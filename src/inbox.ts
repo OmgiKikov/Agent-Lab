@@ -3,9 +3,8 @@ import { convertible, libraryV1Of } from './card/legacy-v1.js';
 import type { QuestionChoice } from './card/status.js';
 import type { SituationView } from './card/view.js';
 import { countText, pluralForm } from './plural.js';
-import type { ResultView } from './result-view.js';
+import { NOT_MEASURED_SIDE, type ResultView } from './result-view.js';
 import { whenText } from './result-text.js';
-import type { NotMeasuredCode } from './run.js';
 import { clip, oneLine } from './text.js';
 
 /*
@@ -76,22 +75,18 @@ export const questionKey = (cardId: string, questionId: string): string => `ques
 
 const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
+/** After «до»: «до 1 вызова», «до 5 вызовов». */
+const CALLS_UP_TO: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
+/** The work a check owes situations the reviewer did not pass, whatever their number: their one revision each. */
+const REVISION = 'Не подошедшие для теста ситуации Lab может один раз переписать по замечаниям проверки';
 const subjectOf = (view: SituationView) => `Ситуация ${view.number} · ${clip(view.brief.title, 90)}`;
 
-/** Where a conversation was not measured, grouped by whose side it failed on: each side asks a different decision. */
-const SIDE: Partial<Record<NotMeasuredCode, 'agent' | 'client' | 'judge'>> = {
-  // The fix of a measurement error lives in the agent's connection; its label names the real problem, never «агент не ответил».
-  agent_error: 'agent', service_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent',
-  simulator_deviated: 'client', simulator_unclear: 'client', simulator_error: 'client', turn_limit: 'client',
-  judge_error: 'judge', judge_unavailable: 'judge', judge_stopped: 'judge',
-};
-
-/** The unmeasured conversations of the newest run: one decision per side, the most frequent reason named. */
+/** The unmeasured conversations of the newest run, grouped by whose side they failed on (NOT_MEASURED_SIDE): one decision per side, the most frequent reason named. */
 function unmeasured(run: NonNullable<InboxInput['run']>, when: string): Decision[] {
   const { record, view } = run;
   const bySide = new Map<'agent' | 'client' | 'judge', { count: number; label: string; scenarioIds: string[] }>();
   for (const reason of view.notMeasured.reasons) {
-    const side = SIDE[reason.code];
+    const side = NOT_MEASURED_SIDE[reason.code];
     if (!side) continue;
     const known = bySide.get(side);
     // Reasons come largest first, so the first one of a side names it.
@@ -169,16 +164,22 @@ export function decisions(input: InboxInput): Decision[] {
           choices: view.question.choices.slice(0, 3).map(choice => ({ label: choice.label, action: { kind: 'answer', cardId: view.id, situation: view.number, choice }, settles: true })) });
       }
     }
+    // The check is an operation of its own: it may make as many calls as the draft's limit, counted from its start, whatever
+    // the preparation and earlier checks spent (lab/library.ts recheckCards). It has work while a claim waits for review
+    // and while a card the reviewer did not pass is still owed its one revision (card/check-calls.ts): such a card is not
+    // «checking», and the check is offered for it all the same.
+    const owed = editable ? draft.pendingCalls : 0;
     const checking = editable ? draft.views.filter(view => view.status === 'checking').length : 0;
-    const left = Math.max(0, draft.record.settings.maxCalls - draft.record.usage.calls);
-    if (checking && draft.pendingCalls > left) spending.push({ key: `budget:${draft.record.id}`, subject: countText(checking, ['Изменённая ситуация', 'Изменённые ситуации', 'Изменённые ситуации']),
-      text: `На проверку ${countText(checking, ['ситуации', 'ситуаций', 'ситуаций'])} нужно ${countText(draft.pendingCalls, ['вызов', 'вызова', 'вызовов'])} модели, а в лимите осталось ${left}.`,
-      choices: [{ label: `Поднять лимит до ${draft.record.usage.calls + draft.pendingCalls}`, action: { kind: 'raise_limit', runId: draft.record.id, to: draft.record.usage.calls + draft.pendingCalls }, settles: true },
-        { label: 'Открыть ситуации', action: { kind: 'open_situations' }, settles: false }] });
-    else if (checking) spending.push({ key: `check:${draft.record.id}`, subject: countText(checking, ['Изменённая ситуация', 'Изменённые ситуации', 'Изменённые ситуации']),
-      text: `${countText(checking, ['ситуация ещё не проверена', 'ситуации ещё не проверены', 'ситуаций ещё не проверены'])} — без проверки ${pluralForm(checking, ['она не войдёт', 'они не войдут', 'они не войдут'])} в прогон.`,
-      choices: [{ label: `Проверить (до ${countText(draft.pendingCalls, ['вызова', 'вызовов', 'вызовов'])} модели)`, action: { kind: 'check_situations', runId: draft.record.id }, settles: true },
-        { label: 'Открыть ситуации', action: { kind: 'open_situations' }, settles: false }] });
+    const limit = draft.record.settings.maxCalls;
+    const subject = checking ? countText(checking, ['Изменённая ситуация', 'Изменённые ситуации', 'Изменённые ситуации']) : 'Проверка ситуаций';
+    const open: DecisionChoice = { label: 'Открыть ситуации', action: { kind: 'open_situations' }, settles: false };
+    if (owed > limit) spending.push({ key: `budget:${draft.record.id}`, subject,
+      text: `${checking ? `На проверку ${countText(checking, ['ситуации', 'ситуаций', 'ситуаций'])} нужно` : `${REVISION} —`} до ${countText(owed, CALLS_UP_TO)} модели, а лимит проверки — ${limit}.`,
+      choices: [{ label: `Поднять лимит до ${owed}`, action: { kind: 'raise_limit', runId: draft.record.id, to: owed }, settles: true }, open] });
+    else if (owed) spending.push({ key: `check:${draft.record.id}`, subject,
+      text: checking ? `${countText(checking, ['ситуация ещё не проверена', 'ситуации ещё не проверены', 'ситуаций ещё не проверены'])} — без проверки ${pluralForm(checking, ['она не войдёт', 'они не войдут', 'они не войдут'])} в прогон.`
+        : `${REVISION} и проверить снова: без этого они не войдут в прогон.`,
+      choices: [{ label: `Проверить (до ${countText(owed, CALLS_UP_TO)} модели)`, action: { kind: 'check_situations', runId: draft.record.id }, settles: true }, open] });
     const pending = draft.record.preparationProgress?.pending.length ?? 0;
     if (editable && pending && !draft.record.librarySnapshot?.acceptance) spending.push({ key: `resume:${draft.record.id}`, subject: 'Подготовка ситуаций',
       text: `Подготовка остановилась: ${countText(pending, CONVERSATIONS)} из логов ещё не ${pluralForm(pending, ['разобран', 'разобраны', 'разобраны'])}.`,

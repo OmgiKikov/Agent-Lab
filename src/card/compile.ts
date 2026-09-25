@@ -42,13 +42,17 @@ const FOLLOW_UP_CEILING = 15;
  * How many messages the customer may write after the first one. The brief's own need — a message per fact, one for
  * the turn and two to spare — and, for a card of a logged dialogue, as long as the real customer talked plus two:
  * the account of the later messages holds one entry per later customer message, so its length is the real
- * conversation's length without its opening (derived, not stored). The logged length is bounded by the ceiling and
- * by the run's messages when they are known; the brief's own need never shrinks, so a card that fitted still fits.
+ * conversation's length without its opening (derived, not stored). Both are bounded by the ceiling and, when they are
+ * known, by the run's messages after the opening: a customer never plans a message the run cannot deliver. The way the
+ * card requires — a change of intent, when it has one — always stays in its budget, so a card too long for the run is
+ * found by its checks (card/checks.ts) instead of being compiled into a customer who cannot finish; a card that fits
+ * the run is never cut below that way.
  */
 function followUps(card: Card, facts: number, maxTurns: number | undefined): number {
   const own = Math.min(FOLLOW_UP_CEILING, facts + (card.client.turn ? 1 : 0) + 2);
-  const logged = Math.min(FOLLOW_UP_CEILING, card.coverage.length + 2, ...(maxTurns === undefined ? [] : [maxTurns - 1]));
-  return Math.max(own, logged);
+  const logged = Math.min(FOLLOW_UP_CEILING, card.coverage.length + 2);
+  const required = card.client.turn?.kind === 'change_intent' ? 1 : 0;
+  return Math.min(Math.max(own, logged), ...(maxTurns === undefined ? [] : [Math.max(maxTurns - 1, required)]));
 }
 
 /**

@@ -5,15 +5,15 @@ import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Experiment, Scenario } from '../src/contracts.js';
+import { emptyUsage, type Experiment, type Scenario } from '../src/contracts.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { evidenceBundle } from '../src/artifacts.js';
 import { assessRepeated } from '../src/judge.js';
-import { judgeCheckPlan, judgeCheckSummary, type JudgeCheck } from '../src/judge-check.js';
+import { judgeCheckCounts, judgeCheckPlan, judgeCheckSummary, JUDGE_CHECK_PROTOCOL, type JudgeCheck } from '../src/judge-check.js';
 import { plantedErrorSchema } from '../src/judge-check-task.js';
 import { markdownReport, htmlReport } from '../src/report.js';
 import { buildResultView } from '../src/result-view.js';
-import { headRows } from '../src/result-text.js';
+import { headRows, judgeCheckText } from '../src/result-text.js';
 import type { Runtime } from '../src/runtime.js';
 import { ExperimentStore } from '../src/store.js';
 import { cardAttempt, cardRun, compiledCard } from './helpers/cards.js';
@@ -105,6 +105,27 @@ test('a judge that passes planted errors is not trusted; a judge that fails cont
   assert.equal(judgeCheckSummary(alarmed, harsh.record)!.distrust, 'false_alarms');
 });
 
+test('unknown controls are unjudged, and a check without controls cannot certify the judge', () => {
+  const items: JudgeCheck['items'] = [
+    { kind: 'planted', trialId: 'trial-1', expectationId: 'expectation-1', result: 'fail' },
+    { kind: 'control', trialId: 'trial-2', expectationId: 'expectation-2', result: 'unknown' },
+  ];
+  const check: JudgeCheck = { protocol: JUDGE_CHECK_PROTOCOL, runId: 'run-1', planted: 1, detected: 1,
+    controls: 0, falseAlarms: 0, items, judgeModel: 'fixture/judge', builderModel: 'fixture/builder', usage: emptyUsage(), at: new Date().toISOString() };
+  assert.deepEqual(judgeCheckCounts(items), { planted: 1, detected: 1, controls: 0, falseAlarms: 0 });
+  const summary = judgeCheckSummary(check, { id: 'run-1' })!;
+  assert.deepEqual([summary.unjudged, summary.distrust], [1, 'incomplete']);
+  const line = judgeCheckText({ judgeCheck: summary });
+  assert.match(line?.text ?? '', /без вердикта 1.*проверка судьи неполная/);
+  assert.equal(line?.warn, true);
+  assert.equal(judgeCheckSummary({ ...check, items: items.slice(0, 1) }, { id: 'run-1' })?.distrust, 'incomplete');
+  assert.equal(judgeCheckSummary({ ...check, items: [{ kind: 'control', trialId: 'trial-2', expectationId: 'expectation-2', result: 'pass' }] }, { id: 'run-1' })?.distrust, 'incomplete',
+    'a check without planted errors cannot certify the judge');
+  const undecided = [{ ...items[0]!, result: 'unknown' as const }, items[1]!];
+  assert.equal(judgeCheckSummary({ ...check, items: undecided }, { id: 'run-1' })?.distrust, 'incomplete',
+    'a planted error without a verdict was not missed by the judge');
+});
+
 test('the trust line reads the same in the summary view and the report; old runs without a check show nothing', async t => {
   const { lab, record } = await labWith(t, scriptedRuntime(reply => reply.includes(PLANTED_MARK) ? 'fail' : 'pass'));
   const plain = await evidenceBundle(await lab.get(record.id), lab.store);
@@ -123,6 +144,26 @@ test('the trust line reads the same in the summary view and the report; old runs
   assert.equal(buildResultView(record, { judgeCheck: other }).judgeCheck, undefined);
 });
 
+test('a judge check is paid work like any other: the owner\'s stop and the closing lab cut its calls short, what was judged is written, the run never changes', async t => {
+  /** A judge sent its request and answering only when the check is stopped. */
+  const hanging = (sent: () => void): Runtime => ({ ...scriptedRuntime(() => 'pass'),
+    assess: (_input, ctx) => new Promise((_resolve, reject) => { ctx.beforeCall(); sent(); ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true }); }) });
+  for (const stop of ['cancel', 'close'] as const) {
+    let sent!: () => void;
+    const judging = new Promise<void>(resolve => { sent = resolve; });
+    const { lab, record } = await labWith(t, hanging(sent));
+    const before = JSON.stringify(await lab.store.get(record.id));
+    const checking = lab.checkJudge(record.id, { planted: 2, controls: 1 });
+    await judging;
+    await assert.rejects(lab.checkJudge(record.id), /другая операция/, 'one operation at a time: the check holds the lab');
+    if (stop === 'cancel') await lab.cancel(record.id); else await lab.close();
+    const check = await checking;
+    assert.ok(check.items.every(item => item.result === null && item.failure === 'stopped'), `${stop}: nothing is guessed`);
+    assert.equal(JSON.stringify(await new ExperimentStore(lab.store.directory).get(record.id)), before, `${stop}: the run record is untouched`);
+    assert.deepEqual(await new ExperimentStore(lab.store.directory).readJudgeCheck(record.id), check, `${stop}: what was judged by then is written`);
+  }
+});
+
 test('the sample is fixed by the run: the same run gives the same verdicts, and a run with nothing passed is refused', () => {
   const record = finishedRun();
   const first = judgeCheckPlan(record, { planted: 5, controls: 5 });
@@ -137,7 +178,8 @@ test('the sample is fixed by the run: the same run gives the same verdicts, and 
 
 const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 async function agentLab(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const child = spawn(process.execPath, ['--import', 'tsx', cli, ...args], { env: { ...process.env, AGENT_LAB_SESSION: '' } });
+  const { AGENT_LAB_SESSION: _chat, ...outside } = process.env;
+  const child = spawn(process.execPath, ['--import', 'tsx', cli, ...args], { env: outside });
   let stdout = '', stderr = '';
   child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
   const code = await new Promise<number | null>(resolve => child.on('close', resolve));

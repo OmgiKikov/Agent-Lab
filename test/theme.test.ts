@@ -65,6 +65,25 @@ test('renderRows keeps every word of a 600-character quote inside 40–160 colum
   }
 });
 
+test('wrapping never changes the text: a long address breaks with nothing inserted, and every line break of a quote stays', () => {
+  const address = 'https://support.example.com/refunds/terminal-1234567890/confirm?operation=987654321&lang=ru';
+  const text = `Агент ответил   «Откройте ${address} и подтвердите возврат.»\nвторая строка\n\nчетвёртая строка`;
+  for (const width of WIDTHS) {
+    const lines = wrapRow({ text, indent: 2, hang: 18 }, width);
+    const bodies = lines.map((line, index) => index ? line.replace(/^ {18}/, '') : line.replace(/^ {2}/, ''));
+    for (const line of lines) assert.ok(visibleWidth(line) <= width, `${width}: «${line}» is wider`);
+    // A line is always a piece of the text as it was: nothing is inserted inside a word and no two lines are merged.
+    for (const body of bodies) assert.ok(text.includes(body), `${width}: «${body}» is not in the text`);
+    assert.equal(bodies.join('').replace(/\s/g, ''), text.replace(/\s/g, ''), `${width}: a character was lost or added`);
+    // The address comes back whole from its pieces; the quote's own line breaks, the empty line too, stay line breaks.
+    assert.ok(bodies.join('').includes(address), `${width}: the address was broken apart`);
+    assert.deepEqual(bodies.slice(-3), ['вторая строка', '', 'четвёртая строка'], `${width}: ${JSON.stringify(bodies)}`);
+  }
+  // The chat paints the same: the row is escaped, wrapped under its hang and painted, and still says what the agent said.
+  const painted = renderRows([{ text, indent: 2, hang: 18, role: 'quote' }], dark, 60).map(plain);
+  assert.ok(painted.map(line => line.trim()).join('').includes(address));
+});
+
 test('paint puts the weight inside the colour and takes both from the role when the row names none', () => {
   // The answer of result-text.ts, coloured by level (docs/design/ui-spec.md §6).
   assert.equal(paint({ text: 'Точность агента: 86%', role: 'accuracy:good' }, dark), '<fg:success><b>Точность агента: 86%</b></fg>');

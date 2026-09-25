@@ -9,9 +9,10 @@ import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { htmlReport, jsonReport, markdownReport, runReport } from '../src/report.js';
 import { REPORT_CSS } from '../src/report-style.js';
 import { buildResultView } from '../src/result-view.js';
-import { situationBrief } from '../src/card/view.js';
-import type { Card as BriefCard } from '../src/card/schema.js';
-import { briefCard, cardRun, compiledCard, requirements } from './helpers/cards.js';
+import { briefFields, briefRows, cardSituation, situationBrief } from '../src/card/view.js';
+import type { Card as BriefCard, LibraryV2 } from '../src/card/schema.js';
+import { briefCard, cardAttempt, cardRun, compiledCard, requirements } from './helpers/cards.js';
+import { COUNTING_RULE_TEXT } from '../src/card/expectations.js';
 
 /*
  * The customer report as a reader meets it: the block tree runReport builds from a run, and its two
@@ -20,6 +21,16 @@ import { briefCard, cardRun, compiledCard, requirements } from './helpers/cards.
  */
 
 const world = { records: {}, writableFields: [], transientFailures: 0 };
+
+test('the interval scale hides labels that would overlap an edge or each other', () => {
+  const accuracy: Block = { kind: 'accuracy', lead: 'На наборе', value: '8%', tail: '1 из 12', level: 'warn',
+    band: { point: 0.08, range: [0, 0.13] } };
+  const html = toHtml({ title: 'Проверка', meta: [], head: [accuracy], blocks: [], footer: [] });
+  assert.match(html, /class="lb[^"]*" style="left:0\.0%">0%/);
+  assert.doesNotMatch(html, /class="lb" style="left:0%"/);
+  assert.doesNotMatch(html, /class="lb fr" style="left:14%"/);
+  assert.match(html, /class="lb[^"]*" style="left:[0-9.]+%">13%/);
+});
 type Card = Experiment['scenarios'][number];
 type Result = MetricAssessment['result'];
 type Library = NonNullable<Experiment['librarySnapshot']>;
@@ -185,12 +196,11 @@ function contentOf(report: Report): string[] {
       case 'section': return [block.title, ...block.blocks.flatMap(walk)];
       case 'table': return [...block.head, ...block.rows.flatMap(row => row.cells)];
       case 'causes': return block.items.flatMap(cause => [cause.title, cause.count,
-        ...cause.examples.flatMap(example => [example.situation, example.expected, ...(example.said ? [example.said] : []), ...(example.rule ? [example.rule] : [])])]);
-      case 'cards': return block.items.flatMap(item => [item.brief.title, item.chip.text, item.brief.source, item.brief.wants, item.brief.writes,
-        ...item.brief.knows.flatMap(fact => [fact.what, fact.when]), ...(item.brief.leaves ? [item.brief.leaves] : []),
+        ...cause.examples.flatMap(example => [example.situation, example.expected, example.said.text, ...(example.rule ? [example.rule] : [])])]);
+      case 'cards': return block.items.flatMap(item => [item.brief.title, item.chip.text, item.brief.source,
+        ...item.client.flatMap(([label, text]) => [label, text].filter(Boolean)),
         ...item.brief.must.flatMap(must => [must.text, ...(must.rule ? [must.rule] : [])]), ...item.dialogue.map(turn => turn.text)]);
-      case 'failures': return block.items.flatMap(item => [item.title, item.expected, ...(item.said ? [item.said] : []),
-        ...(item.rule ? [item.rule.quote, item.rule.source] : []), ...item.dialogue.map(turn => turn.text)]);
+      case 'failures': return block.items.flatMap(item => [item.title, item.expected, item.said.text, item.rule, ...item.dialogue.map(turn => turn.text)]);
       case 'disagreements': return block.items.flatMap(item => [item.title, ...item.expectations, item.hint, item.conversations, ...item.dialogue.map(turn => turn.text)]);
       case 'list': return block.items;
       case 'paragraph': return [block.text];
@@ -214,20 +224,21 @@ test('the report reads in the order a customer asks: number, trust, topics, caus
   assert.equal(report.title, 'Проверка агента · 4 ситуации');
   assert.deepEqual(report.meta, ['18 сентября 2026, 09:30 UTC', 'версия support-bot 2.3']);
 
-  assert.deepEqual(report.head.map(block => block.kind), ['accuracy', 'trust', 'trust']);
-  const [accuracy, trust, reality] = report.head;
+  // One of four situations was not measured: a quarter of the number is missing, so the page says first not to trust it yet.
+  assert.deepEqual(report.head.map(block => block.kind), ['alarm', 'accuracy', 'trust', 'trust']);
+  const [alarm, accuracy, trust, reality] = report.head;
+  assert.deepEqual(alarm, { kind: 'alarm', text: '✗ Числу пока не верить: не измерено 1 из 4 ситуаций — судья не уверен — его оценки разошлись' });
   assert.ok(accuracy?.kind === 'accuracy');
   assert.deepEqual([accuracy.lead, accuracy.value, accuracy.tail, accuracy.level], ['Точность агента:', '67%', '— справился в 2 из 3 ситуаций, ещё 1 не измерено', 'warn']);
   assert.ok(accuracy.band, 'the interval band is drawn under the number');
+  assert.deepEqual(accuracy.band, { point: 2 / 3, range: accuracy.band.range }, 'the band carries the number and its interval only');
   assert.deepEqual(accuracy.band.range.map(share => Math.round(share * 100)), [21, 94]);
-  assert.equal(Math.round((accuracy.band.weighted ?? 0) * 100), 70);
   assert.ok(trust?.kind === 'trust');
   assert.deepEqual(trust.parts, [
-    { text: 'Вероятно, от 21% до 94% (95%)', warn: false }, { text: 'мало данных', warn: true },
-    { text: 'не измерено 1 — судья не уверен — его оценки разошлись', warn: false }, { text: 'судью ещё не проверяли', warn: false },
-  ]);
+    { text: 'Вероятно, от 21% до 94% (95%)', warn: false }, { text: 'мало данных', warn: true }, { text: 'судью ещё не проверяли', warn: false },
+  ], 'the unmeasured share is said once, in the alarm above the number');
   assert.ok(reality?.kind === 'trust');
-  assert.deepEqual(reality.parts, [{ text: 'С учётом частоты тем — около 70%', warn: false }]);
+  assert.deepEqual(reality.parts, [{ text: 'С учётом частоты тем — около 70% (измерены темы 83% диалогов)', warn: false }]);
 
   // A customer cannot act on the owner's next steps, so the page has no «Дальше».
   assert.deepEqual(report.blocks.map(block => block.kind === 'section' ? block.title : block.kind),
@@ -238,16 +249,20 @@ test('the report reads in the order a customer asks: number, trust, topics, caus
     { muted: true, cells: ['Не покрыто ситуациями', '—', '17%'] },
   ] }]);
   assert.deepEqual(section(report, 'Почему ошибается'), [{ kind: 'causes', items: [{ title: CAUSE, count: '1 ситуация',
-    examples: [{ situation: 'Возврат без чека', expected: CRITERIA, said: REFUSAL, rule: REFUND_QUOTE }] }] }]);
+    examples: [{ situation: 'Возврат без чека', expected: CRITERIA, said: { text: `«${REFUSAL}»`, quoted: true }, rule: `«${REFUND_QUOTE}»` }] }] }]);
 
   const [cards] = section(report, 'Ситуации');
   assert.ok(cards?.kind === 'cards');
+  // The page speaks about the owner: a situation the owner wrote is «по правилам владельца агента», never «по вашим».
   assert.deepEqual(cards.items.map(item => [item.number, item.brief.title, item.brief.source, item.chip]), [
     [1, 'Возврат без чека', 'из диалога №2', { text: '✗ не справился', tone: 'err' }],
     [2, 'Возврат с чеком', 'похожая на «Возврат без чека»', { text: '✓ справился', tone: 'ok' }],
-    [3, 'Сроки доставки', 'по вашим правилам', { text: '✓ справился', tone: 'ok' }],
-    [4, 'Доставка в пункт выдачи', 'по вашим правилам', { text: '? не измерено — судья не уверен — его оценки разошлись', tone: 'warn' }],
+    [3, 'Сроки доставки', 'по правилам владельца агента', { text: '✓ справился', tone: 'ok' }],
+    [4, 'Доставка в пункт выдачи', 'по правилам владельца агента', { text: '? не измерено — судья не уверен — его оценки разошлись', tone: 'warn' }],
   ]);
+  // The customer's lines are the brief's own, as every surface lists them.
+  assert.deepEqual(cards.items[0]!.client, [['Хочет', 'Вернуть деньги за наушники без чека'], ['Пишет', `«${OPENING}»`], ['Знает', 'Номер заказа: A-1043 — если спросят'],
+    ['', 'Цвет упаковки — ?'], ['', 'Остаток бонусов на карте — не знает'], ['', 'Номер чека — не знает'], ['Уходит', 'агент назвал срок возврата денег']]);
   // The brief of a library situation: the client's side from the variant, the agent's duties from its required checkpoints.
   // A number known before the conversation but not in the opening is said when asked; a fact learned only in the old
   // conversation was never the customer's at the start of a run, so it is not listed.
@@ -262,16 +277,20 @@ test('the report reads in the order a customer asks: number, trust, topics, caus
   });
   assert.deepEqual(cards.items[0]!.dialogue, [{ who: 'Клиент', text: OPENING }, { who: 'Агент', text: REFUSAL }]);
 
-  assert.deepEqual(section(report, 'Разбор ошибок'), [{ kind: 'failures', items: [{ number: 1, title: 'Возврат без чека', expected: CRITERIA, said: REFUSAL,
-    rule: { quote: REFUND_QUOTE, source: 'Правила возврата' }, dialogue: [{ who: 'Клиент', text: OPENING }, { who: 'Агент', text: REFUSAL }] }] }]);
+  assert.deepEqual(section(report, 'Разбор ошибок'), [{ kind: 'failures', items: [{ number: 1, title: 'Возврат без чека', expected: CRITERIA,
+    said: { text: `«${REFUSAL}»`, quoted: true }, rule: `«${REFUND_QUOTE}» — Правила возврата`,
+    dialogue: [{ who: 'Клиент', text: OPENING }, { who: 'Агент', text: REFUSAL }] }] }]);
   assert.deepEqual(section(report, 'Не измерено'), [{ kind: 'list', items: ['Доставка в пункт выдачи: судья не уверен — его оценки разошлись'] }]);
 
+  // «Как считали» says the rule these situations were counted by: the goal and the prompt rules, in the words of the result's edition.
   const [method] = section(report, 'Как считали');
   assert.ok(method?.kind === 'list');
-  assert.match(method.items[0] ?? '', /^Ситуация засчитана, если агент выполнил запрос клиента/);
-  assert.match(method.items[1] ?? '', /^4 ситуации · 4 разговора · клиента играет Lab.* · версия агента support-bot 2\.3$/);
+  assert.deepEqual(method.items.slice(0, 2), [COUNTING_RULE_TEXT['goal-and-rules-v2'], 'Не измеренные ситуации в процент не входят.']);
+  assert.match(method.items[2] ?? '', /^4 ситуации · 4 разговора · клиента играет Lab.* · версия агента support-bot 2\.3$/);
   assert.ok(method.items.includes('Запрос выполнен: 2 из 3.'), JSON.stringify(method.items));
   assert.ok(method.items.includes('Решения судьи ещё не проверялись человеком.'), JSON.stringify(method.items));
+  // The situations came from the logs: the footer says their first messages are the logged ones, word for word.
+  assert.equal(report.footer.at(-1), 'Первые реплики клиентов в ситуациях из логов взяты из записанных разговоров дословно.');
 });
 
 test('HTML and Markdown carry the same content in the same order', () => {
@@ -345,6 +364,96 @@ test('a demo run is labelled «учебный пример»; a live run is not'
   for (const page of [htmlReport(live), markdownReport(live)]) assert.doesNotMatch(page, /учебный пример/);
 });
 
+test('a situation is drawn from the projection every surface reads: a value Lab filled is marked, and the footer says the first messages are the logs\' own', () => {
+  const plain = briefCard();
+  const card: BriefCard = { ...plain, client: { ...plain.client, writes: 'Помогите с возвратом по чеку 4417, я Анна.' },
+    filled: [{ event: { batchId: 'batch_1', dialogueId: 'late', eventIndex: 0 }, span: 28, mark: '####', kind: 'code', value: '4417' }] };
+  const scenario = compiledCard(card);
+  const record = cardRun([scenario], [cardAttempt('t', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' })], 1,
+    { librarySnapshot: { formatVersion: 2, id: 'library', revision: 1, sources: [], requirements, cards: [card] } as unknown as Library });
+  const report = runReport(bundleOf(record));
+  const [cards] = section(report, 'Ситуации');
+  assert.ok(cards?.kind === 'cards');
+  const view = cardSituation(record.librarySnapshot as LibraryV2, card);
+  assert.deepEqual(cards.items[0]!.client, briefFields(view.brief), 'the same lines as the open situation in Pi');
+  assert.deepEqual(cards.items[0]!.client.slice(1, 3), [['Пишет', '«Помогите с возвратом по чеку 4417, я Анна.»'], ['', 'подставлено вместо обезличенного: «4417»']]);
+  assert.ok(briefRows(view).some(row => row.text.endsWith('подставлено вместо обезличенного: «4417»')));
+  for (const text of [htmlText(toHtml(report)), markdownText(toMarkdown(report))]) {
+    assertInOrder(text, ['Пишет', '«Помогите с возвратом по чеку 4417, я Анна.»', 'подставлено вместо обезличенного: «4417»', 'Знает'], 'the mark follows the message');
+  }
+  assert.equal(report.footer.at(-1), 'Первые реплики клиентов в ситуациях из логов взяты из записанных разговоров дословно; '
+    + 'значения, которые Lab подставил вместо обезличенных, помечены «подставлено вместо обезличенного».');
+  // «Как считали» names the rule these situations were counted by: every expectation, not the old goal and prompt rules.
+  const [method] = section(report, 'Как считали');
+  assert.ok(method?.kind === 'list');
+  assert.equal(method.items[0], COUNTING_RULE_TEXT['all-expectations-v1']);
+  assert.ok(!method.items.some(item => item.includes('не нарушил правил своего промпта')), JSON.stringify(method.items));
+  // A situation written from the owner's rules says so about the owner.
+  const ruled = runReport(bundleOf({ ...record, librarySnapshot: { formatVersion: 2, requirements, cards: [{ ...card, origin: { kind: 'rules' } }] } as unknown as Library }));
+  const [ruledCards] = section(ruled, 'Ситуации');
+  assert.ok(ruledCards?.kind === 'cards');
+  assert.equal(ruledCards.items[0]!.brief.source, 'по правилам владельца агента');
+});
+
+test('a reply the judge did not point at is never quoted as the error on the page', () => {
+  // The refund is observed on the agent's tools: with a complete tool log the missing call fails it, and no reply is the evidence.
+  const plain = briefCard();
+  const scenario = compiledCard(briefCard({ agentMust: plain.agentMust.map(item => item.id === 'e2' ? { ...item, observation: 'tool' as const } : item) }));
+  const reply = 'Спасибо за обращение, хорошего дня!';
+  const attempt = cardAttempt('t', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' }, 0, { countingVersion: 2, observation: { state: 'missing', tools: 'complete' },
+    events: [{ seq: 0, type: 'user', text: scenario.user.opening }, { seq: 1, type: 'assistant', text: reply }] });
+  attempt.assessments = attempt.assessments!.map(item => item.metricId === 'e2' ? { ...item, evidence: [] } : item);
+  const record = cardRun([scenario], [attempt]);
+  const report = runReport(bundleOf(record));
+  const [failures] = section(report, 'Разбор ошибок');
+  assert.ok(failures?.kind === 'failures');
+  assert.deepEqual(failures.items[0]!.said, { text: 'судья не указал реплику', quoted: false });
+  const html = toHtml(report);
+  assert.ok(!html.includes(`«${reply}»`), 'the last reply is not quoted as the agent\'s wrong answer');
+  assert.ok(!html.includes('class="bad-quote"'), 'nothing is marked as the error');
+  assert.ok(htmlText(html).includes(reply), 'the conversation still shows it');
+});
+
+test('the band under the number carries its interval, with labels that never overlap on a phone', () => {
+  const band = (range: [number, number], point: number) => toHtml({ title: 't', meta: [], head: [{ kind: 'accuracy', lead: 'Точность агента:', value: '95%', tail: '—', level: 'good',
+    band: { point, range } }], blocks: [], footer: [] });
+  const labels = (html: string, set: string) => [...html.matchAll(/<span class="lb([^"]*)" style="left:([\d.]+)%">([^<]+)<\/span>/g)]
+    .filter(match => set === 'all' || match[1]!.includes(set)).map(match => ({ left: Number(match[2]), text: match[3]! }));
+  // 91–100%: on a phone the two ends would touch the axis end and each other, so they read as one; a wide window has room for all.
+  const tight = band([0.91, 1], 0.95);
+  assert.deepEqual(labels(tight, ' n').map(label => label.text), ['0%', '91–100%']);
+  assert.deepEqual(labels(tight, ' w').map(label => label.text), ['0%', '91%', '100%']);
+  // 9–91%: the ends leave the axis ends no room on a phone.
+  assert.deepEqual(labels(band([0.09, 0.91], 0.5), ' n').map(label => label.text), ['9%', '91%']);
+  // No two labels of one set overlap at the band widths they are drawn for (a 250px phone band, a 600px window band).
+  for (const [range, point] of [[[0, 0.09], 0.02], [[0.21, 0.94], 0.67], [[0.52, 0.86], 0.72], [[0.76, 1], 1], [[0.95, 1], 0.99], [[0, 1], 0.5]] as [[number, number], number][]) {
+    const html = band(range, point);
+    for (const [set, px] of [[' n', 250], [' w', 600], ['all', 250]] as const) {
+      const shown = labels(html, set);
+      if (set === 'all' && labels(html, ' n').length) continue;
+      const boxes = shown.map(label => ({ ...label, right: label.left + label.text.length * 7.2 / px * 100 })).sort((a, b) => a.left - b.left);
+      for (let i = 1; i < boxes.length; i++) assert.ok(boxes[i - 1]!.right <= boxes[i]!.left, `${range}: «${boxes[i - 1]!.text}» touches «${boxes[i]!.text}»`);
+      assert.ok(boxes.every(box => box.left >= 0 && box.right <= 100.05), `${range}: a label leaves the band`);
+    }
+  }
+  // Chips wrap instead of widening the page.
+  assert.doesNotMatch(REPORT_CSS, /\.chip\{[^}]*nowrap/);
+});
+
+test('a separator stays with the part before it: a wrapped line of the page never starts with «·»', () => {
+  const report: Report = { title: 'Проверка', meta: ['25 сентября 2026', 'версия v1'], blocks: [], footer: [],
+    head: [{ kind: 'trust', parts: [{ text: 'Вероятно, от 9% до 91% (95%)', warn: false }, { text: 'мало данных', warn: true }, { text: 'судью ещё не проверяли', warn: false }] }] };
+  const html = toHtml(report);
+  // In HTML every part is its own element and the dot is drawn after it behind a no-break space: no dot stands between them as text.
+  assert.ok(html.includes('<div class="trust"><span>Вероятно, от 9% до 91% (95%)</span><span class="warn">мало данных</span><span>судью ещё не проверяли</span></div>'), html);
+  assert.ok(html.includes('<span class="meta"><span>25 сентября 2026</span><span>версия v1</span></span>'), html);
+  assert.ok(REPORT_CSS.includes('.top .meta span:not(:last-child)::after,.trust span:not(:last-child)::after{content:"\\00a0·"'));
+  // In Markdown the dot follows its part after a no-break space: a line may break only after it.
+  const nbsp = String.fromCharCode(0xa0);
+  assert.ok(toMarkdown(report).includes(`Вероятно, от 9% до 91% \\(95%\\)${nbsp}· мало данных${nbsp}· судью ещё не проверяли`));
+  assert.ok(toMarkdown(report).includes(`25 сентября 2026${nbsp}· версия v1`));
+});
+
 test('a card reads as its own brief: when each fact is said, the turn, and every expectation with its owner rule', () => {
   const card = briefCard();
   const similar: BriefCard = { ...briefCard({ turn: null }), id: `card_${'e'.repeat(64)}`, number: 4, origin: { kind: 'similar', parentId: card.id, change: { kind: 'turn', turn: null } } };
@@ -380,7 +489,7 @@ test('an old-format situation reads as a brief built from its card', () => {
   const markdown = markdownText(markdownReport(legacyRun()));
   assertInOrder(html, ['Хочет', 'Сменить адрес доставки заказа A-2051', 'Знает', 'Новый адрес — ул. Ленина, 5 — если спросят', 'АГЕНТ ДОЛЖЕН',
     'Сменить адрес доставки и подтвердить новый адрес', `правило: «${ADDRESS_QUOTE}»`], 'HTML');
-  assertInOrder(markdown, ['- Хочет: Сменить адрес доставки заказа A-2051', '- Знает: Новый адрес — ул. Ленина, 5 — если спросят', '**Агент должен**',
+  assertInOrder(markdown, ['- Хочет: Сменить адрес доставки заказа A-2051', '- Знает: Номер заказа A-2051 — сразу', '- Новый адрес — ул. Ленина, 5 — если спросят', '**Агент должен**',
     `1. Сменить адрес доставки и подтвердить новый адрес — правило: «${ADDRESS_QUOTE}»`], 'Markdown');
   for (const text of [html, markdown]) {
     assert.match(text, /Ошибок нет\. Это не гарантия для живых клиентов: проверена 1 ситуация\./);
@@ -395,7 +504,7 @@ test('the stored legacy demo run renders in both formats and names its failures'
   assert.ok(failures?.kind === 'failures');
   const titles = ['Move an appointment', 'Change preference after the first response'];
   assert.deepEqual(failures.items.map(item => item.title), titles);
-  assert.ok(failures.items.every(item => item.said && item.rule), 'each failure quotes the agent and the owner rule');
+  assert.ok(failures.items.every(item => item.said.quoted && item.rule.startsWith('«')), 'each failure quotes the agent and the owner rule');
   for (const text of [htmlText(htmlReport(record)), markdownText(markdownReport(record))]) {
     assertInOrder(text, ['учебный пример', 'Точность агента:', '0%', '— справился в 0 из 2 ситуаций', 'Разбор ошибок', ...titles], 'legacy');
     assert.equal(text.includes(record.id), false);
@@ -453,7 +562,7 @@ test('coincident replies with different scores are named in the exported reports
   after.trials[0]!.id = 'after_trial'; after.trials[0]!.assessments![0]!.result = 'pass';
   const bundle = await evidenceBundle(after, noTrace(before));
   for (const text of [htmlReport(bundle), markdownReport(bundle)]) {
-    assert.match(text, /совпавшими ответами и разными оценками: 1\. Нужна проверка\./);
+    assert.match(text, /У 1 пары попыток ответы агента совпали, а оценки судьи разные: судью нужно проверить\./);
     assert.doesNotMatch(text, /Исправлено 1/);
   }
 });
@@ -510,11 +619,11 @@ test('HTML reports escape untrusted text and remain self-contained with explicit
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; &quot;тест&quot;/);
   assert.doesNotMatch(html, /<script>alert/);
   assert.doesNotMatch(html, /<iframe|<img|<form/i);
-  // Self-contained: the one script runs by its hash, and the optional font stylesheet is the only thing fetched.
+  // Self-contained: the one script runs by its hash, and nothing is fetched when the page is opened — no web fonts, no outside source in the CSP.
   assert.match(html, /default-src 'none'/);
   assert.equal(html.match(/<script\b/gi)?.length, 1);
-  assert.equal(html.match(/<link\b/gi)?.length, 1);
-  assert.match(html, /<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com\//);
+  assert.equal(html.match(/<link\b/gi), null);
+  assert.doesNotMatch(html, /https?:\/\/|fonts\.g|@import|url\(/i);
   assert.match(html, /lang="ru"/);
   // Explicit limits: a draft says it never ran, the demo is labelled, and the full records stay with the owner.
   assert.match(html, /прогон ещё не запускался/);

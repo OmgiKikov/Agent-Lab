@@ -133,13 +133,21 @@ python harnesses/agent-oc/adapter.py ../agent_oc < /dev/null
 
 ```bash
 python harnesses/agent-oc/import-dialogues.py \
-    --input "../agent_oc/data/размеченные логи 1607_2007.xlsx" \
-    --output dialogues.jsonl --multi-turn-only --limit 60
+    --input "../agent_oc/data/размеченные логи 1607_2007.xlsx" --multi-turn-only
 ```
 
-Рядом появится `dialogues.jsonl.meta.json` — поверхность, полномочия, ЕПК и коды ответов по
-каждому диалогу: по ним ситуация прослеживается до строки разметки. Этот файл — прод-данные: держите
-его локально, в репозиторий он не попадает.
+Диалоги лягут в `.agent-lab/agent-oc/dialogues.jsonl`, рядом — `dialogues.jsonl.meta.json`:
+поверхность, полномочия, ЕПК и коды ответов по каждому диалогу, по ним ситуация прослеживается до
+строки разметки. Оба файла — прод-данные, поэтому:
+
+- по умолчанию они пишутся в `.agent-lab/` текущего каталога — папки с правами `0700`, файлы `0600`;
+- `--output` в другое место внутри git-репозитория, которое git не игнорирует (или файл, который
+  git уже отслеживает), скрипт отвергает и ничего не пишет — иначе диалоги и ЕПК ушли бы в коммит;
+- вторая линия защиты — `.gitignore` Lab: `dialogues.jsonl`, `*.meta.json` и `.agent-lab-run/` в
+  нём, где бы они ни лежали.
+
+Весь лог Lab прочитает сам и возьмёт 300 разговоров по хешу содержимого. `--limit N` оставляет первые
+N подошедших — так выборка сдвигается во времени, поэтому без нужды его не задавайте.
 
 Задача для подготовки — реестр скиллов агента, иначе Lab придумает случаи, которых в агенте нет.
 Полные тексты скиллов не годятся: их около 420 000 символов при пределе в 300 000, и это
@@ -147,7 +155,7 @@ python harnesses/agent-oc/import-dialogues.py \
 
 ```bash
 python harnesses/agent-oc/materials.py --root ../agent_oc --output task-cards.json
-node dist/cli.js build --input task-cards.json --dialogues-file dialogues.jsonl --connection connection.json --situations 10
+node dist/cli.js build --input task-cards.json --dialogues-file .agent-lab/agent-oc/dialogues.jsonl --connection connection.json --situations 10
 ```
 
 Без `--yes` команда показывает, сколько ситуаций будет и сколько вызовов модели это может стоить, и
@@ -166,7 +174,8 @@ node dist/cli.js build --input task-cards.json --dialogues-file dialogues.jsonl 
 
 Это отказ проверки формы ответа судьи, а не разногласие двух его вызовов. Причины и исходные
 ответы достаёт `python harnesses/agent-oc/judge-errors.py RUN_ID` — только читает сохранённый
-прогон. Пересчитать оценки по уже записанным разговорам, не вызывая агента, и выгрузить отчёт:
+прогон: аудит судьи по каждому разговору из `.agent-lab/RUN_ID.judge/`, а в старых прогонах — из
+самой записи. Пересчитать оценки по уже записанным разговорам, не вызывая агента, и выгрузить отчёт:
 
 ```bash
 bash harnesses/agent-oc/reassess.sh RUN_ID
@@ -182,4 +191,6 @@ bash harnesses/agent-oc/report.sh RUN_ID
   там, где разметка ждала `fail`. Вердикты предварительные; проверить судью — `agent-lab check-judge`.
 - Симулятор и судья работают на моделях того же шлюза, что и агент: смещение общее.
 - `eventsComplete: true` означает полный перечень действий в границах `eventScope`
-  (`read`, `execute_action`) — тех, что прод пишет в логгер, а не всех сетевых вызовов.
+  (`read`, `execute_action`) — тех, что прод пишет в логгер, а не всех сетевых вызовов. Если за ход
+  действий больше 50, адаптер передаёт первые 50 и `eventsComplete: false`: по обрезанному перечню
+  нельзя утверждать, что инструмент не вызывался.

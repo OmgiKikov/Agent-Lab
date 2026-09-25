@@ -10,7 +10,7 @@ import { acceptLibraryV2 } from '../src/card/library.js';
 import { planClaims } from '../src/card/review.js';
 import type { CardCommand, LibraryV2 } from '../src/card/schema.js';
 import { cardStatus, cardStatuses } from '../src/card/status.js';
-import { changeText } from '../src/card/view.js';
+import { briefRows, cardSituation, changeText, plainSituationText, situationData } from '../src/card/view.js';
 import { CommandRefused, StaleRevisionError, UnknownReference } from '../src/errors.js';
 import { libraryHash } from '../src/scenario-library.js';
 import { cardDraft, cardNumbered, READY, reviewed, type CardDraft } from './helpers/card-library.js';
@@ -79,6 +79,67 @@ test('a new fact gets the next id and never an id a removed fact had', () => {
     (error: unknown) => error instanceof UnknownReference && error.what === 'fact' && error.allowed.join() === 'f1 Номер терминала');
 });
 
+test('in one series a removed fact\'s id is never given to the new one: the change reads «убрано» and «добавлено», not one fact rewritten', () => {
+  const draft = cardDraft();
+  const cardId = late(draft.library).id;
+  const series = prepare(draft.library, { kind: 'edit_card', cardId, changes: [{ kind: 'remove_fact', factId: 'f1' },
+    { kind: 'set_fact', label: 'Совсем другой факт', value: 'да', disclosure: 'on_request' }] }, draft);
+  assert.deepEqual(late(series.next).client.knows.map(fact => [fact.id, fact.label]), [['f2', 'Совсем другой факт']]);
+  assert.deepEqual(changes(series), ['Знает: убрано «Номер терминала: 5678 — если спросят»', 'Знает: добавлено «Совсем другой факт: да — если спросят»']);
+  // An id the series gave out and took back is not given again within it either.
+  const twice = prepare(draft.library, { kind: 'edit_card', cardId, changes: [{ kind: 'set_fact', label: 'Сумма', value: 1200, disclosure: 'on_request' },
+    { kind: 'remove_fact', factId: 'f2' }, { kind: 'set_fact', label: 'Дата покупки', value: '12.03.2026', disclosure: 'on_request' }] }, draft);
+  assert.deepEqual(late(twice.next).client.knows.map(fact => fact.id), ['f1', 'f3']);
+  // Once recorded, the series' ids stay taken: the next new fact is after all of them.
+  const next = prepare(confirmed(twice), { kind: 'set_fact', cardId, label: 'Канал', value: 'чат', disclosure: 'on_request' }, draft);
+  assert.deepEqual(late(next.next).client.knows.map(fact => fact.id), ['f1', 'f3', 'f4']);
+});
+
+test('rewriting a fact keeps how the agent\'s question about it is recognised; a new wording of it is its own line', () => {
+  const draft = cardDraft();
+  const cardId = late(draft.library).id;
+  assert.equal(late(draft.library).client.knows[0]!.askedAs, 'номер терминала');
+  const relabelled = prepare(draft.library, { kind: 'set_fact', cardId, factId: 'f1', label: 'Номер терминала', value: '8765', disclosure: 'on_request' }, draft);
+  assert.equal(late(relabelled.next).client.knows[0]!.askedAs, 'номер терминала', 'a command that does not name it leaves it as it was');
+  assert.deepEqual(changes(relabelled), ['Знает: было «Номер терминала: 5678 — если спросят», стало «Номер терминала: 8765 — если спросят»']);
+  const asked = prepare(draft.library, { kind: 'set_fact', cardId, factId: 'f1', label: 'Номер терминала', value: '5678', disclosure: 'on_request', askedAs: 'номер кассы' }, draft);
+  assert.deepEqual(changes(asked), ['Знает: Номер терминала: 5678 — если спросят: было «номер терминала», стало «номер кассы»']);
+});
+
+test('a duty\'s rule, its condition and a turn\'s kind are shown when they change, and the authority is the strictest of what changes', () => {
+  const draft = cardDraft();
+  const card = late(draft.library);
+  const second = { id: 'rule_ask_number', text: 'Если номера нет, уточнить номер терминала.', quote: 'Если номера нет, уточните номер терминала.', critical: true, observable: true,
+    kind: 'behavior' as const, sourceId: 'source-1' };
+  const library = { ...draft.library, requirements: [...draft.library.requirements, second] };
+  const rule = prepare(library, { kind: 'edit_expectation', cardId: card.id, expectationId: 'e1', requirementIds: [second.id] }, draft);
+  assert.equal(rule.authority, 'owner-confirm');
+  assert.deepEqual(changes(rule), [`Агент должен: не запрашивать номер терминала повторно, если клиент его уже назвал — правило: было «${refundRule.quote}», стало «${second.quote}»`]);
+  // New words with a dropped condition: the words alone would be a wording, the dropped condition makes it a decision.
+  const both = prepare(draft.library, { kind: 'edit_expectation', cardId: card.id, expectationId: 'e2', text: 'объяснить, куда подать заявление', appliesWhen: null }, draft,
+    { ownerWords: 'объяснить, куда подать заявление' });
+  assert.equal(both.authority, 'owner-confirm');
+  assert.deepEqual(changes(both), ['Агент должен: было «объяснить, как оформить возврат», стало «объяснить, куда подать заявление»',
+    'Агент должен: объяснить, куда подать заявление — когда: было «клиент назвал номер терминала», стало «всегда»']);
+  assert.throws(() => applyCommand(draft.library, both, hostGrant(both, 'words')), CommandRefused, 'the owner\'s words never stand in for the confirmation of a dropped condition');
+  assert.equal(confirmed(both).receipts.at(-1)!.ownerWords, 'объяснить, куда подать заявление');
+  const turned = confirmed(prepare(draft.library, { kind: 'set_turn', cardId: card.id, turn: { kind: 'change_intent', after: 'агент объяснил возврат', says: 'А можно обменять?' } }, draft));
+  const kind = prepare(turned, { kind: 'set_turn', cardId: card.id, turn: { kind: 'report', after: 'агент объяснил возврат', says: 'А можно обменять?' } }, draft);
+  assert.deepEqual(changes(kind), ['Поворот: было «меняет намерение после «агент объяснил возврат»: «А можно обменять?»», стало «сообщает, что видит после «агент объяснил возврат»: «А можно обменять?»»']);
+});
+
+test('an answer needs what it is and what it does: words given to an answer that takes none never make its decision a wording', () => {
+  const doubt = { status: 'needs_owner' as const, reason: 'В правиле не сказано, что номер спрашивают один раз.' };
+  const draft = cardDraft({ verdict: (claim, card) => card.number === 1 && claim.alias === 'expectation_e1' ? doubt : READY });
+  const card = late(draft.library);
+  const question = cardStatus(card, { library: draft.library, evidence: draft.evidence, maxTurns: 3 }).question!;
+  // «Убрать» removes the duty: a decision, whatever words ride along with the answer.
+  const removal = prepare(draft.library, { kind: 'answer_question', cardId: card.id, questionId: question.id, choice: 'b', text: 'убрать это' }, draft);
+  assert.deepEqual([removal.command.kind, removal.authority], ['remove_expectation', 'owner-confirm']);
+  assert.throws(() => applyCommand(draft.library, removal, hostGrant(removal, 'words')), CommandRefused);
+  assert.equal(confirmed(removal).receipts.at(-1)!.ownerWords, undefined, 'words the answer did not take are not kept as the owner\'s wording');
+});
+
 test('removing the fact a message backs marks that message changed; the stop stays', () => {
   const draft = cardDraft();
   const next = confirmed(prepare(draft.library, { kind: 'remove_fact', cardId: late(draft.library).id, factId: 'f1' }, draft));
@@ -113,6 +174,34 @@ test('the customer\'s words: a new opening must keep what the customer says at o
   const next = applyCommand(draft.library, prepared, hostGrant(prepared, 'words'));
   assert.deepEqual([known(next).client.writes, known(next).client.writesSource.kind, known(next).client.leaves], [writes, 'owner', 'получил инструкцию']);
   assert.deepEqual(changes(prepared), [`Пишет: было ««Номер терминала: 1234. Помогите с возвратом.»», стало ««${writes}»»`, 'Уходит: было «получил инструкцию по возврату или понял, что агент не поможет», стало «получил инструкцию»']);
+});
+
+test('whether the customer can say what they want: the owner sees it in the brief and changes it with a confirmation; the reviewer is asked the new claim alone', () => {
+  const draft = cardDraft();
+  const card = late(draft.library);
+  const command = { kind: 'edit_client' as const, cardId: card.id, clarity: 'vague' as const };
+  assert.equal(requiredAuthority(command), 'owner-confirm', 'a decision about the customer');
+  assert.equal(requiredAuthority({ ...command, wants: 'Не может сказать, в чём дело' }), 'owner-confirm', 'words beside it never make it a wording');
+  const prepared = prepare(draft.library, command, draft, { ownerWords: 'невнятный' });
+  assert.deepEqual(changes(prepared), ['Запрос: было «внятный», стало «невнятный: клиент не говорит прямо, чего хочет»']);
+  const clarity = planClaims(late(prepared.next), { library: prepared.next, evidence: draft.evidence }).find(claim => claim.kind === 'clarity')!;
+  assert.deepEqual(prepared.recheck, [clarity.key], 'the mark is the basis of its own claim only: every other answer stands');
+  assert.throws(() => applyCommand(draft.library, prepared, hostGrant(prepared, 'words')), CommandRefused);
+  const next = confirmed(prepared);
+  assert.deepEqual([late(next).clarity, late(next).client.wants, late(next).revision], ['vague', card.client.wants, 2]);
+  assert.deepEqual(next.receipts.at(-1)!.command, command);
+  const view = cardSituation(next, late(next));
+  assert.match(plainSituationText(briefRows(view), 100), /\n {4}Запрос {3}невнятный: клиент не говорит прямо, чего хочет\n/);
+  assert.equal(situationData(view).clarity, 'vague', 'the chat reads the mark too');
+  assert.doesNotMatch(plainSituationText(briefRows(cardSituation(draft.library, card)), 100), /Запрос/, 'a clear request reads as before');
+
+  const lifted = prepare(next, { kind: 'edit_client', cardId: card.id, clarity: 'clear' }, draft);
+  assert.deepEqual(changes(lifted), ['Запрос: было «невнятный: клиент не говорит прямо, чего хочет», стало «внятный»']);
+  assert.equal('clarity' in late(lifted.next), false, 'a clear request is the absence of the mark, as on every card before it');
+  assert.throws(() => prepare(draft.library, { kind: 'edit_client', cardId: card.id, clarity: 'clear' }, draft), /Так уже записано/);
+  // In one series with the words: the stricter authority of the two.
+  const series = prepare(draft.library, { kind: 'edit_card', cardId: card.id, changes: [{ kind: 'edit_client', wants: 'Не может сказать, в чём дело: упоминает возврат', clarity: 'vague' }] }, draft);
+  assert.equal(series.authority, 'owner-confirm');
 });
 
 test('a turn is a later message of the dialogue word for word, or the owner\'s words; removing it marks its message changed', () => {
@@ -236,6 +325,11 @@ test('the authority of every command is decided once, the same for every surface
     [{ kind: 'edit_expectation', cardId, expectationId: 'e1', text: 'x' }, 'owner-words'],
     [{ kind: 'edit_expectation', cardId, expectationId: 'e1', requirementIds: ['r'] }, 'owner-confirm'],
     [{ kind: 'edit_expectation', cardId, expectationId: 'e1', appliesWhen: null }, 'owner-confirm'],
+    [{ kind: 'edit_expectation', cardId, expectationId: 'e1', appliesWhen: 'клиент назвал номер' }, 'owner-words'],
+    [{ kind: 'edit_expectation', cardId, expectationId: 'e1', text: 'x', appliesWhen: null }, 'owner-confirm'],
+    [{ kind: 'edit_expectation', cardId, expectationId: 'e1', text: 'x', requirementIds: ['r'] }, 'owner-confirm'],
+    [{ kind: 'edit_expectation', cardId, expectationId: 'e1', text: 'x', appliesWhen: 'y' }, 'owner-words'],
+    [{ kind: 'edit_card', cardId, changes: [{ kind: 'edit_expectation', expectationId: 'e1', text: 'x', appliesWhen: null }] }, 'owner-confirm'],
     [{ kind: 'remove_expectation', cardId, expectationId: 'e1' }, 'owner-confirm'],
     [{ kind: 'edit_client', cardId, wants: 'x' }, 'owner-words'],
     [{ kind: 'set_turn', cardId, turn: null }, 'owner-confirm'],

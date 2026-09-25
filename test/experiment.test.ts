@@ -1,3 +1,4 @@
+import { ProviderFailure } from '../src/llm/model-call.js';
 import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -9,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { caveatLines } from '../src/caveats.js';
+import { STOP_LABEL } from '../src/errors.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash, measurementHash, resultHash } from '../src/lab/record.js';
 import { ExperimentStore } from '../src/store.js';
@@ -17,9 +20,9 @@ import { SANDBOX_RETIRED, createInputSchema, experimentSchema, fingerprint, runn
 import { metricApplies } from '../src/assessment.js';
 import type { Runtime } from '../src/runtime.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
-import { awaitingVerdict, compareRuns } from '../src/comparison.js';
+import { compareRuns } from '../src/comparison.js';
 import { COUNTING_RULES, simulatorUsable } from '../src/outcomes.js';
-import { judgeAgreement } from '../src/agreement.js';
+import { awaitingVerdict, judgeAgreement } from '../src/agreement.js';
 import { buildResultView } from '../src/result-view.js';
 import { trustParts } from '../src/result-text.js';
 import { CODE_ONLY_ASSESSMENT, deriveRun } from '../src/run.js';
@@ -86,11 +89,13 @@ test('a completed evaluation freezes the measurement, persists the observed evid
 test('call budget stops the run, preserving partial trials without a final success claim', async t => {
   const { lab } = await setup(t, legacyDemoRuntime());
   // The external agent spends no model calls of the lab: the budget goes to the simulated user and the judge.
-  const result = await runDraft(lab, await externalDraft(lab, { count: 10, settings: { maxCalls: 5 } }));
-  assert.equal(result.phase, 'error');
-  assert.match(result.error!, /call budget/);
-  assert.equal(result.usage.calls, 5);
+  const draft = await externalDraft(lab, { count: 10, settings: { maxCalls: 5 } });
+  const result = await runDraft(lab, draft);
+  assert.deepEqual([result.phase, result.stop, result.error], ['error', 'budget', STOP_LABEL.budget], 'the stop is typed; the owner reads it in their words');
+  assert.equal(draft.usage.calls, 1, 'the draft\'s preparation spent a call of its own');
+  assert.equal(result.usage.calls, draft.usage.calls + 5, 'the run spends its own limit, counted from its start');
   assert.ok(result.trials.length > 0 && result.trials.length < 10, `${result.trials.length} trials`);
+  assert.ok(result.trials.every(trial => trial.outcome !== 'invalid'), 'a dialogue the budget cut short is stopped, never the agent\'s or the customer\'s failure');
   assert.equal(result.resultsReviewedAt, undefined);
 });
 
@@ -99,7 +104,8 @@ test('task-only execution records automated review and labels expectations provi
   const result = await runDraft(lab, await externalDraft(lab), 'automated');
   assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.equal(result.reviewMode, 'automated');
-  assert.match(result.limitations.join(' '), /проверены автоматически, без человека/);
+  assert.deepEqual(result.caveats, [{ code: 'automated_review' }], 'a typed note');
+  assert.ok(caveatLines(result).includes('Ожидания ситуаций проверены автоматически, без человека: спорные вердикты стоит посмотреть, однозначные годятся как предварительный результат.'));
 });
 
 test('shutdown during the initial checkpoint waits, keeps the lock, and never starts model work', async t => {
@@ -176,7 +182,7 @@ test('shutdown waits for in-flight initialization and cannot reopen a closed lab
   release.resolve();
   await opening; await closing;
   await assert.rejects(lab.create(demoInput()), /не открыта/);
-  await assert.rejects(lab.init(), /closing/);
+  await assert.rejects(lab.init(), /закрывается/);
   await assert.rejects(readFile(join(directory, '.lock')), { code: 'ENOENT' });
 });
 
@@ -232,7 +238,9 @@ test('провалы прогона получают имена, а сорван
   const survived = await runDraft(broken, await externalDraft(broken), 'human');
   assert.equal(survived.phase, 'results_review');
   assert.equal(survived.failureModes, undefined);
-  assert.ok(survived.limitations.some(l => /Не удалось назвать типы провалов.*судья недоступен/.test(l)));
+  // Why the causes are not named is kept typed and read in the owner's words, never as the error's own text.
+  assert.deepEqual(survived.caveats, [{ code: 'causes_unnamed', cause: 'failed' }]);
+  assert.ok(caveatLines(survived).includes('Причины провалов не названы: разбор прервался из-за сбоя.'));
 });
 
 test('unresolved business questions block a first-format draft until new materials produce a new experiment', async t => {
@@ -266,8 +274,8 @@ test('confirming the expectations is recorded as exactly that, never as a human 
   assert.equal(result.reviewMode, 'expectations');
   // The run dialog confirms expectations; the verdicts do not exist yet, so nothing here says a
   // person checked them. The limitation must say so instead of disappearing.
-  assert.match(result.limitations.join(' '), /Владелец подтвердил ожидания ситуаций перед запуском\. Определения карточек и оценки судьи человеком не проверялись\./);
-  assert.doesNotMatch(result.limitations.join(' '), /проверены автоматически, без человека/);
+  assert.deepEqual(result.caveats, [{ code: 'expectations_review' }]);
+  assert.ok(caveatLines(result).includes('Перед запуском вы подтвердили ожидания ситуаций, а не вердикты судьи.'));
   // An old record parses and keeps the two modes it could already hold.
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'human' }).reviewMode, 'human');
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'automated' }).reviewMode, 'automated');
@@ -535,7 +543,7 @@ test('evaluation runs every user mode and skips scripted cards without a script'
   assert.equal(result.phase, 'results_review', result.error ?? '');
   const byMode = (mode: string) => result.trials.filter(tr => tr.userMode === mode).length;
   assert.deepEqual([byMode('static'), byMode('scripted'), byMode('reactive')], [3, withScript, 3]);
-  assert.ok(result.limitations.some(l => /Scripted mode skipped/.test(l)));
+  assert.deepEqual(result.caveats?.filter(note => note.code === 'scripted_skipped'), [{ code: 'scripted_skipped', situations: draft.scenarios.length - withScript }], 'how many, once');
   assert.ok(result.trials.filter(tr => tr.userMode === 'static').every(tr => tr.events.filter(e => e.type === 'user').length === 1));
 });
 
@@ -753,7 +761,7 @@ test('a single failed dialogue is clustered, and a cluster may quote only the ag
   const rejected = await run();
   assert.equal(rejected.phase, 'results_review');
   assert.equal(rejected.failureModes, undefined);
-  assert.ok(rejected.limitations.some(l => /Не удалось назвать типы провалов/.test(l) && /дословно/.test(l)));
+  assert.deepEqual(rejected.caveats?.filter(note => note.code === 'causes_unnamed'), [{ code: 'causes_unnamed', cause: 'rejected' }], 'a cluster quoting what the prompt does not hold is the model\'s answer not holding');
 });
 
 test('human verdicts may target simulator checks, reassessment recomputes them, and an unconfirmed external world is a run limitation', async t => {
@@ -783,10 +791,10 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
       initialState: { records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1' }, { id: 'c2' }] } },
       checks: [], successCriteria: 'Two cards are listed', assumptions: [], metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }] }];
   }));
-  assert.ok(unconfirmed.limitations.includes('Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.'), unconfirmed.limitations.join('\n'));
+  assert.deepEqual(unconfirmed.caveats, [{ code: 'automated_review' }, { code: 'state_unconfirmed' }]);
   assert.match(unconfirmed.trials.find(t => t.scenarioId === 'gold_cards')!.reason, /не подтверждено адаптером/);
   const repeated = await lab.repeat(unconfirmed.id);
-  assert.ok(!repeated.limitations.some(l => l.startsWith('Внешнее состояние карточек')));
+  assert.deepEqual(repeated.caveats, [{ code: 'demo' }], 'a repeat carries none of the run\'s notes — only what the record is, here the retired demo');
 });
 
 function agreeingJudgeRuntime(): Runtime {
@@ -918,7 +926,7 @@ test('a positive control rides on the record: hashes and card identity unchanged
   }
   const diff = compareRuns(source, ran);
   assert.equal(diff.comparable, true, diff.notes.join(' '));
-  assert.ok(diff.notes.every(note => !note.startsWith('Содержимое карточек изменилось') && !note.startsWith('Набор карточек изменился')), diff.notes.join(' '));
+  assert.ok(diff.notes.every(note => !note.startsWith('Изменились ситуации:') && !note.startsWith('Набор ситуаций изменился')), diff.notes.join(' '));
   assert.ok(diff.notes.includes('Контрольные ситуации не сравниваются: они не входят в главное число.'));
   assert.equal(diff.cards.shared, source.scenarios.length - 1);
   assert.ok([...diff.pairs, ...diff.incomparable].every(row => row.scenarioId !== a), 'the control is not a pair of the diff');
@@ -1011,6 +1019,8 @@ async function agreementRecord(lab: ExperimentLab, goal: 'pass' | 'fail' | 'unkn
   await lab.store.save(record);
   return { record, trial, scenario };
 }
+/** The rule a quick mark on such a run is stamped with: its attempts are recorded under today's edition of the goal-and-rules rule. */
+const MARK_RULE = 'goal-and-rules-v3';
 
 test('the lab, not the caller, records which judgment a quick mark refers to', async t => {
   const { lab } = await setup(t, legacyDemoRuntime());
@@ -1073,7 +1083,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
   // The lab stamps the counting rule; a caller value is overwritten, never trusted (CTX-20, CTX-23).
   const first = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', judgeVerdict: 'fail',
     countingRules: 'goal-v1', note: 'Быстрая отметка: согласен с судьёй.' });
-  assert.equal(first.humanReviews.at(-1)!.countingRules, COUNTING_RULES, 'the lab fills the counting rule and overwrites the caller value');
+  assert.equal(first.humanReviews.at(-1)!.countingRules, MARK_RULE, 'the lab fills the counting rule and overwrites the caller value');
   const half = judgeAgreement(first);
   assert.equal(half.checked, 0, 'one mark on a double failure is not a checked situation (CR-02)');
   assert.deepEqual(half.unmarked, [trial.id], 'the situation stays in the queue until its second metric is answered');
@@ -1081,7 +1091,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
   assert.ok(trustParts(buildResultView(first)).includes('судью ещё не проверяли'), trustParts(buildResultView(first)).join(' · '));
 
   const second = await lab.addHumanReview(record.id, { trialId: trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'fail', judgeVerdict: 'fail', note: 'Быстрая отметка: согласен с судьёй.' });
-  assert.equal(second.humanReviews.at(-1)!.countingRules, COUNTING_RULES);
+  assert.equal(second.humanReviews.at(-1)!.countingRules, MARK_RULE);
   const whole = judgeAgreement(second);
   assert.deepEqual([whole.checked, whole.agreed, whole.unsure, whole.stale, whole.staleRule], [1, 1, 0, 0, 0]);
   assert.deepEqual(whole.failures, { agreed: 1, checked: 1 });
@@ -1096,7 +1106,7 @@ test('a double failure needs a stamped mark on both metrics before it counts onc
   await reopened.init();
   try {
     const loaded = await reopened.get(record.id);
-    assert.deepEqual(loaded.humanReviews.map(item => [item.metricId, item.countingRules]), [['goal_attainment', COUNTING_RULES], ['prompt_compliance', COUNTING_RULES]]);
+    assert.deepEqual(loaded.humanReviews.map(item => [item.metricId, item.countingRules]), [['goal_attainment', MARK_RULE], ['prompt_compliance', MARK_RULE]]);
     assert.equal(judgeAgreement(loaded).checked, 1);
   } finally { await reopened.close(); }
 });
@@ -1108,7 +1118,7 @@ test('a quick mark lands only on a metric that decided the situation: one failed
   await assert.rejects(lab.addHumanReview(goalOnly.record.id, { trialId: goalOnly.trial.id, metricId: 'prompt_compliance', source: 'quick', verdict: 'pass', note: 'не та оценка' }),
     /^Error: Отметку согласия можно поставить только на оценку, из-за которой ситуация решена\.$/);
   const marked = await lab.addHumanReview(goalOnly.record.id, { trialId: goalOnly.trial.id, metricId: 'goal_attainment', source: 'quick', verdict: 'fail', note: 'согласен' });
-  assert.equal(marked.humanReviews.at(-1)!.countingRules, COUNTING_RULES);
+  assert.equal(marked.humanReviews.at(-1)!.countingRules, MARK_RULE);
   assert.equal(judgeAgreement(marked).checked, 1, 'a goal-only failure is checked by its one mark');
 
   // Goal pass + rules pass: a two-metric pass has two targets (CTX-25).
@@ -1250,7 +1260,7 @@ test('HN-4: a reassessment that cannot grade the saved facts names the measureme
     'the agent was not even called: never «агент не ответил»');
 
   // Cards without exact checks, judged again by a judge that does not answer: the graded outcome stays, the judge is named.
-  const judgeless: Runtime = { async assess() { throw new Error('Pi provider response incomplete: rate limit'); } };
+  const judgeless: Runtime = { async assess() { throw new ProviderFailure('rate limit', 'Pi provider response incomplete: rate limit'); } };
   const { lab: judged } = await setup(t, judgeless);
   const unchecked = experimentSchema.parse({ ...fixture, id: randomUUID(), scenarios: fixture.scenarios.map(scenario => ({ ...scenario, checks: [] })),
     trials: fixture.trials.map(trial => ({ ...trial, checks: [] })) });

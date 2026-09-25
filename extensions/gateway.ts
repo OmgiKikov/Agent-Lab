@@ -1,7 +1,9 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
-import { connectGateway, GIGA_PROVIDER_ID, type GatewayConnection } from '../src/giga-provider.js';
+import {
+  connectGateway, forgetConnections, gatewayFailureText, GIGA_PROVIDER_ID, keepConnection, reconnectGateway, type GatewayConnection, type GatewayFailure,
+} from '../src/giga-provider.js';
 import {
   forgetGatewaySettings, gatewayEnvironment, gatewayFile, gatewaySettingsSchema, gatewayStatus, saveGatewaySettings, settingsEnvironment,
   unreadableGigaFiles,
@@ -18,8 +20,9 @@ import { safeText } from '../src/text.js';
  *   /agent-lab gateway ──► address, certificate, key, CA ──► catalog checked with exactly these files ──► paths saved, provider giga
  *   /agent-lab gateway off ──► confirmed ──► paths forgotten, provider removed
  *
- * Only paths are remembered (~/.agent-lab/gateway.json, 0600), never the files. The configuration and the transport
- * live in src/giga-*.ts; this module owns the owner's words and the dialogs.
+ * Either connection is also the process's connection (src/giga-provider.ts): Lab's own runtimes reuse it instead of
+ * asking the gateway again. Only paths are remembered (~/.agent-lab/gateway.json, 0600), never the files. The
+ * configuration and the transport live in src/giga-*.ts; this module owns the dialogs.
  */
 
 /** The owner's words for the gateway's variables. */
@@ -38,29 +41,12 @@ export function ownerPath(path: string, cwd: string): string {
   return isAbsolute(trimmed) ? trimmed : resolve(cwd, trimmed);
 }
 
-/** Node's error codes of a gateway whose own certificate did not verify. */
-const SERVER_CERTIFICATE = ['CERT', 'SIGNATURE', 'SELF_SIGNED', 'ISSUER'];
-const connectionCode = (category: string): string | undefined => category.startsWith('connection ') ? category.slice('connection '.length) : undefined;
-const serverCertificateRefused = (category: string): boolean => SERVER_CERTIFICATE.some(part => connectionCode(category)?.includes(part));
-
-/**
- * A refusal of src/giga-provider.ts → what to fix. The category is a Node error code or an HTTP status only: it
- * carries no path, no response body and no certificate.
- */
-export function gatewayFailureText(category: string): string {
-  const code = connectionCode(category);
-  if (category === 'bad configuration') return 'не удалось прочитать сертификат или ключ. Проверьте пути.';
-  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'адрес шлюза не найден в сети. Проверьте адрес и VPN.';
-  if (['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT'].includes(code ?? '') || category === 'timeout or aborted') return 'шлюз не отвечает. Проверьте VPN и адрес.';
-  if (serverCertificateRefused(category)) return 'не удалось проверить сертификат самого шлюза. Укажите цепочку CA или, осознанно, отключите проверку.';
-  if (code === 'EPROTO' || code?.startsWith('ERR_SSL')) return 'сертификат и ключ не подходят друг к другу или к шлюзу.';
-  if (category === 'HTTP 401' || category === 'HTTP 403') return 'шлюз не принял сертификат: у него нет доступа.';
-  if (category === 'HTTP 404') return 'по этому адресу нет каталога моделей. Нужен корень шлюза, без /api.';
-  if (category === 'empty catalog') return 'шлюз ответил, но моделей для разговора с этим сертификатом нет.';
-  return `шлюз ответил ошибкой (${category}).`;
-}
+const sentence = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
 interface GatewayInput { url: string; certPath: string; keyPath: string; caPath?: string | undefined; insecure?: boolean }
+/** One attempt to connect with what the owner typed: connected and saved, or refused with the reason, when the gateway gave one. */
+type Attempt = { connected: true; message: string } | { connected: false; message: string; failure?: GatewayFailure };
+
 export interface GatewayOptions {
   /** The file of the remembered paths; ~/.agent-lab/gateway.json (or AGENT_LAB_GATEWAY_FILE) by default. */
   file?: string;
@@ -88,25 +74,28 @@ export function createGateway(pi: Pick<ExtensionAPI, 'registerProvider' | 'unreg
   };
   const ready = (async () => {
     try {
-      const connection = await connect(gatewayEnvironment(process.env, file));
+      const connection = await reconnectGateway(gatewayEnvironment(process.env, file), connect);
       if ('provider' in connection) connected(connection);
-      else if (connection.failure !== 'not configured') note = `Шлюз моделей не подключился: ${gatewayFailureText(connection.failure)} /agent-lab gateway настроит его заново.`;
+      else if (connection.failure.kind !== 'not configured') note = `Шлюз моделей не подключился: ${gatewayFailureText(connection.failure)} /agent-lab gateway настроит его заново.`;
     } catch { note = 'Личная настройка шлюза моделей повреждена. /agent-lab gateway настроит его заново.'; }
   })();
 
   /** Checks access with exactly these files and only then remembers the paths and connects the provider. */
-  const remember = async (input: GatewayInput, cwd: string, signal?: AbortSignal): Promise<{ failure?: string; message: string }> => {
+  const remember = async (input: GatewayInput, cwd: string, signal?: AbortSignal): Promise<Attempt> => {
     const parsed = gatewaySettingsSchema.safeParse({ format: 'agent-lab-gateway-1', url: input.url.trim(), certPath: ownerPath(input.certPath, cwd),
       keyPath: ownerPath(input.keyPath, cwd), ...(input.caPath ? { caPath: ownerPath(input.caPath, cwd) } : {}), ...(input.insecure ? { insecure: true } : {}) });
-    if (!parsed.success) return { failure: 'bad url', message: 'Адрес шлюза не похож на адрес: нужен вид https://шлюз.' };
+    if (!parsed.success) return { connected: false, message: 'Адрес шлюза не похож на адрес: нужен вид https://шлюз.' };
     const env = settingsEnvironment(parsed.data);
     const unreadable = unreadableGigaFiles(env);
-    if (unreadable.length) return { failure: 'unreadable', message: `Не читается: ${fieldNames(unreadable)}. Проверьте путь.` };
+    if (unreadable.length) return { connected: false, message: `Не читается: ${fieldNames(unreadable)}. Проверьте путь.` };
     const connection = await connect(env, undefined, signal);
-    if (!('provider' in connection)) return { failure: connection.failure, message: `Шлюз не подключён, ничего не сохранено: ${gatewayFailureText(connection.failure)}` };
+    if (!('provider' in connection)) {
+      return { connected: false, failure: connection.failure, message: `Шлюз не подключён, ничего не сохранено: ${gatewayFailureText(connection.failure)}` };
+    }
     await saveGatewaySettings(parsed.data, file);
+    keepConnection(env, connection);
     connected(connection);
-    return { message: `Шлюз моделей подключён: моделей ${connection.models.length}. Выберите модель: /model → giga.${parsed.data.insecure ? ' Сертификат самого шлюза не проверяется — по вашему решению.' : ''}` };
+    return { connected: true, message: `Шлюз моделей подключён: моделей ${connection.models.length}. Выберите модель: /model → giga.${parsed.data.insecure ? ' Сертификат самого шлюза не проверяется — по вашему решению.' : ''}` };
   };
 
   const setup = async (ctx: ExtensionCommandContext): Promise<void> => {
@@ -118,18 +107,21 @@ export function createGateway(pi: Pick<ExtensionAPI, 'registerProvider' | 'unreg
     if (!keyPath) return;
     const caPath = (await ctx.ui.input('Путь к цепочке CA шлюза (Enter — пропустить)', ''))?.trim() || undefined;
     let result = await remember({ url, certPath, keyPath, caPath }, ctx.cwd, ctx.signal);
-    if (result.failure && serverCertificateRefused(result.failure)
-      && await ctx.ui.confirm('Сертификат шлюза не проверяется', 'Подключиться без проверки сертификата самого шлюза? Ваш сертификат при этом по-прежнему нужен. Решение запомнится.')) {
+    // Skipping the check is offered only when the gateway's own certificate did not verify: a refusal of the owner's
+    // certificate is fixed with the owner's files, and weakening TLS would not help it.
+    if (!result.connected && result.failure?.kind === 'gateway certificate' && await ctx.ui.confirm('Сертификат шлюза не проверяется',
+      `${sentence(gatewayFailureText(result.failure))} Подключиться без проверки сертификата самого шлюза? Ваш сертификат при этом по-прежнему нужен. Решение запомнится.`)) {
       result = await remember({ url, certPath, keyPath, caPath, insecure: true }, ctx.cwd, ctx.signal);
     }
-    ctx.ui.notify(safeText(result.message), result.failure ? 'error' : 'info');
-    if (!result.failure) ctx.ui.setWidget('agent-lab-start', undefined);
+    ctx.ui.notify(safeText(result.message), result.connected ? 'info' : 'error');
+    if (result.connected) ctx.ui.setWidget('agent-lab-start', undefined);
   };
 
   const forget = async (ctx: ExtensionCommandContext): Promise<void> => {
     if (!await ctx.ui.confirm('Отключить шлюз моделей?', 'Lab забудет пути к вашим сертификату и ключу. Сами файлы не удаляются.')) return;
     const removed = await forgetGatewaySettings(file);
     pi.unregisterProvider(GIGA_PROVIDER_ID); models = undefined;
+    forgetConnections();
     const environment = Object.keys(process.env).some(name => name.startsWith('AGENT_LAB_GATEWAY_') && name !== 'AGENT_LAB_GATEWAY_FILE' && process.env[name]);
     ctx.ui.notify(`${removed ? 'Шлюз моделей отключён: пути забыты, модели giga убраны из выбора.' : 'Личной настройки шлюза не было; модели giga убраны из выбора.'}${environment
       ? ' Переменные AGENT_LAB_GATEWAY_* всё ещё заданы: в следующем запуске шлюз подключится по ним.' : ''}`, 'info');

@@ -6,10 +6,10 @@ import type { CardCommand } from '../src/card/schema.js';
 import type { Decision, DecisionChoice } from '../src/inbox.js';
 import { decisionsLine } from '../src/inbox.js';
 import type { ExperimentLab } from '../src/experiment.js';
-import { safeText } from '../src/text.js';
+import { safeLine, safeText } from '../src/text.js';
 import type { Background } from './background.ts';
 import { row } from './conversation.ts';
-import { applySituationCommand, chatQueue, settle, writer, type DecisionSurface } from './decisions.ts';
+import { applySituationCommand, busyFor, chatQueue, settle, writer, type DecisionSurface } from './decisions.ts';
 import { displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { decisionsOutput } from './model-output.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
@@ -60,16 +60,21 @@ export function registerDecideTool(pi: Pick<ExtensionAPI, 'registerTool'>, host:
       try {
         const queue = await chatQueue(host.reading(directory));
         if (!params.decision) return host.feedResult(callId, { decisions: decisionsOutput(queue.decisions), note: decisionsLine(queue.decisions.length) }, queueFeed(queue.decisions), 'Решения');
+        // Work going on in this session holds the writer's lease: said first, so the owner is never asked a question
+        // whose answer could not be written, and the work that hides a draft's decisions is named as what is going on.
+        const busy = await busyFor(host.operations, directory);
+        if (busy) throw new Error(busy);
         const decision = queue.decisions.find(item => item.key === params.decision);
         if (!decision) throw new NeedsOwner('unknown_reference', `Решения «${params.decision}» уже нет: его приняли или оно изменилось. Сейчас ждут: ${queue.decisions.map(item => item.key).join(', ') || 'ничего'}.`,
-          queue.decisions.map(item => item.key), 'Этого решения уже нет — покажу, что ждёт сейчас.');
+          queue.decisions.map(item => item.key), 'Этого решения уже нет: его приняли или оно изменилось.');
         const settling = decision.choices.filter(choice => choice.settles);
         if (!settling.length) return host.feedResult(callId, { decided: false, instruction: 'This decision only opens what it is about: show the situation with agent_lab_cards or the conversation with agent_lab_explain.' },
           { tone: 'warning', rows: [row(`${decision.subject} — ${decision.text}`)] }, 'Решение');
         requireInteractive(ctx, 'Решение принимает владелец в интерактивном терминале Pi.');
         // The owner picks in a dialog of the decision itself; the answer the model heard is shown as what they said.
         const named = params.choice === undefined ? undefined : settling[params.choice - 1];
-        const labels = settling.map((choice, index) => `${index + 1}  ${choice.label}`);
+        // An answer's words come from the records: each crosses the terminal boundary, and the pick is matched as shown.
+        const labels = settling.map((choice, index) => safeLine(`${index + 1}  ${choice.label}`));
         const picked = await ctx.ui.select(safeText([decision.subject, '', decision.text, ...(named ? ['', `В разговоре вы ответили: «${named.label}»`] : [])].join('\n')), [...labels, 'Не сейчас']);
         const choice = settling[labels.indexOf(picked ?? '')];
         if (!choice) return host.feedResult(callId, { decided: false, declined: true, instruction: 'The owner did not decide now. Nothing was written; do not ask again unless they do.' },

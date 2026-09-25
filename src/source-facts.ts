@@ -78,6 +78,9 @@ function exportsFactory(w: string[]): boolean {
   });
 }
 
+/** Whether the file's code — not a comment or a string — uses the word: the `respond` of the session a module returns. */
+export const codeHasWord = (source: string, language: Language, word: string): boolean => lex(source, language).words.includes(word);
+
 /** The module contract (Node only), a JSON-lines loop over stdin, and the Lab request field names a file uses. */
 export function codeFacts(source: string, language: Language): CodeFacts {
   const { words, strings } = lex(source, language);

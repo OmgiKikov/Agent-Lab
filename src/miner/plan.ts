@@ -3,6 +3,7 @@ import type { CallContext, Runtime } from '../runtime.js';
 import { preparationCeiling, promptLoad, promptsOversize } from '../card/budget.js';
 import type { CardPreparation, LibraryV2 } from '../card/schema.js';
 import type { ImportBatch } from '../scenario-contracts.js';
+import { sampleWords } from '../scenario-library.js';
 import type { ExperimentStore } from '../store.js';
 import { countText } from '../plural.js';
 import { clip } from '../text.js';
@@ -62,6 +63,8 @@ export interface PreparationConsent {
   /** Logged conversations in the import, every row counted, and those a situation can be made from. */
   conversations: number;
   usable: number;
+  /** A log longer than one import: the conversations it held and the usable ones the import's sample was taken from. */
+  sample?: NonNullable<ImportBatch['sample']>;
   /** Situations promised: the preparation never makes more. */
   promised: number;
   topicMapCalls: number;
@@ -92,7 +95,7 @@ export async function preparationConsent(store: Pick<ExperimentStore, 'readTopic
   const oversize = promptsOversize(input.task, sources);
   if (oversize) throw new Error(oversize);
   return {
-    conversations: batch.dialogues.length + batch.rejected.length, usable: dialogueIds.length, promised, topicMapCalls,
+    conversations: batch.dialogues.length + batch.rejected.length, usable: dialogueIds.length, ...batch.sample ? { sample: batch.sample } : {}, promised, topicMapCalls,
     prompts: promptLoad(sources),
     callCeiling: preparationCeiling({ task: input.task, sources, situations: promised, fromLogs: true, topicMapCalls }),
     excluded: leftOut(batch, excluded), asksAgent: isRunnable(input.target),
@@ -124,11 +127,14 @@ export function consentText(consent: PreparationConsent, source: string): { ques
   for (const item of consent.excluded) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
   // Sorting is stable: equal counts keep the order the conversations were left out in.
   const reasons = [...counts].sort((a, b) => b[1] - a[1]).map(([kind, count]) => `${LEFT_OUT_TEXT[kind]} — ${count}`);
-  const { prompts } = consent;
+  const { prompts, sample } = consent;
+  // A longer log than one import: the owner hears how many it held and how the import's sample was taken.
+  const logged = sample ? `В логах ${countText(sample.dialogues, CONVERSATIONS)}, в одну загрузку входит ${consent.conversations}: ${sampleWords(consent.conversations, sample.usable)}. Из них подходят ${consent.usable}.`
+    : `В логах ${countText(consent.conversations, CONVERSATIONS)}, подходят ${consent.usable}.`;
   return {
     question: `Собрать ${countText(consent.promised, SITUATIONS_ACC)} из ${source}?`,
     lines: [
-      `В логах ${countText(consent.conversations, CONVERSATIONS)}, подходят ${consent.usable}. Ситуаций будет не больше ${consent.promised} — по одной на разговор, из всех тем логов.`,
+      `${logged} Ситуаций будет не больше ${consent.promised} — по одной на разговор, из всех тем логов.`,
       ...(reasons.length ? [`Не войдут ${countText(consent.excluded.length, CONVERSATIONS)}: ${reasons.join(' · ')}.`] : []),
       ...(prompts.count ? [`Промпты агента — ${countText(prompts.count, PROMPTS)}, ${Math.ceil(prompts.bytes / 1000)} КБ — читаются целиком с каждым разговором.`] : []),
       `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. ${REVISION_TEXT} Это потолок, а не прогноз; ${agentWords(consent.asksAgent)}.`,

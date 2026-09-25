@@ -13,6 +13,7 @@ import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { proposalCall } from '../src/card/proposal.js';
 import { checkSchema, experimentSchema, fingerprint, SANDBOX_RETIRED, settingsSchema, type Scenario, type Source, type Target, type Trial, type World } from '../src/contracts.js';
 import { goalAttainment, replyQuality, simulatorFidelity, type JudgeAudit, type MetricAssessment, type Rubric } from '../src/assessment.js';
+import { ProviderFailure } from '../src/llm/model-call.js';
 import type { CallContext, DialogueMessage, Runtime } from '../src/runtime.js';
 import { appointmentAgent, legacyDemoRuntime } from './helpers/demo-record.js';
 import { compiledCard, requirements as cardRequirements } from './helpers/cards.js';
@@ -217,9 +218,16 @@ test('simulator protocol/provider errors are invalid; exhausting target turns is
   assert.match(invalid.reason, /реплика симулированного пользователя/);
   const failed = await evaluate(legacy, working, { ...legacyDemoRuntime(), async userTurn() { throw new Error('Provider offline'); } });
   assert.equal(failed.outcome, 'invalid');
-  const neverDone = await evaluate(legacy, working, { ...legacyDemoRuntime(), async userTurn() { return { message: 'Please confirm again.', done: false }; } });
-  assert.equal(neverDone.outcome, 'invalid');
-  assert.match(neverDone.reason, /не завершился в отведённое число реплик/);
+  // A customer who never says it is done runs into the run's limit: the talk ends there and is graded as it went.
+  const talkative: Runtime = { ...legacyDemoRuntime(), async userTurn() { return { message: 'Please confirm again.', done: false }; } };
+  for (const [target, outcome] of [[working, 'pass'], [withoutUpdate, 'fail']] as const) {
+    const neverDone = await evaluate(legacy, target, talkative);
+    assert.equal(neverDone.outcome, outcome, neverDone.reason);
+    assert.equal(neverDone.invalidCause, undefined, 'the limit is an observation, not a failed measurement');
+    assert.equal(neverDone.turnLimit, true);
+    assert.equal(neverDone.events.filter(event => event.type === 'user').length, settings.maxTurns, 'every message the run allows was delivered');
+    assert.match(neverDone.reason, /Клиенту не хватило реплик/);
+  }
   // A runtime without the free simulator cannot continue an old card: the dialogue is unmeasured, never an agent failure.
   const { userTurn: _userTurn, ...withoutSimulator } = legacyDemoRuntime();
   const unsupported = await evaluate(legacy, working, withoutSimulator);
@@ -354,6 +362,27 @@ test('missing, forged, or failed rubric assessments stay separate from successfu
     assert.equal(trial.assessments, undefined);
     assert.match(trial.assessmentError!, sample.error);
   });
+});
+
+test('a judge failure is recorded by its type, never by its words: a provider that did not answer is «unavailable» whatever its message says', async () => {
+  const scenario = card('a_direct');
+  scenario.metrics = structuredClone(testMetrics);
+  const failing = (error: Error): Runtime => ({ ...legacyDemoRuntime(), async assess() { throw error; } });
+  const cases: [Error, 'unavailable' | 'rejected'][] = [
+    // A step's label leads the message, so the old reading of its first words took these for a rejected answer.
+    [new ProviderFailure('rate limit', 'Судья: Pi provider response incomplete: rate limit'), 'unavailable'],
+    [new ProviderFailure('overloaded', 'Судья: сервер занят', { delivery: 'cut' }), 'unavailable'],
+    [new ProviderFailure('length', 'Pi provider response incomplete: length'), 'rejected'],
+    [new Error('Pi provider response incomplete: rate limit'), 'rejected'],
+  ];
+  for (const [error, failure] of cases) {
+    const trial = await evaluate(scenario, working, failing(error));
+    assert.equal(trial.outcome, 'pass', trial.reason);
+    assert.equal(trial.assessmentError, error.message);
+    assert.equal(trial.assessmentFailure, failure, error.message);
+  }
+  const { assess: _assess, ...withoutJudge } = legacyDemoRuntime();
+  assert.equal((await evaluate(scenario, working, withoutJudge)).assessmentFailure, 'unavailable', 'a runtime without a judge: the judge did not answer');
 });
 
 test('an incomplete or invalid dialogue is not sent to the rubric assessor', async () => {

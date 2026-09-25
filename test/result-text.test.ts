@@ -4,11 +4,13 @@ import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
 import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Requirement, type Source, type Trial } from '../src/contracts.js';
 import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type MetricAssessment } from '../src/assessment.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
-import { buildResultView, COUNTING_RULES, NOT_MEASURED_TEXT, type ResultView } from '../src/result-view.js';
+import { buildResultView, COUNTING_RULES, exitCodeOf, NOT_MEASURED_TEXT, type ResultView } from '../src/result-view.js';
 import {
-  accuracyParts, accuracyRow, alarmRow, causeRows, chatBlock, disagreementRows, failureRows, fitRows, GOOD_FROM, headRows, MAX_WIDTH, MIXED_FROM, nextRows, NOT_MEASURED_WARN_ABOVE, plainText,
-  realityParts, resultScreen, runLine, topicRows, trustParts, trustSegments, whenText, type ResultRow,
+  accuracyParts, accuracyRow, alarmRow, causeRows, chatBlock, countingLines, disagreementRows, dunnoText, errorListRows, failureRows, fitRows, GOOD_FROM, headRows,
+  MAX_WIDTH, MIXED_FROM, NOT_MEASURED_WARN_ABOVE, nextRows, noErrorsText, plainText, realityParts, reasonLabel, resultScreen, runLine, saidText, topicRows, trustParts, trustSegments, whenText,
+  type ResultRow,
 } from '../src/result-text.js';
+import { COUNTING_RULE_TEXT } from '../src/card/expectations.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
 
 /*
@@ -268,18 +270,29 @@ test('trustParts: interval, small sample, not measured, agreement and instabilit
   add('x0', ['pass', 'pass'], { fidelity: 'fail' });
   const v = view(marked(record));
   assert.equal(v.cards.find(item => item.scenarioId === 'r0')?.flaky, true);
+  // Three of seven not measured: the share stands above the number as its alarm, and the trust line does not repeat it.
+  assert.equal(alarmRow(v)?.text, `✗ Числу пока не верить: не измерено 3 из 7 ситуаций — чаще всего ${NOT_MEASURED_TEXT.judge_split} (2)`);
   assert.deepEqual(trustParts(v), [
     'Вероятно, от 15% до 85% (95%)',
     'мало данных',
-    `не измерено 3 — чаще всего ${NOT_MEASURED_TEXT.judge_split} (2)`,
     'с судьёй согласны 8 из 8',
     'нестабильно 1',
   ]);
-  // Only the small-sample segment is a warning a surface may colour; the parts are the segments' texts.
-  assert.deepEqual(trustSegments(v).map(part => part.warn), [false, true, false, false, false]);
+  assert.deepEqual(trustSegments(v).map(part => part.warn), [false, true, false, false]);
   assert.deepEqual(trustSegments(v).map(part => part.text), trustParts(v));
   const row = headRows(v).find(item => item.role.startsWith('trust'));
   assert.deepEqual(row, { role: 'trust:small', indent: 0, text: trustParts(v).join(' · '), parts: trustParts(v) });
+  // One of twenty not measured stays in the trust line, after the interval, as a warning with its share.
+  const few = view(marked(scored(18, 1, { unmeasured: 1 })));
+  assert.deepEqual(trustSegments(few), [
+    { text: 'Вероятно, от 75% до 99% (95%)', warn: false }, { text: 'мало данных', warn: true },
+    { text: `не измерено 1 из 20 — ${NOT_MEASURED_TEXT.judge_split}`, warn: true }, { text: 'с судьёй согласны 19 из 19', warn: false },
+  ]);
+  assert.equal(alarmRow(few), null);
+  const twenty = view(marked(scored(20, 0, { unmeasured: 1 })));
+  assert.deepEqual(trustSegments(twenty).map(part => [part.text, part.warn]).slice(1),
+    [[`не измерено 1 из 21 — ${NOT_MEASURED_TEXT.judge_split}`, true], ['с судьёй согласны 20 из 20', false]]);
+  assert.equal(headRows(twenty).find(item => item.role.startsWith('trust'))?.role, 'trust:small', 'a warning in the line paints the line as one, with no small sample');
 });
 
 test('trustParts: «мало данных» below 20 decided situations only, one reason named alone, what is still being checked', () => {
@@ -292,7 +305,7 @@ test('trustParts: «мало данных» below 20 decided situations only, on
   assert.deepEqual(trustSegments(twenty).map(part => part.warn), [false, false]);
   assert.deepEqual(trustParts(view(scored(3, 9))).slice(0, 2), ['Вероятно, от 9% до 53% (95%)', 'мало данных']);
   // One reason: named without «чаще всего».
-  assert.deepEqual(trustParts(view(scored(2, 0, { unmeasured: 2 }))).slice(2, 3), [`не измерено 2 — ${NOT_MEASURED_TEXT.judge_split}`]);
+  assert.deepEqual(trustParts(view(scored(9, 0, { unmeasured: 1 }))).slice(2, 3), [`не измерено 1 из 10 — ${NOT_MEASURED_TEXT.judge_split}`]);
   // A run still going: what is pending, and no agreement part while the judge's queue is not final.
   assert.deepEqual(trustParts(view(scored(2, 1, { pending: 3 }))), ['Вероятно, от 21% до 94% (95%)', 'мало данных', 'ещё проверяется 3']);
 });
@@ -304,8 +317,10 @@ test('trustParts: the owner\'s agreement is counted, «судью ещё не п
   const overturned = view(marked(scored(18, 7), { disagree: ['t-f0'] }));
   assert.ok(trustParts(overturned).includes('с судьёй согласны 24 из 25'));
   assert.equal(accuracyRow(overturned).text, 'Точность агента: 76% — справился в 19 из 25 ситуаций');
-  // Nothing decided, nothing to review: no agreement part, and the first part starts the sentence.
-  assert.deepEqual(trustParts(view(scored(0, 0, { unmeasured: 2 }))), [`Не измерено 2 — ${NOT_MEASURED_TEXT.judge_split}`]);
+  // Nothing decided, nothing to review: no agreement part, and the first part starts the sentence. Without a number there is
+  // nothing to distrust yet, so the unmeasured share stays in the line.
+  assert.deepEqual(trustParts(view(scored(0, 0, { unmeasured: 2 }))), [`Не измерено 2 из 2 — ${NOT_MEASURED_TEXT.judge_split}`]);
+  assert.equal(alarmRow(view(scored(0, 0, { unmeasured: 2 }))), null);
   assert.deepEqual(trustParts(view(scored(0, 0, { pending: 3 }))), ['Ещё проверяется 3']);
   assert.deepEqual(trustParts(view(run([card('a')], [], { phase: 'review' }))), [], 'a draft has nothing to trust yet');
   assert.deepEqual(headRows(view(run([card('a')], [], { phase: 'review' }))).map(row => row.role), ['accuracy:none']);
@@ -366,8 +381,8 @@ test('disagreementRows: a full overturn says the verdict, a partial one names th
 
 test('realityParts weighs the topics by their share of conversations and says how many conversations have a topic', () => {
   const v = view(rich());
-  // Возврат оплаты: 1 of 3 at 60% of conversations; Статус заявки: 3 of 3 at 30% → (0.6·⅓ + 0.3·1) / 0.9 ≈ 56%.
-  assert.deepEqual(realityParts(v), ['С учётом частоты тем — около 56% (темы известны у 10 из 12 разговоров)']);
+  // Возврат оплаты: 1 of 3 at 60% of conversations; Статус заявки: 3 of 3 at 30% → (0.6·⅓ + 0.3·1) / 0.9 ≈ 56%, on 90% of them.
+  assert.deepEqual(realityParts(v), ['С учётом частоты тем — около 56% (измерены темы 90% диалогов; темы известны у 10 из 12 разговоров)']);
   assert.deepEqual(headRows(v).at(-1), { role: 'reality', indent: 0, text: realityParts(v)[0], parts: realityParts(v) });
   // Every conversation has a topic: no parenthesis.
   // Every conversation has a topic: no parenthesis. 1 of 2 at 60%, 2 of 2 at 40% → 0.6·½ + 0.4·1 = 70%.
@@ -585,7 +600,7 @@ test('chatBlock collapsed: the number, the trust line and the causes in one row 
   const alarmed = chatBlock(view(scored(3, 1, { control: 'fail' })), { expanded: false });
   assert.deepEqual(alarmed.map(row => [row.role, row.indent]), [['alarm', 0], ['accuracy:warn', 0], ['trust:small', 2], ['muted', 2]]);
   assert.deepEqual(texts(chatBlock(view(scored(0, 0, { unmeasured: 2 })), { expanded: false })),
-    ['Точность агента: нет данных — ни одна ситуация не измерена', `Не измерено 2 — ${NOT_MEASURED_TEXT.judge_split}`]);
+    ['Точность агента: нет данных — ни одна ситуация не измерена', `Не измерено 2 из 2 — ${NOT_MEASURED_TEXT.judge_split}`]);
 });
 
 test('chatBlock expanded: the head with the reality line, every cause with its example, the unmeasured situations and the chat «Дальше»', () => {
@@ -594,7 +609,7 @@ test('chatBlock expanded: the head with the reality line, every cause with its e
   assert.deepEqual(rows.map(row => [row.role, row.indent, row.text]), [
     ['accuracy:warn', 0, 'Точность агента: 67% — справился в 4 из 6 ситуаций, ещё 1 не измерено'],
     ['trust:small', 2, trustParts(v).join(' · ')],
-    ['reality', 2, 'С учётом частоты тем — около 56% (темы известны у 10 из 12 разговоров)'],
+    ['reality', 2, 'С учётом частоты тем — около 56% (измерены темы 90% диалогов; темы известны у 10 из 12 разговоров)'],
     ['blank', 0, ''],
     ['heading', 2, 'Почему ошибается'],
     ['item', 4, '1  Переспрашивает номер, который клиент уже назвал'],
@@ -793,4 +808,149 @@ test('every chat and board row is plain Russian, without machine words and witho
       }
     }
   }
+});
+
+// ---- «Не измерено» never raises the number silently ----
+
+/** `passed` situations the agent handled and `broken` ones it never answered; every decided one marked by the owner. */
+function unanswered(passed: number, broken: number): Experiment {
+  const cards = Array.from({ length: passed + broken }, (_, i) => card(`s${i}`, { title: `Ситуация ${i + 1}` }));
+  const trials = cards.map((item, i) => i < passed ? attempt(item.id)
+    : attempt(item.id, { outcome: 'invalid', invalidCause: 'agent', reason: 'Агент не ответил.', assessments: [] }));
+  return marked(run(cards, trials));
+}
+
+test('eight of ten unanswered situations raise the alarm on every surface: never a quiet «100% — ошибок нет»', () => {
+  const v = view(unanswered(2, 8));
+  const alarm = '✗ Числу пока не верить: не измерено 8 из 10 ситуаций — агент не ответил';
+  assert.equal(accuracyRow(v).text, 'Точность агента: 100% — справился в 2 из 2 ситуаций, ещё 8 не измерено', 'the number says what it measured');
+  assert.deepEqual(alarmRow(v), { role: 'alarm', indent: 0, text: alarm });
+  // The chat (folded and open), the board, the CLI and the lines a CI job reads all open with it.
+  for (const [label, rows] of [['chat', chatBlock(v, { expanded: false })], ['chat open', chatBlock(v, { expanded: true })],
+    ['board', resultScreen(v, { surface: 'board', now: NOW })], ['cli', resultScreen(v, { surface: 'cli', now: NOW })]] as const) {
+    assert.deepEqual(rows[0], { role: 'alarm', indent: 0, text: alarm }, label);
+    assert.ok(!texts(rows).some(text => text.startsWith('Ошибок нет')), label);
+    assert.ok(!texts(rows).some(text => text.includes('Отчёт для заказчика')), `${label}: no report for a number not to be trusted`);
+  }
+  assert.equal(plainText(resultScreen(v, { surface: 'cli', now: NOW }), MAX_WIDTH).split('\n')[0], ` ${alarm}`);
+  // Only the measured situations had no error, and the sentence says how many were not measured.
+  assert.deepEqual(causeRows(v), [{ role: 'muted', indent: 0, text: 'Среди измеренных ошибок нет: проверены 2 ситуации, не измерено 8. Это не гарантия для живых клиентов.' }]);
+  // Why first, then a repeat; the customer report is not offered.
+  assert.deepEqual(v.next.map(step => step.kind), ['why_unmeasured', 'repeat']);
+  assert.deepEqual(nextRows(v, 'chat'), [{ role: 'next:first', indent: 0, text: 'Дальше: спросите, почему ситуации не измерены.' }]);
+  assert.equal(exitCodeOf(v), 2, 'the CI exit code stays «incomplete»');
+});
+
+test('from a fifth of the situations unmeasured the number is not trusted; below it the share is the trust line\'s warning', () => {
+  const two = view(unanswered(8, 2));
+  assert.equal(two.notMeasured.alarm, true, '2 of 10 is a fifth');
+  assert.equal(alarmRow(two)?.text, '✗ Числу пока не верить: не измерено 2 из 10 ситуаций — агент не ответил');
+  assert.ok(!two.next.some(step => step.kind === 'report'));
+  const one = view(unanswered(9, 1));
+  assert.deepEqual([one.notMeasured.alarm, alarmRow(one)], [false, null]);
+  assert.deepEqual(trustSegments(one).find(part => part.text.startsWith('не измерено')), { text: 'не измерено 1 из 10 — агент не ответил', warn: true });
+  // Why is always among the steps when something was not measured: after what the result offers while there is no alarm.
+  assert.deepEqual(one.next.map(step => step.kind), ['report', 'repeat', 'why_unmeasured']);
+  assert.equal(causeRows(one)[0]!.text, noErrorsText(9, 1));
+  assert.equal(noErrorsText(9, 1), 'Среди измеренных ошибок нет: проверено 9 ситуаций, не измерено 1. Это не гарантия для живых клиентов.');
+  assert.deepEqual(causeRows(view(marked(scored(3, 0)))), [{ role: 'good', indent: 0, text: 'Ошибок нет. Это не гарантия для живых клиентов: проверены 3 ситуации.' }],
+    '«Ошибок нет» only when nothing was left unmeasured');
+  // A failed control keeps the alarm's one row; the unmeasured share then warns in the trust line.
+  const controlled = view(scored(3, 1, { unmeasured: 2, control: 'fail' }));
+  assert.equal(alarmRow(controlled)?.text, '✗ Числу пока не верить: контрольная ситуация не прошла — проверьте связь с агентом');
+  assert.ok(trustSegments(controlled).some(part => part.text === `не измерено 2 из 6 — ${NOT_MEASURED_TEXT.judge_split}` && part.warn));
+});
+
+test('a page for others speaks about the owner, never to «вы»; the owner\'s own screens keep «вы»', () => {
+  const full = (trialId: string): HumanReview => ({ id: `h-${trialId}`, trialId, metricId: 'goal_attainment', verdict: 'fail', note: 'Проверено целиком.', createdAt: '2026-09-17T00:00:00Z' });
+  const whole = (trialId: string, verdict: HumanReview['verdict']): HumanReview => ({ id: `d-${trialId}`, trialId, verdict, note: 'Прочитал разговор.', createdAt: '2026-09-17T00:00:00Z' });
+  const reviewed = view({ ...scored(3, 2), humanReviews: [full('t-f0'), whole('t-f1', 'pass')] });
+  assert.deepEqual(trustParts(reviewed).slice(2), ['вы проверили 2 ситуации', 'ваши отметки расходятся с итогом: 1']);
+  assert.deepEqual(trustSegments(reviewed, 'others').map(part => part.text).slice(2), ['владелец агента проверил 2 ситуации', 'отметки владельца агента расходятся с итогом: 1']);
+  // A conversation the owner set aside is the owner's word too.
+  const invalid = view({ ...scored(9, 0), humanReviews: [whole('t-p0', 'invalid')] });
+  const [reason] = invalid.notMeasured.reasons;
+  assert.deepEqual([reasonLabel(reason!), reasonLabel(reason!, 'others')], ['вы отметили разговор как негодный', 'владелец агента отметил разговор как негодный']);
+  assert.ok(trustSegments(invalid, 'others').some(part => part.text === 'не измерено 1 из 9 — владелец агента отметил разговор как негодный'));
+  assert.equal(alarmRow(view(scored(5, 2, { control: 'fail' })), 'others')?.text, '✗ Числу пока не верить: контрольная ситуация не прошла — нужно проверить связь с агентом');
+  for (const text of [...trustSegments(reviewed, 'others'), ...trustSegments(invalid, 'others')].map(part => part.text)) {
+    assert.doesNotMatch(text, /(^|[\s«])(вы|вас|вам|ваш[а-я]*)([\s»,.:]|$)/iu, text);
+  }
+});
+
+test('the folded chat counts the causes it does not name as causes, never as the failures left over', () => {
+  const record = scored(0, 8);
+  record.failureModes = [
+    { id: 'a', name: 'Переспрашивает номер', description: 'd', trialIds: ['t-f0', 't-f1'] },
+    { id: 'b', name: 'Не называет срок', description: 'd', trialIds: ['t-f2'] },
+    { id: 'c', name: 'Обещает перезвонить', description: 'd', trialIds: ['t-f3'] },
+    { id: 'd', name: 'Отвечает вне инструкций', description: 'd', trialIds: ['t-f4'] },
+  ];
+  const v = view(record);
+  assert.deepEqual([v.topCauses.length, v.moreCauses], [3, 1]);
+  assert.deepEqual(chatBlock(v, { expanded: false }).at(-1)!.parts, ['Чаще всего: Переспрашивает номер (2)', 'Не называет срок (1)', 'Обещает перезвонить (1)', 'ещё 1 причина']);
+  assert.equal(causeRows(v).at(-1)!.text, 'и ещё 1 причина', 'the board says it too');
+  assert.equal(view(clustered()).moreCauses, 0);
+  assert.ok(!chatBlock(view(clustered()), { expanded: false }).at(-1)!.text.includes('ещё'));
+});
+
+test('a customer who never said «не знаю» adds no «0%» to the trust line', () => {
+  const moves = { answer: 3, missing: 0, turn: 0, finish: 1, other: 0, blocked: [] };
+  assert.equal(dunnoText({ customer: moves }), null);
+  assert.equal(dunnoText({ customer: { ...moves, missing: 1 } }), 'клиент не знал ответа на 25% вопросов агента');
+  assert.ok(!trustParts({ ...view(scored(3, 1)), customer: moves }).some(part => part.includes('не знал')));
+});
+
+test('a reply the judge did not point at is never the agent\'s words in a failure; the conversation still shows it', () => {
+  const record = run([card('f0', { title: 'Возврат — возврат не оформлен' })], [attempt('f0', { goal: 'fail', reply: 'Спасибо за обращение, хорошего дня!',
+    assessments: [{ ...vote('goal_attainment', 'fail'), evidence: [0] }, vote('reply_quality', 'pass'), vote('user_fidelity', 'pass')] })]);
+  const v = view(record);
+  assert.deepEqual([v.failures[0]!.said, v.failures[0]!.unsaid], [null, 'not_cited']);
+  assert.equal(saidText(v.failures[0]!), 'судья не указал реплику');
+  assert.ok(texts(errorListRows(v)).some(text => text.endsWith('Агент: судья не указал реплику')));
+  assert.equal(failureRows(v, record, 0)[3]!.text, 'Агент ответил   судья не указал реплику');
+  assert.ok(!texts([...errorListRows(v), ...causeRows(v, { examples: true }), ...failureRows(v, record, 0).slice(0, 5)]).some(text => text.includes('Спасибо за обращение')));
+  assert.ok(texts(failureRows(v, record, 0)).includes('Агент    Спасибо за обращение, хорошего дня!'));
+});
+
+test('«Как считали» says the counting rule the result names, in the words of its edition', () => {
+  const v = view(scored(3, 1));
+  assert.equal(v.countingRules, 'goal-and-rules-v2');
+  assert.deepEqual(countingLines(v), [COUNTING_RULE_TEXT['goal-and-rules-v2'], 'Не измеренные ситуации в процент не входят.']);
+  assert.equal(countingLines(view(scored(3, 1, { control: 'pass' }))).at(-1),
+    'Не измеренные ситуации в процент не входят. Контрольные ситуации проверяют связь с агентом и судью и в процент тоже не входят.');
+  assert.deepEqual(countingLines({ ...v, countingRules: 'all-expectations-v2, goal-and-rules-v3' }).slice(0, 2), [COUNTING_RULE_TEXT['all-expectations-v2'], COUNTING_RULE_TEXT['goal-and-rules-v3']]);
+  assert.deepEqual(countingLines({ ...v, countingRules: 'a-rule-no-edition-knows' }), ['Не измеренные ситуации в процент не входят.']);
+});
+
+test('fitRows never starts a line with «·»: the separator stays with the part before it, at every width, nothing lost', () => {
+  const parts = ['Вероятно, от 9% до 91% (95%)', 'мало данных', 'судью ещё не проверяли', 'клиент не знал ответа на 40% вопросов агента',
+    'не измерено 12 из 40 — судья не ответил — сбой связи или лимит запросов', 'нестабильно 1'];
+  for (let width = 20; width <= 100; width++) {
+    for (const indent of [0, 2]) {
+      const lines = at([{ role: 'trust', indent, text: parts.join(' · '), parts }], width);
+      for (const line of lines) {
+        assert.ok(visibleWidth(line) <= width, `${width}: «${line}»`);
+        assert.ok(!line.trimStart().startsWith('·'), `${width}/${indent}: a line starts with the separator:\n${lines.join('\n')}`);
+      }
+      assert.equal(lines.map(line => line.trim()).join(' '), parts.join(' · '), `${width}/${indent}`);
+    }
+  }
+  // The parts' own text is never changed, not even a no-break space of their own before a dot.
+  const own = [`итог${String.fromCharCode(0xa0)}· без переноса`, 'второй'];
+  for (const width of [20, 100]) {
+    assert.equal(at([{ role: 'trust', indent: 0, text: own.join(' · '), parts: own }], width).map(line => line.trim()).join(' '), own.join(' · '), `${width}`);
+  }
+});
+
+test('fitRows wraps without changing the text: a long word breaks with nothing inserted, and line breaks stay', () => {
+  const quote = '«https://support.example.com/refunds/terminal-1234567890/confirm?operation=refund&id=42»';
+  for (const width of [30, 40, 60]) {
+    const lines = at([{ role: 'item', indent: 4, text: `Агент ответил   ${quote}`, hang: 16 }], width);
+    assert.equal(lines[0], '     Агент ответил');
+    // Every continuation hangs under the value, and the value reads back character for character.
+    assert.ok(lines.slice(1).every(line => line.startsWith(' '.repeat(21)) && visibleWidth(line) <= width), lines.join('\n'));
+    assert.equal(lines.slice(1).map(line => line.slice(21)).join(''), quote);
+  }
+  assert.deepEqual(at([{ role: 'quote', indent: 2, text: 'первая строка\nвторая строка\nтретья строка' }], 60), ['   первая строка', '   вторая строка', '   третья строка']);
 });

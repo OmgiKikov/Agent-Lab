@@ -30,6 +30,31 @@ function citations(record: Pick<Experiment, 'librarySnapshot' | 'originalImport'
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 
+type SuiteSource = Pick<Experiment, 'librarySnapshot' | 'originalImport' | 'dialogues' | 'scenarios'>;
+
+/**
+ * Whether a suite of `definition` carries what the customers wrote in the owner's logs: the import batches its cards cite,
+ * a first-format library's own batches, the logged conversations a record keeps, or situations taken from them word for word.
+ */
+export function suiteHoldsLogs(definition: SuiteSource): boolean {
+  const library = definition.librarySnapshot;
+  return citations(definition).length > 0 || !!definition.originalImport || definition.dialogues.length > 0
+    || (library?.formatVersion === 1 && library.imports.length > 0)
+    || (library?.formatVersion === 2 && library.cards.some(card => card.origin.kind === 'dialogue' || card.origin.kind === 'similar'))
+    || definition.scenarios.some(scenario => scenario.provenance === 'production');
+}
+
+/**
+ * What the owner is told once a suite is saved, the same in the chat and in `agent-lab save-suite`. A suite made from the
+ * logs holds the customers' conversations, and those stay on the owner's machine and never go into a repository; a suite
+ * made from the owner's rules alone can live in Git and run after every change of the agent.
+ */
+export function suiteSavedText(definition: SuiteSource): string {
+  return suiteHoldsLogs(definition)
+    ? 'В наборе — разговоры клиентов из ваших логов: не добавляйте его в Git и не пересылайте. Храните его там же, где логи, — на этой машине, вне репозитория (например, в .agent-lab, закрытой в .gitignore).'
+    : 'Его можно добавить в Git и запускать после каждой правки агента.';
+}
+
 /**
  * The suite file of `definition` with its connection written relative to the file (`target`, connection.ts
  * portableTarget); the batches it cites come from `store`, each the very one the definition cites.

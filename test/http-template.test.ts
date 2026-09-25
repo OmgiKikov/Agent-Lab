@@ -4,9 +4,11 @@ import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { connectionFromCurl, parseCurl, shellWords } from '../src/curl.js';
-import { atPointer, MissingReplyText, renderRequest, replyStructure, requestTemplateSchema } from '../src/http-template.js';
+import { connectionLines } from '../src/connect.js';
+import { atPointer, renderRequest, replyStructure, requestTemplateSchema } from '../src/http-template.js';
 import { openExternalTarget, preflightTarget, type TemplateTarget } from '../src/targets.js';
 import { checkTemplate, CONNECTION_FORMAT, readConnection, saveConnection } from '../src/connection.js';
 import { doctorTemplate } from '../src/cli/connect.js';
@@ -24,6 +26,10 @@ const CURL = String.raw`curl -s -X POST 'https://agent.example.test/api/v1/chat'
   -H "X-Trace: $(trace-id --short)" \
   --data-raw '{"message":{"version":"1.0","performative":"request","sender":"lab","receiver":"agent","conversation_id":"c-1","reply_with":"r-1",
     "content":{"user_input":"Здравствуйте, это \"пример\""}},"metadata":{"channel":"web","dialog":{"dialog_id":"d-1"}}}'`;
+
+// The owner's variables this curl reads: its own $AGENT_TOKEN, and the one Lab named for the System-Id value.
+process.env.AGENT_TOKEN = 'fixture-token';
+process.env.AGENT_LAB_SYSTEM_ID = 'lab-fixture';
 
 async function envelopeAgent(options: { reply?: (turn: number, text: string) => unknown } = {}) {
   const conversations = new Map<string, string[]>();
@@ -55,7 +61,7 @@ function templateTarget(url: string, reply: string | null = '/result/answer/text
   assert.equal(made.kind, 'ready');
   const target = made.kind === 'ready' ? made.target : undefined;
   assert.ok(target?.kind === 'http' && target.request);
-  return { ...target, url, headersEnv: {}, request: { ...target.request, ...(reply !== null ? { reply } : {}) } };
+  return { ...target, url, request: { ...target.request, ...(reply !== null ? { reply } : {}) } };
 }
 const context = (): CallContext => ({ signal: new AbortController().signal, timeoutMs: 5000, beforeCall() {}, addUsage() {} });
 const world = (): World => ({ records: {}, writableFields: [], transientFailures: 0 });
@@ -75,22 +81,25 @@ test('a curl command line keeps its quoting, headers and body; substitutions bec
   const made = connectionFromCurl(CURL, { message: '/message/content/user_input' });
   assert.ok(made.kind === 'ready' && made.target.kind === 'http' && made.target.request);
   const { request: template, headersEnv } = made.target;
-  assert.deepEqual(template.headers, { 'Content-Type': 'application/json', 'Request-Id': '{{uuid}}', 'System-Id': 'lab-fixture', 'Request-Time': '{{now}}', 'X-Trace': '$(trace-id --short)' });
-  // The secret never reaches the file: its header names a variable read at request time.
-  assert.deepEqual(headersEnv, { Authorization: 'AGENT_LAB_AUTHORIZATION' });
-  assert.ok(!JSON.stringify(made.target).includes('AGENT_TOKEN'));
+  // The date command keeps its format; the owner's $AGENT_TOKEN is read as it is, inside the header's plain text.
+  assert.deepEqual(template.headers, { 'Content-Type': 'application/json', 'Request-Id': '{{uuid}}', 'Request-Time': '{{now:utc:%Y-%m-%dT%H:%M:%SZ}}',
+    Authorization: 'Bearer {{env:AGENT_TOKEN}}', 'X-Trace': '$(trace-id --short)' });
+  // A header that is not plainly harmless is a secret: its value never reaches the file, a named variable holds it.
+  assert.deepEqual(headersEnv, { 'System-Id': 'AGENT_LAB_SYSTEM_ID' });
+  assert.ok(!JSON.stringify(made.target).includes('lab-fixture'));
   assert.equal(atPointer(template.body, '/message/content/user_input'), '{{message}}');
   assert.equal(atPointer(template.body, '/message/conversation_id'), '{{conversation}}');
   assert.equal(atPointer(template.body, '/metadata/dialog/dialog_id'), '{{conversation}}');
   assert.equal(atPointer(template.body, '/message/reply_with'), 'r-1');
-  assert.ok(made.lines.some(line => line.includes('AGENT_LAB_AUTHORIZATION')));
+  assert.ok(connectionLines(made).includes('Заголовок System-Id — секрет из curl: в файл не пишется, Lab прочтёт его из переменной AGENT_LAB_SYSTEM_ID'));
   assert.ok(made.warnings.some(warning => warning.includes('X-Trace')));
   assert.equal(template.reply, undefined);
 
-  // A variable outside a secret header becomes {{env:NAME}}; the owner may name the conversation field himself.
+  // A header that is the owner's variable whole is read from that very variable; the owner may name the conversation field himself.
   const own = connectionFromCurl(`curl https://agent.example.test/x -H "System-Id: $SYSTEM_ID" -d '{"q":"hi","thread":"t-1"}'`, { message: '/q', conversation: ['/thread'] });
   assert.ok(own.kind === 'ready' && own.target.kind === 'http');
-  assert.deepEqual(own.target.request?.headers, { 'System-Id': '{{env:SYSTEM_ID}}' });
+  assert.deepEqual(own.target.request?.headers, {});
+  assert.deepEqual(own.target.headersEnv, { 'System-Id': 'SYSTEM_ID' });
   assert.equal(atPointer(own.target.request?.body, '/thread'), '{{conversation}}');
 
   assert.throws(() => connectionFromCurl(`curl -X GET https://agent.example.test/x -d '{"q":"hi"}'`, { message: '/q' }), /POST/);
@@ -114,12 +123,38 @@ test('a template renders every placeholder, whole-string and inline; unknown one
     assert.equal(body.meta.system, 'sys-7');
     assert.equal(body.n, 3);
     assert.ok(!Number.isNaN(Date.parse(body.meta.at!)));
+    assert.match(body.meta.at!, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, 'Request-Time matches the curl format without milliseconds');
     assert.notEqual(one.headers['Request-Id'], two.headers['Request-Id']);
   } finally { if (previous === undefined) delete process.env.AGENT_LAB_TEMPLATE_TEST; else process.env.AGENT_LAB_TEMPLATE_TEST = previous; }
   assert.throws(() => renderRequest(requestTemplateSchema.parse({ body: { text: '{{message}} {{env:AGENT_LAB_UNSET_FOR_TEST}}' } }), { message: 'x', conversation: 'c' }), /AGENT_LAB_UNSET_FOR_TEST/);
   assert.equal(requestTemplateSchema.safeParse({ body: { text: '{{message}} {{user}}' } }).success, false);
   assert.equal(requestTemplateSchema.safeParse({ body: { text: 'static' } }).success, false);
   assert.equal(targetSchema.safeParse({ kind: 'http', url: 'https://agent.example.test', request: { body: { q: '{{message}}' } }, promptFile: '/prompt.md' }).success, false);
+});
+
+test('the acquiring connection reproduces the supplied envelope and passes a two-turn HTTP doctor', async t => {
+  const connection = await readConnection(fileURLToPath(new URL('../examples/acquiring-production.connection.json', import.meta.url)));
+  assert.equal(connection.target.kind, 'http');
+  assert.ok(connection.target.kind === 'http' && connection.target.request);
+  const first = renderRequest(connection.target.request, { message: 'Тестовый запрос', conversation: 'dialogue-1' });
+  const second = renderRequest(connection.target.request, { message: 'Ещё вопрос', conversation: 'dialogue-1' });
+  assert.match(first.headers['Request-Id']!, /^[0-9a-f-]{36}$/);
+  assert.notEqual(first.headers['Request-Id'], second.headers['Request-Id']);
+  assert.match(first.headers['Request-Time']!, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.equal(first.headers['System-Id'], '6ba7b810-9dad-11d1-80b4-00c04fd430c8');
+  assert.equal(atPointer(first.body, '/message/content/user_input'), 'Тестовый запрос');
+  assert.equal(atPointer(first.body, '/message/conversation_id'), 'dialogue-1');
+  assert.equal(atPointer(first.body, '/metadata/dialog/dialog_id'), 'dialogue-1');
+  assert.equal(atPointer(second.body, '/message/conversation_id'), 'dialogue-1');
+  const api = await envelopeAgent(); t.after(api.close);
+  const target = { ...connection.target, url: api.url, request: connection.target.request };
+  const probe = await checkTemplate(target, undefined);
+  assert.ok(probe.structure.some(field => field.pointer === '/result/answer/text'));
+  const checked = await checkTemplate(target, '/result/answer/text');
+  assert.equal(checked.passed, true);
+  assert.equal(api.requests.length, 3);
+  assert.equal(api.requests[1]!.body.message.conversation_id, api.requests[2]!.body.message.conversation_id);
+  assert.notEqual(api.requests[0]!.body.message.conversation_id, api.requests[1]!.body.message.conversation_id);
 });
 
 test('an agent in its own envelope: one conversation keeps its id, a new dialogue gets a new one, the text is read by pointer', async t => {
@@ -151,7 +186,7 @@ test('a reply without text at the pointer is a typed failure; the dialogue is no
   const api = await envelopeAgent({ reply: () => ({ status: 'ok', result: { answer: { blocks: ['x'] } } }) }); t.after(api.close);
   const target = templateTarget(api.url);
   const session = await openExternalTarget({ target, sessionId: 'trial-x', scenarioId: 's', state: world(), history: () => [], ctx: context() });
-  await assert.rejects(session.respond('Здравствуйте'), (error: unknown) => error instanceof MissingReplyText && error.message.includes('/result/answer/text'));
+  await assert.rejects(session.respond('Здравствуйте'), /В ответе агента нет текста по пути \/result\/answer\/text/);
   await session.close();
   const scenario: Scenario = { id: 'one', familyId: 'one', split: 'dev', title: 'Одно сообщение', tier: 'smoke', provenance: 'curated', requirementIds: [],
     user: { goal: 'Спросить', facts: 'Нет', behavior: 'Одно сообщение', opening: 'Здравствуйте', maxFollowUps: 0 }, initialState: world(), checks: [] };

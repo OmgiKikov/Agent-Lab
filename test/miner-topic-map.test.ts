@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fingerprint } from '../src/contracts.js';
 import { ProviderFailure } from '../src/llm/model-call.js';
+import { countText } from '../src/plural.js';
 import { resolveModels } from '../src/llm/models.js';
-import { REPAIR_ATTEMPTS, runStructured, StructuredTaskError } from '../src/llm/structured.js';
+import { runStructured, StructuredTaskError, TASK_ATTEMPTS } from '../src/llm/structured.js';
 import {
   buildTopicMap, OTHER, planTopicMap, reusableTopicMap, TOPIC_MAP_PROMPT_VERSION, topicMapCalls, topicMapProgressSchema, topicMapSchema,
   type TopicMapBuild, type TopicMapProgress,
@@ -217,8 +218,8 @@ test('a batch that never passes fails typed and names its part; what was finishe
     const batch = importOf(logged);
     const snapshots: unknown[] = [];
     await assert.rejects(f.adapter.topicMap!.build(planTopicMap(batch, models.builder), callContext().ctx, async progress => { snapshots.push(clone(progress)); }),
-    error => error instanceof StructuredTaskError && error.message.startsWith(`Темы разговоров, часть 2 из 2: модель ${REPAIR_ATTEMPTS} раза подряд`));
-    assert.equal(f.requests.length, 2 + REPAIR_ATTEMPTS);
+    error => error instanceof StructuredTaskError && error.message.startsWith(`Темы разговоров, часть 2 из 2: модель ${countText(TASK_ATTEMPTS, ['раз', 'раза', 'раз'])} подряд`));
+    assert.equal(f.requests.length, 2 + TASK_ATTEMPTS);
     assert.equal(snapshots.length, 2, 'the proposal and the first batch were delivered before the failure');
     const plan = planTopicMap(batch, models.builder, snapshots.at(-1));
     assert.equal(plan.calls, 1);

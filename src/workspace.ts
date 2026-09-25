@@ -46,7 +46,7 @@ function agentKey(record: Experiment): string {
   switch (target.kind) {
     case 'http': return `http ${target.url}`;
     case 'module': return `module ${target.path}`;
-    case 'command': return `command ${[target.command, ...target.args].join(' ')}`;
+    case 'command': return JSON.stringify(['command', target.cwd ?? '', target.command, target.args]);
     case 'sandbox': return 'sandbox';
     case 'unconnected': return 'unconnected';
   }

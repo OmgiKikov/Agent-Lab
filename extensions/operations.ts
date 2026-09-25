@@ -14,7 +14,8 @@ export interface SessionOperation {
   quiet: boolean;
   done: Promise<void>;
 }
-interface Presentation {
+/** How a Pi session shows long work: its row while it goes, its result when it ends. */
+export interface Presentation {
   kind: OperationKind;
   id: string;
   origin: SessionOperation['origin'];
@@ -24,6 +25,37 @@ interface Presentation {
   clear(): void;
   error(error: unknown): void;
 }
+
+/*
+ * Pi replaces a session — /new, /resume, /fork, /reload — with a fresh copy of the extension in the same process. Long
+ * work does not belong to the copy that started it: the process and the work go on. The session that ends parks its
+ * work here with its row cleared; the next session takes it over at its start, draws its row and gets its result.
+ *
+ *   session A ──shutdown (replaced)──► parked: the lease, the job, its stage ──session_start of B──► B shows it
+ *   the work ends while parked ──► its result waits for B (PARKED_MS at most; the records keep it either way)
+ *
+ * Quitting Pi still ends the work the session owns: what it recorded is kept, as at every stop.
+ */
+
+/** Where a job reports: the presentation of the session that holds it now, and how that session learns it has ended. */
+interface Stage {
+  presentation: Presentation | undefined;
+  /** The holding session forgets the job and, when it held that lease, the lease. */
+  release(job: SessionOperation, lease: LabLease): void;
+  /** Resolves when a session holds the job, at once unless it is parked. */
+  held: Promise<void>;
+  /** Called by the session that takes a parked job over. */
+  hold(): void;
+  ended: boolean;
+}
+interface Parked { lease: LabLease; job: SessionOperation; stage: Stage }
+
+/** Process-wide, because Pi loads a fresh copy of this module for the next session. */
+const PARKED = Symbol.for('agent-lab.parked-work');
+type Shelf = typeof globalThis & { [PARKED]?: Parked };
+const shelf = globalThis as Shelf;
+/** How long finished work waits for the next session before its result is left to the records alone. */
+const PARKED_MS = 30_000;
 
 /**
  * Draws the record `id` as it is now and again at every change of the work running it (lab/operation.ts), until the
@@ -40,6 +72,7 @@ export function followRecord(lab: ExperimentLab, id: string, draw: (record: Expe
 export class SessionOperations {
   private lease?: LabLease;
   private job?: SessionOperation;
+  private stage?: Stage;
   constructor(private readonly createLab = (directory: string) => new ExperimentLab(directory)) {}
 
   current(directory: string): SessionOperation | undefined { return this.job?.directory === directory ? this.job : undefined; }
@@ -78,15 +111,19 @@ export class SessionOperations {
     if (this.lease !== owned || this.job) throw new Error('Операция не владеет сессией Agent Lab.');
     const job: SessionOperation = { operationId: randomUUID(), kind: presentation.kind, directory: owned.directory,
       id: presentation.id, lab: owned.lab, origin: presentation.origin, quiet: false, done: Promise.resolve() };
-    this.job = job;
-    const unfollow = followRecord(owned.lab, job.id, record => { if (this.job === job) presentation.progress(record); });
+    const stage: Stage = { presentation, held: Promise.resolve(), hold() {}, ended: false,
+      release: ended => { if (this.job === ended) { this.job = undefined; this.stage = undefined; } } };
+    this.job = job; this.stage = stage;
+    const unfollow = followRecord(owned.lab, job.id, record => { if (!stage.ended) stage.presentation?.progress(record); });
     job.done = (async () => {
-      try { await owned.lab.waitForIdle(); await presentation.complete(job); }
-      catch (error) { presentation.error(error); }
+      try { await owned.lab.waitForIdle(); await stage.held; await stage.presentation?.complete(job); }
+      catch (error) { stage.presentation?.error(error); }
       finally {
+        stage.ended = true;
         unfollow();
-        try { presentation.clear(); }
-        finally { try { await owned.close(); } finally { if (this.job === job) this.job = undefined; } }
+        if (shelf[PARKED]?.job === job) delete shelf[PARKED];
+        try { stage.presentation?.clear(); }
+        finally { try { await owned.close(); } finally { stage.release(job, owned); } }
       }
     })();
     void job.done.catch(error => console.error(`Agent Lab: ${String(error)}`));
@@ -102,9 +139,45 @@ export class SessionOperations {
     await job.done;
   }
 
-  async shutdown(): Promise<void> {
-    const job = this.job;
+  /**
+   * The session ends. `replaced`: Pi goes on with another session in this process (/new, /resume, /fork, /reload), so
+   * work that is going is parked for it, its row cleared while this session can still draw; otherwise — Pi quits — the
+   * lease closes, which stops the work with what it recorded kept.
+   */
+  async shutdown(replaced = false): Promise<void> {
+    const job = this.job, stage = this.stage, lease = this.lease;
+    if (replaced && job && stage && lease && !stage.ended) {
+      try { stage.presentation?.clear(); } finally { stage.presentation = undefined; }
+      let hold!: () => void;
+      stage.held = new Promise<void>(resolve => { hold = resolve; setTimeout(resolve, PARKED_MS).unref(); });
+      stage.hold = () => hold();
+      shelf[PARKED] = { lease, job, stage };
+      this.job = undefined; this.stage = undefined; this.lease = undefined;
+      return;
+    }
     await this.lease?.close();
     await job?.done;
+  }
+
+  /**
+   * Takes over work a replaced session of this process parked: this session holds its lease from now on, `show` draws
+   * it and gets its result. Undefined when nothing is parked, or when this session already holds a lease of its own.
+   */
+  adopt(show: (job: SessionOperation, lease: LabLease) => Presentation): SessionOperation | undefined {
+    const parked = shelf[PARKED];
+    if (!parked || this.lease) return undefined;
+    delete shelf[PARKED];
+    const { job, lease, stage } = parked;
+    this.lease = lease; this.job = job; this.stage = stage;
+    stage.release = (ended, closed) => {
+      if (this.job === ended) { this.job = undefined; this.stage = undefined; }
+      if (this.lease === closed) this.lease = undefined;
+    };
+    const presentation = show(job, lease);
+    stage.presentation = presentation;
+    stage.hold();
+    // The row is drawn at once from the live record; the work's next change redraws it.
+    void job.lab.get(job.id).then(record => { if (!stage.ended && stage.presentation === presentation) presentation.progress(record); }, () => { /* the next change draws it */ });
+    return job;
   }
 }

@@ -14,6 +14,8 @@ import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { resultHash } from '../src/lab/record.js';
 import { COUNTING_RULES } from '../src/outcomes.js';
+import { hostGrant } from '../src/card/commands.js';
+import { situationViews } from '../src/card/view.js';
 import { ExperimentStore } from '../src/store.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
 import { boardFixture, CLOSE, escaped, judgedSituations, KEY, legacyDraftIn, noticeOf, output, registered, workspaceSession } from './helpers/pi-session.js';
@@ -408,8 +410,14 @@ test('в рабочем пространстве запуск старого ч�
   session.state.choice = (_title, options) => ++launches === 1 ? 'Не сейчас' : options[0];
   session.state.steps = [[KEY.right, KEY.enter], [KEY.enter], CLOSE];
   await command(first.id, session.ctx);
-  assert.match(session.frames[1]!, /Готово к запуску: 2 ситуации, 2 разговора/);
+  assert.match(session.frames[1]!, /^ Готово к запуску$/m);
+  assert.match(session.frames[1]!, /^ 2 ситуации · 2 разговора: клиента играет Lab, ответы агента оценивает судья\.$/m);
   assert.match(session.frames[1]!, /Enter запустить · ← ситуации · Esc закрыть/);
+  // One description of the plan: the lines the board showed are the lines of the dialog Enter opened, word for word.
+  const board = session.frames[1]!.split('\n');
+  const shown = board.slice(board.indexOf(' Готово к запуску') + 1, board.indexOf('', board.indexOf(' Готово к запуску'))).map(line => line.trim());
+  assert.ok(shown.length >= 3, board.join('\n'));
+  for (const line of shown) assert.ok(session.selectCalls[0]!.title.split('\n').includes(line), `«${line}» is not in the dialog:\n${session.selectCalls[0]!.title}`);
 
   // Closing the workspace does not cancel its run: wait for it before reading the final record.
   const completedStore = new ExperimentStore(join(directory, '.agent-lab'));
@@ -473,5 +481,33 @@ test('in the workspace a digit answers a situation\'s question: the owner\'s dec
     assert.match(noticeOf(session.screens[1]!), /^Ситуация 1: записано\./);
     assert.match(session.screens[1]!, /1 {2}Возврат оплаты — номер только по просьбе +✓ готова/);
     assert.deepEqual([session.selectCalls.length, session.editorCalls.length], [0, 0], 'the key pressed on the shown answer is the decision');
+  } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test('the workspace offers a record\'s words in its native dialogs escaped: a duty that carries an escape sequence is shown and matched without it', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-board-escape-'));
+  const seed = new ExperimentLab(join(cwd, '.agent-lab'), createDemoRuntime());
+  await seed.init();
+  let id: string;
+  try {
+    id = (await seed.create(demoInput())).id; await seed.waitForIdle();
+    // The owner once wrote a duty with an escape sequence in it (a paste from a terminal): the record keeps it as written.
+    const context = await seed.cardContext(id);
+    const ready = situationViews(context.experiment, { evidence: context.evidence, maxTurns: 3 }).find(view => view.status === 'ready')!;
+    const words = 'объяснить\u001b[2J, как оформить возврат';
+    const prepared = await seed.prepareCardCommand(id, { kind: 'edit_expectation', cardId: ready.id, expectationId: ready.refs.must[1]!, text: words }, { via: 'cli-yes', ownerWords: words });
+    await seed.applyCardCommand(id, prepared, hostGrant(prepared, 'words'));
+    await seed.recheckCards(id); await seed.waitForIdle();
+  } finally { await seed.close(); }
+  const { command, shutdown } = registered(), session = workspaceSession(cwd);
+  // «Изменить» on the ready situation, then «Что агент должен»: the duties are offered to pick from; the owner steps back.
+  session.state.choice = (title, options) => title.startsWith('Что изменить') ? options[3] : undefined;
+  session.state.steps = [[KEY.down, KEY.enter, '1'], CLOSE];
+  try {
+    await command(id, session.ctx);
+    const duties = session.selectCalls.find(call => call.title === 'Какое ожидание изменить?');
+    assert.ok(duties, JSON.stringify(session.selectCalls.map(call => call.title)));
+    assert.ok(duties.options.every(option => !option.includes('\u001b')), JSON.stringify(duties.options));
+    assert.ok(duties.options.includes('2  объяснить, как оформить возврат'), JSON.stringify(duties.options));
   } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
 });

@@ -152,10 +152,14 @@ test('a card is calibrated only when its situation is its log\'s: editing an exp
   const reworded = afterCommand(draft, { kind: 'edit_expectation', cardId: late.id, expectationId: 'e2', text: 'объяснить, как подать заявление на возврат' }).find(card => card.id === late.id)!;
   const opening = afterCommand(draft, { kind: 'edit_client', cardId: known.id, writes: 'Номер терминала: 1234. Верните деньги.' }).find(card => card.id === known.id)!;
   const brief = briefCard();
+  // Lab wrote a plausible value over a masking mark of the first message: the log's customer, whose export hid the value.
+  const filled = (card: Card) => cardSchema.parse({ ...card, filled: [{ event: { batchId: draft.batch.id, dialogueId: 'known', eventIndex: 0 }, span: 0, mark: '#', kind: 'code', value: '1234' }] });
   const table: [string, Card, ReturnType<typeof cardExclusion>][] = [
     ['a card of a dialogue', late, undefined],
     ['the other card of a dialogue', known, undefined],
     ['the owner reworded an expectation', reworded, undefined],
+    ['Lab filled a value the log\'s export masked', filled(known), undefined],
+    ['Lab filled a value, and the owner rewrote the first message', filled(opening), 'situation_edited'],
     ['a similar card', similar, 'not_from_log'],
     ['a card added by the owner', cardSchema.parse({ ...brief, origin: { kind: 'owner', receiptId: 'owner_1' } }), 'not_from_log'],
     ['a card from the owner\'s rules', cardSchema.parse({ ...brief, origin: { kind: 'rules', requirementIds: ['refund_rule'] }, client: { ...brief.client, writesSource: { kind: 'model' } } }), 'not_from_log'],
@@ -167,6 +171,8 @@ test('a card is calibrated only when its situation is its log\'s: editing an exp
     assert.equal(cardExclusion(card), expected, name);
     assert.equal(calibratable(card), expected === undefined, name);
   }
+  assert.deepEqual([cardLogSituation(draft.library, filled(known)).masked, cardLogSituation(draft.library, known).masked], [true, undefined],
+    'a filled card is compared with its log, whose judge reads the marks: the calibration says so');
 });
 
 test('a first-format situation is calibrated through its projection by the same rule', async () => {

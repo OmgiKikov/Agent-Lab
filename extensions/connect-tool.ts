@@ -5,8 +5,8 @@ import { Type } from 'typebox';
 import { settingsSchema } from '../src/contracts.js';
 import { checkTemplate, TOOL_PROBE_OPENING } from '../src/connection.js';
 import {
-  CONNECTION_FILE, connectionLines, defaultConversation, fieldLabel, literalFields, missingVariables, proposeReply, proposeRequest, replyFields, saveProjectConnection,
-  testCallFailure, type ConnectionReader, type ReplyField, type RequestChoice,
+  CONNECTION_FILE, connectionLines, defaultConversation, fieldLabel, fieldValue, literalFields, missingVariables, proposeReply, proposeRequest, replyFields, replyLabel,
+  saveProjectConnection, shownAddress, testCallFailure, variableUse, type ConnectionReader, type ReplyField, type RequestChoice,
 } from '../src/connect.js';
 import { connectionFromCurl, type CurlFields, type CurlReady } from '../src/curl.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -46,7 +46,7 @@ async function choose(ctx: Pick<ExtensionContext, 'ui'>, question: string, body:
   return index < 0 ? undefined : options[index];
 }
 
-const valueText = (value: string) => `«${clip(oneLine(value), 40)}»`;
+const valueText = (value: string) => value ? `«${clip(oneLine(value), 40)}»` : 'пусто';
 
 /** The owner's own reading of the request: the message field, then the conversation fields ticked through one list. */
 async function pickRequest(ctx: Pick<ExtensionContext, 'ui'>, asked: CurlFields, conversation: readonly string[]): Promise<RequestChoice | undefined> {
@@ -55,12 +55,13 @@ async function pickRequest(ctx: Pick<ExtensionContext, 'ui'>, asked: CurlFields,
   const picked = await choose(ctx, 'Какое поле запроса — сообщение клиента?', ['Сюда Lab подставит слова клиента в каждой реплике.'], [...labels, NOT_NOW]);
   const message = fields[labels.indexOf(picked ?? '')]?.pointer;
   if (message === undefined) return undefined;
-  const others = asked.fields.filter(field => field.pointer !== message);
+  // A conversation id is a value of the request: not a turn's role, not a secret read from the environment.
+  const others = asked.fields.filter(field => field.pointer !== message && !field.pointer.endsWith('/role') && !(typeof field.value === 'string' && field.value.startsWith('{{env:')));
   const chosen = new Set(conversation.filter(pointer => pointer !== message));
   while (true) {
     const ordered = others.filter(field => chosen.has(field.pointer)).map(field => field.pointer);
     const done = ordered.length ? `Готово — разговор: ${ordered.map(fieldLabel).join(', ')}` : 'Готово — без поля разговора';
-    const toggles = others.map(field => `${chosen.has(field.pointer) ? '✓' : '○'} ${fieldLabel(field.pointer)} · ${valueText(field.value)}`);
+    const toggles = others.map(field => `${chosen.has(field.pointer) ? '✓' : '○'} ${fieldLabel(field.pointer)} · ${valueText(field.value === null ? '' : fieldValue(field))}`);
     const answer = await choose(ctx, 'Какие поля — идентификатор разговора?', ['В них Lab ставит новое значение в каждой ситуации, чтобы агент начинал её с чистого листа. Отметьте и нажмите «Готово».'],
       [done, ...toggles, NOT_NOW]);
     if (answer === done) return { message, conversation: ordered };
@@ -149,13 +150,11 @@ async function connect(host: ConnectHost, callId: string, ctx: ExtensionContext,
 
   const target = templateOf(made);
   const missing = missingVariables(target);
-  if (missing.length) {
-    const header = new Map(Object.entries(target.headersEnv).map(([name, variable]) => [variable, name]));
-    return refused(`Перед проверкой задайте в окружении ${missing.map(variable => header.has(variable) ? `${variable} (значение заголовка ${header.get(variable)} из вашего curl)` : variable).join(', ')} и перезапустите Pi, затем пришлите curl ещё раз. Ничего не отправлено и не сохранено.`);
-  }
+  // A variable the curl names and the owner already has is read as it is; one Lab named for a secret of the curl is set once.
+  if (missing.length) return refused(`Перед проверкой задайте в окружении ${missing.map(variable => variableUse(made, variable)).join(', ')} и перезапустите Pi, затем пришлите curl ещё раз. Ничего не отправлено и не сохранено.`);
 
   // 2. The owner's consent to the test messages, then where the agent's text is.
-  if (await choose(ctx, 'Отправить агенту 2 тестовых сообщения?', [`Адрес: ${target.url}`, `Lab напишет «${TOOL_PROBE_OPENING}» и ещё одно сообщение в том же разговоре и прочтёт ответы агента.`], ['Отправить', NOT_NOW]) !== 'Отправить')
+  if (await choose(ctx, 'Отправить агенту 2 тестовых сообщения?', [`Адрес: ${shownAddress(target)}`, `Lab напишет «${TOOL_PROBE_OPENING}» и ещё одно сообщение в том же разговоре и прочтёт ответы агента.`], ['Отправить', NOT_NOW]) !== 'Отправить')
     return declined('Тестовые сообщения не отправляю: вы отказались. Ничего не сохранено.');
   let empty = false;
   let check: Awaited<ReturnType<typeof checkTemplate>>;
@@ -169,19 +168,23 @@ async function connect(host: ConnectHost, callId: string, ctx: ExtensionContext,
   } catch (error) { if (signal.aborted) throw error; return refused(`${testCallFailure(error)} Ничего не сохранено.`); }
   if (empty) return refused('Агент ответил, но в его ответе нет ни одного текста: проверьте, что curl ведёт к диалоговой ручке агента. Ничего не сохранено.');
   if (check.reply === undefined) return declined('Агента не подключаю: поле ответа не выбрано. Ничего не сохранено.');
-  if (!check.passed) return refused(`На второе сообщение в том же разговоре агент ответил без текста в поле ${fieldLabel(check.reply)}: проверьте, что он держит разговор по его идентификатору. Ничего не сохранено.`);
+  if (!check.passed || !check.request) return refused(`${check.failure ?? `Агент не ответил текстом в поле ${fieldLabel(check.reply)}.`} Ничего не сохранено.`);
 
   // 3. Saved where the preparation and the run find it; a connection.json already there is replaced only at the owner's word.
   const file = resolve(ctx.cwd, CONNECTION_FILE);
   const exists = await access(file).then(() => true, () => false);
-  if (exists && await choose(ctx, `В папке проекта уже есть ${CONNECTION_FILE}. Заменить его этим подключением?`, [`Адрес: ${target.url}`], ['Заменить', NOT_NOW]) !== 'Заменить')
+  if (exists && await choose(ctx, `В папке проекта уже есть ${CONNECTION_FILE}. Заменить его этим подключением?`, [`Адрес: ${shownAddress(target)}`], ['Заменить', NOT_NOW]) !== 'Заменить')
     return declined(`Подключение проверено, но не сохранено: вы оставили прежний ${CONNECTION_FILE}.`);
-  await saveProjectConnection({ project: ctx.cwd, data: directory, target: { ...target, request: { ...target.request, reply: check.reply } }, replace: exists });
-  const variables = Object.values(target.headersEnv);
-  return host.feedResult(callId, { connected: true, saved: CONNECTION_FILE, address: target.url, reply: fieldLabel(check.reply),
-    ...(variables.length ? { environment: variables } : {}),
-    instruction: 'The agent is connected and both test messages were answered; the next preparation and run use this connection. Tell the owner in one line and offer the next step: check the agent on its logs (agent_lab_prepare).' },
-  { rows: [row(safeText(`Агент подключён: ${target.url}`), 'text', true),
-    row(safeText(`Ответ агента — поле ${fieldLabel(check.reply)}; оба тестовых сообщения прошли. Сохранено в ${CONNECTION_FILE}.`), 'muted'),
-    row('Дальше: проверить агента на логах.', 'muted')] }, 'Подключение агента');
+  await saveProjectConnection({ project: ctx.cwd, data: directory, target: { ...target, request: check.request }, replace: exists });
+  const variables = [...new Set([...Object.values(target.headersEnv), ...made.substitutions.flatMap(item => item.variable ? [item.variable] : [])])];
+  return host.feedResult(callId, { connected: true, saved: CONNECTION_FILE, address: shownAddress(target), reply: replyLabel(check.reply),
+    ...(variables.length ? { environment: variables } : {}), ...(check.warnings.length ? { warnings: check.warnings } : {}),
+    instruction: check.warnings.length
+      ? 'The agent is connected and both test messages were answered, but Lab could not confirm how it keeps the conversation (warnings). Tell the owner in one line, name the warning in plain words, and offer the next step: check the agent on its logs (agent_lab_prepare).'
+      : 'The agent is connected and both test messages were answered; the next preparation and run use this connection. Tell the owner in one line and offer the next step: check the agent on its logs (agent_lab_prepare).' },
+  { ...(check.warnings.length ? { tone: 'warning' as const } : {}),
+    rows: [row(safeText(`Агент подключён: ${shownAddress(target)}`), 'text', true),
+      row(safeText(`Ответ агента — поле ${replyLabel(check.reply)}; оба тестовых сообщения прошли. Сохранено в ${CONNECTION_FILE}.`), 'muted'),
+      ...check.warnings.map(warning => row(safeText(warning))),
+      row('Дальше: проверить агента на логах.', 'muted')] }, 'Подключение агента');
 }

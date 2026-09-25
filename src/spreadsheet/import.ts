@@ -3,6 +3,7 @@ import { StructuredTaskError } from '../llm/structured.js';
 import { countText } from '../plural.js';
 import type { CallContext } from '../runtime.js';
 import type { ImportBatch } from '../scenario-contracts.js';
+import { ScenarioFiles } from '../scenario-store.js';
 import type { ExperimentStore } from '../store.js';
 import { importTable, type TablePreview } from './dialogues.js';
 import { overridden, readExactly } from './exact.js';
@@ -132,7 +133,16 @@ export async function confirmTableImport(store: ExperimentStore, path: string, p
     sheet: { dialogues: preview.dialogues, ...preview.selected === undefined ? {} : { selected: preview.selected }, usable: preview.usable, taken: preview.taken, rejected: preview.rejected,
       ...proposal.mapping.collapseRepeats && preview.repeats ? { repeats: preview.repeats } : {} },
     ...proposal.basis ? { proposedBy: proposal.basis } : {} });
-  return { batch: await store.writeTableImport(batch, reading), reading };
+  return { batch: await store.writeTableImport(await keptImport(store, batch), reading), reading };
+}
+
+/**
+ * The import the data folder already keeps for the same conversations, else `batch`: the same rows read again by a
+ * newer reading of them — the table of masks, a sample's record — stay the import situations were made from.
+ */
+async function keptImport(store: Pick<ExperimentStore, 'readImport'>, batch: ImportBatch): Promise<ImportBatch> {
+  const stored = await store.readImport(batch.id).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; });
+  return stored?.contentHash === batch.contentHash ? stored : batch;
 }
 
 /**
@@ -149,5 +159,5 @@ export async function readConfirmedTable(path: string, directory: string): Promi
   if (batch.id !== confirmed.entry.importId || batch.contentHash !== confirmed.entry.contentHash) {
     throw new Error(`Таблица «${file.name}» прочиталась не так, как при подтверждении. Подтвердите разметку заново.`);
   }
-  return batch;
+  return keptImport(new ScenarioFiles(directory), batch);
 }
