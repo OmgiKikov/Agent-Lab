@@ -199,7 +199,8 @@ export interface Observed { started: boolean; status?: number; retryAfterMs?: nu
 /**
  * The failure of a reply that did not stop normally. The stream protocol is the structured part: an answer that began
  * emits `start` first, a request refused before generation never does. The status comes from the adapter's
- * `onResponse` where it reports a refused response, else from the error text; the kind, from the status, else the words.
+ * `fetch` or its `onResponse` where they report a refused response, else from the error text; the kind, from the status,
+ * else the words.
  */
 export function providerFailureOf(reply: ModelReply, observed: Observed): ProviderFailure {
   if (reply.stopReason === 'length') return new ProviderFailure('length', 'Pi provider response incomplete: length');
@@ -271,23 +272,27 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
  */
 export const PROVIDER_CONCURRENCY = 16;
 /**
- * How many times a request refused for a transient cause (a rate limit or an overload) is sent again. Nothing
- * was billed and the budget was charged once, so a repeat spends neither; it only waits. Rate limits usually clear within the
- * waits below, and a provider that stays refusing fails the step after about 15 s instead of holding it.
+ * How many times a request refused for a transient cause (a rate limit or an overload) is sent again. A refusal before
+ * any answer began is not billed — true of OpenRouter and the providers behind it as far as Lab knows, which is why the
+ * budget is charged once per call, never per repeat — so a repeat spends nothing; it only waits. Every repeat is still a
+ * request: usage.attempts counts them apart from the calls. A provider that keeps refusing fails the step after the
+ * waits below, never holds it.
  */
 export const REFUSED_RETRIES = 4;
-/** The first wait before a refused request is sent again; each next one doubles, up to RETRY_MAX_MS. */
-const RETRY_BASE_MS = 1_000;
-/** The longest wait Lab chooses itself: the four waits come to 7.5–15 s with jitter. */
-const RETRY_MAX_MS = 16_000;
+/**
+ * The waits Lab chooses itself when the provider named none, doubling from the first, half fixed and half random so that
+ * requests refused together do not come back together. An overload clears in seconds: 0.5–1, 1–2, 2–4, 4–8 s, 7.5–15 s in
+ * all. A rate limit is counted per minute by most providers, so its waits reach into the next minute: 2–4, 4–8, 8–16,
+ * 16–32 s, 30–60 s in all.
+ */
+const RETRY_BASE_MS: Readonly<Record<'rate limit' | 'other', number>> = { 'rate limit': 4_000, other: 1_000 };
 /** A provider's own retry-after is honoured up to this; a longer one is not waited out, and the request stays refused. */
 const RETRY_AFTER_MAX_MS = 60_000;
 
 /** The wait before retry number `retry + 1`, or undefined when the provider asked for longer than Lab waits. */
-function retryDelay(retry: number, retryAfterMs: number | undefined): number | undefined {
+function retryDelay(kind: ProviderFailureKind, retry: number, retryAfterMs: number | undefined): number | undefined {
   if (retryAfterMs !== undefined) return retryAfterMs <= RETRY_AFTER_MAX_MS ? retryAfterMs : undefined;
-  // Half fixed, half random: requests refused together do not come back together.
-  const ceiling = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** retry);
+  const ceiling = RETRY_BASE_MS[kind === 'rate limit' ? 'rate limit' : 'other'] * 2 ** retry;
   return ceiling / 2 + Math.random() * ceiling / 2;
 }
 
@@ -357,6 +362,30 @@ function reportDefect(ctx: CallContext, defect: ModelCallDefect): void {
   process.stderr.write(`Agent Lab: внутренняя ошибка при вызове модели ${defect.model}: ${cause instanceof Error ? cause.stack ?? `${cause.name}: ${cause.message}` : String(cause)}\n`);
 }
 
+/** Notes the status and the retry-after of a refused response; an answered one says nothing about a failure. */
+function note(observed: Observed, status: number, headers: Record<string, string>): void {
+  if (status < 400) return;
+  observed.status = status;
+  const after = retryAfterOf(headers);
+  if (after !== undefined) observed.retryAfterMs = after;
+}
+
+/*
+ * pi-ai reports a response to `onResponse` only once its SDK's request resolved, which a refused one never does: its
+ * adapters call it after a 2xx. A 429's retry-after therefore never reached Lab that way. The adapters below take the
+ * `fetch` of the request options (a documented option of pi-ai's ProviderRequestOptions, which they hand their SDK
+ * client or call themselves); through it Lab reads the status and the retry-after of a refused response on its way to
+ * the SDK, and changes nothing else. Google's adapters refuse a custom fetch and Bedrock's does not use one: there a
+ * refusal is read from the reply's error text, and Lab waits by its own schedule. The gateway (giga) reports refusals
+ * to `onResponse` itself. Review this list when pi-ai is upgraded.
+ */
+const OBSERVED_FETCH_APIS: ReadonlySet<string> = new Set(['openai-completions', 'openai-responses', 'azure-openai-responses', 'anthropic-messages', 'mistral-conversations']);
+const observingFetch = (observed: Observed): typeof globalThis.fetch => async (input, init) => {
+  const response = await globalThis.fetch(input, init);
+  note(observed, response.status, Object.fromEntries(response.headers));
+  return response;
+};
+
 /** One request under its own deadline; its usage is recorded exactly once, also when it fails. */
 async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, ctx: CallContext, onIncomplete?: (text: string) => void): Promise<Sent> {
   const deadline = new AbortController();
@@ -372,12 +401,8 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
       ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
       ...(request.reasoning ? { reasoning: 'medium' as const } : {}),
       ...(request.responseFormat ? { onPayload: (payload: unknown) => ({ ...(payload as Record<string, unknown>), response_format: request.responseFormat }) } : {}),
-      onResponse: response => {
-        if (response.status < 400) return;
-        observed.status = response.status;
-        const after = retryAfterOf(response.headers);
-        if (after !== undefined) observed.retryAfterMs = after;
-      },
+      ...(OBSERVED_FETCH_APIS.has(model.api) ? { fetch: observingFetch(observed) } : {}),
+      onResponse: response => note(observed, response.status, response.headers),
     });
     reply = await untilAborted(read(stream, observed), signal);
   } catch (error) {
@@ -424,7 +449,7 @@ export async function callModel(runtime: ModelRuntime, model: Model, request: Mo
       const sent = await send(runtime, model, request, ctx, onIncomplete);
       if (sent.ok) return { text: sent.text, message: sent.message };
       const { failure } = sent;
-      const wait = failure.delivery === 'refused' && failure.retryable && retry < REFUSED_RETRIES ? retryDelay(retry, sent.retryAfterMs) : undefined;
+      const wait = failure.delivery === 'refused' && failure.retryable && retry < REFUSED_RETRIES ? retryDelay(failure.kind, retry, sent.retryAfterMs) : undefined;
       if (wait === undefined) throw failure;
       // The place is kept while waiting: a provider that refuses gets fewer requests, not more.
       await pause(wait, ctx.signal);
