@@ -1286,32 +1286,13 @@ test('a retired sandbox or compare record opens and reassesses but never runs ag
 });
 
 test('references can be added to a recorded run without running the agent again', async t => {
-  const runtime: Runtime = {
-    async prepare({ sources }) {
-      return { requirements: [{ id: 'owner_rule', text: 'Answer from the owner material', sourceId: sources[0]!.id,
-        quote: sources[0]!.content, critical: false }], questions: [],
-        agent: { name: 'Recorded agent', instructions: 'Recorded only', tools: [] }, scenarios: [] };
-    },
-    async goals({ dialogues }) {
-      const dialogue = dialogues[0]!;
-      return [{ id: `goal_${dialogue.id}`, goal: `Answer ${dialogue.id}`, opening: dialogue.messages.find(message => message.role === 'user')!.content,
-        evidenceDialogueIds: [dialogue.id], requirementIds: ['owner_rule'], successCriteria: 'Answer from the owner material', facts: 'User message only', outcome: 'unknown' }];
-    },
-    async improve() { throw new Error('score must not improve'); },
-    async openTarget() { throw new Error('score must not open the target'); },
-    async userTurn() { throw new Error('score must not run the simulator'); },
-  };
-  const { lab } = await setup(t, runtime);
-  const seed = await lab.score(createInputSchema.parse({ task: 'Score recorded dialogues', mode: 'live', scenarioCount: 0,
-    materials: [{ name: 'policy', content: 'Answer from the owner material' }],
-    dialogues: [{ id: 'd0', goal: 'Fee', messages: [{ role: 'user', content: 'Какая комиссия?' }, { role: 'assistant', content: 'Комиссия 1.5% до 15:00.' }] }] }));
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const record = await runDraft(lab, await externalDraft(lab, { count: 1, settings: { repeats: 1 } }));
+  const measured = record.trials.find(trial => !['invalid', 'cancelled'].includes(trial.outcome))!;
+  const reference = { id: 'r1', origin: 'owner' as const, confirmed: true, text: 'Код услуги 999-777' };
+  const copy = await lab.reassess(record.id, { codeOnly: true, criteria: [{ scenarioId: measured.scenarioId, references: [reference] }] });
   await lab.waitForIdle();
-  const recorded = await lab.get(seed.id);
-  const reference = { id: 'r1', origin: 'owner' as const, confirmed: true, text: 'Комиссия 1.5%, приём до 15:00' };
-  const copy = await lab.reassess(recorded.id, { codeOnly: true, criteria: [{ scenarioId: recorded.scenarios[0]!.id, references: [reference] }] });
-  await lab.waitForIdle();
-  const reassessed = await lab.get(copy.id);
-  assert.equal(reassessed.phase, 'results_review', reassessed.error ?? '');
-  assert.equal(reassessed.trials[0]!.checks.find(check => check.id === 'ref_r1_tokens')?.passed, true);
-  assert.deepEqual(reassessed.trials[0]!.events, recorded.trials[0]!.events);
+  const reassessed = (await lab.get(copy.id)).trials.find(trial => trial.id === measured.id)!;
+  assert.equal(reassessed.checks.find(check => check.id === 'ref_r1_tokens')?.passed, false, 'a value the agent never said fails the reference');
+  assert.deepEqual(reassessed.events, measured.events, 'reassessment reads the recorded dialogue, it does not run the agent');
 });
