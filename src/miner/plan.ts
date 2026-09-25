@@ -7,7 +7,7 @@ import type { ImportBatch, LeftOutCount } from '../scenario-contracts.js';
 import type { ExperimentStore } from '../store.js';
 import { countText, pluralForm } from '../plural.js';
 import { clip } from '../text.js';
-import { trafficSummary } from './coverage.js';
+import { topicTraffic, trafficSummary, untopicedText } from './coverage.js';
 import { representativeSample } from './sample.js';
 import { sampleSchema, type CardTopic, type SampleStrata, type Traffic } from './schema.js';
 import { planTopicMap, reusableTopicMap, topicMapKey, usableConversations, type BuilderModel, type TopicMap, type Unsuitable } from './topic-map.js';
@@ -120,6 +120,8 @@ export interface PreparationConsent {
   leftAsRead: { reason: string; count: number }[];
   /** The draft has a connected agent: Lab sends it one message to learn whether its tool calls can be judged (connection.ts). */
   asksAgent: boolean;
+  /** The stored topic map of these logs found no topic for most conversations (coverage.ts untopicedText); absent otherwise, or before a map. */
+  untopiced?: string;
 }
 
 /**
@@ -138,7 +140,8 @@ export async function preparationConsent(store: Pick<ExperimentStore, 'readTopic
   const conversations = batch.sample?.dialogues ?? batch.dialogues.length + batch.rejected.length;
   if (!dialogueIds.length) throw new NothingFits(left, conversations);
   const promised = Math.min(situationCount(request.situations), dialogueIds.length);
-  const topicMapCalls = reusableTopicMap(stored, batch, builder) ? 0 : planTopicMap(batch, builder, stored).calls;
+  const reused = reusableTopicMap(stored, batch, builder);
+  const topicMapCalls = reused ? 0 : planTopicMap(batch, builder, stored).calls;
   const sources = materialSources(input.materials);
   // Prompts too large for any request would make no situation: the owner hears it before agreeing to anything.
   const oversize = promptsOversize(input.task, sources);
@@ -150,6 +153,7 @@ export async function preparationConsent(store: Pick<ExperimentStore, 'readTopic
     prompts: promptLoad(sources),
     callCeiling: preparationCeiling({ task: input.task, sources, situations: promised, fromLogs: true, topicMapCalls }),
     left: left.counts, leftAsRead: left.asRead, asksAgent: isRunnable(input.target),
+    ...(reused && untopicedText(topicTraffic(reused)) ? { untopiced: untopicedText(topicTraffic(reused))! } : {}),
   };
 }
 
@@ -184,6 +188,7 @@ export function consentText(consent: PreparationConsent, source: string): { ques
       `${logged} Ситуаций будет не больше ${consent.promised} — по одной на разговор, из всех тем логов.`,
       ...(reasons.length ? [`${pluralForm(leftCount(left), ['Не войдёт', 'Не войдут', 'Не войдут'])} в ситуации ${countText(leftCount(left), CONVERSATIONS)}${sample ? ' логов' : ''}: ${reasons.join(' · ')}.`] : []),
       ...(roles ? [roles] : []),
+      ...(consent.untopiced ? [`Темы этих логов уже размечены, но ${consent.untopiced}.`] : []),
       ...(prompts.count ? [`Промпты агента — ${countText(prompts.count, PROMPTS)}, ${Math.ceil(prompts.bytes / 1000)} КБ — читаются целиком с каждым разговором.`] : []),
       `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. ${REVISION_TEXT} Это потолок, а не прогноз; ${agentWords(consent.asksAgent)}.`,
     ],
@@ -245,7 +250,9 @@ export async function logSample(store: ExperimentStore, batch: ImportBatch, runt
   const map = await topicMapOf(store, batch, runtime.topicMap, ctx, onStep);
   const sample = representativeSample(map, count, new Set(unsuitable.map(item => item.dialogueId)));
   const traffic = trafficSummary(map);
-  await onStep('Темы разговоров размечены. Готовлю ситуации.');
+  // A map that found no topic for most conversations is said so at once, not only in the result.
+  const untopiced = untopicedText(topicTraffic(map));
+  await onStep(untopiced ? `Темы разговоров размечены, но ${untopiced}. Готовлю ситуации.` : 'Темы разговоров размечены. Готовлю ситуации.');
   // A topic whose every conversation is unsuitable has no candidate: it stays in the traffic and out of the sample.
   return { count, picked: sample.picked, strata: sampleSchema.parse(sample.strata.flatMap(({ topicId, dialogueIds }) => dialogueIds.length ? [{ topicId, dialogueIds }] : [])), excluded,
     ...(traffic ? { traffic } : {}) };
