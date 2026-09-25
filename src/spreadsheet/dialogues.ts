@@ -1,5 +1,6 @@
 import { fingerprint } from '../contracts.js';
-import type { ImportBatch } from '../scenario-contracts.js';
+import { countLeftOut, leftOutPhrase } from '../log-issues.js';
+import type { ImportBatch, LeftOutCode, LeftOutIssue } from '../scenario-contracts.js';
 import { logImport } from '../scenario-library.js';
 import { columnLabel, type Column, type Role, type TableMapping } from './mapping.js';
 import { splitMessages } from './markers.js';
@@ -21,16 +22,10 @@ import { cellOf, columnLetter, type Sheet } from './sheet.js';
  * labels them: blind to outcomes and to where a row stands in the sheet, and the same for the same logs.
  */
 
-/** Why a conversation of the sheet is not usable, when the spreadsheet itself shows it; fixed wording, so the preview can count them. */
+/** Why a conversation of the sheet is not usable, when the spreadsheet itself shows it: typed as the import types its own (log-issues.ts). */
 const ROW_ISSUES = {
-  noText: 'Пустой текст разговора',
-  noMarker: 'Текст не начинается с метки роли',
-  emptyMessage: 'Пустое сообщение',
-  unknownRole: 'Роль сообщения не указана в разметке',
-  noOrder: 'У сообщения нет порядкового номера или времени',
-  // The import's own wording for the same thing, so both count as one reason.
-  duplicate: 'Повторяющийся id диалога',
-} as const;
+  noText: { code: 'no_text' }, noMarker: { code: 'no_marker' }, emptyMessage: { code: 'blank' }, noOrder: { code: 'no_order' },
+} as const satisfies Record<string, LeftOutIssue>;
 
 export interface TablePreview {
   /** Rows below the header with anything in them. */
@@ -43,8 +38,8 @@ export interface TablePreview {
   usable: number;
   /** Conversations in the import: all usable ones, or the sample of them when there are more than one import holds. */
   taken: number;
-  /** Why the rest are not usable, the most frequent reason first. */
-  rejected: { reason: string; count: number }[];
+  /** Why the rest are not usable, the most frequent reason first: each conversation once, under its first reason. */
+  rejected: { code: LeftOutCode; reason: string; count: number }[];
   /** Messages of usable conversations by marker or role value. */
   messages: { label: string; role: Role; count: number }[];
   /** The other columns, kept with each conversation as written. */
@@ -59,7 +54,7 @@ export interface TablePreview {
 /** One conversation on its way into the import: the row the import reads, and the reason the sheet already shows. */
 interface SheetDialogue {
   raw: Record<string, unknown>;
-  issue?: string;
+  issue?: LeftOutIssue;
   labels: { label: string; role: Role }[];
   /** Messages that are copies of the block right before them: dropped when the owner chose so, counted either way. */
   repeats: number;
@@ -79,8 +74,7 @@ export function importTable(sheet: Sheet, mapping: TableMapping): { batch: Impor
   const { batch, verdicts } = logImport(dialogues.map(item => item.raw), { known: new Map(dialogues.flatMap((item, i) => item.issue ? [[i, item.issue] as const] : [])),
     maskVersion: mapping.maskVersion ?? 1, key: (_, i) => dialogues[i]!.key() });
   const usable = dialogues.flatMap((item, i) => verdicts[i] ? [] : [{ item, i }]);
-  const reasons = new Map<string, number>();
-  for (const verdict of verdicts) if (verdict?.[0]) reasons.set(verdict[0], (reasons.get(verdict[0]) ?? 0) + 1);
+  const reasons = countLeftOut(verdicts.flatMap(verdict => verdict ? [{ issues: verdict }] : []));
   const messages = new Map<string, { label: string; role: Role; count: number }>();
   for (const { item } of usable) for (const { label, role } of item.labels) {
     const entry = messages.get(label) ?? { label, role, count: 0 };
@@ -90,7 +84,7 @@ export function importTable(sheet: Sheet, mapping: TableMapping): { batch: Impor
   const repeats = { dialogues: repeated.length, messages: repeated.reduce((total, item) => total + item.repeats, 0) };
   return { batch, preview: {
     rows: rows.length, dialogues: conversations.length, ...mapping.filter ? { selected: chosen.length } : {}, usable: usable.length, taken: batch.dialogues.length,
-    rejected: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
+    rejected: reasons.map(({ code, count }) => ({ code, reason: leftOutPhrase(code), count })),
     messages: [...messages.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
     kept: kept.map(item => item.key), ...repeats.dialogues ? { repeats } : {},
   } };
@@ -140,7 +134,7 @@ function rowDialogues(sheet: Sheet, mapping: TableMapping, conversations: readon
     const row = rows[0]!, id = cellText(sheet, row, mapping.id).trim(), text = cellText(sheet, row, mapping.text);
     const columns = keptCells(sheet, row, kept);
     const base = { id, row: row + 1, ...columns ? { columns } : {} };
-    const duplicate = id !== '' && seen.has(id) ? ROW_ISSUES.duplicate : undefined;
+    const duplicate: LeftOutIssue | undefined = id !== '' && seen.has(id) ? { code: 'duplicate', value: id } : undefined;
     seen.add(id);
     if (!text.trim()) return { raw: base, issue: duplicate ?? ROW_ISSUES.noText, labels: [], repeats: 0, key: contentKey(id, [], []) };
     const split = splitMessages(text, separator, tokens);
@@ -168,7 +162,8 @@ function messageDialogues(sheet: Sheet, mapping: TableMapping, conversations: re
       return { ...role ? { role } : {}, content: cellText(sheet, row, mapping.text).trim(), row: row + 1, value,
         ...layout.order ? { order: cellText(sheet, row, layout.order) } : {}, ...columns ? { columns } : {} };
     }));
-    const issue = messages.some(message => !message.role) ? ROW_ISSUES.unknownRole : unordered ? ROW_ISSUES.noOrder
+    const unmapped = messages.find(message => !message.role);
+    const issue: LeftOutIssue | undefined = unmapped ? { code: 'unmapped', value: unmapped.value.slice(0, 200) } : unordered ? ROW_ISSUES.noOrder
       : messages.some(message => !message.content) ? ROW_ISSUES.emptyMessage : undefined;
     const labels = messages.flatMap(message => message.role ? [{ label: message.value, role: message.role }] : []);
     return { raw: { id, rows: group.map(row => row + 1), messages, ...dropped }, ...issue ? { issue } : {}, labels, repeats, key: contentKey(id, messages, labels) };

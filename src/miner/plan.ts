@@ -1,23 +1,24 @@
-import { isRunnable, materialSources, type CreateInput, type Settings, type ValidationExclusion } from '../contracts.js';
+import { isRunnable, materialSources, type CreateInput, type Settings } from '../contracts.js';
 import type { CallContext, Runtime } from '../runtime.js';
 import { preparationCeiling, promptLoad, promptsOversize } from '../card/budget.js';
 import type { CardPreparation, LibraryV2 } from '../card/schema.js';
-import type { ImportBatch } from '../scenario-contracts.js';
-import { sampleWords } from '../scenario-library.js';
+import { countLeftOut, issueText, leftOutTotal, leftOutWords, mergeLeftOut, rolesLine, unknownRoles, wayOut } from '../log-issues.js';
+import type { ImportBatch, LeftOutCount } from '../scenario-contracts.js';
 import type { ExperimentStore } from '../store.js';
-import { countText } from '../plural.js';
+import { countText, pluralForm } from '../plural.js';
 import { clip } from '../text.js';
 import { trafficSummary } from './coverage.js';
 import { representativeSample } from './sample.js';
 import { sampleSchema, type CardTopic, type SampleStrata, type Traffic } from './schema.js';
-import { planTopicMap, reusableTopicMap, topicMapKey, usableConversations, type BuilderModel, type TopicMap } from './topic-map.js';
+import { planTopicMap, reusableTopicMap, topicMapKey, usableConversations, type BuilderModel, type TopicMap, type Unsuitable } from './topic-map.js';
 
 /*
  * The Scenario Miner inside a preparation (E1). Before anything is spent the owner reads one consent value; then
  * the import's topic map is reused or built, and the representative sample of the requested count becomes the
  * preparation's units:
  *
- *   consent: map calls · the preparation's ceiling · situations promised · conversations left out, each with its reason
+ *   consent: map calls · the preparation's ceiling · situations promised · every conversation of the log left out,
+ *            counted by its reason — or, when none of them fits, no consent at all: why, and what to do
  *   map:     stored under the same key ─► reused, no call · build in progress ─► continued · each step stored first
  *   units:   the sample's picks; a pick that makes no situation ─► the next untried conversation of its topic
  *
@@ -42,16 +43,55 @@ export function builderOf(settings: Pick<Settings, 'provider' | 'model' | 'roles
   return { provider: choice.provider, id: choice.model };
 }
 
-/** A logged conversation no situation is made from: a row the import could not read, or one the usability check refuses. */
-export interface LeftOut { dialogueId: string; kind: 'unreadable' | ValidationExclusion['kind']; reason: string }
+/** A conversation of an import no situation is made from: a row the import refused, or one it read that no situation can be made of. */
+export interface LeftOut { dialogueId: string; reason: string }
 
-/** The conversations of an import left out before anything is spent, in import order: the unreadable rows, then the unusable conversations. */
-function leftOut(batch: ImportBatch, unusable: readonly ValidationExclusion[]): LeftOut[] {
+/** The conversations of an import left out before anything is spent, in import order: the rows it refused, then the ones no situation can be made of. */
+export function leftBeforeSpending(batch: ImportBatch, unsuitable: readonly Unsuitable[] = usableConversations(batch).unsuitable): LeftOut[] {
   return [
-    ...batch.rejected.map((row): LeftOut => ({ dialogueId: clip(row.id ?? `row_${row.index}`, 200), kind: 'unreadable', reason: clip(row.reasons.join('; '), 2000) })),
-    ...unusable.map(({ dialogueId, kind, reason }): LeftOut => ({ dialogueId, kind, reason })),
+    ...batch.rejected.map((row): LeftOut => ({ dialogueId: clip(row.id ?? `row_${row.index}`, 200), reason: clip(row.reasons.join(' '), 2000) })),
+    ...unsuitable.map(({ dialogueId, issue }): LeftOut => ({ dialogueId, reason: issueText(issue) })),
   ];
 }
+
+/** Why the conversations of a log make no situation, counted: typed, and in their own words the rows of an import read before reasons were typed. */
+interface LogLeft { counts: LeftOutCount[]; asRead: { reason: string; count: number }[] }
+
+/**
+ * Every conversation of the log no situation is made from, counted by why: a sample's import counted the whole log as it
+ * read it; an import that keeps every row counts its refused rows and the ones no situation can be made of.
+ */
+function logLeft(batch: ImportBatch, unsuitable: readonly Unsuitable[]): LogLeft {
+  const situations = countLeftOut(unsuitable.map(({ dialogueId, issue }) => ({ issues: [issue], id: dialogueId })));
+  if (batch.sample) return { counts: batch.sample.left ?? situations, asRead: [] };
+  const asRead = new Map<string, number>();
+  for (const row of batch.rejected) if (!row.issues) asRead.set(row.reasons[0]!, (asRead.get(row.reasons[0]!) ?? 0) + 1);
+  const refused = countLeftOut(batch.rejected.flatMap(row => row.issues ? [{ issues: row.issues, ...(row.id ? { id: row.id } : {}) }] : []));
+  return { counts: mergeLeftOut(refused, situations), asRead: [...asRead].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count) };
+}
+
+/** Each reason of a log's left-out conversations with its count, the typed ones first. */
+const leftWords = (left: LogLeft): string[] =>
+  [...leftOutWords(left.counts), ...left.asRead.map(item => `${item.reason.charAt(0).toLowerCase()}${item.reason.slice(1)} — ${item.count}`)];
+const leftCount = (left: LogLeft): number => leftOutTotal(left.counts) + left.asRead.reduce((sum, item) => sum + item.count, 0);
+
+/**
+ * No conversation of the logs makes a situation, so no consent is asked: the message says every reason with its
+ * count and the way out of the most frequent one. `roles` are the role names Lab does not know — the owner may still
+ * say who writes under them, and each surface asks that its own way.
+ */
+export class NothingFits extends Error {
+  constructor(left: LogLeft, conversations: number) {
+    const reasons = leftWords(left);
+    super(`Из логов не собрать ни одной ситуации: ни один из ${countText(conversations, CONVERSATIONS_OF)} не подходит${reasons.length ? ` — ${reasons.join(' · ')}` : ''}. ${wayOut(left.counts)}`);
+    this.name = 'NothingFits';
+    this.roles = unknownRoles(left.counts);
+  }
+  readonly roles: readonly string[];
+}
+
+/** The role names of an import's conversations Lab does not know, as written: what the owner is asked to map. */
+export const loggedRolesToMap = (batch: ImportBatch): string[] => unknownRoles(logLeft(batch, []).counts);
 
 /**
  * What the owner agrees to before logs become situations: one value every surface renders as it is. Spending has
@@ -60,26 +100,32 @@ function leftOut(batch: ImportBatch, unusable: readonly ValidationExclusion[]): 
  * limit stays the run's budget.
  */
 export interface PreparationConsent {
-  /** Logged conversations in the import, every row counted, and those a situation can be made from. */
+  /** Logged conversations in the log, every row counted, and — in the import — those a situation can be made from. */
   conversations: number;
   usable: number;
-  /** A log longer than one import: the conversations it held and the usable ones the import's sample was taken from. */
-  sample?: NonNullable<ImportBatch['sample']>;
+  /** A log larger than one import: the readable conversations its sample was drawn from, and the conversations taken. */
+  sample?: { usable: number; taken: number };
   /** Situations promised: the preparation never makes more. */
   promised: number;
   topicMapCalls: number;
   /** The agent's prompts every situation reads in full (card/budget.ts promptLoad): how many, and their size. */
   prompts: { count: number; bytes: number };
   callCeiling: number;
-  /** Conversations no situation is made from, with the reason; none of them reaches a model. */
-  excluded: LeftOut[];
+  /**
+   * Conversations of the log no situation is made from, counted by why (log-issues.ts). A long one is still sorted into
+   * its topic, so it counts in the traffic; none is a situation.
+   */
+  left: LeftOutCount[];
+  /** The refused rows of an import read before reasons were typed, by the words it stored. */
+  leftAsRead: { reason: string; count: number }[];
   /** The draft has a connected agent: Lab sends it one message to learn whether its tool calls can be judged (connection.ts). */
   asksAgent: boolean;
 }
 
 /**
  * The consent of preparing `situations` situations from the logs of `input` (its import) under its settings and
- * rules, reading what the store already holds of the logs' topic map.
+ * rules, reading what the store already holds of the logs' topic map. A log no situation can be made from asks for no
+ * consent: the refusal says why and what to do.
  */
 export async function preparationConsent(store: Pick<ExperimentStore, 'readTopicMap'>, request: { input: CreateInput; situations?: number }): Promise<PreparationConsent> {
   const { input } = request;
@@ -87,7 +133,10 @@ export async function preparationConsent(store: Pick<ExperimentStore, 'readTopic
   if (!batch) throw new Error('Согласие на подготовку из логов нужно только тогда, когда логи есть.');
   const builder = builderOf(input.settings);
   const stored = await store.readTopicMap(topicMapKey(batch, builder));
-  const { dialogueIds, excluded } = usableConversations(batch);
+  const { dialogueIds, unsuitable } = usableConversations(batch);
+  const left = logLeft(batch, unsuitable);
+  const conversations = batch.sample?.dialogues ?? batch.dialogues.length + batch.rejected.length;
+  if (!dialogueIds.length) throw new NothingFits(left, conversations);
   const promised = Math.min(situationCount(request.situations), dialogueIds.length);
   const topicMapCalls = reusableTopicMap(stored, batch, builder) ? 0 : planTopicMap(batch, builder, stored).calls;
   const sources = materialSources(input.materials);
@@ -95,25 +144,24 @@ export async function preparationConsent(store: Pick<ExperimentStore, 'readTopic
   const oversize = promptsOversize(input.task, sources);
   if (oversize) throw new Error(oversize);
   return {
-    conversations: batch.dialogues.length + batch.rejected.length, usable: dialogueIds.length, ...batch.sample ? { sample: batch.sample } : {}, promised, topicMapCalls,
+    // A sample is told only where it took fewer than it could read: a small log with a row too large to keep took them all.
+    conversations, usable: dialogueIds.length, ...batch.sample && batch.dialogues.length < batch.sample.usable ? { sample: { usable: batch.sample.usable, taken: batch.dialogues.length } } : {},
+    promised, topicMapCalls,
     prompts: promptLoad(sources),
     callCeiling: preparationCeiling({ task: input.task, sources, situations: promised, fromLogs: true, topicMapCalls }),
-    excluded: leftOut(batch, excluded), asksAgent: isRunnable(input.target),
+    left: left.counts, leftAsRead: left.asRead, asksAgent: isRunnable(input.target),
   };
 }
 
 const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
+/** The count after «из»: «ни один из 50 разговоров». */
+const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
 /** The count after «не больше»: «не больше 21 вызова», «не больше 115 вызовов». */
 const CALLS: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
 const SITUATIONS_ACC: [string, string, string] = ['ситуацию', 'ситуации', 'ситуаций'];
 /** The ceiling holds the one revision of a situation the check rejected (card/budget.ts). */
 const REVISION_TEXT = 'Сюда входит одна переделка каждой ситуации, которую не пропустила проверка.';
 const PROMPTS: [string, string, string] = ['промпт', 'промпта', 'промптов'];
-/** Why a conversation makes no situation, in the owner's words. */
-const LEFT_OUT_TEXT: Record<LeftOut['kind'], string> = {
-  unreadable: 'запись не читается', length: 'нет реплик клиента или их больше 16', masked: 'реплика клиента скрыта обезличиванием',
-  customer_data: 'нужны данные клиента', unconfirmed: 'в правилах нет ожидаемого ответа',
-};
 
 /** What the preparation asks of the agent: nothing, or the one probe of its tools — a call to the agent, not to a model. */
 const agentWords = (asksAgent: boolean): string => asksAgent ? 'Lab один раз спросит агента, какие инструменты он показывает' : 'агент не запускается';
@@ -123,19 +171,19 @@ const agentWords = (asksAgent: boolean): string => asksAgent ? 'Lab один р�
  * most, what is left out and why, and the ceiling of the spending. Every surface asks it with these words.
  */
 export function consentText(consent: PreparationConsent, source: string): { question: string; lines: string[] } {
-  const counts = new Map<LeftOut['kind'], number>();
-  for (const item of consent.excluded) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
-  // Sorting is stable: equal counts keep the order the conversations were left out in.
-  const reasons = [...counts].sort((a, b) => b[1] - a[1]).map(([kind, count]) => `${LEFT_OUT_TEXT[kind]} — ${count}`);
+  const left: LogLeft = { counts: consent.left, asRead: consent.leftAsRead };
+  const reasons = leftWords(left);
   const { prompts, sample } = consent;
-  // A longer log than one import: the owner hears how many it held and how the import's sample was taken.
-  const logged = sample ? `В логах ${countText(sample.dialogues, CONVERSATIONS)}, в одну загрузку входит ${consent.conversations}: ${sampleWords(consent.conversations, sample.usable)}. Из них подходят ${consent.usable}.`
-    : `В логах ${countText(consent.conversations, CONVERSATIONS)}, подходят ${consent.usable}.`;
+  const roles = rolesLine(consent.left);
+  // A larger log than one import: the owner hears how many it held and how the import's sample was taken.
+  const logged = sample ? `В логах ${countText(consent.conversations, CONVERSATIONS)}; в одну загрузку входит ${sample.taken} из ${sample.usable} прочитанных — Lab берёт их по хешу содержимого, без отбора по исходу. В ситуации из них подходят ${consent.usable}.`
+    : `В логах ${countText(consent.conversations, CONVERSATIONS)}, в ситуации подходят ${consent.usable}.`;
   return {
     question: `Собрать ${countText(consent.promised, SITUATIONS_ACC)} из ${source}?`,
     lines: [
       `${logged} Ситуаций будет не больше ${consent.promised} — по одной на разговор, из всех тем логов.`,
-      ...(reasons.length ? [`Не войдут ${countText(consent.excluded.length, CONVERSATIONS)}: ${reasons.join(' · ')}.`] : []),
+      ...(reasons.length ? [`${pluralForm(leftCount(left), ['Не войдёт', 'Не войдут', 'Не войдут'])} в ситуации ${countText(leftCount(left), CONVERSATIONS)}${sample ? ' логов' : ''}: ${reasons.join(' · ')}.`] : []),
+      ...(roles ? [roles] : []),
       ...(prompts.count ? [`Промпты агента — ${countText(prompts.count, PROMPTS)}, ${Math.ceil(prompts.bytes / 1000)} КБ — читаются целиком с каждым разговором.`] : []),
       `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. ${REVISION_TEXT} Это потолок, а не прогноз; ${agentWords(consent.asksAgent)}.`,
     ],
@@ -158,6 +206,7 @@ export interface LogSample {
   /** The units in order: one round over the topics at a time. */
   picked: string[];
   strata: SampleStrata;
+  /** The conversations of the import left out before anything is spent, with the reason. */
   excluded: LeftOut[];
   /** The traffic of the import's topic map; none when the runtime cannot map topics. */
   traffic?: Traffic;
@@ -188,16 +237,17 @@ async function topicMapOf(store: ExperimentStore, batch: ImportBatch, mapper: No
  */
 export async function logSample(store: ExperimentStore, batch: ImportBatch, runtime: Runtime, ctx: CallContext, count: number,
   onStep: (message: string) => void | Promise<void> = () => {}): Promise<LogSample> {
-  const { dialogueIds: usable, excluded: unusable } = usableConversations(batch);
-  const excluded = leftOut(batch, unusable);
+  const { dialogueIds: usable, unsuitable } = usableConversations(batch);
+  const excluded = leftBeforeSpending(batch, unsuitable);
   // Nothing to sample: fail before the policy is read, instead of paying for a preparation with no unit.
-  if (!usable.length) throw new Error('В логах нет ни одного разговора, из которого можно сделать ситуацию.');
+  if (!usable.length) throw new NothingFits(logLeft(batch, unsuitable), batch.sample?.dialogues ?? batch.dialogues.length + batch.rejected.length);
   if (!runtime.topicMap) return { count, picked: usable.slice(0, count), strata: [{ dialogueIds: usable }], excluded };
   const map = await topicMapOf(store, batch, runtime.topicMap, ctx, onStep);
-  const sample = representativeSample(map, count);
+  const sample = representativeSample(map, count, new Set(unsuitable.map(item => item.dialogueId)));
   const traffic = trafficSummary(map);
   await onStep('Темы разговоров размечены. Готовлю ситуации.');
-  return { count, picked: sample.picked, strata: sampleSchema.parse(sample.strata.map(({ topicId, dialogueIds }) => ({ topicId, dialogueIds }))), excluded,
+  // A topic whose every conversation is unsuitable has no candidate: it stays in the traffic and out of the sample.
+  return { count, picked: sample.picked, strata: sampleSchema.parse(sample.strata.flatMap(({ topicId, dialogueIds }) => dialogueIds.length ? [{ topicId, dialogueIds }] : [])), excluded,
     ...(traffic ? { traffic } : {}) };
 }
 

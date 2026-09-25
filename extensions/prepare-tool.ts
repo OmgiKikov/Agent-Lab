@@ -13,7 +13,7 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { readDialogueImport } from '../src/imports.js';
 import { expandMaterials, promptMaterials } from '../src/materials.js';
 import type { PromptCandidate } from '../src/prompt-candidates.js';
-import { consentText, DEFAULT_SITUATIONS, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
+import { consentText, DEFAULT_SITUATIONS, loggedRolesToMap, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
 import { countText } from '../src/plural.js';
 import { TABLE_EXTENSIONS } from '../src/spreadsheet/workbook.js';
 import { safeText } from '../src/text.js';
@@ -153,6 +153,26 @@ function unknownPrompt(id: string, found: ProjectDetection | undefined): never {
     'Такого промпта Lab в проекте не нашёл — какой из найденных задаёт ответ клиенту?');
 }
 
+/** The answers to «кто пишет под этой ролью?»: a role of the conversation, or the owner's word that Lab should leave those conversations aside. */
+const ROLE_ANSWERS = [['клиент', 'user'], ['агент — бот, которого проверяем', 'assistant'], ['служебное', 'system']] as const;
+const LEAVE_ROLE = 'не знаю — оставить эти разговоры в стороне';
+
+/**
+ * Who writes under each role name of the logs Lab does not know (`client`, `operator`): one native question per name,
+ * never guessed — a bank's «operator» may be a person, not the bot. `declined` when the owner stepped back.
+ */
+async function askLoggedRoles(ctx: ExtensionContext, names: readonly string[]): Promise<ReadonlyMap<string, 'user' | 'assistant' | 'system'> | 'declined'> {
+  const roles = new Map<string, 'user' | 'assistant' | 'system'>();
+  for (const name of names) {
+    const picked = await ctx.ui.select(safeText(`Кто пишет сообщения с ролью «${name}» в логах?\n\nLab читает роли user, assistant, system и tool, а эту не угадывает: под ней может быть и бот, и живой сотрудник.`),
+      [...ROLE_ANSWERS.map(([label]) => label), LEAVE_ROLE, 'Не сейчас']);
+    const role = ROLE_ANSWERS.find(([label]) => label === picked)?.[1];
+    if (role) roles.set(name, role);
+    else if (picked !== LEAVE_ROLE) return 'declined';
+  }
+  return roles;
+}
+
 const declined = (host: PrepareHost, callId: string, text: string) =>
   host.feedResult(callId, { cancelled: true, spent: 0, instruction: 'The owner stepped back: nothing was spent or written. Do not ask again unless they do.' },
     { tone: 'warning', rows: [row(text)] }, 'Сбор ситуаций отменён');
@@ -223,8 +243,19 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
           { tone: 'warning', rows: [row(safeText(imported.refused))] }, 'Таблица не прочитана');
       }
     }
-    try { libraryImport = await readDialogueImport(logs, { directory }); }
-    catch (error) { throw new Error(safeText(`Не удалось прочитать логи ${shownPath(logs, ctx.cwd)}: ${error instanceof Error ? error.message : String(error)} Агент не запускался, ничего не потрачено.`)); }
+    const read = async (roles?: ReadonlyMap<string, 'user' | 'assistant' | 'system'>) => {
+      try { return await readDialogueImport(logs, { directory, ...(roles ? { roles } : {}) }); }
+      catch (error) { throw new Error(safeText(`Не удалось прочитать логи ${shownPath(logs, ctx.cwd)}: ${error instanceof Error ? error.message : String(error)} Агент не запускался, ничего не потрачено.`)); }
+    };
+    libraryImport = await read();
+    // A table's roles are its confirmed reading; a JSON log's unknown role names are the owner's word, asked before the consent.
+    const names = TABLE_EXTENSIONS.has(extname(logs).toLowerCase()) ? [] : loggedRolesToMap(libraryImport);
+    if (names.length) {
+      requireInteractive(ctx, `В логах роли, которых Lab не знает (${names.join(', ')}): кто пишет под ними, решаете вы в интерактивном терминале Pi. Откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не потрачено.`);
+      const roles = await askLoggedRoles(ctx, names);
+      if (roles === 'declined') return declined(host, callId, 'Не собираю: вы не сказали, кто пишет под ролями логов. Ничего не потрачено.');
+      if (roles.size) libraryImport = await read(roles);
+    }
     if (!libraryImport.dialogues.length) throw new Error(`В ${shownPath(logs, ctx.cwd)} нет разговоров, которые Lab может прочитать.`);
   }
 

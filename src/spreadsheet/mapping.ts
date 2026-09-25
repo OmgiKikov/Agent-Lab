@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { identifierSchema, sha256Schema, text } from '../ids.js';
+import { leftOutCodeSchema } from '../scenario-contracts.js';
 import { DELIMITERS, ENCODINGS } from './csv.js';
 import { SHEET_COLUMNS, columnIndex, columnLetter } from './sheet.js';
 import { TABLE_FORMATS } from './workbook.js';
@@ -146,7 +147,7 @@ export const tableReadingSchema = z.strictObject({
    * and taken are among them. `repeats`: with the owner's collapseRepeats, the conversations and messages copies left.
    */
   sheet: z.strictObject({ dialogues: count, selected: count.optional(), usable: count, taken: count,
-    rejected: z.array(z.strictObject({ reason: text(2000), count: z.number().int().positive() })).max(100),
+    rejected: z.array(z.strictObject({ code: leftOutCodeSchema.optional(), reason: text(2000), count: z.number().int().positive() })).max(100),
     repeats: z.strictObject({ dialogues: count, messages: count }).optional() }),
   /** Who proposed the reading the owner confirmed; absent in readings confirmed before Lab's model proposed them. */
   proposedBy: readingBasisSchema.optional(),

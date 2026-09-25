@@ -58,17 +58,22 @@ export function allocate(sizes: readonly number[], count: number): number[] {
   return floors;
 }
 
-/** The conversations to prepare as `count` situations: every topic represented in proportion to its share of the logs. */
-export function representativeSample(map: TopicMap, count: number): RepresentativeSample {
+/**
+ * The conversations to prepare as `count` situations: every topic represented in proportion to its share of the logs.
+ * `unsuitable` are sorted conversations no situation can be made of (topic-map.ts): they count in their topic's share
+ * and are never picked.
+ */
+export function representativeSample(map: TopicMap, count: number, unsuitable: ReadonlySet<string> = new Set()): RepresentativeSample {
   if (!Number.isInteger(count) || count < 1) throw new Error('Число ситуаций должно быть целым и не меньше 1.');
   const groups = [...topicDialogues(map)];
   const total = groups.reduce((sum, [, dialogueIds]) => sum + dialogueIds.length, 0);
+  const candidates = new Map(groups.map(([topicId, dialogueIds]) => [topicId, dialogueIds.filter(dialogueId => !unsuitable.has(dialogueId))]));
   // Sorting is stable: topics of equal size keep the content hash's order.
-  const ranked = seededOrder(groups, map.contentHash, ([topicId]) => `topic:${topicId}`).sort((a, b) => b[1].length - a[1].length);
-  const seats = allocate(ranked.map(([, dialogueIds]) => dialogueIds.length), count);
+  const ranked = seededOrder(groups, map.contentHash, ([topicId]) => `topic:${topicId}`).sort((a, b) => candidates.get(b[0])!.length - candidates.get(a[0])!.length);
+  const seats = allocate(ranked.map(([topicId]) => candidates.get(topicId)!.length), count);
   const strata = ranked.map(([topicId, dialogueIds], index): SampleStratum => ({
-    topicId, share: dialogueIds.length / total, available: dialogueIds.length, allocated: seats[index]!,
-    dialogueIds: seededOrder(dialogueIds, map.contentHash, dialogueId => `pick:${dialogueId}`),
+    topicId, share: dialogueIds.length / total, available: candidates.get(topicId)!.length, allocated: seats[index]!,
+    dialogueIds: seededOrder(candidates.get(topicId)!, map.contentHash, dialogueId => `pick:${dialogueId}`),
   }));
   const picked: string[] = [];
   for (let round = 0; strata.some(stratum => stratum.allocated > round); round++) {

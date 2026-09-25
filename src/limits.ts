@@ -33,11 +33,17 @@ export const IMPORT_DIALOGUE_LIMIT = 300;
  * where the next conversation would not fit. The import is never refused for it.
  */
 export const IMPORT_BATCH_CHARS = 12_000_000;
+/** The JSON of one logged conversation an import keeps; a larger one is left out of the import, with that reason. */
+export const LOGGED_CONVERSATION_CHARS = 500_000;
+/** A logged message longer than this is a document pasted in, not a message: its conversation is left out, with that reason. */
+export const LOGGED_MESSAGE_CHARS = 8000;
 /**
  * Later customer messages one situation accounts for (card/schema.ts `coverage`), and so the customer messages of a
- * logged conversation a situation can be made from: its opening and those. Long conversations are where agents lose
- * customers, so the bound is the card's, never the sample's convenience; a conversation too large for one model call is
- * left out later, with that reason (card/prepare.ts).
+ * logged conversation a situation can be made from: its opening and those. The one bound on a conversation's length,
+ * in the card's own terms, never in raw events: a longer conversation is still read and counted in the traffic of its
+ * topic; only no situation is made of it. Long conversations are where agents lose customers, so the bound is the
+ * card's, never the sample's convenience; a conversation too large for one model call is left out later, with that
+ * reason (card/prepare.ts).
  */
 export const CARD_LATER_MESSAGES = 60;
 export const LOGGED_CUSTOMER_MESSAGES = CARD_LATER_MESSAGES + 1;

@@ -3,11 +3,11 @@ import { z } from 'zod';
 import type { ValidationExclusion } from '../contracts.js';
 import type { CallContext } from '../runtime.js';
 import { identifierSchema, sha256Schema } from '../ids.js';
-import { validationDialogueIssue } from '../imports.js';
 import { IMPORT_DIALOGUE_LIMIT } from '../limits.js';
 import type { Model } from '../llm/model-call.js';
 import type { StructuredTask } from '../llm/structured.js';
-import type { ImportBatch } from '../scenario-contracts.js';
+import type { ImportBatch, LeftOutIssue } from '../scenario-contracts.js';
+import { situationIssue } from '../scenario-library.js';
 import { oneLine, safeLine } from '../text.js';
 import { OTHER, OTHER_TITLE, TITLE_CHARS, TOPIC_LIMIT } from './schema.js';
 
@@ -18,7 +18,8 @@ export { OTHER, OTHER_TITLE, TOPIC_LIMIT } from './schema.js';
  * and which topic each logged conversation belongs to. Situations are sampled by it (sample.ts) and
  * their coverage of real traffic is measured against it (coverage.ts).
  *
- *   batch ─► usability check of src/imports.ts ─► excluded, with its reason; never sent
+ *   batch ─► every conversation is sorted; the ones no situation can be made of (scenario-library.ts situationIssue)
+ *            are marked unsuitable, so the sample never picks them, and still count in their topic's traffic
  *         ─► seeded sample of customer openings ─► 1 call: ≤15 topics; the harness numbers them t1…tN
  *         ─► import order, batches of ≤40 ─► 1 call each: dialogue-id enum × topic enum + other, each id exactly once
  *         ─► TopicMap, bound to importId + contentHash + builder model + prompt version
@@ -186,24 +187,29 @@ function batched<T>(items: readonly T[], size: number): T[][] {
   return batches;
 }
 
-/** The conversations of an import the map sorts, with every customer message, and those the usability check refuses. */
-function partition(batch: MinerImport): { usable: Conversation[]; excluded: ValidationExclusion[] } {
-  const usable: Conversation[] = [];
-  const excluded: ValidationExclusion[] = [];
+/** A conversation of the import no situation can be made of, and why; it is still sorted into its topic. */
+export interface Unsuitable { dialogueId: string; issue: LeftOutIssue }
+
+/**
+ * The conversations of an import the map sorts — every one, with every customer message: the traffic of a topic counts
+ * the long conversations too, since they are where agents lose customers — and, apart, those no situation can be made
+ * of, with the reason (scenario-library.ts situationIssue).
+ */
+function partition(batch: MinerImport): { sorted: Conversation[]; unsuitable: Unsuitable[] } {
+  const sorted: Conversation[] = [], unsuitable: Unsuitable[] = [];
   for (const dialogue of batch.dialogues) {
-    const messages = dialogue.events.flatMap(event => event.type === 'message' && (event.role === 'user' || event.role === 'assistant') && event.content !== undefined
-      ? [{ role: event.role, content: event.content }] : []);
-    // An import stored before the table of masks keeps its first reading, so its stored map still accounts for it.
-    const issue = validationDialogueIssue({ messages }, batch.maskVersion ?? 1);
-    if (issue) excluded.push({ dialogueId: dialogue.id, ...issue });
-    else usable.push({ dialogueId: dialogue.id, customer: messages.flatMap(message => message.role === 'user' ? [message.content] : []) });
+    sorted.push({ dialogueId: dialogue.id, customer: dialogue.events.flatMap(event => event.type === 'message' && event.role === 'user' && event.content !== undefined ? [event.content] : []) });
+    // An import stored before the table of masks keeps its first reading.
+    const issue = situationIssue(dialogue, batch.maskVersion ?? 1);
+    if (issue) unsuitable.push({ dialogueId: dialogue.id, issue });
   }
-  return { usable, excluded };
+  return { sorted, unsuitable };
 }
-/** The conversations of an import a situation can be made from, in import order, and those the usability check refuses, with the reason. */
-export function usableConversations(batch: MinerImport): { dialogueIds: string[]; excluded: ValidationExclusion[] } {
-  const { usable, excluded } = partition(batch);
-  return { dialogueIds: usable.map(conversation => conversation.dialogueId), excluded };
+/** The conversations of an import a situation can be made from, in import order, and those no situation can be made of, with the reason. */
+export function usableConversations(batch: MinerImport): { dialogueIds: string[]; unsuitable: Unsuitable[] } {
+  const { sorted, unsuitable } = partition(batch);
+  const left = new Set(unsuitable.map(item => item.dialogueId));
+  return { dialogueIds: sorted.flatMap(conversation => left.has(conversation.dialogueId) ? [] : [conversation.dialogueId]), unsuitable };
 }
 
 const sorted = (batch: readonly Conversation[], assignments: TopicMapProgress['assignments']): boolean =>
@@ -222,10 +228,10 @@ function continuation(stored: unknown, key: TopicMapKey, batches: readonly (read
 
 export interface TopicMapPlan {
   readonly key: TopicMapKey;
-  /** Conversations the map sorts: the usable ones. */
+  /** Conversations the map sorts: every conversation of the import. */
   readonly dialogues: number;
-  /** Conversations the usability check of src/imports.ts refused, in import order: never sent, never counted. */
-  readonly excluded: readonly ValidationExclusion[];
+  /** Sorted conversations no situation can be made of, in import order, with the reason: the sample never picks them. */
+  readonly unsuitable: readonly Unsuitable[];
   /** Model calls this plan still makes: the proposal unless the continuation has it, and each batch not yet sorted. */
   readonly calls: number;
   /** What the proposal reads: a seeded sample of customer openings, without ids. */
@@ -243,7 +249,7 @@ export interface TopicMapPlan {
  */
 export function planTopicMap(batch: MinerImport, builder: BuilderModel, resume?: unknown): TopicMapPlan {
   const key = topicMapKey(batch, builder);
-  const { usable, excluded } = partition(batch);
+  const { sorted: usable, unsuitable } = partition(batch);
   const openings: string[][] = [];
   let bytes = 0;
   for (const { customer } of seededOrder(usable, key.contentHash, conversation => `opening:${conversation.dialogueId}`)) {
@@ -256,7 +262,7 @@ export function planTopicMap(batch: MinerImport, builder: BuilderModel, resume?:
   const batches = batched(usable.map(({ dialogueId, customer }) => ({ dialogueId, customer: excerpt(customer, EXCERPT_BYTES) })), CLASSIFY_BATCH);
   const continued = continuation(resume, key, batches);
   const left = batches.filter(batch => !continued || !sorted(batch, continued.assignments)).length;
-  return { key, dialogues: usable.length, excluded, calls: (continued || !usable.length ? 0 : 1) + left, openings, batches, resume: continued };
+  return { key, dialogues: usable.length, unsuitable, calls: (continued || !usable.length ? 0 : 1) + left, openings, batches, resume: continued };
 }
 
 /**
@@ -268,10 +274,10 @@ export function reusableTopicMap(stored: unknown, batch: MinerImport, builder: B
   const parsed = topicMapSchema.safeParse(stored);
   if (!parsed.success || !sameKey(parsed.data, topicMapKey(batch, builder))) return undefined;
   const map = parsed.data;
-  const { usable, excluded } = partition(batch);
-  const ids = (list: readonly { dialogueId: string }[]) => JSON.stringify(list.map(item => item.dialogueId));
+  const { sorted } = partition(batch);
+  // A map that left conversations out — as maps did before every conversation was sorted — is built again.
   const assigned = Object.keys(map.assignments);
-  return assigned.length === usable.length && usable.every(item => Object.hasOwn(map.assignments, item.dialogueId)) && ids(map.excluded) === ids(excluded)
+  return assigned.length === sorted.length && sorted.every(item => Object.hasOwn(map.assignments, item.dialogueId)) && !map.excluded.length
     ? map : undefined;
 }
 
@@ -345,7 +351,7 @@ export async function buildTopicMap(plan: TopicMapPlan, build: TopicMapBuild): P
   const header = { formatVersion: 1 as const, ...plan.key };
   let progress = plan.resume;
   if (!progress) {
-    if (!plan.batches.length) return topicMapSchema.parse({ ...header, topics: [], assignments: {}, excluded: plan.excluded });
+    if (!plan.batches.length) return topicMapSchema.parse({ ...header, topics: [], assignments: {}, excluded: [] });
     const proposal = await run(PROPOSAL_TASK, { conversations: plan.openings }, ctx);
     const topics = proposal.topics.map((topic, index) => ({ id: numbered(index), title: plain(topic.title), description: plain(topic.description) }));
     progress = { ...header, topics, assignments: {} };
@@ -360,7 +366,7 @@ export async function buildTopicMap(plan: TopicMapPlan, build: TopicMapBuild): P
     assignments = { ...assignments, ...Object.fromEntries(answer.assignments.map(({ dialogueId, topicId }) => [dialogueId, topicId])) };
     await build.onProgress?.({ ...header, topics, assignments });
   }
-  return topicMapSchema.parse({ ...header, topics, assignments, excluded: plan.excluded });
+  return topicMapSchema.parse({ ...header, topics, assignments, excluded: [] });
 }
 
 /** The topic of a logged conversation: undefined when the conversation was excluded or belongs to another import. */

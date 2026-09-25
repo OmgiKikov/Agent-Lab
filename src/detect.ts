@@ -9,7 +9,8 @@ import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES, MATERIAL_CHARS } from './limi
 import { MATERIAL_EXTENSIONS, materialText } from './materials.js';
 import { codePrompts, jsonPrompts, MIN_PROMPT_CHARS, type PromptCandidate } from './prompt-candidates.js';
 import { countText, pluralForm } from './plural.js';
-import { logImport, sampleWords } from './scenario-library.js';
+import { logImport, sampleWords, type Verdict } from './scenario-library.js';
+import type { LeftOutIssue } from './scenario-contracts.js';
 import { codeFacts, codeHasWord, FACTORY, languageOf } from './source-facts.js';
 import { proposeTableBytes } from './spreadsheet/import.js';
 import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
@@ -43,7 +44,8 @@ export interface AgentCandidate { target: RunnableTarget; confidence: Confidence
  * A spreadsheet (`table`) is counted under the reading Lab proposes, which the owner confirms before the import; `question`: Lab
  * sees the conversations but must ask one thing first (a marker or a role it does not know, the id column), so nothing is counted as rejected yet.
  */
-export interface LogFile { file: string; dialogues: number; rejected: number; complete: boolean; table?: 'ready' | 'question' }
+/** `roles`: role names of the log's conversations Lab does not know — who writes under them is asked before a preparation. */
+export interface LogFile { file: string; dialogues: number; rejected: number; complete: boolean; table?: 'ready' | 'question'; roles?: string[] }
 export interface MaterialFolder { folder: string; documents: number }
 /** Paths are relative to `root`, except inside `target`. */
 export interface ProjectDetection {
@@ -146,13 +148,16 @@ class Reader {
 }
 
 /** Rows the import accepts, counted with the import's own reading of the whole file: a conversation id is taken once in it. */
-function dialogueCount(raw: unknown): { dialogues: number; rejected: number } | undefined {
+function dialogueCount(raw: unknown, known: ReadonlyMap<number, LeftOutIssue>): { dialogues: number; rejected: number; roles?: string[] } | undefined {
   const rows = Array.isArray(raw) ? raw : isRecord(raw) && Array.isArray(raw.dialogues) ? raw.dialogues : undefined;
   if (!rows?.length) return undefined;
-  let verdicts: (string[] | undefined)[];
-  try { ({ verdicts } = logImport(raw)); } catch { return undefined; } // the import refuses the file as a whole: not a log Lab can take
-  const rejected = verdicts.filter(Boolean).length, dialogues = verdicts.length - rejected;
-  return dialogues ? { dialogues, rejected } : undefined;
+  let verdicts: Verdict[];
+  try { ({ verdicts } = logImport(raw, { known })); } catch { return undefined; } // the import refuses the file as a whole: not a log Lab can take
+  // A conversation under a role name Lab does not know is a conversation all the same: who writes under it is the owner's word.
+  const unmapped = verdicts.filter(verdict => verdict?.every(issue => issue.code === 'roles'));
+  const roles = [...new Set(unmapped.flatMap(verdict => verdict!.map(issue => issue.value ?? '')))].filter(Boolean).slice(0, 12);
+  const rejected = verdicts.filter(Boolean).length - unmapped.length, dialogues = verdicts.length - rejected;
+  return dialogues ? { dialogues, rejected, ...(roles.length ? { roles } : {}) } : undefined;
 }
 
 /** A spreadsheet of logs under the reading Lab would propose; a table without conversations, or one Lab cannot read, is not a log. */
@@ -323,14 +328,14 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
       const whole = await reader.text(file.path, IMPORT_FILE_BYTES);
       const text = whole ?? (ext === '.jsonl' ? await reader.head(file.path) : undefined);
       if (text === undefined) continue;
-      let raw: unknown;
-      try { raw = parseImportText(text, ext === '.jsonl'); } catch { continue; }
+      let raw: unknown, known: ReadonlyMap<number, LeftOutIssue>;
+      try { ({ raw, known } = parseImportText(text, ext === '.jsonl')); } catch { continue; }
       if (isRecord(raw) && raw.format === CONNECTION_FORMAT) {
         const connection = await readConnection(file.path).catch(() => undefined);
         if (connection) add(`connection:${file.rel}`, connection.target, [{ kind: 'connection', file: file.rel }]);
         continue;
       }
-      const count = dialogueCount(raw);
+      const count = dialogueCount(raw, known);
       if (count) logs.push({ file: file.rel, ...count, complete: whole !== undefined });
       else if (ext === '.json') {
         // A JSON of prompts (an MLS-style agent_prompt.json, or a config with a system field) is read whole, like any config.
@@ -461,7 +466,8 @@ function logLine(log: LogFile): string {
     + (log.rejected ? `, ${countText(log.rejected, ['запись', 'записи', 'записей'])} ${pluralForm(log.rejected, ['не подошла', 'не подошли', 'не подошли'])}` : '')
     + (log.complete && log.table !== 'question' && log.dialogues > IMPORT_DIALOGUE_LIMIT ? `; в одну загрузку входит ${IMPORT_DIALOGUE_LIMIT}: ${sampleWords(IMPORT_DIALOGUE_LIMIT, log.dialogues)}` : '');
   if (log.table) return `  ${log.file} — таблица, ${counted}; ${log.table === 'ready' ? 'как её читать, Lab покажет перед загрузкой' : 'перед загрузкой Lab спросит, как её читать'}`;
-  return `  ${log.file} — ${counted}${log.complete ? '' : `; дальше Lab не смотрел: файл больше ${IMPORT_FILE_BYTES / 1_000_000} МБ, целиком его Lab прочитает при загрузке`}`;
+  const roles = log.roles?.length ? `; роли ${log.roles.map(role => `«${role}»`).join(', ')} Lab не знает — кто пишет под ними, он спросит перед сборкой` : '';
+  return `  ${log.file} — ${counted}${roles}${log.complete ? '' : `; дальше Lab не смотрел: файл больше ${IMPORT_FILE_BYTES / 1_000_000} МБ, целиком его Lab прочитает при загрузке`}`;
 }
 
 const ORIGIN_TEXT: Record<PromptCandidate['origin'], string> = { file: 'файл', code: 'строка в коде', json: 'поле JSON' };

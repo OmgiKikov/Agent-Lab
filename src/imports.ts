@@ -1,11 +1,9 @@
-import { logImport, logReader, sampledBatch } from './scenario-library.js';
-import type { ImportBatch } from './scenario-contracts.js';
+import { logImport, logReader, sampledBatch, type RowReading } from './scenario-library.js';
+import type { ImportBatch, LeftOutIssue } from './scenario-contracts.js';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
-import type { Dialogue, ValidationExclusion } from './contracts.js';
-import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES, LOG_CONVERSATIONS, LOGGED_CUSTOMER_MESSAGES, STREAMED_LOG_BYTES } from './limits.js';
-import { hiddenMessage, MASK_VERSION, type MaskVersion } from './masking.js';
+import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES, LOG_CONVERSATIONS, STREAMED_LOG_BYTES } from './limits.js';
 import { ScenarioFiles } from './scenario-store.js';
 import { readConfirmedTable } from './spreadsheet/import.js';
 import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
@@ -13,21 +11,11 @@ import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 /*
  * A file of logged conversations becomes an import: a JSON document read whole (up to IMPORT_FILE_BYTES), JSON Lines
  * read in a stream, a line at a time (up to STREAMED_LOG_BYTES), or a spreadsheet under the reading its owner
- * confirmed. A log longer than one import gives the sample of its usable conversations (scenario-library.ts logImport),
- * the same for the same file. A file that is not what it says is refused with the place and what to do.
+ * confirmed. A log larger than one import gives the sample of its readable conversations (scenario-library.ts
+ * logImport), the same for the same file. A file that is not what it says is refused with the place and what to do;
+ * inside JSON Lines, a line that is not JSON, or one too long to hold, is one conversation left out with that reason,
+ * counted where it stands, and the rest of the log is read.
  */
-
-/**
- * Whether a logged dialogue can become a situation at all; the scenario miner excludes by it before anything is spent.
- * Drop the whole dialogue: removing one masked turn would silently change its meaning. `maskVersion` is the table of
- * masks its import was read by: a topic map of an import stored before the table left out what the first reading did.
- */
-export function validationDialogueIssue(dialogue: Pick<Dialogue, 'messages'>, maskVersion: MaskVersion = MASK_VERSION): Omit<ValidationExclusion, 'dialogueId'> | undefined {
-  const users = dialogue.messages.filter(message => message.role === 'user');
-  if (!users.length || users.length > LOGGED_CUSTOMER_MESSAGES) return { kind: 'length', reason: users.length ? `клиент пишет больше ${LOGGED_CUSTOMER_MESSAGES} раз` : 'в разговоре нет ни одной реплики клиента' };
-  if (users.some(message => hiddenMessage(message.content, maskVersion))) return { kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' };
-  return undefined;
-}
 
 const isJsonSpace = (char: string | undefined) => char === ' ' || char === '\t' || char === '\n' || char === '\r';
 const isDigit = (char: string | undefined) => char !== undefined && char >= '0' && char <= '9';
@@ -101,14 +89,21 @@ function brokenAt(text: string, offset: number): string {
   return `неожиданно стоит ${shown}`;
 }
 
-/** The value of a JSON text; refused in the owner's words with the line and the character where it breaks. */
-function parseJson(text: string, line?: number): unknown {
+/** The value of a JSON document; refused in the owner's words with the line and the character where it breaks. */
+function parseJson(text: string): unknown {
   try { return JSON.parse(text); } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
     const offset = jsonBreak(text), before = text.slice(0, offset);
-    const row = (line ?? 1) + before.split('\n').length - 1, column = offset - before.lastIndexOf('\n');
-    if (line !== undefined) throw new Error(`Файл логов не читается: в строке ${row} (знак ${column}) ${brokenAt(text, offset)}. В файле .jsonl каждая непустая строка — один разговор в JSON.`);
+    const row = before.split('\n').length, column = offset - before.lastIndexOf('\n');
     throw new Error(`Файл логов не читается как JSON: в строке ${row} (знак ${column}) ${brokenAt(text, offset)}. Проверьте там запятые, кавычки и скобки.`);
+  }
+}
+
+/** A line of JSON Lines as a row of the log: its JSON, or — when it is not JSON — its text, with that reason. */
+function lineRow(text: string, number: number): { row: unknown; issue?: LeftOutIssue } {
+  try { return { row: JSON.parse(text) }; } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return { row: text, issue: { code: 'line', value: String(number) } };
   }
 }
 
@@ -125,14 +120,21 @@ function eachLine(text: string, visit: (line: string, number: number) => void): 
   }
 }
 
-/** A JSON document, or JSON Lines: one row per non-empty line. The one reading of an import file, shared with project detection. */
-export function parseImportText(text: string, jsonl: boolean): unknown {
+/**
+ * A JSON document, or JSON Lines: one row per non-empty line, a line that is not JSON kept as its text with that reason
+ * (`known`, by row). The one reading of an import file, shared with project detection.
+ */
+export function parseImportText(text: string, jsonl: boolean): { raw: unknown; known: ReadonlyMap<number, LeftOutIssue> } {
   const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   if (!body.trim()) throw new Error('Файл логов пуст.');
-  if (!jsonl) return parseJson(body);
-  const rows: unknown[] = [];
-  eachLine(body, (line, number) => rows.push(parseJson(line, number)));
-  return rows;
+  if (!jsonl) return { raw: parseJson(body), known: new Map() };
+  const rows: unknown[] = [], known = new Map<number, LeftOutIssue>();
+  eachLine(body, (line, number) => {
+    const { row, issue } = lineRow(line, number);
+    if (issue) known.set(rows.length, issue);
+    rows.push(row);
+  });
+  return { raw: rows, known };
 }
 
 const notUtf8 = () => new Error('Файл логов не в кодировке UTF-8: сохраните его в UTF-8 — так пишут JSON.');
@@ -148,67 +150,84 @@ const unconfirmedTable = (file: string) => new Error(`Таблицу Lab чит�
 const tooManyConversations = () => new Error(`В файле логов больше ${LOG_CONVERSATIONS.toLocaleString('ru-RU')} разговоров — это архив, а не логи одного периода. Выгрузите из системы период поменьше.`);
 
 /** A JSON document read whole. */
-async function readJsonFile(file: string): Promise<ImportBatch> {
+async function readJsonFile(file: string, reading: RowReading): Promise<ImportBatch> {
   if ((await stat(file)).size > IMPORT_FILE_BYTES) {
     throw new Error(`Файл логов больше ${IMPORT_FILE_BYTES / 1_000_000} МБ: документ JSON Lab читает только целиком. Сохраните логи в JSON Lines (.jsonl) — по одному разговору в строке: такой файл Lab читает построчно, до ${STREAMED_LOG_BYTES / 1_000_000} МБ, и сам берёт выборку.`);
   }
-  return logImport(parseImportText(utf8(await readFile(file)), false)).batch;
+  return logImport(parseImportText(utf8(await readFile(file)), false).raw, reading).batch;
+}
+
+/** A line of JSON Lines longer than this is not held to be read: its conversation is far larger than an import keeps. */
+const LINE_CHARS = IMPORT_FILE_BYTES;
+
+/**
+ * JSON Lines read in a stream, a line at a time: every line read by the import's rules and counted, only the rows of a
+ * short log kept. A log larger than one import — or one with a line too long to hold — is read a second time for the
+ * rows of its sample; a file that changed in between is refused.
+ */
+async function readJsonLines(file: string, reading: RowReading): Promise<ImportBatch> {
+  const before = await stat(file);
+  if (before.size > STREAMED_LOG_BYTES) throw new Error(`Файл логов больше ${STREAMED_LOG_BYTES / 1_000_000} МБ — выгрузите из системы период поменьше.`);
+  const reader = logReader(reading);
+  const head: unknown[] = [], known = new Map<number, LeftOutIssue>();
+  let rows = 0, held = true;
+  await eachLineOf(file, (text, number) => {
+    if (++rows > LOG_CONVERSATIONS) throw tooManyConversations();
+    if (text === undefined) { reader.skip({ code: 'large' }); held = false; head.length = 0; return; }
+    const { row, issue } = lineRow(text, number);
+    reader.read(row, issue);
+    if (!held || rows > IMPORT_DIALOGUE_LIMIT) { held = false; head.length = 0; return; }
+    if (issue) known.set(head.length, issue);
+    head.push(row);
+  });
+  if (!rows) throw new Error('Файл логов пуст.');
+  if (held) return logImport(head, { ...reading, known }).batch;
+  const { indexes, sample } = reader.sample();
+  const wanted = new Set(indexes), taken: unknown[] = [];
+  const changed = () => new Error('Файл логов изменился, пока Lab его читал. Загрузите его ещё раз.');
+  let index = 0;
+  await eachLineOf(file, (text, number) => {
+    if (!wanted.has(index++)) return;
+    const read = text === undefined ? undefined : lineRow(text, number);
+    if (!read || read.issue) throw changed();
+    taken.push(read.row);
+  });
+  const after = await stat(file);
+  if (index !== rows || after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw changed();
+  return sampledBatch(taken, sample, reading);
 }
 
 /**
- * JSON Lines read in a stream, a line at a time: every line parsed and read by the import's rules, only the rows of a
- * short log kept. A longer log is read a second time for the rows of its sample; a file that changed in between is refused.
+ * Each non-empty line of a file read in a stream, with its number as the owner counts lines: every line break counts.
+ * A line longer than LINE_CHARS is never held: it is visited as undefined, and the reading goes on after it.
  */
-async function readJsonLines(file: string): Promise<ImportBatch> {
-  const before = await stat(file);
-  if (before.size > STREAMED_LOG_BYTES) throw new Error(`Файл логов больше ${STREAMED_LOG_BYTES / 1_000_000} МБ — выгрузите из системы период поменьше.`);
-  const reader = logReader();
-  const head: unknown[] = [];
-  let rows = 0;
-  await eachLineOf(file, (text, number) => {
-    const row = parseJson(text, number);
-    if (++rows > LOG_CONVERSATIONS) throw tooManyConversations();
-    if (rows <= IMPORT_DIALOGUE_LIMIT) head.push(row); else head.length = 0;
-    reader.read(row);
-  });
-  if (!rows) throw new Error('Файл логов пуст.');
-  if (rows <= IMPORT_DIALOGUE_LIMIT) return logImport(head).batch;
-  const { indexes, sample } = reader.sample();
-  const wanted = new Set(indexes), taken: unknown[] = [];
-  let index = 0;
-  await eachLineOf(file, (text, number) => { if (wanted.has(index++)) taken.push(parseJson(text, number)); });
-  const after = await stat(file);
-  if (index !== rows || after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw new Error('Файл логов изменился, пока Lab его читал. Загрузите его ещё раз.');
-  return sampledBatch(taken, sample);
-}
-
-/** Each non-empty line of a file read in a stream, with its number as the owner counts lines: every line break counts. */
-async function eachLineOf(file: string, visit: (line: string, number: number) => void): Promise<void> {
+async function eachLineOf(file: string, visit: (line: string | undefined, number: number) => void): Promise<void> {
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  let rest = '', number = 0;
-  const line = (text: string) => {
+  let rest = '', number = 0, skipping = false;
+  const line = (text: string | undefined) => {
     number++;
-    if (text.trim()) visit(text.endsWith('\r') ? text.slice(0, -1) : text, number);
+    if (text === undefined) visit(undefined, number);
+    else if (text.trim()) visit(text.endsWith('\r') ? text.slice(0, -1) : text, number);
   };
   try {
     for await (const chunk of createReadStream(file)) {
       const text = rest + decoder.decode(chunk as Buffer, { stream: true });
       let from = 0;
-      for (let end = text.indexOf('\n'); end !== -1; end = text.indexOf('\n', from)) { line(text.slice(from, end)); from = end + 1; }
+      for (let end = text.indexOf('\n'); end !== -1; end = text.indexOf('\n', from)) { line(skipping ? undefined : text.slice(from, end)); skipping = false; from = end + 1; }
       rest = text.slice(from);
-      if (rest.length > IMPORT_FILE_BYTES) throw new Error(`Файл логов не читается: строка ${number + 1} длиннее ${IMPORT_FILE_BYTES / 1_000_000} МБ, а в файле .jsonl строка — один разговор.`);
+      if (rest.length > LINE_CHARS) { skipping = true; rest = ''; }
     }
     rest += decoder.decode();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ERR_ENCODING_INVALID_ENCODED_DATA') throw notUtf8();
     throw error;
   }
-  line(rest);
+  line(skipping ? undefined : rest);
 }
 
-/** The conversations of a task file as an import, every raw row retained; a log longer than one import gives its sample. */
-export function importDialogues(raw: unknown): ImportBatch {
-  return logImport(raw).batch;
+/** The conversations of a task file as an import, every raw row retained; a log larger than one import gives its sample. */
+export function importDialogues(raw: unknown, reading: RowReading = {}): ImportBatch {
+  return logImport(raw, reading).batch;
 }
 
 /**
@@ -222,12 +241,16 @@ async function storedImport(batch: ImportBatch, directory: string | undefined): 
 }
 
 /**
- * A file of logged conversations: JSON or JSONL as written, or a spreadsheet (.xlsx, .csv) under the
- * reading its owner confirmed, found in the data folder `directory`. What the folder already keeps of the
- * same conversations is that import.
+ * A file of logged conversations: JSON or JSONL as written — with the owner's word on role names Lab does not know,
+ * when they gave it (`roles`) — or a spreadsheet (.xlsx, .csv) under the reading its owner confirmed, found in the data
+ * folder `directory`. What the folder already keeps of the same conversations is that import.
  */
-export async function readDialogueImport(file: string, options: { directory?: string } = {}): Promise<ImportBatch> {
-  if (isTable(file) && !options.directory) throw unconfirmedTable(file);
-  const read = isTable(file) ? await readConfirmedTable(file, options.directory!) : isLines(file) ? await readJsonLines(file) : await readJsonFile(file);
-  return storedImport(read, options.directory);
+export async function readDialogueImport(file: string, options: { directory?: string; roles?: RowReading['roles'] } = {}): Promise<ImportBatch> {
+  if (isTable(file)) {
+    if (!options.directory) throw unconfirmedTable(file);
+    if (options.roles) throw new Error(`Кто пишет в таблице, задаёт её разметка: agent-lab import --file ${file} --roles "ЗНАЧЕНИЕ=клиент|агент|служебное".`);
+    return storedImport(await readConfirmedTable(file, options.directory), options.directory);
+  }
+  const reading: RowReading = options.roles ? { roles: options.roles } : {};
+  return storedImport(isLines(file) ? await readJsonLines(file, reading) : await readJsonFile(file, reading), options.directory);
 }

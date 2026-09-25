@@ -30,6 +30,20 @@ function whereChoice(text: string): NonNullable<TableChoices['where']> {
   if (!column) throw new Error('--where: ожидается КОЛОНКА=ЗНАЧЕНИЕ, несколько значений — через |; одна КОЛОНКА покажет её значения.');
   return at < 0 ? { column } : { column, values: text.slice(at + 1).split('|').map(value => value.trim()) };
 }
+/**
+ * `build --roles client=клиент,operator=агент`: who writes under the role names of a JSON log Lab does not know — the
+ * owner's word, never Lab's guess. Undefined without the flag.
+ */
+export function loggedRolesOf(text: string | undefined): ReadonlyMap<string, 'user' | 'assistant' | 'system'> | undefined {
+  if (text === undefined) return undefined;
+  const pairs = rolePairs(text, '--roles', false);
+  return new Map(pairs.map(({ label, role }) => [label, role as 'user' | 'assistant' | 'system']));
+}
+
+/** How to answer role names Lab does not know from the command line: the flag of the same command, a role for each. */
+export const loggedRolesHint = (names: readonly string[]): string =>
+  `Кто есть кто: та же команда с --roles "${names.map(name => `${name}=РОЛЬ`).join(',')}", где РОЛЬ — клиент, агент или служебное.`;
+
 /** The owner's choices from the command line; each overrides what Lab would propose. */
 export function tableChoicesOf(values: Record<string, string | boolean | string[] | undefined>): TableChoices {
   const text = (key: string) => typeof values[key] === 'string' ? values[key] as string : undefined;
