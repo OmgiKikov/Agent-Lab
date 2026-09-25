@@ -87,7 +87,7 @@ test('navigation-independent snapshots export matching comparisons and the same 
   // Without attempts after, nothing is paired and the situation says why it has no verdict.
   const incomplete = await evidenceBundle({ ...after, trials: [] }, lab.store);
   for (const report of [htmlReport(incomplete), markdownReport(incomplete)]) {
-    assert.match(report, /Нет совпадающих валидных попыток/);
+    assert.match(report, /Нет попыток, измеренных в обоих прогонах: сравнивать нечего\./);
     assert.match(report, /Move an appointment: прогон остановился раньше/);
   }
 });

@@ -568,7 +568,7 @@ test('a card edited after load-suite is neither unstable nor fixed/regressed aga
   assert.ok(view.cards.every(item => !item.unstable), JSON.stringify(view.stability));
   assert.deepEqual(view.stability, buildResultView(edited, { before: same.source }).stability, 'the same answer as with the stored source');
   const diff = compareRuns(rebuilt, edited);
-  assert.ok(diff.notes.some(note => note.startsWith('Содержимое карточек изменилось')), JSON.stringify(diff.notes));
+  assert.ok(diff.notes.some(note => note.startsWith('Изменились ситуации:')), JSON.stringify(diff.notes));
   assert.deepEqual([diff.fixed, diff.regressed], [[], []]);
   // Against the stored source the edited card is not counted either.
   assert.equal(stabilityBetweenRuns({ ...same.source }, edited).unstable.length, 0);

@@ -1,7 +1,6 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { Experiment, Trial } from '../src/contracts.js';
-import { agreementSample, judgeAgreement } from '../src/agreement.js';
-import { awaitingVerdict } from '../src/comparison.js';
+import { agreementSample, awaitingVerdict, judgeAgreement } from '../src/agreement.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { resultHash } from '../src/lab/record.js';
 import { markTargets, measurementUsable } from '../src/outcomes.js';

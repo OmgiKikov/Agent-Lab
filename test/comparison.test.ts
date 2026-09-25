@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sourceIdentity } from '../src/normalize.js';
-import { awaitingVerdict, compareRuns, humanFindings, judgeModel, stabilityAfterReassess, stabilityBetweenRuns } from '../src/comparison.js';
+import { awaitingVerdict } from '../src/agreement.js';
+import { compareRuns, judgeModel, stabilityAfterReassess, stabilityBetweenRuns } from '../src/comparison.js';
 import { cardOutcome, cardVerdict, goalCardOutcome, headlineCardOutcome, plannedTrials } from '../src/run.js';
 import { buildResultView, exitCodeOf } from '../src/result-view.js';
 import { embeddedBefore } from '../src/artifacts.js';
@@ -10,6 +11,8 @@ import { automaticTrialResult, COUNTING_RULES, isAgentFailure } from '../src/out
 import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROMPT, JUDGE_PROTOCOL, observableSources, sealJudgeReceipt, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { emptyUsage, fingerprint, settingsSchema, type Experiment, type HumanReview, type Outcome, type Scenario, type Source, type Target, type TraceEvent, type Trial, type UserMode } from '../src/contracts.js';
 import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type JudgeAudit, type MetricAssessment } from '../src/assessment.js';
+import type { Card as BriefCard } from '../src/card/schema.js';
+import { briefCard, cardAttempt, cardRun, compiledCard } from './helpers/cards.js';
 
 const world = { records: { r: { t: '0' } }, writableFields: ['t'], transientFailures: 0 };
 const metrics = [
@@ -68,7 +71,7 @@ test('identical replies with flipped rubric scores require review without rewrit
   assert.equal(diff.pairs[0]?.change, 'unknown', 'a score flip on coincident replies is not an agent fix');
   assert.match(diff.pairs[0]?.reviewNote ?? '', /Ответы агента совпали/);
   assert.match(diff.headline, /Общих оценённых ситуаций нет/);
-  assert.match(diff.headline, /разными оценками: 1\./);
+  assert.match(diff.headline, /У 1 пары попыток ответы агента совпали, а оценки судьи разные: судью нужно проверить\./);
   assert.doesNotMatch(diff.headline, /Исправлено/);
   assert.deepEqual([before, after], original);
   after.trials[0]!.events[1]!.text = 'A changed answer';
@@ -76,6 +79,22 @@ test('identical replies with flipped rubric scores require review without rewrit
   after.trials[0]!.events = [];
   before.trials[0]!.events = [];
   assert.equal(compareRuns(before, after).pairs[0]?.reviewNote, undefined, 'missing replies are not identical evidence');
+});
+
+test('two runs of situations compare by the rule of their number: fixed and broken, never «предварительно» or a rubric', () => {
+  const first = compiledCard(), second = compiledCard({ ...briefCard(), id: `card_${'d'.repeat(64)}`, number: 4, title: 'Возврат — второй клиент' } as BriefCard);
+  const all = { e1: 'pass', e2: 'pass', e3: 'pass' } as const;
+  const reply = (text: string) => ({ events: [{ seq: 0, type: 'user' as const, text: first.user.opening }, { seq: 1, type: 'assistant' as const, text }] });
+  const before = cardRun([first, second], [cardAttempt('a0', first, { ...all, e2: 'fail' }), cardAttempt('b0', second, all)], 1, { id: 'before', mode: 'demo' });
+  const after = cardRun([first, second], [cardAttempt('a1', first, all, 0, reply('Объясню, как оформить возврат.')), cardAttempt('b1', second, { ...all, e3: 'fail' }, 0, reply('Уточните номер.'))], 1,
+    { id: 'after', mode: 'demo', parentRunId: 'before' });
+  const diff = compareRuns(before, after);
+  assert.equal(diff.comparable, true, diff.notes.join(' '));
+  assert.equal(diff.includesRubrics, true, 'a card is judged by the judge, so its receipts are checked pair by pair on a live run');
+  assert.deepEqual([diff.fixed.map(row => row.scenarioId), diff.regressed.map(row => row.scenarioId)], [[first.id], [second.id]]);
+  assert.equal(diff.headline, 'Исправлено 1, сломалось 1, без изменений 0 из 2 ситуаций.');
+  assert.ok(!diff.notes.some(note => /рубрик|предварительн/i.test(note)), diff.notes.join(' '));
+  assert.ok(diff.notes.includes('Сравнение по 2 ситуациям: разница может быть случайной, повторы новых ситуаций не добавляют.'), diff.notes.join(' '));
 });
 
 test('сравнение двух прогонов называет, что починилось и что сломалось, а не среднее', () => {
@@ -100,12 +119,17 @@ test('сравнение двух прогонов называет, что по
   const broken = compareRuns(before, run({ basics: 'fail', tariff: 'pass', refund: 'fail' }));
   assert.match(broken.headline, /Исправлено 1, сломалось 1/);
   assert.deepEqual(broken.regressed.map(r => [r.scenarioId, r.tier]), [['basics', 'smoke']]);
-  assert.ok(broken.notes.some(n => /дымовых карточек/.test(n)));
+  assert.ok(broken.notes.includes('Сломалась 1 базовая ситуация: сначала верните то, что должно работать всегда.'), JSON.stringify(broken.notes));
 
   // Несравнимые прогоны признаются несравнимыми.
   const other = compareRuns(before, run({ basics: 'pass', newcard: 'pass' }, { settings: settingsSchema.parse({ repeats: 3 }) }));
-  assert.ok(other.notes.some(n => /Набор карточек изменился/.test(n)));
-  assert.ok(other.notes.some(n => /повторов отличаются/.test(n)));
+  assert.ok(other.notes.some(n => /Набор ситуаций изменился/.test(n)));
+  assert.ok(other.notes.some(n => /число повторов/.test(n)));
+  // Every count agrees with its noun, and the words are the owner's: no «карточек», «пар» without its count's form.
+  assert.match(other.headline, /^Прогоны несравнимы \(\d+ пар[аы]? попыток\): исправления и поломки не подсчитаны\.$/);
+  for (const text of [diff.headline, broken.headline, other.headline, ...diff.notes, ...broken.notes, ...other.notes]) {
+    assert.doesNotMatch(text, /карточ|дымов|регресс|невалид|тест|reactive|scripted|static|#\d/, text);
+  }
   assert.deepEqual(other.cards.onlyBefore.sort(), ['refund', 'tariff']);
   assert.deepEqual(other.cards.onlyAfter, ['newcard']);
 });
@@ -119,7 +143,7 @@ test('run differences reject changed cards, missing or duplicate attempts and in
   assert.equal(compareRuns(before, after).includesRubrics, true);
   const unknown = compareRuns(before, make('unknown', 'unknown'));
   assert.equal(unknown.ungraded, 1);
-  assert.match(unknown.incomparable[0]?.reason ?? '', /решающей.*оценки/);
+  assert.equal(unknown.incomparable[0]?.reason, 'Ни судья, ни человек не решили, справился ли агент в этой паре попыток.');
   for (const changed of [
     { ...after, scenarios: [{ ...s, user: { ...s.user, opening: 'easier task' } }] },
     { ...after, trials: [] },
@@ -146,16 +170,16 @@ test('partial run comparisons pair the same valid attempts and disclose missing 
   const before = record({ id: 'before', scenarios: cards, settings, trials: [attempt('fixed', 0, 'fail'), attempt('fixed', 1, 'invalid'), attempt('broken', 0, 'pass'), attempt('broken', 1, 'pass'), attempt('unpaired', 0, 'fail')] });
   const after = record({ id: 'after', scenarios: cards, settings, trials: [attempt('fixed', 0, 'pass'), attempt('fixed', 1, 'fail'), attempt('broken', 0, 'fail'), attempt('broken', 1, 'invalid'), attempt('unpaired', 1, 'pass')] });
   const result = compareRuns(before, after);
-  assert.equal(result.comparable, true); assert.match(result.headline, /Частичное сравнение \(2\/6 пар\)/);
+  assert.equal(result.comparable, true); assert.match(result.headline, /^Частичное сравнение: 2 из 6 пар попыток\. /);
   assert.deepEqual(result.fixed.map(c => c.scenarioId), ['fixed']); assert.deepEqual(result.regressed.map(c => c.scenarioId), ['broken']);
   assert.equal(result.ungraded, 1, 'different repeat numbers must never be paired');
   assert.equal(result.incomparable.length, 4);
   assert.deepEqual(result.incomparable.map(pair => pair.reason).sort(), [
-    'Нет попытки «до».', 'Нет попытки «после».', 'Попытка «до» невалидна или не измерена.', 'Попытка «после» невалидна или не измерена.',
+    'Нет попытки «до».', 'Нет попытки «после».', 'Попытка «до» не измерена.', 'Попытка «после» не измерена.',
   ]);
   assert.deepEqual(result.coverage, { plannedPairs: 6, validPairs: 2, excludedPairs: 4, invalidBefore: 1, invalidAfter: 1, missingBefore: 1, missingAfter: 1,
     excludedBy: { invalidBefore: 1, invalidAfter: 1, missingBefore: 1, missingAfter: 1, judgeIncomplete: 0, other: 0 } });
-  assert.ok(result.notes.some(n => /Сбои могут скрывать регрессии/.test(n)));
+  assert.ok(result.notes.some(n => /За несопоставленными попытками может скрываться поломка/.test(n)));
   const duplicated = compareRuns(before, { ...after, trials: [...after.trials, after.trials[0]!] });
   assert.equal(duplicated.comparable, false); assert.equal(duplicated.fixed.length, 0);
   assert.deepEqual(duplicated.pairs, []);
@@ -215,23 +239,14 @@ test('a legacy comparison run shows the selected version on its control split, n
   assert.deepEqual(active.failures, []);
 });
 
-test('human findings surface missed failures and false alarms without rewriting automatic evidence', () => {
+test('a whole-dialogue remark of the owner never rewrites the automatic evidence or the number', () => {
   const r = record({ scenarios: [{ ...scenario('s1'), metrics: [] }], trials: [trial('t1', 's1', 'static', 'pass')], settings: settingsSchema.parse({ repeats: 1, userModes: ['static'] }) });
   const measured = JSON.stringify(r.trials);
   r.humanReviews.push(review('negative', 't1', 'fail'));
-  assert.deepEqual(humanFindings(r).map(f => [f.trialId, f.subject, f.verdict, f.automatic, f.disagreement]), [['t1', 'agent', 'fail', 'pass', true]]);
   const view = buildResultView(r);
-  assert.deepEqual([view.headline.passed, view.headline.decided], [1, 1], 'a whole-dialogue remark is a finding; it does not rewrite the automatic result');
+  assert.deepEqual([view.headline.passed, view.headline.decided], [1, 1], 'a whole-dialogue remark does not rewrite the automatic result');
   assert.equal(JSON.stringify(r.trials), measured);
   assert.equal(isAgentFailure(r, r.trials[0]!), false);
-  r.humanReviews.push(review('revised', 't1', 'pass', {}, '2026-09-09T00:00:00Z'));
-  assert.deepEqual(humanFindings(r), []);
-  r.humanReviews.push(review('specific', 't1', 'fail', { checkId: 'time' }));
-  assert.equal(humanFindings(r)[0]?.target, 'time', 'a whole-dialogue pass must not erase a separate criterion finding');
-  r.humanReviews.push(review('unsure', 't1', 'unknown', { checkId: 'time' }, '2026-09-10T00:00:00Z'));
-  assert.deepEqual(humanFindings(r), []);
-  r.trials[0]!.outcome = 'fail'; r.trials[0]!.checks[0]!.passed = false;
-  assert.deepEqual(humanFindings(r).map(f => [f.verdict, f.automatic, f.disagreement]), [['pass', 'fail', true]], 'a pass against an automatic failure is a disagreement, not a flagged problem');
 });
 
 test('simulator labels and unmeasured attempts never become automatic agent failures or calibrated disagreements', () => {
@@ -239,12 +254,10 @@ test('simulator labels and unmeasured attempts never become automatic agent fail
     { metricId: 'goal', result: 'pass', rationale: 'r', evidence: [1] },
     { metricId: 'fidelity', result: 'pass', rationale: 'r', evidence: [1] },
   ] })], humanReviews: [review('h1', 't1', 'fail', { metricId: 'fidelity' })] });
-  assert.equal(humanFindings(r)[0]?.subject, 'simulator');
   assert.equal(isAgentFailure(r, r.trials[0]!), false);
   assert.deepEqual(buildResultView(r).failures, [], 'a simulator label never becomes a counted agent failure');
   r.trials[0]!.outcome = 'cancelled';
-  assert.equal(humanFindings(r)[0]?.automatic, 'unknown');
-  assert.equal(humanFindings(r)[0]?.disagreement, false);
+  assert.equal(isAgentFailure(r, r.trials[0]!), false);
 });
 
 test('repeats that disagree fail the situation and name it flaky; missing, unknown and duplicate attempts leave it unmeasured', () => {
@@ -321,7 +334,6 @@ test('simulator review controls eligibility without rewriting evidence or becomi
   assert.equal(automaticTrialResult(card, t), 'unknown');
   assert.equal(exitCodeOf(buildResultView(r)), 2);
   r.humanReviews = [review('sim-fail', t.id, 'fail', { checkId: 'simulator_leak' })];
-  assert.equal(humanFindings(r)[0]!.subject, 'simulator');
   assert.equal(isAgentFailure(r, t), false);
   r.humanReviews.push(review('sim-pass', t.id, 'pass', { checkId: 'simulator_leak' }, '2026-09-09T00:00:00Z'));
   assert.equal(automaticTrialResult(card, t, r.humanReviews), 'pass');
@@ -332,7 +344,7 @@ test('simulator review controls eligibility without rewriting evidence or becomi
 });
 
 const commandTarget: Target = { kind: 'command', command: 'python3', args: ['agent.py'], timeoutMs: 60000 };
-const cardChanged = (notes: string[]) => notes.some(n => n.startsWith('Содержимое карточек изменилось'));
+const cardChanged = (notes: string[]) => notes.some(n => n.startsWith('Изменились ситуации:'));
 
 test('an external legacy card without an evidence channel equals the same card judged on the reply', () => {
   const legacy = { ...scenario('s1'), metrics: [] };
@@ -391,7 +403,9 @@ test('live comparison checks judge receipts against the sources the judge saw, o
   assert.equal(partial.fixed.length, 1);
   assert.equal(partial.coverage.validPairs, 1);
   assert.deepEqual(partial.coverage.excludedBy, { invalidBefore: 0, invalidAfter: 0, missingBefore: 0, missingAfter: 0, judgeIncomplete: 1, other: 0 });
-  assert.ok(partial.notes.includes('Сопоставлено 1 из 2 пар попыток. Исключено 1: до — 0 невалидных и 0 пропущенных; после — 0 невалидных и 0 пропущенных; без завершённой оценки судьи — 1. Сбои могут скрывать регрессии; вывод относится только к сопоставленной части.'), JSON.stringify(partial.notes));
+  assert.ok(partial.notes.includes('Сопоставлено 1 из 2 пар попыток. Не сопоставлено 1: «до» — не измерено 0, нет попытки 0; «после» — не измерено 0, нет попытки 0; '
+    + 'без завершённой оценки судьи — 1. За несопоставленными попытками может скрываться поломка: вывод относится только к сопоставленным.'), JSON.stringify(partial.notes));
+  assert.ok(partial.notes.includes('1 ситуация без решающей оценки не вошла в сравнение.'), JSON.stringify(partial.notes));
 
   const otherJudge = structuredClone(after);
   for (const t of otherJudge.trials) t.judgeAudit!.model = 'another-judge';
@@ -597,7 +611,7 @@ test('a rebuilt source keeps its card identity when control situations are left 
   const edited = controlledRepeat(source, run => { run.scenarios.find(s => s.id === 's1')!.user.goal = 'another goal'; });
   const editedDiff = compareRuns(embeddedBefore(edited, source.id)!, edited);
   assert.equal(editedDiff.comparable, false);
-  assert.ok(editedDiff.notes.some(note => note.startsWith('Содержимое карточек изменилось')), editedDiff.notes.join(' '));
+  assert.ok(editedDiff.notes.some(note => note.startsWith('Изменились ситуации:')), editedDiff.notes.join(' '));
 });
 
 test('a control in either run is left out of the diff: union, added control, selected tests and the same run', () => {
@@ -605,7 +619,7 @@ test('a control in either run is left out of the diff: union, added control, sel
   const assertComparable = (diff: ReturnType<typeof compareRuns>) => {
     assert.equal(diff.comparable, true, diff.notes.join(' '));
     assert.ok(diff.notes.includes(CONTROL_NOTE));
-    assert.ok(diff.notes.every(note => !note.startsWith('Набор карточек изменился') && !note.startsWith('Содержимое карточек изменилось')), diff.notes.join(' '));
+    assert.ok(diff.notes.every(note => !note.startsWith('Набор ситуаций изменился') && !note.startsWith('Изменились ситуации:')), diff.notes.join(' '));
     assert.ok([...diff.pairs, ...diff.incomparable].every(row => row.scenarioId !== 'ctl'));
   };
 
@@ -629,8 +643,8 @@ test('a control in either run is left out of the diff: union, added control, sel
   const subset = goalRun(REPEAT, { ctl: 'pass', s1: 'pass' }, 'h', { parentRunId: SOURCE, selectedScenarioIds: ['ctl', 's1'], positiveControlScenarioIds: ['ctl'] });
   const selected = compareRuns(full, subset);
   assertComparable(selected);
-  assert.ok(selected.headline.startsWith('Выбранные тесты (1/'), selected.headline);
-  assert.ok(selected.notes.includes('Сравнение относится только к явно выбранным тестам. Остальной регрессионный набор не проверен.'));
+  assert.ok(selected.headline.startsWith('Только выбранные ситуации: 1 из 3.'), selected.headline);
+  assert.ok(selected.notes.includes('Сравнение относится только к выбранным ситуациям: остальные в этот раз не проверялись.'));
 
   // The same run: only the same-run note decides, the control note follows it.
   const self = goalRun(SOURCE, { s1: 'pass', ctl: 'pass' }, 'h', { positiveControlScenarioIds: ['ctl'] });
@@ -725,7 +739,7 @@ test('compareRuns names a run that holds marks under the previous counting rule,
   after.humanReviews = [quick('old', 't-A-0', 'fail', 'goal_attainment', 'fail', { unstamped: true })];
   const diff = compareRuns(before, after);
   assert.equal(diff.comparable, true, diff.notes.join(' '));
-  assert.equal(diff.notes.filter(note => note === 'В прогоне d0d0d0d0 есть отметки по прежнему правилу подсчёта: 1.').length, 1);
+  assert.equal(diff.notes.filter(note => note === 'В прогоне «после» отметки по прежнему правилу подсчёта: 1.').length, 1, 'the run is named without its id');
   assert.deepEqual(diff.unchanged, { passing: 1, failing: 1 }, 'the note is informational: the comparison itself is untouched');
   // Current-rule marks and a run without marks add nothing.
   after.humanReviews = [quick('g', 't-A-0', 'fail', 'goal_attainment', 'fail'), quick('r', 't-A-0', 'fail', 'prompt_compliance', 'fail')];
@@ -736,7 +750,7 @@ test('compareRuns names a run that holds marks under the previous counting rule,
   assert.equal(compareRuns(before, after).notes.filter(note => note.includes('по прежнему правилу подсчёта')).length, 2);
 });
 
-test('a quick agreement is not a human remark, a quick disagreement still is', () => {
+test('a quick agreement is no disagreement, a quick objection is one', () => {
   const base = quickFixture();
   const passing = { ...trial('t2', 's2', 'reactive', 'pass', { assessments: [
     { metricId: 'goal', result: 'pass', rationale: 'ответ дан', evidence: [1] },
@@ -746,20 +760,12 @@ test('a quick agreement is not a human remark, a quick disagreement still is', (
     trials: [base.trials[0]!, passing] };
 
   const agreed = { ...both, humanReviews: [quick('agree', 't', 'fail', 'goal', 'fail')] };
-  assert.deepEqual(humanFindings(agreed), [], 'agreeing with the judge is not a remark of the owner');
-  assert.deepEqual(buildResultView(agreed).agreement.disagreements, []);
+  assert.deepEqual(buildResultView(agreed).agreement.disagreements, [], 'agreeing with the judge is not a disagreement');
 
   const objected = quick('objection', 't2', 'fail', 'goal', 'pass', { note: 'Судья не заметил, что реквизиты не те.' });
   const mixed = { ...both, humanReviews: [quick('agree', 't', 'fail', 'goal', 'fail'), objected] };
-  const findings = humanFindings(mixed);
-  assert.equal(findings.length, 1, 'only the disagreement is reported');
-  assert.equal(findings[0]?.trialId, 't2');
-  assert.equal(findings[0]?.disagreement, true);
-  assert.equal(findings[0]?.note, 'Судья не заметил, что реквизиты не те.');
-  assert.deepEqual(buildResultView(mixed).agreement.disagreements.map(item => item.trialId), ['t2'], 'the agreement counts the objection alone');
-
-  const full = { ...both, humanReviews: [review('full', 't', 'fail', { metricId: 'goal' })] };
-  assert.equal(humanFindings(full).length, 1, 'a full review on the same rubric is reported as before');
+  const disagreements = buildResultView(mixed).agreement.disagreements;
+  assert.deepEqual(disagreements.map(item => [item.trialId, item.note]), [['t2', 'Судья не заметил, что реквизиты не те.']], 'the agreement counts the objection alone');
 });
 
 // ---- The headline rule (03.1): the goal and, when the card has it, the prompt rules; one gate for both. ----
@@ -961,7 +967,7 @@ test('compareRuns decides a card from its matched attempts when a repeat is miss
   const diff = compareRuns(before, after);
   assert.equal(diff.comparable, true, diff.notes.join(' '));
   assert.equal(diff.coverage.validPairs, 2);
-  assert.ok(diff.headline.includes('Частичное сравнение (2/4 пар)'), diff.headline);
+  assert.ok(diff.headline.includes('Частичное сравнение: 2 из 4 пар попыток.'), diff.headline);
   assert.deepEqual(diff.fixed.map(row => row.scenarioId), ['A'], 'the matched pair decides the card; the missing repeat is disclosed, not a reason to leave it ungraded');
   assert.deepEqual(diff.unchanged, { passing: 0, failing: 1 });
   assert.equal(diff.ungraded, 0);

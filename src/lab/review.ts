@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { calibrateRun } from '../card/calibrate.js';
 import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
-import { awaitingVerdict } from '../comparison.js';
+import { awaitingVerdict } from '../agreement.js';
 import { suiteEvidence } from '../connection.js';
 import { addUsage, emptyUsage, fingerprint, humanReviewInputSchema, reassessmentSchema, validatePreparation, type Experiment, type HumanReviewInput, type ReassessmentInput } from '../contracts.js';
 import { assessmentRubrics } from '../assessment.js';

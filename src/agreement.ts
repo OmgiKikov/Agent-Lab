@@ -1,14 +1,16 @@
 import { COUNTING_VERSION, countingVersionOf } from './card/expectations.js';
-import { fingerprint, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
+import { fingerprint, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
+import { metricApplies } from './assessment.js';
 import { isRunning } from './phases.js';
-import { headlineTrialResult, latestHumanReviews, markTargets, markUnderCurrentRule, measurementUsable, observedRecord, recordedResult } from './outcomes.js';
+import { headlineMetricIds, headlineTrialResult, isAgentFailure, latestHumanReviews, markTargets, markUnderCurrentRule, measurementUsable, observedRecord, recordedResult } from './outcomes.js';
 import { headlineCardOutcome } from './run.js';
 
 /*
- * How often the owner agreed with the judge, counted on what the judge actually recorded.
+ * The owner's review of the judge: how often the owner agreed with it, counted on what the judge actually
+ * recorded, and which dialogues still wait for the owner's decision (awaitingVerdict).
  * Pure: no I/O, no escaping (each surface escapes at its own boundary). It imports only
- * contracts.js, phases.js, card/expectations.js, outcomes.js and run.js — never the engine, quality.ts,
- * comparison.ts or result-view.ts — so result-view.ts can use it without a cycle.
+ * contracts.js, assessment.js, phases.js, card/expectations.js, outcomes.js and run.js — never the engine,
+ * quality.ts, comparison.ts or result-view.ts — so result-view.ts can use it without a cycle.
  *
  * The count never reads the human-overridden result: agreeing with a verdict must not be able to
  * change the verdict it is measured against, or agreement would always be 100%.
@@ -199,4 +201,52 @@ export function judgeAgreement(input: Experiment): JudgeAgreement {
   const order = new Map(record.scenarios.map((scenario, i) => [scenario.id, i]));
   result.disagreements.sort((a, b) => (order.get(a.scenarioId) ?? 0) - (order.get(b.scenarioId) ?? 0));
   return result;
+}
+
+/**
+ * The dialogues that still wait for the owner's decision before a review is complete. A label on a passing or
+ * simulator criterion does not resolve an agent's failed criteria.
+ */
+export function awaitingVerdict(record: Experiment): Set<string> {
+  record = observedRecord(record);
+  const latest = latestHumanReviews(record);
+  const decided = (key: string) => ['pass', 'fail'].includes(latest.get(key)?.verdict ?? '');
+  return new Set(record.trials.filter(trial => {
+    if (latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid') return false;
+    {
+      const pending = [
+        ...(simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).filter(c => !c.passed).map(c => `check:${c.id}`),
+        ...(record.scenarios.find(s => s.id === trial.scenarioId)?.metrics ?? [])
+          .filter(m => m.subject === 'simulator' && metricApplies(m, trial) && trial.assessments?.find(a => a.metricId === m.id)?.result !== 'pass').map(m => `metric:${m.id}`),
+      ];
+      if (pending.some(key => !['pass', 'fail', 'invalid'].includes(latest.get(`${trial.id}|${key}`)?.verdict ?? ''))) return true;
+    }
+    // Quick marks close a situation only when every metric that decided it is answered (CTX-18);
+    // on a goal card other rubrics and objective checks are not part of the headline. Doubt
+    // («не могу сказать») is not a decision, and a phase-3 mark on a two-target situation answered
+    // the previous rule, so either leaves the judge's own failure in the queue. The simulator is
+    // judged above, separately.
+    {
+      const scenario = record.scenarios.find(s => s.id === trial.scenarioId);
+      const targets = markTargets(scenario, trial);
+      const quickClosed = !!targets && targets.metricIds.every(id => {
+        const mark = latest.get(`${trial.id}|metric:${id}`);
+        return mark?.source === 'quick' && ['pass', 'fail'].includes(mark.verdict) && markUnderCurrentRule(scenario, trial, mark, targets.metricIds);
+      });
+      if (quickClosed) {
+        if (headlineMetricIds(scenario).length) return false;
+        // A legacy strict card: every other agent rubric the judge failed is part of its headline and still needs a decision.
+        return (scenario?.metrics ?? []).some(m => m.subject === 'agent' && !targets.metricIds.includes(m.id)
+          && trial.assessments?.some(a => a.metricId === m.id && a.result === 'fail') && !decided(`${trial.id}|metric:${m.id}`));
+      }
+    }
+    if (!isAgentFailure(record, trial) || decided(`${trial.id}|dialogue`) || latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid') return false;
+    const failed = [
+      ...trial.checks.filter(c => !c.passed).map(c => `check:${c.id}`),
+      ...(record.scenarios.find(s => s.id === trial.scenarioId)?.metrics ?? [])
+        .filter(m => m.subject === 'agent' && trial.assessments?.some(a => a.metricId === m.id && a.result === 'fail'))
+        .map(m => `metric:${m.id}`),
+    ];
+    return !failed.length || failed.some(key => !decided(`${trial.id}|${key}`));
+  }).map(t => t.id));
 }
