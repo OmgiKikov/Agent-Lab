@@ -6,7 +6,7 @@ import { CARD_CUSTOMER_PROTOCOLS } from './card-customer.js';
  * Heuristic checks over the simulated user's own replies. They answer three questions the judge
  * can miss: did the user say a value only the backend knows (leak), did it
  * say a value that exists nowhere in its card or the conversation (fabrication, a heuristic),
- * did it repeat itself (loop). Results describe the simulator, never the agent, and are never
+ * did it repeat itself while the agent moved on (loop). Results describe the simulator, never the agent, and are never
  * shown to the judge so that they cannot bias its verdict. They apply to free simulators, including free card
  * customers. Fixed controller messages are harness text and remain outside these heuristic checks.
  */
@@ -73,19 +73,21 @@ export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorChec
     description: 'Пользователь не называет значения, которых нет ни в карточке, ни в предыдущих репликах (эвристика по токенам)',
     evidence: fabricated ? `Подозрение: реплика #${fabricated.seq} содержит значение «${fabricated.token}», которого нет в известных пользователю фактах и предыдущих репликах.` : 'Все значения в репликах пользователя прослеживаются к карточке или предыдущим репликам.' });
 
-  const seen = new Map<string, number>();
+  // A loop is the customer's when it says again what it said before although the agent answered it otherwise: a customer
+  // who repeats its request to an agent that repeats the same reply is caught in the agent's loop, not its own.
+  const said = new Map<string, { seq: number; prompt: string }[]>();
   let loop: { seq: number; earlier: number } | undefined;
   for (const message of users) {
     const text = normalize(message.text ?? '');
     const prompt = trial.events.findLast(e => e.type === 'assistant' && e.seq < message.seq)?.text;
     if (text.length < 3 || !prompt) continue;
-    const key = `${normalize(prompt)}|${text}`;
-    const earlier = seen.get(key);
-    if (earlier !== undefined && message.seq !== users[0]!.seq) { loop = { seq: message.seq, earlier }; break; }
-    seen.set(key, message.seq);
+    const answered = normalize(prompt);
+    const earlier = said.get(text)?.find(item => item.prompt !== answered);
+    if (earlier && message.seq !== users[0]!.seq) { loop = { seq: message.seq, earlier: earlier.seq }; break; }
+    said.set(text, [...said.get(text) ?? [], { seq: message.seq, prompt: answered }]);
   }
   checks.push({ id: 'simulator_loop', heuristic: true, passed: !loop, ...(loop ? { seq: loop.seq } : {}),
-    description: 'Повтор пары ответ агента → реплика пользователя (эвристика)',
-    evidence: loop ? `Подозрение: реплика #${loop.seq} повторяет реплику #${loop.earlier} после такого же ответа агента.` : 'Повторов реплик нет.' });
+    description: 'Повтор реплики пользователя, хотя агент ответил иначе (эвристика)',
+    evidence: loop ? `Подозрение: реплика #${loop.seq} повторяет реплику #${loop.earlier}, хотя агент ответил на неё иначе.` : 'Повторов реплик после изменившегося ответа агента нет.' });
   return checks;
 }
