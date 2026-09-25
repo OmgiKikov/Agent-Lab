@@ -8,7 +8,7 @@ import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from '../connection.js';
 import { addCaveat, type CauseFailure } from '../caveats.js';
-import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type FailureMode, type Revision, type Scenario, type UserMode } from '../contracts.js';
+import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, judgeFallback, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type FailureMode, type Revision, type Scenario, type UserMode } from '../contracts.js';
 import { BudgetExhausted, Stopped } from '../errors.js';
 import { ProviderFailure } from '../llm/model-call.js';
 import { StructuredTaskError } from '../llm/structured.js';
@@ -199,6 +199,29 @@ function fitPlan(record: Experiment, raiseLimit: boolean): void {
 }
 
 /**
+ * Before the run's first paid call, its judge must be reachable from this network: Pi's key says only that it may be
+ * used. The independent default judge this network does not reach gives way to the draft's own model, as the chat
+ * intends (contracts.ts judgeFallback) — the result's trust line and a note say so; any other unreachable judge refuses
+ * the run in the owner's words, before anything is spent. Nothing is billed: the check is the network's, not a model's.
+ */
+async function reachJudge(lab: Lab, record: Experiment): Promise<void> {
+  const reachable = async (): Promise<boolean> => {
+    const runtime = await lab.runtime(record);
+    return !runtime.judgeReachable || runtime.judgeReachable(new AbortController().signal);
+  };
+  if (await reachable()) return;
+  const judge = record.settings.roles?.judge ?? record.settings.judge ?? { provider: record.settings.provider, model: record.settings.model };
+  const named = `${judge.provider}/${judge.model}`;
+  const fallback = judgeFallback(record.settings);
+  if (fallback) {
+    record.settings = { ...record.settings, judge: { ...fallback } };
+    record.evaluatorVersion = evaluatorVersion(record.settings);
+    if (await reachable()) { addCaveat(record, { code: 'judge_fallback', from: named, to: `${fallback.provider}/${fallback.model}` }); return; }
+  }
+  throw new Error(`Судья ${named} недоступен из этой сети: Lab не достучался до него за несколько секунд. Проверьте сеть или выберите судьёй доступную модель. Ничего не запущено и не потрачено.`);
+}
+
+/**
  * Freezes what is measured — the draft the owner confirmed — and runs its dialogues in the background, within the
  * draft's limits from the run's start: what the preparation and the checks before it spent is not the run's.
  */
@@ -233,6 +256,8 @@ export async function start(lab: Lab, id: string, options: StartOptions): Promis
     if (record.targetFingerprint && !sameTargetVersion(record.targetFingerprint, await targetFingerprint(record.target))) {
       throw new Error('Код агента изменился после подготовки карточек. Обновите подключение в настройках и подтвердите новую версию.');
     }
+    // Next to the agent's check: the judge must be reachable too, before anything is spent.
+    await reachJudge(lab, record);
     fitPlan(record, !!options.raiseLimit);
     record.reviewedAt = new Date().toISOString();
     record.reviewMode = options.reviewer ?? 'human';

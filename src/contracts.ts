@@ -40,6 +40,18 @@ export function judgeFor(available: readonly { provider: string; id: string }[],
   const reachable = available.some(model => model.provider === DEFAULT_JUDGE.provider && model.id === DEFAULT_JUDGE.model);
   return reachable || !session ? { ...DEFAULT_JUDGE } : { provider: session.provider, model: session.id };
 }
+/**
+ * The judge a run takes instead when this network does not reach the draft's one (lab/run.ts start): for the
+ * independent default judge, the draft's own model — the fallback judgeFor makes — and nothing for a judge named in a
+ * role, or when the draft has no other model. The result then says the judge is the model that built the situations.
+ */
+export function judgeFallback(settings: { provider: string; model: string; judge?: { provider: string; model: string }; roles?: { judge?: unknown } }):
+  { provider: string; model: string } | undefined {
+  const { judge } = settings;
+  if (settings.roles?.judge || !judge || judge.provider !== DEFAULT_JUDGE.provider || judge.model !== DEFAULT_JUDGE.model) return undefined;
+  if (!settings.provider || !settings.model || (settings.provider === judge.provider && settings.model === judge.model)) return undefined;
+  return { provider: settings.provider, model: settings.model };
+}
 const TOOL_NAMES = ['search_materials', 'lookup_record', 'update_record'] as const;
 const text = z.string().trim().min(1);
 const dialogueContent = z.string().min(1).max(8000).refine(v => !!v.trim(), 'Empty dialogue content');
