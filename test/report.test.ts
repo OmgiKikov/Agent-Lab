@@ -430,6 +430,20 @@ test('the band under the number carries its interval, with labels that never ove
   assert.doesNotMatch(REPORT_CSS, /\.chip\{[^}]*nowrap/);
 });
 
+test('a separator stays with the part before it: a wrapped line of the page never starts with «·»', () => {
+  const report: Report = { title: 'Проверка', meta: ['25 сентября 2026', 'версия v1'], blocks: [], footer: [],
+    head: [{ kind: 'trust', parts: [{ text: 'Вероятно, от 9% до 91% (95%)', warn: false }, { text: 'мало данных', warn: true }, { text: 'судью ещё не проверяли', warn: false }] }] };
+  const html = toHtml(report);
+  // In HTML every part is its own element and the dot is drawn after it behind a no-break space: no dot stands between them as text.
+  assert.ok(html.includes('<div class="trust"><span>Вероятно, от 9% до 91% (95%)</span><span class="warn">мало данных</span><span>судью ещё не проверяли</span></div>'), html);
+  assert.ok(html.includes('<span class="meta"><span>25 сентября 2026</span><span>версия v1</span></span>'), html);
+  assert.ok(REPORT_CSS.includes('.top .meta span:not(:last-child)::after,.trust span:not(:last-child)::after{content:"\\00a0·"'));
+  // In Markdown the dot follows its part after a no-break space: a line may break only after it.
+  const nbsp = String.fromCharCode(0xa0);
+  assert.ok(toMarkdown(report).includes(`Вероятно, от 9% до 91% \\(95%\\)${nbsp}· мало данных${nbsp}· судью ещё не проверяли`));
+  assert.ok(toMarkdown(report).includes(`25 сентября 2026${nbsp}· версия v1`));
+});
+
 test('a card reads as its own brief: when each fact is said, the turn, and every expectation with its owner rule', () => {
   const card = briefCard();
   const similar: BriefCard = { ...briefCard({ turn: null }), id: `card_${'e'.repeat(64)}`, number: 4, origin: { kind: 'similar', parentId: card.id, change: { kind: 'turn', turn: null } } };
