@@ -391,8 +391,16 @@ export interface Trial {
   /**
    * Why the dialogue could not be measured, typed where it broke. Records written before it carry only `reason` (run.ts
    * decodes them); records written before 'measurement' existed keep the cause they were stored with, without migration.
+   * A conversation judged up to its break (`cutOff`) keeps the cause of the break here too.
    */
   invalidCause?: InvalidCause;
+  /**
+   * The agent's side broke the conversation (`invalidCause`: agent, no_reply, service_reply) after the agent had spoken:
+   * it was judged up to the break in the cut-off mode (judge.ts), where only a failure the agent's own events before the
+   * break show counts, and every other expectation stays unmeasured for the break's cause (run.ts). The outcome is then
+   * `ungraded`. Absent on every other conversation and in older records, whose breaks stayed unmeasured.
+   */
+  cutOff?: true;
   /** Why the judge left the attempt without a judgment, typed where it failed. Records written before it carry only `assessmentError`. */
   assessmentFailure?: AssessmentFailure;
   /**
@@ -611,6 +619,7 @@ export const trialSchema = z.strictObject({
   assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
   turnLimit: z.literal(true).optional(),
   countingVersion: z.union([z.literal(2), z.literal(3)]).optional(),
+  cutOff: z.literal(true).optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),

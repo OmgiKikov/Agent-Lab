@@ -14,6 +14,7 @@ import type { ConnectionReader } from './connect.js';
 import type { TableReader } from './spreadsheet/reading-task.js';
 import type { AllowedUserAction, UserDecision, UserView } from './user-controller.js';
 import type { CustomerBrief, CustomerReply, OfferedButton } from './card-customer.js';
+import type { CutOff } from './judge.js';
 
 /*
  * What the engine asks of the world outside it: a model for every role (Runtime), the agent under test (TargetSession),
@@ -65,7 +66,8 @@ export interface Runtime {
   reviewCard?(input: CardReviewRequest, ctx: CallContext): Promise<CardReview>;
   /** The free LLM user of scenarios without an `execution` block: recorded runs made before the scenario library. */
   userTurn?(input: { user: Scenario['user']; messages: DialogueMessage[]; turn: number }, ctx: CallContext): Promise<UserTurn>;
-  assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial }, ctx: CallContext): Promise<MetricAssessment[]>;
+  /** The judge of one dialogue; `cutOff`: the agent's side broke it before its end, and it is judged up to the break (judge.ts assessCutOff). */
+  assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial; cutOff?: CutOff }, ctx: CallContext): Promise<MetricAssessment[]>;
   /** The same judge on a recorded conversation (card/log-judge.ts): one expectation, two votes, a receipt of its own. */
   logJudge?: LogJudge;
   /** The builder's planted errors of a judge check (judge-check-task.ts): one agent reply rewritten so one expectation is broken. */

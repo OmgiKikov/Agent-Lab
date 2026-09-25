@@ -5,7 +5,7 @@ import { simulatorFidelity } from './assessment.js';
 import { EXPECTATIONS_PROTOCOL, failureModeSchema, fingerprint, SIMULATOR_PROTOCOL, VERSION, type FailureMode, type Settings } from './contracts.js';
 import { verbatimSpan } from './verbatim.js';
 import { sourceSelectionSchema, userTurnSchema, type CallContext, type Runtime } from './runtime.js';
-import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
+import { assessCutOff, assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
 import { MODEL_REQUEST_BYTES, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels, roleChoices } from './llm/models.js';
@@ -205,7 +205,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       return result.modes.map(mode => mode.promptQuotes ? { ...mode, promptQuotes: mode.promptQuotes.map(quote => verbatimSpan(input.prompt!, quote)!) } : mode);
     },
     async assess(input, ctx) {
-      return assessRepeated(input, judgeModel, ctx, respond(ctx));
+      return input.cutOff ? assessCutOff(input, input.cutOff, judgeModel, ctx, respond(ctx)) : assessRepeated(input, judgeModel, ctx, respond(ctx));
     },
     logJudge: { provider: judge.provider, model: judge.id, protocolHash: logProtocolHash(judgeModel.configurationHash),
       assess: (request, ctx) => judgeLogged(request, judgeModel, ctx, respond(ctx)) },

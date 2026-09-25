@@ -181,7 +181,8 @@ const CALLS_UP_TO: [string, string, string] = ['вызова', 'вызовов',
 /**
  * The attempts a run of `record` plans, as its budget counts them (card/budget.ts): every user mode × situation ×
  * repeat, each with the expectations its judge votes on; a customer only in a reactive attempt, and never in a control,
- * which is its opening and one reply.
+ * which is its opening and one reply. A conversation the agent's side cut off is judged once too, up to its break
+ * (judge.ts cut-off mode), with the same votes: its judgment is in the plan like any other.
  */
 function plannedAttempts(record: Experiment): PlannedAttempt[] {
   const controls = new Set(record.positiveControlScenarioIds ?? []);

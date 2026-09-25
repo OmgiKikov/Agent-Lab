@@ -448,3 +448,120 @@ export function judgmentFailure(error: unknown, signal: AbortSignal): Assessment
   if (error instanceof ProviderFailure) return error.delivery === 'answered' ? 'rejected' : 'unavailable';
   return 'rejected';
 }
+
+/* ───────────────────────────── a conversation cut off on the agent's side ───────────────────────────── */
+
+/**
+ * Where the agent's side broke a conversation before its end, after the agent had spoken (evaluation.ts): the cause and
+ * the last event of the agent's side before the break.
+ */
+export interface CutOff { cause: 'agent' | 'no_reply' | 'service_reply'; afterSeq: number }
+
+/** The break as the judge reads it, in its own language. */
+const CUT_OFF_CAUSE: Record<CutOff['cause'], string> = {
+  agent: "the agent's side failed (its process or service broke) and gave the customer nothing",
+  no_reply: 'the agent gave the customer no reply',
+  service_reply: "a service text of the stand stood in for the agent's reply",
+};
+const cutOffNote = (cutOff: CutOff): string => `This conversation did not reach its end: ${CUT_OFF_CAUSE[cutOff.cause]} after event #${cutOff.afterSeq}. `
+  + 'Judge only what the agent said and did up to the break. What the agent did not get to do because the conversation broke off is not a failure: leave such a rubric unclear. '
+  + "A failure must cite the agent's own event before the break.";
+
+/**
+ * The cut-off mode of JUDGE_PROTOCOL: the same prompt, rubrics and two votes, with the break stated in the input; of
+ * its verdicts only a failure the agent's own events before the break show is counted (countedBeforeBreak).
+ */
+export const JUDGE_PROTOCOL_CUT_OFF = fingerprint({ protocol: JUDGE_PROTOCOL, mode: 'cut-off-v1', note: cutOffNote({ cause: 'agent', afterSeq: 0 }), counted: 'fail-cited-on-agent-events-before-the-break' });
+
+/** The input of a cut-off judgment: the ordinary one and the break. */
+const cutOffInput = (input: Input, cutOff: CutOff) => ({ ...judgeInput(input), cutOff: { cause: cutOff.cause, afterSeq: cutOff.afterSeq, note: cutOffNote(cutOff) } });
+
+/** The events a cut-off judgment's verdicts are checked against: the ones its judge saw, the customer's own claims withheld. */
+export const cutOffEvidenceEvents = (events: TraceEvent[]): TraceEvent[] => judgeEvents(events, true);
+
+/** The events of the agent's side before a break: its replies with words (a service text in its place is not one), its tools, its observed state. */
+export function agentEventsBeforeBreak(events: readonly TraceEvent[], cause: CutOff['cause']): TraceEvent[] {
+  const replies = events.filter(event => event.type === 'assistant');
+  const service = cause === 'service_reply' ? replies.at(-1) : undefined;
+  return events.filter(event => event !== service && (event.type === 'assistant' ? !!event.text?.trim()
+    : event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'observation' || event.type === 'retrieval'));
+}
+
+/** Why an expectation of a cut-off conversation stays unmeasured, in the owner's words. */
+const CUT_OFF_RATIONALE: Record<CutOff['cause'], string> = {
+  agent: 'Разговор оборвался: сбой на стороне агента.',
+  no_reply: 'Разговор оборвался: агент не дал ответа клиенту.',
+  service_reply: 'Разговор оборвался: вместо агента ответил стенд.',
+};
+
+/**
+ * The verdicts of a cut-off conversation that count: the customer's as the judge gave them — its turns up to the break
+ * are all there is of it —, and of the agent's only a failure the judge quoted from the agent's own events before the
+ * break (quotes checked verbatim by validateAssessments; a verdict without quotes proves nothing here). Any other verdict
+ * of the agent is unmeasured, for the break's cause.
+ */
+export function countedBeforeBreak(assessments: readonly MetricAssessment[], metrics: readonly Rubric[], events: readonly TraceEvent[], cause: CutOff['cause']): MetricAssessment[] {
+  const agentSide = new Set(agentEventsBeforeBreak(events, cause).map(event => event.seq));
+  return assessments.map(assessment => {
+    if (metrics.find(metric => metric.id === assessment.metricId)?.subject !== 'agent') return assessment;
+    if (assessment.result === 'fail' && assessment.citations?.some(citation => agentSide.has(citation.seq))) return assessment;
+    return { metricId: assessment.metricId, result: 'unknown', evidence: [],
+      rationale: `${CUT_OFF_RATIONALE[cause]} В словах агента до обрыва нарушения этого ожидания не видно — оно не измерено.` };
+  });
+}
+
+/**
+ * Judges a conversation the agent's side cut off (evaluation.ts): two votes on every rubric that applies, under
+ * JUDGE_PROTOCOL_CUT_OFF, with the break stated in each vote's input. Returns the judge's own aggregate; the harness
+ * counts of it what countedBeforeBreak keeps.
+ */
+export async function assessCutOff(input: Input, cutOff: CutOff, model: { provider: string; id: string; configurationHash?: string; transport?: JudgeAudit['transport'] }, ctx: CallContext,
+  respond: Respond): Promise<MetricAssessment[]> {
+  input = { ...input, scenario: judgedScenario(input.scenario, input.trial) };
+  const metrics = assessmentRubrics(input.scenario, input.trial);
+  if (!metrics.length) return [];
+  const notApplicable = metrics.filter(metric => !metricApplies(metric, input.trial)).map(metric => metric.id);
+  const applicable = metrics.filter(metric => !notApplicable.includes(metric.id));
+  const data = cutOffInput({ ...input, scenario: { ...input.scenario, metrics: applicable } }, cutOff);
+  const audit: JudgeAudit = {
+    protocolHash: underConfiguration(JUDGE_PROTOCOL_CUT_OFF, model.configurationHash), inputHash: fingerprint(data), provider: model.provider, model: model.id,
+    ...(model.configurationHash ? { configurationHash: model.configurationHash } : {}), ...(model.transport ? { transport: model.transport } : {}),
+    prompt: JUDGE_PROMPT, input: JSON.stringify(data), attempts: [], notApplicable,
+  };
+  const save = (final = false) => ctx.onJudgment?.(input.trial.id, structuredClone(audit), final);
+  save();
+  await castVotes(audit, { metrics: applicable, input: metric => JSON.stringify(cutOffInput({ ...input, scenario: { ...input.scenario, metrics: [metric] } }, cutOff)),
+    parse: (raw, metric) => parseJudgment(raw, input, [metric], false) }, ctx.signal, save, respond);
+  if (audit.attempts.some(attempt => attempt.error && !attempt.superseded)) throw new Error('Judge response rejected; original responses and errors are preserved in judgeAudit');
+  return metrics.map(metric => {
+    if (notApplicable.includes(metric.id)) return { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'Не применяется: реактивный симулятор не вызывался.' };
+    const votes = audit.attempts.filter(attempt => attempt.metricId === metric.id && !attempt.superseded).map(attempt => attempt.assessments![0]!);
+    if (votes.every(vote => vote.result === votes[0]!.result)) return { ...votes[0]!, rationale: `${AGREED_RATIONALE_PREFIX} ${votes[0]!.rationale}`.slice(0, 4000) };
+    return { metricId: metric.id, result: 'unknown', evidence: [...new Set(votes.flatMap(vote => vote.evidence))].slice(0, 30),
+      rationale: `${SPLIT_RATIONALE_PREFIX} ${votes.map(vote => vote.result).join(' / ')}. Основания каждой оценки сохранены в judgeAudit.` };
+  });
+}
+
+/**
+ * Whether a cut-off judgment stands on the record: its protocol, its input re-derived from the record, two votes on
+ * every rubric that applies, and each recorded verdict what the votes agreed on — or unmeasured where the harness did
+ * not count it. The harness can only take a verdict away, never give one.
+ */
+export function hasCompleteCutOffJudgment(input: Input, cutOff: CutOff): boolean {
+  input = { ...input, scenario: judgedScenario(input.scenario, input.trial) };
+  const judged = input.trial.judgeReceipt;
+  const metrics = assessmentRubrics(input.scenario, input.trial);
+  if (!judged || !metrics.length || input.trial.assessmentError || !judged.complete) return false;
+  if (judged.protocolHash !== underConfiguration(JUDGE_PROTOCOL_CUT_OFF, judged.configurationHash)) return false;
+  const applicable = metrics.filter(metric => metricApplies(metric, input.trial));
+  const notApplicable = metrics.filter(metric => !metricApplies(metric, input.trial)).map(metric => metric.id);
+  if (fingerprint(judged.notApplicable) !== fingerprint(notApplicable)) return false;
+  if (judged.inputHash !== fingerprint(cutOffInput({ ...input, scenario: { ...input.scenario, metrics: applicable } }, cutOff))) return false;
+  if (judged.votes.some(vote => vote.error) || judged.votes.length !== applicable.length * 2) return false;
+  return applicable.every(metric => {
+    const votes = judged.votes.filter(vote => vote.metricId === metric.id).map(vote => vote.result);
+    const agreed = votes.length === 2 && votes[0] !== undefined && votes[0] === votes[1] ? votes[0] : 'unknown';
+    const recorded = input.trial.assessments?.find(assessment => assessment.metricId === metric.id)?.result;
+    return recorded === agreed || metric.subject === 'agent' && recorded === 'unknown';
+  });
+}

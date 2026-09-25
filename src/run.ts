@@ -271,7 +271,8 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   const codes: NotMeasuredCode[] = [];
   const latest = latestHumanReviews({ trials: [trial], humanReviews: record.humanReviews });
   if (trial.outcome === 'cancelled') codes.push('stopped');
-  else if (trial.outcome === 'invalid') codes.push(({ turn_limit: 'turn_limit', simulator: 'simulator_error', agent: 'agent_error', service_reply: 'service_reply', measurement: 'measurement_error',
+  // A conversation judged up to its break names the break for everything its judge could not count.
+  else if (trial.outcome === 'invalid' || trial.cutOff) codes.push(({ turn_limit: 'turn_limit', simulator: 'simulator_error', agent: 'agent_error', service_reply: 'service_reply', measurement: 'measurement_error',
     no_reply: 'agent_no_reply', connection: 'connection_error', provider: 'provider_error' } as const)[invalidCauseOf(trial)]);
   const failure = assessmentFailureOf(trial);
   if (failure) codes.push(({ code_only: 'not_judged', stopped: 'judge_stopped', unavailable: 'judge_unavailable', rejected: 'judge_error' } as const)[failure]);

@@ -8,7 +8,7 @@ import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, typ
 import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, ragEvidenceComplete, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
 import { userTurnSchema, type ButtonChoice, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
 import { valueTokens } from './verbatim.js';
-import { hasCompleteJudgment, judgmentEvidenceEvents, judgmentFailure, observableSources, sealJudgeReceipt } from './judge.js';
+import { agentEventsBeforeBreak, countedBeforeBreak, cutOffEvidenceEvents, hasCompleteCutOffJudgment, hasCompleteJudgment, judgmentEvidenceEvents, judgmentFailure, observableSources, sealJudgeReceipt, type CutOff } from './judge.js';
 import { ProviderFailure, type ProviderFailureKind } from './llm/model-call.js';
 import { StructuredTaskError } from './llm/structured.js';
 import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure, Stopped } from './errors.js';
@@ -77,9 +77,11 @@ function pressOf(offered: readonly AgentButton[], message: string): ButtonChoice
   return press ? { index: press.index, text: press.button.text, ...(press.button.value !== undefined ? { value: press.button.value } : {}) } : undefined;
 }
 
-/** Why a turn that gave the customer nothing leaves the dialogue unmeasured; the agent's status is named as the adapter wrote it. */
-const noReplyReason = (status: string | undefined) =>
-  `Агент не дал ответа клиенту${status ? ` (статус ${clip(status, 200)})` : ''}: ход не дошёл до клиента, разговор не измерен.`;
+/** A turn that gave the customer nothing; the agent's status is named as the adapter wrote it. */
+const noReplyBreak = (status: string | undefined) => `Агент не дал ответа клиенту${status ? ` (статус ${clip(status, 200)})` : ''}: ход не дошёл до клиента.`;
+/** What became of a conversation the agent's side broke: not measured, or — once the agent had spoken — judged up to the break. */
+const UNMEASURED = ' Разговор не измерен.';
+const JUDGED_TO_BREAK = ' Разговор оценён до обрыва: засчитывается только нарушение, которое видно в словах агента до обрыва.';
 
 /** Who broke a conversation, in the owner's words, by its cause — never by the step it was at. */
 const BROKEN_BY: Record<InvalidCause, string> = {
@@ -252,6 +254,8 @@ export async function evaluateTrial(input: {
   let refusal: InvalidCause | undefined;
   let stopped = false;
   let handedOff = false;
+  // How the agent's side broke the conversation, without the verdict on it (UNMEASURED or JUDGED_TO_BREAK).
+  let broke: string | undefined;
   let finalUserReply = false;
   let reportedState = false;
   let controlled: ReturnType<typeof createUserState> | undefined;
@@ -338,7 +342,8 @@ export async function evaluateTrial(input: {
       if (facts.outcome === 'no_reply') {
         // The customer got nothing: what the adapter wrote is its diagnostic, never a message of the agent, and the customer
         // Lab plays never sees it. The agent's operability, counted apart — neither the Lab's error nor a failed duty.
-        trial.reason = noReplyReason(facts.status);
+        broke = noReplyBreak(facts.status);
+        trial.reason = broke + UNMEASURED;
         trial.invalidCause = 'no_reply';
         emit({ type: 'error', text: trial.reason, result: { outcome: 'no_reply', ...(facts.status ? { status: facts.status } : {}), ...(response.trim() ? { detail: clip(response, 2000) } : {}) } });
         break;
@@ -346,9 +351,9 @@ export async function evaluateTrial(input: {
       append('assistant', response, { ...(facts.outcome === 'handoff' ? { outcome: facts.outcome } : {}), ...(facts.status ? { status: facts.status } : {}),
         ...(facts.buttons.length ? { buttons: facts.buttons } : {}) });
       offered = facts.buttons;
-      if (!response.trim() && facts.outcome !== 'handoff') { trial.reason = 'Испытуемый вернул пустой ответ.'; trial.invalidCause = 'agent'; break; }
+      if (!response.trim() && facts.outcome !== 'handoff') { broke = 'Агент вернул пустой ответ.'; trial.reason = broke + UNMEASURED; trial.invalidCause = 'agent'; break; }
       const serviceMarker = target.serviceReplies?.find(marker => response.includes(marker));
-      if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; trial.invalidCause = 'service_reply'; break; }
+      if (serviceMarker !== undefined) { broke = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента.`; trial.reason = broke + UNMEASURED; trial.invalidCause = 'service_reply'; break; }
       // The agent passed the conversation to a person: it ends here, and it is judged as it went.
       if (facts.outcome === 'handoff') { stopped = true; handedOff = true; break; }
       if (control || controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
@@ -449,7 +454,7 @@ export async function evaluateTrial(input: {
       // agent was contacted, the measurement, the model provider, the connection, the agent's side, the customer Lab plays.
       const broken = refusal ? { cause: refusal, detail: error instanceof Error ? error.message : 'неизвестный сбой' } : breakOf(error, stage === 'agent' || stage === 'grading' ? 'agent' : 'customer');
       trial.invalidCause = broken.cause;
-      trial.reason = `${BROKEN_BY[broken.cause]}: ${broken.detail}`;
+      trial.reason = broke = `${BROKEN_BY[broken.cause]}: ${broken.detail}`;
     }
     emit({ type: 'error', text: trial.reason });
   } finally {
@@ -458,7 +463,7 @@ export async function evaluateTrial(input: {
       // What the session found only as it closed (a line the adapter sent after its last answer) still unmeasures the conversation.
       if (trial.outcome !== 'cancelled') {
         const broken = breakOf(error, 'agent');
-        trial.outcome = 'invalid'; trial.invalidCause = broken.cause; trial.reason = `${BROKEN_BY[broken.cause]}: ${broken.detail}`;
+        trial.outcome = 'invalid'; trial.invalidCause = broken.cause; trial.reason = broke = `${BROKEN_BY[broken.cause]}: ${broken.detail}`;
       }
       emit({ type: 'error', text: trial.reason });
     }
@@ -467,7 +472,16 @@ export async function evaluateTrial(input: {
     trial.elapsedMs = Math.round(performance.now() - started);
     if (persistenceFailed) throw persistenceError;
   }
-  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && assessmentRubrics(judgedScenario(scenario, trial), trial).length) {
+  // The agent's side broke the conversation after the agent had spoken: what it said up to the break is its conversation,
+  // judged in the cut-off mode — only a failure its own events before the break show counts, the rest stays unmeasured
+  // for the break's cause. Its judgment comes out of the run's limit like any conversation's: the plan counts one each.
+  if (!ctx.signal.aborted && breakPoint(scenario, trial, true)) {
+    trial.outcome = 'ungraded';
+    trial.cutOff = true;
+    trial.simulatorChecks = simulatorChecks(scenario, trial);
+    trial.reason = (broke ?? trial.reason) + JUDGED_TO_BREAK;
+  }
+  if ((stopped || trial.cutOff) && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && assessmentRubrics(judgedScenario(scenario, trial), trial).length) {
     try {
       ctx.signal.throwIfAborted();
       onStage?.('assessment');
@@ -504,6 +518,22 @@ export async function evaluateTrial(input: {
 const AGENT_SIDE: ReadonlySet<InvalidCause> = new Set(['agent', 'no_reply', 'service_reply', 'measurement']);
 
 /**
+ * Where the agent's side cut a conversation off after the agent had spoken, so it is judged up to the break; undefined
+ * for any other conversation. `fresh`: the conversation just broke and is still `invalid`; otherwise one already
+ * recorded as cut off (`trial.cutOff`), judged again. Exact checks read a whole conversation — its last reply, its final
+ * state —, so a card with them keeps a broken conversation unmeasured.
+ */
+function breakPoint(scenario: Scenario, trial: Trial, fresh = false): CutOff | undefined {
+  const cause = trial.invalidCause;
+  if (fresh ? trial.outcome !== 'invalid' : !trial.cutOff) return undefined;
+  if (cause !== 'agent' && cause !== 'no_reply' && cause !== 'service_reply') return undefined;
+  if (directChecks(scenario, trial).length || !assessmentRubrics(judgedScenario(scenario, trial), trial).length) return undefined;
+  const spoken = agentEventsBeforeBreak(trial.events, cause);
+  const last = spoken.at(-1);
+  return last && spoken.some(event => event.type === 'assistant') ? { cause, afterSeq: last.seq } : undefined;
+}
+
+/**
  * Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt
  * only as its observable rules. A new judgment never carries a checkpoint verdict: a first-format card is
  * judged through its projection, one expectation per required checkpoint (card/legacy-v1.ts).
@@ -516,9 +546,12 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
   if (!runtime.assess) throw new ProviderFailure('unavailable', 'Metric assessment is unavailable for this runtime');
   let latest: JudgeAudit | undefined;
   let mapped: MetricAssessment[] | undefined;
+  // A conversation cut off on the agent's side is judged up to its break, and of it only what countedBeforeBreak keeps counts.
+  const cutOff = breakPoint(stored, trial);
   try {
     const response = await runtime.assess({
       scenario: structuredClone({ ...scenario, metrics }), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
+      ...(cutOff ? { cutOff } : {}),
     }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit, final) => {
       // The full audit lives in the store's sidecar; the trial keeps only a sealed receipt. The receipt
       // hashes exactly what the store keeps: the schema-normalized audit (trimmed texts). An audit the
@@ -528,17 +561,21 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
       latest = structuredClone(persisted);
       ctx.onJudgment?.(id, persisted, final);
     } });
-    const assessments = validateAssessments(metrics, judgmentEvidenceEvents(trial.events, latest), response);
+    const assessments = validateAssessments(metrics, cutOff ? cutOffEvidenceEvents(trial.events) : judgmentEvidenceEvents(trial.events, latest), response);
     ctx.signal.throwIfAborted();
     mapped = assessments.map(assessment => !metricApplies(metrics.find(m => m.id === assessment.metricId)!, trial)
       ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: RAG_METRIC_IDS.has(assessment.metricId)
         ? 'Полный RAG-контекст каждого ответа не подтверждён адаптером; причина не установлена.' : 'Реактивный симулятор не участвовал в этом диалоге; его качество не измерено.' }
       : assessment);
+    if (cutOff) mapped = countedBeforeBreak(mapped, metrics, trial.events, cutOff.cause);
     return mapped;
   } finally {
     // A failed judgment keeps its receipt too, sealed incomplete, so reports still point to its sidecar.
     if (latest) {
-      const complete = !!mapped && hasCompleteJudgment({ scenario, sources: observableSources(sources, requirements), trial: { ...trial, judgeAudit: latest, assessments: mapped } });
+      const judged = { scenario, sources: observableSources(sources, requirements) };
+      const complete = !!mapped && (cutOff
+        ? hasCompleteCutOffJudgment({ ...judged, trial: { ...trial, judgeReceipt: sealJudgeReceipt(latest, true), assessments: mapped } }, cutOff)
+        : hasCompleteJudgment({ ...judged, trial: { ...trial, judgeAudit: latest, assessments: mapped } }));
       trial.judgeReceipt = sealJudgeReceipt(latest, complete);
     }
   }
