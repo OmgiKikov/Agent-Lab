@@ -14,12 +14,16 @@ import { z } from 'zod';
  * Every dialogue is a new conversation — that is its reset. Placeholders are parsed over the TEMPLATE only (structure
  * the owner wrote); a reply is read by pointer, never searched. Environment values are read at request time and never
  * stored, like `headersEnv`.
+ *
+ * Beside its text, a reply may carry buttons and a status: `buttons` names where their list is and, in each, its text
+ * and its value; `outcome` names the status field and the values of it that mean a handoff to a person or no reply at
+ * all. A press goes out as the button's text in {{message}} and its value in {{choice}}.
  */
 
 const ENV_NAME = '[A-Za-z_][A-Za-z0-9_]{0,99}';
 /** An environment variable a connection reads: a header's value, a template's {{env:NAME}}. */
 export const envNameSchema = z.string().regex(new RegExp(`^${ENV_NAME}$`), 'Invalid environment variable name');
-const NAMES = `message|conversation(?::number)?|session|uuid(?::hex)?|now(?::[^{}]{1,60})?|env:${ENV_NAME}`;
+const NAMES = `message|choice|conversation(?::number)?|session|uuid(?::hex)?|now(?::[^{}]{1,60})?|env:${ENV_NAME}`;
 /** Every placeholder a body or a header may hold; anything else in double braces is refused when the connection is read. */
 const PLACEHOLDER = new RegExp(`\\{\\{(${NAMES})\\}\\}`, 'g');
 /** A turn of the conversation also names its speaker and its words. */
@@ -117,6 +121,11 @@ const historySchema = z.strictObject({
   /** The request's own names of the customer and the agent. */
   roles: z.strictObject({ user: z.string().trim().min(1).max(100), assistant: z.string().trim().min(1).max(100) }),
 });
+/** Where the reply's buttons are: the list, and in each button what the customer sees and what the agent takes back. */
+const buttonsSchema = z.strictObject({ list: pointerSchema, text: pointerSchema, value: pointerSchema.optional() });
+const statusValues = z.array(z.string().trim().min(1).max(200)).min(1).max(20).optional();
+/** Where the reply says what the turn gave the customer: the status field, and its values that mean a handoff or no reply; any other is a reply. */
+const outcomeSchema = z.strictObject({ status: pointerSchema, handoff: statusValues, noReply: statusValues });
 const sessionSchema = z.strictObject({
   /** Where each reply names the conversation; unknown until the connection check saw a reply. */
   reply: pointerSchema.optional(),
@@ -145,11 +154,15 @@ export const requestTemplateSchema = z.strictObject({
   history: historySchema.optional(),
   /** The agent names the conversation in its replies: the body's {{session}} is the id the previous reply gave. */
   session: sessionSchema.optional(),
+  /** Where the reply's buttons are; without it the agent's buttons are not read. */
+  buttons: buttonsSchema.optional(),
+  /** Where the reply's status is and which values of it mean a handoff to a person or no reply; without it every turn is a reply. */
+  outcome: outcomeSchema.optional(),
 }).superRefine((template, ctx) => {
   const texts = templateTexts(template);
   const turnTexts = template.history ? markerFree(template.history.turn) : [];
   const unknown = [...new Set([...texts.flatMap(text => unknownIn(text, PLACEHOLDER)), ...turnTexts.flatMap(text => unknownIn(text, TURN_PLACEHOLDER))])];
-  if (unknown.length) ctx.addIssue({ code: 'custom', message: `Неизвестные подстановки в шаблоне: ${unknown.join(', ')}. Доступны {{message}}, {{conversation}}, {{session}}, {{uuid}}, {{now}}, {{env:ИМЯ}} и {{history}}.` });
+  if (unknown.length) ctx.addIssue({ code: 'custom', message: `Неизвестные подстановки в шаблоне: ${unknown.join(', ')}. Доступны {{message}}, {{choice}}, {{conversation}}, {{session}}, {{uuid}}, {{now}}, {{env:ИМЯ}} и {{history}}.` });
   const formats = [...texts, ...turnTexts].flatMap(timeFormats).filter(format => !timeFormatSupported(format));
   if (formats.length) ctx.addIssue({ code: 'custom', message: `Формат времени ${formats.join(', ')} Lab не знает: оставьте {{now}}.` });
   const found = markers(template.body);
@@ -188,6 +201,8 @@ export interface RequestValues {
   turns?: readonly Turn[];
   /** The id the agent named in its previous reply; undefined before it named one. */
   session?: string | number;
+  /** The button the message presses: {{choice}} is its value, or its text when it has none. */
+  choice?: { text: string; value?: string };
 }
 interface Rendering { template: RequestTemplate; values: RequestValues; uuid: string; now: Date }
 
@@ -207,6 +222,7 @@ function environment(variable: string): string {
 
 function textValue(name: string, r: Rendering, turn?: Turn & { name: string }): string {
   if (name === 'message') return r.values.message;
+  if (name === 'choice') return r.values.choice ? r.values.choice.value ?? r.values.choice.text : '';
   if (name === 'conversation') return r.values.conversation;
   if (name === 'conversation:number') return String(conversationNumber(r.values.conversation));
   if (name === 'session') { const value = sessionValue(r); return typeof value === 'string' || typeof value === 'number' ? String(value) : ''; }
@@ -234,6 +250,8 @@ function renderJson(value: Json, r: Rendering, turn?: Turn & { name: string }): 
     // Whole values keep the type the curl had: a numbered conversation stays a number.
     if (value === '{{conversation:number}}') return conversationNumber(r.values.conversation);
     if (value === '{{session}}') return sessionValue(r);
+    // A message that presses no button sends no choice.
+    if (value === '{{choice}}') return r.values.choice ? r.values.choice.value ?? r.values.choice.text : null;
     return renderText(value, r, turn);
   }
   if (Array.isArray(value)) return value.flatMap(item => item === HISTORY || item === HISTORY_BEFORE ? historyTurns(item === HISTORY, r) : [renderJson(item, r, turn)]);
@@ -294,6 +312,25 @@ export function replyAt(document: unknown, pointer: string): string | undefined 
   }
   const value = atPointer(document, pointer);
   return typeof value === 'string' ? value : undefined;
+}
+
+/** A button of an agent's reply, read through the template's map: its text and, when the map names one, its value. */
+export interface ReplyButton { text: string; value?: string }
+/** The buttons of a reply where `map` says they are; none where the reply has no list there. */
+export function replyButtons(document: unknown, map: NonNullable<RequestTemplate['buttons']>): ReplyButton[] {
+  const list = atPointer(document, map.list);
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 20).flatMap(item => {
+    const text = atPointer(item, map.text);
+    const value = map.value === undefined ? undefined : atPointer(item, map.value);
+    return typeof text === 'string' && text.trim() ? [{ text: text.trim().slice(0, 300), ...(typeof value === 'string' || typeof value === 'number' ? { value: String(value).slice(0, 300) } : {}) }] : [];
+  });
+}
+/** The reply's status where `map` says it is, as the agent wrote it; undefined where there is none. */
+export function replyStatus(document: unknown, map: NonNullable<RequestTemplate['outcome']>): string | undefined {
+  const value = atPointer(document, map.status);
+  const status = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  return status ? status.slice(0, 200) : undefined;
 }
 
 export function replyText(document: unknown, pointer: string): string {

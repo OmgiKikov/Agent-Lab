@@ -15,7 +15,7 @@ import { endGroup, endedByStop, trackGroup, untrackGroup } from './agent-process
 export { closeAllTargets } from './agent-processes.js';
 import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure, Stopped } from './errors.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
-import { addressVariables, atPointer, renderAddress, renderRequest, replyText, templateVariables, type Json, type RequestTemplate, type RequestValues } from './http-template.js';
+import { addressVariables, atPointer, renderAddress, renderRequest, replyAt, replyButtons, replyStatus, replyText, templateVariables, type Json, type RequestTemplate, type RequestValues } from './http-template.js';
 import { countText } from './plural.js';
 import { clip } from './text.js';
 
@@ -368,6 +368,21 @@ export function agentSession(target: TemplateTarget, reply: unknown): string | n
   return typeof value === 'string' && value !== '' || typeof value === 'number' ? value : undefined;
 }
 
+/**
+ * The reply of an agent in its own format as Lab's contract reads it: its text and, where the template maps them, its
+ * buttons and what the turn gave the customer — a handoff or no reply by the status values the template names. A turn
+ * that is not a reply may come without text.
+ */
+export function templateReply(target: TemplateTarget, body: unknown): ExternalReply {
+  const { buttons, outcome } = target.request;
+  const status = outcome ? replyStatus(body, outcome) : undefined;
+  const turn: TurnOutcome = status !== undefined && outcome?.handoff?.includes(status) ? 'handoff' : status !== undefined && outcome?.noReply?.includes(status) ? 'no_reply' : 'reply';
+  const text = turn === 'reply' ? replyText(body, replyPointer(target)) : replyAt(body, replyPointer(target)) ?? '';
+  if (!buttons && !outcome) return text;
+  const offered = buttons ? replyButtons(body, buttons) : [];
+  return { reply: text, events: [], ...(turn !== 'reply' ? { outcome: turn } : {}), ...(status !== undefined ? { status } : {}), ...(offered.length ? { buttons: offered } : {}) };
+}
+
 /** Where the connection says the agent's text is; unset until the owner picks it from the connection check. */
 function replyPointer(target: TemplateTarget): string {
   if (target.request.reply === undefined) throw new ConnectionFailure('start', 'В подключении не выбран путь к тексту ответа агента: запустите agent-lab doctor --connection подключение.json --yes и укажите --reply.');
@@ -392,10 +407,12 @@ async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> 
         const past = history();
         const last = past.at(-1);
         const turns = (last?.role === 'user' && last.content === message ? past : [...past, { role: 'user' as const, content: message }]).map(turn => ({ role: turn.role, text: turn.content }));
-        const body = await templateExchange(templated, { message, conversation: sessionId, turns, ...(session !== undefined ? { session } : {}) }, ctx.signal);
+        const body = await templateExchange(templated, { message, conversation: sessionId, turns, ...(session !== undefined ? { session } : {}),
+          ...(options?.choice ? { choice: { text: options.choice.text, ...(options.choice.value !== undefined ? { value: options.choice.value } : {}) } } : {}) }, ctx.signal);
         session = agentSession(templated, body) ?? session;
-        // Text only: such an agent shows neither its tools nor a reset, so the dialogue is judged on its replies.
-        return applyReply(replyText(body, replyPointer(templated)), state, ctx, input.onRecords, input.onReply);
+        // Its text, buttons and status as the template maps them: such an agent shows neither its tools nor a reset, so the
+        // dialogue is judged on its replies.
+        return applyReply(templateReply(templated, body), state, ctx, input.onRecords, input.onReply);
       }
       const body = await postJson(renderAddress(target.url), headers, { sessionId, scenarioId, initialState, messages: history(), message,
         ...(options?.choice ? { choice: options.choice } : {}),
