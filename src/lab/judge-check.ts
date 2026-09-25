@@ -58,8 +58,11 @@ async function plantedItem(work: Work, candidate: JudgeCheckCandidate, name: str
   if (!isCardExecution(execution) || !expectation) return { ...base, result: null, failure: 'builder' };
   const rules = execution.evaluatorView.requirements.filter(requirement => expectation.requirementIds.includes(requirement.id)).map(requirement => requirement.quote);
   const replies = agentReplies(candidate.trial).map((event, index) => ({ index, text: event.text! }));
+  // The builder reads the expectation whole, as the judge's rubric does: a duty it must not do is broken by doing it, never by its acceptable path.
+  const { text, strength, appliesWhen, acceptable, violation } = expectation;
+  const request = { text, ...(strength ? { strength } : {}), ...(appliesWhen ? { appliesWhen } : {}), ...(acceptable ? { acceptable } : {}), ...(violation ? { violation } : {}) };
   let planted;
-  try { planted = await work.runtime.plantError.plant({ expectation: expectation.text, rules, replies }, work.ctx(name)); }
+  try { planted = await work.runtime.plantError.plant({ expectation: request, rules, replies }, work.ctx(name)); }
   catch { return { ...base, result: null, failure: work.spent() ? 'stopped' : 'builder' }; }
   const copy = freshCopy(candidate.trial);
   const reply = agentReplies(copy)[planted.replyIndex];
