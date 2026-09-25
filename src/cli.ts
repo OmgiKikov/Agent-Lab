@@ -20,6 +20,7 @@ import { expandMaterials, promptMaterials } from './materials.js';
 import type { PromptCandidate } from './prompt-candidates.js';
 import { proposedPrompts, proposePurposes, purposeConsentLine, purposeKey, purposeLine, type PurposeProposal } from './prompt-purpose.js';
 import { createPiRuntime, getPiStatus } from './pi.js';
+import { chatArguments } from './instructions.js';
 import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
@@ -138,9 +139,9 @@ async function chat(args: string[]): Promise<void> {
   // Pi writes in this chat is the owner's alone (0600 files, 0700 folders), as the records in .agent-lab are. The child
   // inherits the mask; this process only waits for it.
   process.umask(0o077);
-  // The Agent Lab session gets the agent-builder skill's text as its instructions (extensions/agent-lab.ts); listed
-  // as a skill as well, it would only invite the model to read the same text twice.
-  const child = spawn(process.execPath, [resolve(piRoot, 'dist/bundle/cli.js'), '--no-extensions', '--no-skills', '-e', resolve(root, 'extensions/agent-lab.ts'), ...args],
+  // The Agent Lab session gets the agent-builder skill's text as its system prompt's own (instructions.ts): every turn
+  // carries it, the ones Pi starts for a finished run as much as the owner's.
+  const child = spawn(process.execPath, [resolve(piRoot, 'dist/bundle/cli.js'), ...await chatArguments(resolve(root, 'extensions/agent-lab.ts')), ...args],
     { stdio: 'inherit', env: { ...process.env, AGENT_LAB_SESSION: '1' } });
   process.exitCode = await new Promise<number>((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve(code ?? (signal ? 130 : 1))); });
 }
