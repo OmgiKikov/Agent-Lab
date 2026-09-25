@@ -319,8 +319,8 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
               break;
             }
             const decided = await situationCommand(ctx, chosen, situation);
-            if (!decided) continue;
-            inform(await applySituationCommand(surface, record, situation, decided));
+            const said = decided && await applySituationCommand(surface, record, situation, decided);
+            if (said) inform(said);
             continue;
           }
           if (action.type === 'rulebook') {
@@ -404,7 +404,8 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             const situation = data.set?.views.find(view => view.number === action.situation);
             if (!situation || !record) return undefined;
             const decided = await situationCommand(ctx, action.kind === 'answer' ? { kind: 'answer', choice: action.choice } : { kind: 'remove', label: choice.label }, situation);
-            return decided ? `Решено: ${await applySituationCommand(surface, record, situation, decided)}` : undefined;
+            const said = decided && await applySituationCommand(surface, record, situation, decided);
+            return said ? `Решено: ${said}` : undefined;
           }
           case 'add_rule': {
             const situation = data.set?.views.find(view => view.number === action.situation);
@@ -416,20 +417,12 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
           case 'check_connection':
             handoff = { request: 'Проверь подключение к агенту', context: { task: 'The owner asked from the workspace to check the connection to the agent: show what was not measured with agent_lab_explain and ask the owner whether the agent runs and how it is started; a new way to start it goes to agent_lab_run as agent.' } };
             return 'handoff';
-          case 'raise_limit':
-            // A higher limit is spending: the key alone does not raise it, the owner confirms the number.
-            if (!await ask(ctx, `Поднять лимит до ${action.to} вызовов модели?`, ['Лимит нужен, чтобы проверить изменённые ситуации; потраченное не сбрасывается.'], 'Поднять лимит')) return undefined;
-            return settle(surface, action, data.runs.map(run => run.record));
-          case 'reassess': {
-            const run = data.runs.find(item => item.record.id === action.runId)?.record;
-            if (!run || !await ask(ctx, `Переоценить ${run.trials.length} записанных разговоров судьёй?`,
-              ['Агент не запускается: судья заново оценивает записанные разговоры; результат будет отдельным прогоном.', `Не больше ${run.settings.maxCalls} вызовов модели.`], 'Переоценить')) return undefined;
-            return settle(surface, action, data.runs.map(item => item.record));
-          }
           case 'name_log_version': {
             const version = (await ctx.ui.editor('Какая версия агента записала логи · как вы её называете', ''))?.trim();
             return version ? settle(surface, { kind: 'declare_log_version', importId: action.importId, version }, data.runs.map(run => run.record)) : undefined;
           }
+          // A higher limit and a re-assessment are spending the key alone does not start: settle asks the owner with the numbers.
+          case 'raise_limit': case 'reassess':
           case 'check_situations': case 'resume_preparation': case 'prepare_variations': case 'convert_draft': case 'declare_log_version':
             return settle(surface, action, data.runs.map(run => run.record));
           case 'open_situation': case 'open_situations': case 'open_conversation': return undefined;

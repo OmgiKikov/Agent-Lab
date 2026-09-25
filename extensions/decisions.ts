@@ -14,11 +14,11 @@ import type { Experiment, Settings } from '../src/contracts.js';
 import { countText } from '../src/plural.js';
 import { isRunning } from '../src/phases.js';
 import type { ExperimentLab } from '../src/experiment.js';
-import { draftHash } from '../src/lab/record.js';
-import { decisions, type Decision, type DecisionAction } from '../src/inbox.js';
+import { draftBudget, draftHash } from '../src/lab/record.js';
+import { checkConsent, decisions, raiseLimitConsent, reassessConsent, type Decision, type DecisionAction, type SpendConsent } from '../src/inbox.js';
 import { libraryHash } from '../src/scenario-library.js';
 import type { ExperimentStore } from '../src/store.js';
-import { clip, oneLine } from '../src/text.js';
+import { clip, oneLine, safeText } from '../src/text.js';
 import type { Background } from './background.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
 
@@ -26,7 +26,8 @@ import type { LabLease, SessionOperations } from './operations.ts';
  * «Нужно ваше решение» (docs/design/ui-spec.md §8.3) in both surfaces. The queue is derived from the records (src/inbox.ts); what a
  * pick does is decided here, once, for the workspace and the chat. The surface asks the owner first — a key on the
  * board, a native dialog in the chat — and then these functions do what the pick means through the same operations
- * and owner commands; nothing here asks again or decides for the owner.
+ * and owner commands. What spends model calls beyond what the owner already agreed to is asked here, in one native
+ * dialog with its scope and ceiling (src/inbox.ts SpendConsent), the same for both surfaces; nothing decides for them.
  */
 
 /** Writes under the writer's lease; long work is handed to the session (`handOver`), which releases the lease when the work ends. */
@@ -74,6 +75,20 @@ export interface DecisionSurface {
 }
 const viaOf = (surface: DecisionSurface): Via => surface.origin === 'board' ? 'board' : 'pi-confirm';
 
+/** The owner's word on a paid step, in its native dialog; true only when they agreed. */
+const agrees = (ctx: ExtensionContext, consent: SpendConsent): Promise<boolean> => ask(ctx, consent.question, consent.lines, consent.yes);
+
+/**
+ * What the check after a prepared change may spend: every claim of the draft no receipt answers once the change is in,
+ * and the revisions owed (card/check-calls.ts) — 0 when nothing is to check, or when it is more than the draft's limit
+ * lets a check spend without the owner raising it (then no check runs and the notice says so).
+ */
+async function checkOwed(lab: ExperimentLab, id: string, next: Parameters<typeof checkCalls>[1]): Promise<number> {
+  const { experiment, evidence } = await lab.cardContext(id);
+  const owed = checkCalls(experiment, next, evidence);
+  return owed <= draftBudget(experiment).calls ? owed : 0;
+}
+
 /** The logs a calibrated run compared with, and whether the owner has named their agent version since: what the inbox asks about. */
 export async function logsOf(store: Pick<ExperimentStore, 'readLogVersions'>, record: Experiment): Promise<{ importId: string; declared: boolean }[]> {
   if (!record.calibration) return [];
@@ -103,22 +118,33 @@ export async function chatQueue(reader: ExperimentLab, now = new Date()): Promis
 
 /**
  * A situation command the owner decided: applied with their grant — their words when they typed them, their pick
- * otherwise — and checked again, in the background when that takes calls. A run that happened never changes: a
- * change of its situations goes into a fresh draft of the same set.
+ * otherwise — and checked again, in the background when that takes calls. What the check may spend is asked first, with
+ * the change: the owner writes and checks, or writes and keeps the check for later (a decision of the queue). A run
+ * that happened never changes: a change of its situations goes into a fresh draft of the same set. Undefined when the
+ * owner wrote nothing.
  */
-export async function applySituationCommand(surface: DecisionSurface, record: Experiment, situation: SituationView, decided: { command: CardCommand; words?: string }): Promise<string> {
+export async function applySituationCommand(surface: DecisionSurface, record: Experiment, situation: SituationView, decided: { command: CardCommand; words?: string }): Promise<string | undefined> {
   return surface.writing(async (lab, handOver) => {
     const target = await lab.editableCards(record.id);
     const copied = target.copiedFrom && target.copiedFrom !== target.id ? ' Правка — в новом черновике того же набора; прошлый прогон не меняется.' : '';
     const prepared = await lab.prepareCardCommand(target.id, decided.command, { via: viaOf(surface), ...(decided.words ? { ownerWords: decided.words } : {}) });
+    // One word on a plausible fact's label decides it on every situation that holds it: the notice names them all.
+    const numbers = prepared.diff.map(item => item.number);
+    const owed = decided.command.kind === 'remove_card' ? 0 : await checkOwed(lab, target.id, prepared.next);
+    let later = false;
+    if (owed) {
+      const consent = checkConsent(numbers.length ? numbers : [situation.number], owed);
+      const picked = await surface.ctx.ui.select([consent.question, '', ...consent.lines].map(line => safeText(line)).join('\n'), [consent.yes, consent.later, 'Не записывать']);
+      if (picked !== consent.yes && picked !== consent.later) return undefined;
+      later = picked === consent.later;
+    }
     // The owner picked the answer natively, so the grant is theirs either way; words mark it as their wording only where no decision rides along.
     await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, decided.words && prepared.authority === 'owner-words' ? 'words' : 'confirmed'));
     if (decided.command.kind === 'remove_card') return `Ситуация ${situation.number} убрана из черновика.${copied}`;
-    const check = await lab.recheckCards(target.id);
+    const check = await lab.recheckCards(target.id, { defer: later });
     const where = surface.origin === 'board' ? 'здесь и в чате' : 'сюда отдельным сообщением';
-    // One word on a plausible fact's label decides it on every situation that holds it: the notice names them all.
-    const numbers = prepared.diff.map(item => item.number);
     const subject = numbers.length > 1 ? `Ситуации ${numbers.join(', ')}` : `Ситуация ${situation.number}`;
+    if (check.decision.action === 'skipped') return `${subject}: записано. Проверка — когда скажете: решение «Проверить» ждёт в очереди.${copied}`;
     if (check.decision.action === 'run') { handOver(lease => surface.background.check(surface.ctx, lease, target.id, situation.number)); return `${subject}: записано. Проверяю ${numbers.length > 1 ? 'их' : 'её'} — итог придёт ${where}.${copied}`; }
     return check.decision.action === 'needs_budget' ? `Записано. На проверку не хватает лимита: нужно вызовов ${check.decision.pendingJobs}, осталось ${check.decision.remainingCalls}.${copied}`
       : `${subject}: записано.${copied}`;
@@ -169,18 +195,25 @@ async function resumeCeiling(ctx: ExtensionContext, draft: Experiment): Promise<
   return agreed ? budget.resume : null;
 }
 
+/** The choices settled here; answers and removals go through applySituationCommand, openings and hand-overs belong to the surface. */
+export type Settled = Extract<DecisionAction, { kind: 'raise_limit' | 'check_situations' | 'resume_preparation' | 'prepare_variations' | 'convert_draft' | 'reassess' | 'declare_log_version' }>;
+const SETTLED: ReadonlySet<DecisionAction['kind']> = new Set<Settled['kind']>(['raise_limit', 'check_situations', 'resume_preparation', 'prepare_variations', 'convert_draft', 'reassess', 'declare_log_version']);
+export const settledHere = (action: DecisionAction): action is Settled => SETTLED.has(action.kind);
+
 /**
  * What a settling choice that is not about one situation does, once the surface has the owner's pick; the notice in
- * the owner's words. `runs` are the finished runs a re-assessment may name. Undefined for a choice this layer does not
- * settle (answers and removals go through applySituationCommand; openings and hand-overs belong to the surface).
+ * the owner's words. A paid step whose pick does not say its ceiling — a re-assessment, a higher limit — is agreed to
+ * here in its own dialog first, the same on both surfaces. `runs` are the finished runs a re-assessment may name.
+ * Undefined when the owner stepped back in a dialog: nothing was written or spent.
  */
-export async function settle(surface: DecisionSurface, action: DecisionAction, runs: readonly Experiment[]): Promise<string | undefined> {
+export async function settle(surface: DecisionSurface, action: Settled, runs: readonly Experiment[]): Promise<string | undefined> {
   const where = surface.origin === 'board' ? 'здесь и в чате' : 'сюда отдельным сообщением';
   switch (action.kind) {
     case 'raise_limit':
       return surface.writing(async (lab, handOver) => {
         const draft = await lab.get(action.runId);
         const raised = raisedLimits(draft, action.to);
+        if (!await agrees(surface.ctx, raiseLimitConsent(raised.maxCalls, raised.maxDurationMs && Math.round(raised.maxDurationMs / 60_000)))) return undefined;
         await lab.updateDraft(draft.id, draftHash(draft), { settings: raised });
         const check = await lab.recheckCards(draft.id, { explicit: true });
         if (check.decision.action === 'run') handOver(lease => surface.background.check(surface.ctx, lease, draft.id, undefined));
@@ -225,7 +258,9 @@ export async function settle(surface: DecisionSurface, action: DecisionAction, r
         return [text.summary, ...text.left.slice(0, 1), text.check].join(' ');
       });
     case 'reassess': {
-      if (!runs.some(run => run.id === action.runId)) return undefined;
+      const run = runs.find(item => item.id === action.runId);
+      if (!run) throw new Error('Этого прогона уже нет среди завершённых: откройте результаты заново.');
+      if (!await agrees(surface.ctx, reassessConsent(run))) return undefined;
       return surface.writing(async (lab, handOver) => {
         const next = await lab.reassess(action.runId, {});
         handOver(lease => surface.background.detach(surface.ctx, lease, next.id, surface.origin));
@@ -240,7 +275,5 @@ export async function settle(surface: DecisionSurface, action: DecisionAction, r
         return action.version === null ? 'Записано: версия агента в логах неизвестна — совпадение с продом останется сравнением.'
           : `Записано: логи записал агент версии «${clip(oneLine(action.version), 60)}». Это учтёт следующая сверка с продом — в новом прогоне или при переоценке этого.`;
       });
-    case 'answer': case 'remove': case 'add_rule': case 'check_connection': case 'name_log_version':
-    case 'open_situation': case 'open_situations': case 'open_conversation': return undefined;
   }
 }
