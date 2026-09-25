@@ -71,3 +71,19 @@ export class NotADraft extends CommandRefused {}
 export class AgentRequestFailed extends Error {
   constructor(readonly kind: 'unreachable' | 'tls' | 'timeout' | 'status', message: string, readonly status?: number, readonly code?: string) { super(message); }
 }
+
+/**
+ * Lab could not start the agent's adapter or talk to it — never the agent's own answer: `start` — the process did not
+ * start, the prompt file or a variable the connection reads is missing, the adapter failed before the first message;
+ * `contract` — a reply outside Lab's contract (the field is named); `protocol` — a line of the adapter that answers no
+ * request (targets.ts).
+ */
+export class ConnectionFailure extends Error {
+  constructor(readonly kind: 'start' | 'contract' | 'protocol', message: string, options?: ErrorOptions) { super(message, options); }
+}
+
+/** The agent's side gave a turn nothing: its process ended or was killed while Lab waited for its reply. */
+export class AgentFailure extends Error {}
+
+/** The adapter answered but could not measure the turn — it reported a measurementError, or the agent's version changed mid-dialogue. */
+export class MeasurementFailure extends Error {}

@@ -8,10 +8,11 @@ import { z } from 'zod';
 import { fingerprint, isRunnable, scalarSchema, usageSchema, type ReleaseHook, type ReleaseLog, type RunnableTarget, type Target, type World } from './contracts.js';
 import type { CallContext, DialogueMessage, TargetSession } from './runtime.js';
 import { targetEntryPath } from './target-version.js';
-import { AgentRequestFailed } from './errors.js';
+import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure } from './errors.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { addressVariables, atPointer, renderAddress, renderRequest, replyText, templateVariables, type Json, type RequestTemplate, type RequestValues } from './http-template.js';
 import { countText } from './plural.js';
+import { clip } from './text.js';
 
 type HttpTarget = Extract<Target, { kind: 'http' }>;
 
@@ -19,7 +20,7 @@ function httpHeaders(target: HttpTarget): Record<string, string> {
   const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' };
   for (const [header, variable] of Object.entries(target.headersEnv)) {
     const value = process.env[variable];
-    if (!value) throw new Error(`Не задана переменная окружения ${variable} для заголовка ${header}. Задайте её перед запуском Pi.`);
+    if (!value) throw new ConnectionFailure('start', `Не задана переменная окружения ${variable} для заголовка ${header}. Задайте её перед запуском Pi.`);
     headers[header] = value;
   }
   return headers;
@@ -226,9 +227,22 @@ interface ExternalTargetInput {
 }
 type SessionInput<K extends ExternalTargetInput['target']['kind']> = Omit<ExternalTargetInput, 'target'> & { target: Extract<Target, { kind: K }> };
 
+/** The types a reply's field may be expected to have, in the owner's words. */
+const TYPE_WORDS: Record<string, string> = { string: 'строка', number: 'число', boolean: 'true или false', object: 'объект', array: 'список' };
+
+/** What of a reply breaks Lab's contract, field by field: an object is read against the object's own rules, so the field is named. */
+function contractIssues(raw: unknown): string {
+  const object = externalReplySchema.options[1];
+  const result = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? object.safeParse(raw) : undefined;
+  if (!result || result.success) return 'ответ — не строка и не объект с полем reply';
+  return [...new Set(result.error.issues.flatMap(issue => issue.code === 'unrecognized_keys' ? issue.keys.map(key => `лишнее поле «${clip(key, 60)}»`)
+    : [`поле «${issue.path.join('.') || 'reply'}» — ${issue.code === 'invalid_type' ? `ожидается ${TYPE_WORDS[issue.expected] ?? issue.expected}` : 'значение не по контракту'}`]))]
+    .slice(0, 5).join('; ');
+}
+
 function applyReply(raw: unknown, state: World, ctx: CallContext, onRecords?: () => void, onReply?: ExternalTargetInput['onReply']): string {
   const parsed = externalReplySchema.safeParse(raw);
-  if (!parsed.success) throw new Error(`Ответ агента не по контракту Lab (${[...new Set(parsed.error.issues.map(i => i.path.join('.') || 'весь ответ'))].join(', ')}): ожидается строка или объект с полем reply.`);
+  if (!parsed.success) throw new ConnectionFailure('contract', `Ответ агента не по контракту Lab: ${contractIssues(raw)}. Ожидается строка или объект с полем reply и только полями контракта.`);
   onReply?.(parsed.data);
   if (typeof parsed.data === 'string') return parsed.data;
   const { reply, retrievals, events, records, measurementError } = parsed.data;
@@ -241,7 +255,7 @@ function applyReply(raw: unknown, state: World, ctx: CallContext, onRecords?: ()
   }
   if (measurementError) {
     if (reply.trim()) ctx.onTargetEvent?.({ type: 'assistant', text: reply });
-    throw new Error(`Ошибка измерения внешнего агента: ${measurementError}`);
+    throw new MeasurementFailure(`Адаптер сообщил, что не может измерить этот ход: ${measurementError}`);
   }
   return reply;
 }
@@ -300,7 +314,7 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
   try { response = await fetch(url, { method: 'POST', headers, signal, body: JSON.stringify(body) }); }
   catch (error) { throw failed(error); }
   if (!response.ok) { await response.body?.cancel(); throw new AgentRequestFailed('status', `Агент ответил ошибкой ${response.status}.`, response.status); }
-  if (Number(response.headers.get('content-length')) > REPLY_BYTES) { await response.body?.cancel(); throw new Error(REPLY_TOO_LARGE); }
+  if (Number(response.headers.get('content-length')) > REPLY_BYTES) { await response.body?.cancel(); throw new ConnectionFailure('contract', REPLY_TOO_LARGE); }
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -310,12 +324,12 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
       try { chunk = await reader.read(); } catch (error) { throw failed(error); }
       if (chunk.done) break;
       size += chunk.value.byteLength;
-      if (size > REPLY_BYTES) { await reader.cancel(); throw new Error(REPLY_TOO_LARGE); }
+      if (size > REPLY_BYTES) { await reader.cancel(); throw new ConnectionFailure('contract', REPLY_TOO_LARGE); }
       chunks.push(chunk.value);
     }
   } finally { reader.releaseLock(); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown; }
-  catch { throw new Error('Агент ответил не JSON: Lab ждёт ответ в формате JSON.'); }
+  catch { throw new ConnectionFailure('contract', 'Агент ответил не JSON: Lab ждёт ответ в формате JSON.'); }
 }
 
 export type TemplateTarget = HttpTarget & { request: RequestTemplate };
@@ -347,7 +361,7 @@ export function agentSession(target: TemplateTarget, reply: unknown): string | n
 
 /** Where the connection says the agent's text is; unset until the owner picks it from the connection check. */
 function replyPointer(target: TemplateTarget): string {
-  if (target.request.reply === undefined) throw new Error('В подключении не выбран путь к тексту ответа агента: запустите agent-lab doctor --connection подключение.json --yes и укажите --reply.');
+  if (target.request.reply === undefined) throw new ConnectionFailure('start', 'В подключении не выбран путь к тексту ответа агента: запустите agent-lab doctor --connection подключение.json --yes и укажите --reply.');
   return target.request.reply;
 }
 
@@ -362,7 +376,7 @@ async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> 
   let session: string | number | undefined;
   return {
     async respond(message, options) {
-      if (closed) throw new Error('Сессия с внешним агентом закрыта.');
+      if (closed) throw new ConnectionFailure('protocol', 'Сессия с внешним агентом закрыта.');
       ctx.signal.throwIfAborted();
       if (templated) {
         // The agent keeps its conversation by the trial's own id, by the turns sent whole, or by the id it named itself.
@@ -418,11 +432,11 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
   let pending: { resolve: (reply: unknown) => void; reject: (error: Error) => void } | undefined;
   let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   const takePending = () => { const waiting = pending; pending = undefined; return waiting; };
-  const exited = () => new Error(`Процесс агента завершился${exit ? exit.code !== null ? ` с кодом ${exit.code}` : ` по сигналу ${exit.signal}` : ''}${diagnostics.trim() ? `: ${diagnostics.trim()}` : '.'}`);
+  const exited = () => new AgentFailure(`Процесс агента завершился${exit ? exit.code !== null ? ` с кодом ${exit.code}` : ` по сигналу ${exit.signal}` : ''}${diagnostics.trim() ? `: ${diagnostics.trim()}` : '.'}`);
   let bytes = 0;
   child.stdout.on('data', chunk => {
     bytes += Buffer.byteLength(chunk);
-    if (bytes > REPLY_BYTES) { takePending()?.reject(new Error(REPLY_TOO_LARGE)); kill(); }
+    if (bytes > REPLY_BYTES) { takePending()?.reject(new ConnectionFailure('contract', REPLY_TOO_LARGE)); kill(); }
   });
   const lines = createInterface({ input: child.stdout });
   lines.on('line', line => {
@@ -434,15 +448,15 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
   child.on('close', (code, signal) => { exit = { code, signal }; takePending()?.reject(exited()); });
   await new Promise<void>((resolve, reject) => {
     child.once('spawn', () => resolve());
-    child.once('error', error => reject(new Error(`Не удалось запустить агента ${target.command}: ${spawnReason(error)}`)));
+    child.once('error', error => reject(new ConnectionFailure('start', `Не удалось запустить агента ${target.command}: ${spawnReason(error)}.`)));
   });
   const initialState = structuredClone(state);
   let closed = false;
   const exchange = async (payload: unknown): Promise<unknown> => {
-    if (closed) throw new Error('Сессия с внешним агентом закрыта.');
+    if (closed) throw new ConnectionFailure('protocol', 'Сессия с внешним агентом закрыта.');
     ctx.signal.throwIfAborted();
     if (exit) throw exited();
-    if (pending) throw new Error('У сессии уже есть активный запрос.');
+    if (pending) throw new ConnectionFailure('protocol', 'У сессии уже есть активный запрос.');
     bytes = 0;
     const reply = new Promise<unknown>((resolve, reject) => { pending = { resolve, reject }; });
     // A stray print instead of the reply shows here: the owner sees what the agent wrote while Lab waited.
@@ -480,7 +494,12 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
   };
   if (input.initialize) {
     try { await exchange({ type: 'open', sessionId, scenarioId, initialState, prompt: input.prompt, promptHash: input.prompt === undefined ? undefined : fingerprint(input.prompt) }); }
-    catch (error) { kill(); await session.close(); throw error; }
+    catch (error) {
+      kill(); await session.close();
+      // Before its first message the adapter only starts: whatever stops it there is the connection's, not the agent's answer.
+      throw ctx.signal.aborted || error instanceof ConnectionFailure ? error
+        : new ConnectionFailure('start', `Адаптер агента не запустился: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
   }
   return session;
 }
@@ -492,18 +511,44 @@ export async function readPrompt(file: string): Promise<string> {
   if (!prompt.trim() || prompt.includes('\0')) throw new Error('Пустой или бинарный prompt-файл.');
   return prompt;
 }
+/** A failure of a session typed, so its cause is read by its kind (evaluation.ts): what no typed failure names is the connection's. */
+function typed(error: unknown, signal: AbortSignal, kind: ConnectionFailure['kind']): unknown {
+  if (signal.aborted || error instanceof ConnectionFailure || error instanceof AgentFailure || error instanceof MeasurementFailure || error instanceof AgentRequestFailed) return error;
+  return new ConnectionFailure(kind, error instanceof Error ? error.message : String(error), { cause: error });
+}
+
+/**
+ * A session with the agent under test. Every failure that leaves it is typed: the agent's side gave a turn nothing
+ * (AgentRequestFailed, AgentFailure), the adapter could not measure a turn (MeasurementFailure), or Lab could not start
+ * the adapter or read its reply (ConnectionFailure) — a stop keeps its own reason.
+ */
 export async function openExternalTarget(input: ExternalTargetInput): Promise<TargetSession> {
-  if (input.target.promptFile) {
-    const prompt = await readPrompt(input.target.promptFile);
-    const original = input.onReply;
-    input = { ...input, prompt, onReply(reply) {
-      if (typeof reply === 'string' || reply.promptHash !== fingerprint(prompt)) throw new Error('Адаптер не подтвердил применение выбранного промпта (promptHash).');
-      original?.(reply);
-    } };
-  }
-  switch (input.target.kind) {
-    case 'http': return httpSession({ ...input, target: input.target });
-    case 'module': return moduleSession({ ...input, target: input.target });
-    case 'command': return commandSession({ ...input, target: input.target });
-  }
+  const { signal } = input.ctx;
+  let session: TargetSession;
+  try {
+    if (input.target.promptFile) {
+      const file = input.target.promptFile;
+      const prompt = await readPrompt(file).catch(error => {
+        const code = (error as NodeJS.ErrnoException).code;
+        throw new ConnectionFailure('start', code === 'ENOENT' || code === 'ENOTDIR' ? `Не найден файл промпта: ${file}. Исправьте promptFile в подключении.`
+          : code === 'EACCES' || code === 'EPERM' ? `Нет доступа к файлу промпта: ${file}. Проверьте права чтения.` : `Файл промпта ${file} не читается: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      });
+      const original = input.onReply;
+      input = { ...input, prompt, onReply(reply) {
+        if (typeof reply === 'string' || reply.promptHash !== fingerprint(prompt)) throw new ConnectionFailure('contract', 'Адаптер не подтвердил применение выбранного промпта (promptHash).');
+        original?.(reply);
+      } };
+    }
+    switch (input.target.kind) {
+      case 'http': session = await httpSession({ ...input, target: input.target }); break;
+      case 'module': session = await moduleSession({ ...input, target: input.target }); break;
+      case 'command': session = await commandSession({ ...input, target: input.target }); break;
+    }
+  } catch (error) { throw typed(error, signal, 'start'); }
+  return {
+    async respond(message, options) {
+      try { return await session.respond(message, options); } catch (error) { throw typed(error, signal, 'contract'); }
+    },
+    close: () => session.close(),
+  };
 }

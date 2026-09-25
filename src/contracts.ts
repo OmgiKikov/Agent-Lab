@@ -414,10 +414,14 @@ export interface Trial {
  * to answer, a service text stood in for the agent's reply, or `measurement`: the agent's side answered but the
  * measurement could not be made — the adapter reported a measurementError, or the connection did not show the
  * state, tool log, reset or observed field the checks need; `no_reply`: the adapter said the turn gave the customer
- * nothing (a service status, a failed generation) — the agent's operability, never the Lab's error nor a failed duty.
+ * nothing (a service status, a failed generation) — the agent's operability, never the Lab's error nor a failed duty;
+ * `connection`: Lab could not start the agent's adapter or talk to it (a process that did not start, a prompt file that
+ * is gone, a reply outside the contract, a line outside the protocol); `provider`: the model provider refused or failed
+ * the customer Lab plays. Neither is the agent's. The cause is chosen by the type of what broke (evaluation.ts), and
+ * records written before `connection` and `provider` existed keep the cause they were stored with.
  * Values are only ever appended, never renamed or reordered, so every stored cause stays valid.
  */
-export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement', 'no_reply'] as const;
+export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement', 'no_reply', 'connection', 'provider'] as const;
 export type InvalidCause = typeof INVALID_CAUSES[number];
 /** Why an attempt has no judgment: only code checks were re-run, the run was stopped, the model provider did not answer, or the judge's answers were rejected. */
 export const ASSESSMENT_FAILURES = ['code_only', 'stopped', 'unavailable', 'rejected'] as const;
