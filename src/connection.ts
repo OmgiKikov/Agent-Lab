@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { addUsage, checkSchema, describeCheck, emptyUsage, experimentSchema, fingerprint, isRunnable, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type RunnableTarget, type Scenario, type Target, type ToolChannel, type Trial } from './contracts.js';
+import { addUsage, checkSchema, describeCheck, emptyUsage, experimentSchema, fingerprint, isRunnable, runnableTarget, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type RunnableTarget, type Scenario, type Target, type ToolChannel, type Trial } from './contracts.js';
+import type { Exam } from './target-schema.js';
 import type { Runtime } from './runtime.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
@@ -282,6 +283,33 @@ function replaced(document: Json, pointer: string, value: Json): Json {
   if (Array.isArray(document)) return document.map((item, i) => String(i) === head ? replaced(item, tail, value) : item);
   if (document && typeof document === 'object') return { ...document, [head]: replaced(document[head] ?? null, tail, value) };
   return document;
+}
+
+/** What makes two targets one connection: how Lab reaches the agent, paths as a saved file keeps them — neither its exam nor the stand's test customer. */
+function connectionKey(target: RunnableTarget, base: string): string {
+  const { exam: _exam, customerProfile: _profile, ...reach } = runnableTarget(resolveTarget(portableTarget(target, base), base));
+  return fingerprint(reach);
+}
+/** Whether two targets reach the same agent the same way, whatever exam each carries: an exam is written for a connection, not for a draft. */
+export const sameConnection = (a: RunnableTarget, b: RunnableTarget, base: string): boolean => connectionKey(a, base) === connectionKey(b, base);
+
+/** The project's connection file: its connection, or null when there is none. One Lab cannot read is an error: Lab never overwrites it. */
+export async function projectConnection(file: string): Promise<Connection | null> {
+  try { return await readConnection(file); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Error(`${basename(file)} в папке проекта не читается как подключение Agent Lab: исправьте или уберите его — Lab его не менял.`);
+  }
+}
+
+/**
+ * Writes the exam the owner agreed to into the project's connection file: the connection there keeps everything else
+ * when it reaches this same agent; otherwise `target` with the exam takes its place, as the owner's dialog said. 0600, atomic.
+ */
+export async function saveExam(file: string, target: RunnableTarget, exam: Exam): Promise<void> {
+  const current = await projectConnection(file);
+  const kept = current && sameConnection(current.target, target, dirname(resolve(file))) ? current : undefined;
+  await saveConnection(file, { ...kept ?? { format: CONNECTION_FORMAT }, target: { ...kept?.target ?? target, exam } }, current !== null);
 }
 
 /** Saves a connection file the owner named; `replace` only for an explicit change of that same file. */

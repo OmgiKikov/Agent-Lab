@@ -50,6 +50,15 @@ const GOT: Record<ExamTurn, string> = {
   empty: 'пустой ответ', service: 'вместо агента ответил стенд', missing: 'ответа не было',
 };
 
+/**
+ * An exam in the owner's words before it is written: every path, and at each of its steps exactly what the customer
+ * writes or presses and what the agent's turn must be — nothing of it goes to the agent unseen.
+ */
+export function examPlanLines(exam: Exam): string[] {
+  return exam.flatMap((path, index) => [`Путь ${index + 1}. ${path.name}${path.initialState === undefined ? '' : ' — со своим исходным состоянием'}`,
+    ...path.steps.map(step => `  ${step.press !== undefined ? `клиент нажимает «${step.press}»` : `клиент пишет «${step.say ?? ''}»`} → ${EXPECTED[step.expect]}${step.contains !== undefined ? `, в нём «${step.contains}»` : ''}`)]);
+}
+
 /** Whether the turn is what the step expects: a reply with buttons is still a reply to the customer. */
 function meets(expect: Step['expect'], got: ExamTurn): boolean {
   return expect === 'reply' ? got === 'reply' || got === 'buttons' : got === expect;

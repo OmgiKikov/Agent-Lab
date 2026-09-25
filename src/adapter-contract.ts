@@ -64,7 +64,8 @@ export function adapterContract(): AdapterContract {
     outcome: OUTCOMES,
     exam: `target.exam: paths {name, steps, initialState?}; a step is say (the customer's words) or press (a button of the previous reply), expect ${EXAM_EXPECTATIONS.join(' | ')}, `
       + 'and contains — a value the reply must hold. The exam counts only with a path of two or more steps whose later step checks with contains what the customer said '
-      + 'earlier; without one the result shows no percent. Lab runs it before every run, without a model; a failed exam stops the run.',
+      + 'earlier; without one the result shows no percent. Lab runs it before every run, without a model; a failed exam stops the run. From the chat, the paths '
+      + 'go to agent_lab_run as exam when the owner asks for them: Lab shows them to the owner and writes them into connection.json only at their word.',
     rules: [
       'eventsComplete, retrievalsComplete and resetConfirmed only when the adapter\'s code proves them.',
       'A fresh, isolated session per conversation: nothing of one leaks into the next.',
