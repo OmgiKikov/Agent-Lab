@@ -515,13 +515,20 @@ const handledCell = (item: { passed: number; decided: number; unmeasured: number
 export function scenarioRows(view: Pick<ResultView, 'scenarios'>): ResultRow[] {
   const scenarios = view.scenarios?.filter(scenario => scenario.decided || scenario.unmeasured) ?? [];
   if (!scenarios.length) return [];
+  // What the run did not check is said beside what it did: the expectations of a scenario no situation carries, and the
+  // scenarios of the plan with no situation in the run at all.
+  const unchecked = (items: readonly { text: string; mustNot: boolean }[]) => items.map(item => `${item.mustNot ? 'нельзя — ' : ''}${oneLine(item.text)}`).join('; ');
+  const absent = view.scenarios!.filter(scenario => !scenario.situations);
   return [{ role: 'heading', indent: 0, text: 'По сценариям', right: 'справился' }, ...scenarios.flatMap((scenario): ResultRow[] => [
     { role: 'item', indent: 2, text: `«${oneLine(scenario.question)}»`, right: handledCell(scenario) },
     ...(scenario.variations.length > 1 ? scenario.variations.filter(variation => variation.decided || variation.unmeasured || variation.pending)
       .map((variation): ResultRow => ({ role: 'item:muted', indent: 4, text: `${oneLine(variation.title)}${variation.origin !== 'logs' ? ' — не из логов' : ''}`, right: handledCell(variation) })) : []),
     ...scenario.broken.slice(0, 2).map((item): ResultRow => ({ role: 'muted', indent: 4,
       text: `Нарушено: ${item.mustNot ? 'нельзя — ' : ''}${oneLine(item.text)} — в ${item.count} из ${countText(item.of, SITUATIONS_OF)}` })),
-  ])];
+    ...(scenario.unchecked.length ? [{ role: 'muted' as const, indent: 4, text: `Не проверяет ни одна ситуация: ${unchecked(scenario.unchecked)}` }] : []),
+  ]), ...(absent.length ? [{ role: 'item:muted' as const, indent: 2,
+    text: `${pluralForm(absent.length, ['Не проверялся сценарий', 'Не проверялись сценарии', 'Не проверялись сценарии'])} — в прогоне нет ${pluralForm(absent.length, ['его', 'их', 'их'])} ситуаций: ${
+      absent.map(scenario => `«${oneLine(scenario.question)}»`).join('; ')}` }] : [])];
 }
 
 const MAX_TOPICS = 5;
@@ -638,6 +645,20 @@ export function causeRows(view: ResultView, options: { examples?: boolean } = {}
 export function caveatRows(view: Pick<ResultView, 'notes'>, reader: Reader = 'owner'): ResultRow[] {
   const lines = caveatLines(view.notes, reader);
   return lines.length ? [{ role: 'heading', indent: 0, text: 'Оговорки' }, ...lines.map(text => ({ role: 'muted' as const, indent: 2, text }))] : [];
+}
+
+/**
+ * «Пробелы в правилах»: the customers' requests from the logs no rule of the owner speaks to (ResultView.rulesGaps) — the
+ * number says nothing about them. The owner is told how to close them; a page for others says only what was not checked.
+ */
+export function rulesGapRows(view: Pick<ResultView, 'rulesGaps'>, reader: Reader = 'owner'): ResultRow[] {
+  const gaps = view.rulesGaps ?? [];
+  if (!gaps.length) return [];
+  const requests = countText(gaps.length, ['запроса', 'запросов', 'запросов']);
+  const lead = reader === 'owner' ? `Правил нет для ${requests} из логов — такие запросы не проверяются. Добавьте правила в материалы, и Lab сделает для них ситуации.`
+    : `У владельца агента нет правил для ${requests} из логов — такие запросы не проверялись.`;
+  return [{ role: 'heading', indent: 0, text: 'Пробелы в правилах' }, { role: 'muted', indent: 2, text: lead },
+    ...gaps.map(gap => ({ role: 'item:muted' as const, indent: 4, text: `«${oneLine(gap)}»` }))];
 }
 
 /** «Не измерено»: every unmeasured situation with its reason, grouped in the order of the reasons. */
@@ -808,7 +829,7 @@ export function resultScreen(view: ResultView, options: { surface: 'board' | 'cl
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
   const blocks = [headRows(view), scenarioRows(view), topicRows(view), causeRows(view),
-    ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
+    ...(full ? [errorListRows(view), unmeasuredRows(view), rulesGapRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
     [runLine(view, options.now), ...barRows(view)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }

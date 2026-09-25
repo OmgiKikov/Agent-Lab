@@ -230,14 +230,19 @@ export interface PlannedSituation { scenarioId: string; outcome: 'pass' | 'fail'
  */
 export interface ScenarioOutcome {
   question: string;
+  /** The run's counted situations that are examples of the scenario: none — the run did not check the scenario at all. */
+  situations: number;
   passed: number; decided: number; unmeasured: number; pending: number;
   variations: { title: string; origin: BusinessScenario['variations'][number]['origin']; passed: number; decided: number; unmeasured: number; pending: number }[];
   broken: { text: string; mustNot: boolean; count: number; of: number }[];
+  /** The scenario's expectations no situation of the run checks — no card of it carries the duty —, in the plan's order. */
+  unchecked: { text: string; mustNot: boolean }[];
 }
 
 /**
- * The run's counted situations by the scenarios of the accepted plan; a scenario none of them is an example of is not
- * listed, and neither are situations of no scenario. Pure: the verdicts are the run's own (run.ts), never decided here.
+ * The run's counted situations by the scenarios of the accepted plan, every scenario of it — one none of them is an
+ * example of with no situation (`situations` 0), so what the run did not check is said too; situations of no scenario
+ * are not listed. Pure: the verdicts are the run's own (run.ts), never decided here.
  */
 export function planOutcomes(library: Pick<LibraryV2, 'plan' | 'cards'>, situations: readonly PlannedSituation[]): ScenarioOutcome[] {
   const cards = new Map(library.cards.map(card => [card.id, card]));
@@ -246,7 +251,7 @@ export function planOutcomes(library: Pick<LibraryV2, 'plan' | 'cards'>, situati
       const card = cards.get(situation.scenarioId);
       return card?.scenarioRef?.scenarioId === scenario.id ? [{ situation, card }] : [];
     });
-    if (!mine.length) return [];
+
     // A situation still being checked is on its way, not unmeasured.
     const pending = (item: (typeof mine)[number]) => item.situation.outcome === 'unknown' && item.situation.reason === 'in_progress';
     const count = (items: typeof mine) => ({ passed: items.filter(item => item.situation.outcome === 'pass').length,
@@ -260,6 +265,8 @@ export function planOutcomes(library: Pick<LibraryV2, 'plan' | 'cards'>, situati
       return { text: expectation.text, mustNot: expectation.strength === 'must_not', count: judged.filter(outcome => outcome === 'fail').length,
         of: judged.filter(outcome => outcome !== 'unknown').length };
     }).filter(item => item.count > 0).sort((a, b) => b.count - a.count);
-    return [{ question: scenario.question, ...count(mine), variations, broken }];
+    const checked = new Set(mine.flatMap(({ card }) => card.agentMust.flatMap(duty => duty.planExpectationId ? [duty.planExpectationId] : [])));
+    const unchecked = scenario.expectations.filter(expectation => !checked.has(expectation.id)).map(expectation => ({ text: expectation.text, mustNot: expectation.strength === 'must_not' }));
+    return [{ question: scenario.question, situations: mine.length, ...count(mine), variations, broken, unchecked }];
   });
 }

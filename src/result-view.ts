@@ -235,6 +235,11 @@ export interface ResultView {
    */
   scenarios?: ScenarioOutcome[];
   /**
+   * The customers' requests from the logs the owner's rules leave open, as the preparation found them (in the builder's
+   * words): no situation checks them, so the number says nothing about them. Absent when the preparation found none.
+   */
+  rulesGaps?: string[];
+  /**
    * Whether the agent answered its customers at all, over every conversation the run started — the ones it counts and
    * the ones the stand broke and the run started again (`retried`, whose broken attempts it no longer keeps): those the
    * agent left without a reply (`no_reply`), answered with a stand's service text, or broke on (an error, a timeout). Such
@@ -550,6 +555,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const library = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot : undefined;
   const scenarios = library?.plan ? planOutcomes(library, counted) : [];
   if (scenarios.length) view.scenarios = scenarios;
+  const gaps = rulesGapsOf(input);
+  if (gaps.length) view.rulesGaps = gaps;
   const operability = operabilityOf(record);
   if (operability) view.operability = operability;
   if (record.realism) view.realism = structuredClone(record.realism);
@@ -578,6 +585,17 @@ function operabilityOf(record: Experiment): ResultView['operability'] {
   const retried = standRetries(record);
   const operability = { conversations: record.trials.length + retried, noReply: count('no_reply'), serviceReply: count('service_reply'), broken: count('agent'), retried };
   return operability.noReply + operability.serviceReply + operability.broken + operability.retried ? operability : undefined;
+}
+
+/**
+ * The requests of the logs the owner's rules leave open: the conversations a card preparation made no situation of
+ * because no rule speaks to what the customer asks (card/schema.ts `excluded[].uncovered`), each once. The run keeps the
+ * preparation it was made from; this is the one place the result reads it.
+ */
+function rulesGapsOf(record: Pick<Experiment, 'preparationProgress'>): string[] {
+  const progress = record.preparationProgress;
+  if (progress?.protocol !== 'cards-v1' && progress?.protocol !== 'cards-v2') return [];
+  return [...new Set(progress.excluded.flatMap(item => item.uncovered ? [oneLine(item.uncovered)] : []))];
 }
 
 /** The fixed sentence lab/run.ts writes into `limitations` for the conversations it ran again after the stand broke. */

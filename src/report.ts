@@ -7,7 +7,7 @@ import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
 import {
   accuracyParts, alarmRow, causeItems, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, noRuleText, realityParts, reasonLabel,
-  operabilityText, saidText, scenarioRows, situationOutcomeText, toolExpectationsText, topicsNote, trialTurns, trustSegments, type ResultRow,
+  operabilityText, rulesGapRows, saidText, scenarioRows, situationOutcomeText, toolExpectationsText, topicsNote, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { briefFields, situationBrief } from './card/view.js';
@@ -99,6 +99,12 @@ function topicsBlock(view: ResultView): Block[] {
   const note = topicsNote(view);
   return [{ kind: 'section', title: 'По темам', blocks: [{ kind: 'table', head: ['Тема', 'справился', ...(shares ? ['доля диалогов'] : [])], rows },
     ...(note ? [{ kind: 'paragraph' as const, muted: true, text: note }] : [])] }];
+}
+
+/** «Пробелы в правилах»: what result-text.ts says of them as a paragraph, the requests themselves as a list. */
+function gapsBlock(view: ResultView): Block[] {
+  const [heading, lead, ...gaps] = rulesGapRows(view, READER);
+  return heading && lead ? [{ kind: 'section', title: heading.text, blocks: [{ kind: 'paragraph', muted: true, text: lead.text }, { kind: 'list', items: gaps.map(row => row.text) }] }] : [];
 }
 
 /** How much of the logs the situations stand for: «15 ситуаций покрывают 9 из 11 тем — 94% диалогов. Не покрыты: …». */
@@ -229,6 +235,7 @@ export function runReport(bundle: EvidenceBundle): Report {
       ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),
       ...(failures.length ? [{ kind: 'section' as const, title: 'Разбор ошибок', blocks: [{ kind: 'failures' as const, items: failures }] }] : []),
       ...(unmeasured.length ? [{ kind: 'section' as const, title: 'Не измерено', blocks: [{ kind: 'list' as const, items: unmeasured }] }] : []),
+      ...gapsBlock(view),
       ...calibrationBlock(bundle),
       ...comparisonBlock(bundle),
       basisBlock(bundle, view),
