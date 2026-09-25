@@ -216,8 +216,7 @@ export function runReport(bundle: EvidenceBundle): Report {
     meta: [dateText(view.createdAt), ...(view.scope.target ? [`версия ${view.scope.target}`] : []), ...(view.mode === 'demo' ? ['учебный пример'] : [])],
     head: [
       ...(alarm ? [{ kind: 'alarm' as const, text: alarm.text }] : []),
-      { kind: 'accuracy', lead: accuracy.lead, value: accuracy.value, tail: accuracy.tail, level: accuracy.level,
-        band: null },
+      { kind: 'accuracy', lead: accuracy.lead, value: accuracy.value, tail: accuracy.tail, level: accuracy.level },
       ...(trust.length ? [{ kind: 'trust' as const, parts: trust }] : []),
       ...(operabilityText(view) ? [{ kind: 'trust' as const, parts: [{ text: operabilityText(view)!, warn: true }] }] : []),
       ...(reality.length ? [{ kind: 'trust' as const, parts: reality.map(text => ({ text, warn: false })) }] : []),

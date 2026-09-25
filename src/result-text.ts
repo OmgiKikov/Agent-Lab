@@ -19,10 +19,12 @@ import { oneLine } from './text.js';
  * all say the same lines in the same order (docs/design/ui-spec.md §4.7, §4.10, §8.5):
  *
  *   ✗ Числу пока не верить: …                                    ← a failed control, or too much unmeasured
- *   Точность агента: 72% — справился в 18 из 25 ситуаций          ← the answer, coloured by level
- *   Вероятно, от 52% до 86% (95%) · не измерено 2 из 25 — … · …    ← one trust line
- *   С учётом частоты тем — около 70% (измерены темы 90% диалогов)  ← only when topics are known
+ *   Точность агента: 72% — справился в 18 из 25 ситуаций          ← the answer, coloured by level; no interval
+ *   По выбранным ситуациям; не прогноз… · мало данных · не измерено 2 из 25 — …   ← one trust line
  *   По темам / Почему ошибается / Дальше                          ← rows with a right-hand counter
+ *
+ * The number carries no interval, here or anywhere: its situations are a curated set drawn from the logs, not customers
+ * sampled independently from production (interval.ts). «мало данных» says what a small count does to it.
  *
  * Rows are semantic (a role, an indent, a text, an optional right-hand counter or « · » parts);
  * `fitRows` lays them out as plain lines of a given width, so every surface wraps identically and
@@ -163,7 +165,7 @@ export function alarmRow(view: ResultView, reader: Reader = 'owner'): ResultRow 
 export const unstableCount = (view: ResultView) => view.cards.filter(card => !card.control && (card.flaky || card.unstable)).length;
 
 /**
- * The one trust line under the number, in segments: the 95% interval and a small-sample warning, what was not measured
+ * The one trust line under the number, in segments: what the number is read over and a small-sample warning, what was not measured
  * and the main reason (a warning; above the number instead when it raised the alarm), what is still being checked, the
  * owner's agreement with the judge, the unstable situations. `warn` marks the segments a surface colours as a warning.
  * A segment with nothing to say is left out; the first one starts the sentence.

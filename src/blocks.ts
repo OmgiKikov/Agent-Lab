@@ -27,9 +27,8 @@ export interface DisagreementItem { number: number; title: string; expectations:
 
 export type Block =
   | { kind: 'alarm'; text: string }
-  | { kind: 'accuracy'; lead: string; value: string | null; tail: string; level: Level;
-      /** The 95% interval under the number; `point` and the range are shares 0..1. */
-      band: { point: number; range: [number, number] } | null }
+  /** The number alone, with no interval under it: the situations are a curated set, not a sample of production (interval.ts). */
+  | { kind: 'accuracy'; lead: string; value: string | null; tail: string; level: Level }
   | { kind: 'trust'; parts: { text: string; warn: boolean }[] }
   | { kind: 'section'; title: string; blocks: Block[] }
   | { kind: 'table'; head: string[]; rows: { cells: string[]; muted: boolean }[] }
@@ -48,45 +47,8 @@ export const escapeHtml = (value: unknown) => plain(value).replace(/[&<>"']/g, c
 export const escapeMarkdown = (value: unknown) => plain(value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!).replace(/[\\`*_{}\[\]()#|]/g, '\\$&');
 const e = escapeHtml;
 const md = escapeMarkdown;
-const pct = (share: number) => Math.round(share * 100);
 /** « · » between the parts of a line, glued to the part before it: a wrapped line never starts with the dot. */
 const SEPARATOR = '\u00a0· ';
-
-/*
- * The labels under the interval band: its two ends, and the axis ends 0% and 100% where they leave room. A label is
- * placed by its left edge, kept inside the band, and never overlaps another: the two ends too close to each other read
- * as one «91–100%», and an axis label that would touch one is left out. Widths are judged at a band of `px` pixels with
- * a 11.5px monospace digit of LABEL_PX, so the labels hold on the narrowest band they are drawn for.
- */
-const LABEL_PX = 7.2;
-/** The band on a 320px phone, and from a 700px window up (report-style.ts shows the wide set there). */
-const NARROW_BAND = 250, WIDE_BAND = 600;
-/** Room left between two labels, in percent of the band. */
-const LABEL_GAP = 2;
-interface BandLabel { text: string; left: number; kind: 'end' | 'axis' }
-function bandLabels(lo: number, hi: number, px: number): BandLabel[] {
-  const widthOf = (text: string) => text.length * LABEL_PX / px * 100;
-  const at = (text: string, centre: number, kind: BandLabel['kind']): BandLabel & { right: number } => {
-    const width = widthOf(text);
-    const left = Math.min(Math.max(0, centre - width / 2), 100 - width);
-    return { text, left, right: left + width, kind };
-  };
-  const low = at(`${lo}%`, lo, 'end'), high = at(`${hi}%`, hi, 'end');
-  const ends = lo === hi ? [low] : low.right + LABEL_GAP <= high.left ? [low, high] : [at(`${lo}–${hi}%`, (lo + hi) / 2, 'end')];
-  const clear = (label: { left: number; right: number }) => ends.every(end => label.right + LABEL_GAP <= end.left || end.right + LABEL_GAP <= label.left);
-  const zero = at('0%', 0, 'axis'), full = at('100%', 100, 'axis');
-  return [...(clear(zero) ? [zero] : []), ...ends, ...(clear(full) ? [full] : [])].map(({ text, left, kind }) => ({ text, left, kind }));
-}
-
-function bandHtml(band: NonNullable<Extract<Block, { kind: 'accuracy' }>['band']>): string {
-  const [lo, hi] = band.range.map(pct) as [number, number];
-  const label = (item: BandLabel, set: string) => `<span class="lb${item.kind === 'axis' ? ' ax' : ''}${set}" style="left:${item.left.toFixed(1)}%">${item.text}</span>`;
-  const narrow = bandLabels(lo, hi, NARROW_BAND), wide = bandLabels(lo, hi, WIDE_BAND);
-  const same = JSON.stringify(narrow) === JSON.stringify(wide);
-  const labels = same ? narrow.map(item => label(item, '')) : [...narrow.map(item => label(item, ' n')), ...wide.map(item => label(item, ' w'))];
-  return `<div class="band" aria-hidden="true"><span class="track"></span><span class="range" style="left:${lo}%;width:${Math.max(hi - lo, 1)}%"></span>`
-    + `<span class="dot" style="left:${pct(band.point)}%"></span>${labels.join('')}</div>`;
-}
 
 const dl = (rows: [string, string, string?][]) => `<dl>${rows.map(([term, value, cls]) => `<div><dt>${e(term)}</dt><dd${cls ? ` class="${cls}"` : ''}>${e(value)}</dd></div>`).join('')}</dl>`;
 const turnsHtml = (turns: Turn[]) => `<div class="turns">${turns.map(turn => `<div class="turn${turn.who === 'Клиент' ? ' client' : ''}"><span class="who">${e(turn.who)}</span><span>${e(turn.text)}</span></div>`).join('')}</div>`;
@@ -117,8 +79,7 @@ function disagreementHtml(item: DisagreementItem): string {
 function blockHtml(block: Block): string {
   switch (block.kind) {
     case 'alarm': return `<p class="alarm">${e(block.text)}</p>`;
-    case 'accuracy': return `<div class="acc ${block.level}"><span>${e(block.lead)}</span>${block.value ? `<span class="pct">${e(block.value)}</span>` : ''}<span>${e(block.tail)}</span></div>`
-      + (block.band ? `<div class="${block.level}">${bandHtml(block.band)}</div>` : '');
+    case 'accuracy': return `<div class="acc ${block.level}"><span>${e(block.lead)}</span>${block.value ? `<span class="pct">${e(block.value)}</span>` : ''}<span>${e(block.tail)}</span></div>`;
     case 'trust': return `<div class="trust">${block.parts.map(part => `<span${part.warn ? ' class="warn"' : ''}>${e(part.text)}</span>`).join('')}</div>`;
     case 'section': return `<section><h2>${e(block.title)}</h2>${block.blocks.map(blockHtml).join('')}</section>`;
     case 'table': return `<table><thead><tr>${block.head.map(cell => `<th>${e(cell)}</th>`).join('')}</tr></thead><tbody>${block.rows.map(row => `<tr${row.muted ? ' class="muted"' : ''}>${row.cells.map(cell => `<td>${e(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;

@@ -28,7 +28,7 @@ export { COUNTING_RULES } from './outcomes.js';
  * the owner's own quotes; the words around them live in result-text.ts. Pure: no I/O, no escaping.
  */
 
-export { SMALL_SAMPLE, wilson } from './interval.js';
+export { SMALL_SAMPLE } from './interval.js';
 
 /** Why a situation was not measured, in the owner's words: the tail of «не измерено N — …». */
 export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
@@ -146,8 +146,12 @@ export interface ResultView {
   createdAt: string;
   /** The counting rules the counted situations are decided by (card/expectations.ts), in record order; the default rule on a run without them. */
   countingRules: string;
-  /** Situations handled out of those decided, over the counted (non-control) situations. */
-  headline: { passed: number; decided: number; accuracy: number | null; range: [number, number] | null; smallSample: boolean };
+  /**
+   * Situations handled out of those decided, over the counted (non-control) situations. The number has no interval: the
+   * situations are a curated, stratified set, not independent draws from production, so `range` is always null — a field
+   * kept only for readers of the stored JSON, never a place for a confidence claim. `smallSample` is «мало данных».
+   */
+  headline: { passed: number; decided: number; accuracy: number | null; range: null; smallSample: boolean };
   /** Situations still waiting in a running phase; never part of notMeasured. */
   pending: number;
   notMeasured: {
@@ -427,8 +431,6 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     ...(examined ? { connection: examined } : {}),
     simulator: simulatorEvidence(record),
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
-    // This is a curated/stratified set, not independent Bernoulli sampling from production.
-    // Keep the compatibility field empty rather than attach a population confidence claim.
     headline: { passed, decided, accuracy: withheld ? null : accuracy, range: null, smallSample: decided > 0 && decided < SMALL_SAMPLE },
     pending: notStarted ? 0 : counted.filter(card => card.reason === 'in_progress').length,
     notMeasured: { total: unmeasured, reasons, of: counted.length,

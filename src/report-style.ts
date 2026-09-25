@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 
 /*
  * The look of the customer report: the palette, type and anatomy of the approved card prototype
- * (dark window, a sans face with a mono accent, status chips, the large accuracy figure over its
- * interval band, the client / agent brief). It is one offline file that fetches nothing: the type is
- * the reader's own system faces, so opening it reaches no server; print gets a light page.
+ * (dark window, a sans face with a mono accent, status chips, the large accuracy figure, the client /
+ * agent brief). It is one offline file that fetches nothing: the type is the reader's own system faces,
+ * so opening it reaches no server; print gets a light page.
  */
 
 /** Opens every folded section before printing, so paper carries the whole report. The only script the CSP allows. */
@@ -13,7 +13,7 @@ export const REPORT_SCRIPT_HASH = createHash('sha256').update(REPORT_SCRIPT).dig
 
 export const REPORT_CSS = `
 :root{color-scheme:dark;
---page:#0a0c0f;--glow:#132031;--win:#0f1216;--bar:#14181d;--edge:#252b33;--line:#1d232a;--band:#171c22;--well:#0c0f13;
+--page:#0a0c0f;--glow:#132031;--win:#0f1216;--bar:#14181d;--edge:#252b33;--line:#1d232a;--hover:#171c22;--well:#0c0f13;
 --text:#d5dae0;--bright:#f1f4f7;--muted:#8b949e;--dim:#5b646e;
 --accent:#86b1d6;--accent-bg:rgba(134,177,214,.1);--accent-line:rgba(134,177,214,.36);
 --ok:#8dc39c;--ok-bg:rgba(141,195,156,.1);--ok-line:rgba(141,195,156,.34);
@@ -44,15 +44,6 @@ p{margin:0}
 .pct{display:inline-block;font-weight:700;font-size:1.8em;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 .good .pct{color:var(--ok)}.warn .pct{color:var(--warn)}.bad .pct{color:var(--err)}.none{color:var(--muted)}
 .trust{display:flex;flex-wrap:wrap;column-gap:1ch;color:var(--muted)}.trust .warn{color:var(--warn)}
-.band{position:relative;height:56px;max-width:640px}
-.band .track{position:absolute;left:0;right:0;top:24px;height:4px;border-radius:2px;background:var(--edge)}
-.band .range{position:absolute;top:24px;height:4px;border-radius:2px;background:var(--accent-line)}
-.good .band .range{background:var(--ok-line)}.warn .band .range{background:var(--warn-line)}.bad .band .range{background:var(--err-line)}
-.band .dot{position:absolute;top:19px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:var(--accent)}
-.good .band .dot{background:var(--ok);box-shadow:0 0 0 4px var(--ok-bg)}.warn .band .dot{background:var(--warn);box-shadow:0 0 0 4px var(--warn-bg)}.bad .band .dot{background:var(--err);box-shadow:0 0 0 4px var(--err-bg)}
-.band .lb{position:absolute;top:36px;font:11.5px/1.4 var(--mono);color:var(--muted);white-space:nowrap}
-.band .lb.ax{color:var(--dim)}.band .lb.w{display:none}
-@media (min-width:700px){.band .lb.n{display:none}.band .lb.w{display:inline}}
 table{border-collapse:collapse;width:100%;max-width:720px;font-variant-numeric:tabular-nums}
 th{font:500 12px/1.5 var(--mono);color:var(--dim);text-align:right;padding:0 0 6px 18px}
 th:first-child,td:first-child{text-align:left;padding-left:0}
@@ -62,7 +53,7 @@ tr.muted td,tr.muted td:first-child{color:var(--muted)}
 .why{display:grid;gap:4px}
 details>summary{list-style:none;cursor:pointer}details>summary::-webkit-details-marker{display:none}
 .cause summary{display:grid;grid-template-columns:3ch minmax(0,1fr) auto 1.5ch;column-gap:1ch;align-items:baseline;padding:8px 10px;border:1px solid transparent;border-radius:9px}
-.cause summary:hover{background:var(--band);border-color:var(--line)}
+.cause summary:hover{background:var(--hover);border-color:var(--line)}
 .cause .i{color:var(--accent);font-family:var(--mono)}.cause .t{color:var(--bright)}.cause .n{color:var(--muted);white-space:nowrap}
 .chev{display:inline-block;text-align:center;color:var(--dim);transition:transform .25s ease}
 details[open]>summary .chev{transform:rotate(90deg)}
@@ -106,7 +97,7 @@ ul.plain,ol.plain{margin:0;padding-left:2.4ch;display:grid;gap:4px}
 @media (max-width:640px){.exs{margin-left:0}dl>div{grid-template-columns:minmax(0,1fr)}.cause summary{grid-template-columns:3ch minmax(0,1fr) 1.5ch}.cause .n{grid-column:2}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 @media print{
-:root{color-scheme:light;--page:#fff;--glow:#fff;--win:#fff;--bar:#f4f5f7;--edge:#d4d8de;--line:#e3e6ea;--band:#f4f5f7;--well:#fafbfc;
+:root{color-scheme:light;--page:#fff;--glow:#fff;--win:#fff;--bar:#f4f5f7;--edge:#d4d8de;--line:#e3e6ea;--hover:#f4f5f7;--well:#fafbfc;
 --text:#1b1f24;--bright:#000;--muted:#4d5661;--dim:#6b7580;--accent:#1f5f8f;--accent-bg:#eef4f9;--accent-line:#a9c4db;
 --ok:#1f7a3a;--ok-bg:#edf7f0;--ok-line:#a8d3b4;--warn:#8a5a00;--warn-bg:#fdf6e7;--warn-line:#e4c98d;--err:#b0322a;--err-bg:#fcefee;--err-line:#e7aba6}
 body{background:#fff;font-size:12.5px}.stage{max-width:none;padding:0}.win{box-shadow:none;border-radius:8px}
