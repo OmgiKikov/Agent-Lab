@@ -618,14 +618,17 @@ function rulesGapsOf(record: Pick<Experiment, 'preparationProgress'>): string[] 
   return [...new Set(progress.excluded.flatMap(item => item.uncovered ? [oneLine(item.uncovered)] : []))];
 }
 
-/** The fixed sentence lab/run.ts writes into `limitations` for the conversations it ran again after the stand broke. */
+/** The fixed sentence lab/run.ts wrote into `limitations`, before `rerunAfter` existed, for the conversations it ran again. */
 const RERUN_NOTE = 'Разговоров, повторённых после сбоя стенда: ';
 /**
- * The conversations the stand broke and the run started again from the start: their broken attempts are not among the
- * trials, only counted in the one fixed sentence the harness writes (lab/run.ts) — decoded here and nowhere else, as
- * run.ts decodes the harness's older reasons. A typed count kept with the record takes its place when there is one.
+ * The conversations the stand broke and the run started again from the start. Each retried attempt keeps the one that
+ * broke as `rerunAfter` (lab/run.ts), so the count is typed. Records written before that field existed carry only the
+ * harness's fixed sentence, decoded here for them alone, as run.ts decodes the harness's older reasons: a newer record
+ * writes the sentence only beside the typed attempts, so it is never read twice.
  */
-function standRetries(record: Pick<Experiment, 'limitations'>): number {
+function standRetries(record: Pick<Experiment, 'limitations' | 'trials'>): number {
+  const typed = record.trials.filter(trial => trial.rerunAfter).length;
+  if (typed) return typed;
   const note = record.limitations.find(item => item.startsWith(RERUN_NOTE));
   const count = note ? Number.parseInt(note.slice(RERUN_NOTE.length), 10) : 0;
   return Number.isSafeInteger(count) && count > 0 ? count : 0;

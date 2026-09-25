@@ -158,10 +158,13 @@ export function createDemoRuntime(): Runtime {
         }
         const duty = DUTY[metric.id];
         const pass = duty === 'ask' ? !repeated && (openingHasNumber || asked) : duty === 'explain' ? hasNumber && explained : undefined;
+        const asking = repeated ? 'агент снова спросил номер терминала, который клиент уже назвал'
+          : asked ? 'агент спросил номер терминала, когда клиент его ещё не называл'
+          : openingHasNumber ? 'клиент назвал номер сразу, и агент его не переспрашивал' : 'агент так и не спросил номер терминала';
         return pass === undefined
           ? { metricId: metric.id, result: 'unknown', evidence: [], rationale: 'Учебный судья оценивает только ожидания учебной карточки.' }
           : { metricId: metric.id, result: pass ? 'pass' : 'fail', evidence: replies.map(e => e.seq),
-            rationale: duty === 'ask' ? `Учебная проверка: номер запрошен=${asked}, повтор после раскрытия=${repeated}` : 'Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок' };
+            rationale: duty === 'ask' ? `Учебная проверка: ${asking}.` : 'Учебная проверка наличия конкретной инструкции; не оценка произвольных модельных формулировок' };
       });
     },
   };

@@ -17,7 +17,7 @@ const VALUE_TOKEN = /[A-Za-zА-Яа-яЁё0-9:./-]+/g;
 export function valueTokens(text: string): Set<string> {
   const tokens = new Set<string>();
   for (const raw of text.match(VALUE_TOKEN) ?? []) {
-    const token = raw.replace(/[.,:]+$/, '').toLocaleLowerCase();
+    const token = raw.replace(/[.,:]+$/, '').toLowerCase();
     if (token.length >= 3 && /\d/.test(token)) tokens.add(token);
   }
   return tokens;
