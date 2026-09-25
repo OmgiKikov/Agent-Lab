@@ -37,7 +37,10 @@ const SITUATIONS: [string, string, string] = ['ситуация', 'ситуац�
 const CALLS: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
 const MOVED: [string, string, string] = ['перенесена', 'перенесены', 'перенесено'];
 const FACTS: [string, string, string] = ['факт', 'факта', 'фактов'];
-/** Later customer messages one card accounts for, as when a card is prepared from its dialogue. */
+/**
+ * Later customer messages one card accounts for (schema.ts `coverage`). A conversation sampled for a preparation has at
+ * most 16 customer messages (imports.ts validationDialogueIssue); a first-format draft may cite a longer one.
+ */
 const LATER_MESSAGES = 60;
 const UNACCOUNTED = 'Старая подготовка не отнесла эту реплику ни к фактам клиента, ни к повороту.';
 
@@ -164,7 +167,7 @@ export function convertV1Library(v1: LibraryV1, input: { id: string; createdAt: 
  */
 export function convertedPreparation(record: Experiment, conversion: Conversion, previous: PreparationProgress | undefined): CardPreparation {
   const selection = previous?.sourceSelection?.filter(row => isIdentifier(row.dialogueId));
-  return { protocol: CARD_PROTOCOL, inputHash: preparationInputHash(record, CARD_PROTOCOL), status: 'complete', pending: [], processed: [...new Set(conversion.units.map(item => item.unit))],
+  return { protocol: CARD_PROTOCOL, inputHash: preparationInputHash(record, CARD_PROTOCOL), pending: [], processed: [...new Set(conversion.units.map(item => item.unit))],
     excluded: conversion.left.map(item => ({ dialogueId: item.variantId, reason: `Ситуация «${clip(item.title, 160)}» не перенесена: ${item.reason}.` })),
     ...(selection ? { sourceSelection: selection } : {}),
     cards: conversion.units.map(item => ({ dialogueId: item.unit, cardId: item.cardId })) };

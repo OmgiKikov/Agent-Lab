@@ -2,11 +2,11 @@ import { z } from 'zod';
 import { CommandRefused } from '../errors.js';
 import { text } from '../ids.js';
 import type { TaskRunner } from '../llm/structured.js';
-import { holdsMark, maskedSpans } from '../masking.js';
+import { holdsMark, MASK_VERSION, maskedSpans } from '../masking.js';
 import type { BuilderModel } from '../miner/topic-map.js';
 import type { CallContext } from '../runtime.js';
 import { clip } from '../text.js';
-import { contains, filledMessage, messageAt, sameEvent, type CardEvidence } from './checks.js';
+import { contains, filledMessage, filledSpan, messageAt, sameEvent, type CardEvidence } from './checks.js';
 import { fillKindSchema, type Card, type CardCommand, type EventRef, type Filled } from './schema.js';
 
 /*
@@ -15,8 +15,10 @@ import { fillKindSchema, type Card, type CardCommand, type EventRef, type Filled
  * The harness finds every mark structurally (masking.ts), offers each as a slot with its id and the words around it,
  * and the model answers every slot with a plausible value of the same kind — the slots are the keys of the answer's
  * schema, so none is skipped and none invented. The harness writes the values in and keeps the rest of the message
- * character for character; the card records each value (`filled`), its brief says «подставлено вместо обезличенного»,
- * and it stays the logged situation: calibration compares it with its log, whose judge reads the marks (calibration-scope.ts).
+ * character for character; the card records each value (`filled`) with the table of marks it was counted by, its brief
+ * says «подставлено вместо обезличенного», and it stays the logged situation: calibration compares it with its log,
+ * whose judge reads the marks (calibration-scope.ts). New slots are read by the table; a value filled before it stays
+ * where its own table put it, and its mark is not offered again.
  *
  *   at proposal time   the slots of the dialogue's customer messages ride the proposal call (proposal.ts, CARD_ROLE)
  *   an existing card   one builder call (MASK_FILL_ROLE) makes a `fill_masked` command the owner confirms once
@@ -30,11 +32,17 @@ const CONTEXT = 60;
 /** A mark the model fills: its id in the answer, the message and the mark's place in it, and the words around it. */
 export interface MaskSlot { id: string; event: EventRef; span: number; mark: string; before: string; after: string }
 
-/** The slots of messages, in message order, at most MASK_SLOT_LIMIT; `skip` leaves out marks already filled. */
+/**
+ * The slots of messages as the table reads their marks, in message order, at most MASK_SLOT_LIMIT; `skip` leaves out
+ * marks already filled — each where the table its fill counted by found it.
+ */
 export function maskSlots(messages: readonly { event: EventRef; content: string }[], skip: readonly Filled[] = []): MaskSlot[] {
-  return messages.flatMap(({ event, content }) => maskedSpans(content).flatMap((span, index) => skip.some(item => sameEvent(item.event, event) && item.span === index) ? []
-    : [{ id: `m${event.eventIndex}_${index}`, event, span: index, mark: span.mark,
-      before: content.slice(Math.max(0, span.start - CONTEXT), span.start), after: content.slice(span.end, span.end + CONTEXT) }])).slice(0, MASK_SLOT_LIMIT);
+  return messages.flatMap(({ event, content }) => {
+    const taken = new Set(skip.flatMap(item => sameEvent(item.event, event) ? filledSpan(content, item)?.start ?? [] : []));
+    return maskedSpans(content, MASK_VERSION).flatMap((span, index) => taken.has(span.start) ? []
+      : [{ id: `m${event.eventIndex}_${index}`, event, span: index, mark: span.mark,
+        before: content.slice(Math.max(0, span.start - CONTEXT), span.start), after: content.slice(span.end, span.end + CONTEXT) }]);
+  }).slice(0, MASK_SLOT_LIMIT);
 }
 
 /** What the model reads of a slot: no references, the message by its index. */
@@ -64,11 +72,11 @@ export function fillSlip(id: string, answer: FillAnswer): string | undefined {
 const KEPT_MARK_CHARS = 60;
 const keptMark = (mark: string): string => clip(mark, KEPT_MARK_CHARS);
 
-/** The values of the slots as the card records them. */
+/** The values of the slots as the card records them, with the table the slots' marks were counted by (maskSlots). */
 export const slotFills = (slots: readonly MaskSlot[], answers: Readonly<Record<string, FillAnswer>>): Filled[] =>
   slots.flatMap(slot => {
     const answer = answers[slot.id];
-    return answer ? [{ event: slot.event, span: slot.span, mark: keptMark(slot.mark), kind: answer.kind, value: answer.value }] : [];
+    return answer ? [{ event: slot.event, span: slot.span, mark: keptMark(slot.mark), kind: answer.kind, value: answer.value, maskVersion: MASK_VERSION }] : [];
   });
 
 /** The customer's messages a card reads: its opening, its turn and every fact's message, once each. */
@@ -137,10 +145,17 @@ export const unmaskCommand = (request: UnmaskRequest, answer: UnmaskAnswer): Ext
   facts: request.facts.map(fact => ({ factId: fact.id, value: answer.facts[fact.id]! })),
 });
 
+/** Where a fill's mark stands in its message, read by the fill's own table; -1 when the import holds no such mark. */
+function placeOf(fill: Filled, evidence: CardEvidence): number {
+  const content = messageAt(evidence, fill.event);
+  return (content === undefined ? undefined : filledSpan(content, fill)?.start) ?? -1;
+}
+
 /**
- * Writes a `fill_masked` command into a card: each value over its mark in the card's own messages, the opening and the
- * turn read anew from their messages, the masked facts given their values. The deterministic checks then hold each fact
- * to its message as it reads with the values in.
+ * Writes a `fill_masked` command into a card: each value over its mark in the card's own messages — the mark its span
+ * counts by its own table — the opening and the turn read anew from their messages, the masked facts given their
+ * values. A value over a mark already filled replaces it, whichever table the earlier fill counted by. The
+ * deterministic checks then hold each fact to its message as it reads with the values in.
  */
 export function applyFill(draft: Card, command: Extract<CardCommand, { kind: 'fill_masked' }>, evidence: CardEvidence): void {
   const events = cardEvents(draft);
@@ -148,11 +163,13 @@ export function applyFill(draft: Card, command: Extract<CardCommand, { kind: 'fi
   for (const item of command.spans) {
     if (!events.some(event => sameEvent(event, item.event))) throw new CommandRefused('Подставить значение можно только в реплики клиента этой ситуации.');
     const content = messageAt(evidence, item.event);
-    const span = content === undefined ? undefined : maskedSpans(content)[item.span];
-    if (!span) throw new CommandRefused('В этой реплике клиента нет такого обезличенного значения.');
-    filled = [...filled.filter(other => !(sameEvent(other.event, item.event) && other.span === item.span)), { ...item, mark: keptMark(span.mark) }];
+    const span = content === undefined ? undefined : filledSpan(content, item);
+    if (content === undefined || !span) throw new CommandRefused('В этой реплике клиента нет такого обезличенного значения.');
+    filled = [...filled.filter(other => !(sameEvent(other.event, item.event) && filledSpan(content, other)?.start === span.start)), { ...item, mark: keptMark(span.mark) }];
   }
-  filled.sort((a, b) => a.event.eventIndex - b.event.eventIndex || a.span - b.span);
+  // In the order the marks stand in the log: the spans of two tables do not count alike.
+  const places = new Map(filled.map(item => [item, placeOf(item, evidence)] as const));
+  filled.sort((a, b) => a.event.eventIndex - b.event.eventIndex || places.get(a)! - places.get(b)! || a.span - b.span);
   if (filled.length) draft.filled = filled;
   const read = (event: EventRef) => {
     const content = messageAt(evidence, event);

@@ -54,7 +54,8 @@ const proposal = (change: (proposal: DialogueProposal) => void = () => {}): Dial
 test('the marks of a message are found by their shape and the values written in keep every other character', () => {
   assert.deepEqual(maskedSpans(OPENING).map(span => span.mark), ['#', '*', '*']);
   assert.deepEqual(maskedSpans('*важно*, 5*3, №#12, xxxx 1234, <PHONE>, [скрыто]').map(span => span.mark), ['xxxx', '<PHONE>', '[скрыто]'], 'a mark touching a letter or a digit is not a mask');
-  assert.equal(withValues(OPENING, new Map([[0, '3'], [2, '1 200 ₽']])), 'С утра было 3 покупки, на * и 1 200 ₽, терминал пишет «нет связи».');
+  const [count, , amount] = maskedSpans(OPENING);
+  assert.equal(withValues(OPENING, [{ ...count!, value: '3' }, { ...amount!, value: '1 200 ₽' }]), 'С утра было 3 покупки, на * и 1 200 ₽, терминал пишет «нет связи».');
 });
 
 test('a masked opening is filled in the proposal call: one value per mark, the rest verbatim, the card marked and still compared with its log', () => {

@@ -58,7 +58,7 @@ test('from logs to the number: import → cards → review → acceptance → ru
     const { library, experiment } = await lab.readCards(draft.id);
     assert.equal(experiment.phase, 'review', experiment.error ?? '');
     const progress = progressOf(experiment);
-    assert.deepEqual([progress.status, progress.processed, progress.pending, progress.excluded], ['complete', ['late', 'known'], [], []]);
+    assert.deepEqual([progress.processed, progress.pending, progress.excluded], [['late', 'known'], [], []]);
     assert.deepEqual(library.cards.map(card => [card.number, card.title, card.client.writes]), [
       [1, 'Возврат оплаты — номер по просьбе', 'Помогите с возвратом.'], [2, 'Возврат оплаты — номер назван сразу', 'Номер терминала: 1234. Помогите с возвратом.']]);
     assert.deepEqual(library.readingManifest.map(row => [row.dialogueId, row.sourceIds, row.cardIds]), [['late', ['source-1'], [library.cards[0]!.id]], ['known', ['source-1'], [library.cards[1]!.id]]]);
@@ -164,7 +164,7 @@ test('a paid call that died in flight is never repeated: its dialogue is left ou
     const resumed = await lab.get(draft.id);
     const progress = progressOf(resumed);
     assert.equal(died, 1, 'the dialogue is not asked again');
-    assert.deepEqual([progress.status, progress.pending, progress.processed, progress.excluded.map(item => item.dialogueId)], ['complete', [], ['known'], ['late']],
+    assert.deepEqual([progress.pending, progress.processed, progress.excluded.map(item => item.dialogueId)], [[], ['known'], ['late']],
       'a dialogue left out counts once, as left out, never also as processed');
     assert.match(progress.excluded.find(item => item.dialogueId === 'late')?.reason ?? '', /стоимость неизвестна/);
     assert.deepEqual((await lab.readCards(draft.id)).library.cards.map(card => [card.number, card.origin]), [[1, { kind: 'dialogue', batchId: resumed.originalImport!.id, dialogueId: 'known' }]]);
