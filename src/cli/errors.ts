@@ -97,7 +97,7 @@ function fileText(error: SystemError, context: ErrorContext): string | undefined
 /** The owner's words for why a command failed; `detail` is the original when the failure is a defect of Lab. */
 export function errorText(error: unknown, context: ErrorContext): { text: string; detail?: string } {
   if (error instanceof UsageError) return { text: error.message };
-  if (error instanceof LockedError) return { text: 'Папку данных сейчас ведёт другой процесс Agent Lab — например, открытый чат. Смотреть можно (summary, export); запуск и изменения — после его завершения.' };
+  if (error instanceof LockedError) return { text: `Папку данных ${error.directory || context.directory} сейчас ведёт другой процесс Agent Lab — например, открытый чат или команда agent-lab. Смотреть можно (summary, export); запуск и изменения — после его завершения. Если такого процесса точно нет, удалите файл ${error.lockFile} и повторите.` };
   if (error instanceof LibraryConflict || error instanceof CommandRefused || error instanceof UnknownReference) return { text: error.message };
   if (error instanceof Stopped) return { text: STOPPED[error.reason] };
   if (error instanceof ProviderFailure) return { text: error.kind === 'unavailable' && forOwner(error.message) ? error.message : PROVIDER[error.kind] };

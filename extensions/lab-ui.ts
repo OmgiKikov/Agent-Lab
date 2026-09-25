@@ -155,7 +155,7 @@ export const UNKNOWN_ERROR = 'Не получилось из-за внутрен
 /** The owner's words for an error Lab knows; undefined for anything else. */
 function knownText(error: unknown): string | undefined {
   if (error instanceof NeedsOwner) return error.ownerText;
-  if (error instanceof LockedError) return 'Другая сессия Pi сейчас ведёт работу в этой папке. Смотреть можно здесь; изменения и запуск — после её завершения.';
+  if (error instanceof LockedError) return `Папку данных ${error.directory} сейчас ведёт другой процесс Agent Lab — другая сессия Pi или команда agent-lab. Смотреть можно здесь; изменения и запуск — после его завершения. Если такого процесса точно нет, удалите файл ${error.lockFile} и повторите.`;
   if (error instanceof StaleRevisionError) return error.message;
   if (error instanceof LibraryConflict) return 'Ситуации изменились. Откройте их заново и повторите по свежему состоянию.';
   if (error instanceof CommandRefused || error instanceof UnknownReference) return error.message;
