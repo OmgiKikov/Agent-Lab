@@ -54,7 +54,7 @@ export async function preparationDetails(store: ExperimentStore, record: Experim
     const failed = progress.excluded.filter(item => !unsuitable.has(item.dialogueId));
     preparation.cards = { completed: progress.processed.length, total, pending: progress.pending.length, failed: failed.length,
       ...(failed.length ? { lastFailure: clip(safeLine(failed.at(-1)!.reason), 240) } : {}) };
-    const stages = { select: 'Подбор материалов', ground: 'Проверка оснований', propose: 'Составление ситуаций', review: 'Проверка ситуаций', extract: 'Извлечение ситуаций', repair: 'Исправление ситуаций' };
+    const stages = { select: 'Подбор материалов', ground: 'Проверка оснований', plan: 'План сценария', propose: 'Составление ситуаций', review: 'Проверка ситуаций', extract: 'Извлечение ситуаций', repair: 'Исправление ситуаций' };
     const active = ('active' in progress ? progress.active : undefined) ?? (progress.activeStage ? [{ stage: progress.activeStage }] : []);
     for (const item of state === 'working' ? active : []) {
       const label = stages[item.stage];
