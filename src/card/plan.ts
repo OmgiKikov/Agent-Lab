@@ -4,7 +4,7 @@ import { text } from '../ids.js';
 import type { CardTopic } from '../miner/schema.js';
 import { countText } from '../plural.js';
 import { basisProposal, citationId, groundingSlip, located, type CallSource, type ProposalCall } from './proposal.js';
-import { dutyLine, dutyNotes } from './duty-words.js';
+import { dutyLine, dutyNotes, dutySections } from './duty-words.js';
 import type { BusinessScenario, Card, LibraryV2 } from './schema.js';
 
 /*
@@ -162,8 +162,8 @@ const ORIGIN_TEXT = { rules: 'добавлен по правилам, не из 
 
 /** One variation in a line, as the owner confirms it: its title, where it comes from, and the expectations that apply to it. */
 export function variationLine(scenario: BusinessScenario, variation: BusinessScenario['variations'][number]): string {
-  const applies = variationExpectations(scenario, variation.id).map(expectation => dutyLine(listed(expectation)));
-  return `«${variation.title}» — ${variation.origin === 'logs' ? 'из логов' : ORIGIN_TEXT[variation.origin]}; ${applies.join('; ') || 'ожиданий нет'}`;
+  const applies = dutySections(variationExpectations(scenario, variation.id).map(listed)).map(({ heading, items }) => `${heading}: ${items.map(item => item.duty.text).join('; ')}`);
+  return `«${variation.title}» — ${variation.origin === 'logs' ? 'из логов' : ORIGIN_TEXT[variation.origin]}; ${applies.join(' · ') || 'ожиданий нет'}`;
 }
 
 /** The variations of a library's plan no situation is an example of yet, and no conversation shows: the ones a situation is written for from the rules. */
