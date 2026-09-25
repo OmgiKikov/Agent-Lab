@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { checkTemplate, CONNECTION_FORMAT, rememberConnection, saveConnection, type Connection } from '../connection.js';
+import { checkTemplate, CONNECTION_FORMAT, rememberConnection, saveConnection, type Connection, type TemplateCheck } from '../connection.js';
 import { connectionLines, missingVariables, replyLabel, shownAddress, variableUse } from '../connect.js';
 import { connectionFromCurl } from '../curl.js';
 import { pointerSchema } from '../http-template.js';
@@ -56,16 +56,26 @@ export async function connectFromCurl(flags: ConnectFlags): Promise<void> {
  * `agent-lab doctor` on an agent in its own format. Without the text's path: one message and the reply's structure,
  * then the owner picks the path (--reply). With it: two turns of one conversation, what the connection says about the
  * conversation checked by structure, and the connection saved once both are answered — into the named connection
- * file and Lab's remembered connection.
+ * file and Lab's remembered connection. `signal` stops the requests (Ctrl+C); with `json` nothing is printed and the
+ * check is returned for the caller's one JSON document.
  */
-export async function doctorTemplate(input: { connection: Connection; target: TemplateTarget; file?: string; reply?: string; yes?: boolean; directory: string }): Promise<void> {
+export async function doctorTemplate(input: { connection: Connection; target: TemplateTarget; file?: string; reply?: string; yes?: boolean; directory: string; signal?: AbortSignal; json?: boolean }): Promise<TemplateCheck | undefined> {
   const reply = input.reply !== undefined ? pointerSchema.parse(input.reply) : input.target.request.reply;
   const requests = reply === undefined ? 1 : 2;
   if (!input.yes) {
     write([`Lab отправит агенту ${requests === 1 ? 'одно пробное сообщение' : 'два пробных сообщения в одном разговоре'} по адресу ${shownAddress(input.target)}.`]);
     throw new Error(`Для ${requests === 1 ? 'пробного запроса' : 'двух пробных запросов'} укажите --yes.`);
   }
-  const check = await checkTemplate(input.target, reply);
+  const check = await checkTemplate(input.target, reply, input.signal);
+  if (input.json) {
+    process.exitCode = check.passed && check.request ? 0 : 2;
+    if (check.passed && check.request) {
+      const connection: Connection = { ...input.connection, target: { ...input.target, request: check.request } };
+      if (input.file && JSON.stringify(check.request) !== JSON.stringify(input.target.request)) await saveConnection(input.file, connection, true);
+      await rememberConnection(input.directory, connection);
+    }
+    return check;
+  }
   const structure = ['Строение ответа агента (значения не показаны):', ...check.structure.length ? check.structure.map(field => `  ${field.pointer || '/'} · ${characters(field.length)}`) : ['  строковых полей нет']];
   if (check.reply === undefined) {
     write([...structure, '', `Какое поле — текст ответа агента? Укажите его: agent-lab doctor --connection ${input.file ?? 'подключение.json'} --reply /путь --yes`]);
