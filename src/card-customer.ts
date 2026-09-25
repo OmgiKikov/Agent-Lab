@@ -131,7 +131,7 @@ export function pressedButton<B extends OfferedButton>(offered: readonly B[], me
   return index < 0 ? undefined : { index, button: offered[index]! };
 }
 
-/** Why a reply cannot go to the agent: in words for the model, which repairs it, and in the owner's words, when it stands. */
+/** Why a reply cannot go to the agent: in words for the model, which repairs it, and in the owner's words about the customer, when it stands. */
 export interface CustomerProblem { model: string; owner: string }
 
 /**
@@ -141,9 +141,9 @@ export interface CustomerProblem { model: string; owner: string }
 export function customerReplyIssue(reply: CustomerReply, brief: CustomerBrief, conversation: readonly DialogueMessage[], turned: boolean,
   offered: readonly OfferedButton[] = []): CustomerProblem | undefined {
   const controlProblem = customerDecisionProblem(reply, brief, turned);
-  if (controlProblem) return { model: controlProblem, owner: 'клиент выбрал ход, которого его ситуация сейчас не допускает' };
+  if (controlProblem) return { model: controlProblem, owner: 'выбрал ход, которого его ситуация сейчас не допускает' };
   if (reply.move === 'turn' || reply.move === 'leave') return undefined;
-  if (!reply.message.trim()) return { model: 'The message is empty: write what the customer says.', owner: 'клиент прислал пустую реплику' };
+  if (!reply.message.trim()) return { model: 'The message is empty: write what the customer says.', owner: 'прислал пустую реплику' };
   const listed = (tokens: string[]) => tokens.map(token => `«${token}»`).join(', ');
   const press = pressedButton(offered, reply.message);
   if (press) {
@@ -151,12 +151,12 @@ export function customerReplyIssue(reply: CustomerReply, brief: CustomerBrief, c
     const own = new Set(valueTokens([brief.goal, brief.opening, ...brief.knows, ...conversation.filter(item => item.role === 'user').map(item => item.content)].join('\n')));
     const unknown = [...valueTokens(press.button.text)].filter(token => !own.has(token));
     if (unknown.length) return { model: `The button "${press.button.text}" names ${unknown.map(token => `"${token}"`).join(', ')}, which the customer does not know: press a button only when its values are among your known facts or your own earlier words; otherwise answer in your own words or say you do not know.`,
-      owner: `клиент нажал кнопку «${press.button.text}» со значением ${listed(unknown)}, которого не знает` };
+      owner: `нажал кнопку «${press.button.text}» со значением ${listed(unknown)}, которого не знает` };
   }
   const allowed = new Set([...valueTokens([brief.goal, brief.opening, ...brief.knows].join('\n')), ...valueTokens(conversation.map(item => item.content).join('\n'))]);
   const invented = [...valueTokens(reply.message)].filter(token => !allowed.has(token));
   if (invented.length) return { model: `The message names ${invented.map(token => `"${token}"`).join(', ')}, which the customer does not know: use only values from knows or from the conversation, or say the customer does not know.`,
-    owner: `клиент назвал ${listed(invented)} — этого нет ни в его ситуации, ни в разговоре` };
+    owner: `назвал ${listed(invented)} — этого нет ни в его ситуации, ни в разговоре` };
   return undefined;
 }
 

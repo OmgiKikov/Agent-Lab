@@ -161,5 +161,19 @@ function mayHoldMark(content: string): boolean {
 export const readAlike = (content: string): boolean => !mayHoldMark(content)
   || maskedThrough(content, 1) === maskedThrough(content, MASK_VERSION) && hiddenMessage(content, 1) === hiddenMessage(content, MASK_VERSION);
 
+/**
+ * A placeholder tag an export writes in square brackets, in capitals — [НОМЕР_КАРТЫ], [PHONE], [ФИО] — which the table
+ * above does not read as a mark: a card may keep one in what its customer knows. Read only where the customer Lab plays
+ * speaks (customer-values.ts), never for imports.
+ */
+const PLACEHOLDER_TAG = /(?<![\p{L}\p{N}_])\[(?=[^\]]*\p{Lu})[\p{Lu}\p{N}_ -]{2,40}\](?![\p{L}\p{N}_])/gu;
+
+/** Every masked value of a message a customer would send: the table's marks and placeholder tags, in order, never overlapping. */
+export function placeholderSpans(content: string): MaskedSpan[] {
+  const spans = [...maskedSpans(content), ...[...content.matchAll(PLACEHOLDER_TAG)].map(match => ({ start: match.index, end: match.index + match[0].length, mark: match[0] }))]
+    .sort((a, b) => a.start - b.start || b.end - a.end);
+  return spans.filter((span, index) => !spans.slice(0, index).some(other => span.start < other.end));
+}
+
 /** A value that is a mark again, or holds a character marks are written with: never a value written in for a mark. */
 export const holdsMark = (value: string): boolean => maskedSpans(value).length > 0 || [...value].some(char => MARK_CHARACTERS.has(char));
