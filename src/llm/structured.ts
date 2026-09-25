@@ -89,6 +89,8 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
   const request = {
     system: `${task.instructions}\n${DATA_BOUNDARY}\n${outputContract(task.output)}`,
     maxTokens: task.bounded?.outputBytes ?? 16384,
+    // A reasoning model thinks by the provider's default otherwise, and a long think cuts the answer at maxTokens.
+    ...(model.reasoning ? { reasoning: 'minimal' as const } : {}),
     ...(format ? { responseFormat: format } : {}),
     ...(task.bounded ? { maxRequestBytes: task.bounded.requestBytes } : {}),
   };

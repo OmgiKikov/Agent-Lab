@@ -116,6 +116,8 @@ export const tableChoicesSchema = z.strictObject({
   answer: columnChoice.nullable().optional(),
   /** The assessor's columns; an empty list is the owner's word that the table has none. */
   expected: z.array(z.strictObject({ column: columnChoice, kind: z.enum(EXPECTED_KINDS) })).max(3).optional(),
+  /** The owner said which of the assessor's columns there are — no more is asked. */
+  expectedDone: z.literal(true).optional(),
 });
 export type TableChoices = z.infer<typeof tableChoicesSchema>;
 

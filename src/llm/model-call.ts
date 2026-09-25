@@ -21,8 +21,8 @@ export interface ModelRequest {
   maxTokens: number;
   /** Omitted: the provider's default. */
   temperature?: number;
-  /** Medium thinking for a reasoning model; off otherwise. */
-  reasoning?: boolean;
+  /** true: medium thinking for a reasoning model; 'minimal': as little as the model allows; omitted: the provider's default. */
+  reasoning?: boolean | 'minimal';
   /** A provider-native response format, set only where the transport honours it. */
   responseFormat?: Record<string, unknown>;
   /** A cap on the serialized request, in UTF-8 bytes. Bytes, not tokens: the provider still rejects a prompt over its window. */
@@ -113,7 +113,7 @@ export async function callModel(runtime: ModelRuntime, model: Model, request: Mo
       signal, timeoutMs: ctx.timeoutMs, maxRetries: 0, transport: 'sse',
       maxTokens: Math.min(request.maxTokens, model.maxTokens),
       ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
-      ...(request.reasoning ? { reasoning: 'medium' as const } : {}),
+      ...(request.reasoning ? { reasoning: request.reasoning === true ? 'medium' as const : request.reasoning } : {}),
       ...(request.responseFormat ? { onPayload: (payload: unknown) => ({ ...(payload as Record<string, unknown>), response_format: request.responseFormat }) } : {}),
     }), signal);
   } catch {

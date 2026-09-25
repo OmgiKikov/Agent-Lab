@@ -34,7 +34,7 @@ export type TableQuestion =
   /** Which column identifies a conversation? */
   | { kind: 'id'; columns: ColumnInfo[] }
   /** One question per row: which column holds the assessor's expected result — an answer, an article id, an answer code — or none? */
-  | { kind: 'expected'; columns: { column: ColumnInfo; kinds: ExpectedKind[] }[] }
+  | { kind: 'expected'; columns: { column: ColumnInfo; kinds: ExpectedKind[] }[]; chosen: TableChoices['expected'] & {} }
   /** Who writes the messages this marker starts in the text column: клиент, агент, служебное — or is it not a marker? */
   | { kind: 'marker'; column: ColumnInfo; token: string; messages: number }
   /** Who writes the messages with this value in the role column? */
@@ -142,11 +142,12 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
  */
 function questionTable(workbook: Workbook, file: TableFile, sheet: Sheet, chosen: TableChoices, base: ProposalBase): TableProposal {
   if (!chosen.text) return { ...base, status: 'refused', choice: 'text', reason: 'Назовите колонку с вопросом клиента: одна строка — один вопрос.' };
-  if (chosen.expected === undefined) {
+  const picked = chosen.expected ?? [];
+  if (!chosen.expectedDone && picked.length < 3) {
     const a = analyzeSheet(sheet);
-    const taken = new Set([chosen.text, chosen.answer, chosen.id, chosen.where?.column].flatMap(name => name ? [findColumn(name, a.columns)?.index] : []));
+    const taken = new Set([chosen.text, chosen.answer, chosen.id, chosen.where?.column, ...picked.map(item => item.column)].flatMap(name => name ? [findColumn(name, a.columns)?.index] : []));
     const columns = a.columns.filter(column => column.filled && !taken.has(column.index)).slice(0, 12).map(column => ({ column, kinds: expectedKinds(a, column) }));
-    if (columns.length) return { ...base, status: 'question', question: { kind: 'expected', columns }, found: a.rows.length };
+    if (columns.length) return { ...base, status: 'question', question: { kind: 'expected', columns, chosen: picked }, found: a.rows.length };
   }
   const outcome = readExactly(workbook, file, { sheet: sheet.name, id: chosen.id ?? null, text: chosen.text,
     layout: { kind: 'question_per_row', answer: chosen.answer ?? null }, collapseRepeats: false,

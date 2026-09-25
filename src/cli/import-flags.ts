@@ -55,7 +55,7 @@ export function tableChoicesOf(values: Record<string, string | boolean | string[
     ...text('where') ? { where: whereChoice(text('where')!) } : {},
     ...values['collapse-repeats'] ? { collapseRepeats: true } : values['keep-repeats'] ? { collapseRepeats: false } : {},
     ...text('answer-column') ? { perRow: 'question', answer: text('answer-column') } : {},
-    ...text('expected-column') ? { perRow: 'question', expected: [expectedChoice(text('expected-column')!)] } : values['no-expected'] ? { expected: [] } : {},
+    ...text('expected-column') ? { perRow: 'question', expected: [expectedChoice(text('expected-column')!)], expectedDone: true } : values['no-expected'] ? { expected: [], expectedDone: true } : {},
   });
 }
 /** How to answer the proposal from the command line. */
