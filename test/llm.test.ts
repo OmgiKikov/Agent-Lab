@@ -142,7 +142,7 @@ test('a provider that did not answer fails with its stored label, typed by kind 
   const cases: [Reply, ProviderFailureKind, ProviderDelivery, string, Usage][] = [
     [{ content: [], stopReason: 'error', errorMessage: 'Insufficient credits on the account' }, 'insufficient credit', 'refused', 'Pi provider response incomplete: insufficient credit', free],
     [{ content: [], stopReason: 'error', errorMessage: 'This model maximum context length is 8192 tokens' }, 'context limit', 'refused', 'Pi provider response incomplete: context limit', free],
-    [{ content: [], stopReason: 'error', errorMessage: 'upstream went away' }, 'incomplete', 'refused', 'Pi provider response incomplete: error', free],
+    [{ content: [], stopReason: 'error', errorMessage: 'upstream went away' }, 'incomplete', 'cut', 'Pi provider response incomplete: error', { ...free, costUsd: null }],
     [{ content: [], stopReason: 'error', errorMessage: 'upstream went away', started: true }, 'incomplete', 'cut', 'Pi provider response incomplete: error', billed],
     [{ content: [{ type: 'text', text: '{"partial":' }], stopReason: 'length' }, 'length', 'answered', 'Pi provider response incomplete: length', billed],
     ['   ', 'empty', 'answered', 'Модель вернула пустой ответ.', billed],

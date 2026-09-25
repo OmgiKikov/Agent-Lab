@@ -1,3 +1,4 @@
+import { ProviderFailure } from '../src/llm/model-call.js';
 import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -1259,7 +1260,7 @@ test('HN-4: a reassessment that cannot grade the saved facts names the measureme
     'the agent was not even called: never «агент не ответил»');
 
   // Cards without exact checks, judged again by a judge that does not answer: the graded outcome stays, the judge is named.
-  const judgeless: Runtime = { async assess() { throw new Error('Pi provider response incomplete: rate limit'); } };
+  const judgeless: Runtime = { async assess() { throw new ProviderFailure('rate limit', 'Pi provider response incomplete: rate limit'); } };
   const { lab: judged } = await setup(t, judgeless);
   const unchecked = experimentSchema.parse({ ...fixture, id: randomUUID(), scenarios: fixture.scenarios.map(scenario => ({ ...scenario, checks: [] })),
     trials: fixture.trials.map(trial => ({ ...trial, checks: [] })) });
