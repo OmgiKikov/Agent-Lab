@@ -1,19 +1,19 @@
 import { EXPECTATIONS_PROTOCOL, fingerprint, type Experiment, type TraceEvent } from '../contracts.js';
-import { judgeAuditSchema, validateAssessments, type JudgeAudit, type MetricAssessment, type Rubric } from '../assessment.js';
+import { judgeAuditSchema, validateAssessments, type JudgeAudit, type MetricAssessment } from '../assessment.js';
 import type { CallContext } from '../runtime.js';
 import { Stopped } from '../errors.js';
 import { castVotes, JUDGE_PROMPT, JUDGE_PROTOCOL, judgmentRows, type Respond } from '../judge.js';
-import { clip } from '../text.js';
-import { LOGGED_MODE, logJudgmentReceiptSchema, type LogJudgeRequest, type LogJudgment, type LogJudgmentReceipt, type LoggedDialogue } from './calibration.js';
-import type { Expectation } from './expectations.js';
+import { LOGGED_MODE, LOGGED_MODE_V1, logJudgmentReceiptSchema, type LogJudgeRequest, type LogJudgment, type LogJudgmentReceipt, type LoggedDialogue } from './calibration.js';
+import { channelHolds, COUNTING_VERSION } from './expectations.js';
 
 /*
  * The judge on a recorded conversation (docs/design/card-v2-spec.md §10.3): judgment (b) of an expectation, next to judgment (a) on
- * the synthetic attempt. Same JUDGE_PROMPT, same two-vote protocol (judge.ts castVotes); only the input differs.
- * The input is the logged dialogue as it was recorded — no brief of the customer (the log is the situation; the
- * card's reading of it is not whispered to the judge), no simulator, no stand state — and the rubric is the log
- * variant of the expectation. It carries its mode and the import's content hash, so its input hash can never be
- * a synthetic one, and its protocol hash carries the mode, so neither judgment can close the other's receipt.
+ * the synthetic attempt. Same JUDGE_PROMPT, same two-vote protocol (judge.ts castVotes), the same rubric — the accepted
+ * definition's own, strength, what else fulfils it and what breaks it included — and the same channel rule
+ * (expectations.ts channelHolds); only the conversation differs. The input is the logged dialogue as it was recorded —
+ * no brief of the customer (the log is the situation; the card's reading of it is not whispered to the judge), no
+ * simulator, no stand state. It carries its mode and the import's content hash, so its input hash can never be a
+ * synthetic one, and its protocol hash carries the mode, so neither judgment can close the other's receipt.
  */
 
 /** The judge protocol on recorded conversations under one judge configuration; never equal to a synthetic protocol hash. */
@@ -24,82 +24,87 @@ type KeyParts = Pick<LogJudgmentReceipt, 'definitionHash' | 'expectationId' | 'i
 export const calibrationKey = (parts: KeyParts): string => fingerprint({ definitionHash: parts.definitionHash, expectationId: parts.expectationId,
   importContentHash: parts.importContentHash, dialogueId: parts.dialogueId, protocolHash: parts.protocolHash });
 
-const withoutStop = (text: string): string => text.endsWith('.') ? text.slice(0, -1) : text;
-
-/**
- * One expectation's rubric on a recorded conversation. «Наступило» is the moment the agent should already have
- * done it; for a duty that depends on the agent's path, the moment its condition arose. Unlike the synthetic
- * rubric there is no «if it never happened, it is not broken»: a conversation that never got there leaves both
- * conditions not_met — not measured, never a pass.
- */
-export function logRubric(expectation: Pick<Expectation, 'id' | 'text' | 'requirementIds' | 'appliesWhen'>, letter: string, card: string): Rubric {
-  const duty = withoutStop(expectation.text);
-  const arose = expectation.appliesWhen === undefined ? 'Ожидание наступило' : `Условие «${withoutStop(expectation.appliesWhen)}» возникло`;
-  return { id: expectation.id, subject: 'agent', name: clip(expectation.text, 120),
-    description: `Ожидание ${letter} ${card}. Основание — требования ${expectation.requirementIds.join(', ')} (см. requirements).`,
-    passCriteria: `${arose}, и выполнено: ${duty}.`, failCriteria: `${arose}, но не выполнено: ${duty}.` };
-}
-
-const LOG_SCOPE = 'Записанный разговор реального клиента с агентом прода: ни агент, ни клиент не запускались, реплики взяты из лога как есть. '
-  + 'Оценивайте только записанное. Ожидание наступает в тот момент разговора, когда агент уже должен был его выполнить. '
-  + 'Если разговор до этого момента не дошёл — клиент ушёл, разговор оборвался или перешёл к оператору, — оба условия not_met. '
-  + 'Слова агента доказывают только то, что сказано; действия агента видны только в записанных событиях инструментов и состояния.';
-
-type LoggedEvent = { seq: number; type: 'user' | 'assistant' | 'tool' | 'retrieval' | 'state'; content: string };
+type LoggedEvent = { seq: number; type: 'user' | 'assistant' | 'tool' | 'retrieval' | 'state'; content: string; tool?: string };
 /**
  * The events of a logged dialogue as the judge reads them: `seq` is the event's index in the import; the
  * customer's and the agent's messages always, tool, retrieval and state events only from a completely
- * recorded dialogue. System messages are not the conversation.
+ * recorded dialogue. System messages are not the conversation. A tool event names its tool when the log's event does (a
+ * string `tool`, as the adapter contract names it): the channel rule reads it.
  */
 function loggedEvents(dialogue: LoggedDialogue): LoggedEvent[] {
   const complete = dialogue.observation === 'complete';
   return dialogue.events.flatMap((event): LoggedEvent[] => {
     if (event.type === 'message') return (event.role === 'user' || event.role === 'assistant') && event.content !== undefined ? [{ seq: event.index, type: event.role, content: event.content }] : [];
-    return complete ? [{ seq: event.index, type: event.type, content: event.content ?? JSON.stringify(event.data) }] : [];
+    if (!complete) return [];
+    const tool = event.type === 'tool' ? (event.data as { tool?: unknown } | null)?.tool : undefined;
+    return [{ seq: event.index, type: event.type, content: event.content ?? JSON.stringify(event.data), ...(typeof tool === 'string' && tool ? { tool } : {}) }];
   });
 }
 
 /**
- * The complete, frozen input of judgment (b), version 1. Any change to what it holds or how it is rendered is a
- * new mode (`logged-v2`), never an edit here: stored receipts are checked against this very rendering.
+ * What the judge is told about a recorded conversation (`logged-v2`). The rubric is the synthetic one; what differs is
+ * the conversation, which may end before the expectation was due: both conditions not_met then say it was not exercised
+ * (logUndecided `not_exercised_in_log`). An expectation under a condition is due once its condition arose, and what holds
+ * when it never arose is the rubric's own word, as on the synthetic side.
  */
-export function logJudgeInputV1(request: LogJudgeRequest) {
+const LOG_SCOPE = 'A recorded conversation of a real customer with the production agent: neither was run here, the messages are the log as it was recorded. '
+  + 'Judge only what was recorded, by the supplied rubric — the same one a synthetic conversation of this situation is judged by. '
+  + 'The expectation is due at the moment of the conversation when the agent should already have met it; an expectation under a condition is due once its condition arose. '
+  + 'If the conversation ended before that moment — the customer left, the conversation broke off or was handed to a person — both conditions are not_met: it was not exercised here. '
+  + 'Where the rubric says what holds when its condition never arose, follow the rubric. '
+  + 'The agent\'s words prove only what was said; its actions show only in the recorded tool and state events.';
+
+/**
+ * The complete, frozen input of judgment (b) in its mode `logged-v2`. Any change to what it holds or how it is
+ * rendered is a new mode, never an edit here. Stored receipts of every mode are checked against the input their own
+ * audit keeps (logJudgmentComplete), never against a rendering made again.
+ */
+export function logJudgeInput(request: LogJudgeRequest) {
   const { expectation } = request;
   const cited = new Set(expectation.requirementIds);
   return {
-    mode: LOGGED_MODE,
+    mode: LOGGED_MODE as typeof LOGGED_MODE,
     importContentHash: request.importContentHash,
     scenario: { execution: { evaluation: EXPECTATIONS_PROTOCOL, expectations: [expectation], requirements: request.requirements.filter(requirement => cited.has(requirement.id)) },
-      metrics: [logRubric(expectation, request.letter, request.card)] },
+      metrics: [request.rubric] },
     evaluationScope: LOG_SCOPE,
     sources: request.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, hash: fingerprint(content) })),
     dialogue: { observation: request.dialogue.observation, events: loggedEvents(request.dialogue) },
   };
 }
-type LogInput = ReturnType<typeof logJudgeInputV1>;
+/** The input of a stored audit, of either mode: `logged-v1` judged the log by a rubric of its own and named no tool. */
+type LogInput = Omit<ReturnType<typeof logJudgeInput>, 'mode'> & { mode: typeof LOGGED_MODE | typeof LOGGED_MODE_V1 };
 
 const TRACE_TYPE = { user: 'user', assistant: 'assistant', tool: 'tool_result', retrieval: 'retrieval', state: 'observation' } as const;
 /** The same events in the shape the citation check reads: a quote must be verbatim in the event it cites. */
 const traceEvents = (events: readonly LoggedEvent[]): TraceEvent[] => events.map(event => ({ seq: event.seq, type: TRACE_TYPE[event.type], text: event.content }));
-/** The event type a verdict must cite on an expectation's channel, as on the synthetic side (expectations.ts). */
-const CHANNEL = { reply: 'assistant', tool: 'tool_result', state: 'observation' } as const;
+/** The event type a `logged-v1` verdict had to cite on its expectation's channel, as its receipts were sealed. */
+const CHANNEL_V1 = { reply: 'assistant', tool: 'tool', state: 'state' } as const;
 
 /**
  * One vote read from the judge's answer. It must cover exactly this rubric, cite events of this conversation
- * and quote them verbatim, or it is asked once more; a pass or a fail that cites nothing on the expectation's
- * channel is read as unknown, the answer itself kept as it was.
+ * and quote them verbatim, or it is asked once more; a pass or a fail that does not hold on the expectation's channel
+ * is read as unknown, the answer itself kept as it was. The rules are those of the vote's mode: `logged-v2` reads the
+ * channel by the synthetic side's own rule (expectations.ts channelHolds: a complete log shows the call the agent never
+ * made) and asks meaningful quotes, as the judge's protocol does; a stored `logged-v1` vote reads as it was sealed.
  */
 function parseLogVote(raw: string, input: LogInput): MetricAssessment[] {
   const rubric = input.scenario.metrics[0]!;
+  const expectation = input.scenario.execution.expectations[0]!;
   const rows = judgmentRows(raw);
   if (rows.length !== 1 || rows[0]!.metricId !== rubric.id) throw new Error('Assessment must cover every requested metric exactly once');
   const { passCondition, failCondition, ...row } = rows[0]!;
   const result = passCondition === 'met' && failCondition === 'not_met' ? 'pass' : failCondition === 'met' && passCondition === 'not_met' ? 'fail' : 'unknown';
-  const events = traceEvents(input.dialogue.events);
-  const assessment = validateAssessments([rubric], events, [{ ...row, result }])[0]!;
-  const channel = CHANNEL[input.scenario.execution.expectations[0]!.observation];
-  const onChannel = events.some(event => event.type === channel && assessment.evidence.includes(event.seq));
-  return [result === 'unknown' || onChannel ? assessment : { ...assessment, result: 'unknown' }];
+  const current = input.mode === LOGGED_MODE;
+  const assessment = validateAssessments([rubric], traceEvents(input.dialogue.events), [{ ...row, result }], { meaningfulQuotes: current })[0]!;
+  if (result === 'unknown') return [assessment];
+  const cited = input.dialogue.events.filter(event => assessment.evidence.includes(event.seq));
+  const complete = input.dialogue.observation === 'complete';
+  const holds = current ? channelHolds(expectation, result, { reply: cited.some(event => event.type === 'assistant'),
+    tools: cited.filter(event => event.type === 'tool').map(event => event.tool), state: cited.some(event => event.type === 'state') },
+  { toolsComplete: complete, stateObserved: complete, edition: COUNTING_VERSION })
+    : cited.some(event => event.type === CHANNEL_V1[expectation.observation]);
+  return [holds ? assessment : { ...assessment, result: 'unknown' }];
 }
 
 type Vote = LogJudgmentReceipt['votes'][number];
@@ -157,7 +162,7 @@ export function logUndecided(receipt: Pick<LogJudgmentReceipt, 'skipped' | 'comp
  */
 export async function judgeLogged(request: LogJudgeRequest, model: { provider: string; id: string; configurationHash?: string; transport?: JudgeAudit['transport'] },
   ctx: CallContext, respond: Respond): Promise<LogJudgment> {
-  const data = logJudgeInputV1(request);
+  const data = logJudgeInput(request);
   const input = JSON.stringify(data);
   const audit: JudgeAudit = {
     protocolHash: logProtocolHash(model.configurationHash), inputHash: fingerprint(data), provider: model.provider, model: model.id,

@@ -7,7 +7,9 @@ import type { ImportBatch } from '../scenario-contracts.js';
 import type { ExperimentStore } from '../store.js';
 import { CALIBRATION_PROTOCOL, LOGGED_MODE, logJudgmentReceiptSchema, type Calibration, type LogJudge, type LogJudgeRequest, type LogJudgmentReceipt } from './calibration.js';
 import { calibrationCalls, cardLogSituation, logSkip, runLogSituations, testedVersion, type LogSituation } from './calibration-scope.js';
-import { calibrationKey, logJudgeInputV1, logJudgmentComplete } from './log-judge.js';
+import { calibrationKey, logJudgeInput, logJudgmentComplete } from './log-judge.js';
+import { expectationRubric } from './compile.js';
+import { judgedScenario } from './legacy-v1.js';
 
 /*
  * The calibration step of a run (docs/design/card-v2-spec.md §10.3–10.6): after the synthetic attempts are judged, every expectation
@@ -61,11 +63,15 @@ function plannedJobs(record: Experiment, situations: ReturnType<typeof runLogSit
     if (!batch || !dialogue || !situation.scenario.execution) return [];
     const { scenario } = situation;
     const sources = observableSources(scenarioSources(record, scenario), record.requirements);
+    // The rubrics the synthetic attempts are judged by: a card's own, a first-format card's through its projection.
+    const rubrics = judgedScenario(scenario, {}).metrics ?? [];
     return situation.expectations.map(({ expectation, letter }): Job => {
       const identity = { cardId: scenario.id, expectationId: expectation.id, definitionHash: fingerprint(scenario), importId: batch.id, importContentHash: batch.contentHash, dialogueId: dialogue.id };
       const key = calibrationKey({ ...identity, protocolHash: judge.protocolHash });
       const skipped = logSkip(expectation, dialogue, situation.log!.opening);
-      return { key, identity, ...(skipped ? { skipped } : {}), request: { key, expectation, letter, card: situation.card, requirements: scenario.execution!.evaluatorView.requirements,
+      return { key, identity, ...(skipped ? { skipped } : {}), request: { key, expectation, letter, card: situation.card,
+        rubric: rubrics.find(rubric => rubric.id === expectation.id) ?? expectationRubric(expectation, letter, situation.card, { toolLog: expectation.observation === 'tool' }),
+        requirements: scenario.execution!.evaluatorView.requirements,
         sources, importContentHash: batch.contentHash, dialogue: { observation: dialogue.observation, events: dialogue.events } } };
     });
   });
@@ -73,7 +79,7 @@ function plannedJobs(record: Experiment, situations: ReturnType<typeof runLogSit
 
 /** A key the log cannot show: its receipt without a call. */
 const skippedReceipt = (job: Job, judge: LogJudge): LogJudgmentReceipt => logJudgmentReceiptSchema.parse({
-  mode: LOGGED_MODE, key: job.key, ...job.identity, protocolHash: judge.protocolHash, inputHash: fingerprint(logJudgeInputV1(job.request)),
+  mode: LOGGED_MODE, key: job.key, ...job.identity, protocolHash: judge.protocolHash, inputHash: fingerprint(logJudgeInput(job.request)),
   provider: judge.provider, model: judge.model, skipped: job.skipped, votes: [], result: 'unknown', complete: true });
 
 /**

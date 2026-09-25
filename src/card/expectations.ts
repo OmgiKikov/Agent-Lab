@@ -116,35 +116,39 @@ export const countingRuleText = (rule: string): string | undefined =>
 const stateObserved = (trial: Trial): boolean => !!trial.observation && trial.observation.state !== 'missing'
   && (trial.observation.state === 'sandbox' || trial.observation.resetConfirmed === true);
 
-/** The events of the agent's side of a dialogue: what it said and what its tool log shows. */
+/** What the events a verdict cites show: an agent reply, results of tools (by name; undefined where the record names none), an observed state. */
+export interface CitedChannels { reply: boolean; tools: readonly (string | undefined)[]; state: boolean }
+/** What a conversation's record can show at all: a complete tool log, an observed state, and the edition of the rules it is read by. */
+export interface ChannelScope { toolsComplete: boolean; stateObserved: boolean; edition: CountingVersion }
 
 /**
- * A verdict on the agent's tools stands only on a complete tool log. A pass needs a cited tool result — of the tool the
- * expectation names, when it names one: another tool's call proves nothing about it, and the agent's words never prove
- * an action. From edition 2 a failure stands without one — a complete log holds every call the agent made, so the call
- * the expectation asks for was never made.
+ * The channel rule of a verdict — the one rule of both judgments, of a run's attempt and of a logged conversation
+ * (log-judge.ts): a pass or a fail stands only on its expectation's channel. A reply on a cited agent reply; a state on a
+ * cited state of a conversation whose state was observed; a tool only on a complete tool log — a pass on a cited result
+ * of the tool the expectation names (of any tool when it names none: another tool's call proves nothing about it, and the
+ * agent's words never prove an action), and from edition 2 a failure without one: a complete log holds every call the
+ * agent made, so the call the expectation asks for was never made.
  */
-function toolEvidence(trial: Trial, expectation: Pick<Expectation, 'tool'>, result: 'pass' | 'fail', cited: readonly Trial['events'][number][]): boolean {
-  if (trial.observation?.tools !== 'complete') return false;
-  const proves = (event: Trial['events'][number]) => event.type === 'tool_result' && (expectation.tool === undefined || event.tool === expectation.tool);
-  return cited.some(proves) || result === 'fail' && editionOf(trial) >= 2;
+export function channelHolds(expectation: Pick<Expectation, 'observation' | 'tool'>, result: 'pass' | 'fail', cited: CitedChannels, scope: ChannelScope): boolean {
+  switch (expectation.observation) {
+    case 'reply': return cited.reply;
+    case 'tool': return scope.toolsComplete && (cited.tools.some(tool => expectation.tool === undefined || tool === expectation.tool) || result === 'fail' && scope.edition >= 2);
+    case 'state': return scope.stateObserved && cited.state;
+  }
 }
 
 /**
- * The judge's own verdict on one expectation, read through the channel the expectation is observed on: a
- * pass or a fail stands only when the judge cited an event of that channel — an agent reply, a tool result
- * of a complete tool log (of the named tool, when the expectation names one; or, for a failure from edition 2,
- * the complete log itself), or an observed state. Otherwise it is unknown (`no_evidence`). The raw judgment stays
- * stored as it was; only its reading is gated here.
+ * The judge's own verdict on one expectation, read through the channel the expectation is observed on (channelHolds):
+ * otherwise it is unknown (`no_evidence`). The raw judgment stays stored as it was; only its reading is gated here.
  */
 export function recordedExpectationResult(trial: Trial, expectation: Pick<Expectation, 'id' | 'observation' | 'tool'>): 'pass' | 'fail' | 'unknown' | undefined {
   const assessment = trial.assessments?.find(item => item.metricId === expectation.id);
   if (!assessment || assessment.result === 'unknown') return assessment?.result;
   const cited = trial.events.filter(event => assessment.evidence.includes(event.seq));
-  const channel = expectation.observation === 'reply' ? cited.some(event => event.type === 'assistant')
-    : expectation.observation === 'tool' ? toolEvidence(trial, expectation, assessment.result, cited)
-    : stateObserved(trial) && cited.some(event => event.state !== undefined);
-  return channel ? assessment.result : 'unknown';
+  const holds = channelHolds(expectation, assessment.result, {
+    reply: cited.some(event => event.type === 'assistant'), tools: cited.filter(event => event.type === 'tool_result').map(event => event.tool), state: cited.some(event => event.state !== undefined),
+  }, { toolsComplete: trial.observation?.tools === 'complete', stateObserved: stateObserved(trial), edition: editionOf(trial) });
+  return holds ? assessment.result : 'unknown';
 }
 
 /** The votes one expectation received, from the receipt or the full audit; a vote that failed has no result. */
