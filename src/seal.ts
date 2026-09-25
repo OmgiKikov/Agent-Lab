@@ -1,4 +1,4 @@
-import { fingerprint, type Experiment, type Trial } from './contracts.js';
+import { fingerprint, type Experiment, type Scenario, type Trial } from './contracts.js';
 
 /*
  * The seal of a run's evidence. Every attempt a run or a re-assessment records is sealed once, where the engine records
@@ -10,20 +10,23 @@ import { fingerprint, type Experiment, type Trial } from './contracts.js';
  *   deriveRun ──recordIntegrity──► 'sealed' · 'unsealed' (nothing to check) · 'altered': «запись изменена после прогона», no percent
  *
  * A seal has no secret: whoever computes it again can forge it, as they could a receipt. It makes an edit of the record
- * visible — a verdict turned, an attempt's words changed, a judgment's evidence moved — never merely unlikely.
+ * visible — a verdict turned, an attempt's words changed, a judgment's evidence moved, a duty taken out of the situation
+ * it was judged by — never merely unlikely. A field a later release adds to a stored shape must stay optional, never
+ * defaulted, or it would change the seal of every attempt recorded before it (the rule the stored shapes already keep).
  */
 
 /** The seal's own rule: a change of what it covers is a new name, never an edit. */
 export const TRIAL_SEAL = 'trial-seal-v1';
 
 /**
- * The seal of one recorded attempt: the whole attempt but the seal itself and its judge receipt's `complete` — a reader's
- * own verdict on the sidecar audit, which a reader that cannot match the sidecar marks false in its copy (artifacts.ts).
+ * The seal of one recorded attempt, with the definition of the situation it was judged by: the whole attempt but the seal
+ * itself and its judge receipt's `complete` — a reader's own verdict on the sidecar audit, which a reader that cannot
+ * match the sidecar marks false in its copy (artifacts.ts).
  */
-export function sealTrial(trial: Trial): string {
+export function sealTrial(trial: Trial, definition: Scenario | undefined): string {
   const { seal: _seal, ...recorded } = trial;
   const receipt = recorded.judgeReceipt && { ...recorded.judgeReceipt, complete: undefined };
-  return fingerprint({ protocol: TRIAL_SEAL, trial: { ...recorded, ...(receipt ? { judgeReceipt: receipt } : {}) } });
+  return fingerprint({ protocol: TRIAL_SEAL, trial: { ...recorded, ...(receipt ? { judgeReceipt: receipt } : {}) }, definition: definition ? fingerprint(definition) : null });
 }
 
 /**
@@ -50,18 +53,19 @@ function receiptHolds(trial: Trial): boolean {
 export type Integrity = 'sealed' | 'unsealed' | 'altered';
 
 /**
- * The record's evidence as the number may use it: `altered` when a sealed attempt no longer matches its seal or an older
- * attempt's judge receipt no longer gives its recorded results; `sealed` when every attempt is sealed and holds;
+ * The record's evidence as the number may use it: `altered` when a sealed attempt no longer matches its seal — its own
+ * content, or the definition of its situation — or an older attempt's judge receipt no longer gives its recorded results;
+ * `sealed` when every attempt is sealed and holds;
  * `unsealed` otherwise — a record written before seals, with nothing that contradicts it (nothing to check is not an
  * alteration). Pure.
  */
-export function recordIntegrity(record: Pick<Experiment, 'trials'>): Integrity {
+export function recordIntegrity(record: Pick<Experiment, 'trials' | 'scenarios'>): Integrity {
   let sealed = record.trials.length > 0;
   for (const trial of record.trials) {
     if (trial.seal === undefined) {
       sealed = false;
       if (!receiptHolds(trial)) return 'altered';
-    } else if (sealTrial(trial) !== trial.seal) return 'altered';
+    } else if (sealTrial(trial, record.scenarios.find(scenario => scenario.id === trial.scenarioId)) !== trial.seal) return 'altered';
   }
   return sealed ? 'sealed' : 'unsealed';
 }
