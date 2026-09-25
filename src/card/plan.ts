@@ -216,18 +216,22 @@ export function variationOf(library: Pick<LibraryV2, 'plan'>, card: { scenarioRe
   return ref && library.plan?.find(scenario => scenario.id === ref.scenarioId)?.variations.find(variation => variation.id === ref.variationId)?.title;
 }
 
-/** A situation of a run as the plan counts it: its verdict and each duty's (e1…), over every attempt (run.ts). */
-export interface PlannedSituation { scenarioId: string; outcome: 'pass' | 'fail' | 'unknown'; parts: readonly { id: string; outcome: 'pass' | 'fail' | 'unknown' }[] }
+/**
+ * A situation of a run as the plan counts it: its verdict and each duty's (e1…), over every attempt (run.ts); `reason`,
+ * why an undecided one has no verdict — `in_progress` while it is still being checked, which is never «не измерено».
+ */
+export interface PlannedSituation { scenarioId: string; outcome: 'pass' | 'fail' | 'unknown'; reason?: string; parts: readonly { id: string; outcome: 'pass' | 'fail' | 'unknown' }[] }
 
 /**
- * One business scenario in a run's result: its situations handled of those decided and those not measured — over the
- * scenario and over each variation — and the expectations of the plan the agent broke, most often first, each of the
- * decided situations it was judged in. The answer to the owner's question in the plan's own words.
+ * One business scenario in a run's result: its situations handled of those decided, those not measured and those still
+ * being checked (`pending`) — over the scenario and over each variation — and the expectations of the plan the agent
+ * broke, most often first, each of the decided situations it was judged in. The answer to the owner's question in the
+ * plan's own words.
  */
 export interface ScenarioOutcome {
   question: string;
-  passed: number; decided: number; unmeasured: number;
-  variations: { title: string; origin: BusinessScenario['variations'][number]['origin']; passed: number; decided: number; unmeasured: number }[];
+  passed: number; decided: number; unmeasured: number; pending: number;
+  variations: { title: string; origin: BusinessScenario['variations'][number]['origin']; passed: number; decided: number; unmeasured: number; pending: number }[];
   broken: { text: string; mustNot: boolean; count: number; of: number }[];
 }
 
@@ -243,8 +247,11 @@ export function planOutcomes(library: Pick<LibraryV2, 'plan' | 'cards'>, situati
       return card?.scenarioRef?.scenarioId === scenario.id ? [{ situation, card }] : [];
     });
     if (!mine.length) return [];
+    // A situation still being checked is on its way, not unmeasured.
+    const pending = (item: (typeof mine)[number]) => item.situation.outcome === 'unknown' && item.situation.reason === 'in_progress';
     const count = (items: typeof mine) => ({ passed: items.filter(item => item.situation.outcome === 'pass').length,
-      decided: items.filter(item => item.situation.outcome !== 'unknown').length, unmeasured: items.filter(item => item.situation.outcome === 'unknown').length });
+      decided: items.filter(item => item.situation.outcome !== 'unknown').length,
+      unmeasured: items.filter(item => item.situation.outcome === 'unknown' && !pending(item)).length, pending: items.filter(pending).length });
     const variations = scenario.variations.map(variation => ({ title: variation.title, origin: variation.origin,
       ...count(mine.filter(item => item.card.scenarioRef?.variationId === variation.id)) }));
     const broken = scenario.expectations.map(expectation => {

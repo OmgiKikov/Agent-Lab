@@ -497,22 +497,25 @@ export const judgeQuestionText = (verdict: 'pass' | 'fail'): string => `Судь
 /** The same about the judge's reading of a logged conversation, expectation by expectation. */
 export const logQuestionText = (targets: readonly Pick<LogTarget, 'letter' | 'judge'>[]): string => `Судья по логу решил: ${logVerdictsText(targets)}. Вы согласны?`;
 
-/** «1 из 2», with the situations not measured beside it: a scenario is never read as handled on what was not measured. */
-const handledCell = (item: { passed: number; decided: number; unmeasured: number }): string =>
-  `${item.decided ? `${item.passed} из ${item.decided}` : '—'}${item.unmeasured ? ` · не измерено ${item.unmeasured}` : ''}`;
+/**
+ * «1 из 2», with the situations not measured and those still being checked beside it: a scenario is never read as
+ * handled on what was not measured, nor what is still on its way read as not measured.
+ */
+const handledCell = (item: { passed: number; decided: number; unmeasured: number; pending: number }): string =>
+  `${item.decided ? `${item.passed} из ${item.decided}` : '—'}${item.unmeasured ? ` · не измерено ${item.unmeasured}` : ''}${item.pending ? ` · ещё проверяется ${item.pending}` : ''}`;
 
 /**
  * «По сценариям» — the owner's business question answered in the plan's words (card/plan.ts): each scenario of the run,
  * the customers' question and how many of its situations the agent handled; under it each variation, when there are
  * several, and the expectations it broke most often, of the situations they were judged in. Shown once a situation of
- * a scenario is decided or left unmeasured.
+ * a scenario is decided or left unmeasured; a variation whose situations are still being checked says so.
  */
 export function scenarioRows(view: Pick<ResultView, 'scenarios'>): ResultRow[] {
   const scenarios = view.scenarios?.filter(scenario => scenario.decided || scenario.unmeasured) ?? [];
   if (!scenarios.length) return [];
   return [{ role: 'heading', indent: 0, text: 'По сценариям', right: 'справился' }, ...scenarios.flatMap((scenario): ResultRow[] => [
     { role: 'item', indent: 2, text: `«${oneLine(scenario.question)}»`, right: handledCell(scenario) },
-    ...(scenario.variations.length > 1 ? scenario.variations.filter(variation => variation.decided || variation.unmeasured)
+    ...(scenario.variations.length > 1 ? scenario.variations.filter(variation => variation.decided || variation.unmeasured || variation.pending)
       .map((variation): ResultRow => ({ role: 'item:muted', indent: 4, text: `${oneLine(variation.title)}${variation.origin !== 'logs' ? ' — не из логов' : ''}`, right: handledCell(variation) })) : []),
     ...scenario.broken.slice(0, 2).map((item): ResultRow => ({ role: 'muted', indent: 4,
       text: `Нарушено: ${item.mustNot ? 'нельзя — ' : ''}${oneLine(item.text)} — в ${item.count} из ${countText(item.of, SITUATIONS_OF)}` })),
