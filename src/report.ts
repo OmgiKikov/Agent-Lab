@@ -4,7 +4,7 @@ import { toHtml, toMarkdown, type Block, type CardItem, type DisagreementItem, t
 import { calibrationCaveats, conversationsText, disagreementText, exclusionsLine, hintText } from './card/calibration-view.js';
 import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
-import { countText } from './plural.js';
+import { countText, pluralForm } from './plural.js';
 import {
   accuracyParts, alarmRow, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, moreCausesText, noErrorsText, noRuleText, realityParts, reasonLabel,
   operabilityText, saidText, scenarioRows, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
@@ -127,12 +127,12 @@ function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
     ...coverageSentence(view),
     ...(toolExpectationsText(view) ? [`${toolExpectationsText(view)}.`] : []),
     ...(breakdown.goal.decided ? [`Запрос выполнен: ${breakdown.goal.met} из ${breakdown.goal.decided}.${breakdown.rules.decided ? ` Правила промпта нарушены: ${breakdown.rules.broken} из ${breakdown.rules.decided}.` : ''}`] : []),
-    agreement.checked ? `Владелец агента согласился с решениями судьи в ${agreement.agreed} из ${agreement.checked} проверенных случаев.`
+    agreement.checked ? `Владелец агента согласился с решениями судьи в ${agreement.agreed} из ${countText(agreement.checked, ['проверенного случая', 'проверенных случаев', 'проверенных случаев'])}.`
       : view.reviewed.situations ? `Владелец агента сам проверил ${countText(view.reviewed.situations, ['ситуацию', 'ситуации', 'ситуаций'])}.`
       : agreement.queueFailures.length + agreement.sampledPasses.length ? 'Решения судьи ещё не проверялись человеком.' : '',
     ...(view.judgeCheck ? [judgeCheckBasis(view.judgeCheck)] : []),
     ...(view.reviewed.contradicted ? [`В ${countText(view.reviewed.contradicted, ['ситуации', 'ситуациях', 'ситуациях'])} отметка владельца агента по всему разговору расходится с итогом: итог считается по ожиданиям ситуации, отметка по всему разговору в число не входит.`] : []),
-    ...(coverage.excluded.length ? [`Из ${coverage.examined} разговоров в набор вошли ${coverage.included}; не вошли: ${coverage.excluded.map(item => `${item.label} — ${item.count}`).join(', ')}.`] : []),
+    ...(coverage.excluded.length ? [`Из ${countText(coverage.examined, ['разговора', 'разговоров', 'разговоров'])} в набор ${pluralForm(coverage.included, ['вошёл', 'вошли', 'вошли'])} ${coverage.included}; не вошли: ${coverage.excluded.map(item => `${item.label} — ${item.count}`).join(', ')}.`] : []),
     ...(stability?.skipped ? [`Стабильность не проверена: ${stability.skipped}.`] : stability?.unstable.length
       ? [`Нестабильны при повторе: ${stability.unstable.map(row => oneLine(row.title)).join(', ')}.`] : []),
     ...bundle.warnings,

@@ -78,6 +78,8 @@ export const noErrorsText = (decided: number, unmeasured = 0): string => unmeasu
   : `Ошибок нет. Это не гарантия для живых клиентов: ${pluralForm(decided, CHECKED)} ${countText(decided, SITUATIONS)}.`;
 /** Genitive after «из»: «1 из 1 ситуации», «9 из 13 ситуаций». */
 const SITUATIONS_OF: [string, string, string] = ['ситуации', 'ситуаций', 'ситуаций'];
+/** Genitive after «из»: «из 1 разговора», «из 5 разговоров». */
+const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
 const ERRORS: [string, string, string] = ['ошибка', 'ошибки', 'ошибок'];
 const PASSES: [string, string, string] = ['успех', 'успеха', 'успехов'];
 const TOPICS: [string, string, string] = ['тема', 'темы', 'тем'];
@@ -246,7 +248,7 @@ export function realityParts(view: ResultView): string[] {
   const clarity = clarityParts(view);
   if (!topics || topics.weighted === null) return clarity;
   const notes = [...(topics.measuredShare < 1 ? [`измерены темы ${sharePercent(topics.measuredShare)} диалогов`] : []),
-    ...(topics.labeled < topics.logged ? [`темы известны у ${topics.labeled} из ${topics.logged} разговоров`] : [])];
+    ...(topics.labeled < topics.logged ? [`темы известны у ${topics.labeled} из ${countText(topics.logged, CONVERSATIONS_OF)}`] : [])];
   return [`С учётом частоты тем — около ${percent(topics.weighted)}${notes.length ? ` (${notes.join('; ')})` : ''}`, ...clarity];
 }
 
@@ -266,7 +268,7 @@ export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: st
   const check = view.judgeCheck;
   if (!check) return null;
   const parts = [`Судья поймал ${check.detected} из ${check.planted} ${pluralForm(check.planted, PLANTED)}`,
-    ...(check.controls ? [`изменил pass на fail у ${check.falseAlarms} из ${check.controls} неизменённых копий`] : []),
+    ...(check.controls ? [`ложных тревог ${check.falseAlarms} из ${countText(check.controls, ['неизменённой копии', 'неизменённых копий', 'неизменённых копий'])}`] : []),
     ...(check.unjudged ? [`без вердикта ${check.unjudged}`] : [])];
   const text = `${parts.join(', ')}${check.distrust ? ` — ${DISTRUST_TEXT[check.distrust]}` : ''}. Это диагностика, а не проверка на независимых эталонах.`;
   return { text, warn: check.distrust !== null };
@@ -276,19 +278,29 @@ export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: st
 export function evaluationEvidenceLines(view: ResultView): string[] {
   const { agreement, simulator, headline, notMeasured } = view;
   const judge = blindText(view) ?? (agreement.checked
-    ? `Судья: человек согласился в ${agreement.agreed} из ${agreement.checked} проверенных разговоров; это сверка после показа оценки, не слепая калибровка.`
+    ? `Судья: человек согласился в ${agreement.agreed} из ${countText(agreement.checked, ['проверенного разговора', 'проверенных разговоров', 'проверенных разговоров'])}; это сверка после показа оценки, не слепая калибровка.`
     : 'Судья: ручной сверки оценок этого прогона пока нет.');
-  const customer = simulator?.conversations
-    ? `Клиент: соблюдение карточки подтверждено моделью в ${simulator.passed} из ${simulator.conversations} разговоров; нарушений ${simulator.failed}, без вывода ${simulator.unknown}, без проверки ${simulator.notChecked}.${simulator.heuristicFlags ? ` Отдельно эвристики отметили ${simulator.heuristicFlags} разговоров для разбора.` : ''}`
-    : 'Клиент: реактивное поведение в этом прогоне не измерено.';
+  const customer = simulator?.conversations ? customerText(simulator) : 'Клиент: реактивное поведение в этом прогоне не измерено.';
   const remaining = Math.max(0, notMeasured.of - headline.decided);
-  const metric = `Метрика: оценено ${headline.decided} из ${notMeasured.of} ситуаций. Процент относится только к оценённым ситуациям.`;
+  const metric = `Метрика: оценено ${headline.decided} из ${countText(notMeasured.of, SITUATIONS_OF)}. Процент относится только к оценённым ситуациям.`;
   const bounds = view.connection && view.connection !== 'passed' ? 'Процент и его границы появятся, когда подключение агента пройдёт экзамен.'
     : notMeasured.of > 0 && remaining > 0
-    ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${remaining} оставшихся ситуаций. Это границы, не прогноз.`
+    ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${countText(remaining, ['оставшейся ситуации', 'оставшихся ситуаций', 'оставшихся ситуаций'])}. Это границы, не прогноз.`
     : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';
   const realism = realismText(view);
   return [judge, customer, ...(realism ? [realism.text] : []), metric, bounds];
+}
+
+/**
+ * «Клиент: …» — whether the customer Lab played kept to its situation, as the judge read it, over the reactive
+ * conversations: the confirmed ones of all, then only the counts that are not zero; the conversations its heuristic
+ * checks marked for review, apart. A model's verdict is recorded evidence, not proof the customer behaved like a person.
+ */
+function customerText(simulator: NonNullable<ResultView['simulator']>): string {
+  const tail = [...(simulator.failed ? [`отошёл от ситуации — ${simulator.failed}`] : []), ...(simulator.unknown ? [`судья не уверен — ${simulator.unknown}`] : []),
+    ...(simulator.notChecked ? [`не проверялось — ${simulator.notChecked}`] : [])];
+  const flags = simulator.heuristicFlags ? ` Ещё в ${countText(simulator.heuristicFlags, ['разговоре', 'разговорах', 'разговорах'])} есть подозрения к клиенту — пометки на разбор.` : '';
+  return `Клиент: судья подтвердил, что клиент держался своей ситуации, в ${simulator.passed} из ${countText(simulator.conversations, CONVERSATIONS_OF)}${tail.length ? `; ${tail.join(', ')}` : ''}.${flags}`;
 }
 
 /**
@@ -336,7 +348,7 @@ export function operabilityText(view: Pick<ResultView, 'operability'>): string |
   const parts = [...(found.noReply ? [`агент не дал ответа — ${found.noReply}`] : []), ...(found.serviceReply ? [`вместо агента ответил стенд — ${found.serviceReply}`] : []),
     ...(found.broken ? [`сбой агента — ${found.broken}`] : [])];
   const total = found.noReply + found.serviceReply + found.broken;
-  return `Работоспособность: в ${total} из ${countText(found.conversations, ['разговора', 'разговоров', 'разговоров'])} клиент не получил ответа агента (${parts.join(', ')}). Эти разговоры не считаются ошибками агента по существу и не входят в процент.`;
+  return `Работоспособность: в ${total} из ${countText(found.conversations, CONVERSATIONS_OF)} клиент не получил ответа агента (${parts.join(', ')}). Эти разговоры не считаются ошибками агента по существу и не входят в процент.`;
 }
 
 /** The first block of every surface: alarm, number, trust line, reality line, the judge check, and how the synthetic customers compare with production. */
@@ -623,7 +635,7 @@ export function nextStepText(step: NextStep): string {
       return `Проверить, прав ли судья — ${parts.join(', ')}`;
     }
     case 'blind_check': return `Проверить судью вслепую — ${countText(step.left, ['оценка', 'оценки', 'оценок'])} без его вердиктов`;
-    case 'why_unmeasured': return `Посмотреть, почему не измерено ${countText(step.count, SITUATIONS)}`;
+    case 'why_unmeasured': return `Посмотреть, почему ${pluralForm(step.count, ['не измерена', 'не измерены', 'не измерено'])} ${countText(step.count, SITUATIONS)}`;
     case 'repeat': return 'Повторить прогон на новой версии агента';
     case 'report': return 'Отчёт для заказчика';
   }
@@ -726,9 +738,6 @@ export function chatBlock(view: ResultView, options: { expanded: boolean }): Res
 }
 
 /* ───────────────────────────── two runs compared ───────────────────────────── */
-
-/** Genitive after «из»: «из 1 разговора», «из 5 разговоров». */
-const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
 
 /**
  * Two runs compared (comparison.ts), the only copy of its words: the run compared with and the answer, how much could be
