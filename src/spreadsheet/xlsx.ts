@@ -8,7 +8,8 @@ import { SHEET_COLUMNS, SHEET_ROWS, columnIndex, tooManyColumns, tooManyRows, ty
  * say which part holds each one, the shared-string table holds most texts. A cell keeps the text the file
  * stores — the shared or inline string, the number as written, TRUE/FALSE — without number formats:
  * a date stays Excel's day count, which still orders correctly. A merged range shows its value in every
- * cell it covers, as the owner sees it on screen.
+ * cell it covers inside the sheet's data, as the owner sees it on screen; ranges that would cover more cells than the
+ * sheet holds are no reading of it — a few bytes of XML must not unpack into gigabytes — and the table is refused.
  */
 
 /** Everything the parts of one workbook may unpack to; a 4 MB workbook of text unpacks to a few tens of megabytes. */
@@ -47,7 +48,7 @@ export function readXlsx(file: Buffer): Sheet[] {
     if (!relation?.type.endsWith('/worksheet')) return [];
     const xml = part(partPath(relation.target));
     if (xml === undefined) throw damaged(`нет листа «${sheet.name}»`);
-    return [{ name: sheet.name, rows: worksheetRows(xml, shared) }];
+    return [{ name: sheet.name, rows: worksheetRows(xml, shared, sheet.name) }];
   });
 }
 
@@ -94,7 +95,7 @@ function sharedStrings(xml: string): string[] {
 
 interface OpenCell { row: number; column: number; type: string; value: string; inline: string }
 
-function worksheetRows(xml: string, shared: readonly string[]): string[][] {
+function worksheetRows(xml: string, shared: readonly string[], name: string): string[][] {
   const cells = new Map<number, Map<number, string>>();
   const merges: string[] = [];
   let row = -1, column = -1, phonetic = 0;
@@ -121,7 +122,7 @@ function worksheetRows(xml: string, shared: readonly string[]): string[][] {
     else if (name === 'rPh' && !token.empty) phonetic++;
     else if (name === 'mergeCell') { const range = token.attributes.get('ref'); if (range) merges.push(range); }
   }
-  return grid(cells, merges);
+  return grid(cells, merges, name);
 }
 
 function cellText(cell: OpenCell, shared: readonly string[]): string {
@@ -148,20 +149,39 @@ function put(cells: Map<number, Map<number, string>>, row: number, column: numbe
   columns.set(column, text);
 }
 
-/** Dense rows up to the last row with a value; each merged range repeats its top-left value over the cells it covers inside the data. */
-function grid(cells: Map<number, Map<number, string>>, merges: string[]): string[][] {
+/**
+ * Merged cells never cover more than this many cells beyond the values the sheet holds: an export merges an id over the
+ * rows of its conversation, or a title over the table, each within the data — never a range thousands of times its size.
+ */
+const MERGE_SLACK = 10_000;
+
+/**
+ * Dense rows up to the last row with a value; each merged range repeats its top-left value over the cells it covers
+ * inside the data — its rows up to the last with a value, its columns up to the widest row. The cells the ranges cover
+ * are counted: more than the sheet's own values and MERGE_SLACK is a file built to unpack, refused before it is.
+ */
+function grid(cells: Map<number, Map<number, string>>, merges: string[], name: string): string[][] {
   const last = largest(cells.keys());
+  let held = 0, width = 0;
   const rows: string[][] = Array.from({ length: last + 1 }, (_, row) => {
     const columns = cells.get(row);
-    return Array.from({ length: columns ? largest(columns.keys()) + 1 : 0 }, (_, column) => columns?.get(column) ?? '');
+    held += columns?.size ?? 0;
+    const length = columns ? largest(columns.keys()) + 1 : 0;
+    width = Math.max(width, length);
+    return Array.from({ length }, (_, column) => columns?.get(column) ?? '');
   });
+  let room = held + MERGE_SLACK;
   for (const range of merges) {
     const [from, to] = range.split(':').map(cellReference);
     const value = from && rows[from.row]?.[from.column];
     if (!from || !to || !value) continue;
-    for (let row = from.row; row <= Math.min(to.row, last); row++) {
+    const bottom = Math.min(to.row, last), right = Math.min(to.column, width - 1);
+    if (bottom >= from.row && right >= from.column && (room -= (bottom - from.row + 1) * (right - from.column + 1)) < 0) {
+      throw new Error(`В листе «${name}» объединённые ячейки ${range} занимают больше места, чем данные листа, — так таблицу не прочитать. Снимите объединение ячеек или сохраните лист как CSV и загрузите снова.`);
+    }
+    for (let row = from.row; row <= bottom; row++) {
       const cellsOfRow = rows[row]!;
-      for (let column = from.column; column <= Math.min(to.column, SHEET_COLUMNS - 1); column++) {
+      for (let column = from.column; column <= right; column++) {
         while (cellsOfRow.length <= column) cellsOfRow.push('');
         if (cellsOfRow[column] === '') cellsOfRow[column] = value;
       }
