@@ -186,7 +186,8 @@ export function realityParts(view: ResultView): string[] {
 /** Where a judge check leaves the judge untrusted: the warning after its counts. */
 const DISTRUST_TEXT: Record<NonNullable<JudgeCheckSummary['distrust']>, string> = {
   misses: 'судье нельзя доверять: пропускает подброшенные ошибки',
-  false_alarms: 'судье нельзя доверять: находит ошибки в верных ответах',
+  false_alarms: 'судье нельзя доверять: находит ошибки в неизменённых контрольных ответах',
+  incomplete: 'проверка судьи неполная: не все ответы получили вердикт или нет контрольных копий',
 };
 const PLANTED: [string, string, string] = ['подброшенной ошибки', 'подброшенных ошибок', 'подброшенных ошибок'];
 
@@ -198,7 +199,8 @@ export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: st
   const check = view.judgeCheck;
   if (!check) return null;
   const parts = [`Судья поймал ${check.detected} из ${check.planted} ${pluralForm(check.planted, PLANTED)}`,
-    ...(check.controls ? [`ложных тревог ${check.falseAlarms} из ${check.controls}`] : [])];
+    ...(check.controls ? [`ложных тревог ${check.falseAlarms} из ${check.controls}`] : []),
+    ...(check.unjudged ? [`без вердикта ${check.unjudged}`] : [])];
   const text = `${parts.join(', ')}${check.distrust ? ` — ${DISTRUST_TEXT[check.distrust]}` : ''}`;
   return { text, warn: check.distrust !== null };
 }

@@ -355,8 +355,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
   const customer = customerMoves(run);
   const judgeCheck = judgeCheckSummary(options.judgeCheck, record);
-  // Older records may carry no judge setting at all: nothing is claimed about them.
-  const judgeSetting = record.settings?.judge as { provider: string; model: string } | undefined;
+  // Use the same role precedence as the runtime; older records without a judge setting make no claim.
+  const judgeSetting = record.settings?.roles?.judge ?? record.settings?.judge;
   const builder = record.settings?.roles?.builder ?? { provider: record.settings?.provider, model: record.settings?.model };
   if (judgeSetting && record.trials.length && builder.provider === judgeSetting.provider && builder.model === judgeSetting.model) view.sameModelJudge = true;
   return { ...view, ...(calibration ? { calibration } : {}), ...(judgeCheck ? { judgeCheck } : {}), ...(customer ? { customer } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };

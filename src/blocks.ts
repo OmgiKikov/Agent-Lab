@@ -47,8 +47,17 @@ const pct = (share: number) => Math.round(share * 100);
 
 function bandHtml(band: NonNullable<Extract<Block, { kind: 'accuracy' }>['band']>): string {
   const [lo, hi] = band.range.map(pct) as [number, number];
-  const labels = [`<span class="lb l0">0%</span>`, `<span class="lb" style="left:${lo}%">${lo}%</span>`, `<span class="lb" style="left:${hi}%">${hi}%</span>`,
-    ...(band.weighted === null ? [] : [`<span class="lb fr" style="left:${pct(band.weighted)}%">≈${pct(band.weighted)}%</span>`]), `<span class="lb l100">100%</span>`];
+  const labels = [`<span class="lb l0">0%</span>`, `<span class="lb l100">100%</span>`];
+  const shown = [0, 100];
+  // Labels near the edges or one another overlap on a narrow report. The ticks and range remain visible.
+  const add = (at: number, label: string, className = '', gap = 12) => {
+    if (shown.some(position => Math.abs(position - at) < gap)) return;
+    labels.push(`<span class="lb${className}" style="left:${at}%">${label}</span>`);
+    shown.push(at);
+  };
+  add(lo, `${lo}%`);
+  add(hi, `${hi}%`);
+  if (band.weighted !== null) add(pct(band.weighted), `≈${pct(band.weighted)}%`, ' fr', 16);
   return `<div class="band" aria-hidden="true"><span class="track"></span><span class="range" style="left:${lo}%;width:${Math.max(hi - lo, 1)}%"></span>`
     + (band.weighted === null ? '' : `<span class="tick" style="left:${pct(band.weighted)}%"></span>`)
     + `<span class="dot" style="left:${pct(band.point)}%"></span>${labels.join('')}</div>`;

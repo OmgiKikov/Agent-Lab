@@ -60,7 +60,10 @@ export function recurringProblems(runs: readonly ProblemRun[]): Problem[] {
   const problems: Problem[] = [];
   const explained = new Set<string>();
   for (const cause of view.topCauses) {
-    const runsInRow = inRow(runs, run => failed(run, cause.scenarioIds));
+    // A failed situation can have a different cause in the next run. Only claim that this cause recurred
+    // when the previous result names the same cause on at least one of the same situations.
+    const runsInRow = inRow(runs, run => run.view.topCauses.some(previous => previous.name === cause.name
+      && previous.scenarioIds.some(id => cause.scenarioIds.includes(id))));
     if (cause.scenarioIds.length < 2 && runsInRow < 2) continue;
     cause.scenarioIds.forEach(id => explained.add(id));
     const observations = cause.scenarioIds.flatMap(id => {

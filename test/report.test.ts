@@ -20,6 +20,16 @@ import { briefCard, cardRun, compiledCard, requirements } from './helpers/cards.
  */
 
 const world = { records: {}, writableFields: [], transientFailures: 0 };
+
+test('the interval scale hides labels that would overlap an edge or each other', () => {
+  const accuracy: Block = { kind: 'accuracy', lead: 'На наборе', value: '8%', tail: '1 из 12', level: 'warn',
+    band: { point: 0.08, range: [0, 0.13], weighted: 0.14 } };
+  const html = toHtml({ title: 'Проверка', meta: [], head: [accuracy], blocks: [], footer: [] });
+  assert.equal((html.match(/<span class="lb l0">0%<\/span>/g) ?? []).length, 1);
+  assert.doesNotMatch(html, /class="lb" style="left:0%"/);
+  assert.doesNotMatch(html, /class="lb fr" style="left:14%"/);
+  assert.match(html, /class="lb" style="left:13%">13%/);
+});
 type Card = Experiment['scenarios'][number];
 type Result = MetricAssessment['result'];
 type Library = NonNullable<Experiment['librarySnapshot']>;
@@ -217,7 +227,7 @@ test('the report reads in the order a customer asks: number, trust, topics, caus
   assert.deepEqual(report.head.map(block => block.kind), ['accuracy', 'trust', 'trust']);
   const [accuracy, trust, reality] = report.head;
   assert.ok(accuracy?.kind === 'accuracy');
-  assert.deepEqual([accuracy.lead, accuracy.value, accuracy.tail, accuracy.level], ['Точность агента:', '67%', '— справился в 2 из 3 ситуаций', 'warn']);
+  assert.deepEqual([accuracy.lead, accuracy.value, accuracy.tail, accuracy.level], ['Точность агента:', '67%', '— справился в 2 из 3 ситуаций, ещё 1 не измерено', 'warn']);
   assert.ok(accuracy.band, 'the interval band is drawn under the number');
   assert.deepEqual(accuracy.band.range.map(share => Math.round(share * 100)), [21, 94]);
   assert.equal(Math.round((accuracy.band.weighted ?? 0) * 100), 70);

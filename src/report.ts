@@ -77,8 +77,8 @@ function coverageSentence(view: ResultView): string[] {
 
 /** How the judge was checked without a person, in one sentence of the fine print. */
 function judgeCheckBasis(check: NonNullable<ResultView['judgeCheck']>): string {
-  const unjudged = check.unjudged ? ` Без вердикта остались ${check.unjudged}: они не считаются ни пойманными, ни пропущенными.` : '';
-  return `Судью проверили без человека: в копию разговора, который он засчитал, Lab подбрасывал одну явную ошибку в ответ агента, и тот же судья оценивал копию заново; ${check.controls ? 'контрольные копии оставались без изменений' : 'контрольных копий не было'}. Исходные разговоры и оценки не менялись.${unjudged}`;
+  const unjudged = check.unjudged ? ` Без вердикта остались ${check.unjudged}: они не считаются ни пойманными, ни пропущенными, и проверка не считается полной.` : '';
+  return `Судью проверили без человека: в копию разговора, который он засчитал, Lab подбрасывал предполагаемую ошибку в ответ агента, и тот же судья оценивал копию заново; ${check.controls ? 'контрольные копии оставались без изменений' : 'контрольных копий не было'}. Исходные разговоры и оценки не менялись. Это диагностика, а не независимая проверка: качество подброшенных ошибок и контрольных ответов человек не подтверждал.${unjudged}`;
 }
 
 /** How the number was made and what it rests on, in plain sentences for the fine print. */

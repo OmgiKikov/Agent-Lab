@@ -4,6 +4,7 @@ import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { connectionFromCurl, parseCurl, shellWords } from '../src/curl.js';
 import { atPointer, MissingReplyText, renderRequest, replyStructure, requestTemplateSchema } from '../src/http-template.js';
@@ -114,12 +115,38 @@ test('a template renders every placeholder, whole-string and inline; unknown one
     assert.equal(body.meta.system, 'sys-7');
     assert.equal(body.n, 3);
     assert.ok(!Number.isNaN(Date.parse(body.meta.at!)));
+    assert.match(body.meta.at!, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, 'Request-Time matches the curl format without milliseconds');
     assert.notEqual(one.headers['Request-Id'], two.headers['Request-Id']);
   } finally { if (previous === undefined) delete process.env.AGENT_LAB_TEMPLATE_TEST; else process.env.AGENT_LAB_TEMPLATE_TEST = previous; }
   assert.throws(() => renderRequest(requestTemplateSchema.parse({ body: { text: '{{message}} {{env:AGENT_LAB_UNSET_FOR_TEST}}' } }), { message: 'x', conversation: 'c' }), /AGENT_LAB_UNSET_FOR_TEST/);
   assert.equal(requestTemplateSchema.safeParse({ body: { text: '{{message}} {{user}}' } }).success, false);
   assert.equal(requestTemplateSchema.safeParse({ body: { text: 'static' } }).success, false);
   assert.equal(targetSchema.safeParse({ kind: 'http', url: 'https://agent.example.test', request: { body: { q: '{{message}}' } }, promptFile: '/prompt.md' }).success, false);
+});
+
+test('the acquiring connection reproduces the supplied envelope and passes a two-turn HTTP doctor', async t => {
+  const connection = await readConnection(fileURLToPath(new URL('../examples/acquiring-production.connection.json', import.meta.url)));
+  assert.equal(connection.target.kind, 'http');
+  assert.ok(connection.target.kind === 'http' && connection.target.request);
+  const first = renderRequest(connection.target.request, { message: 'Тестовый запрос', conversation: 'dialogue-1' });
+  const second = renderRequest(connection.target.request, { message: 'Ещё вопрос', conversation: 'dialogue-1' });
+  assert.match(first.headers['Request-Id']!, /^[0-9a-f-]{36}$/);
+  assert.notEqual(first.headers['Request-Id'], second.headers['Request-Id']);
+  assert.match(first.headers['Request-Time']!, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.equal(first.headers['System-Id'], '6ba7b810-9dad-11d1-80b4-00c04fd430c8');
+  assert.equal(atPointer(first.body, '/message/content/user_input'), 'Тестовый запрос');
+  assert.equal(atPointer(first.body, '/message/conversation_id'), 'dialogue-1');
+  assert.equal(atPointer(first.body, '/metadata/dialog/dialog_id'), 'dialogue-1');
+  assert.equal(atPointer(second.body, '/message/conversation_id'), 'dialogue-1');
+  const api = await envelopeAgent(); t.after(api.close);
+  const target = { ...connection.target, url: api.url, request: connection.target.request };
+  const probe = await checkTemplate(target, undefined);
+  assert.ok(probe.structure.some(field => field.pointer === '/result/answer/text'));
+  const checked = await checkTemplate(target, '/result/answer/text');
+  assert.equal(checked.passed, true);
+  assert.equal(api.requests.length, 3);
+  assert.equal(api.requests[1]!.body.message.conversation_id, api.requests[2]!.body.message.conversation_id);
+  assert.notEqual(api.requests[0]!.body.message.conversation_id, api.requests[1]!.body.message.conversation_id);
 });
 
 test('an agent in its own envelope: one conversation keeps its id, a new dialogue gets a new one, the text is read by pointer', async t => {

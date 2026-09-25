@@ -355,7 +355,7 @@ test('a long run leaves the conversation free: Esc does not stop it, progress is
     while ((await fixture.read()).phase !== 'evaluating') await new Promise(resolve => setTimeout(resolve, 20));
     escape.abort();
     const result = await started;
-    assert.equal(json(result).background, true); assert.match(drawn(run, result, false).join('\n'), /Прогон идёт: 2 разговора[\s\S]*Результат придёт сюда сообщением/);
+    assert.equal(json(result).background, true); assert.match(drawn(run, result, false).join('\n').replace(/\s+/g, ' '), /Прогон идёт: 2 разговора.*Результат придёт сюда сообщением/);
     assert.equal((await fixture.read()).phase, 'evaluating', 'interrupting the action does not stop the run');
     const progress = json(await run.execute('progress', { action: 'progress' }, undefined, undefined, ctx));
     assert.deepEqual([progress.running, progress.working, progress.finished, progress.planned], [true, 'run', 0, 2]);

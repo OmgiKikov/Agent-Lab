@@ -260,6 +260,10 @@ test('problems are what repeats: a cause in several situations or a failure run 
   assert.ok(problems.every(problem => problem.observations.every(item => item.quote === 'Уточните номер терминала.')));
   // One run alone: a cause of a single situation is a one-off error, not a problem.
   assert.deepEqual(recurringProblems(runs.slice(0, 1)).map(problem => problem.title), ['Переспрашивает номер вместо ответа по заявке']);
+  const old = runs[1]!;
+  const unrelated = { ...old, view: { ...old.view, topCauses: old.view.topCauses.map(cause => ({ ...cause, name: 'Иная причина' })) } };
+  const differentCause = recurringProblems([runs[0]!, unrelated]);
+  assert.equal(differentCause.find(problem => problem.title === 'Переспрашивает номер вместо ответа по заявке')?.runsInRow, 1);
 });
 
 test('the agents of a folder are grouped by how they are reached; situations prepared before the agent was connected belong to the one agent', async () => {
@@ -273,6 +277,10 @@ test('the agents of a folder are grouped by how they are reached; situations pre
   // Two connected agents: the waiting draft stays apart, named for what it is.
   const other = { ...structuredClone(connected), id: 'other-run', target: { kind: 'command', command: 'node', args: ['bot.js'], cwd: '/project', timeoutMs: 60000 } } as Experiment;
   assert.equal(agentSpaces([...records, other, waiting]).length, 3);
+  const anotherFolder = { ...other, id: 'other-folder', target: { ...other.target, cwd: '/elsewhere' } } as Experiment;
+  assert.equal(agentSpaces([other, anotherFolder]).length, 2, 'the same command in another directory is another agent');
+  const anotherArg = { ...other, id: 'other-arg', target: { ...other.target, args: ['bot', 'js'] } } as Experiment;
+  assert.equal(agentSpaces([other, anotherArg]).length, 2, 'argument boundaries are part of agent identity');
   assert.equal(agentName(waiting), 'агент поддержки', 'the owner\'s own name comes first');
   // The placeholder of an unnamed external agent says nothing: such an agent is named by how it is started.
   const unnamed = { ...other, revisions: [{ ...other.revisions[0]!, spec: EXTERNAL_AGENT }] } as Experiment;

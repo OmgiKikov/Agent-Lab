@@ -74,7 +74,8 @@ function renderJson(value: Json, render: (text: string) => string): Json {
 
 /** One request's body and headers: {{uuid}} and {{now}} are the same everywhere within it and new in the next. */
 export function renderRequest(template: RequestTemplate, values: RequestValues): { body: Json; headers: Record<string, string> } {
-  const all = { ...values, uuid: randomUUID(), now: new Date().toISOString() };
+  // Match the common curl `date -u +%Y-%m-%dT%H:%M:%SZ` header exactly: some gateways reject milliseconds.
+  const all = { ...values, uuid: randomUUID(), now: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') };
   const render = (text: string) => renderText(text, all);
   return { body: renderJson(template.body, render), headers: Object.fromEntries(Object.entries(template.headers).map(([name, text]) => [name, render(text)])) };
 }
