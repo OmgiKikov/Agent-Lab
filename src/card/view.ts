@@ -180,8 +180,12 @@ export function referenceText(reference: Reference): string {
 const VAGUE_REQUEST = 'невнятный: клиент не говорит прямо, чего хочет';
 const CLEAR_REQUEST = 'внятный';
 
-/** The label of the record's own line in «d»: the situation's version and its set's. */
+/**
+ * The record's own line in «d»: the situation by its number, its version, and the revision of its set — never an id or a
+ * hash, which say nothing to the owner (the machine reader gets the ids apart, situationData).
+ */
 const RECORD_LABEL = 'Запись';
+const recordLine = (number: number, version: number, set: string): string => `ситуация №${number}, версия ${version} · ${set}`;
 const OBSERVED = { reply: 'по ответу агента', tool: 'по вызовам инструментов', state: 'по состоянию системы' } as const;
 /** How a duty is observed; a duty on the tools names the tool whose call proves it, when it names one. */
 const observedText = (expectation: Card['agentMust'][number]): string =>
@@ -231,7 +235,7 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
     ]),
     ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${observedText(expectation)}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
     ...rules,
-    { label: RECORD_LABEL, text: `ситуация ${card.id} · версия ${card.revision} · набор ${library.id}, ревизия ${library.revision}` },
+    { label: RECORD_LABEL, text: recordLine(card.number, card.revision, `набор ситуаций, ревизия ${library.revision}${library.acceptance ? ', утверждён для прогона' : ''}`) },
   ];
 }
 
@@ -317,7 +321,7 @@ export function projectV1Variant(library: LibraryV1, variant: ScenarioVariant, n
       ...variant.userState.facts.map(fact => ({ label: 'Откуда факт', text: `${oneLine(fact.statement)} — ${origin(fact)}` })),
       ...(variant.sourceCoverage ?? []).map(item => ({ label: 'Поздние реплики', text: `реплика №${item.eventIndex + 1} — ${COVERED[item.disposition]}: ${oneLine(item.reason)}` })),
       ...variant.issues.map(issue => ({ label: 'Замечание', text: plainIssue(library, variant, issue) })),
-      { label: 'Запись', text: `вариант ${variant.id} · версия ${variant.revision} · набор ${library.id}, ревизия ${library.revision} (старый формат)` },
+      { label: RECORD_LABEL, text: recordLine(number, variant.revision, `набор ситуаций старого формата, ревизия ${library.revision}`) },
     ],
   };
 }
@@ -353,7 +357,7 @@ export function scenarioView(record: Pick<Experiment, 'requirements'>, scenario:
       { label: 'Что знает клиент', text: oneLine(scenario.user.facts) },
       ...scenario.checks.map(check => ({ label: 'Точная проверка', text: oneLine(describeCheck(check)) })),
       ...(scenario.metrics ?? []).map(metric => ({ label: 'Судья оценивает', text: oneLine(metric.name) })),
-      { label: 'Запись', text: `ситуация ${scenario.id} (формат до наборов ситуаций)` },
+      { label: RECORD_LABEL, text: `ситуация №${number} · записана до наборов ситуаций` },
     ],
   };
 }
