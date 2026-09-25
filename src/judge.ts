@@ -17,7 +17,8 @@ export const judgeResponseSchema = z.strictObject({ assessments: z.array(metricA
 /**
  * The answer's JSON Schema as the judge is shown it: z.toJSONSchema(judgeResponseSchema) as zod 4 wrote it when the stored
  * judgments were made, frozen. A newer zod may write the same schema differently, and JUDGE_PROMPT, JUDGE_PROTOCOL and every
- * receipt sealed by it would change with it; test/llm.test.ts says when the parse schema and this text part ways.
+ * receipt sealed by it would change with it. Nothing checks the two against each other while the test suite is removed:
+ * a change of judgeResponseSchema must be matched here by hand.
  */
 const RESPONSE_SCHEMA_TEXT = '{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"assessments":{"maxItems":8,"type":"array","items":{"type":"object","properties":{"metricId":{"type":"string","pattern":"^[a-zA-Z0-9_-]{1,80}$"},"rationale":{"type":"string","minLength":1,"maxLength":4000},"evidence":{"maxItems":48,"type":"array","items":{"type":"integer","minimum":0,"maximum":9007199254740991}},"citations":{"maxItems":48,"type":"array","items":{"type":"object","properties":{"seq":{"type":"integer","minimum":0,"maximum":9007199254740991},"quote":{"type":"string","minLength":1,"maxLength":2000}},"required":["seq","quote"],"additionalProperties":false}},"passCondition":{"type":"string","enum":["met","not_met","unclear"]},"failCondition":{"type":"string","enum":["met","not_met","unclear"]}},"required":["metricId","rationale","evidence","citations","passCondition","failCondition"],"additionalProperties":false}}},"required":["assessments"],"additionalProperties":false}';
 // Anthropic's grammar supports the object shape, but not these size/range bounds.
