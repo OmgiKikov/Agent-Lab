@@ -878,7 +878,10 @@ export function chatBlock(view: ResultView, options: { expanded: boolean }): Res
   }
   const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
   const indent = (rows: ResultRow[]) => rows.map(row => ({ ...row, indent: row.indent + 2 }));
-  const blocks = [head, indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
+  // The judge's blind check, when it is the step to take, is offered before the failures are shown with their verdicts.
+  const next = indent(nextRows(view, 'chat')), blindFirst = view.next[0]?.kind === 'blind_check';
+  const blocks = [head, ...(blindFirst ? [next] : []), indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)),
+    ...(blindFirst ? [] : [next])];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
 

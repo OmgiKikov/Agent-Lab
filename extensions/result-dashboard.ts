@@ -2,7 +2,7 @@ import { causeItems, causeRows, fitRows, headRows, nextRows, runLine, barRows, t
 import type { NextStep, ResultView } from '../src/result-view.js';
 import { safeText } from '../src/text.js';
 import type { Line, ResultPick, Screen, SpaceData } from './workspace-screens.ts';
-import { box, beside, selection, span, wrap } from './render/panels.ts';
+import { box, selection, span, wrap } from './render/panels.ts';
 import { GLYPH, ROLE_TONE } from './render/theme.ts';
 
 /*
@@ -16,7 +16,8 @@ import { GLYPH, ROLE_TONE } from './render/theme.ts';
  *   ✗ Числу пока не верить: …                      ← alarmRow, when the number is not to be trusted yet
  *   Точность агента: 50% — справился в 1 из 2 …    ← the number, or why it is withheld
  *   По выбранным ситуациям; … · мало данных          ← the trust line
- *   ╭─ Дальше ───────────╮  ╭─ Почему ошибается ──╮  ← side by side from 100 columns, one under the other below
+ *   ╭─ Дальше ─────────────────────────────────╮   ← the steps, the blind check before any verdict
+ *   ╭─ Почему ошибается ───────────────────────╮   ← the causes, each opening its first failure
  *   Прогон сегодня в … · 2 ситуации                  ← the run line
  */
 
@@ -80,17 +81,15 @@ export function resultDashboard(data: SpaceData, run: SpaceData['runs'][number],
   if (going) body.push(...wrap(going.text, width, 'accent'), []);
   body.push(...laid(headRows(view, { brief: true }), width), []);
 
-  const columns = width >= 100;
-  const leftWidth = columns ? Math.floor((width - 2) * 0.5) : width;
-  const rightWidth = columns ? width - leftWidth - 2 : width;
-  // «Дальше» first: the step the owner is advised to take, the judge's blind check before any of its verdicts.
-  const next = panel(nextRows(view, 'board'), leftWidth - 4, (_row, index) => STEP_PICK[view.next[index]!.kind], selected, 0);
+  // «Дальше» above the causes at every width: the step the owner is advised to take, the judge's blind check before any
+  // of its verdicts is read.
+  const next = panel(nextRows(view, 'board'), width - 4, (_row, index) => STEP_PICK[view.next[index]!.kind], selected, 0);
   // «Почему ошибается»: each cause opens its first failure; without a failure, the one sentence that says so.
   const causes = causeRows(view);
   const failed = causeItems(view).items;
   const trialOf = (index: number) => view.failures.find(failure => failed[index]?.scenarioIds.includes(failure.scenarioId))?.trialId;
   let cause = 0;
-  const why = view.failures.length ? panel(causes, rightWidth - 4, row => {
+  const why = view.failures.length ? panel(causes, width - 4, row => {
     if (row.role !== 'item') return null;
     const trialId = trialOf(cause++);
     return trialId ? { kind: 'failure', trialId } : null;
@@ -99,15 +98,9 @@ export function resultDashboard(data: SpaceData, run: SpaceData['runs'][number],
   const picks = [...next.picks, ...why?.picks ?? []];
   const items: number[] = [];
   const shown = [...(next.lines.length ? [{ panel: next, tone: 'accent' as const }] : []), ...(why ? [{ panel: why, tone: 'muted' as const }] : [])];
-  if (shown.length === 2 && columns) {
-    const [left, right] = shown.map((item, index) => box(item.panel.title, item.panel.lines, index ? rightWidth : leftWidth, item.tone)) as [Line[], Line[]];
-    items.push(...[...next.offsets, ...why!.offsets].map(offset => body.length + BOX_TOP + offset));
-    body.push(...beside(left, right, leftWidth), []);
-  } else for (const item of shown) {
-    // One under the other, the width of the screen: a panel's rows were laid out for the column it would have beside the other.
-    const lines = box(item.panel.title, item.panel.lines, shown.length === 2 ? width : item.panel === next ? leftWidth : rightWidth, item.tone);
+  for (const item of shown) {
     items.push(...item.panel.offsets.map(offset => body.length + BOX_TOP + offset));
-    body.push(...lines, []);
+    body.push(...box(item.panel.title, item.panel.lines, width, item.tone), []);
   }
   // Nothing failed: the sentence about what that does not prove stands under the steps.
   if (!view.failures.length && causes.length) body.push(...laid(causes, width), []);
