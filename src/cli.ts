@@ -115,8 +115,8 @@ const writeStdout = (value: string): Promise<void> => new Promise((resolve, reje
 /**
  * Set by `agent-lab chat` for Pi, and so present in every command Pi's shell runs in that chat. Any value counts, an
  * empty one too: `AGENT_LAB_SESSION= agent-lab run --yes` is still a command from the chat. This only keeps the chat's
- * model from consenting for the owner by accident; a shell without limits can always drop the variable
- * (`env -u AGENT_LAB_SESSION …`), so the real guard is Pi asking the owner before it runs a shell command.
+ * model from consenting for the owner by accident. The dedicated chat excludes Pi's shell and write tools; a Pi
+ * session started separately with this extension can still have a shell and drop the variable.
  */
 const IN_CHAT = process.env.AGENT_LAB_SESSION !== undefined;
 const CHAT_ASKS = 'Из чата Agent Lab команда с --yes, --allow-logs или --replace не выполняется: в чате согласие на расход, решения и то, куда уходят разговоры клиентов, спрашивает сам чат. '
@@ -423,6 +423,13 @@ async function exportRun({ values, directory }: CommandInput): Promise<void> {
   if (!['json', 'html', 'markdown'].includes(format)) throw new Error('Формат экспорта: --format json, html или markdown.');
   const store = new ExperimentStore(directory);
   const bundle = await evidenceBundle(await store.get(values.id), store, values.before);
+  if (!values.output && process.stdout.isTTY && format !== 'json') {
+    const saved = await exportArtifacts(bundle, directory);
+    const shown = (path: string) => relative(process.cwd(), path) || path;
+    process.stdout.write(`${[`Отчёт для заказчика сохранён: ${safeLine(shown(format === 'html' ? saved.htmlReport : saved.report))}`,
+      `Рядом — ${format === 'html' ? 'Markdown' : 'HTML'} и снимок доказательств (${safeLine(shown(dirname(saved.htmlReport)))}).`].join('\n')}\n`);
+    return;
+  }
   const content = format === 'html' ? htmlReport(bundle) : format === 'markdown' ? markdownReport(bundle) : jsonReport(bundle);
   if (values.output) await writeFile(values.output, content, { mode: 0o600 }); else process.stdout.write(`${content}\n`);
 }

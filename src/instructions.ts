@@ -45,5 +45,5 @@ export function agentLabInstructions(): Promise<string> {
  * given this way stands in for Pi's own APPEND_SYSTEM.md, as the chat stands apart from the owner's other extensions.
  */
 export async function chatArguments(extension: string): Promise<string[]> {
-  return ['--no-extensions', '--no-skills', '--append-system-prompt', await agentLabInstructions(), '-e', extension];
+  return ['--no-extensions', '--no-skills', '--exclude-tools', 'bash,edit,write', '--append-system-prompt', await agentLabInstructions(), '-e', extension];
 }
