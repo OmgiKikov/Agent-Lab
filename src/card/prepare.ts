@@ -105,8 +105,8 @@ const UNBOUND_PROPOSAL = 'Предложенная ситуация не про�
  */
 const gapText = (asks: string, read: number, total: number): string => `Правила для этого запроса нет: ${asks}. ${read >= total ? 'Lab прочитал все ваши материалы'
   : `Lab прочитал ${read} из ${total} материалов, подобранных под этот разговор`}, и проверяющий подтвердил: в них не сказано, что агент должен ответить. Добавьте правило в базу знаний или промпт агента — иначе такие запросы не проверяются.`;
-/** The builder found no rule for a request and the reviewer found one: Lab's failure, never a gap in the owner's rules. */
-const disputedGapText = (asks: string, reason: string): string => `Ситуация не составлена: Lab не нашёл в материалах правила для запроса «${asks}», а проверяющий нашёл: ${reason}`;
+/** The builder found no rule for a request and the reviewer found one, or doubted: Lab's failure, never a gap in the owner's rules. */
+const disputedGapText = (asks: string, reason: string): string => `Ситуация не составлена: Lab не нашёл в материалах правила для запроса «${asks}», а проверяющий не подтвердил, что его там нет: ${reason}`;
 /** The builder found no rule for a request, and no check of that came back: never told as a gap. */
 const uncheckedGapText = (asks: string): string => `Ситуация не составлена: Lab не нашёл в материалах правила для запроса «${asks}», а проверить, что его там действительно нет, не удалось.`;
 /** A conversation no variation of the plan covers: a limit of the plan, never a gap in the owner's rules. */
@@ -497,7 +497,7 @@ class Preparation {
         reviewer: { protocol: REVIEW_PROTOCOL, model: review.model, reason: verdict.reason } });
       return { excluded: gapText(found.uncovered, found.sources.length, record.sources.length), uncovered: found.uncovered };
     }
-    const reason = verdict?.reason ?? 'проверяющий не подтвердил, что правила нет.';
+    const reason = verdict?.reason ?? 'ответа на этот вопрос нет.';
     if (progress.revised?.includes(unit) || !read.length) return { excluded: disputedGapText(found.uncovered, reason) };
     progress.revised = [...progress.revised ?? [], unit];
     let revised: Card | LeftOut | Uncovered;
