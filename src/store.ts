@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, utimesSync, watch } from 'node:fs';
-import { mkdir, open, readFile, readdir, unlink, utimes } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir, open, readFile, readdir, stat, unlink, utimes } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { judgeAuditSchema, type JudgeAudit } from './assessment.js';
 import { judgeCheckSchema, type JudgeCheck } from './judge-check.js';
 import { experimentSchema, fingerprint, type Experiment, type TraceEvent } from './contracts.js';
@@ -40,6 +40,12 @@ type AuditFolder = 'judge' | 'calibration' | 'judge-check';
  * another machine meanwhile (folder-lock.ts): before its next write it reads the lock again.
  */
 const OVERDUE_MS = HEARTBEAT_MS * 1.5;
+/** A temporary file of an atomic write (fs-atomic.ts): its target's name, a UUID, `.tmp`. */
+const TEMPORARY = /^(.+)\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
+/** Files at the folder's top that processes without the writer's lock write too. */
+const OTHERS_FILES: ReadonlySet<string> = new Set(['.lock', '.recovery', 'connection.local.json', 'gateway.json']);
+/** No live write of a file takes this long. */
+const LIVE_WRITE_MS = 60_000;
 
 export class ExperimentStore {
   readonly directory: string;
@@ -145,7 +151,30 @@ export class ExperimentStore {
         await this.acquire();
       });
     }
+    await this.sweepTemporaries();
     try { await this.recoverPublications(); } catch (error) { await this.close(); throw error; }
+  }
+  /**
+   * Removes what dead processes left of their writes: the temporary files of atomic writes (`<name>.<uuid>.tmp`) and the
+   * markers of a gate's clearing. Every write of the store goes through its one writer, so once this writer holds the
+   * folder its own kinds of temporary file are never a live write's. The files at the folder's top that processes without
+   * the lock write too — a lock attempt, the remembered connection of `doctor`, the gateway's settings when the folder is
+   * the home one — are removed only when older than LIVE_WRITE_MS, which no live write takes.
+   */
+  private async sweepTemporaries(): Promise<void> {
+    let names: string[];
+    try { names = await readdir(this.directory, { recursive: true }); } catch { return; }
+    for (const name of names) {
+      const temporary = TEMPORARY.exec(basename(name));
+      const marker = dirname(name) === '.' && name.endsWith('.clearing') && (name.startsWith('.lock.') || name.startsWith('.recovery.'));
+      if (!temporary && !marker) continue;
+      const path = join(this.directory, name);
+      if (marker || dirname(name) === '.' && OTHERS_FILES.has(temporary![1]!)) {
+        const info = await stat(path).catch(() => undefined);
+        if (!info || Date.now() - info.mtimeMs < LIVE_WRITE_MS) continue;
+      }
+      await unlink(path).catch(() => {});
+    }
   }
   async close(): Promise<void> {
     await this.writerQueue;
