@@ -22,7 +22,8 @@ import { readPurposeFile, writePurposeFile, type PurposeProposal } from './promp
 import type { TableReading } from './spreadsheet/mapping.js';
 import type { TopicMap, TopicMapKey, TopicMapProgress } from './miner/topic-map.js';
 import type { LogVersionJournal } from './card/calibration.js';
-import type { SentCalls } from './lab/interrupted.js';
+import { markInterrupted, type SentCalls } from './lab/interrupted.js';
+import { isRunning } from './phases.js';
 
 /*
  * Storage, and only storage, of one data folder: a record per run as one atomic JSON file, the writer's lock, the
@@ -188,7 +189,16 @@ export class ExperimentStore {
     if (validated.librarySnapshot) await this.files().retainLibrary(validated.librarySnapshot);
     await writeFileAtomic(this.path(validated.id), JSON.stringify(validated, null, 2));
   }
+  /**
+   * The record as stored — except one left in a running phase by a writer that is gone: a reader shows it where the next
+   * writer will put it (lab/interrupted.ts), without writing, so no surface keeps saying that dead work goes on.
+   */
   async get(id: string): Promise<Experiment> {
+    const record = await this.read(id);
+    if (isRunning(record.phase) && await this.writerGone()) markInterrupted(record, await this.sentCalls(id).catch(() => undefined));
+    return record;
+  }
+  private async read(id: string): Promise<Experiment> {
     const file = await open(this.path(id), 'r');
     try {
       if ((await file.stat()).size > 50_000_000) throw new Error('Experiment record exceeds 50 MB');
@@ -203,29 +213,62 @@ export class ExperimentStore {
     try { names = await readdir(this.directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
     const ids = names.filter(n => n.endsWith('.json') && isIdentifier(n.slice(0, -5))).map(n => n.slice(0, -5));
-    const results = await Promise.allSettled(ids.map(id => this.get(id)));
+    const results = await Promise.allSettled(ids.map(id => this.read(id)));
     const records: Experiment[] = [];
     results.forEach((result, index) => {
       if (result.status === 'fulfilled') records.push(result.value);
       else this.diagnostics.push({ id: ids[index]!, message: result.reason instanceof SyntaxError ? 'Некорректный JSON. Исходный файл сохранён.'
         : oneLine(result.reason instanceof Error ? result.reason.message : result.reason).slice(0, 240) });
     });
+    // The writer is asked about once per listing, and only when some record says its work goes on.
+    if (records.some(record => isRunning(record.phase)) && await this.writerGone()) {
+      for (const record of records) if (isRunning(record.phase)) markInterrupted(record, await this.sentCalls(record.id).catch(() => undefined));
+    }
     return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
   /**
-   * Calls `changed` with a record's id whenever its file is written — by this process or another — until the returned
-   * stop: a reader follows another process's work without asking the disk again and again. A folder the system
-   * cannot watch never calls it.
+   * Whether the folder's writer is gone, for a reader: no lock, or a lock whose holder is proved dead (folder-lock.ts). A
+   * holder of this machine that is alive and beat within two heartbeats is taken at its word without asking `ps`; a lock
+   * that cannot be read, or that no Lab wrote, says nothing. The writer itself is never gone.
    */
-  watch(changed: (id: string) => void): () => void {
+  private async writerGone(): Promise<boolean> {
+    if (this.lockToken) return false;
+    let found: Found | null;
+    try { found = await find(this.lockPath); } catch { return false; }
+    if (!found) return true;
+    const { holder } = found;
+    if (holder === null) return false;
+    if (holder && Date.now() - found.beatMs <= 2 * HEARTBEAT_MS) {
+      const here = await this.processes.self();
+      if (holder.host !== undefined && holder.host !== here.host || this.processes.alive(holder.pid)) return false;
+    }
+    return provedDead(found, this.processes);
+  }
+  /**
+   * Calls `changed` with a record's id whenever its file is written — by this process or another — until the returned
+   * stop: a reader follows another process's work without asking the disk again and again. A writer that dies (kill -9, a
+   * crash) writes nothing more, so the folder's writer is also looked at once a heartbeat: when it is found gone,
+   * `changed` is called without an id — its running records read as interrupted from then on. A folder the system cannot
+   * watch never calls it.
+   */
+  watch(changed: (id?: string) => void): () => void {
+    let stopped = false, alive: boolean | undefined;
+    const look = async () => {
+      const gone = await this.writerGone().catch(() => false);
+      if (!stopped && alive === true && gone) changed();
+      alive = !gone;
+    };
+    void look();
+    const writer = setInterval(() => { void look(); }, HEARTBEAT_MS);
+    writer.unref();
     try {
       const watcher = watch(this.directory, (_event, name) => {
         const id = typeof name === 'string' && name.endsWith('.json') ? name.slice(0, -5) : undefined;
         if (id !== undefined && isIdentifier(id)) changed(id);
       });
       watcher.on('error', () => watcher.close());
-      return () => watcher.close();
-    } catch { return () => {}; }
+      return () => { stopped = true; clearInterval(writer); watcher.close(); };
+    } catch { return () => { stopped = true; clearInterval(writer); }; }
   }
 
   /* ── journals and sidecars ── */

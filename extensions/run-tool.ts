@@ -277,7 +277,7 @@ async function progress(host: RunHost, callId: string, ctx: ExtensionContext, id
   if (job?.kind === 'assessment' && job.id === record.id) return host.feedResult(callId, { run: record.id, working: 'check', instruction: 'A check of changed situations is going on; its result arrives as a message. Do not poll.' },
     { rows: [row('Проверяю изменённые ситуации в фоне; итог придёт сообщением.', 'text', true)] }, note);
   const feed: Feed = { rows: running ? [row(progressText(record), 'text', true), row(`Идёт в фоне; ${STOP_HINT}.`, 'muted')]
-    : [row(`Сейчас ничего не идёт: ${runWhen(record)} — ${record.trials.length ? 'прогон завершён' : 'черновик'}.`, 'muted')] };
+    : [row(`Сейчас ничего не идёт: ${runWhen(record)} — ${['interrupted', 'error', 'cancelled'].includes(record.phase) ? 'остановлен до результата' : record.trials.length ? 'прогон завершён' : 'черновик'}.`, 'muted')] };
   // A check of situations has a phase of its own (phases.ts): it is neither a preparation nor a run.
   const working = record.phase === 'preparing' ? 'preparation' : record.phase === 'checking' ? 'check' : running ? 'run' : null;
   return host.feedResult(callId, { run: record.id, running, working, inThisSession: !!job && job.id === record.id,
@@ -289,7 +289,12 @@ async function progress(host: RunHost, callId: string, ctx: ExtensionContext, id
 async function stop(host: RunHost, callId: string, ctx: ExtensionContext, id: string | undefined): Promise<AgentToolResult<unknown>> {
   const directory = resolve(ctx.cwd, '.agent-lab');
   const job = host.operations.current(directory);
-  if (!job) throw new Error('В этой сессии ничего не идёт: ни прогона, ни подготовки, ни проверки. Работу другой сессии Pi останавливают там.');
+  if (!job) {
+    // Work of a process that is gone reads as interrupted (store.ts): only work that is really going on is another session's.
+    const elsewhere = (await host.reading(directory).list()).some(record => isRunning(record.phase));
+    throw new Error(elsewhere ? 'В этой сессии ничего не идёт: ни прогона, ни подготовки, ни проверки. Работу другой сессии Pi останавливают там.'
+      : 'Сейчас ничего не идёт — останавливать нечего.');
+  }
   const going = job.kind === 'assessment' ? 'проверка ситуаций' : job.kind === 'preparation' ? 'подготовка ситуаций' : 'прогон';
   // The run the owner named must be the one that is going: another run is never stopped in its place.
   if (id) {
