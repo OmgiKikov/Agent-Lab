@@ -1,11 +1,11 @@
 import type { Requirement, Source } from '../contracts.js';
 import { countText } from '../plural.js';
-import { maskedSpans, withValues } from '../masking.js';
+import { maskedSpans, withValues, type MaskedSpan } from '../masking.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { clip } from '../text.js';
 import { requiredUserTurns } from '../user-controller.js';
 import { compilePolicy } from './compile.js';
-import type { Card, EventRef } from './schema.js';
+import type { Card, EventRef, Filled } from './schema.js';
 
 /*
  * The deterministic checks of a card (docs/design/card-v2-spec.md §2.4): references and exact text, never meaning. A value is in a
@@ -38,10 +38,21 @@ export const messageAt = (evidence: CardEvidence, event: EventRef): string | und
 
 export const sameEvent = (a: EventRef, b: EventRef): boolean => a.batchId === b.batchId && a.dialogueId === b.dialogueId && a.eventIndex === b.eventIndex;
 
-/** A logged message as the card reads it: the values Lab wrote over its masking marks (card/unmask.ts) in their place. */
+/**
+ * The mark a value Lab wrote in stands over: the `span`-th (from 0) of its message as the table of marks the fill counted
+ * by reads it (masking.ts) — version 1 for a fill that names none, as every fill written before the table. A table reads
+ * a message's marks anew, so a fill is read by its own: its value stays where it was written.
+ */
+export const filledSpan = (content: string, fill: Pick<Filled, 'span' | 'maskVersion'>): MaskedSpan | undefined =>
+  maskedSpans(content, fill.maskVersion ?? 1)[fill.span];
+
+/** A logged message as the card reads it: the values Lab wrote over its masking marks (card/unmask.ts), each over its own mark. */
 export function filledMessage(content: string, filled: Card['filled'], event: EventRef): string {
-  const values = new Map((filled ?? []).filter(item => sameEvent(item.event, event)).map(item => [item.span, item.value] as const));
-  return values.size ? withValues(content, values) : content;
+  const values = (filled ?? []).filter(item => sameEvent(item.event, event)).flatMap(item => {
+    const span = filledSpan(content, item);
+    return span ? [{ ...span, value: item.value }] : [];
+  });
+  return values.length ? withValues(content, values) : content;
 }
 
 /** The message a card's reference points at, as the card reads it; undefined when the import holds no such message. */

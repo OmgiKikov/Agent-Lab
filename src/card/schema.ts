@@ -97,8 +97,11 @@ export const fillKindSchema = z.enum(['count', 'amount', 'date', 'time', 'name',
  * A value Lab wrote in where the de-identified log had a mark («#», «*», «<PHONE>»): the `span`-th mark (from 0) of the
  * message `event`, the mark as it stood and the plausible value in its place. The log keeps the mark; the card's opening,
  * turn and facts read the message with the value, and the brief says so («подставлено вместо обезличенного»).
+ * `maskVersion` is the table of marks `span` counts by (masking.ts): a table reads a message's marks anew, so the fill is
+ * always read by its own (card/checks.ts filledSpan). Absent on every fill written before the table: version 1.
  */
-const filledSchema = z.strictObject({ event: eventRefSchema, span: z.number().int().nonnegative(), mark: text(60), kind: fillKindSchema, value: text(80) });
+const filledSchema = z.strictObject({ event: eventRefSchema, span: z.number().int().nonnegative(), mark: text(60), kind: fillKindSchema, value: text(80),
+  maskVersion: z.literal(2).optional() });
 export type Filled = z.infer<typeof filledSchema>;
 
 export const cardSchema = z.strictObject({
@@ -171,7 +174,8 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
   setFactDisclosure, setFact, removeFact, editExpectation, removeExpectation, editClient, setTurn,
   // A series of changes of one card, confirmed and recorded once.
   z.strictObject({ kind: z.literal('edit_card'), cardId: id, changes: z.array(cardChangeSchema).min(1).max(12) }),
-  // Lab's plausible values over the log's masking marks (card/unmask.ts): the marks of the card's messages, and the facts whose value was a mark.
+  // Lab's plausible values over the log's masking marks (card/unmask.ts): the marks of the card's messages, each counted
+  // by its `maskVersion` as the card's fill records it, and the facts whose value was a mark.
   z.strictObject({ kind: z.literal('fill_masked'), cardId: id,
     spans: z.array(filledSchema.omit({ mark: true })).max(40), facts: z.array(z.strictObject({ factId: id, value: text(120) })).max(8) })
     .refine(command => command.spans.length + command.facts.length > 0, 'Nothing to fill'),
