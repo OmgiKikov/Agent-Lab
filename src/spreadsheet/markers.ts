@@ -5,7 +5,10 @@
  * only ever where both meet — a separator followed by a confirmed marker — and a marker word inside a
  * message, or a separator inside a message not followed by a marker, stays text of that message. Other
  * exports only join the messages with spaces: a message then starts at every confirmed marker that opens
- * the text or follows a space, as a whole word — the AGENT of SUPPORT_AGENT starts nothing.
+ * the text or follows a space, as a whole word — the AGENT of SUPPORT_AGENT starts nothing. A marker is read
+ * in the form the export writes it: an export that writes «CLIENT:» has the colon in its marker, so a customer's
+ * own word «AGENT» inside a message («…а не с AGENT ботом») starts nothing; one that writes «CLIENT Здравствуйте»
+ * (the owner's real export) has none, and there a word only the export writes can start a message.
  *
  * Detection only proposes, and it compares readings: each character that stands before the markers taken
  * as the separator, and the markers alone. A reading is plausible when both sides of a conversation are in
@@ -34,6 +37,8 @@ const MIN_MARKER_SHARE = 0.001;
  * messages is not proposed; a rarer marker (an operator who joins a few conversations) the owner names.
  */
 const SPACED_MARKER_SHARE = 0.5;
+/** A marker the export writes with a colon right after it in this share of the messages it starts has the colon in its form. */
+const COLON_SHARE = 0.9;
 /** Both sides of a dialogue write: the second most frequent marker starts at least this share of the first one's messages. */
 const NEAR_ZERO = 0.1;
 /**
@@ -209,7 +214,8 @@ export function candidateTokens(texts: readonly string[], limit: number): Candid
       if (!colon && unitKind(code) === LOWER) { at = end - 1; continue; }
       const word = text.slice(at, end);
       const label = colon && word.length >= 2 && word.length < MARKER_CHARS && [...word].some(isLetter);
-      const token = isMarkerToken(word) ? word : label ? `${word}:` : undefined;
+      // An uppercase word before a colon is offered as the export writes it, colon and all: «CLIENT:».
+      const token = label ? `${word}:` : isMarkerToken(word) ? word : undefined;
       at = end - 1;
       if (!token) continue;
       let entry = counts.get(token);
@@ -255,6 +261,23 @@ function readingOf(texts: readonly string[], separator: string | undefined, lead
   return { ...separator === undefined ? {} : { separator }, markers, led };
 }
 
+/**
+ * The markers of a reading in the form the export writes them: «CLIENT:» where nearly every message a marker starts
+ * (COLON_SHARE) has a colon right after it — then a bare «CLIENT» inside a message is a word of it — the bare word
+ * otherwise. Counted again in the form chosen.
+ */
+function writtenForm(texts: readonly string[], reading: MarkerStructure): MarkerStructure {
+  const tokens = reading.markers.map(item => item.token);
+  const bare = boundaryCounts(texts, reading.separator, tokens);
+  const colon = boundaryCounts(texts, reading.separator, tokens.map(token => `${token}:`));
+  const forms = tokens.map(token => {
+    const written = colon.get(`${token}:`) ?? 0;
+    return written > 0 && written >= (bare.get(token) ?? 0) * COLON_SHARE ? `${token}:` : token;
+  });
+  if (forms.every((form, i) => form === tokens[i])) return reading;
+  return { ...reading.separator === undefined ? {} : { separator: reading.separator }, markers: namedCounts(texts, reading.separator, forms), led: ledTexts(texts, forms) };
+}
+
 /** Both sides of a conversation: a second marker, not near zero next to the first. */
 function plausible(reading: MarkerStructure): boolean {
   const [first, second] = reading.markers;
@@ -286,17 +309,18 @@ export function detectMarkers(texts: readonly string[], given?: string | null): 
     if (isMarkerToken(token)) leading.set(token, (leading.get(token) ?? 0) + 1);
   }
   if (sum(leading.values()) < texts.length / 2) return undefined;
-  if (given !== undefined) return readingOf(texts, given ?? undefined, leading);
+  const written = (reading: MarkerStructure | undefined) => reading && writtenForm(texts, reading);
+  if (given !== undefined) return written(readingOf(texts, given ?? undefined, leading));
   // Every uppercase word counted with no separator, once: the separators are checked against it, and it is the last reading.
   let counted: MarkerCount[] | undefined;
   const unseparated = () => counted ??= countMarkers(texts, undefined);
   const opening = likelySeparators(texts, new Set(leading.keys()));
   for (const separator of opening.length ? opening : likelySeparators(texts)) {
     const reading = readingOf(texts, separator, leading);
-    if (reading && plausible(reading) && separatesMarkers(texts, reading, new Map(unseparated().map(item => [item.token, item.messages])))) return reading;
+    if (reading && plausible(reading) && separatesMarkers(texts, reading, new Map(unseparated().map(item => [item.token, item.messages])))) return written(reading);
   }
   const spaced = readingOf(texts, undefined, leading, unseparated());
-  return spaced && plausible(spaced) ? spaced : undefined;
+  return spaced && plausible(spaced) ? written(spaced) : undefined;
 }
 
 /** How many messages each named marker starts, and in how many texts, the most frequent first. */

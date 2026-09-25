@@ -17,7 +17,7 @@ import type { Workbook } from './workbook.js';
  */
 
 /** Bumped whenever what the model is shown changes: a reading proposed from other evidence is proposed again. */
-export const EVIDENCE_VERSION = 2;
+export const EVIDENCE_VERSION = 3;
 const SHEETS = 10;
 const COLUMNS = 60;
 /** Rows shown from the top of a sheet; rows that show a marker not seen in them come on top, up to SAMPLE_ROWS. */

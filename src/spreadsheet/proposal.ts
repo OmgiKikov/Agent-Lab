@@ -85,7 +85,11 @@ const KNOWN_ROLES: ReadonlyMap<string, Role> = new Map([
   ...['agent', 'bot', 'assistant', 'ai', 'агент', 'бот', 'ассистент'].map(word => [word, 'assistant'] as const),
   ...['system', 'система'].map(word => [word, 'system'] as const),
 ]);
-const knownRole = (label: string): Role | undefined => KNOWN_ROLES.get(label.trim().toLowerCase());
+/** A role word as the export writes it, the colon of a marker («CLIENT:») aside. */
+const knownRole = (label: string): Role | undefined => {
+  const word = label.trim();
+  return KNOWN_ROLES.get((word.endsWith(':') ? word.slice(0, -1) : word).toLowerCase());
+};
 
 const quoted = (text: string) => `«${text}»`;
 
