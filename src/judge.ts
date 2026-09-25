@@ -529,7 +529,7 @@ export const JUDGE_PROTOCOL_CUT_OFF = fingerprint({ protocol: JUDGE_PROTOCOL, mo
 const cutOffInput = (input: Input, cutOff: CutOff) => ({ ...judgeInput(input), cutOff: { cause: cutOff.cause, afterSeq: cutOff.afterSeq, note: cutOffNote(cutOff) } });
 
 /** The events a cut-off judgment's verdicts are checked against: the ones its judge saw, the customer's own claims withheld. */
-export const cutOffEvidenceEvents = (events: TraceEvent[]): TraceEvent[] => judgeEvents(events, true);
+export const cutOffEvidenceEvents = (events: TraceEvent[]): TraceEvent[] => judgeEvents(events, CURRENT);
 
 /** The events of the agent's side before a break: its replies with words (a service text in its place is not one), its tools, its observed state. */
 export function agentEventsBeforeBreak(events: readonly TraceEvent[], cause: CutOff['cause']): TraceEvent[] {

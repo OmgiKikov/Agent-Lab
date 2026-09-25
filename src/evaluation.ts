@@ -98,6 +98,7 @@ const PROVIDER_WHY: Record<ProviderFailureKind, string> = {
   'access denied': 'провайдер отказал в доступе — проверьте ключ и права на модель', unavailable: 'модель недоступна — проверьте ключ и модель',
   'context limit': 'запрос не поместился в окно модели', incomplete: 'модель оборвала ответ — повторите прогон', empty: 'модель вернула пустой ответ — повторите прогон',
   length: 'ответ модели упёрся в предел длины',
+  'bad request': 'провайдер отклонил запрос — проверьте настройки модели',
 };
 
 /** The errors an error carries, itself first: a structured task wraps what it could not finish (llm/structured.ts). */
