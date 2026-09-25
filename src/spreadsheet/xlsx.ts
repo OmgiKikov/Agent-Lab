@@ -12,8 +12,12 @@ import { SHEET_COLUMNS, SHEET_ROWS, columnIndex, tooManyColumns, tooManyRows, ty
  * sheet holds are no reading of it — a few bytes of XML must not unpack into gigabytes — and the table is refused.
  */
 
-/** Everything the parts of one workbook may unpack to; a 4 MB workbook of text unpacks to a few tens of megabytes. */
-const XML_BYTES = 64_000_000;
+/**
+ * Everything the parts of one workbook may unpack to. A 4 MB workbook of text unpacks to a few tens of megabytes as
+ * Excel writes it, and to about 85 MB where the exporter writes every Cyrillic letter as `&#1076;` (openpyxl does):
+ * the limit takes both, so the declared file size is the one a table is really read up to.
+ */
+const XML_BYTES = 128_000_000;
 /** The first bytes of an OLE compound file: an .xls book, or an .xlsx that Excel encrypted with a password. */
 const COMPOUND_FILE = Buffer.from([0xd0, 0xcf, 0x11, 0xe0]);
 
@@ -33,7 +37,7 @@ export function readXlsx(file: Buffer): Sheet[] {
       unpacked += data.length;
       return data.toString('utf8');
     } catch (error) {
-      if (error instanceof ArchiveTooLarge) throw new Error(`Таблица распаковывается больше чем в ${XML_BYTES / 1_000_000} МБ — Lab такие файлы не читает.`);
+      if (error instanceof ArchiveTooLarge) throw new Error(`Таблица распаковывается больше чем в ${XML_BYTES / 1_000_000} МБ — Lab такие файлы не читает. Выгрузите меньший период или оставьте в таблице только нужные колонки.`);
       throw error;
     }
   };
