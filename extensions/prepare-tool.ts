@@ -13,7 +13,7 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { readDialogueImport } from '../src/imports.js';
 import { expandMaterials, promptMaterials } from '../src/materials.js';
 import type { PromptCandidate } from '../src/prompt-candidates.js';
-import { consentText, DEFAULT_SITUATIONS, loggedRolesToMap, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
+import { consentText, DEFAULT_SITUATIONS, ensureSomethingFits, loggedRolesToMap, NothingFits, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
 import { countText } from '../src/plural.js';
 import type { Encoding } from '../src/spreadsheet/csv.js';
 import { TABLE_EXTENSIONS } from '../src/spreadsheet/workbook.js';
@@ -260,7 +260,8 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
       if (roles === 'declined') return declined(host, callId, 'Не собираю: вы не сказали, кто пишет под ролями логов. Ничего не потрачено.');
       if (roles.size) libraryImport = await read(roles);
     }
-    if (!libraryImport.dialogues.length) throw new Error(`В ${shownPath(logs, ctx.cwd)} нет разговоров, которые Lab может прочитать.`);
+    // Logs no situation can be made from are refused with every reason and the way out, the engine's own words.
+    try { ensureSomethingFits(libraryImport); } catch (error) { throw error instanceof NothingFits ? new Error(error.message) : error; }
   }
 
   // The run's settings are the host's: the model names neither a limit nor a model.
@@ -290,7 +291,9 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
 
   // The one gate of a paid preparation, asked last: a request that cannot start never asks the owner for money.
   requireInteractive(ctx, 'Подготовка ситуаций тратит вызовы модели: согласие на расход даёте вы в интерактивном терминале Pi. Откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не потрачено.');
-  const consent = libraryImport ? await preparationConsent(host.reading(directory).store, { input, situations: count }) : undefined;
+  // No conversation fits: the refusal is the engine's own, told as it is — the unknown roles were asked above.
+  const consent = libraryImport ? await preparationConsent(host.reading(directory).store, { input, situations: count })
+    .catch(error => { throw error instanceof NothingFits ? new Error(error.message) : error; }) : undefined;
   // The ceiling the owner agrees to is the one the preparation stops at: it goes to the lab with the consent.
   const callCeiling = consent?.callCeiling ?? preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations: count, fromLogs: false });
   const plan = consent ? consentText(consent, basename(logs)) : rulesConsentText(count, callCeiling, isRunnable(input.target));
