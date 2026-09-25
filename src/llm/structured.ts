@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { CallContext } from '../runtime.js';
 import { countText } from '../plural.js';
 import { DATA_BOUNDARY } from '../prompts.js';
-import { callModel, ProviderFailure, type ChatMessage } from './model-call.js';
+import { Stopped } from '../errors.js';
+import { callModel, ModelCallDefect, ProviderFailure, type ChatMessage } from './model-call.js';
 import { jsonMode, type ModelRole, type ModelTable } from './models.js';
 
 /*
@@ -77,8 +78,14 @@ const unusable = (failure: ProviderFailure): string => failure.kind === 'length'
   ? `The reply was cut off at the output limit before it was complete. Return a more compact object without dropping required fields. ${NOT_JSON}`
   : `The reply was empty. ${NOT_JSON}`;
 
-/** The step's label leads the message; the error keeps its class and its typed fields, so callers still branch on the kind of failure. */
-function labelled(label: string, error: unknown): Error {
+/**
+ * The step's label leads the message; the error keeps its class and its typed fields, so callers still branch on the kind
+ * of failure. A stop — the owner's, the time's, the closing application's or the budget's refusal of the next call — and
+ * Lab's own defect are not failures of the step: they pass as they are, the same object the operation and the dialogue
+ * read by its class (a budget stop names «не хватило лимита вызовов», never «сбой»).
+ */
+function labelled(label: string, error: unknown): unknown {
+  if (error instanceof Stopped || error instanceof ModelCallDefect) return error;
   const message = `${label}: ${error instanceof Error ? error.message : 'шаг не удался'}`;
   if (error instanceof StructuredTaskError) return new StructuredTaskError(message, { cause: error });
   if (error instanceof ProviderFailure) {
