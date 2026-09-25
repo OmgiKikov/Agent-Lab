@@ -134,7 +134,7 @@ export interface Prepared {
    * A change of the plan: the scenario's question and, in a line, its expectation or variation before and after (null —
    * none: added, or removed); `diff` holds the situations that change with it.
    */
-  plan?: { scenario: string; what: 'expectation' | 'variation'; before: string | null; after: string | null };
+  plan?: { scenario: string; what: 'expectation' | 'variation'; before: string | null; after: string | null; flip?: true };
   next: LibraryV2;
 }
 
@@ -256,7 +256,9 @@ function refuseNewFindings(before: Card | undefined, after: Card, library: Libra
 }
 
 interface Edited { cards: Card[]; scope: string[]; readingManifest?: LibraryV2['readingManifest']; nextNumber?: number; rulebook?: Rulebook;
-  plan?: BusinessScenario[]; planChange?: Prepared['plan'] }
+  plan?: BusinessScenario[]; planChange?: Prepared['plan'];
+  /** A doubt the owner settles: the card stays as it is, and the question it asked is what changes. */
+  settled?: { cardId: string; question: string } }
 const replace = (library: LibraryV2, card: Card): Edited => ({ cards: library.cards.map(item => item.id === card.id ? card : item), scope: [card.id] });
 
 /** The owner's words for a similar card's title: what differs from its parent. */
@@ -408,6 +410,8 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
   const owner = { kind: 'owner' as const, receiptId };
   const change = (card: Card, apply: (draft: Card) => string): Edited => {
     const after = revised(card, apply);
+    // A change that leaves the card as it was would only raise its version: nothing the owner could see.
+    if (fingerprint({ ...after, revision: card.revision }) === fingerprint(card)) throw new CommandRefused('Так уже записано.');
     refuseNewFindings(card, after, library, context);
     return replace(library, after);
   };
@@ -436,7 +440,7 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
       if (!question?.choices.some(choice => choice.command.kind === 'settle_claim' && choice.command.key === command.key)) {
         throw new StaleRevisionError(command.key, question?.id ?? 'none', `Сомнение по ситуации №${card.number} уже другое или снято: покажу, что осталось.`);
       }
-      return { cards: library.cards, scope: [card.id] };
+      return { cards: library.cards, scope: [card.id], settled: { cardId: card.id, question: question.text } };
     }
     case 'add_similar': return addSimilar(library, command, receiptId, context);
     case 'decide_plausible': return decidePlausible(library, command, receiptId, context);
@@ -481,6 +485,8 @@ function planChange(library: LibraryV2, command: Extract<CardCommand, { kind: 'e
     after = { ...scenario, expectations: scenario.expectations.filter(item => item.id !== expectation.id) };
   }
   const reason = command.kind === 'edit_plan_expectation' ? 'Ожидание сценария изменили вы.' : 'Ожидание сценария убрали вы.';
+  // Must ↔ must not: the preview says so before anything else.
+  const flip = command.kind === 'edit_plan_expectation' && command.strength !== undefined && (command.strength === 'must_not') !== (expectation.strength === 'must_not');
   let cards = library.cards;
   for (const card of linked) {
     const next = revised(card, draft => {
@@ -493,7 +499,8 @@ function planChange(library: LibraryV2, command: Extract<CardCommand, { kind: 'e
   }
   const kept = after.expectations.find(item => item.id === expectation.id);
   return { cards, scope: linked.map(card => card.id), plan: plan.map(item => item.id === scenario.id ? after : item),
-    planChange: { scenario: scenario.question, what: 'expectation', before: expectationLine(scenario, expectation), after: kept ? expectationLine(after, kept) : null } };
+    planChange: { scenario: scenario.question, what: 'expectation', before: expectationLine(scenario, expectation), after: kept ? expectationLine(after, kept) : null,
+      ...(flip ? { flip: true as const } : {}) } };
 }
 
 /**
@@ -575,7 +582,8 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
   const card = (source: LibraryV2, id: string) => source.cards.find(item => item.id === id);
   const diff = edited.scope.map(id => {
     const was = card(library, id), now = card(next, id);
-    return { cardId: id, number: (now ?? was)!.number, changes: briefChanges(was && cardSituation(library, was), now && cardSituation(next, now)) };
+    const settled = edited.settled?.cardId === id ? [{ field: 'Сомнение проверяющего', before: edited.settled.question, after: 'снято вашим решением' }] : [];
+    return { cardId: id, number: (now ?? was)!.number, changes: [...settled, ...briefChanges(was && cardSituation(library, was), now && cardSituation(next, now))] };
   });
   const recheck = edited.scope.flatMap(id => {
     const now = card(next, id);
@@ -585,14 +593,18 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
     flagged: edited.scope.flatMap(id => card(next, id)?.number ?? []).sort((a, b) => a - b) };
   // An answer needs what the answer is and what it does: words for a choice that does not take them never make a decision a wording.
   const authority = answer ? strictest([requiredAuthority(asked), requiredAuthority(command)]) : requiredAuthority(command);
-  return { command, libraryHash: before, previewHash: fingerprint({ library: before, command, next: libraryHash(next) }),
+  const prepared: Prepared = { command, libraryHash: before, previewHash: fingerprint({ library: before, command, next: libraryHash(next) }),
     authority, via: context.via, diff, scope: edited.scope, recheck, ...(rulebook ? { rulebook } : {}), ...(edited.planChange ? { plan: edited.planChange } : {}), next };
+  // The owner confirms what the preview shows: a change no line of it shows is never written in their name.
+  if (!preparedLines(prepared).length) throw new CommandRefused('Это изменение не видно ни в одной строке ситуации, поэтому Lab его не записывает.');
+  return prepared;
 }
 
 /**
  * What a prepared command changes, in the owner's lines, the same on every surface: «было → стало» of each touched
- * situation and a change of the rulebook; for the plan, its expectation before and after and the numbers of the
- * situations that change with it — one change, not the same line for each of them. Pure: each surface makes them safe.
+ * situation — every field that moves, a duty turned into its opposite first of all — and a change of the rulebook; for
+ * the plan, its expectation before and after and the numbers of the situations that change with it — one change, not
+ * the same line for each of them. Pure: each surface makes them safe.
  */
 export function preparedLines(prepared: Pick<Prepared, 'diff' | 'rulebook' | 'plan' | 'next'>): string[] {
   const { plan } = prepared;
@@ -600,11 +612,13 @@ export function preparedLines(prepared: Pick<Prepared, 'diff' | 'rulebook' | 'pl
     'Ситуацию этого варианта Lab составит по правилам, когда вы скажете: это расходует вызовы модели.'];
   if (plan) {
     const numbers = prepared.diff.map(item => item.number).sort((a, b) => a - b);
-    return [`Сценарий «${plan.scenario}» — общее ожидание`, `  было: ${plan.before ?? '—'}`, `  стало: ${plan.after ?? 'убрано из плана'}`,
+    return [`Сценарий «${plan.scenario}» — общее ожидание`, ...(plan.flip ? ['  Смысл ожидания меняется на противоположный:'] : []),
+      `  было: ${plan.before ?? '—'}`, `  стало: ${plan.after ?? 'убрано из плана'}`,
       numbers.length === 1 ? `Вместе с ним ${plan.after ? 'меняется' : 'теряет его'} ситуация ${numbers[0]}.`
         : numbers.length ? `Вместе с ним ${plan.after ? 'меняются' : 'теряют его'} ситуации ${numbers.join(', ')}.` : 'Ситуаций с этим ожиданием сейчас нет.'];
   }
-  return [...prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`)),
+  const lines = (flip: boolean) => prepared.diff.flatMap(item => item.changes.filter(change => !!change.flip === flip).map(change => `${item.number}  ${changeText(change)}`));
+  return [...lines(true), ...lines(false),
     ...(prepared.rulebook ? rulebookChangeLines(prepared.rulebook.before, prepared.rulebook.after, prepared.next.requirements, prepared.rulebook.flagged) : [])];
 }
 

@@ -175,6 +175,8 @@ export function referenceText(reference: Reference): string {
 const VAGUE_REQUEST = 'невнятный: клиент не говорит прямо, чего хочет';
 const CLEAR_REQUEST = 'внятный';
 
+/** The label of the record's own line in «d»: the situation's version and its set's. */
+const RECORD_LABEL = 'Запись';
 const OBSERVED = { reply: 'по ответу агента', tool: 'по вызовам инструментов', state: 'по состоянию системы' } as const;
 /** How a duty is observed; a duty on the tools names the tool whose call proves it, when it names one. */
 const observedText = (expectation: Card['agentMust'][number]): string =>
@@ -224,7 +226,7 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
     ]),
     ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${observedText(expectation)}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
     ...rules,
-    { label: 'Запись', text: `ситуация ${card.id} · версия ${card.revision} · набор ${library.id}, ревизия ${library.revision}` },
+    { label: RECORD_LABEL, text: `ситуация ${card.id} · версия ${card.revision} · набор ${library.id}, ревизия ${library.revision}` },
   ];
 }
 
@@ -577,13 +579,23 @@ export const actionRow = (actions: readonly SituationAction[]): SituationRow =>
 
 /* ───────────────────────────── «было → стало» ───────────────────────────── */
 
-export interface BriefChange { field: string; before: string | null; after: string | null }
+/** One line of «было → стало»; `flip` — a duty turned into its opposite (must ↔ must not), which every preview says first. */
+export interface BriefChange { field: string; before: string | null; after: string | null; flip?: true }
+
+/** A duty as a change names it: «Агент должен» or «Агент не должен» (C6 wording, one place for every surface). */
+const dutyLabel = (duty: Pick<Brief['must'][number], 'forbidden'>): string => duty.forbidden ? 'Агент не должен' : 'Агент должен';
+/** A duty whose meaning turns, in the flip line: «агент НЕ должен: …» stands out from «агент должен: …». */
+const dutyStatement = (duty: Pick<Brief['must'][number], 'forbidden' | 'text'>): string => `агент ${duty.forbidden ? 'НЕ ' : ''}должен: ${duty.text}`;
+/** Whether a duty is the plan's shared expectation or the situation's own, as a change shows it. */
+const PLAN_LINK = { shared: 'общее ожидание сценария: меняется вместе с планом', own: 'только этой ситуации: план его больше не меняет' } as const;
 
 /**
  * What changed between two states of one situation, line by line of the brief: a fact and a duty are matched
- * by their id, so a changed disclosure reads «было «?», стало «если спросят»» on the same fact. A card's terms the
- * brief does not print — a duty's rules, its condition and how it is observed, the agent's question a fact answers,
- * what the late turn does — get lines of their own: whatever the owner confirms is shown.
+ * by their id, so a changed disclosure reads «было «?», стало «если спросят»» on the same fact. Every field of a duty
+ * the judge reads gets its line — whether it must or must not be done (a turn into the opposite comes first of all),
+ * its words, what else fulfils it, what breaks it, when it applies, its rules, how it is observed, whether it is the
+ * plan's —, and so do the agent's question a fact answers and what the late turn does. Whatever else changes in how the
+ * situation is run and judged («d») is listed from there: a change the owner confirms is never shown as none.
  */
 export function briefChanges(before: SituationView | undefined, after: SituationView | undefined): BriefChange[] {
   if (!before || !after) return [{ field: 'Ситуация', before: before ? `№${before.number} ${before.brief.title}` : null, after: after ? `№${after.number} ${after.brief.title}` : null }];
@@ -609,21 +621,57 @@ export function briefChanges(before: SituationView | undefined, after: Situation
   }
   text('Уходит', before.brief.leaves, after.brief.leaves);
   text('Поворот', turnLine(before), turnLine(after));
-  paired('Агент должен', before.brief.must, after.brief.must, before.refs.must, after.refs.must, duty => duty.text);
+  const flips = dutyChanges(before, after, changes);
   const references = (brief: Brief) => brief.references ?? [];
   paired('Проверяется кодом', references(before.brief), references(after.brief), references(before.brief).map(item => item.id), references(after.brief).map(item => item.id), item => item.text);
-  if (before.terms && after.terms) {
-    const was = byId(before.terms.must, before.refs.must);
-    for (const [index, id] of after.refs.must.entries()) {
-      const a = id ? was.get(id) : undefined, b = after.terms.must[index];
-      if (!a || !b) continue;
-      const duty = `Агент должен: ${after.brief.must[index]!.text}`;
-      if (a.rules.map(rule => rule.id).join(' ') !== b.rules.map(rule => rule.id).join(' ')) changes.push({ field: `${duty} — правило`, before: rulesText(a), after: rulesText(b) });
-      text(`${duty} — когда`, a.when ?? 'всегда', b.when ?? 'всегда');
-      text(`${duty} — проверяется`, a.observed, b.observed);
+  if (!changes.length && !flips.length) changes.push(...detailChanges(before, after));
+  return [...flips, ...changes];
+}
+
+/** A duty with everything a change of it may move, by the duty's id. */
+function dutiesOf(view: SituationView) {
+  return new Map(view.brief.must.flatMap((duty, index) => {
+    const id = view.refs.must[index];
+    return id ? [[id, { duty, terms: view.terms?.must[index], plan: view.refs.plan?.[index] ?? null }] as const] : [];
+  }));
+}
+
+/**
+ * The lines of the duties' changes, pushed onto `changes` in the brief's order; a duty turned into its opposite is returned
+ * apart, so it can lead the preview.
+ */
+function dutyChanges(before: SituationView, after: SituationView, changes: BriefChange[]): BriefChange[] {
+  const flips: BriefChange[] = [];
+  const text = (field: string, a: string | null, b: string | null) => { if (a !== b) changes.push({ field, before: a, after: b }); };
+  const was = dutiesOf(before), now = dutiesOf(after);
+  for (const [id, a] of was) if (!now.has(id)) changes.push({ field: dutyLabel(a.duty), before: a.duty.text, after: null });
+  for (const [id, b] of now) {
+    const a = was.get(id);
+    if (!a) { changes.push({ field: dutyLabel(b.duty), before: null, after: b.duty.text }); continue; }
+    if (!!a.duty.forbidden !== !!b.duty.forbidden) flips.push({ field: 'Смысл ожидания меняется на противоположный', before: dutyStatement(a.duty), after: dutyStatement(b.duty), flip: true });
+    else text(dutyLabel(b.duty), a.duty.text, b.duty.text);
+    const name = `${dutyLabel(b.duty)}: ${b.duty.text}`;
+    text(`${name} — допустимо`, a.duty.acceptable ?? null, b.duty.acceptable ?? null);
+    text(`${name} — нарушение`, a.duty.violation ?? null, b.duty.violation ?? null);
+    if (a.terms && b.terms) {
+      text(`${name} — когда`, a.terms.when ?? 'всегда', b.terms.when ?? 'всегда');
+      if (a.terms.rules.map(rule => rule.id).join(' ') !== b.terms.rules.map(rule => rule.id).join(' ')) changes.push({ field: `${name} — правило`, before: rulesText(a.terms), after: rulesText(b.terms) });
+      text(`${name} — проверяется`, a.terms.observed, b.terms.observed);
     }
+    text(`${name} — чьё ожидание`, a.plan ? PLAN_LINK.shared : PLAN_LINK.own, b.plan ? PLAN_LINK.shared : PLAN_LINK.own);
   }
-  return changes;
+  return flips;
+}
+
+/**
+ * The lines of «как это проверяется» that differ, for a change no line of the brief shows (who vouches for a fact, say):
+ * the record's own line («Запись») aside, which every change moves.
+ */
+function detailChanges(before: SituationView, after: SituationView): BriefChange[] {
+  const lines = (view: SituationView) => view.details.filter(item => item.label !== RECORD_LABEL).map(item => `${item.label}: ${item.text}`);
+  const was = lines(before), now = lines(after);
+  const left = was.filter(line => !now.includes(line)), came = now.filter(line => !was.includes(line));
+  return [...left.map(line => ({ field: 'Как проверяется', before: line, after: null })), ...came.map(line => ({ field: 'Как проверяется', before: null, after: line }))];
 }
 
 /** Whether a card's customer can say what they want, as a change shows it; the older formats have no such mark. */
@@ -639,7 +687,7 @@ export function changeText(change: BriefChange): string {
   if (before === null) return `${field}: добавлено «${after}»`;
   if (after === null) return `${field}: убрано «${before}»`;
   const cut = before.lastIndexOf(' — ');
-  if (cut > 0 && after.startsWith(before.slice(0, cut + 3))) return `${field}: ${before.slice(0, cut)} — было «${before.slice(cut + 3)}», стало «${after.slice(cut + 3)}»`;
+  if (!change.flip && cut > 0 && after.startsWith(before.slice(0, cut + 3))) return `${field}: ${before.slice(0, cut)} — было «${before.slice(cut + 3)}», стало «${after.slice(cut + 3)}»`;
   return `${field}: было «${before}», стало «${after}»`;
 }
 
