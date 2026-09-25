@@ -7,7 +7,7 @@ import { rulebookLines, type RulebookView } from '../src/card/rulebook.js';
 import { decisionsLine } from '../src/inbox.js';
 import { problemSize, problemsLine, type Problem } from '../src/problems.js';
 import {
-  accuracyParts, ANSWER_TEXT, calibrationRows, causeRows, failureRows, fitRows, judgeQuestionText, logDisagreementRows, logQuestionText, nextRows,
+  accuracyParts, ANSWER_TEXT, calibrationRows, causeItems, causeRows, failureRows, fitRows, judgeQuestionText, logDisagreementRows, logQuestionText, nextRows,
   resultScreen as resultRows, runLine, trialTurns, whenText, type ResultRow, type Turn,
 } from '../src/result-text.js';
 import type { NextStep, ResultView } from '../src/result-view.js';
@@ -340,7 +340,7 @@ export function pickedRows(view: ResultView, options: { details: boolean; now: D
   let item = 0;
   if (causesAt >= 0) causes.forEach((row, offset) => {
     if (row.role !== 'item') return;
-    const trialId = trialOf(view.topCauses.length ? view.topCauses[item]?.scenarioIds[0] : view.failures[item]?.scenarioId);
+    const trialId = trialOf(causeItems(view).items[item]?.scenarioIds[0]);
     item++;
     if (trialId) picks[causesAt + offset] = { kind: 'failure', trialId };
   });

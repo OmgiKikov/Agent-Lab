@@ -1,7 +1,7 @@
 import { countingRuleOf, headlineRule } from './card/expectations.js';
 import type { ExamResult, Experiment, Realism, Scenario, Trial, ValidationExclusion } from './contracts.js';
 import { isRunning } from './phases.js';
-import { agentMetricResult, COUNTING_RULES, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
+import { agentMetricResult, COUNTING_RULES, GOAL_METRIC_ID, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { judgeModel, stabilityAfterReassess, stabilityBetweenRuns, type Stability } from './comparison.js';
 import { topicView, trafficCoverage, type TopicView } from './coverage.js';
@@ -18,6 +18,7 @@ import { roleChoices } from './llm/models.js';
 import { simulatorEvidence, type SimulatorEvidence } from './simulator-evidence.js';
 import { planOutcomes, type ScenarioOutcome } from './card/plan.js';
 import { blindAgreement, type BlindAgreement } from './blind.js';
+import { oneLine } from './text.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -101,6 +102,12 @@ export function exclusionCounts(exclusions: ValidationExclusion[]): { kind: Excl
 
 /** How a connection's exam ended, when it did not pass: without one (`absent`) or failed; the percent waits for a pass. */
 export type ExamWithheld = Exclude<ExamResult['status'], 'passed'>;
+
+/**
+ * One part of a situation's verdict that failed, as the causes read it: an expectation in the card's own words (`mustNot`
+ * when the agent must not do it), the card's exact checks, or the goal and the prompt rules of an old generated card.
+ */
+export type BrokenPart = { kind: 'expectation'; text: string; mustNot?: true } | { kind: 'checks' } | { kind: 'goal' } | { kind: 'rules' };
 
 /** What to do next, typed; each surface words it (chat asks in words, the board has a row, the CLI names a command). */
 export type NextStep =
@@ -206,6 +213,13 @@ export interface ResultView {
   topCauses: { name: string; count: number; scenarioIds: string[]; example: FailureExplanation }[];
   /** Recorded causes of failed situations beyond the three in `topCauses`. */
   moreCauses: number;
+  /**
+   * What the failed counted situations broke, most often first (equal counts in record order): each failed part of their
+   * verdict with the situations that failed it. Where no cause was named (`topCauses` empty), it is the cause in the
+   * owner's own words — never a situation's title. A legacy card decided by its strict result adds nothing. Never
+   * changes the headline.
+   */
+  broken: { part: BrokenPart; count: number; scenarioIds: string[] }[];
   /** Per-topic rows and the traffic-weighted estimate, when the run's situations come from at least two topics. */
   topics: TopicView | null;
   /**
@@ -297,6 +311,29 @@ function causesOf(run: RunDerivation, failures: FailureExplanation[]): ResultVie
   })
     // Array.prototype.sort is stable: equal counts keep the recorded cluster order.
     .sort((a, b) => b.count - a.count);
+}
+
+/** What the failed counted situations broke (ResultView.broken): every failed part of each, tallied by what it is. */
+function brokenOf(run: RunDerivation, counted: readonly ResultCard[]): ResultView['broken'] {
+  const tally = new Map<string, ResultView['broken'][number]>();
+  for (const card of counted.filter(item => item.outcome === 'fail')) {
+    const situation = run.situation(card.scenarioId)!;
+    const rule = headlineRule(situation.scenario, situation.attempts.map(attempt => attempt.trial));
+    const mustNot = new Set(rule.kind === 'expectations' ? rule.expectations.filter(item => item.strength === 'must_not').map(item => item.id) : []);
+    for (const part of card.parts.filter(item => item.outcome === 'fail')) {
+      const broken: BrokenPart | null = rule.kind === 'goal_rules' ? (part.id === GOAL_METRIC_ID ? { kind: 'goal' } : part.id === RULES_METRIC_ID ? { kind: 'rules' } : null)
+        : part.id === 'checks' ? { kind: 'checks' }
+        : part.text ? { kind: 'expectation', text: oneLine(part.text), ...(mustNot.has(part.id) ? { mustNot: true as const } : {}) } : null;
+      if (!broken) continue;
+      const key = JSON.stringify(broken);
+      const item = tally.get(key) ?? { part: broken, count: 0, scenarioIds: [] };
+      if (item.scenarioIds.includes(card.scenarioId)) continue;
+      item.count++; item.scenarioIds.push(card.scenarioId);
+      tally.set(key, item);
+    }
+  }
+  // Array.prototype.sort is stable: equal counts keep the order they were first broken in.
+  return [...tally.values()].sort((a, b) => b.count - a.count);
 }
 
 /**
@@ -470,7 +507,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     control: { cards: controls, alarm },
     breakdown: breakdownOf(run, counted),
     coverage: { examined: record.dialogues.length + exclusions.length, included: record.dialogues.length, excluded: exclusionCounts(exclusions) },
-    cards, failures, topCauses: causes.slice(0, TOP_CAUSES), moreCauses: Math.max(0, causes.length - TOP_CAUSES),
+    cards, failures, topCauses: causes.slice(0, TOP_CAUSES), moreCauses: Math.max(0, causes.length - TOP_CAUSES), broken: brokenOf(run, counted),
     topics: topicView(record, cards), topicCoverage: trafficCoverage(record, cards),
     agreement: judgeAgreement(input),
     reviewed: { situations: reviewed.situations, contradicted: reviewed.contradicted },

@@ -6,7 +6,7 @@ import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
 import {
-  accuracyParts, alarmRow, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, moreCausesText, noErrorsText, noRuleText, realityParts, reasonLabel,
+  accuracyParts, alarmRow, causeItems, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, noRuleText, realityParts, reasonLabel,
   operabilityText, saidText, scenarioRows, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
@@ -70,17 +70,15 @@ function chipOf(card: ResultCard, view: ResultView): CardItem['chip'] {
   return { text: reason ? `? не измерено — ${reasonLabel(reason, READER)}` : '? ещё проверяется', tone: 'warn' };
 }
 
-/** «Почему ошибается»: each cause with up to three of its failures quoted, and how many more causes there are; without causes, the failures themselves. */
+/** «Почему ошибается»: the causes every surface names (causeItems), each with up to three of its failures quoted, and how many more there are. */
 function causesBlock(view: ResultView): Block[] {
   if (!view.failures.length) {
     return view.headline.decided ? [{ kind: 'paragraph', muted: false, text: noErrorsText(view.headline.decided, view.notMeasured.total) }] : [];
   }
-  const items = view.topCauses.length
-    ? view.topCauses.map(cause => ({ title: oneLine(cause.name), count: countText(cause.count, SITUATIONS),
-      examples: view.failures.filter(failure => cause.scenarioIds.includes(failure.scenarioId)).slice(0, 3).map(example) }))
-    : view.failures.slice(0, 3).map(failure => ({ title: oneLine(failure.title), count: countText(1, SITUATIONS), examples: [example(failure)] }));
-  const more = view.topCauses.length && view.moreCauses ? [{ kind: 'paragraph' as const, muted: true, text: moreCausesText(view.moreCauses) }] : [];
-  return [{ kind: 'section', title: 'Почему ошибается', blocks: [{ kind: 'causes', items }, ...more] }];
+  const { items, more, moreText } = causeItems(view);
+  const shown = items.map(cause => ({ title: cause.text, count: countText(cause.count, SITUATIONS),
+    examples: view.failures.filter(failure => cause.scenarioIds.includes(failure.scenarioId)).slice(0, 3).map(example) }));
+  return [{ kind: 'section', title: 'Почему ошибается', blocks: [{ kind: 'causes', items: shown }, ...(more ? [{ kind: 'paragraph' as const, muted: true, text: moreText }] : [])] }];
 }
 
 /**

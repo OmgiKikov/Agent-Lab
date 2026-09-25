@@ -9,7 +9,7 @@ import type { FailureExplanation } from './explain.js';
 import type { JudgeCheckSummary } from './judge-check.js';
 import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
-import { NOT_MEASURED_ABOUT_OWNER, type ExamWithheld, type NextStep, type ResultView, type TrustIssue } from './result-view.js';
+import { NOT_MEASURED_ABOUT_OWNER, type BrokenPart, type ExamWithheld, type NextStep, type ResultView, type TrustIssue } from './result-view.js';
 import type { NotMeasuredCode } from './run.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import { oneLine } from './text.js';
@@ -546,32 +546,59 @@ function exampleRows(example: FailureExplanation, indent: number): ResultRow[] {
 /** «и ещё 2 причины»: the recorded causes past the three «Почему ошибается» names. */
 export const moreCausesText = (count: number): string => `и ещё ${countText(count, CAUSES)}`;
 
+/** A failed part of a verdict as a cause says it: «Нарушено: объяснить, как оформить возврат», «Не выполнен запрос клиента». */
+export function brokenText(part: BrokenPart): string {
+  switch (part.kind) {
+    case 'expectation': return `Нарушено: ${part.mustNot ? 'нельзя — ' : ''}${part.text}`;
+    case 'checks': return 'Не пройдены точные проверки';
+    case 'goal': return 'Не выполнен запрос клиента';
+    case 'rules': return 'Нарушены правила промпта';
+  }
+}
+
+/** «Почему ошибается» names this many causes; the rest are only counted. */
+const TOP_CAUSES = 3;
+
+/** One cause of «Почему ошибается»: its words, the situations it failed, the failure that shows it. */
+export interface CauseItem { text: string; count: number; scenarioIds: string[]; example: FailureExplanation;
+  /** A cause named by the failure itself — the situation's title, where nothing else says why —: its example needs no title row. */
+  titled?: true }
+
 /**
- * «Почему ошибается»: up to three causes with their size, largest first, each with its example when
- * `examples`, and how many more causes there are; without recorded causes, the failed situations by title.
- * When something was decided and nothing failed, the one honest sentence about what that does not prove —
- * and that only the measured situations had no error when some were not measured.
+ * The causes «Почему ошибается» names, largest first — the causes the run named; where it named none, what the failed
+ * situations broke, in the card's own words; only where not even that is known (a legacy card decided by its strict
+ * result), the failed situations by title — at most three, and how many more there are (`more`, counted in causes, or in
+ * errors for titles). Every surface lists these, and a cursor opens a cause by its first situation.
+ */
+export function causeItems(view: Pick<ResultView, 'topCauses' | 'moreCauses' | 'broken' | 'failures'>): { items: CauseItem[]; more: number; moreText: string } {
+  if (view.topCauses.length) return { items: view.topCauses.map(cause => ({ text: oneLine(cause.name), count: cause.count, scenarioIds: cause.scenarioIds, example: cause.example })),
+    more: view.moreCauses, moreText: moreCausesText(view.moreCauses) };
+  const failed = new Map(view.failures.map(failure => [failure.scenarioId, failure]));
+  const broken = view.broken.flatMap(item => {
+    const example = item.scenarioIds.map(id => failed.get(id)).find(failure => failure !== undefined);
+    return example ? [{ text: brokenText(item.part), count: item.count, scenarioIds: item.scenarioIds, example }] : [];
+  });
+  const more = (total: number) => Math.max(0, total - TOP_CAUSES);
+  if (broken.length) return { items: broken.slice(0, TOP_CAUSES), more: more(broken.length), moreText: moreCausesText(more(broken.length)) };
+  return { items: view.failures.slice(0, TOP_CAUSES).map(failure => ({ text: oneLine(failure.title), count: 1, scenarioIds: [failure.scenarioId], example: failure, titled: true as const })),
+    more: more(view.failures.length), moreText: `и ещё ${countText(more(view.failures.length), ERRORS)}` };
+}
+
+/**
+ * «Почему ошибается»: up to three causes with their size, largest first (causeItems), each with its example when
+ * `examples`, and how many more there are. When something was decided and nothing failed, the one honest sentence
+ * about what that does not prove — and that only the measured situations had no error when some were not measured.
  */
 export function causeRows(view: ResultView, options: { examples?: boolean } = {}): ResultRow[] {
   if (!view.failures.length) {
     const unmeasured = view.notMeasured.total;
     return view.headline.decided ? [{ role: unmeasured ? 'muted' : 'good', indent: 0, text: noErrorsText(view.headline.decided, unmeasured) }] : [];
   }
-  const rows: ResultRow[] = [{ role: 'heading', indent: 0, text: 'Почему ошибается' }];
-  if (view.topCauses.length) {
-    view.topCauses.forEach((cause, i) => {
-      rows.push({ role: 'item', indent: 2, text: `${i + 1}  ${oneLine(cause.name)}`, right: countText(cause.count, SITUATIONS), short: String(cause.count) });
-      if (options.examples) rows.push(...exampleRows(cause.example, 5));
-    });
-    if (view.moreCauses) rows.push({ role: 'muted', indent: 2, text: moreCausesText(view.moreCauses) });
-    return rows;
-  }
-  view.failures.slice(0, 3).forEach((failure, i) => {
-    rows.push({ role: 'item', indent: 2, text: `${i + 1}  ${oneLine(failure.title)}` });
-    if (options.examples) rows.push(...exampleRows(failure, 5).slice(1));
-  });
-  if (view.failures.length > 3) rows.push({ role: 'muted', indent: 2, text: `и ещё ${countText(view.failures.length - 3, ERRORS)}` });
-  return rows;
+  const { items, more, moreText } = causeItems(view);
+  return [{ role: 'heading', indent: 0, text: 'Почему ошибается' }, ...items.flatMap((cause, i): ResultRow[] => [
+    { role: 'item', indent: 2, text: `${i + 1}  ${cause.text}`, right: countText(cause.count, SITUATIONS), short: String(cause.count) },
+    ...(options.examples ? exampleRows(cause.example, 5).slice(cause.titled ? 1 : 0) : []),
+  ]), ...(more ? [{ role: 'muted' as const, indent: 2, text: moreText }] : [])];
 }
 
 /**
@@ -758,12 +785,8 @@ export function resultScreen(view: ResultView, options: { surface: 'board' | 'cl
 export function chatBlock(view: ResultView, options: { expanded: boolean }): ResultRow[] {
   const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
   if (!options.expanded) {
-    const causes = view.topCauses.length
-      ? view.topCauses.map(cause => `${oneLine(cause.name)} (${cause.count})`)
-      : view.failures.slice(0, 3).map(failure => oneLine(failure.title));
-    // More causes than named are counted as causes; without recorded causes, the failures past the three named.
-    const more = view.topCauses.length ? view.moreCauses : Math.max(0, view.failures.length - 3);
-    const causeParts = [...causes, ...(more ? [`ещё ${countText(more, view.topCauses.length ? CAUSES : ERRORS)}`] : [])];
+    const { items, more, moreText } = causeItems(view);
+    const causeParts = [...items.map(cause => `${cause.text} (${cause.count})`), ...(more ? [moreText] : [])];
     const noErrors = view.failures.length ? [] : causeRows(view).map(row => ({ ...row, indent: 2 }));
     return [...head.filter(row => row.role !== 'reality'), ...noErrors,
       ...(causeParts.length ? [{ role: 'muted' as const, indent: 2, text: `Чаще всего: ${causeParts.join(' · ')}`, parts: [`Чаще всего: ${causeParts[0]}`, ...causeParts.slice(1)] }] : [])];
