@@ -17,7 +17,7 @@ import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
 import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, withRequirements } from './library.js';
 import { rulebookOf } from './rulebook.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, proposalRequirements, type CardProposalRequest, type ProposalCall } from './proposal.js';
-import { blockedClaims, claimReceipts, pendingClaims, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
+import { revisionClaims, claimReceipts, pendingClaims, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
 import type { Card, CardPreparation, LibraryV2, PreparationProgress } from './schema.js';
 
 /*
@@ -398,17 +398,17 @@ class Preparation {
   }
 
   /**
-   * A card the reviewer blocked goes back to the proposal once, with the reviewer's reason for each blocked claim; the
-   * revision is bound, checked and reviewed like a new card, and replaces it. A doubt only the owner can settle is the
-   * owner's, not a revision's. The revision is spent whatever it gives: a revision that fails its checks, or runs out of
-   * the unit's proposal allowance, leaves the blocked card as it was; a resume never revises again.
+   * A generated card with unsupported or ambiguous claims gets one revision before asking the owner.
+   * The revision is bound, checked and independently reviewed like a new card. It cannot approve a doubt:
+   * unresolved ambiguity stays with the owner. Owner-authored cards and decisions are never overwritten.
+   * A failed revision leaves the previous card intact; a resume never revises the same unit again.
    */
   private async revise(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, card: Card, whole: boolean): Promise<void> {
     if (this.progress.revised?.includes(unit)) return;
     // A card of a logged conversation is written again only beside that conversation; a card the owner changed or
     // decided on is theirs, and no model writes it over.
     if (card.origin.kind === 'dialogue' && !dialogue || namedByOwner(this.library, card.id)) return;
-    const blocked = blockedClaims(card, { library: this.library, evidence: this.evidence });
+    const blocked = revisionClaims(card, { library: this.library, evidence: this.evidence });
     if (!blocked.length) return;
     const spent = async () => { this.progress.revised = [...this.progress.revised ?? [], unit]; await this.publish(); };
     let revised: Card | { excluded: string };

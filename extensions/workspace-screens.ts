@@ -20,6 +20,8 @@ import { GLYPH, ROLE_TONE, type Tone } from './render/theme.ts';
 import { agreementTarget, type Answer } from './judge-review.ts';
 import type { PreparationView } from './preparation-progress.ts';
 import { preparationPanel } from './preparation-panel.ts';
+import { situationBrowser, situationExplanation } from './situation-browser.ts';
+import { runPanel } from './run-panel.ts';
 
 /*
  * The screens of the agent's workspace (docs/design/ui-spec.md §4, §8), as lines ready to paint: the header with the areas — or the
@@ -182,7 +184,7 @@ function stepLine(data: SpaceData, current: Step, width: number): Line {
   const situations = work === 'preparation' ? 'Ситуации готовятся' : work === 'check' ? 'Ситуации проверяются' : `Ситуации ${views.length ? `${ready}/${views.length}` : ''}`.trim();
   const tabs: Tab<Step>[] = [{ place: 'situations', text: situations, short: 'Ситуации', tone: 'muted' },
     { place: 'run', text: work === 'run' ? 'Прогон идёт' : 'Прогон', short: 'Прогон', tone: 'muted' },
-    { place: 'result', text: `Результат${result ? ` ${result}` : ''}`, short: 'Результат', tone: 'muted' }];
+    { place: 'result', text: `Результат${result ? ` · точность ${result}` : ''}`, short: 'Результат', tone: 'muted' }];
   const { shown, gap } = fitTabs(tabs, current, [], '  ›  ', room(width) - 1);
   return tabLine(shown, current, gap);
 }
@@ -239,6 +241,12 @@ const lowerFirst = (text: string) => text.charAt(0).toLocaleLowerCase('ru') + te
 export function situationsScreen(data: SpaceData, selected: number, width: number, options: { firstRun?: boolean } = {}): Screen {
   const set = data.set;
   const areas: Hint = options.firstRun ? { key: '→', text: 'прогон' } : { key: '←→', text: 'области' };
+  if (set?.views.length && data.progress?.kind !== 'preparation') {
+    const screen = situationBrowser(data, selected, width,
+      [{ key: '↑↓', text: 'ситуация' }, { key: 'PgDn', text: 'ниже' }, { key: '←→', text: options.firstRun ? 'этапы' : 'области' }, { key: 'Enter', text: 'открыть' }, { key: 'Esc', text: 'закрыть' }]);
+    if (data.progress?.kind === 'check') screen.body.unshift(...progressLines(data.progress, room(width)));
+    return screen;
+  }
   // Situations being prepared or checked: the work's own row leads, and it says where its situations appear.
   const progress = data.progress;
   const hint = progress && progress.kind !== 'run' ? HERE_HINT[progress.kind] : undefined;
@@ -445,9 +453,11 @@ const HERE_HINT: Record<Exclude<WorkKind, 'run'>, string> = {
  * «Прогон» before the first result (docs/design/ui-spec.md §4.6): what a run of the ready situations will be, in the very words
  * of the run dialog Enter opens — one description of the plan, never two —; or the work going on, which Enter stops.
  */
-export function runStepScreen(data: SpaceData, width: number): Screen {
+export function runStepScreen(data: SpaceData, width: number, details = false): Screen {
   const w = room(width);
   const work = data.progress;
+  if (work?.kind === 'run' && data.set) return { head: [], body: runPanel(data, width, details),
+    foot: [{ key: '→', text: 'результат' }, ...(work.stoppable ? [{ key: 'Enter', text: 'остановить' }] : []), { key: 'Esc', text: 'закрыть' }] };
   if (work) return { head: [], body: [...(work.kind === 'run' ? [] : [...wsLines([ws('answer', work.kind === 'preparation' ? 'Запустить можно, когда подготовка закончится.' : 'Запустить можно, когда проверка закончится.')], w), blank]),
     ...progressLines(work, w), ...wsLines([ws('muted', WORK_HINT[work.kind], 3)], w)],
   foot: [...(work.stoppable ? [{ key: 'Enter', text: 'остановить' }] : []), work.kind === 'run' ? { key: '→', text: 'результат' } : { key: '←', text: 'ситуации' }, { key: 'Esc', text: 'закрыть' }] };
@@ -457,8 +467,8 @@ export function runStepScreen(data: SpaceData, width: number): Screen {
     return { head: [], body: wsLines([ws('answer', waiting ? `Нечего запускать: ответьте на ${countText(waiting, ['вопрос', 'вопроса', 'вопросов'])} в «Ситуациях».` : 'Нечего запускать: готовых ситуаций пока нет.')], w),
       foot: [{ key: '←', text: 'ситуации' }, { key: 'Esc', text: 'закрыть' }] };
   }
-  return { head: [], body: wsLines([ws('answer', 'Готово к запуску'), ...set.launch.map(line => ws('text', line, 1, { hang: 2 }))], w),
-    foot: [{ key: 'Enter', text: 'запустить' }, { key: '←', text: 'ситуации' }, { key: 'Esc', text: 'закрыть' }] };
+  return { head: [], body: runPanel(data, width, details),
+    foot: [{ key: 'Enter', text: 'к запуску' }, { key: '←', text: 'ситуации' }, { key: 'd', text: details ? 'скрыть параметры' : 'параметры' }, { key: 'Esc', text: 'закрыть' }] };
 }
 
 /* ───────────────────────────── open objects ───────────────────────────── */
@@ -472,7 +482,7 @@ export function situationScreen(view: SituationView, options: { details: boolean
   const answering = actions.length && view.question?.choices.length;
   const foot: Hint[] = [...(actions.length ? [{ key: '1–3', text: answering ? 'ответить' : 'действие' }] : []), { key: 'a', text: 'спросить Lab' },
     ...(view.status === 'unusable' ? [] : [{ key: 'd', text: options.details ? 'скрыть проверку' : 'как это проверяется' }]), { key: 'Esc', text: 'назад' }];
-  return { head: [], body: situationLines(rows, room(width)), foot };
+  return { head: [], body: options.details ? situationLines(rows, room(width)) : situationExplanation(view, room(width), options.editable), foot };
 }
 
 /** The keys of the answers, after the question or the owner's answer. */

@@ -411,13 +411,13 @@ export function situationEntry(view: SituationView) {
   return { number: view.number, title: view.brief.title, status: view.status, ...questionData(view), ...(view.problems.length ? { problems: view.problems.slice(0, 1) } : {}) };
 }
 
-/** «12 ситуаций: 9 готовы · 2 ждут вашего ответа · 1 не подходит для теста». */
+/** «12 ситуаций: 9 готовы · 2 ждут вашего ответа · 1 требует исправления». */
 export function countsText(views: readonly SituationView[]): string {
   const count = (status: CardStatusKind) => views.filter(view => view.status === status).length;
   const parts = [
     countText(count('ready'), ['готова', 'готовы', 'готовы']),
     ...(count('needs_owner') ? [countText(count('needs_owner'), ['ждёт вашего ответа', 'ждут вашего ответа', 'ждут вашего ответа'])] : []),
-    ...(count('unusable') ? [countText(count('unusable'), ['не подходит для теста', 'не подходят для теста', 'не подходят для теста'])] : []),
+    ...(count('unusable') ? [countText(count('unusable'), ['требует исправления', 'требуют исправления', 'требуют исправления'])] : []),
     ...(count('checking') ? [countText(count('checking'), ['ещё не проверена', 'ещё не проверены', 'ещё не проверены'])] : []),
   ];
   return `${countText(views.length, ['ситуация', 'ситуации', 'ситуаций'])}: ${parts.join(' · ')}`;
@@ -441,7 +441,7 @@ const blank: SituationRow = { role: 'blank', indent: 0, text: '' };
 const CHIP: Record<CardStatusKind, { role: SituationRole; text: string; short: string }> = {
   ready: { role: 'chip:ready', text: '✓ готова', short: '✓ готова' },
   needs_owner: { role: 'chip:ask', text: '? нужен ваш ответ', short: '? ответ' },
-  unusable: { role: 'chip:unusable', text: '✗ не подходит для теста', short: '✗ не подходит' },
+  unusable: { role: 'chip:unusable', text: '✗ исправить карточку', short: '✗ исправить' },
   checking: { role: 'chip:checking', text: '… ждёт проверки', short: '… проверка' },
 };
 /** The status chip; «проверяю» only while a check is running, so a check that is not going is never claimed. */
@@ -520,7 +520,7 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
     ...must,
     ...(brief.references ? [blank, { role: 'heading' as const, indent: 0, text: 'Проверяется кодом' },
       ...brief.references.map((reference, index): SituationRow => ({ role: 'field', indent: 3, text: `${String(index + 1).padEnd(3)}${reference.text}`, hang: 3 }))] : []),
-    ...(view.problems.length ? [blank, { role: 'heading' as const, indent: 0, text: 'Почему не подходит' },
+    ...(view.problems.length ? [blank, { role: 'heading' as const, indent: 0, text: 'Что исправить в карточке' },
       ...view.problems.map(text => ({ role: 'problem' as const, indent: 3, text }))] : []),
     ...questionRows(view),
   ];

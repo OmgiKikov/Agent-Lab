@@ -1,29 +1,11 @@
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { span, row, fit, wrap, box, beside } from './render/panels.ts';
 import type { SituationView } from '../src/card/view.js';
-import { safeLine } from '../src/text.js';
 import { countText } from '../src/plural.js';
 import type { PreparationView } from './preparation-progress.ts';
-import type { Line, Segment } from './workspace-screens.ts';
+import type { Line } from './workspace-screens.ts';
 import type { Tone } from './render/theme.ts';
 
 export const WORKSPACE_WIDTH = 140;
-const span = (text: string, tone: Tone = 'text', bold = false): Segment => ({ text, tone, bold });
-const row = (text: string, tone: Tone = 'text', bold = false): Line => [span(safeLine(text), tone, bold)];
-const size = (line: Line) => line.reduce((sum, part) => sum + visibleWidth(part.text), 0);
-const pad = (line: Line, width: number): Line => [...line, span(' '.repeat(Math.max(0, width - size(line))))];
-const fit = (text: string, width: number) => safeLine(truncateToWidth(safeLine(text), Math.max(1, width), '…'));
-const wrap = (text: string, width: number, tone: Tone = 'text'): Line[] => wrapTextWithAnsi(safeLine(text), Math.max(1, width)).map(value => row(value, tone));
-
-function box(title: string, body: Line[], width: number): Line[] {
-  const label = fit(` ${title} `, width - 4);
-  return [[span('╭─', 'borderMuted'), span(label, 'muted'), span('─'.repeat(Math.max(0, width - visibleWidth(label) - 3)) + '╮', 'borderMuted')],
-    ...[[], ...body, []].map(line => [span('│ ', 'borderMuted'), ...pad(line, width - 4), span(' │', 'borderMuted')]),
-    row('╰' + '─'.repeat(width - 2) + '╯', 'borderMuted')];
-}
-function beside(left: Line[], right: Line[], leftWidth: number): Line[] {
-  return Array.from({ length: Math.max(left.length, right.length) }, (_, i) => [...pad(left[i] ?? [], leftWidth), span('  '), ...(right[i] ?? [])]);
-}
-
 /** A compact dashboard: measured counts, current work and customer excerpts, with a stacked narrow layout. */
 export function preparationPanel(view: PreparationView, cards: SituationView[], available: number, frame = 0): Line[] {
   const width = Math.max(20, Math.min(available, WORKSPACE_WIDTH));
@@ -43,7 +25,7 @@ export function preparationPanel(view: PreparationView, cards: SituationView[], 
     [span('━'.repeat(filled), 'accent'), span('─'.repeat(barWidth - filled), 'borderMuted')], []];
 
   const metrics = [
-    { label: 'ДИАЛОГИ', value: logs ? `${logs.classified} / ${logs.total}` : '—', tone: 'text' as Tone },
+    { label: 'РАЗГОВОРЫ ИЗ ЛОГОВ', value: logs ? `${logs.classified} / ${logs.total}` : '—', tone: 'text' as Tone },
     { label: 'ТЕМЫ', value: logs ? String(logs.topics.length) : '—', tone: 'text' as Tone },
     { label: 'МОЖНО ЗАПУСКАТЬ', value: String(ready), tone: 'success' as Tone },
     { label: 'ОШИБКИ КАРТОЧЕК', value: String(blocked), tone: blocked ? 'error' as Tone : 'muted' as Tone },

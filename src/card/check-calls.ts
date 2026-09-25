@@ -2,7 +2,7 @@ import type { Experiment } from '../contracts.js';
 import { PROPOSAL_ATTEMPTS, REVIEW_CALLS } from './budget.js';
 import type { CardEvidence } from './checks.js';
 import { CARD_PROTOCOL, namedByOwner, pendingReviewCalls } from './prepare.js';
-import { blockedClaims, pendingClaims, type ReviewContext } from './review.js';
+import { revisionClaims, pendingClaims, type ReviewContext } from './review.js';
 import type { Card, LibraryV2 } from './schema.js';
 
 /*
@@ -11,8 +11,8 @@ import type { Card, LibraryV2 } from './schema.js';
  * situations is, each answer passing the first time (card/budget.ts):
  *
  *   every claim no receipt answers yet              its review requests
- *   a card still owed its one revision — blocked    the proposal of the new card (one request of its unit's allowance)
- *   now, or with a review to come that may block it   and the review of that card (at most REVIEW_CALLS requests)
+ *   a card still owed its one revision — flagged    the proposal of the new card (one request of its unit's allowance)
+ *   now, or with a review to come that may flag it   and the review of that card (at most REVIEW_CALLS requests)
  */
 
 /** A revision's calls: the proposal of the new card and its review. */
@@ -22,7 +22,7 @@ const REVISION_CALLS = 1 + REVIEW_CALLS;
 export function checkCalls(record: Pick<Experiment, 'preparationProgress' | 'originalImport'>, library: LibraryV2, evidence: CardEvidence): number {
   const context: ReviewContext = { library, evidence };
   const revisions = library.cards.filter(card => owedRevision(record, library, card, evidence)
-    && (blockedClaims(card, context).length > 0 || pendingClaims(card, context).length > 0)).length;
+    && (revisionClaims(card, context).length > 0 || pendingClaims(card, context).length > 0)).length;
   return pendingReviewCalls(library, evidence) + revisions * REVISION_CALLS;
 }
 

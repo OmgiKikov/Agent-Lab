@@ -242,7 +242,7 @@ export class LabWorkspace implements Component {
       if (problem) return withHead(problemScreen(problem, index + 1, width));
     }
     if (this.state.step === 'situations' || this.state.area === 'situations') return withHead(situationsScreen(data, this.cursor(), width, { firstRun: !!this.state.step }));
-    if (this.state.step === 'run') return withHead(runStepScreen(data, width));
+    if (this.state.step === 'run') return withHead(runStepScreen(data, width, this.state.details));
     if (this.state.area === 'inbox') return withHead(inboxScreen(data, this.cursor(), width));
     if (this.state.area === 'rules') return withHead(rulebookScreen(data, width));
     if (this.state.area === 'problems') return withHead(problemsScreen(data, this.cursor(), width));

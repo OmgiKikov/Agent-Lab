@@ -177,11 +177,11 @@ export function reviewRequests(card: Card, claims: readonly Claim[], context: Re
   return parts;
 }
 
-/** The claims of a card the reviewer blocked, by alias, with the reviewer's reason: what a revision must resolve. */
-export function blockedClaims(card: Card, context: ReviewContext): { claim: string; reason: string }[] {
+/** Unsupported or ambiguous generated claims, with the reviewer's reason: what a revision must resolve. */
+export function revisionClaims(card: Card, context: ReviewContext): { claim: string; reason: string }[] {
   return planClaims(card, context).flatMap(claim => {
     const receipt = context.library.claims.find(item => item.key === claim.key);
-    return receipt?.status === 'blocked' ? [{ claim: claim.alias, reason: receipt.reason }] : [];
+    return receipt && (receipt.status === 'blocked' || receipt.status === 'needs_owner') ? [{ claim: claim.alias, reason: receipt.reason }] : [];
   });
 }
 
