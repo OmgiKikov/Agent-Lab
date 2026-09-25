@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type, type Static } from 'typebox';
 import type { Experiment } from '../src/contracts.js';
-import { normalizeText, type CardEvidence } from '../src/card/checks.js';
+import { contains, type CardEvidence } from '../src/card/checks.js';
 import { hostGrant, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
 import { identifierPattern } from '../src/ids.js';
 import { convertible } from '../src/card/legacy-v1.js';
@@ -206,23 +206,12 @@ async function draftSituation(lab: ExperimentLab, record: Experiment, number: nu
   return { target, context, view };
 }
 
-/** Whether a character belongs to a word: a letter of any cased script or a digit. */
-const wordChar = (char: string | undefined): boolean => char !== undefined && (char.toLocaleLowerCase('ru') !== char.toLocaleUpperCase('ru') || (char >= '0' && char <= '9'));
-
 /**
- * Whether `text` stands in `message` word for word: after the one normalisation (card/checks.ts) and never inside a
- * longer word — «обещать возврат» is in «не должен обещать возврат денег», «а» is not in «Агент».
+ * Whether `text` stands in `message` word for word: after the one normalisation and never inside a longer word —
+ * «обещать возврат» is in «не должен обещать возврат денег», «а» is not in «Агент». The same whole-word reading the
+ * checks of a card use (card/checks.ts contains).
  */
-export function saidWordForWord(message: string, text: string): boolean {
-  const said = normalizeText(message), words = normalizeText(text);
-  if (!words) return false;
-  for (let at = said.indexOf(words); at >= 0; at = said.indexOf(words, at + 1)) {
-    const cutBefore = wordChar(said[at - 1]) && wordChar(words[0]);
-    const cutAfter = wordChar(said[at + words.length]) && wordChar(words.at(-1));
-    if (!cutBefore && !cutAfter) return true;
-  }
-  return false;
-}
+export const saidWordForWord = (message: string, text: string): boolean => contains(message, text);
 
 /** Why a change is not written without a terminal: the owner's own way on, never a command line that would consent for them. */
 const DECIDES_IN_TERMINAL = 'Изменение ситуации записывается только после вашего «Записать» в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не записано.';

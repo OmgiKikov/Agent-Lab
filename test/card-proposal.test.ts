@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { cardFindings, contains, loggedMessages, normalizeText, unusableFindings, type CardEvidence } from '../src/card/checks.js';
-import { bindProposal, cardProposalProblem, cardProposalSchema, citationId, proposalCall, proposalPayload, proposalRequirements, type DialogueProposal, type ProposalCall } from '../src/card/proposal.js';
+import { compileCard } from '../src/card/compile.js';
+import { bindProposal, cardProposalProblem, cardProposalSchema, citationId, proposalCall, proposalPayload, proposalRequirements, type DialogueProposal, type DutyProposal, type ProposalCall } from '../src/card/proposal.js';
 import { cardSchema, type Card } from '../src/card/schema.js';
+import { isCardExecution } from '../src/contracts.js';
 import { importBatch } from '../src/scenario-library.js';
 import { strictSchemaProblems } from './helpers/strict-schema.js';
 import { dialogues, policy, proposals, refundBasis, refundRule, rulesProposal } from './helpers/card-prep.js';
@@ -132,7 +134,7 @@ test('a proposal that does not bind is answered with every reason, in the words 
   const problem = cardProposalProblem(with_(proposal => { proposal.knows[0]!.value = '5679'; proposal.coverage['4'] = { as: 'ignored', reason: null }; }), late);
   assert.equal(problem, 'coverage["4"] is "ignored": give a short reason.', 'what the binding itself cannot hold comes first');
   const reasons = cardProposalProblem(with_(proposal => { proposal.knows[0]!.value = '5679'; proposal.coverage['2'] = { as: 'turn', reason: null }; }), late)!;
-  assert.match(reasons, /knows\[0\] "Номер терминала": the value "5679" is not in customer message 2\./);
+  assert.match(reasons, /knows\[0\] "Номер терминала": the value "5679" is not in customer message 2 as whole words\./);
   assert.match(reasons, /coverage\["2"\] is "turn", but "turn\.from" is not 2\./);
   assert.match(cardProposalProblem(with_(proposal => { proposal.knows[0]!.disclosure = 'initial'; }), late)!, /knows\[0\] "Номер терминала" is "initial", so it is said in the opening: its "from" must be writesEvent 0/);
   const long = importBatch([{ id: 'long', messages: [{ role: 'user', content: 'Очень длинно. '.repeat(250) }, { role: 'assistant', content: 'Слушаю.' }] }]);
@@ -199,4 +201,95 @@ test('text is compared exactly, after NFKC, case and spacing: no tokenizer, no f
   assert.ok(!contains('Номер 56 78', '5678'), 'digits split by a space are another value');
   assert.ok(!contains('Ёлка', 'елка'), 'no letter is folded into another');
   assert.ok(!contains('Номер терминала', 'Номер терминала: 5678'));
+});
+
+test('a value stands in a text only as whole words: never a piece of a longer number or word', () => {
+  assert.ok(!contains('Терминал 34567 не печатает чек', '3'), '«3» is not in «34567»');
+  assert.ok(!contains('На корпусе номер 15678', '5678'), '«5678» is not in «15678»');
+  assert.ok(!contains('Номер5678', '5678'), 'nor glued to a word');
+  assert.ok(!contains('Анна', 'нн'), 'nor inside a word');
+  assert.ok(contains('Номер  5678.', '5678'), 'punctuation and spacing end a word');
+  assert.ok(contains('Было 3 покупки', 3));
+  assert.ok(contains('(5678)', 5678));
+  assert.ok(contains('Сегодня 12.03.2026 списали', '12.03.2026'));
+  assert.ok(contains('Номер терминала: 5678, сумма 1200', 'терминала: 5678'), 'a value of several words stands as they do');
+  assert.ok(!contains('Сегодня 3', ''), 'an empty value is in no text');
+});
+
+/** A customer who names their purchases and their till only when asked, while the opening holds longer numbers with the same digits. */
+const numbers = importBatch([{ id: 'numbers', messages: [
+  { role: 'user', content: 'Терминал 34567 не печатает чек, на корпусе номер 15678.' },
+  { role: 'assistant', content: 'Сколько было покупок и какой номер кассы?' },
+  { role: 'user', content: 'Количество покупок: 3, касса 5678.' },
+  { role: 'assistant', content: 'Перезагрузите терминал.' },
+  { role: 'user', content: 'Спасибо!' },
+] }, { id: 'stated', messages: [
+  { role: 'user', content: 'Сегодня 3 чека не напечатались, терминал 34567.' },
+  { role: 'assistant', content: 'Сколько было покупок?' },
+  { role: 'user', content: 'Покупок было 3.' },
+  { role: 'assistant', content: 'Перезагрузите терминал.' },
+  { role: 'user', content: 'Спасибо!' },
+] }]);
+const numbersCall = (dialogueId: string) => proposalCall({ source: { kind: 'dialogue', batchId: numbers.id, dialogueId },
+  messages: loggedMessages(numbers.dialogues.find(dialogue => dialogue.id === dialogueId)!), sources: materials, maxTurns: 6 });
+const counted = (knows: DialogueProposal['knows'], coverage: DialogueProposal['coverage'] = { 2: { as: 'fact', reason: null }, 4: { as: 'stop', reason: null } }): DialogueProposal =>
+  ({ ...structuredClone(proposals.late), knows, coverage });
+const onRequest = (label: string, value: string): DialogueProposal['knows'][number] => ({ label, value, disclosure: 'on_request', from: 2, askedAs: null });
+
+test('facts named on request are not «already in the opening» because its longer numbers share their digits; the false «said at once» no longer passes', () => {
+  const call = numbersCall('numbers');
+  const honest = counted([onRequest('Количество покупок', '3'), onRequest('Номер кассы', '5678')]);
+  assert.equal(cardProposalProblem(honest, call), undefined, 'the customer named them when asked, and the card says so');
+  assert.deepEqual(cardFindings(bindProposal(honest, call, 1), { evidence: evidence(call), maxTurns: 6 }), []);
+  // What a repair used to push the model to: both facts «said in the opening», their message left out as noise.
+  const claimed = counted(honest.knows.map(fact => ({ ...fact, disclosure: 'initial' as const, from: 0 })),
+    { 2: { as: 'ignored', reason: 'повтор' }, 4: { as: 'stop', reason: null } });
+  const problem = cardProposalProblem(claimed, call)!;
+  assert.match(problem, /knows\[0\] "Количество покупок": the value "3" is not in customer message 0 as whole words/);
+  assert.match(problem, /knows\[1\] "Номер кассы": the value "5678" is not in customer message 0 as whole words/);
+});
+
+test('a value that does stand in the opening is repaired towards the truth: its own words first, «initial» only when the opening states the fact', () => {
+  const call = numbersCall('stated');
+  const problem = cardProposalProblem(counted([onRequest('Количество покупок', '3')]), call)!;
+  assert.equal(problem, 'knows[0] "Количество покупок" is not "initial", but its value "3" stands as whole words in the opening (message 0). '
+    + 'If those words there mean something else, write the value together with the words that make it this fact, exactly as the customer wrote them in message 2 '
+    + '(e.g. "3 покупки", not "3"). Only if the opening itself states this fact, mark it "initial" with "from": 0.');
+  assert.equal(cardProposalProblem(counted([onRequest('Количество покупок', 'Покупок было 3')]), call), undefined, 'written with its words, the value is the one the customer named when asked');
+});
+
+test('an opening that outgrows its field only with the values over its marks goes back for a repair: the step never stops on a schema error', () => {
+  const opening = `${'а'.repeat(2974)} Покупок было #.`;
+  const long = importBatch([{ id: 'long-masked', messages: [{ role: 'user', content: opening }, { role: 'assistant', content: 'Слушаю.' }] }]);
+  const call = proposalCall({ source: { kind: 'dialogue', batchId: long.id, dialogueId: 'long-masked' }, messages: loggedMessages(long.dialogues[0]!), sources: materials, maxTurns: 6 });
+  assert.equal(opening.length, 2990);
+  const answer = (value: string): DialogueProposal => ({ ...structuredClone(proposals.known), knows: [], masked: { m0_0: { kind: 'other', value } } });
+  let problem: string | undefined;
+  assert.doesNotThrow(() => { problem = cardProposalProblem(answer('двенадцать, а может и больше'), call); });
+  assert.equal(problem, 'Customer message 0 reads 3017 characters with your values for its masking marks in place, and the opening holds at most 3000: '
+    + 'write shorter values for its marks in "masked", or choose another writesEvent.');
+  assert.equal(cardProposalProblem(answer('12'), call), undefined, 'a value that fits binds');
+  assert.equal(bindProposal(answer('12'), call, 1).client.writes, `${'а'.repeat(2974)} Покупок было 12.`);
+});
+
+test('a duty observed on the tools names its tool from the connection\'s list; the card and the judge\'s input carry it', () => {
+  const call = proposalCall({ source: late.source, messages: late.messages, sources: materials, maxTurns: 6, confirmedObservations: ['tool'], tools: ['kb_search', 'crm_lookup'] });
+  const schema = cardProposalSchema(call);
+  const withTool = (tool: string | null, observation: DutyProposal['observation'] = 'tool') =>
+    with_(proposal => { proposal.agentMust[1] = { ...proposal.agentMust[1]!, observation, tool }; });
+  assert.equal(schema.safeParse(withTool('kb_search')).success, true);
+  assert.equal(schema.safeParse(withTool('refund_api')).success, false, 'a tool the connection did not name cannot be written');
+  assert.equal(schema.parse(proposals.late).agentMust[1]!.tool, null, 'an answer without the field names no tool');
+  assert.deepEqual(strictSchemaProblems(schema), []);
+  assert.match(JSON.stringify(z.toJSONSchema(schema)), /"tool":\{"default":null,"anyOf":\[\{"type":"string","enum":\["kb_search","crm_lookup"\]\},\{"type":"null"\}\]\}/);
+  assert.doesNotMatch(JSON.stringify(z.toJSONSchema(cardProposalSchema(late))), /"tool"/, 'without the tool channel the answer has no such field');
+  assert.match(cardProposalProblem(withTool('kb_search', 'reply'), call)!, /agentMust\[1\] is observed on "reply" and names the tool "kb_search": set "tool" to null/);
+
+  const card = bindProposal(withTool('kb_search'), call, 1);
+  assert.deepEqual(card.agentMust.map(duty => [duty.observation, duty.tool]), [['reply', undefined], ['tool', 'kb_search']]);
+  assert.deepEqual(bindProposal(withTool(null), call, 1).agentMust[1]!.tool, undefined, 'a tool duty that names none reads any tool, as before');
+  assert.equal(cardSchema.safeParse({ ...card, agentMust: [{ ...card.agentMust[0]!, tool: 'kb_search' }, card.agentMust[1]!] }).success, false, 'only a duty on the tools names a tool');
+  const execution = compileCard(card, { requirements: [rule] }).execution;
+  assert.ok(isCardExecution(execution));
+  assert.equal(execution.evaluatorView.expectations[1]!.tool, 'kb_search', 'the sealed definition, which the judge reads, names the tool');
 });

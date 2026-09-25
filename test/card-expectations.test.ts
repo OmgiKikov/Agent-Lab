@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compileCard } from '../src/card/compile.js';
-import { headlineRule, recordedExpectationResult, undecidedExpectation } from '../src/card/expectations.js';
+import { COUNTING_VERSION, headlineRule, recordedExpectationResult, undecidedExpectation } from '../src/card/expectations.js';
 import { cardVerdict, headlineCardOutcome } from '../src/run.js';
-import type { HumanReview, Trial } from '../src/contracts.js';
+import { isCardExecution, type HumanReview, type Trial } from '../src/contracts.js';
 import { judgeInput, observableSources } from '../src/judge.js';
 import { countingRuleFor, headlineTrialResult, markTargets, markUnderCurrentRule } from '../src/outcomes.js';
 import { buildResultView } from '../src/result-view.js';
@@ -84,6 +84,26 @@ test('a verdict stands only on evidence of its channel: a reply, a tool result o
     assessments: [{ metricId: 'e1', result: 'fail', rationale: 'Статус не тот', evidence: [4] }] };
   assert.equal(recordedExpectationResult({ ...state, observation: { state: 'reported', tools: 'complete' } }, { id: 'e1', observation: 'state' }), 'unknown', 'a reset the adapter did not confirm');
   assert.equal(recordedExpectationResult({ ...state, observation: { state: 'reported', tools: 'complete', resetConfirmed: true } }, { id: 'e1', observation: 'state' }), 'fail');
+});
+
+test('a duty that names its tool stands only on that tool\'s result; one that names none reads any tool, as before', () => {
+  const card = briefCard({ agentMust: [{ id: 'e1', text: 'до ответа найти правила возврата в базе знаний', requirementIds: ['refund_rule'], observation: 'tool', tool: 'kb_search' }] });
+  const scenario = compileCard(card, { requirements });
+  assert.ok(isCardExecution(scenario.execution));
+  const expectation = scenario.execution.evaluatorView.expectations[0]!;
+  assert.equal(expectation.tool, 'kb_search');
+  const events: Trial['events'] = [{ seq: 0, type: 'user', text: 'Верните деньги' }, { seq: 1, type: 'tool_call', tool: 'crm_lookup' }, { seq: 2, type: 'tool_result', tool: 'crm_lookup', result: { ok: true } },
+    { seq: 3, type: 'tool_call', tool: 'kb_search' }, { seq: 4, type: 'tool_result', tool: 'kb_search', result: { ok: true } }, { seq: 5, type: 'assistant', text: 'Нашёл правила возврата.' }];
+  const attempt = (result: 'pass' | 'fail', evidence: number[], extra: Partial<Trial> = {}): Trial => ({ ...cardAttempt('t', scenario, {}), events,
+    observation: { state: 'missing', tools: 'complete' }, assessments: [{ metricId: 'e1', result, rationale: 'Оценка', evidence }], ...extra });
+  assert.equal(recordedExpectationResult(attempt('pass', [2]), expectation), 'unknown', 'another tool\'s result proves nothing about this duty');
+  assert.equal(recordedExpectationResult(attempt('fail', [2]), expectation), 'unknown');
+  assert.equal(recordedExpectationResult(attempt('pass', [2, 4]), expectation), 'pass', 'the named tool\'s result among the cited ones decides');
+  assert.equal(recordedExpectationResult(attempt('pass', [2]), { id: 'e1', observation: 'tool' }), 'pass', 'a card without the field: any tool\'s result, as before');
+  assert.equal(recordedExpectationResult(attempt('fail', [5], { countingVersion: COUNTING_VERSION }), expectation), 'fail', 'edition 2: a failure stands on the complete log');
+  assert.deepEqual(cardVerdict(cardRun([scenario], [attempt('pass', [2])]), scenario), { outcome: 'unknown', reason: 'no_evidence' });
+  const input = judgeInput({ scenario, sources: observableSources(cardRun([scenario], []).sources, requirements), trial: attempt('pass', [4]) });
+  assert.match(JSON.stringify(input.scenario), /"observation":"tool","tool":"kb_search"/, 'the judge reads which tool proves the duty');
 });
 
 test('a human verdict on an expectation overrides the judge; a quick «не могу сказать» leaves it; «ошибка теста» takes it out', () => {

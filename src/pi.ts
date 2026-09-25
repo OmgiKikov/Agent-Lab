@@ -15,7 +15,7 @@ import {
   CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
-import { cardReviewSchema } from './card/review.js';
+import { cardReviewSchema, laterMessages } from './card/review.js';
 import { fillWithModel } from './card/unmask.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
 import { buildTopicMap } from './miner/topic-map.js';
@@ -172,7 +172,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const oversize = workInputIssue(input.payload);
       if (oversize) throw new Error(oversize);
       const reviewed = await run({ id: 'card-review', label: 'Проверка ситуации', role: 'judge', instructions: CARD_REVIEW_ROLE,
-        output: cardReviewSchema(input.aliases), bounded: reviewBounds(input.aliases.length) }, input.payload, ctx);
+        output: cardReviewSchema(input.aliases, laterMessages(input)), bounded: reviewBounds(input.aliases.length) }, input.payload, ctx);
       return { verdicts: reviewed.claims, model: `${models.judge.provider}/${models.judge.id}` };
     },
     async failureModes(input, ctx) {

@@ -6,17 +6,20 @@ import { join } from 'node:path';
 import type { Experiment } from '../src/contracts.js';
 import type { Runtime } from '../src/runtime.js';
 import { preparationCeiling, PROPOSAL_ATTEMPTS } from '../src/card/budget.js';
+import { TASK_ATTEMPTS } from '../src/llm/structured.js';
+import { hostGrant } from '../src/card/commands.js';
 import { citationId, type DialogueProposal } from '../src/card/proposal.js';
 import { storedEvidence } from '../src/card/prepare.js';
 import { cardSchema, preparationProgressSchema, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
+import { StructuredTaskError } from '../src/llm/structured.js';
 import { consentText, rulesConsentText } from '../src/miner/plan.js';
 import { buildResultView } from '../src/result-view.js';
 import { realityParts } from '../src/result-text.js';
 import { libraryHash, verifyAcceptedRun } from '../src/scenario-library.js';
-import { cardInput, cardRuntime, policy, proposals, type Received } from './helpers/card-prep.js';
+import { cardInput, cardRuntime, dialogues, policy, proposals, type Received } from './helpers/card-prep.js';
 
 /*
  * W5b: a card the reviewer blocked is written once more against the reviewer's reasons, inside the unit's proposal
@@ -117,10 +120,75 @@ test('a revision that died in flight is never repeated on resume: the blocked ca
   });
 });
 
+/** The blocking reviewer, whose first answer inside the preparation never passes: the card waits for the owner's check. */
+function failingFirstReview(seen: Received): Runtime {
+  const runtime = blockingRuntime(seen);
+  const review = runtime.reviewCard!;
+  let first = true;
+  runtime.reviewCard = async (request, ctx) => {
+    if (first) { first = false; ctx.beforeCall(); throw new StructuredTaskError('Проверка ситуации: the reviewer\'s answer did not pass its schema'); }
+    return review(request, ctx);
+  };
+  return runtime;
+}
+
+test('a card whose review did not happen inside the preparation gets its one revision from the owner\'s check', async () => {
+  const seen = received();
+  await withLab(failingFirstReview(seen), async lab => {
+    const draft = await lab.create(cardInput(), { parallel: 1 });
+    await lab.waitForIdle();
+    assert.deepEqual([await statuses(lab, draft.id), lateOf(seen).length], [['checking', 'ready'], 1], 'the first card waits for a check, not revised');
+    await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    const checked = await lab.get(draft.id);
+    assert.equal(checked.error, null);
+    const late = lateOf(seen);
+    assert.deepEqual([late.length, late[1]!.revision?.blocked], [2, [{ claim: 'expectation_e2', reason: BLOCKED }]], 'the check revised the blocked card with the reviewer\'s reason');
+    assert.deepEqual([await statuses(lab, draft.id), progressOf(checked).revised], [['ready', 'ready'], ['late']]);
+    // The revision was the one promised: another check asks nothing again.
+    const calls = checked.usage.calls;
+    await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    assert.deepEqual([lateOf(seen).length, (await lab.get(draft.id)).usage.calls], [2, calls]);
+  });
+});
+
+test('a card the owner changed is theirs: the check does not have the model write it over', async () => {
+  const seen = received();
+  await withLab(failingFirstReview(seen), async lab => {
+    const draft = await lab.create(cardInput(), { parallel: 1 });
+    await lab.waitForIdle();
+    const late = (await lab.readCards(draft.id)).library.cards.find(card => card.title === proposals.late.title)!;
+    const owners = 'не спрашивать номер терминала второй раз';
+    const edit = await lab.prepareCardCommand(draft.id, { kind: 'edit_expectation', cardId: late.id, expectationId: 'e1', text: owners }, { via: 'cli-yes' });
+    await lab.applyCardCommand(draft.id, edit, hostGrant(edit, 'confirmed'));
+    await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    const card = (await lab.readCards(draft.id)).library.cards.find(item => item.number === late.number)!;
+    assert.deepEqual([lateOf(seen).length, card.agentMust[0]!.text, (await statuses(lab, draft.id))[0]], [1, owners, 'unusable'],
+      'the blocked claim stays for the owner; their wording is not replaced');
+  });
+});
+
+test('the check revises only what a preparation of this Lab proposed: a card with no proposal allowance keeps its verdict', async () => {
+  const seen = received();
+  await withLab(failingFirstReview(seen), async lab => {
+    const draft = await lab.create(cardInput(), { parallel: 1 });
+    await lab.waitForIdle();
+    // As a draft converted from the first format: its cards were never proposed here, so they are owed no revision.
+    const made = await lab.get(draft.id);
+    const { generationAttempts: _attempts, ...converted } = progressOf(made);
+    await lab.store.save({ ...made, preparationProgress: converted });
+    await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    assert.deepEqual([lateOf(seen).length, await statuses(lab, draft.id)], [1, ['unusable', 'ready']]);
+  });
+});
+
 test('the consented ceiling holds each situation\'s revision, and the consent says so', () => {
   const sources = [{ id: 'source-1', name: 'Правила', content: policy, hash: 'h' }];
   const one = preparationCeiling({ task: 'Проверить', sources, situations: 1, fromLogs: false });
-  assert.equal(PROPOSAL_ATTEMPTS, 6, 'five calls to write the card and one to revise it');
+  assert.equal(PROPOSAL_ATTEMPTS, TASK_ATTEMPTS + 1, 'every request one proposal task may make to write the card, and one more to revise it');
   assert.equal(one, PROPOSAL_ATTEMPTS + 2 * 2, 'the allowance, the card\'s review and its revision\'s');
   assert.equal(preparationCeiling({ task: 'Проверить', sources, situations: 3, fromLogs: false }), 3 * (PROPOSAL_ATTEMPTS + 4));
   const consent = consentText({ conversations: 2, usable: 2, promised: 2, excluded: [], callCeiling: 21, topicMapCalls: 0, prompts: { count: 0, bytes: 0 }, asksAgent: false }, 'логов');
@@ -128,27 +196,36 @@ test('the consented ceiling holds each situation\'s revision, and the consent sa
   assert.match(rulesConsentText(2, 21).lines.at(-1)!, /одна переделка каждой ситуации/);
 });
 
-/** The `late` customer cannot say what they want: the card says so, and its duty is to clarify, citing the owner's rule. */
+/**
+ * A customer who cannot say what they want: the `late` conversation, opening with a complaint that names no request
+ * instead of «Помогите с возвратом.» — a clear request is never marked vague. The card says so, and its duty is to
+ * clarify, citing the owner's rule.
+ */
+const vagueDialogues = [{ ...dialogues[0]!, messages: [{ role: 'user' as const, content: 'Здравствуйте. С оплатой что-то не то, не пойму что.' }, ...dialogues[0]!.messages.slice(1)] }, dialogues[1]!];
 const clarifyQuote = 'Если номера нет, уточните номер терминала.';
-const vagueLate: DialogueProposal = { ...proposals.late, clarity: 'vague', wants: 'Не может сформулировать, в чём дело: упоминает возврат, номер терминала не назвал',
-  agentMust: [{ text: 'уточнить номер терминала, не угадывая порядок возврата', appliesWhen: null, observation: 'reply',
+const vagueLate: DialogueProposal = { ...proposals.late, clarity: 'vague', wants: 'Не может сказать, что не так с оплатой; номер терминала назовёт, если спросят',
+  agentMust: [{ text: 'уточнить номер терминала, не угадывая, что случилось с оплатой', appliesWhen: null, observation: 'reply',
     basis: [{ sourceId: 'source-1', quote: clarifyQuote, rule: 'Без номера терминала агент сначала уточняет его.', kind: 'behavior' }] },
     proposals.late.agentMust[1]!] };
 
-test('a vague customer is a situation: its card is marked vague, its duty cites a rule, and the result counts it apart', async () => {
-  const runtime = cardRuntime(received());
+test('a vague customer is a situation: its card is marked vague, the reviewer checks the mark, its duty cites a rule, and the result counts it apart', async () => {
+  const seen = received();
+  const runtime = cardRuntime(seen);
   const propose = runtime.proposeCard!;
   runtime.proposeCard = async (request, ctx) => {
     const answer = await propose(request, ctx);
     return request.call.source.kind === 'dialogue' && request.call.source.dialogueId === 'late' ? vagueLate : answer;
   };
   await withLab(runtime, async lab => {
-    const draft = await lab.create(cardInput(), { parallel: 1 });
+    const draft = await lab.create(cardInput({ dialogues: vagueDialogues }), { parallel: 1 });
     await lab.waitForIdle();
     const { library } = await lab.readCards(draft.id);
-    assert.deepEqual(library.cards.map(card => [card.clarity, card.agentMust[0]!.requirementIds]),
-      [['vague', [citationId('source-1', clarifyQuote)]], [undefined, [citationId('source-1', proposals.known.agentMust[0]!.basis[0]!.quote)]]],
+    assert.deepEqual(library.cards.map(card => [card.clarity, card.client.writes, card.agentMust[0]!.requirementIds]),
+      [['vague', vagueDialogues[0]!.messages[0]!.content, [citationId('source-1', clarifyQuote)]], [undefined, dialogues[1]!.messages[0]!.content, [citationId('source-1', proposals.known.agentMust[0]!.basis[0]!.quote)]]],
       'a clear request is written as every card before the field was');
+    const asked = seen.reviews.filter(request => request.aliases.includes('clarity'));
+    assert.deepEqual(asked.map(request => [request.payload.card.clarity, request.payload.card.writes]), [['vague', vagueDialogues[0]!.messages[0]!.content]],
+      'the reviewer is asked about the mark, of the vague card alone');
     assert.deepEqual(await statuses(lab, draft.id), ['ready', 'ready']);
     const accepted = await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id));
     await lab.start(draft.id, { approved: true, expectedHash: draftHash(accepted.experiment), requireAccepted: true });
@@ -156,6 +233,32 @@ test('a vague customer is a situation: its card is marked vague, its duty cites 
     const view = buildResultView(await lab.get(draft.id));
     assert.deepEqual(view.clarity, { clear: { passed: 0, decided: 1 }, vague: { passed: 1, decided: 1 } });
     assert.deepEqual(realityParts(view), ['Внятные запросы: 0 из 1', 'Невнятные: 1 из 1']);
+  });
+});
+
+test('a clear request marked vague: the reviewer blocks the mark, and the one revision writes the card clear', async () => {
+  const seen = received();
+  const runtime = cardRuntime(seen);
+  const propose = runtime.proposeCard!, review = runtime.reviewCard!;
+  // The author marks «Помогите с возвратом.» vague; the revision reads the reviewer's reason and does not.
+  runtime.proposeCard = async (request, ctx) => {
+    const answer = await propose(request, ctx);
+    return request.call.source.kind === 'dialogue' && request.call.source.dialogueId === 'late' && !request.revision ? { ...proposals.late, clarity: 'vague' } : answer;
+  };
+  const reason = 'Клиент прямо просит помочь с возвратом.';
+  runtime.reviewCard = async (request, ctx) => {
+    const answer = await review(request, ctx);
+    return request.aliases.includes('clarity') ? { ...answer, verdicts: { ...answer.verdicts, clarity: { status: 'blocked', reason } } } : answer;
+  };
+  await withLab(runtime, async lab => {
+    const draft = await lab.create(cardInput(), { parallel: 1 });
+    await lab.waitForIdle();
+    const revision = seen.proposals.find(request => request.revision)!;
+    assert.deepEqual(revision.revision!.blocked, [{ claim: 'clarity', reason }]);
+    assert.equal((revision.revision!.previous as { clarity: string }).clarity, 'vague', 'the revision reads the mark the reviewer blocked');
+    const { library } = await lab.readCards(draft.id);
+    assert.deepEqual(library.cards.map(card => [card.number, card.clarity, card.revision]), [[1, undefined, 2], [2, undefined, 1]]);
+    assert.deepEqual(await statuses(lab, draft.id), ['ready', 'ready']);
   });
 });
 

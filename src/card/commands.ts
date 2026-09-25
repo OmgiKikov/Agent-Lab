@@ -44,7 +44,11 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
   switch (command.kind) {
     // Which agent wrote the logs decides whether agreement with them is a calibration: the owner's decision.
     case 'declare_log_version': return 'owner-confirm';
-    case 'edit_client': return 'owner-words';
+    // Whether the customer can say what they want is a decision about the customer, whatever words come with it.
+    case 'edit_client': return strictest([
+      ...(command.wants !== undefined || command.writes !== undefined || command.leaves !== undefined ? ['owner-words' as const] : []),
+      ...(command.clarity !== undefined ? ['owner-confirm' as const] : []),
+    ]);
     // Every field the command changes counts: new words for a duty never carry a new rule or a dropped condition along with them.
     case 'edit_expectation': return strictest([
       ...(command.text !== undefined ? ['owner-words' as const] : []),
@@ -336,11 +340,16 @@ function applyChange(draft: Card, change: CardChange, library: LibraryV2, contex
       return 'Ожидание убрали вы.';
     }
     case 'edit_client': {
-      if (change.wants === undefined && change.writes === undefined && change.leaves === undefined) throw new CommandRefused('Не сказано, что изменить у клиента.');
+      const worded = change.wants !== undefined || change.writes !== undefined || change.leaves !== undefined;
+      if (!worded && change.clarity === undefined) throw new CommandRefused('Не сказано, что изменить у клиента.');
+      if (!worded && change.clarity === (draft.clarity ?? 'clear')) throw new CommandRefused('Так уже записано.');
       if (change.wants !== undefined) draft.client.wants = change.wants;
       if (change.writes !== undefined) { draft.client.writes = change.writes; draft.client.writesSource = owner; }
       if (change.leaves !== undefined) draft.client.leaves = change.leaves;
-      return 'Слова клиента изменили вы.';
+      // A clear request is the absence of the mark, as on every card before it.
+      if (change.clarity === 'vague') draft.clarity = 'vague';
+      else if (change.clarity === 'clear') delete draft.clarity;
+      return worded ? 'Слова клиента изменили вы.' : 'Понятен ли запрос клиента, решили вы.';
     }
     case 'set_turn': {
       const { turn } = change;
