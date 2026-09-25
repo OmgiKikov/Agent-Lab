@@ -235,12 +235,14 @@ export interface ResultView {
    */
   scenarios?: ScenarioOutcome[];
   /**
-   * Whether the agent answered its customers at all, over every conversation of the run: those it left without a reply
-   * (`no_reply`), answered with a stand's service text, or broke on (an error, a timeout). Such a conversation is never
-   * the agent's error of substance, and it never quietly drops out either: it is the agent's working state, told apart
-   * from its quality. Absent when every conversation got the agent's reply. Never changes the headline.
+   * Whether the agent answered its customers at all, over every conversation the run started — the ones it counts and
+   * the ones the stand broke and the run started again (`retried`, whose broken attempts it no longer keeps): those the
+   * agent left without a reply (`no_reply`), answered with a stand's service text, or broke on (an error, a timeout). Such
+   * a conversation is never the agent's error of substance, and it never quietly drops out either: it is the agent's
+   * working state, told apart from its quality. Absent when every conversation got the agent's reply. Never changes the
+   * headline.
    */
-  operability?: { conversations: number; noReply: number; serviceReply: number; broken: number };
+  operability?: { conversations: number; noReply: number; serviceReply: number; broken: number; retried: number };
   /**
    * The customers Lab played against the logged ones of the same situations (realism.ts): the customer's second
    * assessment, apart from its fidelity to the situation. Absent without a situation from a log. Never changes the headline.
@@ -567,11 +569,28 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   return { ...trusted, next: nextSteps(trusted, isRunning(record.phase), notStarted, reviewed.trialIds, numberOf) };
 }
 
-/** The conversations the agent left without its reply, by how; undefined when it answered in every one (the typed causes only). */
+/**
+ * The conversations the agent left without its reply, by how, over every conversation the run started — the retried
+ * ones too; undefined when it answered in every one (the typed causes only).
+ */
 function operabilityOf(record: Experiment): ResultView['operability'] {
   const count = (cause: Trial['invalidCause']) => record.trials.filter(trial => trial.invalidCause === cause).length;
-  const operability = { conversations: record.trials.length, noReply: count('no_reply'), serviceReply: count('service_reply'), broken: count('agent') };
-  return operability.noReply + operability.serviceReply + operability.broken ? operability : undefined;
+  const retried = standRetries(record);
+  const operability = { conversations: record.trials.length + retried, noReply: count('no_reply'), serviceReply: count('service_reply'), broken: count('agent'), retried };
+  return operability.noReply + operability.serviceReply + operability.broken + operability.retried ? operability : undefined;
+}
+
+/** The fixed sentence lab/run.ts writes into `limitations` for the conversations it ran again after the stand broke. */
+const RERUN_NOTE = 'Разговоров, повторённых после сбоя стенда: ';
+/**
+ * The conversations the stand broke and the run started again from the start: their broken attempts are not among the
+ * trials, only counted in the one fixed sentence the harness writes (lab/run.ts) — decoded here and nowhere else, as
+ * run.ts decodes the harness's older reasons. A typed count kept with the record takes its place when there is one.
+ */
+function standRetries(record: Pick<Experiment, 'limitations'>): number {
+  const note = record.limitations.find(item => item.startsWith(RERUN_NOTE));
+  const count = note ? Number.parseInt(note.slice(RERUN_NOTE.length), 10) : 0;
+  return Number.isSafeInteger(count) && count > 0 ? count : 0;
 }
 
 /**

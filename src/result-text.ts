@@ -389,8 +389,8 @@ export function operabilityText(view: Pick<ResultView, 'operability'>): string |
   const found = view.operability;
   if (!found) return null;
   const parts = [...(found.noReply ? [`агент не дал ответа — ${found.noReply}`] : []), ...(found.serviceReply ? [`вместо агента ответил стенд — ${found.serviceReply}`] : []),
-    ...(found.broken ? [`сбой агента — ${found.broken}`] : [])];
-  const total = found.noReply + found.serviceReply + found.broken;
+    ...(found.broken ? [`сбой агента — ${found.broken}`] : []), ...(found.retried ? [`сбой стенда, разговор начат заново — ${found.retried}`] : [])];
+  const total = found.noReply + found.serviceReply + found.broken + found.retried;
   return `Работоспособность: в ${total} из ${countText(found.conversations, CONVERSATIONS_OF)} клиент не получил ответа агента (${parts.join(', ')}). Эти разговоры не считаются ошибками агента по существу и не входят в процент.`;
 }
 
@@ -831,7 +831,7 @@ function believeRow(view: ResultView): ResultRow | null {
 /** «без ответа агента — 2 из 20 разговоров»: the operability line in a few words, for the collapsed chat block. */
 function operabilityShort(view: Pick<ResultView, 'operability'>): string | null {
   const found = view.operability;
-  const total = found ? found.noReply + found.serviceReply + found.broken : 0;
+  const total = found ? found.noReply + found.serviceReply + found.broken + found.retried : 0;
   return found && total ? `без ответа агента — ${total} из ${countText(found.conversations, CONVERSATIONS_OF)}` : null;
 }
 
