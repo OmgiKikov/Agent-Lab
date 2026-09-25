@@ -17,7 +17,7 @@ import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
 import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, withRequirements, withScenario } from './library.js';
 import { bindPlan, planProblem, planProposalSchema, scenarioOfTopic, type PlanCall } from './plan.js';
 import { rulebookOf } from './rulebook.js';
-import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, proposalRequirements, uncoveredOf, type CardProposalRequest, type ProposalCall } from './proposal.js';
+import { bindProposal, cardProposalProblem, cardProposalSchema, namedVariation, proposalCall, proposalPayload, proposalRequirements, uncoveredOf, type CardProposalRequest, type ProposalCall } from './proposal.js';
 import { revisionClaims, claimReceipts, pendingClaims, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
 import type { Card, CardPreparation, LibraryV2, PreparationProgress } from './schema.js';
 
@@ -370,8 +370,10 @@ class Preparation {
     const planned = queued ? this.library.plan?.find(scenario => scenario.id === queued.scenarioId)
       : dialogue && batch ? scenarioOfTopic(this.library.plan, unitTopic(progress, this.library, batch.id, unit)?.title ?? '') : undefined;
     if (queued && !planned?.variations.some(variation => variation.id === queued.variationId)) return { excluded: 'Этого варианта больше нет в плане сценария.' };
+    // The variation the plan decided: the one a queued unit is written for, or the one whose examples name this conversation.
+    const decided = queued?.variationId ?? (planned && dialogue && batch ? namedVariation(planned, { kind: 'dialogue', batchId: batch.id, dialogueId: unit })?.id : undefined);
     const plan = planned && { scenario: planned, requirements: this.library.requirements.filter(requirement => planned.expectations.some(expectation => expectation.requirementIds.includes(requirement.id))),
-      ...(queued ? { variationId: queued.variationId } : {}) };
+      ...(decided ? { variationId: decided } : {}) };
     const call = (sources: readonly Source[]) => proposalCall({ source: dialogue && batch ? { kind: 'dialogue', batchId: batch.id, dialogueId: unit } : { kind: 'rules', unit },
       messages, sources, binds, maxTurns: record.settings.maxTurns, ...(plan ? { plan } : {}),
       // The tool channel the probe before the preparation confirmed: its tools may be what a duty is observed on.

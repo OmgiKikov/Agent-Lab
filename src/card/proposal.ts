@@ -49,7 +49,10 @@ export interface ProposalCall {
    * one of its variations, and its duties are the plan's expectations for it — its words, rules, strength and ways.
    */
   plan?: { scenario: BusinessScenario; requirements: Requirement[];
-    /** A situation from the rules written for this one variation (a variation no conversation shows): the builder does not choose it. */
+    /**
+     * The variation the plan decided for this situation — one written from the rules for a variation no conversation shows,
+     * or a conversation the plan names as an example of one —: the builder is told it and does not choose.
+     */
     variationId?: string };
 }
 
@@ -204,7 +207,11 @@ export function groundingSlip(name: string, at: Located): string | undefined {
 /** The id of the rule one cited sentence stands for: the same sentence of the same source is the same rule in every card. */
 export const citationId = (sourceId: string, quote: string): string => `rule_${fingerprint({ sourceId, quote }).slice(0, 24)}`;
 
-/** The variation a card is an example of: the one a situation from the rules was written for, else the one the builder chose. */
+/** The variation of the plan whose examples name a conversation: the plan decided that conversation's variation. */
+export const namedVariation = (scenario: BusinessScenario, source: ProposalCall['source']): BusinessScenario['variations'][number] | undefined =>
+  source.kind === 'dialogue' ? scenario.variations.find(item => item.examples.includes(source.dialogueId)) : undefined;
+
+/** The variation a card is an example of: the one the plan decided for it (plan.variationId), else the one the builder chose. */
 const variationOfProposal = (proposal: CardProposal, call: ProposalCall): string | undefined =>
   call.plan?.variationId ?? ('variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined);
 
@@ -214,12 +221,20 @@ function plannedOf(duty: Pick<DutyProposal, 'text'>, call: ProposalCall): Busine
   return call.plan?.scenario.expectations.find(expectation => normalizeText(expectation.text) === said);
 }
 
-/** Why the duties of a card of a planned scenario are not the plan's expectations of its variation. */
+/**
+ * Why the card of a planned scenario is not what the plan makes it: of another variation than the one the plan names its
+ * conversation an example of, or with duties that are not the plan's expectations of its variation.
+ */
 function planSlips(proposal: CardProposal, call: ProposalCall): string[] {
   const plan = call.plan;
   if (!plan) return [];
   const variation = variationOfProposal(proposal, call);
   const slips: string[] = [];
+  const named = namedVariation(plan.scenario, call.source);
+  const answered = 'variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined;
+  if (named && answered !== undefined && answered !== named.id) {
+    slips.push(`variation is ${answered}, but the plan names this conversation as an example of ${named.id} («${named.title}»): answer ${named.id} and take agentMust from the expectations of ${named.id}.`);
+  }
   const seen = new Set<string>();
   proposal.agentMust.forEach((duty, i) => {
     const expectation = plannedOf(duty, call);
