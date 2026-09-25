@@ -10,7 +10,7 @@ import { accuracyParts, comparisonRows, noRuleText, saidText, trialTurns, TURN_H
 import { agentLine } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
 import { clip, oneLine } from '../src/text.js';
-import { standing } from './records.ts';
+import { preparationFailure, standing } from './records.ts';
 import type { Feed } from './render/feed.ts';
 import { GLYPH, type Row } from './render/theme.ts';
 
@@ -157,6 +157,11 @@ export function statusFeed(records: Experiment[], active?: { id: string }, now?:
   const line = (record: Experiment): Row => row(`${runWhen(record, now)} · ${agentLine(record)} · ${standing(record, views.get(record.id))}${was(record)}${record.id === active?.id ? ' · идёт сейчас' : ''}`,
     record.id === active?.id ? 'accent' : undefined);
   const latest = sorted[0]!;
+  // A preparation that made no situation is not a run: the owner reads why it stopped and the way on.
+  const failed = preparationFailure(latest);
+  if (failed !== undefined) return { tone: 'warning', rows: [row(`Подготовка ситуаций ${runWhen(latest, now)} не завершена: ${failed}`, 'warning', true),
+    row('Ситуаций нет, агент не запускался. Когда причина устранена, скажите «подготовь ситуации» ещё раз.', 'muted')],
+  ...(records.length > 1 ? { more: sorted.slice(0, 40).map(line), expand: 'все прогоны' } : {}) };
   return { rows: [row(`${countText(records.length, RUNS)}: последний — ${runWhen(latest, now)}, ${agentLine(latest)}, ${standing(latest, views.get(latest.id))}${was(latest)}`, 'text', true)],
     more: sorted.slice(0, 40).map(line), expand: 'все прогоны' };
 }

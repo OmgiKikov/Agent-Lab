@@ -6,7 +6,8 @@ import { plannedTrials } from '../src/run.js';
 import { agentLine } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
 import { clip } from '../src/text.js';
-import { NeedsOwner } from './lab-ui.ts';
+import { NeedsOwner, recordErrorText } from './lab-ui.ts';
+import { hasSituations } from './steps.ts';
 
 /*
  * Which stored record a request is about. The model names a run by the exact id it read in an earlier result; a
@@ -38,7 +39,14 @@ export function standing(record: Experiment, view?: ResultView): string {
   const size = library?.formatVersion === 2 ? library.cards.length : library?.formatVersion === 1 ? library.variants.length : record.scenarios.length;
   const situations = countText(size, ['ситуация', 'ситуации', 'ситуаций']);
   if (record.phase === 'review') return `черновик: ${situations}${library?.acceptance ? ', утверждены' : ''}`;
+  if (preparationFailure(record) !== undefined) return 'подготовка ситуаций не завершена';
   return record.phase === 'error' || record.phase === 'interrupted' || record.phase === 'cancelled' ? 'остановлен до результата' : situations;
+}
+
+/** Why a preparation that made no situation stopped, in the owner's words; undefined for any other record. */
+export function preparationFailure(record: Experiment): string | undefined {
+  if (!['error', 'interrupted', 'cancelled'].includes(record.phase) || record.trials.length || hasSituations(record)) return undefined;
+  return recordErrorText(record.error) ?? 'причина не записана.';
 }
 
 const holdsSituations = (record: Experiment) => !!record.librarySnapshot || record.scenarios.length > 0 || isRunning(record.phase);

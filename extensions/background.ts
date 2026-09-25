@@ -97,9 +97,14 @@ async function viewsOf(lab: ExperimentLab, record: Experiment) {
 export async function preparedAnswer(lab: ExperimentLab, record: Experiment, interrupted: boolean): Promise<Prepared> {
   const note = `Ситуации · ${runStamp(record)}`;
   if (record.librarySnapshot?.formatVersion !== 2 || record.phase !== 'review') {
+    // Named as what it was — a preparation, not a run —, why it stopped and the way on; nothing is ready to run.
     const reason = recordErrorText(record.error);
-    const failed = [reason ? `Подготовка не завершена: ${reason}` : 'Подготовка не завершена.'];
-    return { output: { run: record.id, prepared: false, error: reason ?? null }, feed: { title: 'Подготовка остановлена', tone: 'warning', rows: failed.map(line => row(line, 'warning')) }, note };
+    const rows = [row(reason ? `Подготовка ситуаций не завершена: ${reason}` : 'Подготовка ситуаций не завершена: причина не записана.', 'warning', true),
+      row(record.phase === 'cancelled' ? 'Ситуаций нет. Скажите «подготовь ситуации», когда захотите начать заново.'
+        : 'Ситуаций нет, агент не запускался. Когда причина устранена, скажите «подготовь ситуации» ещё раз.', 'muted')];
+    return { output: { run: record.id, prepared: false, situations: 0, error: reason ?? null,
+      instruction: 'The preparation ended without situations: nothing can run yet. Tell the owner in one or two sentences why, as error says, and what fixes it; then offer to prepare again.' },
+    feed: { title: 'Подготовка не завершена', tone: 'warning', rows }, note };
   }
   const { context, views } = await viewsOf(lab, record);
   const ready = views.filter(view => view.status === 'ready').length;
