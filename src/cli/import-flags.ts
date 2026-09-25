@@ -91,6 +91,7 @@ export function importHints(proposal: TableProposal): string[] {
   if (proposal.status === 'refused') return ['Поправьте выбор и повторите команду.'];
   if (proposal.status === 'ready') return ['Загрузить: та же команда с --yes.',
     'Поправить: --sheet, --id-column, --text-column; метки — --markers CLIENT=клиент,AGENT=агент и --separator ЗНАК или --no-separator; сообщение в строке — --role-column, --roles, --order-column или --row-order.',
+    'Одна ситуация в строке: --answer-column ОТВЕТ; эталон оценщика: --expected-column "КОЛОНКА=ответ|статья|код" или --no-expected.',
     ...proposal.csv ? ['Текст читается кракозябрами — другая кодировка: --encoding windows-1251, windows-1252 или utf-8.'] : [],
     ...!proposal.mapping.filter && proposal.selectable.length ? ['Отобрать разговоры: --where "КОЛОНКА" покажет её значения, --where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ" оставит только их.'] : [],
     ...proposal.preview.repeats && !proposal.mapping.collapseRepeats ? ['Убрать повторы обменов: --collapse-repeats.'] : []];
