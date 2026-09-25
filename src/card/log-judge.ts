@@ -24,12 +24,15 @@ type KeyParts = Pick<LogJudgmentReceipt, 'definitionHash' | 'expectationId' | 'i
 export const calibrationKey = (parts: KeyParts): string => fingerprint({ definitionHash: parts.definitionHash, expectationId: parts.expectationId,
   importContentHash: parts.importContentHash, dialogueId: parts.dialogueId, protocolHash: parts.protocolHash });
 
-type LoggedEvent = { seq: number; type: 'user' | 'assistant' | 'tool' | 'retrieval' | 'state'; content: string; tool?: string };
+/** A logged event as the judge reads it; `tool` and `state` are how `logged-v1` named what `logged-v2` names as a synthetic trace does. */
+type LoggedEvent = { seq: number; type: 'user' | 'assistant' | 'tool_result' | 'retrieval' | 'observation' | 'tool' | 'state'; content: string; tool?: string };
+/** A logged event's type in the words of a synthetic trace, which the rubric's own rules use («цитируйте tool_result»). */
+const TRACE_TYPE = { user: 'user', assistant: 'assistant', tool_result: 'tool_result', tool: 'tool_result', retrieval: 'retrieval', observation: 'observation', state: 'observation' } as const;
 /**
  * The events of a logged dialogue as the judge reads them: `seq` is the event's index in the import; the
  * customer's and the agent's messages always, tool, retrieval and state events only from a completely
- * recorded dialogue. System messages are not the conversation. A tool event names its tool when the log's event does (a
- * string `tool`, as the adapter contract names it): the channel rule reads it.
+ * recorded dialogue, typed as a synthetic trace types them. System messages are not the conversation. A tool event names
+ * its tool when the log's event does (a string `tool`, as the adapter contract names it): the channel rule reads it.
  */
 function loggedEvents(dialogue: LoggedDialogue): LoggedEvent[] {
   const complete = dialogue.observation === 'complete';
@@ -37,7 +40,7 @@ function loggedEvents(dialogue: LoggedDialogue): LoggedEvent[] {
     if (event.type === 'message') return (event.role === 'user' || event.role === 'assistant') && event.content !== undefined ? [{ seq: event.index, type: event.role, content: event.content }] : [];
     if (!complete) return [];
     const tool = event.type === 'tool' ? (event.data as { tool?: unknown } | null)?.tool : undefined;
-    return [{ seq: event.index, type: event.type, content: event.content ?? JSON.stringify(event.data), ...(typeof tool === 'string' && tool ? { tool } : {}) }];
+    return [{ seq: event.index, type: TRACE_TYPE[event.type], content: event.content ?? JSON.stringify(event.data), ...(typeof tool === 'string' && tool ? { tool } : {}) }];
   });
 }
 
@@ -75,7 +78,6 @@ export function logJudgeInput(request: LogJudgeRequest) {
 /** The input of a stored audit, of either mode: `logged-v1` judged the log by a rubric of its own and named no tool. */
 type LogInput = Omit<ReturnType<typeof logJudgeInput>, 'mode'> & { mode: typeof LOGGED_MODE | typeof LOGGED_MODE_V1 };
 
-const TRACE_TYPE = { user: 'user', assistant: 'assistant', tool: 'tool_result', retrieval: 'retrieval', state: 'observation' } as const;
 /** The same events in the shape the citation check reads: a quote must be verbatim in the event it cites. */
 const traceEvents = (events: readonly LoggedEvent[]): TraceEvent[] => events.map(event => ({ seq: event.seq, type: TRACE_TYPE[event.type], text: event.content }));
 /** The event type a `logged-v1` verdict had to cite on its expectation's channel, as its receipts were sealed. */
@@ -101,7 +103,7 @@ function parseLogVote(raw: string, input: LogInput): MetricAssessment[] {
   const cited = input.dialogue.events.filter(event => assessment.evidence.includes(event.seq));
   const complete = input.dialogue.observation === 'complete';
   const holds = current ? channelHolds(expectation, result, { reply: cited.some(event => event.type === 'assistant'),
-    tools: cited.filter(event => event.type === 'tool').map(event => event.tool), state: cited.some(event => event.type === 'state') },
+    tools: cited.filter(event => event.type === 'tool_result').map(event => event.tool), state: cited.some(event => event.type === 'observation') },
   { toolsComplete: complete, stateObserved: complete, edition: COUNTING_VERSION })
     : cited.some(event => event.type === CHANNEL_V1[expectation.observation]);
   return [holds ? assessment : { ...assessment, result: 'unknown' }];
