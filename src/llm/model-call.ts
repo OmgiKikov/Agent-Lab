@@ -12,6 +12,7 @@ import type { CallContext } from '../runtime.js';
  *                                                            wait (retry-after or backoff) ◄── refused before any answer, transient
  *                                                                                                                   ▼
  *                                                             usage recorded per request ─► text | ProviderFailure (kind, delivery, retryable)
+ *                                                                                                  | ModelCallDefect (the SDK threw: Lab's own, journaled)
  */
 
 export type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
@@ -91,6 +92,19 @@ export class ProviderFailure extends Error {
     this.delivery = details.delivery ?? KIND_DEFAULTS[kind].delivery;
     this.retryable = details.retryable ?? KIND_DEFAULTS[kind].retryable;
     if (details.status !== undefined) this.status = details.status;
+  }
+}
+
+/**
+ * A request that broke inside Lab or the SDK it calls, not at the provider: the SDK threw instead of answering through its
+ * stream protocol, where every provider failure arrives. Nothing here says the key, the access or the provider is at fault,
+ * so the owner is told it is Lab's own defect; the original error, with its stack, is its cause and goes to the operation's
+ * journal (CallContext.onDefect). It is never sent again: a defect repeats, and whether the request left is unknown.
+ */
+export class ModelCallDefect extends Error {
+  constructor(readonly model: string, cause: unknown) {
+    super(`Внутренняя ошибка Lab при вызове модели ${model} — дело не в доступе и не в ключе. Подробности записаны в журнал работы; повторите, а если повторится — сообщите разработчикам Lab.`, { cause });
+    this.name = 'ModelCallDefect';
   }
 }
 
@@ -196,8 +210,9 @@ export function providerFailureOf(reply: ModelReply, observed: Observed): Provid
     { delivery, ...(status === undefined ? {} : { status }) });
 }
 
-const unavailable = (model: Model, delivery: ProviderDelivery = 'refused') => new ProviderFailure('unavailable',
-  `Запрос к ${model.provider}/${model.id} не прошёл. Проверьте доступ, права на модель и доступность провайдера.`, { delivery });
+/** No credentials for the model's provider: the request is refused before it leaves, and only this says «check access». */
+const unavailable = (model: Model) => new ProviderFailure('unavailable',
+  `Запрос к ${model.provider}/${model.id} не отправлен: Pi не нашёл действующего ключа или входа для этого провайдера. Проверьте доступ к модели.`, { delivery: 'refused' });
 
 const counted = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
 /** Tokens as the provider reported them; the cost only when it reported one for a priced model, otherwise unknown, never free. */
@@ -324,6 +339,13 @@ async function read(stream: Stream, observed: Observed): Promise<ModelReply> {
   return stream.result();
 }
 
+/** A defect goes to the operation's journal; a call made outside any operation leaves it on the error output instead. */
+function reportDefect(ctx: CallContext, defect: ModelCallDefect): void {
+  if (ctx.onDefect) { ctx.onDefect(defect); return; }
+  const cause = defect.cause;
+  process.stderr.write(`Agent Lab: внутренняя ошибка при вызове модели ${defect.model}: ${cause instanceof Error ? cause.stack ?? `${cause.name}: ${cause.message}` : String(cause)}\n`);
+}
+
 /** One request under its own deadline; its usage is recorded exactly once, also when it fails. */
 async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, ctx: CallContext, onIncomplete?: (text: string) => void): Promise<Sent> {
   const deadline = new AbortController();
@@ -331,6 +353,7 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
   const signal = AbortSignal.any([ctx.signal, deadline.signal]);
   const observed: Observed = { started: false };
   let reply: ModelReply | undefined;
+  let defect: ModelCallDefect | undefined;
   try {
     const stream = runtime.streamSimple(model, { systemPrompt: request.system, messages: request.messages }, {
       signal, timeoutMs: ctx.timeoutMs, maxRetries: 0, transport: 'sse',
@@ -346,13 +369,16 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
       },
     });
     reply = await untilAborted(read(stream, observed), signal);
-  } catch {
+  } catch (error) {
     // Every provider failure reaches the stream protocol as a reply; only an abort or a defect outside it throws.
+    if (!signal.aborted) defect = new ModelCallDefect(`${model.provider}/${model.id}`, error);
   } finally { clearTimeout(timer); }
   if (signal.aborted || !reply) {
     ctx.addUsage(usageOf(reply, model));
     if (signal.aborted) throw signal.reason;
-    return { ok: false, failure: unavailable(model, 'cut') };
+    defect ??= new ModelCallDefect(`${model.provider}/${model.id}`, new Error('The SDK returned no reply'));
+    reportDefect(ctx, defect);
+    throw defect;
   }
   const text = reply.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
   const failure = reply.stopReason !== 'stop' ? providerFailureOf(reply, observed)

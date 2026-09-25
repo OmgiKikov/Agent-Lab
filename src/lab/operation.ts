@@ -134,6 +134,12 @@ export class OperationRunner {
         if (usage) usage.calls++;
       },
       addUsage: delta => { if (usage) addUsage(usage, delta); },
+      // Lab's own defect goes to the journal of the record the operation works on or beside; the error output keeps it
+      // when even that write fails.
+      onDefect: defect => {
+        try { this.store.appendDiagnostic(active.id, defect); }
+        catch { process.stderr.write(`Agent Lab: ${defect.cause instanceof Error ? defect.cause.stack ?? defect.cause.message : String(defect.cause ?? defect.message)}\n`); }
+      },
     };
     return { ctx, operation };
   }

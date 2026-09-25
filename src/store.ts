@@ -341,6 +341,18 @@ export class ExperimentStore {
     try { return await readFile(join(this.directory, `${id}.trace.jsonl`), 'utf8'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''; throw error; }
   }
+  /**
+   * Lab's own defects met by an operation on the record `id` — an SDK that threw instead of answering — each with its
+   * stack, in `{id}.diagnostics.jsonl`: for whoever reports it, never shown to the owner as it is.
+   */
+  appendDiagnostic(id: string, defect: Error): void {
+    if (!this.lockToken) throw new Error('Для записи журнала откройте лабораторию как писатель.');
+    this.path(id);
+    const cause = defect.cause;
+    const line = { at: new Date().toISOString(), error: `${defect.name}: ${defect.message}`,
+      ...(cause === undefined ? {} : { cause: cause instanceof Error ? cause.stack ?? `${cause.name}: ${cause.message}` : String(cause) }) };
+    appendFileSync(join(this.directory, `${id}.diagnostics.jsonl`), `${JSON.stringify(line)}\n`, { mode: 0o600, flush: true });
+  }
   appendJudgment(id: string, trialId: string, audit: JudgeAudit): void {
     if (!this.lockToken) throw new Error('Для записи оценки откройте лабораторию как писатель.');
     this.path(id);

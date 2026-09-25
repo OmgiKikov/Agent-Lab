@@ -32,6 +32,11 @@ export interface CallContext {
   onTargetEvent?(event: Omit<TraceEvent, 'seq'>): void;
   /** Called on every audit change; final is true exactly once, after the last vote of this judgment settled. */
   onJudgment?(trialId: string, audit: JudgeAudit, final?: boolean): void;
+  /**
+   * A defect of Lab or its SDK met by a call (llm/model-call.ts ModelCallDefect), before it is thrown: the operation writes
+   * it, with its stack, to its journal. Without it the error output gets it.
+   */
+  onDefect?(defect: Error): void;
 }
 export interface DialogueMessage { role: 'user' | 'assistant'; content: string }
 /** A button of the agent's last reply the customer pressed: its place in that reply, its text as shown, the value the adapter gave it. */
