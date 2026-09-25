@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-import { parseArgs } from 'node:util';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
+import { wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { ExperimentLab } from './experiment.js';
 import type { CreateOptions, PreparationOptions } from './lab/library.js';
 import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, isRunnable, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Settings } from './contracts.js';
+import { createInputSchema, isRunnable, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
 import { detectionLines, detectProject, promptLine } from './detect.js';
@@ -28,9 +28,9 @@ import { libraryHash } from './scenario-library.js';
 import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
 import { conversionText } from './card/convert.js';
 import { cardCommandSchema, type CardCommand, type LibraryV2 } from './card/schema.js';
-import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules } from './card/rulebook.js';
-import { actionRow, briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationActions, situationData, situationViews, type SituationView } from './card/view.js';
-import { safeLine } from './text.js';
+import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules, type RulebookView } from './card/rulebook.js';
+import { briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationData, situationViews, type SituationView } from './card/view.js';
+import { safeLine, wrapHanging } from './text.js';
 import { countText } from './plural.js';
 import { logImports } from './card/calibration-scope.js';
 import { confirmTableImport, planTableReading, proposeReading, proposeTableImport, readingConsent } from './spreadsheet/import.js';
@@ -39,6 +39,8 @@ import { READING_CALLS } from './spreadsheet/reading-task.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
 import { importHints, tableChoicesOf } from './cli/import-flags.js';
 import { connectFromCurl, doctorTemplate } from './cli/connect.js';
+import { commandOf, readCommandLine, type Flag, type Flags } from './cli/args.js';
+import { errorText, stopText } from './cli/errors.js';
 import { preparationCeiling } from './card/budget.js';
 import { builderOf, consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
 
@@ -48,37 +50,28 @@ import { builderOf, consentText, preparationConsent, rulesConsentText, situation
  * a command that only reads never takes the writer's lock, so it may run beside a live run. `chat` — and no command
  * in a terminal — opens Pi with the Agent Lab extension.
  *
+ * Each command names the flags it takes (cli/args.ts refuses the others in the owner's words) and the exit code of its
+ * failure: 2 for what a CI reads, where 1 means an agent that failed. Every failure reaches the owner through
+ * cli/errors.ts: what is wrong and what to type instead, never an English diagnostic alone.
+ *
  * Inside that chat the owner's word belongs to the chat: `agent-lab chat` gives Pi AGENT_LAB_SESSION, Pi's shell
  * passes its whole environment to every command it runs, and the chat asks each consent and decision in a native
  * dialog. A command run from the chat's shell — by the model or by the owner's `!` — therefore refuses --yes, unless
  * that shell drops the variable, which nothing here can prevent (IN_CHAT).
  */
 
-const FLAGS = {
-  'data-dir': { type: 'string' }, input: { type: 'string' }, id: { type: 'string' }, output: { type: 'string' },
-  task: { type: 'string' }, operation: { type: 'string' }, 'expected-hash': { type: 'string' },
-  before: { type: 'string' }, after: { type: 'string' }, help: { type: 'boolean', short: 'h' },
-  format: { type: 'string', default: 'json' }, json: { type: 'boolean' },
-  connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
-  'dialogues-file': { type: 'string' }, trial: { type: 'string', multiple: true },
-  yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
-  card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' }, convert: { type: 'boolean' },
-  'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
-  file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },
-  markers: { type: 'string' }, 'role-column': { type: 'string' }, roles: { type: 'string' }, 'order-column': { type: 'string' }, 'row-order': { type: 'boolean' },
-  where: { type: 'string' }, 'no-separator': { type: 'boolean' }, 'collapse-repeats': { type: 'boolean' }, 'keep-repeats': { type: 'boolean' },
-  situations: { type: 'string' }, 'prompts-from': { type: 'string' }, prompt: { type: 'string', multiple: true }, prompts: { type: 'string' },
-  planted: { type: 'string' }, controls: { type: 'string' },
-  curl: { type: 'string' }, message: { type: 'string' }, conversation: { type: 'string', multiple: true }, reply: { type: 'string' },
-  'operator-rules': { type: 'string' }, 'bind-rule': { type: 'string', multiple: true }, 'unbind-rule': { type: 'string', multiple: true },
-} as const;
-type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];
-
 /** What a command gets: the owner's flags and the data folder they point at. */
 interface CommandInput { values: Flags; directory: string }
 interface Command {
-  /** What `agent-lab --help` says about the command, in the owner's words. */
-  help: readonly string[];
+  /** What `agent-lab --help` says about the command: how it is typed, then what it does, in the owner's words. */
+  help: readonly (readonly [usage: string, text: string])[];
+  /** The flags it takes besides --data-dir and --help; any other is refused. */
+  flags: readonly Flag[];
+  /**
+   * The exit code when the command cannot do what it was asked. 2 for the commands a CI reads — `evaluate`, `run`,
+   * `reassess` —, where 1 is reserved for an agent that failed: a test or a place that could not be measured is 2.
+   */
+  failure?: 2;
   run(input: CommandInput): Promise<void>;
 }
 
@@ -206,25 +199,26 @@ async function importTable({ values, directory }: CommandInput): Promise<void> {
 async function cards({ values, directory }: CommandInput): Promise<void> {
   if (!values.id) throw new Error('Укажите --id RUN.');
   const lab = new ExperimentLab(directory);
-  const situations = async (id: string) => {
-    const record = await lab.get(id);
-    if (record.librarySnapshot?.formatVersion !== 2) return { record, views: situationViews(record, { maxTurns: record.settings.maxTurns }) };
-    const context = await lab.cardContext(id);
-    return { record: context.experiment, views: situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns }),
-      rulebook: shownRulebook(context.library) };
-  };
-  /** The list, or one situation with its question and its actions — the same rows the chat and the board draw. JSON carries each situation's id: a command file names its card by it. */
+  const situations = (id: string) => situationsOf(lab, id);
+  /**
+   * The list, or one situation with its question — the same rows the chat and the board draw, without the board's keys:
+   * in a shell the way on is a command, said under the situation. JSON carries each situation's id: a command file names
+   * its card by it.
+   */
   const show = async (id: string, changes: string[] = []) => {
     const { record, views, rulebook } = await situations(id);
     const number = values.card === undefined ? undefined : Number(values.card);
     const view = number === undefined ? undefined : views.find(item => item.number === number);
     if (number !== undefined && !view) throw new Error(`Ситуации №${values.card} нет. Есть: ${views.map(item => item.number).join(', ')}.`);
     if (values.json) { await writeStdout(`${JSON.stringify({ runId: id, counts: countsText(views), ...(changes.length ? { changes } : {}), ...(view ? { situation: { id: view.id, ...situationData(view), details: view.details } } : { situations: views.map(item => ({ id: item.id, ...situationData(item) })), ...(rulebook ? { rulebook } : {}) }) }, null, 2)}\n`); return; }
-    const actions = view && !view.question ? situationActions(view) : [];
-    const rows = view ? [...briefRows(view), ...(actions.length ? [{ role: 'blank' as const, indent: 0, text: '' }, actionRow(actions)] : []), { role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)]
-      : views.flatMap(item => listRows(item));
+    const rows = view ? [...briefRows(view), { role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)] : views.flatMap(item => listRows(item));
     const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), '', ...(rulebook ? [...rulebookLines(rulebook), ''] : [])];
-    await writeStdout(`${[...changes, ...(changes.length ? [''] : []), ...head.map(line => line && ` ${safeLine(line)}`), plainSituationText(rows.map(row => ({ ...row, text: safeLine(row.text) })), process.stdout.columns ?? 100)].join('\n')}\n`);
+    const choices = view?.format === 'card' ? view.question?.choices ?? [] : [];
+    const next = !view || view.format !== 'card' ? [] : choices.length
+      ? [`Ответить: agent-lab cards --id ${id} --card ${view.number} --choice ${choices.map(choice => choice.id).join('|')} --yes — ${choices.map((choice, index) => `${choice.id} — ответ ${index + 1}${choice.needsText ? ' со своими словами в --text «…»' : ''}`).join(', ')}.`]
+      : [`Изменить: agent-lab cards --id ${id} --input команда.json — без --yes Lab покажет «было → стало».`];
+    await writeStdout(`${[...changes, ...(changes.length ? [''] : []), ...head.map(line => line && ` ${safeLine(line)}`), plainSituationText(rows.map(row => ({ ...row, text: safeLine(row.text) })), process.stdout.columns ?? 100),
+      ...(next.length ? ['', ...next.map(line => ` ${safeLine(line)}`)] : [])].join('\n')}\n`);
   };
   if (values.convert) {
     // Free and deterministic: the new draft's situations wait for a check the owner starts with --check --yes.
@@ -343,10 +337,11 @@ async function summary({ values, directory }: CommandInput): Promise<void> {
 
 async function exportRun({ values, directory }: CommandInput): Promise<void> {
   if (!values.id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
-  if (!['json', 'html', 'markdown'].includes(values.format!)) throw new Error('Формат экспорта: json, html или markdown.');
+  const format = values.format ?? 'json';
+  if (!['json', 'html', 'markdown'].includes(format)) throw new Error('Формат экспорта: --format json, html или markdown.');
   const store = new ExperimentStore(directory);
   const bundle = await evidenceBundle(await store.get(values.id), store, values.before);
-  const content = values.format === 'html' ? htmlReport(bundle) : values.format === 'markdown' ? markdownReport(bundle) : jsonReport(bundle);
+  const content = format === 'html' ? htmlReport(bundle) : format === 'markdown' ? markdownReport(bundle) : jsonReport(bundle);
   if (values.output) await writeFile(values.output, content, { mode: 0o600 }); else process.stdout.write(`${content}\n`);
 }
 
@@ -357,7 +352,7 @@ async function diff({ values, directory }: CommandInput): Promise<void> {
   const compared = compareRuns(before, after);
   if (values.json) process.stdout.write(`${JSON.stringify(compared, null, 2)}\n`);
   else process.stdout.write([
-    compared.headline, '',
+    safeLine(compared.headline), '',
     ...(compared.regressed.length ? ['Сломалось:', ...compared.regressed.map(r => `  ✗ ${safeLine(r.title)}`), ''] : []),
     ...(compared.fixed.length ? ['Исправлено:', ...compared.fixed.map(r => `  ✓ ${safeLine(r.title)}`), ''] : []),
     ...(compared.incomparable.length ? ['Несравнимо:', ...compared.incomparable.map(r => `  ? ${safeLine(r.title)} (попытка ${r.repeat + 1}): ${safeLine(r.reason)}`), ''] : []),
@@ -392,7 +387,7 @@ async function accept({ values, directory }: CommandInput): Promise<void> {
     const projection = testPlanLines(record);
     await writeStdout(values.json
       ? `${JSON.stringify({ type: 'test_proposal', text: projection.lines.join('\n'), lines: projection.lines, draftHash: projection.draftHash })}\n`
-      : `${projection.lines.join('\n')}\n`);
+      : `${projection.lines.map(safeLine).join('\n')}\n`);
     if (!values.yes) {
       await writeStdout(values.json
         ? `${JSON.stringify({ type: 'next_step', command: `agent-lab accept --id ${id} --yes` })}\n`
@@ -478,7 +473,7 @@ async function taskInput(values: Flags, directory: string): Promise<{ input: Cre
     // Articles and prompts named by path are read by Lab itself: whole files, no model in between, no item limit of a tool call.
     const { materialFiles, promptFiles, ...task } = raw;
     const expanded = await expandMaterials({ materials: task.materials, materialFiles, promptFiles }, dirname(resolve(values.input)));
-    for (const item of expanded.skipped) process.stderr.write(`Пропущен ${item.file}: ${item.reason}\n`);
+    for (const item of expanded.skipped) process.stderr.write(`Пропущен ${safeLine(item.file)}: ${safeLine(item.reason)}\n`);
     process.stderr.write(`Прочитано материалов из файлов: ${expanded.read}.\n`);
     raw = { ...task, materials: expanded.materials };
   }
@@ -604,23 +599,46 @@ async function prepare({ values, directory }: CommandInput): Promise<void> {
   }
   await asWriter(directory, async lab => {
     const id = await prepareDraft(lab, input, { situations: consent.situations, callCeiling: consent.callCeiling, ...preparationFlags(values) });
-    process.stdout.write(`${JSON.stringify(await lab.get(id), null, 2)}\n`);
+    // The draft holds the logs' conversations word for word: they stay in the private folder, the terminal gets what was made and the way on.
+    const { views } = await situationsOf(lab, id);
+    if (values.json) {
+      await writeStdout(`${JSON.stringify({ id, counts: countsText(views), situations: views.map(view => ({ id: view.id, number: view.number, title: view.brief.title, status: view.status })) }, null, 2)}\n`);
+      return;
+    }
+    await writeStdout(`${[`Собрано: ${countsText(views)}.`, `Черновик: ${id}`, '', 'Дальше:', `  agent-lab cards --id ${id}   ситуации, их вопросы и как ответить`,
+      `  agent-lab cards --id ${id} --accept --yes   утвердить готовые`, `  agent-lab run --id ${id} --yes   прогнать утверждённые`].map(line => safeLine(line)).join('\n')}\n`);
   });
 }
 
-/** Runs an accepted draft to its result, as a script reads it: the view, its exit code and the proof of every dialogue. */
-async function runDraft(lab: ExperimentLab, id: string, values: Flags): Promise<void> {
+/** The situations of a draft or a run as the chat and the board read them: a card set against its imports, an older record by its scenarios. */
+async function situationsOf(lab: ExperimentLab, id: string): Promise<{ record: Experiment; views: SituationView[]; rulebook?: RulebookView | undefined }> {
+  const record = await lab.get(id);
+  if (record.librarySnapshot?.formatVersion !== 2) return { record, views: situationViews(record, { maxTurns: record.settings.maxTurns }) };
+  const context = await lab.cardContext(id);
+  return { record: context.experiment, views: situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns }),
+    rulebook: shownRulebook(context.library) };
+}
+
+/** Runs an accepted draft to its result: the record as it ended and its one view, the source run read for stability as in `summary`. */
+async function runToResult(lab: ExperimentLab, id: string, values: Flags) {
   const draft = await lab.get(id);
   await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft), ...(values.parallel ? { parallel: Number(values.parallel) } : {}) }); await lab.waitForIdle();
   const result = await lab.get(id);
-  // The source run is read-only context for stability, as in `summary`.
   const verified = await resolveVerified(result, lab.store, result.parentRunId);
-  const view = buildResultView(verified.record, { before: verified.before });
-  process.stdout.write(`${JSON.stringify({ id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
-    ...(result.workflow === 'evaluate' ? { ...machineResult(view), proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : { view }),
-    comparison: result.comparisons.at(-1), ...(verified.warnings.length ? { warnings: verified.warnings } : {}), artifact: resolve(lab.store.directory, `${id}.json`) }, null, 2)}\n`);
-  if (result.workflow === 'evaluate') process.exitCode = exitCodeOf(view);
-  if (!['complete', 'results_review'].includes(result.phase)) throw new Error(result.error ?? 'Experiment did not complete');
+  return { result, warnings: verified.warnings, view: buildResultView(verified.record, { before: verified.before }), artifact: resolve(lab.store.directory, `${id}.json`) };
+}
+type Ran = Awaited<ReturnType<typeof runToResult>>;
+
+/** A run as a script reads it: the view, its exit code and the proof of every dialogue. */
+const machineRun = ({ result, warnings, view, artifact }: Ran) => ({ id: result.id, phase: result.phase, mode: result.mode, reviewMode: result.reviewMode,
+  ...(result.workflow === 'evaluate' ? { ...machineResult(view), proofs: result.trials.map(trial => trialProofLines(result, trial.id)) } : { view }),
+  comparison: result.comparisons.at(-1), ...(warnings.length ? { warnings } : {}), artifact });
+
+/** A run that did not reach its result says why, what is kept and where to look. */
+function reached({ result }: Ran): void {
+  if (['complete', 'results_review'].includes(result.phase)) return;
+  const why = stopText(result.error);
+  throw new Error(`Прогон не дошёл до результата${why ? `: ${why}` : '.'} Записанное сохранено: agent-lab summary --id ${result.id}.`);
 }
 
 async function demo({ values, directory }: CommandInput): Promise<void> {
@@ -629,22 +647,38 @@ async function demo({ values, directory }: CommandInput): Promise<void> {
     const id = await prepareDraft(lab, demoInput());
     // The teaching example takes the owner's path: answer its one question («Да» — the customer knew the number), then accept every ready situation.
     const context = await lab.cardContext(id);
+    let answered = 0;
     for (const view of situationViews(context.experiment, { evidence: context.evidence, maxTurns: context.experiment.settings.maxTurns })) if (view.question?.id) {
       const answer = await lab.prepareCardCommand(id, { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: 'a' }, { via: 'cli-yes' });
       await lab.applyCardCommand(id, answer, hostGrant(answer, 'confirmed'));
+      answered++;
     }
-    const answered = await lab.cardContext(id);
-    const ready = situationViews(answered.experiment, { evidence: answered.evidence, maxTurns: answered.experiment.settings.maxTurns }).filter(view => view.status === 'ready');
-    await lab.acceptCards(id, libraryHash(answered.library), ready.map(view => view.id));
-    await runDraft(lab, id, values);
+    const now = await lab.cardContext(id);
+    const ready = situationViews(now.experiment, { evidence: now.evidence, maxTurns: now.experiment.settings.maxTurns }).filter(view => view.status === 'ready');
+    await lab.acceptCards(id, libraryHash(now.library), ready.map(view => view.id));
+    const ran = await runToResult(lab, id, values);
+    reached(ran);
+    // The teaching agent errs on purpose: its failure is the lesson, never a failure of the command — the exit code stays 0.
+    if (values.json) { await writeStdout(`${JSON.stringify(machineRun(ran), null, 2)}\n`); return; }
+    const said = (text: string) => wrapTextWithAnsi(safeLine(text), Math.min(process.stdout.columns ?? MAX_WIDTH, MAX_WIDTH)).join('\n');
+    await writeStdout([
+      said(`Учебный пример: ${countText(ready.length, ['ситуация', 'ситуации', 'ситуаций'])}, без модели и ключей.${answered
+        ? ` На ${answered === 1 ? 'вопрос одной из них' : `вопросы ${countText(answered, ['ситуации', 'ситуаций', 'ситуаций'])}`} Lab ответил «Да» за вас.` : ''}`), '',
+      screenText(ran.view, ran.warnings).trimEnd(), '',
+      said('Учебный агент ошибается нарочно: так выглядит найденная ошибка — что ожидалось, что ответил агент, какое правило нарушено.'),
+      said('Проверить своего агента: agent-lab в папке его проекта — откроется чат Pi с Agent Lab.'), '',
+    ].join('\n'));
   });
 }
 
 async function run({ values, directory }: CommandInput): Promise<void> {
   await asWriter(directory, async lab => {
-    if (!values.id) throw new Error('Укажите прогон: --id EXPERIMENT_ID');
+    if (!values.id) throw new Error('Укажите прогон: --id RUN.');
     if (!values.yes) throw new Error('Для запуска согласованных тестов укажите --yes.');
-    await runDraft(lab, values.id, values);
+    const ran = await runToResult(lab, values.id, values);
+    await writeStdout(`${JSON.stringify(machineRun(ran), null, 2)}\n`);
+    if (ran.result.workflow === 'evaluate') process.exitCode = exitCodeOf(ran.view);
+    reached(ran);
   });
 }
 
@@ -657,59 +691,103 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
   });
 }
 
+/** The flags of `import`: the owner's answers about the table, as the chat asks them one at a time. */
+const TABLE_FLAGS: readonly Flag[] = ['file', 'input', 'json', 'yes', 'sheet', 'id-column', 'text-column', 'separator', 'no-separator', 'markers', 'role-column', 'roles',
+  'order-column', 'row-order', 'where', 'collapse-repeats', 'keep-repeats'];
+const BUILD_FLAGS: readonly Flag[] = ['input', 'dialogues-file', 'situations', 'connection', 'parallel', 'yes', 'json', 'prompts-from', 'prompt', 'prompts'];
+
 /** Every command in the order `--help` lists them: first the owner's path, then what scripts and CI use. */
 const COMMANDS: Readonly<Record<string, Command>> = {
-  detect: { help: ['agent-lab detect [--directory ПАПКА] [--json]   Что Lab нашёл в папке проекта: агента, логи, материалы, промпт'], run: detect },
-  import: { help: ['agent-lab import --file логи.xlsx [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]   Как читать таблицу логов (.xlsx, .csv): с --input разметку предлагает модель задачи, Lab проверяет каждую строку; --yes — сначала на вызов модели, затем на загрузку'], run: importTable },
-  build: { help: ['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--parallel 4] [--yes]   Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их',
-    'agent-lab build --input задача.json --prompts-from ПАПКА [--yes]   Промпты агента из его кода и JSON на выбор; с --yes модель задачи отметит те, что пишут ответ клиенту',
-    'agent-lab build --input задача.json --prompts-from ПАПКА --prompt ФАЙЛ#ИМЯ ... | --prompts suggested [--yes]   Выбранные промпты (или отмеченные Lab) станут правилами поведения бота'], run: prepare },
-  prepare: { help: [], run: prepare },
+  detect: { help: [['agent-lab detect [--directory ПАПКА] [--json]', 'Что Lab нашёл в папке проекта: агента, логи, материалы, промпт']], flags: ['directory', 'json'], run: detect },
+  import: { help: [['agent-lab import --file логи.xlsx [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]',
+    'Как читать таблицу логов (.xlsx, .csv): с --input разметку предлагает модель задачи, Lab проверяет каждую строку; --yes — сначала на вызов модели, затем на загрузку']],
+  flags: TABLE_FLAGS, run: importTable },
+  build: { help: [['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--parallel 4] [--yes] [--json]',
+    'Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их'],
+  ['agent-lab build --input задача.json --prompts-from ПАПКА [--yes]', 'Промпты агента из его кода и JSON на выбор; с --yes модель задачи отметит те, что пишут ответ клиенту'],
+  ['agent-lab build --input задача.json --prompts-from ПАПКА --prompt ФАЙЛ#ИМЯ ... | --prompts suggested [--yes]', 'Выбранные промпты (или отмеченные Lab) станут правилами поведения бота']],
+  flags: BUILD_FLAGS, run: prepare },
+  prepare: { help: [], flags: BUILD_FLAGS, run: prepare },
   cards: { help: [
-    'agent-lab cards --id RUN [--card N] [--json]   Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос',
-    'agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes   Ответ на вопрос ситуации',
-    'agent-lab cards --id RUN --input команда.json [--yes]   Команда владельца; без --yes — только «было → стало»',
-    'agent-lab cards --id RUN --check|--resume|--accept --yes [--parallel 4]   Проверить ситуации · продолжить подготовку · утвердить готовые',
-    'agent-lab cards --id RUN [--operator-rules on|off] [--bind-rule ID] [--unbind-rule ID] [--yes]   Свод правил: входят ли инструкции для операторов, отдельные правила, обязательные для бота',
-    'agent-lab cards --id RUN --convert   Черновик старого формата — продолжить в новом формате; старый останется как есть'], run: cards },
-  accept: { help: ['agent-lab accept --id RUN [--yes]   Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания'], run: accept },
-  run: { help: ['agent-lab run --id RUN --yes [--parallel 4]   Прогнать утверждённые ситуации'], run },
-  repeat: { help: ['agent-lab repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID]   Новый черновик тех же ситуаций'], run: repeat },
-  demo: { help: ['agent-lab demo   Учебный пример целиком, без модели и ключей'], run: demo },
-  summary: { help: ['agent-lab summary --id RUN [--json]   Сколько ситуаций агент прошёл, что не измерено и почему'], run: summary },
-  logs: { help: ['agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--yes]   Какая версия агента записала логи: только тогда сверка с продом — калибровка'], run: logs },
-  reassess: { help: ['agent-lab reassess --id RUN [--input criteria.json] --yes | --code-only   Оценить записанные разговоры заново: судьёй или только точными проверками'], run: reassess },
-  'check-judge': { help: ['agent-lab check-judge --id RUN [--planted 10] [--controls 10] [--yes]   Проверить судью без человека: поймает ли он подброшенные ошибки; без --yes — только сколько вызовов'], run: checkJudgeCommand },
-  export: { help: ['agent-lab export --id RUN --format html|markdown|json [--output отчёт.html]   Отчёт для заказчика'], run: exportRun },
-  diff: { help: ['agent-lab diff --before RUN --after RUN [--json]   Что сломалось и что исправилось между двумя прогонами'], run: diff },
-  'save-suite': { help: ['agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]   Сохранить набор ситуаций в файл'], run: saveSuite },
-  evaluate: { help: ['agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4] [--connection подключение.json]   Прогнать сохранённый набор (CI)'], run: evaluate },
-  suites: { help: ['agent-lab suites [--directory .evals]   Сохранённые наборы'], run: async ({ values }) => { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); } },
-  connect: { help: ['agent-lab connect --curl запрос.txt|- [--message /путь] [--conversation /путь] [--output connection.json] [--yes]   Подключение агента в его собственном формате из команды curl'],
-    run: ({ values }) => connectFromCurl(values) },
-  doctor: { help: ['agent-lab doctor --connection подключение.json --yes   Три пробных запроса к агенту: запись, чтение, сброс',
-    'agent-lab doctor --connection подключение.json [--reply /путь] --yes   Агент в своём формате: строение ответа, затем два хода одного разговора'], run: checkConnection },
-  status: { help: ['agent-lab status   Модели и ключи, которые видит Pi'], run: async () => { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); } },
+    ['agent-lab cards --id RUN [--card N] [--json]', 'Ситуации: что пишет и знает клиент, что должен агент, статус и вопрос'],
+    ['agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes', 'Ответ на вопрос ситуации'],
+    ['agent-lab cards --id RUN --input команда.json [--yes]', 'Команда владельца; без --yes — только «было → стало»'],
+    ['agent-lab cards --id RUN --check|--resume|--accept --yes [--parallel 4]', 'Проверить ситуации · продолжить подготовку · утвердить готовые'],
+    ['agent-lab cards --id RUN [--operator-rules on|off] [--bind-rule ID] [--unbind-rule ID] [--yes]', 'Свод правил: входят ли инструкции для операторов, отдельные правила, обязательные для бота'],
+    ['agent-lab cards --id RUN --convert', 'Черновик старого формата — продолжить в новом формате; старый останется как есть']],
+  flags: ['id', 'card', 'json', 'input', 'choice', 'text', 'check', 'resume', 'accept', 'convert', 'yes', 'parallel', 'operator-rules', 'bind-rule', 'unbind-rule'], run: cards },
+  accept: { help: [['agent-lab accept --id RUN [--yes] [--json]', 'Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания']], flags: ['id', 'yes', 'json'], run: accept },
+  run: { help: [['agent-lab run --id RUN --yes [--parallel 4]', 'Прогнать утверждённые ситуации; итог — JSON для скрипта']], flags: ['id', 'yes', 'parallel', 'json'], failure: 2, run },
+  repeat: { help: [['agent-lab repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID]', 'Новый черновик тех же ситуаций']], flags: ['id', 'case', 'control'], run: repeat },
+  demo: { help: [['agent-lab demo [--json]', 'Учебный пример целиком, без модели и ключей: итог экраном, с --json — JSON']], flags: ['json'], run: demo },
+  summary: { help: [['agent-lab summary --id RUN [--json]', 'Сколько ситуаций агент прошёл, что не измерено и почему']], flags: ['id', 'json'], run: summary },
+  logs: { help: [['agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--import ID] [--yes]', 'Какая версия агента записала логи: только тогда сверка с продом — калибровка']],
+    flags: ['id', 'agent-version', 'unknown', 'import', 'yes'], run: logs },
+  reassess: { help: [['agent-lab reassess --id RUN [--input criteria.json] [--trial ID] --yes | --code-only', 'Оценить записанные разговоры заново: судьёй или только точными проверками']],
+    flags: ['id', 'input', 'trial', 'yes', 'code-only'], failure: 2, run: reassess },
+  'check-judge': { help: [['agent-lab check-judge --id RUN [--planted 10] [--controls 10] [--yes] [--json]', 'Проверить судью без человека: поймает ли он подброшенные ошибки; без --yes — только сколько вызовов']],
+    flags: ['id', 'planted', 'controls', 'yes', 'json'], run: checkJudgeCommand },
+  export: { help: [['agent-lab export --id RUN --format html|markdown|json [--before RUN] [--output отчёт.html]', 'Отчёт для заказчика']], flags: ['id', 'format', 'before', 'output'], run: exportRun },
+  diff: { help: [['agent-lab diff --before RUN --after RUN [--json]', 'Что сломалось и что исправилось между двумя прогонами']], flags: ['before', 'after', 'json'], run: diff },
+  'save-suite': { help: [['agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]', 'Сохранить набор ситуаций в файл']], flags: ['id', 'output', 'case'], run: saveSuite },
+  evaluate: { help: [['agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4] [--connection подключение.json] [--before RUN]', 'Прогнать сохранённый набор (CI)']],
+    flags: ['input', 'yes', 'case', 'parallel', 'connection', 'before'], failure: 2, run: evaluate },
+  suites: { help: [['agent-lab suites [--directory .evals]', 'Сохранённые наборы']], flags: ['directory'],
+    run: async ({ values }) => { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); } },
+  connect: { help: [['agent-lab connect --curl запрос.txt|- [--message /путь] [--conversation /путь] [--output connection.json] [--yes]', 'Подключение агента в его собственном формате из команды curl']],
+    flags: ['curl', 'message', 'conversation', 'output', 'yes'], run: ({ values }) => connectFromCurl(values) },
+  doctor: { help: [['agent-lab doctor --connection подключение.json --yes', 'Три пробных запроса к агенту: запись, чтение, сброс'],
+    ['agent-lab doctor --connection подключение.json [--reply /путь] --yes', 'Агент в своём формате: строение ответа, затем два хода одного разговора']],
+  flags: ['connection', 'yes', 'reply', 'output'], run: checkConnection },
+  status: { help: [['agent-lab status', 'Модели и ключи, которые видит Pi']], flags: [], run: async () => { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); } },
 };
 
-const HELP = [
-  'Agent Lab — насколько хорош ваш агент: точность на ситуациях из реальных логов и причины провалов.', '',
-  '  agent-lab                         Диалог в текущем проекте',
-  '  agent-lab chat [опции Pi]          Напишите задачу обычными словами', '',
-  ...Object.values(COMMANDS).flatMap(command => command.help.map(line => `  ${line}`)), '',
-  'evaluate, run и reassess: 0 — все оценки пройдены; 1 — зарегистрирован провал; 2 — ошибка теста/среды или неполные данные.',
-  '--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается. Из чата Agent Lab --yes не принимается: там согласие спрашивает сам чат.', '',
-].join('\n');
+const INTRO = 'Agent Lab — насколько хорош ваш агент: точность на ситуациях из реальных логов и причины провалов.';
+const CHAT: readonly (readonly [string, string])[] = [['agent-lab', 'Диалог с Agent Lab в текущем проекте'], ['agent-lab chat [опции Pi]', 'То же; задачу пишите обычными словами']];
+const RULES = [
+  'evaluate, run и reassess: 0 — все оценки пройдены; 1 — зарегистрирован провал агента; 2 — ошибка теста или среды, неполные данные.',
+  '--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается. Из чата Agent Lab --yes не принимается: там согласие спрашивает сам чат.',
+];
+
+/**
+ * `--help` laid out for the terminal, at most 100 columns (docs/design/ui-spec.md §6): each command as it is typed, then
+ * what it does under it, both wrapped — a long usage continues under itself. `name`: one command's own help.
+ */
+function helpText(name?: string): string {
+  const width = Math.max(40, Math.min(process.stdout.columns ?? MAX_WIDTH, MAX_WIDTH));
+  const entry = ([usage, text]: readonly [string, string]) => [...wrapHanging(usage, width - 2, width - 6).map((line, index) => `${index ? '      ' : '  '}${line}`),
+    ...wrapTextWithAnsi(text, width - 6).map(line => `      ${line}`)];
+  const own = name ? COMMANDS[name]?.help : undefined;
+  const lines = own?.length ? own.flatMap(entry)
+    : [...wrapTextWithAnsi(INTRO, width), '', ...CHAT.flatMap(entry), '', ...Object.values(COMMANDS).flatMap(command => command.help.flatMap(entry)), '', ...RULES.flatMap(rule => wrapTextWithAnsi(rule, width))];
+  return `${lines.join('\n')}\n`;
+}
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args[0] === 'chat' || (!args.length && process.stdin.isTTY)) { await chat(args.slice(args[0] === 'chat' ? 1 : 0)); return; }
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: FLAGS });
-  const name = positionals[0];
-  if (values.help || !name) { process.stdout.write(HELP); return; }
-  if (values.yes && IN_CHAT) throw new Error(CHAT_ASKS);
-  const command = COMMANDS[name];
-  if (!command) throw new Error(`Unknown command: ${name}`);
-  await command.run({ values, directory: values['data-dir'] ?? resolve('.agent-lab') });
+  const line = readCommandLine(args, name => COMMANDS[name]?.flags, Object.keys(COMMANDS).filter(name => COMMANDS[name]!.help.length));
+  if (line.help || !line.name) { await writeStdout(helpText(line.name)); return; }
+  if (line.values.yes && IN_CHAT) throw new Error(CHAT_ASKS);
+  await COMMANDS[line.name]!.run({ values: line.values, directory: line.values['data-dir'] ?? resolve('.agent-lab') });
 }
-void main().catch(error => { process.stderr.write(`Agent Lab: ${safeLine(error instanceof Error ? error.message : String(error))}\n`); process.exitCode = process.argv[2] === 'evaluate' ? 2 : 1; });
+
+/** The flags as far as the line can be read: a line that cannot be read still names its files, for the words of its error. */
+function readableFlags(args: readonly string[]): Flags {
+  try { return readCommandLine(args, command => COMMANDS[command]?.flags, []).values; } catch { return {} as Flags; }
+}
+
+/**
+ * A command that could not do what it was asked says why in the owner's words, and exits with its command's code: 2
+ * for what a CI reads (the test or the place could not measure), 1 for the rest. The command is read from the line
+ * itself, wherever the owner put it among the flags.
+ */
+void main().catch(error => {
+  const args = process.argv.slice(2);
+  const name = commandOf(args);
+  const values = readableFlags(args);
+  const { text, detail } = errorText(error, { directory: values['data-dir'] ?? resolve('.agent-lab'),
+    files: { input: values.input, file: values.file, connection: values.connection, curl: values.curl, 'dialogues-file': values['dialogues-file'], output: values.output } });
+  process.stderr.write(`Agent Lab: ${safeLine(text)}\n${detail ? `  ${safeLine(detail)}\n` : ''}`);
+  process.exitCode = (name ? COMMANDS[name]?.failure : undefined) ?? 1;
+});

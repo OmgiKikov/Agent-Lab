@@ -14,6 +14,8 @@ import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { resultHash } from '../src/lab/record.js';
 import { COUNTING_RULES } from '../src/outcomes.js';
+import { hostGrant } from '../src/card/commands.js';
+import { situationViews } from '../src/card/view.js';
 import { ExperimentStore } from '../src/store.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
 import { boardFixture, CLOSE, escaped, judgedSituations, KEY, legacyDraftIn, noticeOf, output, registered, workspaceSession } from './helpers/pi-session.js';
@@ -477,5 +479,33 @@ test('in the workspace a digit answers a situation\'s question: the owner\'s dec
     assert.match(noticeOf(session.screens[1]!), /^Ситуация 1: записано\./);
     assert.match(session.screens[1]!, /1 {2}Возврат оплаты — номер только по просьбе +✓ готова/);
     assert.deepEqual([session.selectCalls.length, session.editorCalls.length], [0, 0], 'the key pressed on the shown answer is the decision');
+  } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test('the workspace offers a record\'s words in its native dialogs escaped: a duty that carries an escape sequence is shown and matched without it', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agent-lab-board-escape-'));
+  const seed = new ExperimentLab(join(cwd, '.agent-lab'), createDemoRuntime());
+  await seed.init();
+  let id: string;
+  try {
+    id = (await seed.create(demoInput())).id; await seed.waitForIdle();
+    // The owner once wrote a duty with an escape sequence in it (a paste from a terminal): the record keeps it as written.
+    const context = await seed.cardContext(id);
+    const ready = situationViews(context.experiment, { evidence: context.evidence, maxTurns: 3 }).find(view => view.status === 'ready')!;
+    const words = 'объяснить\u001b[2J, как оформить возврат';
+    const prepared = await seed.prepareCardCommand(id, { kind: 'edit_expectation', cardId: ready.id, expectationId: ready.refs.must[1]!, text: words }, { via: 'cli-yes', ownerWords: words });
+    await seed.applyCardCommand(id, prepared, hostGrant(prepared, 'words'));
+    await seed.recheckCards(id); await seed.waitForIdle();
+  } finally { await seed.close(); }
+  const { command, shutdown } = registered(), session = workspaceSession(cwd);
+  // «Изменить» on the ready situation, then «Что агент должен»: the duties are offered to pick from; the owner steps back.
+  session.state.choice = (title, options) => title.startsWith('Что изменить') ? options[3] : undefined;
+  session.state.steps = [[KEY.down, KEY.enter, '1'], CLOSE];
+  try {
+    await command(id, session.ctx);
+    const duties = session.selectCalls.find(call => call.title === 'Какое ожидание изменить?');
+    assert.ok(duties, JSON.stringify(session.selectCalls.map(call => call.title)));
+    assert.ok(duties.options.every(option => !option.includes('\u001b')), JSON.stringify(duties.options));
+    assert.ok(duties.options.includes('2  объяснить, как оформить возврат'), JSON.stringify(duties.options));
   } finally { await shutdown(); await rm(cwd, { recursive: true, force: true }); }
 });
