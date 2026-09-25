@@ -6,6 +6,7 @@ import { ruleBarText } from './card/rulebook.js';
 import { VERSION_UNKNOWN_NOTE, type RunComparison } from './comparison.js';
 import type { Experiment, Trial } from './contracts.js';
 import type { FailureExplanation } from './explain.js';
+import { realismDifference } from './realism.js';
 import type { JudgeCheckSummary } from './judge-check.js';
 import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
@@ -313,20 +314,24 @@ export function blindText(view: Pick<ResultView, 'blind'>): string | null {
 /** A mean as a person reads it: «1,5», «3». */
 const decimal = (value: number): string => value.toLocaleString('ru-RU', { maximumFractionDigits: 1 });
 
+/** What a marked difference of the played customer says, in each measure (realism.ts realismDifference). */
+const REALISM_MESSAGES = { more: 'Клиент Lab пишет после обращения заметно больше реплик, чем реальные: разговор с ним идёт дольше, чем в проде.',
+  fewer: 'Клиент Lab пишет после обращения заметно меньше реплик, чем реальные: разговор с ним короче, чем в проде.' } as const;
+const REALISM_WORDS = { more: 'Клиент Lab заметно многословнее реальных: с ним агенту может быть легче, чем в проде.', fewer: 'Клиент Lab заметно немногословнее реальных.' } as const;
+
 /**
  * The second assessment of the customer, apart from whether it kept to its situation: how the customers Lab played
- * compare with the logged ones of the same situations (realism.ts) — how many messages after the opening, how many words
- * in one. A customer much wordier than the real ones makes the agent's task easier than in production: that is a
- * warning. Null for a run with no situation from a log.
+ * compare with the logged ones of the same situations (realism.ts) — how many messages after the request, how many words
+ * in one. A customer who differs markedly in either, more or less, played another conversation than production's: that
+ * is a warning. Null for a run with no situation from a log.
  */
 export function realismText(view: Pick<ResultView, 'realism'>): { text: string; warn: boolean } | null {
   const found = view.realism;
   if (!found) return null;
-  const ratio = found.logged.words ? found.synthetic.words / found.logged.words : null;
-  const wordy = ratio !== null && ratio >= 1.5, terse = ratio !== null && ratio <= 2 / 3;
-  return { warn: wordy || terse,
-    text: `Похожесть клиента на реальных (${countText(found.conversations, ['разговор', 'разговора', 'разговоров'])} по ситуациям из логов): реплик после первой — в среднем ${decimal(found.synthetic.messages)} у клиента Lab и ${decimal(found.logged.messages)} у реального; слов в реплике — ${decimal(found.synthetic.words)} и ${decimal(found.logged.words)}.${
-      wordy ? ' Клиент Lab заметно многословнее реальных: с ним агенту может быть легче, чем в проде.' : terse ? ' Клиент Lab заметно немногословнее реальных.' : ''} Это сравнение длины и числа реплик, а не оценка того, похож ли клиент на человека.` };
+  const differs = realismDifference(found);
+  const notes = [...(differs.messages ? [REALISM_MESSAGES[differs.messages]] : []), ...(differs.words ? [REALISM_WORDS[differs.words]] : [])];
+  return { warn: notes.length > 0,
+    text: `Похожесть клиента на реальных (${countText(found.conversations, ['разговор', 'разговора', 'разговоров'])} по ситуациям из логов): реплик после обращения — в среднем ${decimal(found.synthetic.messages)} у клиента Lab и ${decimal(found.logged.messages)} у реального; слов в реплике — ${decimal(found.synthetic.words)} и ${decimal(found.logged.words)}.${notes.map(note => ` ${note}`).join('')} Это сравнение длины и числа реплик, а не оценка того, похож ли клиент на человека.` };
 }
 
 /**
