@@ -843,7 +843,7 @@ export function barRows(view: ResultView): ResultRow[] {
 export function resultScreen(view: ResultView, options: { surface: 'board' | 'cli'; details?: boolean; now?: Date }): ResultRow[] {
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
-  const blocks = [headRows(view), scenarioRows(view), topicRows(view), causeRows(view),
+  const blocks = [headRows(view, { brief: !full }), scenarioRows(view), topicRows(view), causeRows(view),
     ...(full ? [errorListRows(view), unmeasuredRows(view), rulesGapRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
     [runLine(view, options.now), ...barRows(view)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
