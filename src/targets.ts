@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { access, readFile, stat } from 'node:fs/promises';
 import { delimiter, extname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { fingerprint, isRunnable, scalarSchema, usageSchema, type ReleaseHook, type ReleaseLog, type RunnableTarget, type Target, type World } from './contracts.js';
@@ -398,7 +399,7 @@ async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> 
 }
 
 async function moduleSession(input: SessionInput<'module'>): Promise<TargetSession> {
-  return commandSession({ ...input, initialize: true, target: {
+  return commandSession({ ...input, initialize: true, channel: 'pipe', target: {
     kind: 'command', command: process.execPath,
     args: [fileURLToPath(new URL('./module-worker.mjs', import.meta.url)), input.target.path, input.target.exportName],
     timeoutMs: input.target.timeoutMs ?? input.ctx.timeoutMs,
@@ -410,14 +411,19 @@ async function moduleSession(input: SessionInput<'module'>): Promise<TargetSessi
  *   stdin  → {"type":"respond", sessionId, scenarioId, initialState, messages, message, choice?}
  *   stdout ← "reply"  |  {"reply", "outcome"?, "buttons"?, "events"?, "records"?}      one JSON line per request
  *   stdin  → {"type":"close", sessionId}, then stdin ends
- * A stdout line that is not JSON (a stray print) is diagnostics, kept with the stderr tail; it never answers a request.
+ * One JSON line answers one request. A JSON line no request waits for — a second answer to a request, a progress line
+ * in JSON — breaks the protocol: the conversation is not measured, the adapter is named, not the agent. A line that is
+ * not JSON (a stray print) is diagnostics, kept with the stderr tail; it never answers a request. The module worker
+ * answers on a pipe of its own (`channel: 'pipe'`, fd 3), so whatever the module prints is diagnostics too.
  * A reply that misses the deadline kills the process; an early exit surfaces the exit code and the diagnostics tail.
  */
-async function commandSession(input: SessionInput<'command'> & { initialize?: boolean }): Promise<TargetSession> {
+async function commandSession(input: SessionInput<'command'> & { initialize?: boolean; channel?: 'stdout' | 'pipe' }): Promise<TargetSession> {
   const { target, sessionId, scenarioId, state, history, ctx } = input;
   ctx.signal.throwIfAborted();
   const grouped = process.platform !== 'win32';
-  const child = spawn(target.command, target.args, { cwd: target.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: process.env, detached: grouped });
+  const own = input.channel === 'pipe';
+  const child = spawn(target.command, target.args, { cwd: target.cwd, stdio: own ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'], env: process.env, detached: grouped });
+  const answers = (own ? child.stdio[3] : child.stdout) as Readable;
   let killed = false;
   const kill = () => {
     if (killed) return;
@@ -428,22 +434,29 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
   let diagnostics = '';
   const note = (text: string) => { diagnostics = `${diagnostics}${text}`.slice(-4000); };
   child.stderr.on('data', chunk => note(String(chunk)));
+  if (own) child.stdout.on('data', chunk => note(String(chunk)));
   child.stdin.on('error', () => {});
   let pending: { resolve: (reply: unknown) => void; reject: (error: Error) => void } | undefined;
   let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   const takePending = () => { const waiting = pending; pending = undefined; return waiting; };
   const exited = () => new AgentFailure(`Процесс агента завершился${exit ? exit.code !== null ? ` с кодом ${exit.code}` : ` по сигналу ${exit.signal}` : ''}${diagnostics.trim() ? `: ${diagnostics.trim()}` : '.'}`);
   let bytes = 0;
-  child.stdout.on('data', chunk => {
+  answers.on('data', chunk => {
     bytes += Buffer.byteLength(chunk);
     if (bytes > REPLY_BYTES) { takePending()?.reject(new ConnectionFailure('contract', REPLY_TOO_LARGE)); kill(); }
   });
-  const lines = createInterface({ input: child.stdout });
+  // The first line no request waited for: the session answers nothing more once it is there, and says so once.
+  let violation: ConnectionFailure | undefined;
+  let told = false;
+  const broken = (): ConnectionFailure | undefined => { if (violation && !told) { told = true; return violation; } return undefined; };
+  const lines = createInterface({ input: answers });
   lines.on('line', line => {
     let reply: unknown;
     try { reply = JSON.parse(line); } catch { note(`${line}\n`); return; }
     const waiting = takePending();
-    if (waiting) waiting.resolve(reply); else note(`${line}\n`);
+    if (waiting) { waiting.resolve(reply); return; }
+    note(`${line}\n`);
+    violation ??= new ConnectionFailure('protocol', `Адаптер прислал лишнюю строку без запроса: «${clip(line, 200)}». Одна строка JSON отвечает на один запрос; строки прогресса и отладки пишите в stderr.`);
   });
   child.on('close', (code, signal) => { exit = { code, signal }; takePending()?.reject(exited()); });
   await new Promise<void>((resolve, reject) => {
@@ -455,6 +468,7 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
   const exchange = async (payload: unknown): Promise<unknown> => {
     if (closed) throw new ConnectionFailure('protocol', 'Сессия с внешним агентом закрыта.');
     ctx.signal.throwIfAborted();
+    if (violation) throw broken() ?? violation;
     if (exit) throw exited();
     if (pending) throw new ConnectionFailure('protocol', 'У сессии уже есть активный запрос.');
     bytes = 0;
@@ -468,6 +482,8 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
       const sent = new Promise<void>((resolve, reject) => { child.stdin.write(`${JSON.stringify(payload)}\n`, error => error ? reject(error) : resolve()); });
       const [, body] = await Promise.all([sent, reply]);
       ctx.signal.throwIfAborted();
+      // A second line in the same breath as the answer is already read: that answer is not the agent's one reply.
+      if (violation) throw broken() ?? violation;
       return body;
     } finally { clearTimeout(timer); ctx.signal.removeEventListener('abort', onAbort); }
   };
@@ -490,12 +506,15 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
         });
       }
       lines.close();
+      // A line that arrived after the last answer breaks the protocol as much as one before it.
+      const unsaid = broken();
+      if (unsaid) throw unsaid;
     },
   };
   if (input.initialize) {
     try { await exchange({ type: 'open', sessionId, scenarioId, initialState, prompt: input.prompt, promptHash: input.prompt === undefined ? undefined : fingerprint(input.prompt) }); }
     catch (error) {
-      kill(); await session.close();
+      kill(); await session.close().catch(() => {});
       // Before its first message the adapter only starts: whatever stops it there is the connection's, not the agent's answer.
       throw ctx.signal.aborted || error instanceof ConnectionFailure ? error
         : new ConnectionFailure('start', `Адаптер агента не запустился: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

@@ -446,9 +446,13 @@ export async function evaluateTrial(input: {
     emit({ type: 'error', text: trial.reason });
   } finally {
     try { await session?.close(); }
-    catch {
-      emit({ type: 'error', text: 'Target session cleanup failed' });
-      if (trial.outcome !== 'cancelled') { trial.outcome = 'invalid'; trial.reason = `${BROKEN_BY.connection}: не удалось корректно закрыть сессию агента.`; trial.invalidCause = 'connection'; }
+    catch (error) {
+      // What the session found only as it closed (a line the adapter sent after its last answer) still unmeasures the conversation.
+      if (trial.outcome !== 'cancelled') {
+        const broken = breakOf(error, 'agent');
+        trial.outcome = 'invalid'; trial.invalidCause = broken.cause; trial.reason = `${BROKEN_BY[broken.cause]}: ${broken.detail}`;
+      }
+      emit({ type: 'error', text: trial.reason });
     }
     if (ctx.signal.aborted) { trial.outcome = 'cancelled'; trial.reason = 'Диалог остановлен.'; delete trial.invalidCause; }
     trial.finalState = structuredClone(state);
