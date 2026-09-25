@@ -13,7 +13,7 @@ export function preparationPanel(view: PreparationView, cards: SituationView[], 
   const count = view.cards;
   const logs = view.logs;
   const title = view.state === 'paused' ? 'Подготовка остановлена' : view.state === 'complete' ? 'Ситуации собраны' : count ? 'Собираем ситуации' : 'Изучаем реальные обращения';
-  const subtitle = count ? `${count.completed} из ${count.total} собрано` : logs ? `${logs.classified} из ${logs.total} разговоров из логов разобрано` : 'Подключаем агента и читаем материалы';
+  const subtitle = count ? `${count.completed} из ${count.total} собрано` : logs ? `${logs.classified} из ${countText(logs.total, ['разговора', 'разговоров', 'разговоров'])} из логов разобрано` : 'Подключаем агента и читаем материалы';
   const ratio = count ? count.completed / Math.max(1, count.total) : logs ? logs.classified / Math.max(1, logs.total) : 0;
   const barWidth = Math.max(10, Math.min(width - 8, 72));
   const filled = Math.round(barWidth * Math.max(0, Math.min(1, ratio)));

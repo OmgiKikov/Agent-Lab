@@ -64,7 +64,7 @@ export function situationBrowser(data: SpaceData, selected: number, available: n
     ...metrics([
       { label: 'ГОТОВЫ', value: String(ready), note: 'можно запускать', tone: 'success' },
       { label: 'НУЖЕН ВАШ ОТВЕТ', value: String(questions), note: 'уточнения по карточкам', tone: questions ? 'warning' : 'muted' },
-      { label: 'НА ДОРАБОТКЕ', value: String(blocked + checking), note: blocked || checking ? `${blocked} ошибок Lab · ${checking} на проверке` : 'замечаний к карточкам нет', tone: blocked ? 'error' : 'muted' },
+      { label: 'НА ДОРАБОТКЕ', value: String(blocked + checking), note: blocked || checking ? `ошибки Lab: ${blocked} · на проверке: ${checking}` : 'замечаний к карточкам нет', tone: blocked ? 'error' : 'muted' },
     ], width), []];
   const items: number[] = [];
   let anchor = body.length;

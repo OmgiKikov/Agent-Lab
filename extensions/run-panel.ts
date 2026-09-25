@@ -1,6 +1,7 @@
 import type { Line, SpaceData } from './workspace-screens.ts';
 import { row, span, wrap, box, beside, metrics, action } from './render/panels.ts';
 import { WORKSPACE_WIDTH } from './preparation-panel.ts';
+import { countText } from '../src/plural.js';
 
 /** A launch overview from the same saved plan as the confirmation dialog. */
 export function runPanel(data: SpaceData, available: number, details = false): Line[] {
@@ -16,7 +17,7 @@ export function runPanel(data: SpaceData, available: number, details = false): L
     { label: 'ПОВТОРЫ', value: String(record.settings.repeats), note: 'для каждой ситуации', tone: 'text' },
     { label: 'РАЗГОВОРЫ', value: String(plan.conversations), note: 'клиента играет Lab', tone: 'text' },
   ], width), []);
-  body.push(...action(active ? '→' : 'Enter', active ? 'Смотреть ответы и оценки' : `Перейти к запуску · ${plan.conversations} разговоров`, width),
+  body.push(...action(active ? '→' : 'Enter', active ? 'Смотреть ответы и оценки' : `Перейти к запуску · ${countText(plan.conversations, ['разговор', 'разговора', 'разговоров'])}`, width),
     ...wrap(active ? 'Прогон продолжится, если закрыть доску.' : record.mode === 'demo' ? 'Учебный пример без оплаты.' : 'Платные модели · перед запуском откроется подтверждение', width, 'muted'), []);
   if (active) {
     const share = data.progress?.share;
