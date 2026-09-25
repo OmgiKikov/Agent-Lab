@@ -123,7 +123,7 @@ export interface FoundAgent { target: RunnableTarget; note: string }
 export async function findAgent(ctx: Pick<ExtensionContext, 'ui'>, cwd: string): Promise<FoundAgent | undefined> {
   const detection = await detectProject(cwd).catch(() => undefined);
   const found = detection?.agents.slice(0, OFFERED) ?? [];
-  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать — команда или файл модуля (вызовите agent_lab_run с agent), а если агент отвечает по адресу — его curl-запрос к агенту (передайте его в agent_lab_connect).`, [],
+  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать — команда или файл модуля (вызовите agent_lab_run с agent), а если агент отвечает по адресу — его curl-запрос к агенту (передайте его в agent_lab_connect). Если у агента ещё нет адаптера, точный контракт — adapterContract в ответе agent_lab_status.`, [],
     `${NO_AGENT} Как его запускать — команда или файл модуля? Если агент отвечает по адресу, пришлите curl-запрос, которым вы к нему обращаетесь.`);
   const root = detection!.root;
   const note = (candidate: AgentCandidate) => safeText(`Lab нашёл его в папке проекта: ${candidate.evidence.map(evidenceText).join('; ')}.`);

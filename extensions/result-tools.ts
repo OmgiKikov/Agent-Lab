@@ -1,11 +1,13 @@
 import { resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { adapterContract } from '../src/adapter-contract.js';
 import { judgeAgreement } from '../src/agreement.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { disagreementText, logRefusal, logTargets } from '../src/card/calibration-view.js';
 import { situationNumber } from '../src/card/view.js';
-import type { Experiment, Trial } from '../src/contracts.js';
+import { isRunnable, type Experiment, type Trial } from '../src/contracts.js';
+import { examShowsMemory } from '../src/exam.js';
 import { isRunning } from '../src/phases.js';
 import { detectionLines, detectProject, evidenceText, targetLabel, type ProjectDetection } from '../src/detect.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -82,7 +84,7 @@ const attemptOf = (record: Experiment, scenarioId: string, failedTrialId?: strin
 export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host: ResultHost): void {
   pi.registerTool({
     ...displayFor(TOOL.status), name: TOOL.status, label: 'What exists in this project',
-    description: 'Read-only and free. The runs of this project, newest first, with their ids; the work going on now; how many decisions wait for the owner; and — before anything is prepared, or while the agent is not connected — what Lab found in the project folder: how to start the agent, log files, rules and the agent\'s prompt. Call it first when you do not know what exists.',
+    description: 'Read-only and free. The runs of this project, newest first, with their ids; the work going on now; how many decisions wait for the owner; and — before anything is prepared, or while the agent is not connected — what Lab found in the project folder: how to start the agent, log files, rules and the agent\'s prompt. While Lab sees no sure way to start the agent, or its connection has no exam that counts, adapterContract says exactly how an agent must speak to Lab: help the owner write or fix an adapter and its exam by it. Call it first when you do not know what exists.',
     parameters: Type.Object({}, closed),
     executionMode: 'sequential',
     async execute(callId, _params, signal, _onUpdate, ctx) {
@@ -106,8 +108,11 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
         }
         feed.rows.push(...shown.rows);
       }
+      // The contract an adapter must speak, generated from the code: while no sure way to start the agent shows, or its connection has no exam that counts.
+      const connected = records[0] && isRunnable(records[0].target) ? records[0].target : undefined;
+      const contract = found ? !found.agents.some(agent => agent.confidence === 'high' && examShowsMemory(agent.target.exam)) : !!connected && !examShowsMemory(connected.exam);
       return host.feedResult(callId, { runs: records.slice(0, 12).map(record => recordEntry(record)), ...(active ? { working: { run: active.id, kind: active.kind } } : {}),
-        decisions, ...(found ? { found: foundOutput(found) } : {}) }, feed, 'Что есть в проекте');
+        decisions, ...(found ? { found: foundOutput(found) } : {}), ...(contract ? { adapterContract: adapterContract() } : {}) }, feed, 'Что есть в проекте');
     },
   });
   pi.registerTool({
