@@ -129,7 +129,7 @@ for (const topics of [true, false]) {
     const saved = publisher();
     await prepareCards(record, plan(batch, 5, topics), undefined, runtime, budget(record), saved, 3);
     const progress = progressOf(record);
-    assert.deepEqual([progress.status, progress.pending, progress.excluded, progress.active], ['complete', [], [], undefined]);
+    assert.deepEqual([progress.pending, progress.excluded, progress.active], [[], [], undefined]);
     assert.deepEqual(origins(record.librarySnapshot as LibraryV2), [[1, 'd1'], [2, 'd2'], [3, 'd3'], [4, 'd4'], [5, 'd5']]);
     assert.deepEqual((record.librarySnapshot as LibraryV2).cards.map(card => card.title), ['Ситуация d1', 'Ситуация d2', 'Ситуация d3', 'Ситуация d4', 'Ситуация d5']);
     // Without the map a proposal waits for the cards before it; the reviews of those cards still run beside it.
@@ -170,7 +170,7 @@ test('a crash with two calls in flight: the resume settles both and never sends 
   await resumeCards(crashed, batch, resumed.runtime, budget(crashed), publisher(libraryHash(crashed.librarySnapshot!)), 2);
   const progress = progressOf(crashed);
   assert.deepEqual(after.proposals.map(request => request.call.source.kind === 'dialogue' && request.call.source.dialogueId), ['d3', 'd4'], 'neither dialogue is asked again');
-  assert.deepEqual([progress.status, progress.active, progress.excluded.map(item => item.dialogueId)], ['complete', undefined, ['d1', 'd2']]);
+  assert.deepEqual([progress.pending, progress.active, progress.excluded.map(item => item.dialogueId)], [[], undefined, ['d1', 'd2']]);
   assert.ok(progress.excluded.every(item => item.reason.includes('стоимость неизвестна')));
   assert.deepEqual(origins(crashed.librarySnapshot as LibraryV2), [[1, 'd3'], [2, 'd4']], 'the replacements are numbered in the order they were called in');
 });
@@ -207,7 +207,7 @@ for (const [kind, words] of [['rate limit', /^Провайдер модели о
     const saved = publisher();
     await assert.rejects(prepareCards(record, plan(batch, 6, true), undefined, runtime, ceiling(record), saved, 4), error => error instanceof Error && words.test(error.message));
     const progress = progressOf(record);
-    assert.deepEqual([progress.status, progress.active, progress.excluded], ['partial', undefined, []], 'nothing is in doubt, nothing is left out');
+    assert.deepEqual([progress.active, progress.excluded], [undefined, []], 'nothing is in doubt, nothing is left out');
     assert.deepEqual([[...progress.processed].sort(), progress.pending], [['d1', 'd3', 'd4'], ['d2', 'd5', 'd6']], 'the refused conversation waits in the queue; no new one was taken');
     assert.equal(progress.generationAttempts?.find(item => item.dialogueId === 'd2')?.calls, 0, 'a refusal uses up none of the conversation\'s attempts');
     assert.deepEqual(origins(record.librarySnapshot as LibraryV2), [[1, 'd1'], [2, 'd3'], [3, 'd4']], 'the units at work landed their cards');
@@ -216,7 +216,7 @@ for (const [kind, words] of [['rate limit', /^Провайдер модели о
     const last = saved.saves.at(-1)!;
     await resumeCards(last, batch, scripted(after).runtime, ceiling(last), publisher(libraryHash(last.librarySnapshot!)), 4);
     assert.deepEqual(after.proposals.map(dialogueOf), ['d2', 'd5', 'd6'], 'the resume prepares the refused conversation; nothing made is asked again');
-    assert.deepEqual([progressOf(last).status, progressOf(last).excluded, progressOf(last).pending], ['complete', [], []]);
+    assert.deepEqual([progressOf(last).excluded, progressOf(last).pending], [[], []]);
     assert.deepEqual(origins(last.librarySnapshot as LibraryV2), [[1, 'd1'], [2, 'd3'], [3, 'd4'], [4, 'd2'], [5, 'd5'], [6, 'd6']]);
   });
 }
@@ -226,7 +226,7 @@ test('a request over the model\'s window leaves only its conversation out, in th
   const { runtime } = scripted(received(), {}, [], { d2: new ProviderFailure('context limit', 'Ситуация из диалога: Pi provider response incomplete: context limit') });
   await prepareCards(record, plan(batch, 3, true), undefined, runtime, ceiling(record), publisher(), 2);
   const progress = progressOf(record);
-  assert.deepEqual([progress.status, progress.active, progress.excluded], ['complete', undefined, [{ dialogueId: 'd2', reason: 'Разговор вместе с материалами не поместился в окно модели.' }]]);
+  assert.deepEqual([progress.pending, progress.active, progress.excluded], [[], undefined, [{ dialogueId: 'd2', reason: 'Разговор вместе с материалами не поместился в окно модели.' }]]);
   assert.deepEqual([...progress.processed].sort(), ['d1', 'd3', 'd4'], 'a conversation left out counts once, as left out');
   assert.deepEqual(origins(record.librarySnapshot as LibraryV2), [[1, 'd1'], [2, 'd3'], [3, 'd4']]);
 });
@@ -255,14 +255,14 @@ test('the budget refuses a new call: no new unit is taken, the calls under way f
     error => error instanceof Stopped && error.reason === 'budget' && error.message === 'Model call budget exhausted.');
   const progress = progressOf(record);
   assert.deepEqual([record.usage.calls, state.sent], [5, 5]);
-  assert.deepEqual([progress.status, progress.active, progress.excluded, progress.processed, progress.pending], ['partial', undefined, [], ['d1'], ['d2', 'd3', 'd4', 'd5', 'd6']]);
+  assert.deepEqual([progress.active, progress.excluded, progress.processed, progress.pending], [undefined, [], ['d1'], ['d2', 'd3', 'd4', 'd5', 'd6']]);
   assert.deepEqual(origins(record.librarySnapshot as LibraryV2), [[1, 'd1'], [2, 'd2'], [3, 'd3'], [4, 'd4']], 'the proposals under way when the budget ran out are kept');
 
   const after = received();
   const last = saved.saves.at(-1)!;
   await resumeCards(last, batch, scripted(after).runtime, ceiling(last, 40), publisher(libraryHash(last.librarySnapshot!)), 4);
   assert.deepEqual([after.proposals.map(dialogueOf), after.reviews.length], [['d5', 'd6'], 5], 'the kept cards are only reviewed; the conversations never taken are prepared');
-  assert.deepEqual([progressOf(last).status, progressOf(last).excluded], ['complete', []]);
+  assert.deepEqual([progressOf(last).pending, progressOf(last).excluded], [[], []]);
   assert.deepEqual(origins(last.librarySnapshot as LibraryV2), [[1, 'd1'], [2, 'd2'], [3, 'd3'], [4, 'd4'], [5, 'd5'], [6, 'd6']]);
 });
 

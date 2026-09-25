@@ -265,7 +265,12 @@ const cardPreparationSchema = z.strictObject({
   protocol: z.enum(['cards-v1', 'cards-v2']),
   /** What the plan was made from: a resume on changed inputs is refused. */
   inputHash: hash,
-  status: z.enum(['preparing', 'complete', 'partial', 'cancelled']),
+  /**
+   * Retired: the word an earlier Lab wrote for how a launch ended — preparing, complete, partial, or cancelled, which it
+   * also wrote for a stop by the budget. Nothing reads it: what is left to prepare is `pending`, and how the work ended
+   * is the record's phase. Checkpoints that carry it still parse; a preparation this Lab continues drops it.
+   */
+  status: z.unknown().optional(),
   pending: ids(300), processed: ids(300),
   excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
   /** `cards-v1`: the whole policy was grounded in one call (a knowledge base small enough to read at once). */

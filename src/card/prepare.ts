@@ -59,8 +59,6 @@ import type { Card, CardPreparation, LibraryV2, PreparationProgress } from './sc
 export const CARD_PROTOCOL = 'cards-v2';
 const PREVIOUS_PROTOCOL = 'cards-v1';
 const PREVIOUS_PREPARATION = 'Эта подготовка сделана прежней версией Lab — подготовьте заново.';
-/** Later customer messages one card can account for. */
-const LATER_MESSAGES = 60;
 const CARD_LIMIT = 200;
 
 /** The agent a run evaluates when the owner names none: it runs outside Lab with its own instructions and tools. Surfaces name it by how it is started. */
@@ -140,8 +138,11 @@ function refusalText(failure: ProviderFailure, work: 'preparation' | 'check'): s
   return work === 'preparation' ? `${why} Готовые ситуации сохранены, и ни один разговор не потерян: продолжите подготовку${when}.`
     : `${why} Проверенное сохранено: повторите проверку${when}.`;
 }
-/** Whether one of the owner's commands names the card: an edit, an answer, a settled doubt, a filled mark. */
-const namedByOwner = (library: LibraryV2, cardId: string): boolean => library.receipts.some(({ command }) =>
+/**
+ * Whether one of the owner's commands names the card: an edit, an answer, a settled doubt, a filled mark. Such a card is
+ * the owner's, and no model writes it over — neither a revision here nor the one the owner's check counts (check-calls.ts).
+ */
+export const namedByOwner = (library: LibraryV2, cardId: string): boolean => library.receipts.some(({ command }) =>
   'cardId' in command ? command.cardId === cardId : command.kind === 'decide_plausible' && command.facts.some(fact => fact.cardId === cardId));
 /** Why a step's answers never passed, in the owner's words. */
 function unusableText(stage: 'select' | 'propose', error: StructuredTaskError): string {
@@ -353,7 +354,6 @@ class Preparation {
       // The tool channel the probe before the preparation confirmed: its tools may be what a duty is observed on.
       ...(record.toolChannel?.confirmed ? { confirmedObservations: ['tool' as const], tools: record.toolChannel.tools } : {}) });
     if (!read.length) return { excluded: 'Для этой ситуации нет материалов владельца.' };
-    if (call(read).laterEvents.length > LATER_MESSAGES) return { excluded: `После первой реплики клиент пишет ещё больше ${LATER_MESSAGES} раз — для одной ситуации это слишком много.` };
     // A sampled conversation's topic is the map's: the model is offered it alone, and the card takes it as the map words it.
     const topic = dialogue && batch ? unitTopic(progress, this.library, batch.id, unit) : undefined;
     const request = (sources: readonly Source[]): CardProposalRequest => ({ task: record.task, call: call(sources),
@@ -521,7 +521,8 @@ class Preparation {
   async run(): Promise<void> {
     const { record, progress, ctx } = this;
     this.settleInterrupted();
-    progress.status = 'preparing';
+    // The word an earlier Lab wrote for how its launch ended is retired (schema.ts): it would outlive this launch untrue.
+    delete progress.status;
     await this.publish();
     try {
       ctx.signal.throwIfAborted();
@@ -561,13 +562,11 @@ class Preparation {
       // A failure or a refusal stops the taking of new units; the preparation ends once the units at work have landed what they can.
       await Promise.all(Array.from({ length: this.parallel }, () => worker().catch(error => { failures.push(error); })));
       if (failures.length) throw failures[0];
-      progress.status = progress.pending.length ? 'partial' : 'complete';
       await this.publish();
       if (this.halt) throw this.halt;
       const [first] = this.unsent;
       if (first) throw new Error(`Не удалось разобрать ${countText(this.unsent.length, ['источник', 'источника', 'источников'])} — вызов модели не состоялся: ${first.message} Продолжите подготовку, когда причина устранена.`);
     } catch (error) {
-      if (progress.status === 'preparing') progress.status = ctx.signal.aborted ? 'cancelled' : 'partial';
       await this.publish();
       throw error;
     }
@@ -587,7 +586,7 @@ export async function prepareCards(record: Experiment, plan: CardPlan, agent: Ag
   }
   const prompts = promptsOversize(record.task, record.sources);
   if (prompts) throw new Error(prompts);
-  const progress: CardPreparation = { protocol: CARD_PROTOCOL, inputHash: preparationInputHash(record, CARD_PROTOCOL), status: 'preparing',
+  const progress: CardPreparation = { protocol: CARD_PROTOCOL, inputHash: preparationInputHash(record, CARD_PROTOCOL),
     pending: [...units], processed: [], requestedCount: sample ? sample.count : units.length,
     ...(sample ? { sample: sample.strata } : {}), excluded: (sample?.excluded ?? []).map(({ dialogueId, reason }) => ({ dialogueId, reason })) };
   record.preparationProgress = progress;
