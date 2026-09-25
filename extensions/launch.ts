@@ -1,5 +1,6 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { runCalls } from '../src/card/budget.js';
+import { planSummary } from '../src/card/plan.js';
 import { calibrationConsent } from '../src/card/calibrate.js';
 import { describeCheck, type Experiment, type RunnableTarget } from '../src/contracts.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
@@ -163,7 +164,9 @@ export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: 
     const calibration = await calibrationConsent(lab.store, context.experiment, ready.map(view => view.id));
     const limit = limitLine(context.experiment, cardCalls(context.experiment, ready));
     const lines = launchLines(shown(context.experiment), cardPlan(context.experiment, views), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) });
-    const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...lines, ...(limit ? [limit] : []),
+    // What the run checks, scenario by scenario: accepting the situations accepts what they are examples of.
+    const scenarios = planSummary(context.library, ready.map(view => view.id));
+    const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...(scenarios.length ? [...scenarios, ''] : []), ...lines, ...(limit ? [limit] : []),
       'Вместе с запуском Lab утвердит эти ситуации — повтор пойдёт по ним же.'].join('\n')), [LAUNCH, NOT_NOW]);
     if (picked !== LAUNCH) return undefined;
     const draft = await connected();

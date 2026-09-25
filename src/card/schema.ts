@@ -228,6 +228,13 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
     facts: z.array(z.strictObject({ cardId: id, factId: id })).min(1).max(200) }),
   // The whole rulebook as it will be: a library-wide change, whose receipt names no card.
   z.strictObject({ kind: z.literal('set_rulebook'), rulebook: rulebookSchema }),
+  // An expectation of the plan (card/plan.ts) as the owner words it: it changes in the scenario and in every card's duty
+  // that is it, together; null removes the words. A library-wide change, whose receipt names the scenario, not a card.
+  z.strictObject({ kind: z.literal('edit_plan_expectation'), scenarioId: id, expectationId: id, text: text(300).optional(),
+    requirementIds: z.array(id).min(1).max(3).optional(), strength: z.enum(['must', 'must_not']).optional(),
+    acceptable: text(600).nullable().optional(), violation: text(600).nullable().optional() }),
+  // The expectation leaves the scenario and every card's duty that is it; a card it would leave without a duty is refused.
+  z.strictObject({ kind: z.literal('remove_plan_expectation'), scenarioId: id, expectationId: id }),
 ]);
 export type CardCommand = z.infer<typeof cardCommandSchema>;
 

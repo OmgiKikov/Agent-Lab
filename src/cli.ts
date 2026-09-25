@@ -27,11 +27,11 @@ import { ANSWER_TEXT, calibrationRows, comparisonRows, judgeCheckText, logQuesti
 import { judgeCheckPlan, judgeCheckSummary } from './judge-check.js';
 import { evidenceBundle, exportArtifacts, importNumbers, readJudgeCheck, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
-import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
+import { hostGrant, preparedLines, requiredAuthority, wordsOf } from './card/commands.js';
 import { conversionText } from './card/convert.js';
 import { cardCommandSchema, type CardCommand, type LibraryV2 } from './card/schema.js';
-import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules, type RulebookView } from './card/rulebook.js';
-import { briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationData, situationNumber, situationViews, type SituationView } from './card/view.js';
+import { rulebookLines, rulebookOf, shownRulebook, withKind, withRules, type RulebookView } from './card/rulebook.js';
+import { briefRows, countsText, detailRows, formatNote, listRows, plainSituationText, situationData, situationNumber, situationViews, type SituationView } from './card/view.js';
 import { logAnswerOf, logAnswerReviews, logRefusal, logTargets, logVerdictsText, NO_CALIBRATION } from './card/calibration-view.js';
 import { safeLine, wrapHanging } from './text.js';
 import { countText } from './plural.js';
@@ -279,8 +279,7 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     // The command file and the text on the command line are the owner's own: their words, confirmed by --yes.
     const words = wordsOf(command).join('\n');
     const prepared = await lab.prepareCardCommand(target.id, command, { via: 'cli-yes', ...(words && words.length <= 1000 ? { ownerWords: words } : {}) });
-    const changes = [...prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`)),
-      ...(prepared.rulebook ? rulebookChangeLines(prepared.rulebook.before, prepared.rulebook.after, prepared.next.requirements, prepared.rulebook.flagged) : [])];
+    const changes = preparedLines(prepared);
     if (!values.yes) {
       await writeStdout(`${[...changes, '', ...(prepared.recheck.length ? ['После записи Lab проверит изменённое заново.'] : []), 'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
       return;

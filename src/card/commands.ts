@@ -6,11 +6,12 @@ import { clip } from '../text.js';
 import { logVersionCommandSchema, logVersionJournalSchema, type LogVersionCommand, type LogVersionJournal } from './calibration.js';
 import { cardMessage, messageAt, problemText, unusableFindings, type CardEvidence, type CheckFinding } from './checks.js';
 import { pendingClaims } from './review.js';
-import { bindsBot, KIND_WORDS, rulebookOf, unboundCitation } from './rulebook.js';
-import { cardCommandSchema, cardSchema, libraryV2Schema, type Card, type CardChange, type CardCommand, type EventRef, type LibraryV2, type Rulebook } from './schema.js';
+import { expectationLine } from './plan.js';
+import { bindsBot, KIND_WORDS, rulebookChangeLines, rulebookOf, unboundCitation } from './rulebook.js';
+import { cardCommandSchema, cardSchema, libraryV2Schema, type BusinessScenario, type Card, type CardChange, type CardCommand, type EventRef, type LibraryV2, type Rulebook } from './schema.js';
 import { cardStatus, plausibleGroup } from './status.js';
 import { applyFill } from './unmask.js';
-import { briefChanges, cardSituation, type BriefChange } from './view.js';
+import { briefChanges, cardSituation, changeText, type BriefChange } from './view.js';
 
 /*
  * The owner's commands on a draft of cards (docs/design/card-v2-spec.md §5): one layer for the chat, the board and the CLI. An
@@ -39,6 +40,17 @@ export type Via = 'pi-confirm' | 'board' | 'cli-yes';
 /** The stricter of the authorities a command's parts need: a decision about the customer or the rules outranks a wording. */
 const strictest = (authorities: readonly Authority[]): Authority => authorities.includes('owner-confirm') || !authorities.length ? 'owner-confirm' : 'owner-words';
 
+/** The words, rules and ways of a duty an edit names — of one card's duty or of the plan's expectation, the same fields. */
+type DutyFields = Pick<Extract<CardCommand, { kind: 'edit_plan_expectation' }>, 'text' | 'requirementIds' | 'strength' | 'acceptable' | 'violation'>;
+
+/** Every field a duty's edit changes counts: new words for a duty never carry a new rule or a dropped condition along with them. */
+const dutyAuthority = (fields: DutyFields, appliesWhen?: string | null): Authority => strictest([
+  ...(fields.text !== undefined ? ['owner-words' as const] : []),
+  ...(typeof appliesWhen === 'string' ? ['owner-words' as const] : appliesWhen === null ? ['owner-confirm' as const] : []),
+  ...(fields.requirementIds !== undefined || fields.strength !== undefined ? ['owner-confirm' as const] : []),
+  ...[fields.acceptable, fields.violation].flatMap(value => typeof value === 'string' ? ['owner-words' as const] : value === null ? ['owner-confirm' as const] : []),
+]);
+
 /** The authority a command needs; the same in every adapter. */
 export function requiredAuthority(command: CardCommand | LogVersionCommand): Authority {
   switch (command.kind) {
@@ -49,13 +61,9 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
       ...(command.wants !== undefined || command.writes !== undefined || command.leaves !== undefined ? ['owner-words' as const] : []),
       ...(command.clarity !== undefined ? ['owner-confirm' as const] : []),
     ]);
-    // Every field the command changes counts: new words for a duty never carry a new rule or a dropped condition along with them.
-    case 'edit_expectation': return strictest([
-      ...(command.text !== undefined ? ['owner-words' as const] : []),
-      ...(typeof command.appliesWhen === 'string' ? ['owner-words' as const] : command.appliesWhen === null ? ['owner-confirm' as const] : []),
-      ...(command.requirementIds !== undefined || command.strength !== undefined ? ['owner-confirm' as const] : []),
-      ...[command.acceptable, command.violation].flatMap(value => typeof value === 'string' ? ['owner-words' as const] : value === null ? ['owner-confirm' as const] : []),
-    ]);
+    case 'edit_expectation': return dutyAuthority(command, command.appliesWhen);
+    // The plan's expectation is every card's duty that is it: the same fields, the same authority.
+    case 'edit_plan_expectation': return dutyAuthority(command);
     case 'set_turn': return command.turn && !command.turn.event ? 'owner-words' : 'owner-confirm';
     // A similar card whose customer knows something else is a claim about the customer, whatever its words.
     case 'add_similar': return command.change.kind === 'opening' || command.change.kind === 'turn' && command.change.turn !== null ? 'owner-words' : 'owner-confirm';
@@ -66,7 +74,7 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
     case 'edit_card': return strictest(command.changes.map(change => requiredAuthority(withCard(change, command.cardId))));
     // Lab's values over the log's masks speak for the customer: the owner confirms them as shown.
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card':
-    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': case 'set_references': return 'owner-confirm';
+    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': case 'set_references': case 'remove_plan_expectation': return 'owner-confirm';
   }
 }
 
@@ -79,13 +87,14 @@ export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
   switch (command.kind) {
     case 'edit_client': return texts(command.wants, command.writes, command.leaves);
     case 'edit_expectation': return texts(command.text, command.appliesWhen, command.acceptable, command.violation);
+    case 'edit_plan_expectation': return texts(command.text, command.acceptable, command.violation);
     case 'set_turn': return command.turn && !command.turn.event ? texts(command.turn.after, command.turn.says) : [];
     case 'add_similar': return command.change.kind === 'opening' ? [command.change.writes] : command.change.kind === 'turn' ? texts(command.change.turn?.after, command.change.turn?.says)
       : texts(command.change.writes);
     case 'answer_question': return texts(command.text);
     case 'edit_card': return command.changes.flatMap(change => wordsOf(withCard(change, command.cardId)));
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'declare_log_version':
-    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': case 'set_references': return [];
+    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': case 'set_references': case 'remove_plan_expectation': return [];
   }
 }
 
@@ -119,6 +128,8 @@ export interface Prepared {
   recheck: string[];
   /** A change of the rulebook: what bound the bot before and after, and the situations whose expectations it leaves without a binding rule. */
   rulebook?: { before: Rulebook; after: Rulebook; flagged: number[] };
+  /** A change of the plan: the scenario's question and its expectation in a line before and after (null — removed); `diff` holds the situations that change with it. */
+  plan?: { scenario: string; before: string; after: string | null };
   next: LibraryV2;
 }
 
@@ -184,6 +195,17 @@ function nextFactId(library: LibraryV2, draft: Card, issued: ReadonlySet<string>
 
 /* ───────────────────────────── one card's change ───────────────────────────── */
 
+/** The fields an edit names, applied in place to a card's duty or to the plan's expectation: null removes the words, `must` the mark. */
+function applyDutyFields(target: Card['agentMust'][number] | BusinessScenario['expectations'][number], fields: DutyFields): void {
+  if (fields.text !== undefined) target.text = fields.text;
+  if (fields.requirementIds) target.requirementIds = [...new Set(fields.requirementIds)];
+  if (fields.strength === 'must') delete target.strength; else if (fields.strength === 'must_not') target.strength = 'must_not';
+  if (fields.acceptable === null) delete target.acceptable; else if (fields.acceptable !== undefined) target.acceptable = fields.acceptable;
+  if (fields.violation === null) delete target.violation; else if (fields.violation !== undefined) target.violation = fields.violation;
+}
+const reworded = (fields: DutyFields): boolean => fields.text !== undefined || fields.requirementIds !== undefined || fields.strength !== undefined
+  || fields.acceptable !== undefined || fields.violation !== undefined;
+
 const place = (event: EventRef): string => `${event.batchId}/${event.dialogueId}/${event.eventIndex}`;
 
 /**
@@ -228,7 +250,8 @@ function refuseNewFindings(before: Card | undefined, after: Card, library: Libra
   if (found) throw new CommandRefused(`Так нельзя: ${problemText(found, after, library.requirements)}${REMEDY[found.check] ? ` ${REMEDY[found.check]}` : ''}`);
 }
 
-interface Edited { cards: Card[]; scope: string[]; readingManifest?: LibraryV2['readingManifest']; nextNumber?: number; rulebook?: Rulebook }
+interface Edited { cards: Card[]; scope: string[]; readingManifest?: LibraryV2['readingManifest']; nextNumber?: number; rulebook?: Rulebook;
+  plan?: BusinessScenario[]; planChange?: Prepared['plan'] }
 const replace = (library: LibraryV2, card: Card): Edited => ({ cards: library.cards.map(item => item.id === card.id ? card : item), scope: [card.id] });
 
 /** The owner's words for a similar card's title: what differs from its parent. */
@@ -330,12 +353,11 @@ function applyChange(draft: Card, change: CardChange, library: LibraryV2, contex
       if (change.text === undefined && change.requirementIds === undefined && change.appliesWhen === undefined && change.strength === undefined
         && change.acceptable === undefined && change.violation === undefined) throw new CommandRefused('Не сказано, что изменить в ожидании.');
       if (change.requirementIds) { requireRequirements(library, change.requirementIds); requireBinding(library, change.requirementIds); }
-      if (change.text !== undefined) target.text = change.text;
-      if (change.requirementIds) target.requirementIds = [...new Set(change.requirementIds)];
+      applyDutyFields(target, change);
       if (change.appliesWhen === null) delete target.appliesWhen; else if (change.appliesWhen !== undefined) target.appliesWhen = change.appliesWhen;
-      if (change.strength === 'must') delete target.strength; else if (change.strength === 'must_not') target.strength = 'must_not';
-      if (change.acceptable === null) delete target.acceptable; else if (change.acceptable !== undefined) target.acceptable = change.acceptable;
-      if (change.violation === null) delete target.violation; else if (change.violation !== undefined) target.violation = change.violation;
+      // A duty of the plan the owner rewords on this card alone is the card's own from now on: a later change of the plan
+      // leaves it as the owner made it. When it applies is the card's anyway.
+      if (reworded(change)) delete target.planExpectationId;
       return 'Ожидание изменили вы.';
     }
     case 'remove_expectation': {
@@ -419,8 +441,53 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
         readingManifest: library.readingManifest.map(row => ({ ...row, cardIds: row.cardIds.filter(id => id !== card.id) })) };
     }
     case 'set_rulebook': return rulebookChange(library, command.rulebook);
+    case 'edit_plan_expectation': case 'remove_plan_expectation': return planChange(library, command, context);
     case 'answer_question': throw new Error('An answer is resolved to its own command before it is applied.');
   }
+}
+
+/**
+ * An expectation of the plan changes together with every card's duty that is it: the scenario keeps the owner's words,
+ * and each such card becomes a new version of itself, checked as it leaves — a card the change would break is refused
+ * with its number. A duty the owner reworded on its card alone is no longer the plan's and stays as it is. A removed
+ * expectation leaves the scenario and those duties; it is refused where it is the scenario's or a card's last one.
+ */
+function planChange(library: LibraryV2, command: Extract<CardCommand, { kind: 'edit_plan_expectation' | 'remove_plan_expectation' }>, context: CommandContext): Edited {
+  const plan = library.plan ?? [];
+  const scenario = plan.find(item => item.id === command.scenarioId);
+  if (!scenario) throw new UnknownReference('scenario', plan.map((item, index) => `${index + 1} «${clip(item.question, 60)}»`), 'Такого сценария в плане нет.');
+  const expectation = scenario.expectations.find(item => item.id === command.expectationId);
+  if (!expectation) throw new UnknownReference('expectation', scenario.expectations.map(item => `${item.id} ${clip(item.text, 60)}`), `У сценария «${clip(scenario.question, 80)}» нет такого ожидания.`);
+  const linked = library.cards.filter(card => card.scenarioRef?.scenarioId === scenario.id && card.agentMust.some(duty => duty.planExpectationId === expectation.id));
+  const mine = (duty: Card['agentMust'][number]) => duty.planExpectationId === expectation.id;
+  let after: BusinessScenario;
+  if (command.kind === 'edit_plan_expectation') {
+    if (!reworded(command)) throw new CommandRefused('Не сказано, что изменить в ожидании.');
+    if (command.requirementIds) { requireRequirements(library, command.requirementIds); requireBinding(library, command.requirementIds); }
+    const edited = structuredClone(expectation);
+    applyDutyFields(edited, command);
+    if (fingerprint(edited) === fingerprint(expectation)) throw new CommandRefused('Так уже записано.');
+    after = { ...scenario, expectations: scenario.expectations.map(item => item.id === expectation.id ? edited : item) };
+  } else {
+    if (scenario.expectations.length < 2) throw new CommandRefused('У сценария должно остаться хотя бы одно ожидание: без него его нечем проверить. Измените это ожидание или уберите ситуации сценария.');
+    const emptied = linked.filter(card => card.agentMust.every(mine));
+    if (emptied.length) throw new CommandRefused(`У ${emptied.length === 1 ? 'ситуации' : 'ситуаций'} ${emptied.map(card => `№${card.number}`).join(', ')} это единственное ожидание: без него ${emptied.length === 1 ? 'её' : 'их'} нечем измерить. Сначала уберите ${emptied.length === 1 ? 'её' : 'их'} или дайте другое ожидание.`);
+    after = { ...scenario, expectations: scenario.expectations.filter(item => item.id !== expectation.id) };
+  }
+  const reason = command.kind === 'edit_plan_expectation' ? 'Ожидание сценария изменили вы.' : 'Ожидание сценария убрали вы.';
+  let cards = library.cards;
+  for (const card of linked) {
+    const next = revised(card, draft => {
+      if (command.kind === 'edit_plan_expectation') draft.agentMust.filter(mine).forEach(duty => applyDutyFields(duty, command));
+      else draft.agentMust = draft.agentMust.filter(duty => !mine(duty));
+      return reason;
+    });
+    refuseNewFindings(card, next, library, context);
+    cards = cards.map(item => item.id === card.id ? next : item);
+  }
+  const kept = after.expectations.find(item => item.id === expectation.id);
+  return { cards, scope: linked.map(card => card.id), plan: plan.map(item => item.id === scenario.id ? after : item),
+    planChange: { scenario: scenario.question, before: expectationLine(scenario, expectation), after: kept ? expectationLine(after, kept) : null } };
 }
 
 /**
@@ -476,7 +543,7 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
   const { acceptance: _accepted, ...draft } = library;
   const next = libraryV2Schema.parse({ ...draft, revision: library.revision + 1, cards: edited.cards, receipts: [...library.receipts, receipt],
     ...(edited.readingManifest ? { readingManifest: edited.readingManifest } : {}), ...(edited.nextNumber ? { nextNumber: edited.nextNumber } : {}),
-    ...(edited.rulebook ? { rulebook: edited.rulebook } : {}) });
+    ...(edited.rulebook ? { rulebook: edited.rulebook } : {}), ...(edited.plan ? { plan: edited.plan } : {}) });
   const card = (source: LibraryV2, id: string) => source.cards.find(item => item.id === id);
   const diff = edited.scope.map(id => {
     const was = card(library, id), now = card(next, id);
@@ -491,7 +558,24 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
   // An answer needs what the answer is and what it does: words for a choice that does not take them never make a decision a wording.
   const authority = answer ? strictest([requiredAuthority(asked), requiredAuthority(command)]) : requiredAuthority(command);
   return { command, libraryHash: before, previewHash: fingerprint({ library: before, command, next: libraryHash(next) }),
-    authority, via: context.via, diff, scope: edited.scope, recheck, ...(rulebook ? { rulebook } : {}), next };
+    authority, via: context.via, diff, scope: edited.scope, recheck, ...(rulebook ? { rulebook } : {}), ...(edited.planChange ? { plan: edited.planChange } : {}), next };
+}
+
+/**
+ * What a prepared command changes, in the owner's lines, the same on every surface: «было → стало» of each touched
+ * situation and a change of the rulebook; for the plan, its expectation before and after and the numbers of the
+ * situations that change with it — one change, not the same line for each of them. Pure: each surface makes them safe.
+ */
+export function preparedLines(prepared: Pick<Prepared, 'diff' | 'rulebook' | 'plan' | 'next'>): string[] {
+  const { plan } = prepared;
+  if (plan) {
+    const numbers = prepared.diff.map(item => item.number).sort((a, b) => a - b);
+    return [`Сценарий «${plan.scenario}» — общее ожидание`, `  было: ${plan.before}`, `  стало: ${plan.after ?? 'убрано из плана'}`,
+      numbers.length === 1 ? `Вместе с ним ${plan.after ? 'меняется' : 'теряет его'} ситуация ${numbers[0]}.`
+        : numbers.length ? `Вместе с ним ${plan.after ? 'меняются' : 'теряют его'} ситуации ${numbers.join(', ')}.` : 'Ситуаций с этим ожиданием сейчас нет.'];
+  }
+  return [...prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`)),
+    ...(prepared.rulebook ? rulebookChangeLines(prepared.rulebook.before, prepared.rulebook.after, prepared.next.requirements, prepared.rulebook.flagged) : [])];
 }
 
 /**
