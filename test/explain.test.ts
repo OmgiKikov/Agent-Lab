@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emptyUsage, settingsSchema, type Experiment, type Requirement, type Source, type Trial } from '../src/contracts.js';
 import { goalAttainment, promptCompliance, type MetricAssessment } from '../src/assessment.js';
-import { exampleRows, failureExplanation, ruleRegister, rowsToLines, UNVERIFIED } from '../src/explain.js';
-// Phase-3 evidence is read through the namespace, so a missing export fails an assertion, not the module link.
+import { failureExplanation, ruleRegister, type FailureExplanation } from '../src/explain.js';
+// Read through the namespace, so a missing export fails an assertion, not the module link.
 import * as explain from '../src/explain.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView } from '../src/result-view.js';
@@ -17,7 +17,8 @@ import { ExperimentStore } from '../src/store.js';
 
 /*
  * Synthetic owner materials only: two one-line knowledge sources and a multi-line prompt.
- * Requirements are listed out of owner order on purpose.
+ * Requirements are listed out of owner order on purpose. The explanation is data the surfaces word
+ * (result-text.ts, report.ts): what was expected, the reply the judge pointed at, the owner rules.
  */
 const world = { records: {}, writableFields: [], transientFailures: 0 };
 type Card = Experiment['scenarios'][number];
@@ -89,14 +90,13 @@ function refundRun(): Experiment {
   ]);
 }
 
-const REFUND_LINES = [
-  '✗ Возврат через терминал',
-  '  Должен был: Объяснить порядок возврата через терминал и срок зачисления.',
-  '  Сказал (реплика #1): «Ожидайте, заявка передана специалисту.»',
-  '  Правило 1 · Возврат покупки: «Возврат выполняется через меню терминала в течение 30 дней.»',
-  '  Правило 2 · Возврат покупки: «Деньги приходят на карту за пять рабочих дней.»',
-  '  и ещё 1 правило',
-];
+const EXPECTED = 'Объяснить порядок возврата через терминал и срок зачисления.';
+const SAID = { seq: 1, quote: 'Ожидайте, заявка передана специалисту.' };
+/** The parts of an explanation a surface reads, rules by their number in the owner's materials. */
+const partsOf = (explanation: FailureExplanation) => ({
+  kind: explanation.kind, expected: explanation.expected, said: explanation.said, ...(explanation.unsaid ? { unsaid: explanation.unsaid } : {}),
+  rules: explanation.rules.map(rule => rule.number), violated: explanation.violated?.number ?? null,
+});
 
 test('rule numbers follow the owner materials: source order, then quote position, never the array order', () => {
   const register = ruleRegister(run([], []));
@@ -115,13 +115,16 @@ test('a failed situation is explained as expectation, reply and owner rules from
   const record = refundRun();
   const explanation = failureExplanation(record, record.scenarios[0]!);
   assert.ok(explanation);
-  assert.deepEqual(explanation.lines, REFUND_LINES);
+  // Knowledge rules first, then the prompt rule; every verified rule is kept, the surfaces show the first.
+  assert.deepEqual(partsOf(explanation), { kind: 'goal', expected: EXPECTED, said: SAID, rules: [1, 2, 6], violated: null });
   assert.equal(explanation.trialId, 't-refund');
-  assert.deepEqual(explanation.said, { seq: 1, quote: 'Ожидайте, заявка передана специалисту.', judgeCited: true });
   assert.equal(failureExplanation(record, record.scenarios[1]!), null, 'a passing situation has no explanation');
   const view = buildResultView(record);
   assert.equal(view.failures.length, view.headline.decided - view.headline.passed);
-  assert.deepEqual(view.failures.map(item => item.lines), [REFUND_LINES]);
+  assert.deepEqual(view.failures.map(partsOf), [partsOf(explanation)]);
+  // The explanation is data: no second copy of the words rides along with it.
+  assert.deepEqual(Object.keys(explanation).sort(), ['expected', 'kind', 'rules', 'said', 'scenarioId', 'title', 'trialId']);
+  for (const dead of ['situationEvidence', 'exampleRows', 'rowsToLines', 'UNVERIFIED_REPLY']) assert.equal(dead in explain, false, dead);
 });
 
 test('CLI summary lists every failed situation with its explanation, from the built dist', { timeout: 20000 }, async () => {
@@ -164,142 +167,103 @@ test('CLI summary lists every failed situation with its explanation, from the bu
     const machine = JSON.parse(await summary('--json'));
     assert.deepEqual(Object.keys(machine).sort(), ['exitCode', 'lines', 'view', 'warnings']);
     assert.equal(machine.exitCode, 1, 'a counted situation failed');
-    assert.deepEqual(machine.view.failures.map((item: { lines: string[] }) => item.lines), [REFUND_LINES]);
+    assert.deepEqual(machine.view.failures.map((item: FailureExplanation) => [item.expected, item.said]), [[EXPECTED, SAID]]);
     assert.deepEqual(machine.lines, lines.slice(0, machine.lines.length));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-// ---- Task 2: every variant of the explanation (UI-SPEC F1 variants table). ----
+// ---- Every variant of the explanation (UI-SPEC F1 variants table). ----
 
-const TITLE = '✗ Возврат через терминал';
-const EXPECTED = '  Должен был: Объяснить порядок возврата через терминал и срок зачисления.';
-const SAID = '  Сказал (реплика #1): «Ожидайте, заявка передана специалисту.»';
-const RULE_1 = '  Правило 1 · Возврат покупки: «Возврат выполняется через меню терминала в течение 30 дней.»';
-const RULE_2 = '  Правило 2 · Возврат покупки: «Деньги приходят на карту за пять рабочих дней.»';
-const RULE_5 = '  Правило 5 · Системный промпт, строка 2: «Отвечай только по инструкциям банка.»';
-const RULE_6 = 'Правило 6 · Системный промпт, строка 3: «Не обещай сроки, которых нет в инструкциях.»';
-const VIOLATED_6 = '  Нарушено правило 6 · Системный промпт, строка 3: «Не обещай сроки, которых нет в инструкциях.»';
 const QUOTES_RULE_6 = `${AGREED_RATIONALE_PREFIX} Нарушено правило «Не обещай сроки, которых нет в инструкциях» — агент назвал срок «два дня».`;
 const complianceFail = (rationale: string) => verdict('prompt_compliance', 'fail', { rationale, citations: [{ seq: 1, quote: 'Срок — два дня.' }] });
-const allRows: string[][] = [];
+const expectedTexts: string[] = [];
 
 interface Variant { card?: Partial<Card>; assessments?: MetricAssessment[]; trial?: Partial<Trial>; mutate?: (record: Experiment) => void }
-function explainOne(variant: Variant = {}) {
+function explainOne(variant: Variant = {}): FailureExplanation {
   const subject = card('refund', { title: 'Возврат через терминал', requirementIds: ['refund-money', 'refund-path'], ...variant.card });
   const record = structuredClone(run([subject], [attempt('refund', variant.assessments ?? [goalFail(), verdict('prompt_compliance', 'pass')], variant.trial)]));
   variant.mutate?.(record);
   const explanation = failureExplanation(record, record.scenarios[0]!);
   assert.ok(explanation, 'the variant must have an explanation');
-  allRows.push(explanation.lines);
+  if (explanation.expected) expectedTexts.push(explanation.expected);
   return explanation;
 }
 
-test('the reply falls back to the last agent reply, the evidence reply, or says it cannot be shown', () => {
+test('the reply is the one the judge pointed at, verified; a reply it did not point at is never put in its place', () => {
   const twoReplies = { events: [
     { seq: 0, type: 'user' as const, text: 'Как вернуть покупку?' },
     { seq: 1, type: 'assistant' as const, text: 'Первый ответ.' },
     { seq: 2, type: 'user' as const, text: 'А подробнее?' },
     { seq: 3, type: 'assistant' as const, text: 'Второй   ответ\nагента.' },
   ] };
+  // The judge cited the customer's message, not a reply: the last reply proves nothing about the failure.
   const uncited = explainOne({ trial: twoReplies, assessments: [verdict('goal_attainment', 'fail', { evidence: [0], citations: [{ seq: 0, quote: 'Как вернуть' }] })] });
-  assert.equal(uncited.lines[2], '  Сказал (реплика #3, судья не указал реплику): «Второй ответ агента.»');
-  assert.deepEqual(uncited.said, { seq: 3, quote: 'Второй ответ агента.', judgeCited: false });
+  assert.deepEqual([uncited.said, uncited.unsaid], [null, 'not_cited']);
+  // A tool expectation's evidence is a tool result: no reply stands in for it either.
+  const tool = explainOne({ trial: { events: [...twoReplies.events, { seq: 4, type: 'tool_result' as const, text: '{}' }] },
+    assessments: [verdict('goal_attainment', 'fail', { evidence: [4] })] });
+  assert.deepEqual([tool.said, tool.unsaid], [null, 'not_cited']);
 
   const byEvidence = explainOne({ assessments: [verdict('goal_attainment', 'fail', { evidence: [1] })] });
-  assert.equal(byEvidence.lines[2], `  Сказал (реплика #1): «${REPLY}»`);
-  assert.equal(byEvidence.said?.judgeCited, true);
+  assert.deepEqual([byEvidence.said, byEvidence.unsaid], [{ seq: 1, quote: REPLY }, undefined], 'a reply the evidence names is shown whole');
 
   const badQuote = explainOne({ assessments: [goalFail({ citations: [{ seq: 1, quote: 'Деньги уже на карте.' }] })] });
-  assert.equal(badQuote.lines[2], `  Сказал (реплика #1): ${UNVERIFIED}`);
-  assert.equal(badQuote.rows[2]?.role, 'unverified');
-  assert.equal(badQuote.said, null);
-  assert.deepEqual(badQuote.lines.filter((_, i) => i !== 2), [TITLE, EXPECTED, RULE_1, RULE_2], 'the other rows stay');
+  assert.deepEqual([badQuote.said, badQuote.unsaid], [null, 'unverified'], 'words the reply does not hold are never quoted');
+  assert.deepEqual(partsOf(badQuote).rules, [1, 2], 'the other parts stay');
 
   const silent = explainOne({ trial: { events: [{ seq: 0, type: 'user', text: 'Как вернуть покупку?' }] } });
-  assert.equal(silent.lines[2], '  Сказал: в записи нет ответа агента.');
-  assert.equal(silent.rows[2]?.role, 'unverified');
+  assert.deepEqual([silent.said, silent.unsaid], [null, 'no_reply']);
 });
 
-test('a missing expectation is taken from the first shown rule, or said to be missing', () => {
+test('a missing expectation is taken from the first rule, or left out', () => {
   const fromRule = explainOne({ card: { successCriteria: undefined } });
-  assert.equal(fromRule.lines[1], '  Должен был (из правила): Своими словами: Возврат выполняется через меню терминала в течение 30 дней.');
+  assert.equal(fromRule.expected, 'Своими словами: Возврат выполняется через меню терминала в течение 30 дней.');
   const bare = explainOne({ card: { successCriteria: undefined, requirementIds: [] } });
-  assert.deepEqual(bare.lines, [TITLE, '  Должен был: ожидание не записано в ситуации.', SAID, '  Правило: у ситуации нет правила из ваших материалов.']);
-  assert.equal(bare.rows[1]?.role, 'unverified');
-  assert.equal(bare.rows[3]?.role, 'unverified');
+  assert.deepEqual(partsOf(bare), { kind: 'goal', expected: null, said: SAID, rules: [], violated: null });
 });
 
-test('an unknown or tampered rule is named as unverified, after the verified ones, and never numbered', () => {
+test('an unknown or tampered rule is never numbered or shown; the verified ones stay', () => {
   const cases: [string, string[], (record: Experiment) => void][] = [
     ['unknown requirement id', ['ghost', 'refund-path'], () => {}],
     ['source text changed', ['refund-money', 'refund-path'], record => { record.sources[0]!.content = record.sources[0]!.content.replace('Деньги приходят', 'Средства поступают'); }],
     ['requirement quote rewritten', ['refund-money', 'refund-path'], record => { record.requirements.find(item => item.id === 'refund-money')!.quote = 'Деньги не возвращаются.'; }],
     ['source removed', ['bank-only', 'refund-path'], record => { record.sources = record.sources.filter(source => source.id !== 'src-p'); }],
   ];
-  for (const [name, requirementIds, mutate] of cases) {
-    const explanation = explainOne({ card: { requirementIds }, mutate });
-    assert.deepEqual(explanation.lines, [TITLE, EXPECTED, SAID, RULE_1, `  Правило: ${UNVERIFIED}`], name);
-    assert.equal(explanation.rows[4]?.role, 'unverified', name);
-    assert.equal(explanation.unverifiedRules, 1, name);
-  }
-  const allBroken = explainOne({ card: { requirementIds: ['ghost-1', 'ghost-2', 'ghost-3'] } });
-  assert.deepEqual(allBroken.lines, [TITLE, EXPECTED, SAID, `  Правило: ${UNVERIFIED}`, `  Правило: ${UNVERIFIED}`, '  и ещё 1 правило'],
-    'a block where every rule is unverified keeps its title and all rows');
+  for (const [name, requirementIds, mutate] of cases) assert.deepEqual(partsOf(explainOne({ card: { requirementIds }, mutate })).rules, [1], name);
+  assert.deepEqual(partsOf(explainOne({ card: { requirementIds: ['ghost-1', 'ghost-2', 'ghost-3'] } })).rules, []);
 });
 
-test('zero, one, two and many rules: two rows at most, then «и ещё K» with the right plural', () => {
-  const rowsFor = (requirementIds: string[]) => {
-    const explanation = explainOne({ card: { requirementIds } });
-    return { rules: explanation.rows.filter(row => row.role === 'rule' || (row.role === 'unverified' && row.text.startsWith('Правило:'))).length,
-      more: explanation.rows.find(row => row.role === 'more')?.text };
-  };
-  assert.deepEqual(rowsFor(['refund-path']), { rules: 1, more: undefined });
-  assert.deepEqual(rowsFor(['refund-path', 'fee']), { rules: 2, more: undefined });
-  assert.deepEqual(rowsFor(['refund-path', 'fee', 'bank-only']), { rules: 2, more: 'и ещё 1 правило' });
-  assert.deepEqual(rowsFor(['refund-path', 'fee', 'bank-only', 'tariff-change']), { rules: 2, more: 'и ещё 2 правила' });
-  assert.deepEqual(rowsFor(['no-promises', 'bank-only', 'tariff-change', 'fee', 'refund-money', 'refund-path', 'ghost']), { rules: 2, more: 'и ещё 5 правил' });
-  const none = explainOne({ card: { requirementIds: [] } });
-  assert.equal(none.lines.at(-1), '  Правило: у ситуации нет правила из ваших материалов.');
-});
-
-test('knowledge rules come first; a prompt rule names its line; a machine-format rule is never shown or counted', () => {
-  const mixed = explainOne({ card: { requirementIds: ['bank-only', 'fee'] } });
-  assert.deepEqual(mixed.lines.slice(3), ['  Правило 3 · Тарифы: «Комиссия за эквайринг составляет 1,8 процента.»', RULE_5]);
-  const machine = explainOne({ card: { requirementIds: ['json-format', 'refund-path'] } });
-  assert.deepEqual(machine.lines, [TITLE, EXPECTED, SAID, RULE_1]);
-  assert.equal(machine.moreRules, 0);
-  const onlyMachine = explainOne({ card: { requirementIds: ['json-format'] } });
-  assert.equal(onlyMachine.lines.at(-1), '  Правило: у ситуации нет правила из ваших материалов.');
+test('every verified rule is kept, knowledge first; a machine-format rule is never shown or counted', () => {
+  const rulesFor = (requirementIds: string[]) => partsOf(explainOne({ card: { requirementIds } })).rules;
+  assert.deepEqual(rulesFor(['refund-path']), [1]);
+  assert.deepEqual(rulesFor(['refund-path', 'fee', 'bank-only', 'tariff-change']), [1, 3, 4, 5]);
+  assert.deepEqual(rulesFor(['no-promises', 'bank-only', 'tariff-change', 'fee', 'refund-money', 'refund-path', 'ghost']), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(rulesFor(['bank-only', 'fee']), [3, 5], 'knowledge first');
+  assert.deepEqual(rulesFor(['json-format', 'refund-path']), [1]);
+  assert.deepEqual(rulesFor(['json-format']), []);
   const quotedMachine = explainOne({ assessments: [verdict('goal_attainment', 'pass'),
     complianceFail(`${AGREED_RATIONALE_PREFIX} Нарушено «Ответ оформляй в JSON с полем "answer"».`)] });
   assert.equal(quotedMachine.violated, undefined, 'a machine-format rule is never named as violated');
 });
 
-test('only the prompt-rule check failed: the expectation is the one violated rule, or says it cannot be named', () => {
+test('only the prompt-rule check failed: the expectation is the one violated rule, or none when it cannot be named', () => {
   const named = explainOne({ card: { requirementIds: ['refund-path', 'no-promises'] }, assessments: [verdict('goal_attainment', 'pass'), complianceFail(QUOTES_RULE_6)] });
-  assert.equal(named.kind, 'rules');
-  assert.deepEqual(named.lines, [TITLE, `  Должен был: соблюдать правило 6 · Системный промпт, строка 3: «Не обещай сроки, которых нет в инструкциях.»`,
-    '  Сказал (реплика #1): «Срок — два дня.»', RULE_1, `  ${RULE_6}`]);
-  assert.equal(named.violated?.number, 6);
-  assert.ok(!named.lines.some(line => line.includes('Нарушено')), 'no duplicate «Нарушено» row');
+  assert.deepEqual(partsOf(named), { kind: 'rules', expected: 'соблюдать правило «Не обещай сроки, которых нет в инструкциях.»', said: { seq: 1, quote: 'Срок — два дня.' },
+    rules: [1, 6], violated: 6 });
 
-  const unnamed = '  Должен был: соблюдать правила из ваших материалов — объяснение не подтверждено цитатой';
+  const unnamed = (explanation: FailureExplanation) => [explanation.kind, explanation.expected, explanation.violated];
   const two = explainOne({ assessments: [verdict('goal_attainment', 'pass'),
     complianceFail(`${AGREED_RATIONALE_PREFIX} Нарушены «Не обещай сроки, которых нет в инструкциях» и «Отвечай только по инструкциям банка».`)] });
-  assert.equal(two.lines[1], unnamed);
-  assert.equal(two.rows[1]?.role, 'unverified');
-  assert.equal(two.violated, undefined);
-  const none = explainOne({ assessments: [verdict('goal_attainment', 'pass'), complianceFail('Агент нарушил правило о сроках.')] });
-  assert.equal(none.lines[1], unnamed);
-  const short = explainOne({ assessments: [verdict('goal_attainment', 'pass'), complianceFail('Нарушено «сроки».')] });
-  assert.equal(short.lines[1], unnamed, 'a quote shorter than 12 characters names nothing');
+  assert.deepEqual(unnamed(two), ['rules', null, undefined], 'two candidate rules name nothing');
+  assert.deepEqual(unnamed(explainOne({ assessments: [verdict('goal_attainment', 'pass'), complianceFail('Агент нарушил правило о сроках.')] })), ['rules', null, undefined]);
+  assert.deepEqual(unnamed(explainOne({ assessments: [verdict('goal_attainment', 'pass'), complianceFail('Нарушено «сроки».')] })), ['rules', null, undefined],
+    'a quote shorter than 12 characters names nothing');
 
   // A span long enough to pass the 12-character filter but far from the whole rule is a
   // coincidence, not evidence: «по инструкциям банка» is 20 of the 36 characters of rule 5.
   const partial = explainOne({ assessments: [verdict('goal_attainment', 'pass'),
     complianceFail(`${AGREED_RATIONALE_PREFIX} Агент ответил не «по инструкциям банка», а своими словами.`)] });
   assert.equal(partial.violated, undefined, 'a span covering part of one rule names nothing');
-  assert.equal(partial.lines[1], unnamed);
   // A short rule quoted inside a long judge span is the same coincidence from the other side.
   const swallowed = explainOne({ assessments: [verdict('goal_attainment', 'pass'),
     complianceFail(`${AGREED_RATIONALE_PREFIX} Нарушено «агент упомянул тариф, эквайринг и сроки в одном ответе».`)] });
@@ -313,50 +277,24 @@ test('only the prompt-rule check failed: the expectation is the one violated rul
   assert.equal(failureExplanation(record, record.scenarios[0]!), null, 'nothing failed, nothing to explain');
 });
 
-test('a failed goal names the violated prompt rule once, unless it is already shown', () => {
-  // Phase 03.1: the goal failed and the prompt-rule check failed in the same attempt, so this is «оба»; the rows are the goal rows.
-  const extra = explainOne({ assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
-  assert.deepEqual(extra.lines, [TITLE, EXPECTED, SAID, RULE_1, RULE_2, VIOLATED_6]);
-  assert.equal(extra.rows.at(-1)?.role, 'violated');
-  const shown = explainOne({ card: { requirementIds: ['refund-path', 'no-promises'] }, assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
-  assert.deepEqual(shown.lines, [TITLE, EXPECTED, SAID, RULE_1, `  ${RULE_6}`]);
-  const counted = explainOne({ card: { requirementIds: ['refund-path', 'refund-money', 'no-promises'] }, assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
-  assert.deepEqual(counted.lines.slice(3), [RULE_1, RULE_2, '  и ещё 1 правило', VIOLATED_6],
-    'a rule hidden behind «и ещё» is still named as violated');
-});
-
-// ---- Phase 03.1: a double failure is «оба»; the phase-2 kinds keep their rows byte for byte. ----
-
-test('a failed goal with a broken rule in the same attempt is «оба»: the goal rows plus the rule, or a named unverified row', () => {
-  const named = explainOne({ assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
-  assert.equal(named.kind, 'both');
-  assert.deepEqual(named.lines, [TITLE, EXPECTED, SAID, RULE_1, RULE_2, VIOLATED_6], 'the goal rows, then the violated rule named once');
-  assert.equal(named.violated?.number, 6);
-  const shown = explainOne({ card: { requirementIds: ['refund-path', 'no-promises'] }, assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] });
-  assert.equal(shown.kind, 'both');
-  assert.deepEqual(shown.lines, [TITLE, EXPECTED, SAID, RULE_1, `  ${RULE_6}`], 'a rule already shown is not repeated');
+test('a failed goal with a broken rule in the same attempt is «оба»: the goal\'s expectation and the violated rule, when it can be named', () => {
+  assert.deepEqual(partsOf(explainOne({ assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] })),
+    { kind: 'both', expected: EXPECTED, said: SAID, rules: [1, 2], violated: 6 });
+  assert.deepEqual(partsOf(explainOne({ card: { requirementIds: ['refund-path', 'no-promises'] }, assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] })),
+    { kind: 'both', expected: EXPECTED, said: SAID, rules: [1, 6], violated: 6 });
   const unnamed = explainOne({ assessments: [goalFail(), complianceFail('Агент нарушил правило о сроках.')] });
-  assert.equal(unnamed.kind, 'both');
-  assert.deepEqual(unnamed.lines, [TITLE, EXPECTED, SAID, RULE_1, RULE_2, `  Нарушены правила промпта — ${UNVERIFIED}`],
-    'when the rule cannot be named, the second half of the failure is still said');
-  assert.equal(unnamed.rows.at(-1)?.role, 'unverified');
-  assert.equal(unnamed.violated, undefined);
+  assert.deepEqual([unnamed.kind, unnamed.violated], ['both', undefined]);
   const tie = explainOne({ assessments: [goalFail(),
     complianceFail(`${AGREED_RATIONALE_PREFIX} Нарушены «Не обещай сроки, которых нет в инструкциях» и «Отвечай только по инструкциям банка».`)] });
-  assert.equal(tie.kind, 'both');
-  assert.equal(tie.lines.at(-1), `  Нарушены правила промпта — ${UNVERIFIED}`, 'two candidate rules name nothing');
+  assert.deepEqual([tie.kind, tie.violated], ['both', undefined], 'two candidate rules name nothing');
 
-  // The phase-2 kinds are unchanged: only the goal failed, or only the rules failed.
-  const goalOnly = explainOne({ assessments: [goalFail(), verdict('prompt_compliance', 'pass')] });
-  assert.equal(goalOnly.kind, 'goal');
-  assert.deepEqual(goalOnly.lines, [TITLE, EXPECTED, SAID, RULE_1, RULE_2]);
+  // The single kinds: only the goal failed, or only the rules failed.
+  assert.equal(explainOne({ assessments: [goalFail(), verdict('prompt_compliance', 'pass')] }).kind, 'goal');
   const rulesOnly = explainOne({ assessments: [verdict('goal_attainment', 'unknown'), complianceFail(QUOTES_RULE_6)] });
-  assert.equal(rulesOnly.kind, 'rules');
-  assert.deepEqual(rulesOnly.lines, [TITLE, `  Должен был: соблюдать правило 6 · Системный промпт, строка 3: «Не обещай сроки, которых нет в инструкциях.»`,
-    '  Сказал (реплика #1): «Срок — два дня.»', RULE_1, RULE_2], 'a rules-only failure never gets the «Нарушено» row');
+  assert.deepEqual(partsOf(rulesOnly), { kind: 'rules', expected: 'соблюдать правило «Не обещай сроки, которых нет в инструкциях.»',
+    said: { seq: 1, quote: 'Срок — два дня.' }, rules: [1, 2], violated: 6 });
   // A legacy card without the goal rubric is explained as before and never becomes «оба».
-  const legacy = explainOne({ card: { metrics: [{ ...promptCompliance }] }, assessments: [complianceFail(QUOTES_RULE_6)] });
-  assert.equal(legacy.kind, 'goal');
+  assert.equal(explainOne({ card: { metrics: [{ ...promptCompliance }] }, assessments: [complianceFail(QUOTES_RULE_6)] }).kind, 'goal');
 });
 
 test('violatedRuleNumber names the rule the explanation names, else null', () => {
@@ -372,7 +310,7 @@ test('violatedRuleNumber names the rule the explanation names, else null', () =>
   assert.equal(explain.violatedRuleNumber(machine, machine.trials[0]!), null, 'a machine-format rule is never named');
 });
 
-test('quotes are shown whole with whitespace collapsed; no row is shortened', () => {
+test('quotes are kept whole with whitespace collapsed; nothing is shortened', () => {
   const long = `Начало ответа. ${'Очень длинное объяснение условий возврата. '.repeat(20)}Конец ответа.`;
   assert.ok(long.length > 850);
   const spaced = 'Ожидайте,  заявка\nпередана   специалисту.';
@@ -381,31 +319,23 @@ test('quotes are shown whole with whitespace collapsed; no row is shortened', ()
     trial: { events: [{ seq: 0, type: 'user', text: 'Как?' }, { seq: 1, type: 'assistant', text: `${spaced} ${long}` }] },
     assessments: [goalFail({ citations: [{ seq: 1, quote: spaced }] })],
   });
-  assert.equal(collapsed.lines[1], '  Должен был: Объяснить порядок возврата.');
-  assert.equal(collapsed.lines[2], '  Сказал (реплика #1): «Ожидайте, заявка передана специалисту.»');
+  assert.equal(collapsed.expected, 'Объяснить порядок возврата.');
+  assert.deepEqual(collapsed.said, { seq: 1, quote: 'Ожидайте, заявка передана специалисту.' });
   const whole = explainOne({
     trial: { events: [{ seq: 0, type: 'user', text: 'Как?' }, { seq: 1, type: 'assistant', text: long }] },
     assessments: [goalFail({ citations: [{ seq: 1, quote: long }] })],
   });
-  assert.equal(whole.lines[2], `  Сказал (реплика #1): «${long.trim()}»`);
-  assert.ok(allRows.flat().every(line => !line.includes('…')));
+  assert.equal(whole.said?.quote, long.trim());
+  assert.ok(expectedTexts.every(text => !text.includes('…')));
 });
 
-test('exampleRows retitles the block and indents its details by three more columns', () => {
-  const explanation = explainOne();
-  const rows = exampleRows(explanation);
-  assert.deepEqual(rows[0], { role: 'example', indent: 3, text: 'Пример: Возврат через терминал' });
-  assert.deepEqual(rows.slice(1).map(row => row.indent), explanation.rows.slice(1).map(() => 5));
-  assert.deepEqual(rows.slice(1).map(row => row.text), explanation.rows.slice(1).map(row => row.text));
-});
-
-test('jargon backstop: no explanation row carries machine words or requirement ids', () => {
-  assert.ok(allRows.length >= 10, 'the variant tests above ran first');
+test('jargon backstop: no expectation an explanation words carries machine words or requirement ids', () => {
+  assert.ok(expectedTexts.length >= 10, 'the variant tests above ran first');
   const forbidden = /goal_attainment|prompt_compliance|user_fidelity|unknown|рубрик|протокол|кластер|метрик|judge|seq/i;
   const ids = REQUIREMENTS.map(item => item.id);
-  for (const line of allRows.flat()) {
-    assert.doesNotMatch(line, forbidden, line);
-    for (const id of ids) assert.ok(!line.includes(id), `${id} in ${line}`);
+  for (const text of expectedTexts) {
+    assert.doesNotMatch(text, forbidden, text);
+    for (const id of ids) assert.ok(!text.includes(id), `${id} in ${text}`);
   }
 });
 
@@ -424,72 +354,4 @@ test('a short knowledge source is named without a line; a source of four lines a
   const four = structuredClone(three);
   four.sources[0]!.content += '\nЖалобы принимает отделение.';
   assert.equal(ruleRegister(four).get('refund-money')?.line, 3, 'from four non-blank lines the line is named');
-});
-
-/** The evidence the agreement block shows (UI-SPEC F10); asserts the export exists before calling it. */
-function evidenceOf(record: Experiment, scenarioIndex: number, metricId: string) {
-  assert.equal(typeof explain.situationEvidence, 'function', 'explain.ts exports situationEvidence (UI-SPEC F10)');
-  const scenario = record.scenarios[scenarioIndex]!;
-  const trial = record.trials.find(item => item.scenarioId === scenario.id)!;
-  return explain.situationEvidence(record, scenario, trial, metricId);
-}
-/** The owner's one-key answer, stored as the board writes it. */
-const quickReview = (trialId: string, verdict: 'pass' | 'fail' | 'unknown', judgeVerdict: 'pass' | 'fail', note: string) =>
-  ({ id: `q-${trialId}-${verdict}`, trialId, metricId: 'goal_attainment', source: 'quick' as const, verdict, judgeVerdict, note, createdAt: 'now' });
-
-test('доказательство провала — строки объяснения без заголовка, и несогласие владельца их не меняет', () => {
-  const record = refundRun();
-  const rows = evidenceOf(record, 0, 'goal_attainment');
-  assert.deepEqual(rowsToLines(rows), REFUND_LINES.slice(1), 'the same rows as the phase-2 explanation, title removed');
-  assert.ok(rows.every(row => row.role !== 'title' && row.indent === 2));
-  const marked: Experiment = { ...record, humanReviews: [quickReview('t-refund', 'pass', 'fail', 'Агент ответил верно, судья ошибся.')] };
-  assert.equal(failureExplanation(marked, marked.scenarios[0]!), null, 'the overridden result hides the phase-2 explanation');
-  assert.deepEqual(evidenceOf(marked, 0, 'goal_attainment'), rows, 'a disagreement never rewrites the evidence the owner judged');
-  const agreed: Experiment = { ...record, humanReviews: [quickReview('t-refund', 'fail', 'fail', 'Быстрая отметка: согласен с судьёй.')] };
-  assert.deepEqual(evidenceOf(agreed, 0, 'goal_attainment'), rows);
-});
-
-test('доказательство успеха: цитата, на которую сослался судья, иначе последняя реплика; строки «Нарушено правило» нет', () => {
-  const passed = (assessments: MetricAssessment[], overrides: Partial<Trial> = {}, requirementIds = ['refund-path', 'no-promises']) =>
-    run([card('ok', { title: 'Возврат прошёл', requirementIds })], [attempt('ok', assessments, overrides)]);
-  const cited = evidenceOf(passed([verdict('goal_attainment', 'pass', { citations: [{ seq: 1, quote: 'Ожидайте, заявка передана специалисту.' }] }),
-    complianceFail(QUOTES_RULE_6)]), 0, 'goal_attainment');
-  assert.deepEqual(rowsToLines(cited), [EXPECTED, SAID, RULE_1, `  ${RULE_6}`]);
-  assert.ok(cited.every(row => row.role !== 'violated' && !row.text.startsWith('Нарушено')), 'a pass never names a violated rule');
-
-  const twoReplies = { events: [
-    { seq: 0, type: 'user' as const, text: 'Как вернуть покупку?' },
-    { seq: 1, type: 'assistant' as const, text: 'Первый ответ.' },
-    { seq: 2, type: 'user' as const, text: 'А подробнее?' },
-    { seq: 3, type: 'assistant' as const, text: 'Второй   ответ\nагента.' },
-  ] };
-  const uncited = evidenceOf(passed([verdict('goal_attainment', 'pass', { evidence: [] })], twoReplies), 0, 'goal_attainment');
-  assert.equal(rowsToLines(uncited)[1], '  Сказал (реплика #3, судья не указал реплику): «Второй ответ агента.»');
-
-  const bad = evidenceOf(passed([verdict('goal_attainment', 'pass', { citations: [{ seq: 1, quote: 'Деньги уже на карте.' }] })]), 0, 'goal_attainment');
-  assert.equal(rowsToLines(bad)[1], `  Сказал (реплика #1): ${UNVERIFIED}`, 'an unverifiable citation is a status row, never a quotation');
-  assert.equal(bad[1]?.role, 'unverified');
-
-  const bare = evidenceOf(passed([verdict('goal_attainment', 'pass')], {}, []), 0, 'goal_attainment');
-  assert.equal(rowsToLines(bare).at(-1), '  Правило: у ситуации нет правила из ваших материалов.');
-  assert.ok(bare.every(row => row.indent === 2));
-
-  const undecided = evidenceOf(passed([verdict('goal_attainment', 'unknown')]), 0, 'goal_attainment');
-  assert.deepEqual(undecided, [], 'no recorded pass or fail, no evidence');
-});
-
-test('варианты объяснения провала попадают в блок согласия без изменений', () => {
-  const variants: Variant[] = [
-    { assessments: [goalFail({ citations: [{ seq: 1, quote: 'Деньги уже на карте.' }] })] },
-    { card: { requirementIds: ['ghost', 'refund-path'] } },
-    { card: { requirementIds: [] } },
-    { card: { requirementIds: ['refund-path', 'refund-money', 'no-promises'] }, assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] },
-    { assessments: [goalFail(), complianceFail(QUOTES_RULE_6)] },
-  ];
-  for (const variant of variants) {
-    const explanation = explainOne(variant);
-    const subject = card('refund', { title: 'Возврат через терминал', requirementIds: ['refund-money', 'refund-path'], ...variant.card });
-    const record = structuredClone(run([subject], [attempt('refund', variant.assessments ?? [goalFail(), verdict('prompt_compliance', 'pass')], variant.trial)]));
-    assert.deepEqual(evidenceOf(record, 0, 'goal_attainment'), explanation.rows.slice(1), JSON.stringify(variant.card ?? variant.assessments));
-  }
 });

@@ -3,7 +3,6 @@ import { directChecks } from './checkpoints.js';
 import { fingerprint, type AssessmentFailure, type Experiment, type InvalidCause, type Scenario, type Trial } from './contracts.js';
 import type { MetricAssessment } from './assessment.js';
 import { isRunning } from './phases.js';
-import { Stopped } from './errors.js';
 import { GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentMetricResult, automaticTrialResult, expectationResult, GOAL_METRIC_ID, headlineMetricIds, headlineTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, RULES_METRIC_ID, simulatorVerdicts } from './outcomes.js';
 
@@ -72,12 +71,6 @@ function decodeAssessmentError(text: string): AssessmentFailure {
   if (PROVIDER_LABELS.some(label => text.startsWith(label)) || requestFailed(text)) return 'unavailable';
   // Everything else is the judge's own answer rejected (a malformed or unsupported judgment), as older records counted it.
   return 'rejected';
-}
-
-/** The typed failure a judgment error is recorded with. A stop is known by its signal, never by its words. */
-export function judgeFailure(error: unknown, signal: AbortSignal): AssessmentFailure {
-  if (signal.aborted || error instanceof Stopped) return 'stopped';
-  return decodeAssessmentError(error instanceof Error ? error.message : String(error));
 }
 
 /** Why the judge left the attempt without a judgment: the typed failure, or the legacy text of an older record. */
@@ -321,14 +314,30 @@ export function cardVerdict(record: Experiment, scenario: Scenario, rule: 'headl
   const counting = headlineRule(scenario, trials);
   // The strict card outcome decides a legacy card, and every card without a goal when only its goal is asked.
   const strict = rule === 'goal' ? !ids.length : counting.kind === 'strict';
+  const running = isRunning(record.phase);
   const codes = new Set<NotMeasuredCode>();
-  if (!trials.length) codes.add(isRunning(record.phase) ? 'in_progress' : 'not_reached');
+  if (!trials.length) codes.add(running ? 'in_progress' : 'not_reached');
   // A strict card is decided only on a finished run: until then it waits, or the run stopped before deciding it.
-  else if (strict && !FINISHED.has(record.phase)) codes.add(isRunning(record.phase) ? 'in_progress' : 'not_reached');
-  else if (!attemptsMatch(record, scenario, trials)) codes.add('attempts_mismatch');
+  else if (strict && !FINISHED.has(record.phase)) codes.add(running ? 'in_progress' : 'not_reached');
+  // While the run goes on, a planned attempt not recorded yet is still coming: the situation waits, it is not unmeasured.
+  else if (!attemptsMatch(record, scenario, trials)) codes.add(running && attemptsIntact(record, scenario, trials, false) ? 'in_progress' : 'attempts_mismatch');
   const expectations = counting.kind === 'expectations' ? counting.expectations : [];
   for (const trial of trials) for (const code of trialReasons(record, scenario, trial, ids, expectations)) codes.add(code);
-  return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? (trials.some(trial => trial.turnLimit) ? 'turn_limit' : 'judge_unclear') };
+  // A strict card reads its attempts against the whole plan (cardOutcome): where no attempt names a reason, attempts the
+  // plan did not run are why it has no verdict — not an unsure judge.
+  if (strict && !codes.size && !attemptsState({ ...record, scenarios: [scenario], trials }).intact) codes.add('attempts_mismatch');
+  return { outcome, reason: NOT_MEASURED_CODES.find(code => codes.has(code)) ?? undecidedReason(trials) };
+}
+
+/**
+ * The reason of a situation none of whose attempts named one: every attempt is usable and belongs to the plan, yet
+ * nothing decided it. A conversation cut at the run's limit did not fit it; where no attempt holds any judgment
+ * (a legacy card with nothing to judge, a card without an expectation) the judge never assessed it; otherwise the
+ * judge could not decide.
+ */
+function undecidedReason(trials: readonly Trial[]): NotMeasuredCode {
+  if (trials.some(trial => trial.turnLimit)) return 'turn_limit';
+  return trials.some(trial => trial.assessments?.length || trial.checkpoints?.length) ? 'judge_unclear' : 'not_judged';
 }
 
 export interface AttemptDerivation {

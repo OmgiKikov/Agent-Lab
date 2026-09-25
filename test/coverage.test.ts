@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { emptyUsage, settingsSchema, type Experiment, type Trial } from '../src/contracts.js';
 import { goalAttainment, replyQuality, simulatorFidelity, type MetricAssessment } from '../src/assessment.js';
-import { topicView } from '../src/coverage.js';
+import { topicView, WEIGHTED_FROM } from '../src/coverage.js';
 import { buildResultView } from '../src/result-view.js';
 import { realityParts } from '../src/result-text.js';
 import type { Verdict } from '../src/run.js';
@@ -130,6 +130,37 @@ test('the result view carries the topic view of its counted situations', () => {
   const view = buildResultView(record);
   assert.deepEqual(view.topics, topicView(record, view.cards));
   assert.deepEqual(view.topics?.rows.map(row => [row.id, row.passed, row.decided]), [['refund', 1, 2], ['delivery', 1, 1]]);
-  assert.deepEqual(realityParts(view), ['С учётом частоты тем — около 70% (темы известны у 6 из 7 разговоров)']);
+  assert.deepEqual(realityParts(view), ['С учётом частоты тем — около 70% (измерены темы 83% диалогов; темы известны у 6 из 7 разговоров)']);
   assert.equal(buildResultView(run([card('r1')], [attempt('r1')])).topics, null);
+});
+
+/** Ten logged conversations: refund holds `refund` of them, delivery and bonus split the rest; one situation per topic. */
+function traffic(refund: number): Library {
+  const ids = Array.from({ length: 10 }, (_, i) => `d${i}`);
+  const rest = ids.slice(refund);
+  return library({ logged: { logs: ids }, topics: [
+    { id: 'refund', sources: ids.slice(0, refund).map(id => `logs|${id}`) },
+    { id: 'delivery', sources: rest.slice(0, Math.ceil(rest.length / 2)).map(id => `logs|${id}`) },
+    { id: 'bonus', sources: rest.slice(Math.ceil(rest.length / 2)).map(id => `logs|${id}`) },
+  ], variants: { r1: 'refund', v1: 'delivery', b1: 'bonus' } });
+}
+
+test('the weighted estimate says which share of the traffic its measured topics hold, and is not given below half of it', () => {
+  // Refund, 70% of the conversations, was not measured at all: two passes on 30% of the traffic say nothing about «около 100%».
+  const unmeasured = topicView(withLibrary(traffic(7)), cards({ r1: 'unknown', v1: 'pass', b1: 'pass' }))!;
+  assert.ok(Math.abs(unmeasured.measuredShare - 0.3) < 1e-9, String(unmeasured.measuredShare));
+  assert.equal(unmeasured.weighted, null, 'measured topics hold less than half of the conversations');
+  assert.ok(WEIGHTED_FROM === 0.5);
+  // Exactly half is enough; the line then names the share it stands for.
+  const half = topicView(withLibrary(traffic(5)), cards({ r1: 'unknown', v1: 'pass', b1: 'fail' }))!;
+  close(half.measuredShare, 0.5);
+  close(half.weighted, 0.6);
+  const record = run([card('r1'), card('v1'), card('b1')], [attempt('r1', 'fail'), attempt('v1'), attempt('b1')], { librarySnapshot: traffic(6) });
+  const view = buildResultView(record);
+  // One failure in the topic of 60% of the conversations: 67% of the situations, about 40% of the traffic — every topic measured.
+  assert.deepEqual([view.headline.passed, view.headline.decided, view.topics!.measuredShare], [2, 3, 1]);
+  assert.deepEqual(realityParts(view), ['С учётом частоты тем — около 40%']);
+  const partial = buildResultView({ ...record, trials: [attempt('r1', 'fail'), attempt('v1')] });
+  assert.deepEqual(realityParts(partial), ['С учётом частоты тем — около 25% (измерены темы 80% диалогов)'], 'the share the estimate stands for is named');
+  assert.deepEqual(realityParts(buildResultView({ ...record, trials: [attempt('v1'), attempt('b1')] })), [], 'refund unmeasured: 40% of the traffic is not enough');
 });

@@ -438,7 +438,9 @@ test('the workspace and the chat share one project: a request, a question about 
     await command(repeat.id, ctx);
     assert.equal(opened.length, 1);
     assert.match(noticeOf(session.screens.at(-1)!), /^Отчёт для заказчика открыт в браузере: /);
-    assert.match(await readFile(opened[0]!, 'utf8'), /Оценка выросла у 1, снизилась у 0/);
+    // Situations are compared by the rule of the number itself: a fix, not a rubric score that rose.
+    const page = await readFile(opened[0]!, 'utf8');
+    assert.match(page, /Исправлено 1, сломалось 0/); assert.doesNotMatch(page, /Предварительно|Оценка выросла/);
     assert.deepEqual(errors, []); assert.equal(session.state.steps.length, 0);
   } finally { await shutdown(); await rm(directory, { recursive: true, force: true }); }
 });

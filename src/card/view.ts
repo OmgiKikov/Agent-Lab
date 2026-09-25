@@ -1,7 +1,7 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { describeCheck, isCardExecution, type Experiment, type Scenario } from '../contracts.js';
 import { countText } from '../plural.js';
-import { MAX_WIDTH } from '../result-text.js';
+import { MAX_WIDTH, type Reader } from '../result-text.js';
 import type { ImportBatch, LibraryV1, ScenarioVariant } from '../scenario-contracts.js';
 import { oneLine, wrapHanging } from '../text.js';
 import { contains, quotable, type CardEvidence } from './checks.js';
@@ -102,7 +102,13 @@ function factText(fact: Fact): string {
   return oneLine(`${fact.label}: ${quotable(fact.value) ? fact.value : fact.value ? 'да' : 'нет'}`);
 }
 
-function cardSource(library: LibraryV2, card: Card, numbers?: DialogueNumbers): string {
+/** A situation the owner made, as the owner reads its source and as a page for others says it about the owner. */
+const OWNER_MADE: Record<Reader, { added: string; rules: string }> = {
+  owner: { added: 'добавлена вами', rules: 'по вашим правилам' },
+  others: { added: 'добавлена владельцем агента', rules: 'по правилам владельца агента' },
+};
+
+function cardSource(library: LibraryV2, card: Card, numbers?: DialogueNumbers, reader: Reader = 'owner'): string {
   const { origin } = card;
   switch (origin.kind) {
     case 'dialogue': {
@@ -113,8 +119,8 @@ function cardSource(library: LibraryV2, card: Card, numbers?: DialogueNumbers): 
       const parent = library.cards.find(item => item.id === origin.parentId);
       return parent ? `похожая на №${parent.number}` : 'похожая на другую ситуацию';
     }
-    case 'owner': return 'добавлена вами';
-    case 'rules': return 'по вашим правилам';
+    case 'owner': return OWNER_MADE[reader].added;
+    case 'rules': return OWNER_MADE[reader].rules;
   }
 }
 
@@ -127,11 +133,11 @@ function saidOf(fact: Fact): Said {
 }
 
 /** A card read as it stands: its brief is the card itself. A fact no message vouches for is «?» until the owner says. */
-export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumbers): Brief {
+export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumbers, reader: Reader = 'owner'): Brief {
   const quotes = new Map(library.requirements.map(item => [item.id, item.quote]));
   const { wants, writes, knows, leaves, turn } = card.client;
   return {
-    title: oneLine(card.title), source: cardSource(library, card, numbers), wants: oneLine(wants), writes: oneLine(writes),
+    title: oneLine(card.title), source: cardSource(library, card, numbers, reader), wants: oneLine(wants), writes: oneLine(writes),
     knows: knows.map(fact => ({ what: factText(fact), when: saidOf(fact) })),
     leaves: oneLine(leaves), turn: turn ? turnText(turn.after, turn.says) : null,
     must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes) })),
@@ -208,12 +214,12 @@ export function cardSituation(library: LibraryV2, card: Card, status?: CardStatu
 /* ───────────────────────────── the first library format ───────────────────────────── */
 
 /** Where a first-format variant came from. A variant made from another is named by that one's title: its number differs between lists. */
-function variantSource(library: LibraryV1, variant: ScenarioVariant): string {
+function variantSource(library: LibraryV1, variant: ScenarioVariant, reader: Reader = 'owner'): string {
   const origin = variant.sourceDialogues[0];
   const number = origin && dialogueNumbers(library.imports)(origin.batchId, origin.dialogueId);
   if (number !== undefined) return `из диалога №${number}`;
   const parent = variant.parentVariantId && library.variants.find(item => item.id === variant.parentVariantId);
-  return parent ? `похожая на «${oneLine(parent.title)}»` : variant.provenance === 'production' ? 'из разговора в логах' : 'по вашим правилам';
+  return parent ? `похожая на «${oneLine(parent.title)}»` : variant.provenance === 'production' ? 'из разговора в логах' : OWNER_MADE[reader].rules;
 }
 
 /**
@@ -222,7 +228,7 @@ function variantSource(library: LibraryV1, variant: ScenarioVariant): string {
  * the old conversation was never theirs at the start of a run, so it is not listed. The duties are the
  * required checkpoints — of the compiled definition when the variant ran.
  */
-function variantBrief(library: LibraryV1, variant: ScenarioVariant, scenario?: Scenario): Brief {
+function variantBrief(library: LibraryV1, variant: ScenarioVariant, scenario?: Scenario, reader: Reader = 'owner'): Brief {
   const { userState, behaviorPolicy, evaluationSpec } = variant;
   const terminal = new Set(behaviorPolicy.terminalStates);
   const leaves = [...new Set(behaviorPolicy.transitions.filter(item => terminal.has(item.to)).map(item => oneLine(item.when)))];
@@ -233,7 +239,7 @@ function variantBrief(library: LibraryV1, variant: ScenarioVariant, scenario?: S
     .map(checkpoint => ({ text: oneLine(checkpoint.rule), rule: oneLine(checkpoint.quote) || null }));
   return {
     // A run names the situation by its accepted definition, like every other section of the result.
-    title: oneLine(scenario?.title ?? variant.title), source: variantSource(library, variant), wants: oneLine(userState.goal), writes: oneLine(userState.opening),
+    title: oneLine(scenario?.title ?? variant.title), source: variantSource(library, variant, reader), wants: oneLine(userState.goal), writes: oneLine(userState.opening),
     knows: [
       ...userState.facts.filter(fact => fact.availability !== 'learned_in_source').map(fact => {
         const shown = fact.value === undefined || contains(fact.statement, String(fact.value)) ? fact.statement : `${fact.statement}: ${fact.value}`;
@@ -281,12 +287,13 @@ export function projectV1Variant(library: LibraryV1, variant: ScenarioVariant, n
 
 /* ───────────────────────────── records made before libraries ───────────────────────────── */
 
-const SCENARIO_SOURCE = { production: 'из разговора в логах', curated: 'добавлена вами', synthetic: 'по вашим правилам' } as const;
+const scenarioSource = (provenance: Scenario['provenance'], reader: Reader): string =>
+  provenance === 'production' ? 'из разговора в логах' : provenance === 'curated' ? OWNER_MADE[reader].added : OWNER_MADE[reader].rules;
 
-function scenarioBrief(record: Pick<Experiment, 'requirements'>, scenario: Scenario): Brief {
+function scenarioBrief(record: Pick<Experiment, 'requirements'>, scenario: Scenario, reader: Reader = 'owner'): Brief {
   const rule = scenario.requirementIds.map(id => record.requirements.find(item => item.id === id)).find(item => !!item);
   return {
-    title: oneLine(scenario.title), source: SCENARIO_SOURCE[scenario.provenance],
+    title: oneLine(scenario.title), source: scenarioSource(scenario.provenance, reader),
     wants: oneLine(scenario.user.goal), writes: oneLine(scenario.user.opening),
     knows: [
       ...(scenario.user.knows ?? []).map(item => ({ what: oneLine(item), when: 'сразу' as const })),
@@ -335,16 +342,19 @@ export function situationViews(record: Experiment, context: ViewContext): Situat
   return record.scenarios.map((scenario, index) => scenarioView(record, scenario, index + 1));
 }
 
-/** The brief of one situation of a run, whatever format it was accepted in: the customer report reads the same projection. */
-export function situationBrief(record: Experiment, scenario: Scenario, numbers?: DialogueNumbers): Brief {
+/**
+ * The brief of one situation of a run, whatever format it was accepted in: the customer report reads the same
+ * projection, `reader` 'others' saying where a situation the owner made came from about the owner.
+ */
+export function situationBrief(record: Experiment, scenario: Scenario, numbers?: DialogueNumbers, reader: Reader = 'owner'): Brief {
   const library = record.librarySnapshot;
   if (library?.formatVersion === 2) {
     const card = library.cards.find(item => item.id === scenario.id);
-    if (card) return cardBrief(library, card, numbers);
+    if (card) return cardBrief(library, card, numbers, reader);
   }
   const first = libraryV1Of(record);
   const variant = first?.variants.find(item => item.id === scenario.id);
-  return first && variant ? variantBrief(first, variant, scenario) : scenarioBrief(record, scenario);
+  return first && variant ? variantBrief(first, variant, scenario, reader) : scenarioBrief(record, scenario, reader);
 }
 
 /** The number a situation of a run is known by: a card's own number; its place in the run for older formats. */
@@ -451,14 +461,13 @@ export function listRows(view: SituationView, options: RowOptions & { selected?:
 }
 
 /**
- * One open situation (docs/design/ui-spec.md §4.3–4.5): the title with its chip and source; the customer, labels in one column;
- * what the agent must do, each duty with its rule (a rule shared with the duty above is not repeated); then why
- * it cannot be a test, and the one open question with its numbered answers.
+ * The customer's part of a brief as label and text, the way every surface lists it — the open situation and the
+ * customer report alike: an empty label continues the line above; the values Lab wrote over masking marks follow
+ * what the customer writes, so a filled value never reads as the customer's own.
  */
-export function briefRows(view: SituationView, options: RowOptions = {}): SituationRow[] {
-  const { brief } = view;
+export function briefFields(brief: Brief): [label: string, text: string][] {
   const same = (a: string, b: string) => a.toLocaleLowerCase('ru') === b.toLocaleLowerCase('ru');
-  const fields: [string, string][] = [
+  return [
     ...(same(brief.wants, brief.title) ? [] : [['Хочет', brief.wants] as [string, string]]),
     ...(brief.vague ? [['Запрос', VAGUE_REQUEST] as [string, string]] : []),
     ['Пишет', `«${brief.writes}»`],
@@ -467,6 +476,16 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
     ...(brief.leaves ? [['Уходит', brief.leaves] as [string, string]] : []),
     ...(brief.turn ? [['Поворот', brief.turn] as [string, string]] : []),
   ];
+}
+
+/**
+ * One open situation (docs/design/ui-spec.md §4.3–4.5): the title with its chip and source; the customer, labels in one column;
+ * what the agent must do, each duty with its rule (a rule shared with the duty above is not repeated); then why
+ * it cannot be a test, and the one open question with its numbered answers.
+ */
+export function briefRows(view: SituationView, options: RowOptions = {}): SituationRow[] {
+  const { brief } = view;
+  const fields = briefFields(brief);
   const column = Math.max(...fields.map(([label]) => label.length)) + 3;
   const must = brief.must.flatMap((duty, index): SituationRow[] => [
     { role: 'field', indent: 3, text: `${String(index + 1).padEnd(3)}${duty.text}`, hang: 3 },
