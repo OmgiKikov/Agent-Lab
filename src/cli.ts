@@ -41,7 +41,7 @@ import { importHints, tableChoicesOf } from './cli/import-flags.js';
 import { connectFromCurl, doctorTemplate } from './cli/connect.js';
 import { commandOf, readCommandLine, type Flag, type Flags } from './cli/args.js';
 import { errorText, stopText } from './cli/errors.js';
-import { preparationCeiling } from './card/budget.js';
+import { preparationBudget, preparationCeiling } from './card/budget.js';
 import { builderOf, consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
 
 /*
@@ -236,12 +236,22 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
   if (!values.input && !values.choice && !values.check && !values.resume && !values.accept && !rulebookFlags) { await show(values.id); return; }
   await lab.init();
   try {
-    const target = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
-    if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
+    const target: { id: string; preview?: true } = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
+    // A fresh copy of a finished run is only previewed: without --yes nothing is written, so it has no id to name yet.
+    if (target.preview) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка пойдёт в новый черновик того же набора.\n`);
+    else if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
     if (values.resume || values.check || values.accept) {
-      if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.' : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
+      // The ceiling the owner agreed to covers the whole preparation: continuing past it is their word too, the number stated.
+      const budget = values.resume ? preparationBudget(await lab.get(target.id)) : undefined;
+      const raise = budget && budget.resume > budget.ceiling ? budget.resume : undefined;
+      if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.'
+        : raise !== undefined ? `Подготовка потратила ${budget!.spent} из ${budget!.ceiling} согласованных вызовов модели; с --yes потолок всей подготовки станет ${raise}. Агент не запускается.`
+        : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
       const { record, views } = await situations(target.id);
-      if (values.resume) { if (!record.librarySnapshot) throw new Error('Продолжать нечего.'); await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot), preparationFlags(values)); await lab.waitForIdle(); }
+      if (values.resume) {
+        if (!record.librarySnapshot) throw new Error('Продолжать нечего.');
+        await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot), { ...preparationFlags(values), ...(raise !== undefined ? { callCeiling: raise } : {}) }); await lab.waitForIdle();
+      }
       else if (values.check) { await lab.recheckCards(target.id, { explicit: true }); await lab.waitForIdle(); }
       else {
         const ready = views.filter(view => view.status === 'ready');
@@ -268,6 +278,7 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
       return;
     }
     await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, requiredAuthority(prepared.command) === 'owner-words' && words ? 'words' : 'confirmed'));
+    if (target.preview) process.stderr.write(`Правка записана в новый черновик ${target.id}.\n`);
     const check = await lab.recheckCards(target.id);
     if (check.decision.action === 'run') await lab.waitForIdle();
     await show(target.id, changes.map(line => safeLine(line)));

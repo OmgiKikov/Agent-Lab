@@ -4,6 +4,7 @@ import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
 import { awaitingVerdict } from '../agreement.js';
 import { suiteEvidence } from '../connection.js';
+import { addCaveat } from '../caveats.js';
 import { addUsage, emptyUsage, fingerprint, humanReviewInputSchema, reassessmentSchema, validatePreparation, type Experiment, type HumanReviewInput, type ReassessmentInput } from '../contracts.js';
 import { assessmentRubrics } from '../assessment.js';
 import { assessTrial, grade } from '../evaluation.js';
@@ -15,7 +16,7 @@ import { verifyAcceptedRun } from '../scenario-library.js';
 import { simulatorChecks } from '../simulator.js';
 import type { Lab } from './context.js';
 import { isRunning, moveTo } from '../phases.js';
-import { freshDraft, measurementHash, resultHash, retainAcceptedTests } from './record.js';
+import { draftBudget, freshDraft, measurementHash, resultHash, retainAcceptedTests } from './record.js';
 import { nameFailureModes } from './run.js';
 
 /*
@@ -61,10 +62,10 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
     record.targetRelease = previous.targetRelease;
     record.reviewedAt = new Date().toISOString(); record.reviewMode = 'automated';
     record.manifestHash = measurementHash(record);
-    record.limitations.push('Переоценка сохранённых фактов: агент и симулятор не запускались. Смена критериев или судьи не доказывает улучшение агента.');
-    if (input.codeOnly) record.limitations.push('Режим code-only пересчитал только точные проверки; модельные рубрики и кластеры не оценивались.');
+    addCaveat(record, { code: 'reassessment' });
+    if (input.codeOnly) addCaveat(record, { code: 'code_only' });
     moveTo(record, 'evaluating');
-    await lab.operations.launch(record, async ctx => {
+    await lab.operations.launch(record, async (ctx, operation) => {
       const runtime = input.codeOnly ? undefined : await lab.runtime(record);
       for (const original of trials) {
         ctx.signal.throwIfAborted();
@@ -105,9 +106,9 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
         await lab.operations.checkpoint(record, 'evaluating', `Переоценено ${record.trials.length}/${trials.length}. Агент не запускался.`);
       }
       if (runtime) await nameFailureModes(record, runtime, ctx);
-      if (runtime) await calibrateRun(record, { runtime, ctx, store: lab.store, checkpoint: message => lab.operations.checkpoint(record, record.phase, message) });
+      if (runtime) await calibrateRun(record, { runtime, ctx, store: lab.store, checkpoint: message => lab.operations.checkpoint(record, record.phase, message), callsLeft: () => operation.callLimit - operation.spent });
       await lab.operations.checkpoint(record, 'results_review', 'Переоценка готова. Исходные трассы, оценки и ручные решения сохранены в исходном прогоне.');
-    }, { ownsMutation: true });
+    }, { ownsMutation: true, budget: draftBudget(record) });
     return structuredClone(record);
   });
 }
@@ -151,7 +152,7 @@ export function addHumanReview(lab: Lab, id: string, raw: HumanReviewInput): Pro
     }
     (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
     delete record.resultsReviewedAt; delete record.resultsReviewHash;
-    await lab.operations.checkpoint(record, 'results_review', 'Human annotation saved separately from the original assessment.');
+    await lab.operations.checkpoint(record, 'results_review', 'Ваше решение записано отдельно от оценки судьи.');
     return structuredClone(record);
   });
 }
@@ -165,7 +166,7 @@ export function reviewResults(lab: Lab, id: string, expectedHash: string): Promi
     const pending = awaitingVerdict(record).size;
     if (pending) throw new Error(`Нельзя завершить разбор: ${pending} диалогов без решения. Оцените проваленные критерии или весь диалог. Если ошибочен сам тест, отметьте весь диалог «Невалидный тест» с причиной; «неясно» оставляет вопрос открытым.`);
     record.resultsReviewedAt = new Date().toISOString(); record.resultsReviewHash = expectedHash;
-    await lab.operations.checkpoint(record, 'complete', 'Human review complete. Original checks, model estimates and human annotations remain separate.');
+    await lab.operations.checkpoint(record, 'complete', 'Разбор результатов завершён. Проверки, оценки судьи и ваши решения хранятся отдельно.');
     return structuredClone(record);
   });
 }

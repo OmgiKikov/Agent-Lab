@@ -32,6 +32,7 @@ export function standing(record: Experiment, view?: ResultView): string {
     return value ? `точность ${value}` : tail;
   }
   if (record.phase === 'preparing') return 'ситуации готовятся';
+  if (record.phase === 'checking') return 'ситуации проверяются';
   if (record.phase === 'evaluating') return `идёт прогон: ${record.trials.length} из ${countText(plannedTrials(record), ['разговора', 'разговоров', 'разговоров'])}`;
   const library = record.librarySnapshot;
   const size = library?.formatVersion === 2 ? library.cards.length : library?.formatVersion === 1 ? library.variants.length : record.scenarios.length;

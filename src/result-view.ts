@@ -357,7 +357,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const decided = passed + counted.filter(card => card.outcome === 'fail').length;
   const accuracy = decided ? passed / decided : null;
   // A draft that never ran has nothing pending and nothing unmeasured yet; its cards keep their reason.
-  const notStarted = !record.trials.length && (record.phase === 'preparing' || record.phase === 'review');
+  const notStarted = !record.trials.length && (record.phase === 'preparing' || record.phase === 'checking' || record.phase === 'review');
   const reasons = notStarted ? [] : NOT_MEASURED_CODES.filter(code => code !== 'in_progress').map(code => {
     const scenarioIds = counted.filter(card => card.outcome === 'unknown' && card.reason === code).map(card => card.scenarioId);
     return { code, label: NOT_MEASURED_TEXT[code], count: scenarioIds.length, scenarioIds };

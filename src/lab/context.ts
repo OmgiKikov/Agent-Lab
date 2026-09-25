@@ -7,8 +7,17 @@ import type { OperationRunner } from './operation.js';
 export interface Lab {
   readonly store: ExperimentStore;
   readonly operations: OperationRunner;
-  /** A record as it is now: the running operation's live state as a copy, otherwise the stored file. */
+  /**
+   * A record as it is now: the running operation's live state as a copy, otherwise the stored file, otherwise a fresh
+   * draft this lab only previews (`preview`).
+   */
   get(id: string): Promise<Experiment>;
+  /**
+   * Keeps an unwritten fresh draft in this lab, for the owner to see before anything is written: `get` reads it, and the
+   * first change of it — an owner command, its connection, its acceptance, its start — writes it. It is never listed,
+   * and it is gone when the lab closes.
+   */
+  preview(record: Experiment): void;
   list(): Promise<Experiment[]>;
   /** The runtime a record's model calls go through, every builder call journaled with the record. */
   runtime(record: Experiment): Promise<Runtime>;

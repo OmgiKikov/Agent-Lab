@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fingerprint, materialSources, type Experiment } from '../src/contracts.js';
 import type { Runtime } from '../src/runtime.js';
-import { preparationCeiling, promptLoad, promptsOversize } from '../src/card/budget.js';
+import { preparationBudget, preparationCeiling, promptLoad, promptsOversize } from '../src/card/budget.js';
 import { citationId, type DialogueProposal } from '../src/card/proposal.js';
 import { compileCard } from '../src/card/compile.js';
 import { pendingReviewCalls, storedEvidence } from '../src/card/prepare.js';
-import { preparationProgressSchema, type CardPreparation, type LibraryV2 } from '../src/card/schema.js';
+import { preparationProgressSchema, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
+import { CommandRefused, STOP_LABEL } from '../src/errors.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
 import { StructuredTaskError } from '../src/llm/structured.js';
@@ -39,11 +40,14 @@ async function statuses(lab: ExperimentLab, id: string) {
   const { library, experiment } = await lab.readCards(id);
   return [...cardStatuses({ library, evidence: await storedEvidence(lab.store, library), maxTurns: experiment.settings.maxTurns }).values()].map(item => item.status);
 }
-/** A stopped preparation's draft with a larger limit, as the owner raises it before continuing: a resume is bounded by the draft's limit. */
-async function raiseBudget(lab: ExperimentLab, id: string): Promise<LibraryV2> {
-  const draft = await lab.get(id);
-  await lab.updateDraft(id, draftHash(draft), { settings: { maxCalls: 40 } });
-  return (await lab.readCards(id)).library;
+/**
+ * Continues a preparation stopped at the ceiling the owner agreed to: that ceiling covers every resume, so without the
+ * owner's word on a new one nothing is sent; with it, the preparation goes on up to it (lab/library.ts).
+ */
+async function resumeWithCeiling(lab: ExperimentLab, id: string, callCeiling = 40): Promise<void> {
+  const { library } = await lab.readCards(id);
+  await assert.rejects(lab.resumePreparation(id, libraryHash(library)), (error: Error) => error instanceof CommandRefused && /новый потолок/.test(error.message));
+  await lab.resumePreparation(id, libraryHash(library), { callCeiling });
 }
 
 test('from logs to the number: import → cards → review → acceptance → run → result', async () => {
@@ -120,18 +124,20 @@ test('a resume continues every unit from its next step: a card made before the b
     const draft = await lab.create(cardInput(), { callCeiling: 4, parallel: 1 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
-    assert.match(stopped.error ?? '', /budget exhausted/);
+    assert.deepEqual([stopped.phase, stopped.stop, stopped.error], ['review', 'budget', STOP_LABEL.budget], 'a budget stop is typed, and the owner reads it in their words');
     const progress = progressOf(stopped);
-    assert.deepEqual([progress.pending, progress.active, progress.generationAttempts], [['late', 'known'], undefined, [{ dialogueId: 'late', calls: 4 }]],
+    assert.deepEqual([progress.pending, progress.active, progress.generationAttempts?.filter(item => item.calls > 0)], [['late', 'known'], undefined, [{ dialogueId: 'late', calls: 4 }]],
       'the budget stops a step before its next request: nothing is in doubt');
+    assert.deepEqual([progress.callCeiling, progress.spentCalls], [4, 4], 'the checkpoint keeps the ceiling the owner agreed to and what the preparation spent');
+    assert.deepEqual(preparationBudget(stopped), { ceiling: 4, spent: 4, left: 0, pending: 2, resume: 4 + 2 * (6 + 2 * 2) }, 'what is left, and what continuing needs, as data');
     assert.deepEqual(await statuses(lab, draft.id), ['checking']);
-    const library = await raiseBudget(lab, draft.id);
-    await lab.resumePreparation(draft.id, libraryHash(library));
+    await resumeWithCeiling(lab, draft.id);
     await lab.waitForIdle();
     const resumed = await lab.get(draft.id);
-    assert.equal(resumed.error, null);
+    assert.deepEqual([resumed.error, resumed.stop], [null, undefined]);
     assert.deepEqual([proposedFor(seen), seen.reviews.length], [['late', 'known'], 2], 'the card of the first dialogue is not proposed again');
     assert.deepEqual(progressOf(resumed).generationAttempts, [{ dialogueId: 'late', calls: 4 }, { dialogueId: 'known', calls: 1 }]);
+    assert.deepEqual([progressOf(resumed).callCeiling, progressOf(resumed).spentCalls], [40, 7], 'the new ceiling covers the whole preparation, the first launch included');
     assert.deepEqual(await statuses(lab, draft.id), ['ready', 'ready']);
   });
 });
@@ -179,7 +185,7 @@ test('each dialogue has one allowance of proposal calls, repairs included, and a
     const draft = await lab.create(cardInput(), { callCeiling: 4 });
     await lab.waitForIdle();
     assert.equal(spent, 4, 'the preparation\'s ceiling ran out first');
-    await lab.resumePreparation(draft.id, libraryHash(await raiseBudget(lab, draft.id)));
+    await resumeWithCeiling(lab, draft.id);
     await lab.waitForIdle();
     const resumed = await lab.get(draft.id);
     assert.equal(spent, 6, 'two calls were left of the allowance');

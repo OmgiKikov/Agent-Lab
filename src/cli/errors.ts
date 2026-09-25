@@ -1,6 +1,6 @@
 import { basename, dirname, resolve } from 'node:path';
 import { z } from 'zod';
-import { AgentRequestFailed, CommandRefused, LibraryConflict, LockedError, Stopped, UnknownReference } from '../errors.js';
+import { AgentRequestFailed, CommandRefused, LibraryConflict, LockedError, STOP_LABEL, STOP_REASONS, Stopped, UnknownReference } from '../errors.js';
 import { ProviderFailure, type ProviderFailureKind } from '../llm/model-call.js';
 import { StructuredTaskError } from '../llm/structured.js';
 import { UsageError } from './args.js';
@@ -42,8 +42,12 @@ const STOPPED: Record<Stopped['reason'], string> = {
 /** Whether a message was written for the owner: everything Lab says to a person is Russian, an English message is a diagnostic. */
 const forOwner = (message: string): boolean => [...message].some(char => (char >= 'А' && char <= 'я') || char === 'ё' || char === 'Ё');
 
-/** The fixed labels lab/operation.ts gives each stop; a record keeps its stop's label, read back here by exact equality. */
+/**
+ * The fixed labels lab/operation.ts gives each stop (errors.ts STOP_LABEL), and the English ones records kept before
+ * them; a record keeps its stop's label, read back here by exact equality.
+ */
 const STOP_LABELS: Readonly<Record<string, Stopped['reason']>> = {
+  ...Object.fromEntries(STOP_REASONS.map(reason => [STOP_LABEL[reason], reason])),
   'Model call budget exhausted.': 'budget', 'Experiment time limit reached.': 'time', 'Cancelled by the user.': 'cancelled', 'Application is closing.': 'closing',
 };
 /** Why a record's work stopped, as the record keeps it, in the owner's words; undefined for a diagnostic the owner cannot act on. */

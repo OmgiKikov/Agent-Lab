@@ -74,4 +74,10 @@ export interface Runtime {
   /** How an agent in its own request format is connected (connect.ts): the message field of the owner's curl and the text of the agent's reply, proposed by `builder`, confirmed by the owner. */
   connectionReading?: ConnectionReader;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
+  /**
+   * Whether this network reaches the judge at all, asked before a run's first paid call: a key says the judge may be
+   * used, not that it can be reached. A network check, never a model request, so nothing is billed. Absent where there
+   * is nothing to reach (a deterministic runtime).
+   */
+  judgeReachable?(signal: AbortSignal): Promise<boolean>;
 }

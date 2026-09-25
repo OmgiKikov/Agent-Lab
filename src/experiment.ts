@@ -1,3 +1,4 @@
+import { addCaveat } from './caveats.js';
 import type { LogVersionCommand, LogVersionJournal } from './card/calibration.js';
 import type { CardEvidence } from './card/checks.js';
 import type { HostGrant, Prepared, PreparedLogVersion, Via } from './card/commands.js';
@@ -12,7 +13,7 @@ import { captureGeneratorEvidence } from './generator-evidence.js';
 import type { Lab } from './lab/context.js';
 import * as library from './lab/library.js';
 import { OperationRunner, type Follower } from './lab/operation.js';
-import { isRunning, moveTo } from './phases.js';
+import { isRunning, moveTo, restartAt } from './phases.js';
 import * as review from './lab/review.js';
 import * as judgeCheck from './lab/judge-check.js';
 import type { JudgeCheck, JudgeCheckPlan } from './judge-check.js';
@@ -37,31 +38,55 @@ export class ExperimentLab {
   private readonly operations: OperationRunner;
   private readonly lab: Lab;
   private initializing: Promise<void> | undefined;
+  /** Fresh drafts the owner sees before anything is written (Lab.preview): gone with this lab, written by their first change. */
+  private readonly previews = new Map<string, Experiment>();
   constructor(directory: string, private readonly injectedRuntime?: Runtime) {
     this.store = new ExperimentStore(directory);
     this.operations = new OperationRunner(this.store);
-    this.lab = { store: this.store, operations: this.operations, get: id => this.get(id), list: () => this.list(), runtime: record => this.runtime(record) };
+    this.lab = { store: this.store, operations: this.operations, get: id => this.get(id), list: () => this.list(), runtime: record => this.runtime(record),
+      preview: record => { this.previews.set(record.id, structuredClone(record)); } };
   }
 
-  /** Opens the folder as its writer; records a previous process left running are marked interrupted, their evidence kept. */
+  /**
+   * Opens the folder as its writer. A record a previous process left running goes where its phase's restart rule says
+   * (phases.ts), its evidence kept: a draft whose check was cut short is the owner's draft again, anything else is
+   * marked interrupted.
+   */
   init(): Promise<void> {
-    if (this.operations.closing) return Promise.reject(new Error('Experiment Lab is closing.'));
+    if (this.operations.closing) return Promise.reject(new Error('Лаборатория закрывается.'));
     return this.initializing ??= this.initialize();
   }
   private async initialize(): Promise<void> {
     await this.store.init();
     try {
       for (const record of await this.store.list()) if (isRunning(record.phase)) {
-        moveTo(record, 'interrupted'); record.message = 'Предыдущий процесс остановился. Собранные данные сохранены.';
+        const next = restartAt(record);
+        record.message = next === 'review' ? 'Предыдущий процесс остановился во время проверки ситуаций. Черновик сохранён; проверку можно повторить.'
+          : 'Предыдущий процесс остановился. Собранные данные сохранены.';
+        moveTo(record, next);
         record.usage.costUsd = null;
-        record.limitations.push('Процесс остановился между сохранениями: число вызовов и токенов может быть неполным.');
+        addCaveat(record, { code: 'usage_incomplete' });
         record.error = record.message; record.updatedAt = new Date().toISOString(); await this.store.save(record);
       }
       this.operations.open();
     } catch (error) { await this.store.close(); throw error; }
   }
 
-  async get(id: string): Promise<Experiment> { return this.operations.snapshot(id) ?? this.store.get(id); }
+  /** A record as it is now: the running one's live copy, the stored file, or — until a change writes it — a fresh draft this lab previews. */
+  async get(id: string): Promise<Experiment> {
+    const running = this.operations.snapshot(id);
+    if (running) return running;
+    const preview = this.previews.get(id);
+    if (!preview) return this.store.get(id);
+    try {
+      const written = await this.store.get(id);
+      this.previews.delete(id);
+      return written;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return structuredClone(preview);
+    }
+  }
   async list(): Promise<Experiment[]> {
     const records = await this.store.list();
     return records.map(record => this.operations.snapshot(record.id) ?? record);
@@ -74,7 +99,8 @@ export class ExperimentLab {
   acceptCards(id: string, expectedHash: string, cardIds: string[]): Promise<{ library: LibraryV2; experiment: Experiment }> { return library.acceptCards(this.lab, id, expectedHash, cardIds); }
   checkCards(id: string, expectedHash: string): Promise<Experiment> { return library.checkCards(this.lab, id, expectedHash); }
   cardContext(id: string): Promise<{ experiment: Experiment; library: LibraryV2; evidence: CardEvidence; numbers: DialogueNumbers }> { return library.cardContext(this.lab, id); }
-  editableCards(id: string): Promise<{ id: string; copiedFrom?: string }> { return library.editableCards(this.lab, id); }
+  /** The draft an owner command goes to; `preview`: a fresh copy of a finished run, written only with the change applied to it. */
+  editableCards(id: string): Promise<{ id: string; copiedFrom?: string; preview?: true }> { return library.editableCards(this.lab, id); }
   prepareCardCommand(id: string, command: CardCommand, options: { via: Via; ownerWords?: string }): Promise<Prepared> { return library.prepareCardCommand(this.lab, id, command, options); }
   applyCardCommand(id: string, prepared: Prepared, grant: HostGrant): Promise<{ library: LibraryV2; experiment: Experiment }> { return library.applyCardCommand(this.lab, id, prepared, grant); }
   /** Lab's plausible values over one card's masking marks, as the command the owner confirms; one model call, nothing written to the draft. */
@@ -82,12 +108,13 @@ export class ExperimentLab {
   recheckCards(id: string, options?: { defer?: boolean; expectedHash?: string; explicit?: boolean }) { return library.recheckCards(this.lab, id, options); }
   prepareLogVersion(command: LogVersionCommand, options: { via: Via; at?: string }): Promise<PreparedLogVersion> { return library.prepareLogVersion(this.lab, command, options); }
   applyLogVersion(prepared: PreparedLogVersion, grant: HostGrant): Promise<LogVersionJournal> { return library.applyLogVersion(this.lab, prepared, grant); }
-  resumePreparation(id: string, expectedHash: string, options?: library.PreparationOptions): Promise<Experiment> { return library.resumePreparation(this.lab, id, expectedHash, options); }
+  resumePreparation(id: string, expectedHash: string, options?: library.ResumeOptions): Promise<Experiment> { return library.resumePreparation(this.lab, id, expectedHash, options); }
   convertV1Draft(id: string): Promise<Pick<Conversion, 'library' | 'left' | 'calls'> & { experiment: Experiment }> { return library.convertV1Draft(this.lab, id); }
 
   updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> { return run.updateDraft(this.lab, id, expectedHash, raw); }
   acceptDraft(id: string, expectedHash: string): Promise<Experiment> { return run.acceptDraft(this.lab, id, expectedHash); }
-  repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[]): Promise<Experiment> { return run.repeat(this.lab, id, scenarioIds, controlScenarioIds); }
+  /** A fresh draft of a run's accepted set; `preview`: shown before anything is written, written by its first change (Lab.preview). */
+  repeat(id: string, scenarioIds?: string[], controlScenarioIds?: string[], options?: run.RepeatOptions): Promise<Experiment> { return run.repeat(this.lab, id, scenarioIds, controlScenarioIds, options); }
   saveSuite(id: string, file: string, scenarioIds?: string[]): Promise<string> { return run.saveSuite(this.lab, id, file, scenarioIds); }
   loadSuite(file: string, scenarioIds?: string[], connection?: Connection): Promise<Experiment> { return run.loadSuite(this.lab, file, scenarioIds, connection); }
   start(id: string, options: run.StartOptions): Promise<Experiment> { return run.start(this.lab, id, options); }
@@ -101,7 +128,7 @@ export class ExperimentLab {
   checkJudge(id: string, options?: judgeCheck.JudgeCheckOptions): Promise<JudgeCheck> { return judgeCheck.checkJudge(this.lab, id, options); }
 
   /** Stops the operation running `id`; what it recorded is kept. */
-  async cancel(id: string): Promise<Experiment> { return this.operations.cancel(id); }
+  async cancel(id: string): Promise<Experiment> { return this.operations.cancel(id) ?? this.store.get(id); }
   /** Resolves when the running operation has ended and its last checkpoint is saved. */
   async waitForIdle(): Promise<void> { await this.operations.idle(); }
   async close(): Promise<void> {

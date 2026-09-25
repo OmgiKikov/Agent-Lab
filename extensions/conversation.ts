@@ -117,6 +117,8 @@ export function progressText(record: Experiment, now = Date.now()): string {
     const step = total ? `разобрано ${done} из ${countText(total, CONVERSATIONS_OF)}` : oneLine(record.message);
     return [`Готовлю ситуации: ${step}`, minutesSince(record.createdAt, now), spent(record)].filter(Boolean).join(' · ');
   }
+  // A check of the draft's situations, or values proposed for one of them: the line its work says.
+  if (record.phase === 'checking') return [oneLine(record.message), spent(record)].filter(Boolean).join(' · ');
   const planned = plannedTrials(record), done = record.trials.length;
   return [`Прогон: ${done} из ${countText(planned, CONVERSATIONS_OF)}`, minutesSince(record.reviewedAt, now), spent(record)].filter(Boolean).join(' · ');
 }

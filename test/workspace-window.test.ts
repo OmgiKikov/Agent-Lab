@@ -184,6 +184,7 @@ test('the kind of work another process does is read from its record: a draft wit
     await lab.store.save(record);
     return (await workspaceView(new ExperimentLab(demo.directory), newState(), undefined)).data?.progress?.kind;
   };
+  assert.equal(await kindOf({ ...draft, phase: 'checking' }), 'check', 'a check runs in a phase of its own');
   assert.equal(await kindOf({ ...draft, phase: 'preparing' }), 'check', 'a draft that holds its situations and has nothing left to read is being checked');
   assert.equal(await kindOf({ ...draft, phase: 'preparing', librarySnapshot: undefined }), 'preparation');
   assert.equal(await kindOf({ ...draft, phase: 'evaluating' }), 'run');

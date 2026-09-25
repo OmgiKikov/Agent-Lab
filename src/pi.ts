@@ -7,6 +7,7 @@ import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } f
 import { MODEL_REQUEST_BYTES, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
 import { AUTH_HELP, resolveModels, roleChoices } from './llm/models.js';
+import { endpointAnswers } from './llm/reach.js';
 import { gatewayFailureText, gatewayUnavailableText, GIGA_PROVIDER_ID, processGateway, type GatewayFailure } from './giga-provider.js';
 import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
@@ -195,6 +196,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     plantError: { builder, plant: (request, ctx) => plantError(request, { run, ctx }) },
     // So are the values written over a card's masking marks after it was made.
     maskFill: { builder, fill: (request, ctx) => fillWithModel(request, { run, ctx }) },
+    // A key says the judge may be used, not that this network reaches it: its endpoint answers, or the run does not rely
+    // on it (lab/run.ts start). The gateway's own connection was checked when this runtime was made.
+    judgeReachable: signal => judge.provider === GIGA_PROVIDER_ID ? Promise.resolve(true) : endpointAnswers(judge.baseUrl, signal),
     async selectUserAction(input, ctx) {
       // The answer is an enum of exactly the moves allowed now, so a move outside the policy cannot be returned.
       return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema(input.actions) }, input, ctx);

@@ -7,7 +7,7 @@ import type { CardCommand } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { shownRulebook } from '../src/card/rulebook.js';
 import { convertible } from '../src/card/legacy-v1.js';
-import { pendingReviewCalls } from '../src/card/prepare.js';
+import { checkCalls } from '../src/card/check-calls.js';
 import { situationViews, type SituationAction, type SituationView } from '../src/card/view.js';
 import { isRunning } from '../src/phases.js';
 import { demoInput } from '../src/demo.js';
@@ -114,10 +114,12 @@ async function situationCommand(ctx: ExtensionCommandContext, action: SituationA
 
 /**
  * What long work a record is under: this session's own work by the kind it was started as; another process's by the
- * record — a draft that already holds its situations and has nothing left to prepare from is being checked.
+ * record — a check has a phase of its own (phases.ts), and an earlier Lab checked a draft in its preparing phase: one
+ * that already holds its situations and has nothing left to prepare from.
  */
 function workKind(record: Experiment, job: SessionOperation | undefined): WorkKind {
   if (job?.id === record.id) return job.kind === 'assessment' ? 'check' : job.kind;
+  if (record.phase === 'checking') return 'check';
   if (record.phase !== 'preparing') return 'run';
   return record.librarySnapshot && !record.preparationProgress?.pending.length ? 'check' : 'preparation';
 }
@@ -149,7 +151,7 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     // A card set can always be worked on: a finished run's situations are changed in a fresh draft of the same set.
     const editable = !!context && !isRunning(setRecord.phase);
     const coverage = context ? situationCoverage(context.library, cardStatuses({ library: context.library, evidence: context.evidence, maxTurns })) : undefined;
-    if (context && editable && setRecord.phase === 'review' && !setRecord.trials.length) pendingCalls = pendingReviewCalls(context.library, context.evidence);
+    if (context && editable && setRecord.phase === 'review' && !setRecord.trials.length) pendingCalls = checkCalls(context.experiment, context.library, context.evidence);
     const rulebook = context && shownRulebook(context.library);
     const cards = !!context && !context.library.acceptance;
     const plan = cards ? cardPlan(setRecord, views) : scenarioPlan(setRecord);
@@ -313,8 +315,8 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
           if (action.type === 'run') {
             const draft = data.space.draft;
             const started = await writing(async (lab, handOver) => {
-              // No draft: the newest run's set is repeated — the same situations, the agent as it is now.
-              const target = draft ?? (data.space.runs[0] ? await lab.repeat(data.space.runs[0].id) : undefined);
+              // No draft: the newest run's set is repeated — the same situations, the agent as it is now — written only when the owner starts it.
+              const target = draft ?? (data.space.runs[0] ? await lab.repeat(data.space.runs[0].id, undefined, undefined, { preview: true }) : undefined);
               if (!target) throw new Error('Запускать нечего: сначала соберите ситуации.');
               const run = await launchRun(ctx, lab, target);
               if (run) handOver(lease => background.detach(ctx, lease, target.id, 'board'));

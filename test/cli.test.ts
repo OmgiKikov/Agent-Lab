@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { errorText, stopText } from '../src/cli/errors.js';
 import { tableChoicesOf } from '../src/cli/import-flags.js';
 import { demoInput } from '../src/demo.js';
-import { LockedError } from '../src/errors.js';
+import { LockedError, STOP_LABEL } from '../src/errors.js';
 import { ExperimentStore } from '../src/store.js';
 
 /*
@@ -156,6 +156,8 @@ test('every failure of a command reaches the owner in their words with the way o
   assert.equal(defect.detail, 'Cannot read properties of undefined');
   // A stop a record keeps is its fixed label: read back by exact equality, in the owner's words.
   assert.equal(stopText('Model call budget exhausted.'), 'Закончился лимит вызовов модели; сделанное сохранено. Поднимите settings.maxCalls в задаче и повторите.');
+  assert.equal(stopText(STOP_LABEL.budget), stopText('Model call budget exhausted.'), 'the label a stop is written with now reads as the one before it');
+  assert.equal(stopText(STOP_LABEL.time), 'Закончилось время, отведённое на эту работу; сделанное сохранено.');
   assert.equal(stopText('socket hang up'), undefined);
 });
 
