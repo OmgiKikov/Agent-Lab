@@ -225,7 +225,7 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
     }
     try { libraryImport = await readDialogueImport(logs, { directory }); }
     catch (error) { throw new Error(safeText(`Не удалось прочитать логи ${shownPath(logs, ctx.cwd)}: ${error instanceof Error ? error.message : String(error)} Агент не запускался, ничего не потрачено.`)); }
-    if (!libraryImport.originalImport.dialogues.length) throw new Error(`В ${shownPath(logs, ctx.cwd)} нет разговоров, которые Lab может прочитать.`);
+    if (!libraryImport.dialogues.length) throw new Error(`В ${shownPath(logs, ctx.cwd)} нет разговоров, которые Lab может прочитать.`);
   }
 
   // The run's settings are the host's: the model names neither a limit nor a model.
@@ -244,7 +244,8 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
     input = createInputSchema.parse({
       task: params.task, mode: 'live', workflow: 'evaluate', materials: expanded.materials, scenarioCount: libraryImport ? 0 : count,
       target: connection?.target ?? { kind: 'unconnected' }, ...(connection?.targetVersion ? { targetVersion: connection.targetVersion } : {}),
-      ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
+      // The import is what the preparation reads; no older projection of it gates what the import accepted.
+      ...(libraryImport ? { originalImport: libraryImport } : {}),
       settings: settingsSchema.parse({ provider: ctx.model?.provider ?? '', model: ctx.model?.id ?? '', judge, ...run, userModes: ['reactive'],
         maxCalls: runLimit(count, run, !!libraryImport), maxDurationMs: runTime(count * run.repeats),
         // A proposal that reads the agent's prompts and articles whole routinely exceeds the two-minute default per call.

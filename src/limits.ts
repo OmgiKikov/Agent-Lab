@@ -28,6 +28,12 @@ export const LOG_CONVERSATIONS = 100_000;
 /** Dialogues one import batch takes; a longer log gives a sample of this many (scenario-library.ts logImport). */
 export const IMPORT_DIALOGUE_LIMIT = 300;
 /**
+ * The JSON of the conversations one import keeps, all together. A log whose conversations hold more — many long ones —
+ * gives a sample, as a log of more than IMPORT_DIALOGUE_LIMIT conversations does: the same outcome-blind order, cut
+ * where the next conversation would not fit. The import is never refused for it.
+ */
+export const IMPORT_BATCH_CHARS = 12_000_000;
+/**
  * Later customer messages one situation accounts for (card/schema.ts `coverage`), and so the customer messages of a
  * logged conversation a situation can be made from: its opening and those. Long conversations are where agents lose
  * customers, so the bound is the card's, never the sample's convenience; a conversation too large for one model call is

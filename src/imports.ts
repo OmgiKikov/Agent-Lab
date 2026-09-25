@@ -3,7 +3,7 @@ import type { ImportBatch } from './scenario-contracts.js';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
-import { dialogueSchema, type Dialogue, type ValidationExclusion } from './contracts.js';
+import type { Dialogue, ValidationExclusion } from './contracts.js';
 import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES, LOG_CONVERSATIONS, LOGGED_CUSTOMER_MESSAGES, STREAMED_LOG_BYTES } from './limits.js';
 import { hiddenMessage, MASK_VERSION, type MaskVersion } from './masking.js';
 import { ScenarioFiles } from './scenario-store.js';
@@ -206,18 +206,9 @@ async function eachLineOf(file: string, visit: (line: string, number: number) =>
   line(rest);
 }
 
-/** The bounded legacy projection old views use: user and agent messages only. */
-function dialoguesOf(originalImport: ImportBatch): Dialogue[] {
-  return originalImport.dialogues.flatMap(dialogue => {
-    const parsed = dialogueSchema.safeParse({ id: dialogue.id, messages: dialogue.events.filter(event => event.type === 'message' && (event.role === 'user' || event.role === 'assistant')).map(event => ({ role: event.role, content: event.content })) });
-    return parsed.success ? [parsed.data] : [];
-  });
-}
-
-/** Retain full raw evidence before a bounded legacy projection used by old views; a log longer than one import gives its sample. */
-export function importDialogues(raw: unknown): { originalImport: ImportBatch; dialogues: Dialogue[] } {
-  const originalImport = logImport(raw).batch;
-  return { originalImport, dialogues: dialoguesOf(originalImport) };
+/** The conversations of a task file as an import, every raw row retained; a log longer than one import gives its sample. */
+export function importDialogues(raw: unknown): ImportBatch {
+  return logImport(raw).batch;
 }
 
 /**
@@ -235,9 +226,8 @@ async function storedImport(batch: ImportBatch, directory: string | undefined): 
  * reading its owner confirmed, found in the data folder `directory`. What the folder already keeps of the
  * same conversations is that import.
  */
-export async function readDialogueImport(file: string, options: { directory?: string } = {}): Promise<ReturnType<typeof importDialogues>> {
+export async function readDialogueImport(file: string, options: { directory?: string } = {}): Promise<ImportBatch> {
   if (isTable(file) && !options.directory) throw unconfirmedTable(file);
   const read = isTable(file) ? await readConfirmedTable(file, options.directory!) : isLines(file) ? await readJsonLines(file) : await readJsonFile(file);
-  const originalImport = await storedImport(read, options.directory);
-  return { originalImport, dialogues: dialoguesOf(originalImport) };
+  return storedImport(read, options.directory);
 }

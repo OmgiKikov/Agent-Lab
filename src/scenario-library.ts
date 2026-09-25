@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { isIdentifier } from './ids.js';
-import { IMPORT_DIALOGUE_LIMIT } from './limits.js';
+import { IMPORT_BATCH_CHARS, IMPORT_DIALOGUE_LIMIT } from './limits.js';
 import { MASK_VERSION, maskedThrough, readAlike, type MaskVersion } from './masking.js';
 import { fingerprint, type Experiment } from './contracts.js';
 import type { LibraryV2, ScenarioLibrary } from './card/schema.js';
@@ -116,7 +116,7 @@ function readRow(row: unknown, index: number, seen: Set<string>, known: string |
 
 /** The rows of a raw import: an array of conversations, or `{ formatVersion?: 1, dialogues: [...] }`. */
 function rowsOf(raw: unknown): unknown[] {
-  if (raw === undefined) throw new Error('Импорт пуст или превышает 12000000 символов');
+  if (raw === undefined) throw new Error('Импорт пуст.');
   if (record(raw) && raw.formatVersion !== undefined && raw.formatVersion !== 1) throw new Error('Неподдерживаемая версия импорта');
   const rows = Array.isArray(raw) ? raw : record(raw) ? raw.dialogues : undefined;
   if (!Array.isArray(rows)) throw new Error('Ожидается массив диалогов или объект {dialogues: [...]}');
@@ -129,11 +129,12 @@ function rowsOf(raw: unknown): unknown[] {
  * rows are read by (masking.ts). Where a customer's message reads otherwise under it than under the first readings,
  * the batch records it, so its conversations and the topic map of them keep the reading they were made with; where
  * every message reads alike, the batch is the one the first readings made — the same import of the same rows. One
- * batch holds IMPORT_DIALOGUE_LIMIT conversations; a longer log is sampled (logImport).
+ * batch holds IMPORT_DIALOGUE_LIMIT conversations of IMPORT_BATCH_CHARS at most; a larger log is sampled (logImport).
  */
 export function importBatch(raw: unknown, known: ReadonlyMap<number, string> = new Map(), maskVersion: MaskVersion = MASK_VERSION): ImportBatch {
   const serialized = JSON.stringify(raw);
-  if (!serialized || serialized.length > 12_000_000) throw new Error('Импорт пуст или превышает 12000000 символов');
+  if (serialized === undefined) throw new Error('Импорт пуст.');
+  if (serialized.length > IMPORT_BATCH_CHARS) throw new Error(`Разговоры одного импорта занимают больше ${IMPORT_BATCH_CHARS.toLocaleString('ru-RU')} знаков. Загрузите их файлом логов: из большого Lab сам возьмёт выборку.`);
   const rows = rowsOf(z.json().parse(raw));
   if (rows.length > IMPORT_DIALOGUE_LIMIT) throw new Error(`В одном импорте не больше ${IMPORT_DIALOGUE_LIMIT} разговоров.`);
   const contentHash = digest(rows);
@@ -161,25 +162,30 @@ export type LogSample = NonNullable<ImportBatch['sample']>;
 /**
  * A log read a row at a time by the import's rules, so that a log too long to hold is read in a stream: `read` says why
  * a row is refused (undefined for a usable one), a conversation id taken once in the whole log; `sample` names the rows
- * a batch takes of a log longer than one — IMPORT_DIALOGUE_LIMIT of the usable ones, first in the order of `key` (by
- * default conversationKey, a hash of what each conversation is: blind to outcomes and to where it stands), kept in the
- * log's order. The same log gives the same rows.
+ * a batch takes of a log larger than one — the usable ones first in the order of `key` (by default conversationKey, a
+ * hash of what each conversation is: blind to outcomes, to length and to where it stands), up to IMPORT_DIALOGUE_LIMIT
+ * of them and cut where the next would take the batch past IMPORT_BATCH_CHARS, kept in the log's order. Cutting,
+ * never skipping a large conversation for smaller ones after it, keeps the sample blind to length. The same log gives
+ * the same rows.
  */
 export function logReader(options: LogOptions = {}): { read(row: unknown, known?: string): string[] | undefined; sample(): { indexes: number[]; sample: LogSample } } {
   const { maskVersion = MASK_VERSION, key = conversationKey } = options;
-  const seen = new Set<string>(), usable: { index: number; key: string }[] = [];
+  const seen = new Set<string>(), usable: { index: number; key: string; chars: number }[] = [];
   let rows = 0;
   return {
     read(row, known) {
       const index = rows++;
       const read = readRow(row, index, seen, known, maskVersion);
       if ('rejected' in read) return read.rejected.reasons;
-      usable.push({ index, key: key(read.dialogue, index) });
+      usable.push({ index, key: key(read.dialogue, index), chars: JSON.stringify(row).length });
       return undefined;
     },
     sample() {
-      const taken = [...usable].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index).slice(0, IMPORT_DIALOGUE_LIMIT);
-      return { indexes: taken.map(item => item.index).sort((a, b) => a - b), sample: { dialogues: rows, usable: usable.length } };
+      const ordered = [...usable].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index);
+      // The JSON of the taken rows as one array: its brackets, and each row with the comma before the next.
+      let chars = 1, count = 0;
+      while (count < ordered.length && count < IMPORT_DIALOGUE_LIMIT && chars + ordered[count]!.chars + 1 <= IMPORT_BATCH_CHARS) chars += ordered[count++]!.chars + 1;
+      return { indexes: ordered.slice(0, count).map(item => item.index).sort((a, b) => a - b), sample: { dialogues: rows, usable: usable.length } };
     },
   };
 }
@@ -195,14 +201,15 @@ export const sampledBatch = (rows: readonly unknown[], sample: LogSample, maskVe
 export interface LogImport { batch: ImportBatch; verdicts: (string[] | undefined)[] }
 
 /**
- * The import of a log of any length, the same for the same log: at most IMPORT_DIALOGUE_LIMIT rows are one batch
- * (importBatch); a longer log gives the batch of its sample (logReader), which records how many conversations the log
- * held and how many were usable. `known` holds reasons another format's reader found for rows (readRow).
+ * The import of a log of any size, the same for the same log: a log of at most IMPORT_DIALOGUE_LIMIT rows within
+ * IMPORT_BATCH_CHARS is one batch (importBatch); a larger log gives the batch of its sample (logReader), which records
+ * how many conversations the log held and how many were usable. `known` holds reasons another format's reader found for
+ * rows (readRow).
  */
 export function logImport(raw: unknown, options: LogOptions & { known?: ReadonlyMap<number, string> } = {}): LogImport {
   const { known = new Map(), maskVersion = MASK_VERSION } = options;
   const rows = rowsOf(raw);
-  if (rows.length <= IMPORT_DIALOGUE_LIMIT) {
+  if (rows.length <= IMPORT_DIALOGUE_LIMIT && (JSON.stringify(raw)?.length ?? 0) <= IMPORT_BATCH_CHARS) {
     const batch = importBatch(raw, known, maskVersion);
     const reasons = new Map(batch.rejected.map(item => [item.index, item.reasons]));
     return { batch, verdicts: rows.map((_, index) => reasons.get(index)) };

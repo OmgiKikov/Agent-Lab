@@ -599,12 +599,14 @@ async function taskInput(values: Flags, directory: string): Promise<{ input: Cre
     raw = { ...raw, materials: [...raw.materials ?? [], ...promptMaterials(chosen).map(({ name, content, kind }) => ({ name, content, kind }))] };
   }
   const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
-  const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory }) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
+  const originalImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory }) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
   // From the rules alone, --situations is the number of situations the rules are written into.
-  const rules = !libraryImport && values.situations !== undefined ? Number(values.situations) : undefined;
+  const rules = !originalImport && values.situations !== undefined ? Number(values.situations) : undefined;
   if (rules !== undefined && !(Number.isInteger(rules) && rules >= 1 && rules <= SCENARIO_LIMIT)) throw new Error(`По правилам без логов Lab готовит от 1 до ${SCENARIO_LIMIT} ситуаций за раз.`);
+  // The import is what a preparation reads: the conversations of a task file become one and leave the input, so no
+  // older projection of them gates what the import accepted.
   const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
-    ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
+    ...(originalImport ? { originalImport, dialogues: [] } : {}),
     ...(rules !== undefined ? { scenarioCount: rules } : {}) });
   return { input, logs: basename(values['dialogues-file'] ?? values.input) };
 }
