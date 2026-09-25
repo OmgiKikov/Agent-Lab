@@ -143,11 +143,12 @@ test('the call budget stops a repair before another provider request, and malfor
   } finally { await malformed.close(); }
 });
 
-test('a structured answer wrapped in a markdown fence is not repaired into JSON', async () => {
+test('one outer JSON fence is accepted without another call, while prose is rejected', async () => {
   const fenced = await fixture(() => '```json\n{"message":"Move it to 11:00","done":false}\n```');
   try {
     const input = { user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 };
-    await assert.rejects(fenced.adapter.userTurn!(input, callContext().ctx), /не проходит проверку.*not a single JSON object/s);
+    assert.deepEqual(await fenced.adapter.userTurn!(input, callContext().ctx), { message: 'Move it to 11:00', done: false });
+    assert.equal(fenced.requests.length, 1);
   } finally { await fenced.close(); }
 
   const prose = await fixture(() => 'Here you go: {"message":"hi","done":false}');

@@ -55,10 +55,12 @@ const NOT_JSON = 'Return one JSON object and nothing else; escape line breaks in
 const repairOf = (rejection: string) => `Your previous answer was rejected. ${rejection}\nReturn the corrected object in full, as one compact JSON object and nothing else.`;
 
 type Admission<O> = { ok: true; value: O } | { ok: false; outcome: 'syntax' | 'schema' | 'domain'; reason: string };
-/** The text is parsed as written: broken quotes, raw line breaks and a missing brace are a failed attempt, never a local rewrite. */
+/** One enclosing Markdown fence is presentation only. The JSON inside is parsed and validated without repairs. */
 function admit<O>(task: StructuredTask<O>, text: string): Admission<O> {
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim()); }
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(trimmed);
+  try { parsed = JSON.parse(fenced ? fenced[1]! : trimmed); }
   catch (error) {
     return { ok: false, outcome: 'syntax', reason: `The reply was not a single JSON object (Output is not JSON: ${error instanceof Error ? error.message : 'unreadable'}). ${NOT_JSON}` };
   }

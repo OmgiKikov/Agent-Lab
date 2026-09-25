@@ -23,6 +23,26 @@ import { pendingClaims, reviewRequests } from '../src/card/review.js';
 
 const storedFixture = async (name: string) => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 
+test('a single JSON fence costs one call; extra prose, broken JSON and invalid fields still fail', async () => {
+  const task = { id: 'fenced-json', label: 'Fenced JSON', role: 'builder' as const, instructions: 'Return an answer.', output: z.strictObject({ answer: z.string() }) };
+  for (const reply of ['```json\n{"answer":"да"}\n```', '```\r\n{"answer":"да"}\r\n```']) {
+    const f = await fixture(() => reply);
+    try {
+      const models = await resolveModels(f.runtime, fixtureSettings, new AbortController().signal);
+      const { ctx, usage } = callContext();
+      assert.deepEqual(await runStructured(f.runtime, models, task, {}, ctx), { answer: 'да' });
+      assert.equal(usage.calls, 1);
+    } finally { await f.close(); }
+  }
+  for (const reply of ['Here it is:\n```json\n{"answer":"да"}\n```', '```json\n{"answer":"да"}\n```\nextra', '```json\n{"answer":}\n```', '```json\n{"answer":123}\n```', '```json\n{"answer":"да"}\n```\n```json\n{}\n```']) {
+    const f = await fixture(() => reply);
+    try {
+      const models = await resolveModels(f.runtime, fixtureSettings, new AbortController().signal);
+      await assert.rejects(runStructured(f.runtime, models, task, {}, callContext().ctx), StructuredTaskError);
+    } finally { await f.close(); }
+  }
+});
+
 test('long valid structured replies use the model output window without byte-based rejection or repairs', async () => {
   const answer = { text: 'Подробное объяснение. '.repeat(1500) };
   const limits: Array<number | undefined> = [];
