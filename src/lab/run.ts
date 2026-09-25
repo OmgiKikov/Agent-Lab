@@ -1,22 +1,28 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { assessmentRubrics } from '../assessment.js';
+import { runCalls, type PlannedAttempt } from '../card/budget.js';
 import { calibrateRun } from '../card/calibrate.js';
 import { COUNTING_VERSION } from '../card/expectations.js';
+import { judgedScenario } from '../card/legacy-v1.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from '../connection.js';
 import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type Revision, type Scenario, type UserMode } from '../contracts.js';
+import { BudgetExhausted } from '../errors.js';
 import type { CallContext, Runtime } from '../runtime.js';
 import { evaluateTrial } from '../evaluation.js';
 import { scenarioSources } from '../judge.js';
 import { evaluatorVersion } from '../pi.js';
+import { countText } from '../plural.js';
 import { deriveRun, plannedTrials } from '../run.js';
 import { verifyAcceptedRun } from '../scenario-library.js';
 import { SUITE_FORMAT, carriedImports, suiteText } from '../suite.js';
 import { preflightTarget, readPrompt, runRelease } from '../targets.js';
 import { sameTargetVersion, targetFingerprint } from '../target-version.js';
 import type { Lab } from './context.js';
+import type { Operation } from './operation.js';
 import { isRunning, moveTo } from '../phases.js';
-import { draftHash, freshDraft, measurementHash, retainAcceptedTests, revision } from './record.js';
+import { draftBudget, draftHash, freshDraft, measurementHash, retainAcceptedTests, revision } from './record.js';
 
 /*
  * A run: the draft it starts from — its settings and connection, a repeat of an accepted set, a set saved to or
@@ -147,15 +153,57 @@ export function loadSuite(lab: Lab, file: string, scenarioIds?: string[], connec
   });
 }
 
-/** The owner's confirmation of a run. `parallel` is an execution knob, not a measurement setting: dialogues are independent, so several may run at once without changing what is measured. */
-export interface StartOptions { approved: boolean; reviewer?: 'human' | 'expectations' | 'automated'; expectedHash?: string; parallel?: number; requireAccepted?: boolean }
+/**
+ * The owner's confirmation of a run. `parallel` is an execution knob, not a measurement setting: dialogues are
+ * independent, so several may run at once without changing what is measured. `raiseLimit`: the owner's dialog said
+ * that the run's call limit is raised to its plan when the plan does not fit it, and they confirmed that too.
+ */
+export interface StartOptions { approved: boolean; reviewer?: 'human' | 'expectations' | 'automated'; expectedHash?: string; parallel?: number; requireAccepted?: boolean; raiseLimit?: boolean }
 
-/** Freezes what is measured — the draft the owner confirmed — and runs its dialogues in the background. */
+/** «до 21 вызова модели». */
+const CALLS_UP_TO: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
+
+/**
+ * The attempts a run of `record` plans, as its budget counts them (card/budget.ts): every user mode × situation ×
+ * repeat, each with the expectations its judge votes on; a customer only in a reactive attempt, and never in a control,
+ * which is its opening and one reply.
+ */
+function plannedAttempts(record: Experiment): PlannedAttempt[] {
+  const controls = new Set(record.positiveControlScenarioIds ?? []);
+  return record.settings.userModes.flatMap(mode => record.scenarios
+    .filter(scenario => mode !== 'scripted' || scenario.user.script !== undefined)
+    .flatMap(scenario => Array.from({ length: record.settings.repeats }, (): PlannedAttempt => ({ customer: mode === 'reactive' && !controls.has(scenario.id),
+      expectations: assessmentRubrics(judgedScenario(scenario, {}), { events: [] }).length }))));
+}
+
+/** The model calls a run of `record` plans, every answer passing the first time; the comparison with production takes what is left. */
+export function runPlan(record: Experiment): number {
+  return runCalls(plannedAttempts(record), record.settings.maxTurns);
+}
+
+/**
+ * The run's own budget: its plan must fit the draft's limit before anything starts — the owner hears the numbers, or
+ * the limit is raised to the plan when their confirmation said so. The teaching example spends nothing and has no plan.
+ */
+function fitPlan(record: Experiment, raiseLimit: boolean): void {
+  const planned = runPlan(record);
+  if (record.mode === 'demo' || planned <= record.settings.maxCalls) return;
+  const raised = settingsSchema.safeParse({ ...record.settings, maxCalls: planned });
+  if (raiseLimit && raised.success) { record.settings = raised.data; return; }
+  throw new Error(`Прогону нужно до ${countText(planned, CALLS_UP_TO)} модели, а лимит прогона — ${record.settings.maxCalls}. `
+    + (raised.success ? `Поднимите лимит до ${planned} или запустите меньше ситуаций. Ничего не запущено и не потрачено.`
+      : 'Столько не помещается в один прогон: запустите меньше ситуаций или повторов. Ничего не запущено и не потрачено.'));
+}
+
+/**
+ * Freezes what is measured — the draft the owner confirmed — and runs its dialogues in the background, within the
+ * draft's limits from the run's start: what the preparation and the checks before it spent is not the run's.
+ */
 export async function start(lab: Lab, id: string, options: StartOptions): Promise<Experiment> {
   const parallel = options.parallel ?? 1;
   if (!Number.isInteger(parallel) || parallel < 1 || parallel > MAX_PARALLEL) throw new Error(`Параллельных диалогов может быть от 1 до ${MAX_PARALLEL}.`);
   return lab.operations.change(async () => {
-    const record = await lab.store.get(id);
+    const record = await lab.get(id);
     verifyAcceptedRun(record);
     if (record.phase !== 'review') throw new Error('Запустить можно только эксперимент, ожидающий проверки. Чтобы поменять набор карточек, создайте новый.');
     if (record.workflow !== 'evaluate') throw new Error('Сравнение с автоматическим улучшением агента больше не запускается: такой прогон можно только открыть. Для новой проверки подготовьте библиотеку сценариев.');
@@ -182,6 +230,7 @@ export async function start(lab: Lab, id: string, options: StartOptions): Promis
     if (record.targetFingerprint && !sameTargetVersion(record.targetFingerprint, await targetFingerprint(record.target))) {
       throw new Error('Код агента изменился после подготовки карточек. Обновите подключение в настройках и подтвердите новую версию.');
     }
+    fitPlan(record, !!options.raiseLimit);
     record.reviewedAt = new Date().toISOString();
     record.reviewMode = options.reviewer ?? 'human';
     if (record.reviewMode === 'automated') record.limitations.push('Ожидания ситуаций проверены автоматически, без человека: спорные вердикты стоит посмотреть, однозначные годятся как предварительный результат.');
@@ -191,24 +240,25 @@ export async function start(lab: Lab, id: string, options: StartOptions): Promis
     record.manifestHash = measurementHash(record);
     moveTo(record, 'evaluating');
     record.message = 'Выполняю согласованный план проверки.';
-    await lab.operations.launch(record, ctx => evaluateReviewed(lab, record, ctx, parallel), { ownsMutation: true });
+    await lab.operations.launch(record, (ctx, operation) => evaluateReviewed(lab, record, ctx, operation, parallel), { ownsMutation: true, budget: draftBudget(record) });
     return structuredClone(record);
   });
 }
 
-async function evaluateReviewed(lab: Lab, record: Experiment, ctx: CallContext, parallel: number): Promise<void> {
+async function evaluateReviewed(lab: Lab, record: Experiment, ctx: CallContext, operation: Operation, parallel: number): Promise<void> {
   const runtime = await lab.runtime(record);
   const agent = record.revisions[0];
-  if (!agent || !record.manifestHash) throw new Error('Missing reviewed agent or measurement manifest.');
+  if (!agent || !record.manifestHash) throw new Error('В черновике нет подтверждённого агента или плана измерения — это ошибка Agent Lab.');
   await release(lab, record, ctx);
-  await runSuite(lab, record, runtime, agent, ctx, parallel);
+  await runSuite(lab, record, runtime, agent, ctx, operation, parallel);
   frozenGuard(record, record.manifestHash, ctx)();
   await nameFailureModes(record, runtime, ctx);
   if (record.trials.some(t => !['invalid', 'cancelled'].includes(t.outcome))) {
     await rememberConnection(lab.store.directory, { format: 'agent-lab-connection-1', target: runnableTarget(record.target), targetVersion: record.targetVersion });
   }
-  // The synthetic result is complete; the same situations are now judged on their recorded conversations.
-  await calibrateRun(record, { runtime, ctx, store: lab.store, checkpoint: message => lab.operations.checkpoint(record, record.phase, message) });
+  // The synthetic result is complete; the same situations are now judged on their recorded conversations, out of what the run left.
+  await calibrateRun(record, { runtime, ctx, store: lab.store, checkpoint: message => lab.operations.checkpoint(record, record.phase, message),
+    callsLeft: () => operation.callLimit - operation.spent });
   await lab.operations.checkpoint(record, 'results_review', 'Диалоги и оценки готовы. Разберите провалы и проверьте поведение симулятора, прежде чем принимать результат.');
 }
 
@@ -216,7 +266,27 @@ async function evaluateReviewed(lab: Lab, record: Experiment, ctx: CallContext, 
 function frozenGuard(record: Experiment, hash: string, ctx: CallContext): () => void {
   return () => {
     ctx.signal.throwIfAborted();
-    if (measurementHash(record) !== hash) throw new Error('The approved evaluation conditions changed. Create a fresh reviewed run.');
+    if (measurementHash(record) !== hash) throw new Error('Условия измерения изменились во время прогона. Запустите повтор заново.');
+  };
+}
+
+/**
+ * The context of one dialogue of a run. A call its conversation needs that the run's budget refuses — the customer's
+ * next move — stops this dialogue as a stop would (it is not the agent's or the customer's failure); a vote the budget
+ * refuses leaves the judgment incomplete, while the votes already under way finish. Other dialogues are not touched.
+ */
+function dialogueContext(ctx: CallContext): { ctx: CallContext; stage: (stage: 'target' | 'user' | 'assessment') => void } {
+  const stopped = new AbortController();
+  let judging = false;
+  return {
+    ctx: { ...ctx, signal: AbortSignal.any([ctx.signal, stopped.signal]),
+      beforeCall() {
+        try { ctx.beforeCall(); } catch (error) {
+          if (error instanceof BudgetExhausted && !judging) stopped.abort(error);
+          throw error;
+        }
+      } },
+    stage: stage => { judging = stage === 'assessment'; },
   };
 }
 
@@ -234,9 +304,9 @@ async function release(lab: Lab, record: Experiment, ctx: CallContext): Promise<
 }
 
 /** The single trial loop: every user mode, every scenario, every repeat, one checkpoint per trial. */
-async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: Revision, ctx: CallContext, parallel: number): Promise<void> {
+async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: Revision, ctx: CallContext, operation: Operation, parallel: number): Promise<void> {
   const hash = record.manifestHash;
-  if (!hash) throw new Error('Missing measurement manifest.');
+  if (!hash) throw new Error('В черновике нет плана измерения — это ошибка Agent Lab.');
   const guard = frozenGuard(record, hash, ctx);
   const scenarios = record.scenarios;
   const controls = new Set(record.positiveControlScenarioIds ?? []);
@@ -263,6 +333,8 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
   let failed = false;
   const worker = async () => {
     while (next < attempts.length && !failed) {
+      // The budget refused a call: no new dialogue starts; the ones under way finish, and the run stops at its budget.
+      if (operation.exhausted) throw new BudgetExhausted();
       const { userMode, scenario, repeat } = attempts[next++]!;
       const prefix = record.settings.userModes.length > 1 ? `[${userMode}] ` : '';
       const running = () => parallel > 1 ? ` · параллельно ${Math.min(parallel, attempts.length - completed)}` : '';
@@ -270,9 +342,13 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
       await fingerprintCheck('Код внешнего агента изменился во время прогона. Создайте повтор с новой версией.');
       const progress = () => `${prefix}${scenario.title} · диалог ${completed + 1}/${planned}${running()}`;
       lab.operations.say(record, `${progress()} · открываем сессию`);
+      const dialogue = dialogueContext(ctx);
       const trial = await evaluateTrial({ runtime, revision: agent, scenario, repeat, manifestHash: hash, sources: record.sources, judgeSources: scenarioSources(record, scenario), requirements: record.requirements, settings: record.settings,
-        control: controls.has(scenario.id), onStage: stage => lab.operations.say(record, `${progress()} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`),
-        ctx: { ...ctx, onTrace: (trialId, event) => {
+        control: controls.has(scenario.id), onStage: stage => {
+          dialogue.stage(stage);
+          lab.operations.say(record, `${progress()} · ${{ target: 'ответ агента', user: 'реплика пользователя', assessment: 'оценка критериев' }[stage]}`);
+        },
+        ctx: { ...dialogue.ctx, onTrace: (trialId, event) => {
           ctx.onTrace?.(trialId, event);
           const stage = event.type === 'user' ? 'ждём ответ агента' : event.type === 'assistant' ? 'ответ получен · готовим следующий шаг'
             : event.type === 'simulator' ? 'реплика симулятора готова' : event.type === 'tool_call' ? `инструмент ${event.tool ?? ''}`

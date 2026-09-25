@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { STOP_LABEL } from '../src/errors.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash, measurementHash, resultHash } from '../src/lab/record.js';
 import { ExperimentStore } from '../src/store.js';
@@ -86,11 +87,13 @@ test('a completed evaluation freezes the measurement, persists the observed evid
 test('call budget stops the run, preserving partial trials without a final success claim', async t => {
   const { lab } = await setup(t, legacyDemoRuntime());
   // The external agent spends no model calls of the lab: the budget goes to the simulated user and the judge.
-  const result = await runDraft(lab, await externalDraft(lab, { count: 10, settings: { maxCalls: 5 } }));
-  assert.equal(result.phase, 'error');
-  assert.match(result.error!, /call budget/);
-  assert.equal(result.usage.calls, 5);
+  const draft = await externalDraft(lab, { count: 10, settings: { maxCalls: 5 } });
+  const result = await runDraft(lab, draft);
+  assert.deepEqual([result.phase, result.stop, result.error], ['error', 'budget', STOP_LABEL.budget], 'the stop is typed; the owner reads it in their words');
+  assert.equal(draft.usage.calls, 1, 'the draft\'s preparation spent a call of its own');
+  assert.equal(result.usage.calls, draft.usage.calls + 5, 'the run spends its own limit, counted from its start');
   assert.ok(result.trials.length > 0 && result.trials.length < 10, `${result.trials.length} trials`);
+  assert.ok(result.trials.every(trial => trial.outcome !== 'invalid'), 'a dialogue the budget cut short is stopped, never the agent\'s or the customer\'s failure');
   assert.equal(result.resultsReviewedAt, undefined);
 });
 
@@ -176,7 +179,7 @@ test('shutdown waits for in-flight initialization and cannot reopen a closed lab
   release.resolve();
   await opening; await closing;
   await assert.rejects(lab.create(demoInput()), /не открыта/);
-  await assert.rejects(lab.init(), /closing/);
+  await assert.rejects(lab.init(), /закрывается/);
   await assert.rejects(readFile(join(directory, '.lock')), { code: 'ENOENT' });
 });
 

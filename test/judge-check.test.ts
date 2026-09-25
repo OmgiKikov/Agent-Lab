@@ -123,6 +123,26 @@ test('the trust line reads the same in the summary view and the report; old runs
   assert.equal(buildResultView(record, { judgeCheck: other }).judgeCheck, undefined);
 });
 
+test('a judge check is paid work like any other: the owner\'s stop and the closing lab cut its calls short, what was judged is written, the run never changes', async t => {
+  /** A judge sent its request and answering only when the check is stopped. */
+  const hanging = (sent: () => void): Runtime => ({ ...scriptedRuntime(() => 'pass'),
+    assess: (_input, ctx) => new Promise((_resolve, reject) => { ctx.beforeCall(); sent(); ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true }); }) });
+  for (const stop of ['cancel', 'close'] as const) {
+    let sent!: () => void;
+    const judging = new Promise<void>(resolve => { sent = resolve; });
+    const { lab, record } = await labWith(t, hanging(sent));
+    const before = JSON.stringify(await lab.store.get(record.id));
+    const checking = lab.checkJudge(record.id, { planted: 2, controls: 1 });
+    await judging;
+    await assert.rejects(lab.checkJudge(record.id), /другая операция/, 'one operation at a time: the check holds the lab');
+    if (stop === 'cancel') await lab.cancel(record.id); else await lab.close();
+    const check = await checking;
+    assert.ok(check.items.every(item => item.result === null && item.failure === 'stopped'), `${stop}: nothing is guessed`);
+    assert.equal(JSON.stringify(await new ExperimentStore(lab.store.directory).get(record.id)), before, `${stop}: the run record is untouched`);
+    assert.deepEqual(await new ExperimentStore(lab.store.directory).readJudgeCheck(record.id), check, `${stop}: what was judged by then is written`);
+  }
+});
+
 test('the sample is fixed by the run: the same run gives the same verdicts, and a run with nothing passed is refused', () => {
   const record = finishedRun();
   const first = judgeCheckPlan(record, { planted: 5, controls: 5 });

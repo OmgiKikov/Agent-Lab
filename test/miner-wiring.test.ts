@@ -12,6 +12,7 @@ import { addCard } from '../src/card/library.js';
 import { cardSchema, libraryV2Schema, type Card, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
+import { STOP_LABEL } from '../src/errors.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
 import { importDialogues } from '../src/imports.js';
@@ -144,7 +145,7 @@ test('a preparation stops at the ceiling its consent stated, not at the draft\'s
     const draft = await lab.create(createInput(batch), { situations: 2 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
-    assert.match(stopped.error ?? '', /budget exhausted/);
+    assert.deepEqual([stopped.stop, stopped.error], ['budget', STOP_LABEL.budget]);
     assert.deepEqual([stopped.usage.calls, stopped.settings.maxCalls], [consent.callCeiling, 150], 'the promise and the stop are one number');
   });
 });

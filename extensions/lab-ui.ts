@@ -2,7 +2,7 @@ import type { AgentToolResult, ExtensionContext, Theme, ToolDefinition, ToolRend
 import type { Component } from '@earendil-works/pi-tui';
 import { z } from 'zod';
 import { safeText } from '../src/text.js';
-import { AgentRequestFailed, CommandRefused, LibraryConflict, LockedError, StaleRevisionError, Stopped, UnknownReference } from '../src/errors.js';
+import { AgentRequestFailed, CommandRefused, LibraryConflict, LockedError, StaleRevisionError, STOP_LABEL, STOP_REASONS, Stopped, UnknownReference } from '../src/errors.js';
 import type { Experiment } from '../src/contracts.js';
 import { convertible } from '../src/card/legacy-v1.js';
 import { ProviderFailure, type ProviderFailureKind } from '../src/llm/model-call.js';
@@ -79,10 +79,12 @@ const STOPPED: Record<Stopped['reason'], string> = {
   closing: 'Работа остановилась при закрытии Agent Lab; сделанное сохранено.',
 };
 /**
- * The fixed labels lab/operation.ts gives each stop. A record keeps its stop's label as its error, so a stored stop is
- * read back here by exact equality with these, never by searching the text.
+ * The fixed labels lab/operation.ts gives each stop (src/errors.ts STOP_LABEL), and the English ones records kept before
+ * them. A record keeps its stop's label as its error, so a stored stop is read back here by exact equality with these,
+ * never by searching the text.
  */
 const STOP_LABELS: Readonly<Record<string, Stopped['reason']>> = {
+  ...Object.fromEntries(STOP_REASONS.map(reason => [STOP_LABEL[reason], reason])),
   'Model call budget exhausted.': 'budget', 'Experiment time limit reached.': 'time', 'Cancelled by the user.': 'cancelled', 'Application is closing.': 'closing',
 };
 const PROVIDER: Record<ProviderFailureKind, string> = {
@@ -188,6 +190,9 @@ export function recordErrorText(error: string | null | undefined): string | unde
 }
 /** Whether a record's work was stopped by the owner's own request (its stop's fixed label). */
 export const stoppedByOwner = (error: string | null | undefined): boolean => !!error && Object.hasOwn(STOP_LABELS, error) && STOP_LABELS[error] === 'cancelled';
+/** How a record's last work was stopped: its typed stop, or — a record written before it — its stop's fixed label; undefined when no stop cut it short. */
+export const stopOf = (record: Pick<Experiment, 'stop' | 'error'>): Stopped['reason'] | undefined =>
+  record.stop ?? (record.error && Object.hasOwn(STOP_LABELS, record.error) ? STOP_LABELS[record.error] : undefined);
 
 /** What the workspace hands to the conversation with a request about one object: stable identities, never a copy of editable state. */
 export function boardDiscussionContext(record: Experiment, situation?: { number: number; id: string }) {

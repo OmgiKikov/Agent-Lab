@@ -273,10 +273,16 @@ test('what the log cannot show costs nothing: an unanswered customer is skipped 
 
 test('a calibration the run\'s limit cannot cover is skipped whole with the reason; the synthetic result is complete', async () => {
   const calls = { count: 0 };
-  await withLab({ ...cardRuntime(), logJudge: scriptedLogJudge(refundReading, calls) }, async lab => {
-    const run = await finishedRun(lab, cardInput(), async id => { await lab.updateDraft(id, draftHash(await lab.get(id)), { settings: { maxCalls: 10 } }); });
+  const base = cardRuntime();
+  // The customer and the judge charge their calls as models do: the run spends its own limit, the plan of 15 calls.
+  const charged: Runtime = { ...base, logJudge: scriptedLogJudge(refundReading, calls),
+    selectUserAction: async (input, ctx) => { ctx.beforeCall(); return base.selectUserAction!(input, ctx); },
+    assess: async (input, ctx) => { for (const _vote of (input.scenario.metrics ?? []).flatMap(metric => [metric, metric])) ctx.beforeCall(); return base.assess!(input, ctx); } };
+  await withLab(charged, async lab => {
+    const run = await finishedRun(lab, cardInput(), async id => { await lab.updateDraft(id, draftHash(await lab.get(id)), { settings: { maxCalls: 15 } }); });
     assert.equal(run.phase, 'results_review', run.error ?? '');
-    assert.deepEqual([run.calibration!.unfinished, run.calibration!.entries.length, calls.count], ['budget', 0, 0], '8 judge calls do not fit in the 5 left: none is made');
+    assert.ok(run.settings.maxCalls - (run.usage.calls - 4) < 8, 'the run left fewer calls than the comparison needs (the preparation\'s 4 are not the run\'s)');
+    assert.deepEqual([run.calibration!.unfinished, run.calibration!.entries.length, calls.count], ['budget', 0, 0], '8 judge calls do not fit in what the run left: none is made');
     assert.deepEqual([buildResultView(run).headline.passed, buildResultView(run).headline.decided], [1, 2]);
   });
 });

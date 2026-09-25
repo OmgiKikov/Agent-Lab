@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { VERSION, emptyUsage, fingerprint, materialSources, type CreateInput, type Experiment, type Revision } from '../contracts.js';
 import { withDefaultGoalObservation } from '../normalize.js';
 import { evaluatorVersion } from '../pi.js';
+import type { Budget } from './operation.js';
 
 /*
  * A record's identity and how records are made: the three hashes a record is sealed by, a new draft from the owner's
@@ -38,6 +39,15 @@ export function measurementHash(record: Experiment): string {
     positiveControlScenarioIds: record.positiveControlScenarioIds,
     librarySnapshot: record.librarySnapshot, originalImport: record.originalImport, generatorConfig:record.generatorConfig,generatorIdentity:record.generatorIdentity,
     targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
+}
+
+/**
+ * What one operation on a draft other than its preparation may spend — a run, a check, a fill, a re-assessment: the
+ * draft's limits, counted from that operation's start, never from what earlier work on the record spent. A preparation
+ * spends out of the ceiling its consent stated instead (card/budget.ts).
+ */
+export function draftBudget(record: Pick<Experiment, 'settings'>): Budget {
+  return { calls: record.settings.maxCalls, timeMs: record.settings.maxDurationMs };
 }
 
 /** The agent label a draft evaluates, identified by its content. */

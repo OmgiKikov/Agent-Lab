@@ -39,7 +39,7 @@ import { READING_CALLS } from './spreadsheet/reading-task.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
 import { importHints, tableChoicesOf } from './cli/import-flags.js';
 import { connectFromCurl, doctorTemplate } from './cli/connect.js';
-import { preparationCeiling } from './card/budget.js';
+import { preparationBudget, preparationCeiling } from './card/budget.js';
 import { builderOf, consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
 
 /*
@@ -245,9 +245,17 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     const target = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
     if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
     if (values.resume || values.check || values.accept) {
-      if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.' : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
+      // The ceiling the owner agreed to covers the whole preparation: continuing past it is their word too, the number stated.
+      const budget = values.resume ? preparationBudget(await lab.get(target.id)) : undefined;
+      const raise = budget && budget.resume > budget.ceiling ? budget.resume : undefined;
+      if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.'
+        : raise !== undefined ? `Подготовка потратила ${budget!.spent} из ${budget!.ceiling} согласованных вызовов модели; с --yes потолок всей подготовки станет ${raise}. Агент не запускается.`
+        : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
       const { record, views } = await situations(target.id);
-      if (values.resume) { if (!record.librarySnapshot) throw new Error('Продолжать нечего.'); await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot), preparationFlags(values)); await lab.waitForIdle(); }
+      if (values.resume) {
+        if (!record.librarySnapshot) throw new Error('Продолжать нечего.');
+        await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot), { ...preparationFlags(values), ...(raise !== undefined ? { callCeiling: raise } : {}) }); await lab.waitForIdle();
+      }
       else if (values.check) { await lab.recheckCards(target.id, { explicit: true }); await lab.waitForIdle(); }
       else {
         const ready = views.filter(view => view.status === 'ready');

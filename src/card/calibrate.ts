@@ -1,6 +1,6 @@
 import { fingerprint, type Experiment } from '../contracts.js';
 import type { CallContext, Runtime } from '../runtime.js';
-import { Stopped } from '../errors.js';
+import { BudgetExhausted, Stopped } from '../errors.js';
 import { observableSources, scenarioSources } from '../judge.js';
 import { pluralForm } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
@@ -112,7 +112,12 @@ export interface CalibrationWork {
   store: CalibrationStore;
   /** Saves the record with a progress line; the run's own checkpoint. */
   checkpoint(message: string): Promise<void>;
+  /** The calls the run's own budget has left (lab/operation.ts); without it, what the draft's limit leaves of the record's calls. */
+  callsLeft?(): number;
 }
+
+/** What the run leaves for the calibration: its own budget's rest, or — for a caller without one — the draft's limit less the record's calls. */
+const callsLeft = (record: Experiment, work: CalibrationWork): number => work.callsLeft?.() ?? record.settings.maxCalls - record.usage.calls;
 
 /**
  * Calibrates a run whose synthetic attempts are judged. Nothing happens when the owner turned calibration off,
@@ -133,7 +138,7 @@ export async function calibrateRun(record: Experiment, work: CalibrationWork): P
     const publish = () => { calibration.entries = jobs.flatMap(job => done.get(job.key) ?? []); };
     publish();
     const pending = jobs.filter(job => !done.has(job.key));
-    if (2 * pending.length > record.settings.maxCalls - record.usage.calls) { calibration.unfinished = 'budget'; return; }
+    if (2 * pending.length > callsLeft(record, work)) { calibration.unfinished = 'budget'; return; }
     await judgeAll(record, pending, judge, work, receipt => { done.set(receipt.key, receipt); publish(); }, done.size);
   } catch (error) {
     // A broken import or store stops only the calibration; the run's result is kept as it was.
@@ -147,9 +152,9 @@ async function judgeAll(record: Experiment, pending: readonly Job[], judge: LogJ
   const calibration = record.calibration!;
   const total = already + pending.length;
   const ctx: CallContext = { ...work.ctx, onTargetEvent: undefined, onTrace: undefined,
-    // The calibration never draws the run over its limit: it stops itself before the run's own gate would abort the run.
+    // The calibration never draws the run over its limit: a call past what the run left is refused, and the run's result stands.
     beforeCall() {
-      if (record.usage.calls >= record.settings.maxCalls) throw new Stopped('budget', 'Лимит вызовов модели исчерпан: сверка с продом остановлена, результат прогона не изменился.');
+      if (callsLeft(record, work) <= 0) throw new BudgetExhausted('Лимит вызовов модели исчерпан: сверка с продом остановлена, результат прогона не изменился.');
       work.ctx.beforeCall();
     },
     onJudgment: (key, audit) => work.store.writeCalibrationAudit(record.id, key, audit) };

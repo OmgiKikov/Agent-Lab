@@ -12,7 +12,7 @@ import { captureGeneratorEvidence } from './generator-evidence.js';
 import type { Lab } from './lab/context.js';
 import * as library from './lab/library.js';
 import { OperationRunner, type Follower } from './lab/operation.js';
-import { isRunning, moveTo } from './phases.js';
+import { isRunning, moveTo, restartAt } from './phases.js';
 import * as review from './lab/review.js';
 import * as judgeCheck from './lab/judge-check.js';
 import type { JudgeCheck, JudgeCheckPlan } from './judge-check.js';
@@ -43,16 +43,23 @@ export class ExperimentLab {
     this.lab = { store: this.store, operations: this.operations, get: id => this.get(id), list: () => this.list(), runtime: record => this.runtime(record) };
   }
 
-  /** Opens the folder as its writer; records a previous process left running are marked interrupted, their evidence kept. */
+  /**
+   * Opens the folder as its writer. A record a previous process left running goes where its phase's restart rule says
+   * (phases.ts), its evidence kept: a draft whose check was cut short is the owner's draft again, anything else is
+   * marked interrupted.
+   */
   init(): Promise<void> {
-    if (this.operations.closing) return Promise.reject(new Error('Experiment Lab is closing.'));
+    if (this.operations.closing) return Promise.reject(new Error('Лаборатория закрывается.'));
     return this.initializing ??= this.initialize();
   }
   private async initialize(): Promise<void> {
     await this.store.init();
     try {
       for (const record of await this.store.list()) if (isRunning(record.phase)) {
-        moveTo(record, 'interrupted'); record.message = 'Предыдущий процесс остановился. Собранные данные сохранены.';
+        const next = restartAt(record);
+        record.message = next === 'review' ? 'Предыдущий процесс остановился во время проверки ситуаций. Черновик сохранён; проверку можно повторить.'
+          : 'Предыдущий процесс остановился. Собранные данные сохранены.';
+        moveTo(record, next);
         record.usage.costUsd = null;
         record.limitations.push('Процесс остановился между сохранениями: число вызовов и токенов может быть неполным.');
         record.error = record.message; record.updatedAt = new Date().toISOString(); await this.store.save(record);
@@ -82,7 +89,7 @@ export class ExperimentLab {
   recheckCards(id: string, options?: { defer?: boolean; expectedHash?: string; explicit?: boolean }) { return library.recheckCards(this.lab, id, options); }
   prepareLogVersion(command: LogVersionCommand, options: { via: Via; at?: string }): Promise<PreparedLogVersion> { return library.prepareLogVersion(this.lab, command, options); }
   applyLogVersion(prepared: PreparedLogVersion, grant: HostGrant): Promise<LogVersionJournal> { return library.applyLogVersion(this.lab, prepared, grant); }
-  resumePreparation(id: string, expectedHash: string, options?: library.PreparationOptions): Promise<Experiment> { return library.resumePreparation(this.lab, id, expectedHash, options); }
+  resumePreparation(id: string, expectedHash: string, options?: library.ResumeOptions): Promise<Experiment> { return library.resumePreparation(this.lab, id, expectedHash, options); }
   convertV1Draft(id: string): Promise<Pick<Conversion, 'library' | 'left' | 'calls'> & { experiment: Experiment }> { return library.convertV1Draft(this.lab, id); }
 
   updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> { return run.updateDraft(this.lab, id, expectedHash, raw); }
@@ -101,7 +108,7 @@ export class ExperimentLab {
   checkJudge(id: string, options?: judgeCheck.JudgeCheckOptions): Promise<JudgeCheck> { return judgeCheck.checkJudge(this.lab, id, options); }
 
   /** Stops the operation running `id`; what it recorded is kept. */
-  async cancel(id: string): Promise<Experiment> { return this.operations.cancel(id); }
+  async cancel(id: string): Promise<Experiment> { return this.operations.cancel(id) ?? this.store.get(id); }
   /** Resolves when the running operation has ended and its last checkpoint is saved. */
   async waitForIdle(): Promise<void> { await this.operations.idle(); }
   async close(): Promise<void> {

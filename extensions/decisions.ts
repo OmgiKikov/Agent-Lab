@@ -8,8 +8,10 @@ import { pendingReviewCalls } from '../src/card/prepare.js';
 import type { CardCommand } from '../src/card/schema.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
 import { rulebookChangeLines, rulebookOf, withKind } from '../src/card/rulebook.js';
-import { ask } from './lab-ui.ts';
-import type { Experiment } from '../src/contracts.js';
+import { LONGEST_OPERATION_MS, preparationBudget } from '../src/card/budget.js';
+import { ask, stopOf } from './lab-ui.ts';
+import type { Experiment, Settings } from '../src/contracts.js';
+import { countText } from '../src/plural.js';
 import { isRunning } from '../src/phases.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
@@ -141,6 +143,32 @@ export async function applyRulebookChange(surface: DecisionSurface, record: Expe
   });
 }
 
+/** «потрачено 21 вызов», and after «до»: «до 21 вызова». */
+const CALLS: [string, string, string] = ['вызов', 'вызова', 'вызовов'];
+const CALLS_UP_TO: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
+
+/**
+ * The owner's «поднять лимит» raises what actually stopped the draft's last work: its calls to `calls`, and its time
+ * too when the time cut it short — doubled, at most the longest an operation may take.
+ */
+export function raisedLimits(draft: Pick<Experiment, 'settings' | 'stop' | 'error'>, calls: number): Pick<Settings, 'maxCalls'> & Partial<Pick<Settings, 'maxDurationMs'>> {
+  const time = stopOf(draft) === 'time' ? Math.min(LONGEST_OPERATION_MS, 2 * draft.settings.maxDurationMs) : draft.settings.maxDurationMs;
+  return { maxCalls: Math.max(draft.settings.maxCalls, calls), ...(time > draft.settings.maxDurationMs ? { maxDurationMs: time } : {}) };
+}
+
+/**
+ * The owner's word to continue a preparation: nothing more to ask while the ceiling they agreed to covers what is left;
+ * otherwise the numbers and the new ceiling, natively. The new ceiling when they agreed to one; null when they did not.
+ */
+async function resumeCeiling(ctx: ExtensionContext, draft: Experiment): Promise<number | undefined | null> {
+  const budget = preparationBudget(draft);
+  if (!budget || budget.resume <= budget.ceiling) return undefined;
+  const agreed = await ask(ctx, 'Продолжить подготовку?', [`Подготовка потратила ${countText(budget.spent, CALLS)} модели из ${budget.ceiling} согласованных.`,
+    `На то, что осталось разобрать (${budget.pending}), нужно до ${countText(budget.resume - budget.spent, CALLS_UP_TO)}: потолок всей подготовки станет ${budget.resume}.`,
+    'Это потолок, а не прогноз; агент не запускается.'], 'Продолжить');
+  return agreed ? budget.resume : null;
+}
+
 /**
  * What a settling choice that is not about one situation does, once the surface has the owner's pick; the notice in
  * the owner's words. `runs` are the finished runs a re-assessment may name. Undefined for a choice this layer does not
@@ -152,10 +180,12 @@ export async function settle(surface: DecisionSurface, action: DecisionAction, r
     case 'raise_limit':
       return surface.writing(async (lab, handOver) => {
         const draft = await lab.get(action.runId);
-        await lab.updateDraft(draft.id, draftHash(draft), { settings: { maxCalls: action.to } });
+        const raised = raisedLimits(draft, action.to);
+        await lab.updateDraft(draft.id, draftHash(draft), { settings: raised });
         const check = await lab.recheckCards(draft.id, { explicit: true });
         if (check.decision.action === 'run') handOver(lease => surface.background.check(surface.ctx, lease, draft.id, undefined));
-        return `Решено: лимит поднят до ${action.to}. Проверяю ситуации — итог придёт ${where}.`;
+        const time = raised.maxDurationMs ? ` и время — до ${Math.round(raised.maxDurationMs / 60_000)} мин` : '';
+        return `Решено: лимит поднят до ${countText(raised.maxCalls, CALLS_UP_TO)}${time}. Проверяю ситуации — итог придёт ${where}.`;
       });
     case 'check_situations':
       return surface.writing(async (lab, handOver) => {
@@ -168,7 +198,11 @@ export async function settle(surface: DecisionSurface, action: DecisionAction, r
       return surface.writing(async (lab, handOver) => {
         const draft = await lab.get(action.runId);
         if (!draft.librarySnapshot) throw new Error('Нет сохранённой подготовки, которую можно продолжить.');
-        await lab.resumePreparation(draft.id, libraryHash(draft.librarySnapshot));
+        const callCeiling = await resumeCeiling(surface.ctx, draft);
+        if (callCeiling === null) return undefined;
+        const resumed = await lab.resumePreparation(draft.id, libraryHash(draft.librarySnapshot), callCeiling === undefined ? {} : { callCeiling });
+        // A preparation with nothing left to prepare is its draft again at once: there is no work to hand over.
+        if (resumed.phase !== 'preparing') return 'Подготовка успела разобрать всё: черновик снова открыт.';
         handOver(lease => surface.background.preparation(surface.ctx, lease, draft.id));
         return 'Продолжаю подготовку с сохранённого места — ситуации придут в чат.';
       });

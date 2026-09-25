@@ -6,6 +6,7 @@ import { test, type TestContext } from 'node:test';
 import type { ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { promptOption } from '../extensions/prompt-choice.ts';
 import { TOOL } from '../extensions/steps.ts';
+import { preparationTime, runLimit, runTime } from '../src/card/budget.js';
 import { detectProject } from '../src/detect.js';
 import { ExperimentLab } from '../src/experiment.js';
 import type { Runtime } from '../src/runtime.js';
@@ -179,7 +180,11 @@ test('a preparation from the owner\'s rules alone is paid, so it asks one consen
   assert.deepEqual(consent!.options, ['Собрать ситуации', 'Не сейчас']);
   const prepared = await prepare({ ...request, withoutLogs: true, situations: 2 });
   const record = await store.get(prepared.run);
-  assert.deepEqual([record.phase, record.settings.maxCalls, record.settings.provider, record.settings.model], ['review', 30, 'fixture', 'fixture-model'], 'the settings are the host\'s: the draft\'s limit is the run\'s budget');
+  // The draft's limits are its run's, computed from the run's plan: two situations of at most three expectations, one attempt each with a customer of six moves at most.
+  assert.deepEqual([record.phase, record.settings.maxCalls, record.settings.maxDurationMs, record.settings.provider, record.settings.model],
+    ['review', runLimit(2, { maxTurns: 6, repeats: 1 }, false), runTime(2), 'fixture', 'fixture-model'], 'the settings are the host\'s: the draft\'s limits are its run\'s');
+  assert.equal(runLimit(2, { maxTurns: 6, repeats: 1 }, false), 2 * (6 + 2 * 3) + 1, 'per situation the customer\'s moves and two votes on each of three expectations, and one naming of the causes');
+  assert.deepEqual([(record.preparationProgress as { callCeiling?: number }).callCeiling, preparationTime(2)], [20, 360_000], 'the preparation keeps its own ceiling and has its own time');
   assert.ok(record.usage.calls <= 20, 'the preparation stays under the ceiling the owner agreed to');
   assert.equal(prepared.situations.length, 2);
 });
@@ -201,10 +206,11 @@ test('the consent says what is read and what it may cost; the whole import is ke
   assert.equal(input.dialogues!.length, 200, 'the legacy projection is bounded');
   assert.deepEqual(options, { situations: 15, callCeiling: 159 }, 'the ceiling the owner agreed to goes to the lab, which stops the preparation there');
   const { settings } = input;
-  assert.deepEqual([settings!.maxCalls, settings!.timeoutMs, settings!.maxTurns, settings!.userModes, settings!.repeats], [385, 600000, 6, ['reactive'], 1]);
+  assert.deepEqual([settings!.maxCalls, settings!.maxDurationMs, settings!.timeoutMs, settings!.maxTurns, settings!.userModes, settings!.repeats], [runLimit(15, { maxTurns: 6, repeats: 1 }, true), runTime(15), 600000, 6, ['reactive'], 1]);
+  assert.equal(runLimit(15, { maxTurns: 6, repeats: 1 }, true), 15 * (6 + 2 * 3) + 1 + 15 * 3 * 2, 'the run\'s plan and the comparison of every expectation with its logged conversation');
   assert.match(asked[0]!.title, /^Собрать 15 ситуаций из logs\.jsonl\?\n\nВ логах 300 разговоров, подходят 300\. Ситуаций будет не больше 15/);
   assert.match(asked[0]!.title, /не больше 159 вызовов модели на всю подготовку, из них 9 — на разметку тем/,
-    'the preparation\'s own ceiling: the map, per situation its proposal allowance and the reviews of its card and of its one revision — the draft\'s limit of 385 is the run\'s');
+    'the preparation\'s own ceiling: the map, per situation its proposal allowance and the reviews of its card and of its one revision — the draft\'s limit is the run\'s');
   assert.doesNotMatch(asked[0]!.title, /validation set|outcome-blind/i, 'the owner is asked in plain words');
 });
 

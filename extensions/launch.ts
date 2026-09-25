@@ -1,10 +1,12 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { runCalls } from '../src/card/budget.js';
 import { calibrationConsent } from '../src/card/calibrate.js';
 import { describeCheck, type Experiment, type RunnableTarget } from '../src/contracts.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
 import { detectProject, evidenceText, targetLabel, type AgentCandidate } from '../src/detect.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
+import { runPlan } from '../src/lab/run.js';
 import { countText } from '../src/plural.js';
 import { expectationSheet } from '../src/quality.js';
 import { libraryHash } from '../src/scenario-library.js';
@@ -50,6 +52,22 @@ function runScope(record: Experiment): string[] {
   return record.scenarios.map(s => [safeText(s.title), `  Запрос: ${safeText(s.user.opening)}`,
     ...(record.settings.userModes.includes('scripted') ? (s.user.script ?? []).map((message, i) => `  Продолжение ${i + 1}: ${safeText(message)}`) : []),
     `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n'));
+}
+
+/**
+ * The dialog's line when the draft's call limit cannot hold its run's plan (card/budget.ts): the owner reads both
+ * numbers, and «Запустить» raises the limit to the plan. None when the plan fits, or for the teaching example.
+ */
+function limitLine(record: Experiment, calls: number): string | undefined {
+  if (record.mode === 'demo' || calls <= record.settings.maxCalls) return undefined;
+  return `Лимит вызовов модели — ${record.settings.maxCalls}, а прогону нужно до ${calls}: запуск поднимет лимит до ${calls}.`;
+}
+
+/** The model calls a card draft's run of its `ready` situations plans (card/budget.ts runCalls), every answer passing the first time. */
+function cardCalls(record: Experiment, ready: readonly SituationView[]): number {
+  const modes = record.settings.userModes.filter(mode => mode !== 'scripted');
+  return runCalls(ready.flatMap(view => modes.flatMap(mode => Array.from({ length: record.settings.repeats }, () => ({ customer: mode === 'reactive', expectations: view.brief.must.length })))),
+    record.settings.maxTurns);
 }
 
 /** The plan of a card draft's run: its ready situations; the ones waiting for the owner, unusable or unchecked stay out. */
@@ -126,26 +144,28 @@ export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: 
     if (!ready.length) throw new NeedsOwner('needs_owner_input', 'Запускать нечего: ни одна ситуация не готова. Покажите владельцу вопросы по ситуациям (agent_lab_decide) — ответ делает ситуацию готовой.', [],
       'Запускать нечего: ни одна ситуация ещё не готова — ответьте на их вопросы.');
     const calibration = await calibrationConsent(lab.store, context.experiment, ready.map(view => view.id));
+    const limit = limitLine(context.experiment, cardCalls(context.experiment, ready));
     const lines = launchLines(shown(context.experiment), cardPlan(context.experiment, views), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) });
-    const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...lines,
+    const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...lines, ...(limit ? [limit] : []),
       'Вместе с запуском Lab утвердит эти ситуации — повтор пойдёт по ним же.'].join('\n')), [LAUNCH, NOT_NOW]);
     if (picked !== LAUNCH) return undefined;
     const draft = await connected();
     const { experiment } = await lab.acceptCards(draft.id, libraryHash(context.library), ready.map(view => view.id));
-    return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: draftHash(experiment), parallel: runParallel(experiment), requireAccepted: true });
+    return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: draftHash(experiment), parallel: runParallel(experiment), requireAccepted: true, raiseLimit: !!limit });
   }
   if (library && !library.acceptance) throw new NeedsOwner('needs_owner_input', 'Это черновик старого формата: его ситуации можно посмотреть, но не утвердить. Предложите владельцу продолжить их в новом формате (решение в agent_lab_decide).', [],
     'Это черновик старого формата: его ситуации нельзя утвердить. Их можно продолжить в новом формате — старый черновик останется как есть.');
   const confirmed = start.acceptedDraftHash === draftHash(start);
   const calibration = await calibrationConsent(lab.store, start);
   const scope = library ? [] : runScope(start);
+  const limit = limitLine(start, runPlan(start));
   const plan = [...scope, ...(scope.length ? [''] : []), ...launchLines(shown(start), scenarioPlan(start), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) }),
-    ...(library || confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'])];
+    ...(limit ? [limit] : []), ...(library || confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'])];
   const picked = await ctx.ui.select(safeText([library || confirmed ? 'Запустить прогон?' : 'Подтвердить ожидания и запустить?', '', ...plan].join('\n')), [LAUNCH, NOT_NOW]);
   if (picked !== LAUNCH) return undefined;
   const draft = await connected();
   const hash = draftHash(draft);
   // A new connection is a new version of the draft: the expectations the owner confirmed in this dialog are confirmed on it.
   if (draft.acceptedDraftHash !== hash) await lab.acceptDraft(draft.id, hash);
-  return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(draft), requireAccepted: true });
+  return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(draft), requireAccepted: true, raiseLimit: !!limit });
 }

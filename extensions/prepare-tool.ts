@@ -4,7 +4,7 @@ import { basename, extname, join, relative, resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { z } from 'zod';
-import { preparationCeiling } from '../src/card/budget.js';
+import { preparationCeiling, runLimit, runTime } from '../src/card/budget.js';
 import { createInputSchema, isRunnable, judgeFor, materialSources, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
 import { rememberedConnection } from '../src/connection.js';
 import { demoInput } from '../src/demo.js';
@@ -231,8 +231,10 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   // The run's settings are the host's: the model names neither a limit nor a model.
   const count = params.situations ?? (libraryImport ? DEFAULT_SITUATIONS : RULES_SITUATIONS);
   if (!libraryImport && count > SCENARIO_LIMIT) throw new Error(`По правилам без логов Lab готовит не больше ${SCENARIO_LIMIT} ситуаций за раз.`);
-  // The conversations a preparation may try: the sample and the replacements of picks that make no situation.
-  const tried = Math.min(40, 3 * count);
+  // The draft's limits are its run's, computed from the run's plan (card/budget.ts): every situation at its most
+  // expectations, one attempt with a customer Lab plays, and — from logs — the comparison with production. The
+  // preparation has its own ceiling, the consent's, and its own time.
+  const run = { repeats: 1, maxTurns: 6 };
   const connection = await rememberedConnection(directory);
   const session = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
   // What Pi can reach right now, from its own registry: no runtime is started for it.
@@ -243,11 +245,10 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
       task: params.task, mode: 'live', workflow: 'evaluate', materials: expanded.materials, scenarioCount: libraryImport ? 0 : count,
       target: connection?.target ?? { kind: 'unconnected' }, ...(connection?.targetVersion ? { targetVersion: connection.targetVersion } : {}),
       ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
-      settings: settingsSchema.parse({ provider: ctx.model?.provider ?? '', model: ctx.model?.id ?? '', judge, repeats: 1,
-        ...(libraryImport ? { maxCalls: Math.max(140, 2 * tried + 19 * count + 20), maxDurationMs: Math.min(14_400_000, Math.max(180_000, 180_000 * tried)),
-          // A proposal that reads the agent's prompts and articles whole routinely exceeds the two-minute default per call.
-          timeoutMs: 600_000, maxTurns: 6, userModes: ['reactive'] }
-          : { maxCalls: Math.max(20, 10 * count + 10), maxDurationMs: 180_000 }) }),
+      settings: settingsSchema.parse({ provider: ctx.model?.provider ?? '', model: ctx.model?.id ?? '', judge, ...run, userModes: ['reactive'],
+        maxCalls: runLimit(count, run, !!libraryImport), maxDurationMs: runTime(count * run.repeats),
+        // A proposal that reads the agent's prompts and articles whole routinely exceeds the two-minute default per call.
+        ...(libraryImport ? { timeoutMs: 600_000 } : {}) }),
     });
   } catch (error) { throw plainInputError(error); }
 

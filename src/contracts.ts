@@ -8,6 +8,7 @@ import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS, RECORD_REQUIREME
 import { z } from 'zod';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { PHASES, type Phase } from './phases.js';
+import { STOP_REASONS, type StopReason } from './errors.js';
 import { valueTokens } from './verbatim.js';
 
 /*
@@ -449,6 +450,12 @@ export interface Experiment {
   acceptedTests?: AcceptedTest[];
   trials: Trial[]; comparisons: Comparison[]; iterations: { revisionId: string; accepted: boolean; reason: string }[];
   usage: Usage; error: string | null; limitations: string[];
+  /**
+   * How the last operation on this record was stopped before it ended by itself — the owner, the closing application,
+   * its time or its budget — beside `error`, which keeps the line the owner reads. Absent when it ended by itself or
+   * failed, and in records written before it existed (their `error` keeps the English label of the stop).
+   */
+  stop?: StopReason;
   humanReviews: HumanReview[]; resultsReviewedAt?: string; resultsReviewHash?: string;
   /** Named clusters over the failed dialogues of this run; the bridge from evaluation to fixing. */
   failureModes?: FailureMode[];
@@ -557,7 +564,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   acceptedTests: z.array(acceptedTestSchema).max(200)
     .refine(tests => unique(tests.map(test => test.testId)) && unique(tests.map(test => test.scenarioId)), 'Accepted test identities must be unique').default([]),
   trials: z.array(trialSchema), comparisons: z.array(comparisonSchema), iterations: z.array(z.strictObject({ revisionId: text, accepted: z.boolean(), reason: z.string() })),
-  usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()),
+  usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()), stop: z.enum(STOP_REASONS).optional(),
   humanReviews: z.array(humanReviewSchema).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),

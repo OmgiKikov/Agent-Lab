@@ -276,7 +276,15 @@ const cardPreparationSchema = z.strictObject({
    * check of a card no unit names.
    */
   active: z.array(z.strictObject({ dialogueId: id.optional(), stage: preparationStageSchema })).min(1).max(MAX_PREPARATION_PARALLEL).optional(),
+  /** The time the preparation took, its creation and every resume together. */
   elapsedMs: z.number().int().nonnegative().optional(),
+  /**
+   * The model calls the preparation may make over its creation and every resume: the ceiling the owner agreed to, or
+   * raised it to when continuing. Checkpoints written before it existed lack it, and a resume reads the draft's limit.
+   */
+  callCeiling: z.number().int().nonnegative().optional(),
+  /** The model calls the preparation made, its creation and every resume together; lacking in older checkpoints. */
+  spentCalls: z.number().int().nonnegative().optional(),
   /** Proposal calls spent per unit, repairs included; the allowance survives a resume. */
   generationAttempts: z.array(z.strictObject({ dialogueId: id, calls: z.number().int().nonnegative() })).max(300).optional(),
   /** A large knowledge base: the articles chosen for each dialogue from the table of contents. */
