@@ -16,7 +16,8 @@ import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, 
 import { rulebookOf } from './rulebook.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, proposalRequirements, type CardProposalRequest, type ProposalCall } from './proposal.js';
 import { blockedClaims, claimReceipts, pendingClaims, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
-import type { Card, CardPreparation, LibraryV2, PreparationProgress } from './schema.js';
+import { cardSchema, type Card, type CardPreparation, type LibraryV2, type PreparationProgress } from './schema.js';
+import { assessorReference } from './assessor.js';
 
 /*
  * Preparing situations — from dialogues of an import, or from the owner's rules alone (docs/design/card-v2-spec.md §8, C9):
@@ -287,7 +288,10 @@ class Preparation {
     const parsed = cardProposalSchema(asked.call).safeParse(answer);
     const problem = parsed.success ? cardProposalProblem(parsed.data, asked.call) : parsed.error.message;
     if (!parsed.success || problem) return { excluded: `Предложенная ситуация не прошла проверку: ${problem}` };
-    const card = withTrafficTopic(bindProposal(parsed.data, asked.call, revision ? revision.card.number : this.library.nextNumber), topic);
+    const bound = withTrafficTopic(bindProposal(parsed.data, asked.call, revision ? revision.card.number : this.library.nextNumber), topic);
+    // The assessor's markup of this conversation, carried by the import, is the situation's reference from the start.
+    const references = dialogue ? assessorReference(dialogue.original, record.sources) : undefined;
+    const card = references ? cardSchema.parse({ ...bound, references }) : bound;
     // A sentence another card already cites is already a rule of the library, by the same id: the first wording stays.
     const cited = proposalRequirements(parsed.data, asked.call).filter(requirement => !record.requirements.some(known => known.id === requirement.id));
     const requirements = [...record.requirements, ...cited];

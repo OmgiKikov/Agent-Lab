@@ -66,19 +66,26 @@ export const moreValuesLine = (more: number): string => `ещё ${countText(more
 
 type ReadyProposal = Extract<TableProposal, { status: 'ready' }>;
 
+const EXPECTED_WORDS = { answer: 'ожидаемый ответ (Lab найдёт его статью в базе знаний; короткий код — код ответа)', article: 'id статьи базы знаний', code: 'код ответа' } as const;
+
 /** How the mapping reads the table, one line per choice; without a choice of conversations, the columns they could be chosen by. */
 function readingLines({ mapping, preview, selectable }: ReadyProposal): string[] {
   const layout = mapping.layout;
   const counted = (label: string) => countText(preview.messages.find(item => item.label === label)?.count ?? 0, MESSAGES);
-  const lines = layout.kind === 'dialogue_per_row'
-    ? [`  Один разговор — одна строка; id разговора — колонка ${quoted(columnLabel(mapping.id))}.`,
+  const lines = layout.kind === 'question_per_row'
+    ? [`  Один случай — одна строка${mapping.id ? `; id — колонка ${quoted(columnLabel(mapping.id))}` : ''}.`,
+      `  Вопрос клиента — колонка ${quoted(columnLabel(mapping.text))} · ${counted('вопрос')}.`,
+      layout.answer ? `  Ответ агента из лога — колонка ${quoted(columnLabel(layout.answer))} · ${counted('ответ')}.` : '  Ответа агента в таблице нет: разговор начнётся с вопроса.']
+    : layout.kind === 'dialogue_per_row'
+    ? [`  Один разговор — одна строка; id разговора — колонка ${quoted(columnLabel(mapping.id!))}.`,
       layout.separator === undefined ? `  Текст — колонка ${quoted(columnLabel(mapping.text))}: сообщения ничем не отделены — новое начинается с каждой метки:`
         : `  Текст — колонка ${quoted(columnLabel(mapping.text))}: сообщения отделены ${shown(layout.separator)}, каждое начинается с метки:`,
       ...layout.markers.map(marker => `    ${marker.token} — ${ROLE_WORDS[marker.role]} · ${counted(marker.token)}`)]
-    : [`  Одно сообщение — одна строка; id разговора — колонка ${quoted(columnLabel(mapping.id))}.`,
+    : [`  Одно сообщение — одна строка; id разговора — колонка ${quoted(columnLabel(mapping.id!))}.`,
       `  Кто пишет — колонка ${quoted(columnLabel(layout.role))}:`,
       ...layout.roles.map(item => `    ${quoted(item.value)} — ${ROLE_WORDS[item.role]} · ${counted(item.value)}`),
       `  Текст — колонка ${quoted(columnLabel(mapping.text))}; порядок сообщений — ${layout.order ? `по колонке ${quoted(columnLabel(layout.order))}` : 'как строки в таблице'}.`];
+  for (const item of mapping.expected ?? []) lines.push(`  Ожидание асессора — колонка ${quoted(columnLabel(item.column))}: ${EXPECTED_WORDS[item.kind]} — станет эталоном ситуации.`);
   if (preview.kept.length === 1) lines.push(`  Колонку ${quoted(preview.kept[0]!)} Lab сохранит при разговорах как есть; в оценке она не участвует.`);
   else if (preview.kept.length) lines.push(`  Колонки ${preview.kept.map(quoted).join(', ')} Lab сохранит при разговорах как есть; в оценке они не участвуют.`);
   if (!mapping.filter && selectable.length) lines.push(`  Разговоры можно отобрать по ${selectable.length === 1 ? 'колонке' : 'колонкам'} ${selectable.map(column => quoted(columnLabel(column))).join(', ')}.`);

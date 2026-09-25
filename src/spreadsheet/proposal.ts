@@ -3,6 +3,7 @@ import { countText } from '../plural.js';
 import { analyzeSheet, filledValues, isNumeric, type SheetAnalysis } from './analysis.js';
 import type { CsvDialect } from './csv.js';
 import { importTable, parseOrder, type TablePreview } from './dialogues.js';
+import { readExactly } from './exact.js';
 import {
   LABEL_LIMIT, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
   type ColumnInfo, type ReadingBasis, type Role, type TableChoices, type TableLayout, type TableMapping,
@@ -104,6 +105,7 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   const base: ProposalBase = { file, sheets: workbook.sheets.map(item => item.name), sheet: sheet.name, ...workbook.csv ? { csv: workbook.csv } : {}, headerRow: analysis.header + 1, columns: analysis.columns };
   if (wanted !== undefined && !named) return { ...base, status: 'refused', choice: 'sheet', reason: `Листа ${quoted(wanted)} нет. Есть: ${base.sheets.map(quoted).join(', ')}.` };
   if (!analysis.rows.length) return { ...base, status: 'refused', choice: 'sheet', reason: `В листе ${quoted(sheet.name)} нет строк под заголовком.` };
+  if (chosen.perRow === 'question' || chosen.answer !== undefined) return questionTable(workbook, file, sheet, chosen, base);
   const outcome = decide(analysis, chosen);
   if ('refused' in outcome) return { ...base, status: 'refused', choice: outcome.refused, reason: outcome.reason };
   if ('question' in outcome) return { ...base, status: 'question', question: outcome.question, found: outcome.found };
@@ -125,6 +127,18 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   const mapping = chosen.collapseRepeats ? tableMappingSchema.parse({ ...asWritten, collapseRepeats: true }) : asWritten;
   return { ...base, status: 'ready', mapping, preview: mapping === asWritten ? preview : importTable(sheet, mapping).preview,
     selectable: selectableColumns(sheet, reading, conversations, analysis.columns) };
+}
+
+/**
+ * One case per row, as the owner said: their columns read exactly, with the same checks as a reading Lab's model
+ * proposed. Lab guesses nothing here — the question column is the owner's to name.
+ */
+function questionTable(workbook: Workbook, file: TableFile, sheet: Sheet, chosen: TableChoices, base: ProposalBase): TableProposal {
+  if (!chosen.text) return { ...base, status: 'refused', choice: 'text', reason: 'Назовите колонку с вопросом клиента: одна строка — один вопрос.' };
+  const outcome = readExactly(workbook, file, { sheet: sheet.name, id: chosen.id ?? null, text: chosen.text,
+    layout: { kind: 'question_per_row', answer: chosen.answer ?? null }, collapseRepeats: false,
+    ...chosen.where ? { where: chosen.where } : {}, ...chosen.expected ? { expected: chosen.expected } : {} });
+  return 'proposal' in outcome ? outcome.proposal as TableProposal : { ...base, status: 'refused', choice: 'text', reason: outcome.problem };
 }
 
 /** A sheet as Lab's own reading sees it: the shared analysis, and the marker structure of each column once it was looked for. */

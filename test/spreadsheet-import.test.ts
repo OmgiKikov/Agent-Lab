@@ -173,7 +173,7 @@ test('merged and empty cells in an .xlsx: a merged id covers its messages, an em
   ];
   const bytes = xlsxFile([{ name: 'Чаты', rows, merges: ['A1:D1', 'A3:A5', 'A6:A7'] }]), file = tableFileOf('chats.xlsx', bytes);
   const proposal = ready(proposeTable(readWorkbook(bytes, file), file));
-  assert.deepEqual([proposal.headerRow, proposal.mapping.id.header, proposal.mapping.text.header], [2, 'Диалог', 'Сообщение'], 'the merged title above the table is not the header');
+  assert.deepEqual([proposal.headerRow, proposal.mapping.id?.header, proposal.mapping.text.header], [2, 'Диалог', 'Сообщение'], 'the merged title above the table is not the header');
   assert.deepEqual(proposal.mapping.layout.kind === 'message_per_row' && [proposal.mapping.layout.role.header, proposal.mapping.layout.roles, proposal.mapping.layout.order?.header],
     ['Кто', [{ value: 'Клиент', role: 'user' }, { value: 'Бот', role: 'assistant' }], '№']);
   const { batch } = importTable(readWorkbook(bytes, file).sheets[0]!, proposal.mapping);

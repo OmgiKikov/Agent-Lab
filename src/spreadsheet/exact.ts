@@ -1,7 +1,7 @@
 import { MASKED_REASON, NO_CUSTOMER_REASON } from '../scenario-library.js';
 import { analyzeSheet, columnNames, type SheetAnalysis } from './analysis.js';
 import { importTable, type TablePreview } from './dialogues.js';
-import { findColumn, tableMappingSchema, toColumn, type ColumnInfo, type MarkerRole, type RepeatJudgement, type Role, type TableChoices, type TableMapping } from './mapping.js';
+import { findColumn, tableMappingSchema, toColumn, type ColumnInfo, type ExpectedKind, type MarkerRole, type RepeatJudgement, type Role, type TableChoices, type TableMapping } from './mapping.js';
 import type { TableProposal } from './proposal.js';
 import { frequentCopies } from './repeats.js';
 import { conversationRows, selectableColumns, whereOutcome } from './selection.js';
@@ -19,15 +19,19 @@ import type { TableFile, Workbook } from './workbook.js';
 /** How the messages are told apart, every part decided; a marker decided as `text` is a word of the messages. */
 export type LayoutChoice =
   | { kind: 'dialogue_per_row'; separator: string | null; markers: { token: string; role: MarkerRole }[] }
-  | { kind: 'message_per_row'; role: string; roles: { value: string; role: Role }[]; order: string | null };
+  | { kind: 'message_per_row'; role: string; roles: { value: string; role: Role }[]; order: string | null }
+  | { kind: 'question_per_row'; answer: string | null };
 /** A complete reading: columns are named by columnNames() (analysis.ts), or as the owner names them (a header or a letter). */
 export interface CompleteReading {
   sheet: string;
-  id: string;
+  /** null only for one question per row: each row is its own case. */
+  id: string | null;
   text: string;
   layout: LayoutChoice;
   collapseRepeats: boolean;
   where?: { column: string; values?: string[] };
+  /** The assessor's markup: which columns hold the expected result, and what each holds. */
+  expected?: { column: string; kind: ExpectedKind }[];
 }
 
 /** Each side writes at least this share of the other side's messages: a side near zero was read into the other's messages. */
@@ -47,7 +51,16 @@ const quoted = (text: string) => `"${text}"`;
 export function overridden(model: CompleteReading, owner: TableChoices): CompleteReading | undefined {
   const toMarkers = owner.markers !== undefined || owner.separator !== undefined;
   const toMessages = owner.role !== undefined || owner.roles !== undefined || owner.order !== undefined;
+  const toQuestions = owner.perRow === 'question' || owner.answer !== undefined;
+  const expected = owner.expected ?? model.expected;
   const layout = model.layout;
+  if (layout.kind === 'question_per_row' || toQuestions) {
+    if (toMarkers || toMessages) return undefined;
+    const answer = owner.answer !== undefined ? owner.answer : layout.kind === 'question_per_row' ? layout.answer : null;
+    return { sheet: owner.sheet ?? model.sheet, id: owner.id ?? (layout.kind === 'question_per_row' ? model.id : null), text: owner.text ?? model.text,
+      layout: { kind: 'question_per_row', answer }, collapseRepeats: false, ...owner.where ?? model.where ? { where: owner.where ?? model.where } : {},
+      ...expected ? { expected } : {} };
+  }
   if (layout.kind === 'dialogue_per_row' ? toMessages : toMarkers) return undefined;
   const decided = <T, K>(mine: readonly T[], theirs: readonly T[] | undefined, key: (item: T) => K) =>
     [...mine.filter(item => !theirs?.some(next => key(next) === key(item))), ...theirs ?? []];
@@ -58,6 +71,7 @@ export function overridden(model: CompleteReading, owner: TableChoices): Complet
       : { ...layout, role: owner.role ?? layout.role, roles: decided(layout.roles, owner.roles, item => item.value), order: owner.order === undefined ? layout.order : owner.order },
     collapseRepeats: owner.collapseRepeats ?? model.collapseRepeats,
     ...owner.where ?? model.where ? { where: owner.where ?? model.where } : {},
+    ...expected ? { expected } : {},
   };
 }
 
@@ -77,7 +91,8 @@ export function readExactly(workbook: Workbook, file: TableFile, reading: Comple
   const resolved = resolve(a, reading);
   if ('problem' in resolved) return resolved;
   const parsed = tableMappingSchema.safeParse({ version: 1, source: workbook.csv ? { format: 'csv', ...workbook.csv } : { format: 'xlsx', sheet: sheet.name },
-    headerRow: a.header + 1, id: toColumn(resolved.id), text: toColumn(resolved.text), layout: resolved.layout });
+    headerRow: a.header + 1, ...resolved.id ? { id: toColumn(resolved.id) } : {}, text: toColumn(resolved.text), layout: resolved.layout,
+    ...resolved.expected ? { expected: resolved.expected } : {} });
   if (!parsed.success) return { problem: `This reading is not possible: ${parsed.error.issues.map(issue => issue.message).join('; ')}.` };
   const conversations = conversationRows(sheet, parsed.data, a.rows);
   const selection = whereOutcome(sheet, parsed.data, conversations, resolved.where);
@@ -94,23 +109,27 @@ export function readExactly(workbook: Workbook, file: TableFile, reading: Comple
     selectable: selectableColumns(sheet, parsed.data, conversations, a.columns) } };
 }
 
-type Resolved = { id: ColumnInfo; text: ColumnInfo; layout: TableMapping['layout']; where?: { column: ColumnInfo; values?: string[] } };
+type Resolved = { id?: ColumnInfo; text: ColumnInfo; layout: TableMapping['layout']; where?: { column: ColumnInfo; values?: string[] }; expected?: TableMapping['expected'] };
 /** The reading's columns in its sheet: by the names Lab gives them, else as the owner names them. */
 function resolve(a: SheetAnalysis, reading: CompleteReading): Resolved | { problem: string } {
   const named = columnNames(a.columns);
   const choice = reading.layout;
-  const names = [reading.id, reading.text, ...choice.kind === 'message_per_row' ? [choice.role, ...choice.order === null ? [] : [choice.order]] : [],
-    ...reading.where ? [reading.where.column] : []];
+  const names = [...reading.id === null ? [] : [reading.id], reading.text, ...choice.kind === 'message_per_row' ? [choice.role, ...choice.order === null ? [] : [choice.order]] : [],
+    ...choice.kind === 'question_per_row' && choice.answer !== null ? [choice.answer] : [], ...reading.where ? [reading.where.column] : [],
+    ...(reading.expected ?? []).map(item => item.column)];
   const found = new Map(names.map(name => [name, named.get(name) ?? findColumn(name, a.columns)]));
   const missing = [...new Set(names.filter(name => !found.get(name)))];
   if (missing.length) return { problem: `${missing.map(quoted).join(', ')} ${missing.length === 1 ? 'is not a column' : 'are not columns'} of sheet ${quoted(a.sheet.name)}.` };
   const column = (name: string) => found.get(name)!;
-  const layout: TableMapping['layout'] = choice.kind === 'dialogue_per_row'
+  const layout: TableMapping['layout'] = choice.kind === 'question_per_row'
+    ? { kind: 'question_per_row', ...choice.answer === null ? {} : { answer: toColumn(column(choice.answer)) } }
+    : choice.kind === 'dialogue_per_row'
     ? { kind: 'dialogue_per_row', ...choice.separator === null ? {} : { separator: choice.separator },
       markers: choice.markers.flatMap(item => item.role === 'text' ? [] : [{ token: item.token, role: item.role }]) }
     : { kind: 'message_per_row', role: toColumn(column(choice.role)), roles: choice.roles, ...choice.order === null ? {} : { order: toColumn(column(choice.order)) } };
-  return { id: column(reading.id), text: column(reading.text), layout,
-    ...reading.where ? { where: { column: column(reading.where.column), ...reading.where.values ? { values: reading.where.values } : {} } } : {} };
+  return { ...reading.id === null ? {} : { id: column(reading.id) }, text: column(reading.text), layout,
+    ...reading.where ? { where: { column: column(reading.where.column), ...reading.where.values ? { values: reading.where.values } : {} } } : {},
+    ...reading.expected?.length ? { expected: reading.expected.map(item => ({ column: toColumn(column(item.column)), kind: item.kind })) } : {} };
 }
 
 /**
@@ -141,6 +160,8 @@ function readingProblem(a: SheetAnalysis, mapping: TableMapping, preview: TableP
   }
   const count = (role: Role) => preview.messages.filter(item => item.role === role).reduce((sum, item) => sum + item.count, 0);
   const customer = count('user'), agent = count('assistant');
+  // One question per row has no marks to misread: its customer side is the text column, the agent's reply is optional.
+  if (layout.kind === 'question_per_row') return customer ? undefined : `Under this reading no row has a customer's question in ${quoted(mapping.text.header)}.`;
   const where = layout.kind === 'dialogue_per_row' ? 'the markers and the separator' : 'the role column and its roles';
   if (!customer || !agent) return `Under this reading no message is the ${customer ? "agent's (assistant)" : "customer's (user)"}: ${customer} customer and ${agent} agent messages. Check ${where}.`;
   if (Math.min(customer, agent) < Math.max(customer, agent) * PLAUSIBLE_SIDE) {

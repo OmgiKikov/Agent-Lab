@@ -34,6 +34,9 @@ const column = z.strictObject({ index: z.number().int().min(0).max(SHEET_COLUMNS
 export type Column = z.infer<typeof column>;
 /** A value of a column that chooses conversations: the cell as written, the spaces around it aside; '' is an empty cell. */
 const cellValue = z.string().trim().max(VALUE_CHARS);
+/** What a column of the assessor's markup holds: the expected answer, the id of the article it rests on, or the answer code. */
+export const EXPECTED_KINDS = ['answer', 'article', 'code'] as const;
+export type ExpectedKind = typeof EXPECTED_KINDS[number];
 
 export const tableMappingSchema = z.strictObject({
   version: z.literal(1),
@@ -43,7 +46,8 @@ export const tableMappingSchema = z.strictObject({
   ]),
   /** The row with the column names, counted as the owner sees it (1 is the first row). */
   headerRow: z.number().int().min(1).max(HEADER_SCAN),
-  id: column,
+  /** Absent only for one question per row: each row is then its own conversation, named by its row. */
+  id: column.optional(),
   text: column,
   layout: z.discriminatedUnion('kind', [
     /**
@@ -55,16 +59,29 @@ export const tableMappingSchema = z.strictObject({
     /** One message per row: who writes it in a role column; order by a column of numbers or dates, or by the rows themselves. */
     z.strictObject({ kind: z.literal('message_per_row'), role: column,
       roles: z.array(z.strictObject({ value: text(80), role })).min(2).max(LABEL_LIMIT), order: column.optional() }),
+    /**
+     * One case per row: `text` is the customer's message as written, with no role marks; `answer` the agent's reply
+     * the log kept, when there is a column of it. A sheet of test cases or of reviewed questions reads this way.
+     */
+    z.strictObject({ kind: z.literal('question_per_row'), answer: column.optional() }),
   ]),
+  /**
+   * The assessor's expected result, per conversation: a column of the expected answer (whose article or code the
+   * harness recognises), of the article id, or of the answer code. It becomes the reference of each situation.
+   */
+  expected: z.array(z.strictObject({ column, kind: z.enum(EXPECTED_KINDS) })).min(1).max(3).optional(),
   /** Only the conversations with one of these values in this column go into the import: the owner's choice of what to evaluate. */
   filter: z.strictObject({ column, values: z.array(cellValue).min(1).max(FILTER_VALUES) }).optional(),
   /** Only when the owner chose it: a block of messages written again right after itself is read once (repeats.ts). */
   collapseRepeats: z.literal(true).optional(),
 }).superRefine((mapping, ctx) => {
   const layout = mapping.layout;
-  const columns = [mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],
-    ...mapping.filter ? [mapping.filter.column.index] : []];
+  const columns = [...mapping.id ? [mapping.id.index] : [], mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],
+    ...layout.kind === 'question_per_row' && layout.answer ? [layout.answer.index] : [], ...mapping.filter ? [mapping.filter.column.index] : [],
+    ...(mapping.expected ?? []).map(item => item.column.index)];
   if (new Set(columns).size !== columns.length) ctx.addIssue({ code: 'custom', message: 'One column cannot play two parts' });
+  if (!mapping.id && layout.kind !== 'question_per_row') ctx.addIssue({ code: 'custom', message: 'A conversation needs its id column' });
+  if (layout.kind === 'question_per_row') return;
   const labels = layout.kind === 'dialogue_per_row' ? layout.markers.map(item => ({ label: item.token, role: item.role })) : layout.roles.map(item => ({ label: item.value, role: item.role }));
   if (new Set(labels.map(item => item.label)).size !== labels.length) ctx.addIssue({ code: 'custom', message: 'Duplicate markers or role values' });
   if (!labels.some(item => item.role === 'user') || !labels.some(item => item.role === 'assistant')) ctx.addIssue({ code: 'custom', message: 'A conversation needs a customer and an agent' });
@@ -94,6 +111,10 @@ export const tableChoicesSchema = z.strictObject({
   order: columnChoice.nullable().optional(),
   where: z.strictObject({ column: columnChoice, values: z.array(cellValue).min(1).max(FILTER_VALUES).optional() }).optional(),
   collapseRepeats: z.boolean().optional(),
+  /** One case per row: the text column is the customer's message; `answer` the agent's logged reply, null for none. */
+  perRow: z.literal('question').optional(),
+  answer: columnChoice.nullable().optional(),
+  expected: z.array(z.strictObject({ column: columnChoice, kind: z.enum(EXPECTED_KINDS) })).min(1).max(3).optional(),
 });
 export type TableChoices = z.infer<typeof tableChoicesSchema>;
 
