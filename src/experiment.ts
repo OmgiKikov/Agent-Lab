@@ -1,3 +1,4 @@
+import { addCaveat } from './caveats.js';
 import type { LogVersionCommand, LogVersionJournal } from './card/calibration.js';
 import type { CardEvidence } from './card/checks.js';
 import type { HostGrant, Prepared, PreparedLogVersion, Via } from './card/commands.js';
@@ -61,7 +62,7 @@ export class ExperimentLab {
           : 'Предыдущий процесс остановился. Собранные данные сохранены.';
         moveTo(record, next);
         record.usage.costUsd = null;
-        record.limitations.push('Процесс остановился между сохранениями: число вызовов и токенов может быть неполным.');
+        addCaveat(record, { code: 'usage_incomplete' });
         record.error = record.message; record.updatedAt = new Date().toISOString(); await this.store.save(record);
       }
       this.operations.open();

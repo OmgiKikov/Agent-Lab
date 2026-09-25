@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { PHASES, type Phase } from './phases.js';
 import { STOP_REASONS, type StopReason } from './errors.js';
+import { caveatsSchema, type Caveat } from './caveats.js';
 import { valueTokens } from './verbatim.js';
 
 /*
@@ -449,7 +450,10 @@ export interface Experiment {
   /** Portable identity of explicitly accepted scenario definitions. Optional only for legacy in-memory fixtures. */
   acceptedTests?: AcceptedTest[];
   trials: Trial[]; comparisons: Comparison[]; iterations: { revisionId: string; accepted: boolean; reason: string }[];
+  /** Notes of what this record's result does not prove, as records wrote them before notes were typed; new records keep `caveats`. */
   usage: Usage; error: string | null; limitations: string[];
+  /** What this record's result does not prove, typed and each once (caveats.ts): the owner reads them through caveatLines. Absent in older records. */
+  caveats?: Caveat[];
   /**
    * How the last operation on this record was stopped before it ended by itself — the owner, the closing application,
    * its time or its budget — beside `error`, which keeps the line the owner reads. Absent when it ended by itself or
@@ -564,7 +568,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   acceptedTests: z.array(acceptedTestSchema).max(200)
     .refine(tests => unique(tests.map(test => test.testId)) && unique(tests.map(test => test.scenarioId)), 'Accepted test identities must be unique').default([]),
   trials: z.array(trialSchema), comparisons: z.array(comparisonSchema), iterations: z.array(z.strictObject({ revisionId: text, accepted: z.boolean(), reason: z.string() })),
-  usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()), stop: z.enum(STOP_REASONS).optional(),
+  usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()), caveats: caveatsSchema.optional(), stop: z.enum(STOP_REASONS).optional(),
   humanReviews: z.array(humanReviewSchema).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),

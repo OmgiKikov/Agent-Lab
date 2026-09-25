@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { caveatLines } from '../src/caveats.js';
 import { STOP_LABEL } from '../src/errors.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash, measurementHash, resultHash } from '../src/lab/record.js';
@@ -102,7 +103,8 @@ test('task-only execution records automated review and labels expectations provi
   const result = await runDraft(lab, await externalDraft(lab), 'automated');
   assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.equal(result.reviewMode, 'automated');
-  assert.match(result.limitations.join(' '), /проверены автоматически, без человека/);
+  assert.deepEqual(result.caveats, [{ code: 'automated_review' }], 'a typed note');
+  assert.ok(caveatLines(result).includes('Ожидания ситуаций проверены автоматически, без человека: спорные вердикты стоит посмотреть, однозначные годятся как предварительный результат.'));
 });
 
 test('shutdown during the initial checkpoint waits, keeps the lock, and never starts model work', async t => {
@@ -235,7 +237,9 @@ test('провалы прогона получают имена, а сорван
   const survived = await runDraft(broken, await externalDraft(broken), 'human');
   assert.equal(survived.phase, 'results_review');
   assert.equal(survived.failureModes, undefined);
-  assert.ok(survived.limitations.some(l => /Не удалось назвать типы провалов.*судья недоступен/.test(l)));
+  // Why the causes are not named is kept typed and read in the owner's words, never as the error's own text.
+  assert.deepEqual(survived.caveats, [{ code: 'causes_unnamed', cause: 'failed' }]);
+  assert.ok(caveatLines(survived).includes('Причины провалов не названы: разбор прервался из-за сбоя.'));
 });
 
 test('unresolved business questions block a first-format draft until new materials produce a new experiment', async t => {
@@ -269,8 +273,8 @@ test('confirming the expectations is recorded as exactly that, never as a human 
   assert.equal(result.reviewMode, 'expectations');
   // The run dialog confirms expectations; the verdicts do not exist yet, so nothing here says a
   // person checked them. The limitation must say so instead of disappearing.
-  assert.match(result.limitations.join(' '), /Владелец подтвердил ожидания ситуаций перед запуском\. Определения карточек и оценки судьи человеком не проверялись\./);
-  assert.doesNotMatch(result.limitations.join(' '), /проверены автоматически, без человека/);
+  assert.deepEqual(result.caveats, [{ code: 'expectations_review' }]);
+  assert.ok(caveatLines(result).includes('Владелец подтвердил ожидания ситуаций перед запуском. Определения карточек и оценки судьи человеком не проверялись.'));
   // An old record parses and keeps the two modes it could already hold.
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'human' }).reviewMode, 'human');
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'automated' }).reviewMode, 'automated');
@@ -538,7 +542,7 @@ test('evaluation runs every user mode and skips scripted cards without a script'
   assert.equal(result.phase, 'results_review', result.error ?? '');
   const byMode = (mode: string) => result.trials.filter(tr => tr.userMode === mode).length;
   assert.deepEqual([byMode('static'), byMode('scripted'), byMode('reactive')], [3, withScript, 3]);
-  assert.ok(result.limitations.some(l => /Scripted mode skipped/.test(l)));
+  assert.deepEqual(result.caveats?.filter(note => note.code === 'scripted_skipped'), [{ code: 'scripted_skipped', situations: draft.scenarios.length - withScript }], 'how many, once');
   assert.ok(result.trials.filter(tr => tr.userMode === 'static').every(tr => tr.events.filter(e => e.type === 'user').length === 1));
 });
 
@@ -756,7 +760,7 @@ test('a single failed dialogue is clustered, and a cluster may quote only the ag
   const rejected = await run();
   assert.equal(rejected.phase, 'results_review');
   assert.equal(rejected.failureModes, undefined);
-  assert.ok(rejected.limitations.some(l => /Не удалось назвать типы провалов/.test(l) && /дословно/.test(l)));
+  assert.deepEqual(rejected.caveats?.filter(note => note.code === 'causes_unnamed'), [{ code: 'causes_unnamed', cause: 'rejected' }], 'a cluster quoting what the prompt does not hold is the model\'s answer not holding');
 });
 
 test('human verdicts may target simulator checks, reassessment recomputes them, and an unconfirmed external world is a run limitation', async t => {
@@ -786,10 +790,10 @@ test('human verdicts may target simulator checks, reassessment recomputes them, 
       initialState: { records: {}, writableFields: [], transientFailures: 0, external: { cards: [{ id: 'c1' }, { id: 'c2' }] } },
       checks: [], successCriteria: 'Two cards are listed', assumptions: [], metrics: [{ id: 'goal', name: 'Goal', subject: 'agent', description: 'd', passCriteria: 'p', failCriteria: 'f' }] }];
   }));
-  assert.ok(unconfirmed.limitations.includes('Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.'), unconfirmed.limitations.join('\n'));
+  assert.deepEqual(unconfirmed.caveats, [{ code: 'automated_review' }, { code: 'state_unconfirmed' }]);
   assert.match(unconfirmed.trials.find(t => t.scenarioId === 'gold_cards')!.reason, /не подтверждено адаптером/);
   const repeated = await lab.repeat(unconfirmed.id);
-  assert.ok(!repeated.limitations.some(l => l.startsWith('Внешнее состояние карточек')));
+  assert.deepEqual(repeated.caveats, [{ code: 'demo' }], 'a repeat carries none of the run\'s notes — only what the record is, here the retired demo');
 });
 
 function agreeingJudgeRuntime(): Runtime {

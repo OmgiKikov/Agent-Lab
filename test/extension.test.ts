@@ -128,7 +128,7 @@ test('the built-in example from the chat: prepared, its question decided, run in
     assert.equal(result.run, prepared.run); assert.ok(result.lines.length > 2);
     const finished = await store.get(prepared.run);
     assert.deepEqual([finished.phase, finished.reviewMode, finished.trials.length], ['results_review', 'expectations', 4]);
-    assert.match(finished.limitations.join(' '), /Владелец подтвердил ожидания ситуаций перед запуском\. Определения карточек и оценки судьи человеком не проверялись\./);
+    assert.deepEqual(finished.caveats, [{ code: 'demo' }, { code: 'expectations_review' }], 'the teaching example, and what the owner confirmed: typed, each once');
     const results = output(await call(TOOL.results, {}));
     assert.deepEqual(results.lines, result.lines, 'the result reads the same when asked for again');
     assert.ok(results.failures.length > 0, 'the teaching agent asks for the number it was given');

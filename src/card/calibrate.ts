@@ -141,9 +141,9 @@ export async function calibrateRun(record: Experiment, work: CalibrationWork): P
     if (2 * pending.length > callsLeft(record, work)) { calibration.unfinished = 'budget'; return; }
     await judgeAll(record, pending, judge, work, receipt => { done.set(receipt.key, receipt); publish(); }, done.size);
   } catch (error) {
-    // A broken import or store stops only the calibration; the run's result is kept as it was.
+    // A broken import or store stops only the calibration; the run's result is kept as it was. Why it did not finish is
+    // the calibration's own typed cause, which its view says in the owner's words — never a second note to decode.
     calibration.unfinished ??= unfinishedCause(error, work.ctx.signal);
-    record.limitations.push(`Сверка с продом не завершена: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

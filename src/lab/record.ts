@@ -78,8 +78,8 @@ export function newRecord(input: CreateInput): Experiment {
     target: input.target, goldenCases: [], dialogues: input.dialogues, profiles: [], notes: '',
     evaluatorVersion: evaluatorVersion(input.settings),
     ...(input.targetVersion ? { targetVersion: input.targetVersion } : {}),
-    // Only what is particular to this record: what every run's number does not prove is said by its trust line.
-    limitations: input.mode === 'demo' ? ['Учебный пример: пользователь, судья и подготовка — детерминированные заготовки без модели; это не измерение качества модели.'] : [],
+    // Only what is particular to this record, typed (caveats.ts): what every run's number does not prove is said by its trust line.
+    limitations: [], ...(input.mode === 'demo' ? { caveats: [{ code: 'demo' as const }] } : {}),
   };
 }
 
@@ -112,7 +112,10 @@ export function freshDraft(previous: Experiment, scenarioIds?: string[]): Experi
   delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog; delete record.calibration;
   retainAcceptedTests(record);
   record.evaluatorVersion = evaluatorVersion(record.settings);
-  record.limitations = previous.limitations.filter(note => !note.startsWith('Scripted mode skipped') && !note.startsWith('Не удалось назвать типы провалов:')
-    && !note.startsWith('Внешнее состояние карточек не подтверждено'));
+  // Every note is about the work done on the earlier record — its run, its review, its re-assessment, its usage — and
+  // none of it is this draft's; only the teaching example stays what it is.
+  record.limitations = [];
+  delete record.caveats;
+  if (record.mode === 'demo') record.caveats = [{ code: 'demo' }];
   return record;
 }

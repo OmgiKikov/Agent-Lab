@@ -7,8 +7,11 @@ import { calibrateRun } from '../card/calibrate.js';
 import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from '../connection.js';
-import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type Revision, type Scenario, type UserMode } from '../contracts.js';
-import { BudgetExhausted } from '../errors.js';
+import { addCaveat, type CauseFailure } from '../caveats.js';
+import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type FailureMode, type Revision, type Scenario, type UserMode } from '../contracts.js';
+import { BudgetExhausted, Stopped } from '../errors.js';
+import { ProviderFailure } from '../llm/model-call.js';
+import { StructuredTaskError } from '../llm/structured.js';
 import type { CallContext, Runtime } from '../runtime.js';
 import { evaluateTrial } from '../evaluation.js';
 import { scenarioSources } from '../judge.js';
@@ -233,10 +236,10 @@ export async function start(lab: Lab, id: string, options: StartOptions): Promis
     fitPlan(record, !!options.raiseLimit);
     record.reviewedAt = new Date().toISOString();
     record.reviewMode = options.reviewer ?? 'human';
-    if (record.reviewMode === 'automated') record.limitations.push('Ожидания ситуаций проверены автоматически, без человека: спорные вердикты стоит посмотреть, однозначные годятся как предварительный результат.');
+    if (record.reviewMode === 'automated') addCaveat(record, { code: 'automated_review' });
     // The owner confirmed the expectations, and nothing else. The verdicts are produced after this
     // point, so no confirmation here can mean a person checked them: say so instead of going quiet.
-    if (record.reviewMode === 'expectations') record.limitations.push('Владелец подтвердил ожидания ситуаций перед запуском. Определения карточек и оценки судьи человеком не проверялись.');
+    if (record.reviewMode === 'expectations') addCaveat(record, { code: 'expectations_review' });
     record.manifestHash = measurementHash(record);
     moveTo(record, 'evaluating');
     record.message = 'Выполняю согласованный план проверки.';
@@ -316,15 +319,12 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
   const firstTrial = record.trials.length;
   const attempts: Array<{ userMode: UserMode; scenario: Scenario; repeat: number }> = [];
   for (const userMode of record.settings.userModes) {
-    const skipped: string[] = [];
+    let skipped = 0;
     for (const scenario of scenarios) {
-      if (userMode === 'scripted' && scenario.user.script === undefined) { skipped.push(scenario.id); continue; }
+      if (userMode === 'scripted' && scenario.user.script === undefined) { skipped++; continue; }
       for (let repeat = 0; repeat < record.settings.repeats; repeat++) attempts.push({ userMode, scenario, repeat });
     }
-    if (skipped.length) {
-      const note = `Scripted mode skipped ${skipped.length} card(s) without a script: ${skipped.join(', ')}.`;
-      if (!record.limitations.includes(note)) record.limitations.push(note);
-    }
+    if (skipped) addCaveat(record, { code: 'scripted_skipped', situations: skipped });
   }
   const fingerprintCheck = async (message: string) => {
     if (record.targetFingerprint && !sameTargetVersion(record.targetFingerprint, await targetFingerprint(record.target))) throw new Error(message);
@@ -358,10 +358,7 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
       // Every attempt of this run is counted by the rules of today's edition; a stored run keeps its own.
       trial.countingVersion = COUNTING_VERSION;
       record.trials.push(trial);
-      if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) {
-        const note = 'Внешнее состояние карточек не подтверждено адаптером (resetConfirmed): проверки состояния не измерены.';
-        if (!record.limitations.includes(note)) record.limitations.push(note);
-      }
+      if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) addCaveat(record, { code: 'state_unconfirmed' });
       if (trial.observation?.version) {
         if (record.targetRelease && record.targetRelease !== trial.observation.version) throw new Error('Внешний агент сообщил разные версии в одном прогоне. Сравнение недоступно.');
         record.targetRelease = trial.observation.version;
@@ -389,7 +386,7 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
  * known (the prompt among the owner's materials, the connection's promptFile, or a stored sandbox run's built-in
  * instructions when it is re-assessed), the cluster may quote the fragment that
  * governed the broken behaviour; quotes are checked verbatim. A failed clustering must not
- * lose a completed run: it is recorded as a limitation instead.
+ * lose a completed run: it is recorded as a typed note instead (caveats.ts causes_unnamed), with why.
  */
 export async function nameFailureModes(record: Experiment, runtime: Runtime, ctx: CallContext): Promise<void> {
   // Exactly the attempts the number calls failures: a cause must explain the headline, not a rubric it does not count.
@@ -408,15 +405,26 @@ export async function nameFailureModes(record: Experiment, runtime: Runtime, ctx
     trace: trial.events.filter(e => e.type !== 'simulator')
       .map(e => `#${e.seq} ${e.type}${e.tool ? ` ${e.tool}` : ''}: ${e.text ?? JSON.stringify(e.result ?? e.args ?? '')}`).join('\n').slice(0, 12000),
   }));
+  let prompt: string | undefined;
+  let modes: FailureMode[];
   try {
     const suppliedPrompt = record.sources.filter(source => source.kind === 'prompt').map(source => source.content).join('\n\n') || undefined;
-    const prompt = suppliedPrompt ?? (isRunnable(record.target)
+    prompt = suppliedPrompt ?? (isRunnable(record.target)
       ? (record.target.promptFile ? await readPrompt(record.target.promptFile) : undefined)
       : record.revisions.find(r => r.id === record.selectedRevisionId)?.spec.instructions);
-    const modes = await runtime.failureModes({ task: record.task, failures, ...(prompt !== undefined ? { prompt } : {}) }, ctx);
-    validateFailureModes(modes, failed, prompt);
-    record.failureModes = modes;
+    modes = await runtime.failureModes({ task: record.task, failures, ...(prompt !== undefined ? { prompt } : {}) }, ctx);
   } catch (error) {
-    record.limitations.push(`Не удалось назвать типы провалов: ${error instanceof Error ? error.message : String(error)}`);
+    addCaveat(record, { code: 'causes_unnamed', cause: causeFailure(error, ctx.signal) });
+    return;
   }
+  // Clusters that cite a dialogue that did not fail, or a quote the prompt does not hold, are the model's answer not holding.
+  try { validateFailureModes(modes, failed, prompt); } catch { addCaveat(record, { code: 'causes_unnamed', cause: 'rejected' }); return; }
+  record.failureModes = modes;
+}
+
+/** Why the failure causes could not be named, by the kind of what stopped the naming — never by its words. */
+function causeFailure(error: unknown, signal: AbortSignal): CauseFailure {
+  if (error instanceof Stopped) return error.reason === 'budget' ? 'budget' : 'stopped';
+  if (signal.aborted) return 'stopped';
+  return error instanceof ProviderFailure ? 'unavailable' : error instanceof StructuredTaskError ? 'rejected' : 'failed';
 }

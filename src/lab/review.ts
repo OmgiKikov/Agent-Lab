@@ -4,6 +4,7 @@ import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
 import { awaitingVerdict } from '../comparison.js';
 import { suiteEvidence } from '../connection.js';
+import { addCaveat } from '../caveats.js';
 import { addUsage, emptyUsage, fingerprint, humanReviewInputSchema, reassessmentSchema, validatePreparation, type Experiment, type HumanReviewInput, type ReassessmentInput } from '../contracts.js';
 import { assessmentRubrics } from '../assessment.js';
 import { assessTrial, grade } from '../evaluation.js';
@@ -61,8 +62,8 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
     record.targetRelease = previous.targetRelease;
     record.reviewedAt = new Date().toISOString(); record.reviewMode = 'automated';
     record.manifestHash = measurementHash(record);
-    record.limitations.push('Переоценка сохранённых фактов: агент и симулятор не запускались. Смена критериев или судьи не доказывает улучшение агента.');
-    if (input.codeOnly) record.limitations.push('Режим code-only пересчитал только точные проверки; модельные рубрики и кластеры не оценивались.');
+    addCaveat(record, { code: 'reassessment' });
+    if (input.codeOnly) addCaveat(record, { code: 'code_only' });
     moveTo(record, 'evaluating');
     await lab.operations.launch(record, async (ctx, operation) => {
       const runtime = input.codeOnly ? undefined : await lab.runtime(record);
