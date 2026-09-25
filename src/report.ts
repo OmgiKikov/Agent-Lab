@@ -6,7 +6,7 @@ import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
 import {
-  accuracyParts, alarmRow, causeItems, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, noRuleText, realityParts, reasonLabel,
+  accuracyParts, alarmRow, breakdownText, causeItems, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, noRuleText, realityParts, reasonLabel,
   operabilityText, rulesGapRows, saidText, scenarioRows, situationOutcomeText, toolExpectationsText, topicsNote, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
@@ -125,14 +125,14 @@ function judgeCheckBasis(check: NonNullable<ResultView['judgeCheck']>): string {
 
 /** How the number was made and what it rests on, in plain sentences for the fine print; the owner's own checks are said about the owner. */
 function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
-  const { agreement, breakdown, coverage, scope, stability } = view;
+  const { agreement, coverage, scope, stability } = view;
   const lines = [
     ...countingLines(view),
     ...(view.bar ? [`${ruleBarText(view.bar, READER)}.`] : []),
     `${countText(scope.cards, SITUATIONS)} · ${countText(scope.dialogues, ['разговор', 'разговора', 'разговоров'])} · клиента играет Lab${scope.judgeModel ? ` · судья — ${scope.judgeModel}` : ''}${scope.target ? ` · версия агента ${scope.target}` : ''}${scope.costUsd ? ` · $${scope.costUsd.toFixed(2)}` : ''}`,
     ...coverageSentence(view),
     ...(toolExpectationsText(view) ? [`${toolExpectationsText(view)}.`] : []),
-    ...(breakdown.goal.decided ? [`Запрос выполнен: ${breakdown.goal.met} из ${breakdown.goal.decided}.${breakdown.rules.decided ? ` Правила промпта нарушены: ${breakdown.rules.broken} из ${breakdown.rules.decided}.` : ''}`] : []),
+    ...(breakdownText(view) ? [breakdownText(view)!] : []),
     agreement.checked ? `Владелец агента согласился с решениями судьи в ${agreement.agreed} из ${countText(agreement.checked, ['проверенного случая', 'проверенных случаев', 'проверенных случаев'])}.`
       : view.reviewed.situations ? `Владелец агента сам проверил ${countText(view.reviewed.situations, ['ситуацию', 'ситуации', 'ситуаций'])}.`
       : agreement.queueFailures.length + agreement.sampledPasses.length ? 'Решения судьи ещё не проверялись человеком.' : '',

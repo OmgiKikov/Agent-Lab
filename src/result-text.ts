@@ -340,6 +340,8 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
  * checks marked for review, apart. A model's verdict is recorded evidence, not proof the customer behaved like a person.
  */
 function customerText(simulator: NonNullable<ResultView['simulator']>): string {
+  // A run whose situations carry no check of the customer said nothing of it: that, not «0 из N».
+  if (simulator.notChecked === simulator.conversations) return `Клиент: держался ли он своей ситуации, судья не проверял (${countText(simulator.conversations, ['разговор', 'разговора', 'разговоров'])}).`;
   const tail = [...(simulator.failed ? [`отошёл от ситуации — ${simulator.failed}`] : []), ...(simulator.unknown ? [`судья не уверен — ${simulator.unknown}`] : []),
     ...(simulator.notChecked ? [`не проверялось — ${simulator.notChecked}`] : [])];
   const flags = simulator.heuristicFlags ? ` Ещё в ${countText(simulator.heuristicFlags, ['разговоре', 'разговорах', 'разговорах'])} есть подозрения к клиенту — пометки на разбор.` : '';
@@ -622,8 +624,22 @@ export function causeItems(view: Pick<ResultView, 'topCauses' | 'moreCauses' | '
 }
 
 /**
+ * The two halves of the headline where the situations are counted by the client's request and the prompt's rules
+ * (ResultView.breakdown): how many requests were met, how many situations broke a rule — and which rule most often,
+ * when one stands out. Null where no situation has the prompt-rule half.
+ */
+export function breakdownText(view: Pick<ResultView, 'breakdown'>): string | null {
+  const { goal, rules, withoutRules } = view.breakdown;
+  if (!rules.decided) return null;
+  const common = rules.commonRule === null ? '' : `, чаще всего — правило ${rules.commonRule}${rules.commonRuleQuote ? ` «${oneLine(rules.commonRuleQuote)}»` : ''} (${rules.commonRuleCount})`;
+  return `Запрос клиента выполнен в ${goal.met} из ${countText(goal.decided, SITUATIONS_OF)}; правила промпта нарушены в ${rules.broken} из ${countText(rules.decided, SITUATIONS_OF)}${common}${
+    withoutRules ? `; без проверки правил промпта — ${withoutRules}` : ''}.`;
+}
+
+/**
  * «Почему ошибается»: up to three causes with their size, largest first (causeItems), each with its example when
- * `examples`, and how many more there are. When something was decided and nothing failed, the one honest sentence
+ * `examples`, and how many more there are; where the situations are counted by the request and the prompt's rules, how
+ * the failures split between them first (breakdownText). When something was decided and nothing failed, the one honest sentence
  * about what that does not prove — and that only the measured situations had no error when some were not measured.
  */
 export function causeRows(view: ResultView, options: { examples?: boolean } = {}): ResultRow[] {
@@ -632,7 +648,8 @@ export function causeRows(view: ResultView, options: { examples?: boolean } = {}
     return view.headline.decided ? [{ role: unmeasured ? 'muted' : 'good', indent: 0, text: noErrorsText(view.headline.decided, unmeasured) }] : [];
   }
   const { items, more, moreText } = causeItems(view);
-  return [{ role: 'heading', indent: 0, text: 'Почему ошибается' }, ...items.flatMap((cause, i): ResultRow[] => [
+  const split = breakdownText(view);
+  return [{ role: 'heading', indent: 0, text: 'Почему ошибается' }, ...(split ? [{ role: 'muted' as const, indent: 2, text: split }] : []), ...items.flatMap((cause, i): ResultRow[] => [
     { role: 'item', indent: 2, text: `${i + 1}  ${cause.text}`, right: countText(cause.count, SITUATIONS), short: String(cause.count) },
     ...(options.examples ? exampleRows(cause.example, 5).slice(cause.titled ? 1 : 0) : []),
   ]), ...(more ? [{ role: 'muted' as const, indent: 2, text: moreText }] : [])];

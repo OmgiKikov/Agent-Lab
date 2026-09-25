@@ -222,7 +222,8 @@ function rulesOf(record: Experiment, scenario: Scenario, register: Map<string, R
  * situation's own criteria, else the words of its first rule. Null when the record says none of it.
  */
 function expectedOf(record: Experiment, scenario: Scenario, kind: FailureExplanation['kind'], violated: RuleRef | undefined, register: Map<string, RuleRef>): string | null {
-  if (kind === 'rules') return violated ? `соблюдать правило «${violated.quote}»` : null;
+  // A broken rule that cannot be named is still what was expected: the prompt's rules, not «не записано».
+  if (kind === 'rules') return violated ? `соблюдать правило «${violated.quote}»` : 'соблюдать правила промпта';
   const criteria = oneLine(scenario.successCriteria ?? '');
   if (criteria) return criteria;
   const first = rulesOf(record, scenario, register)[0];

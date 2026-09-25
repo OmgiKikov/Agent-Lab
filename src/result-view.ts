@@ -5,7 +5,7 @@ import { agentMetricResult, COUNTING_RULES, GOAL_METRIC_ID, headlineMetricIds, l
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { judgeModel, stabilityAfterReassess, stabilityBetweenRuns, type Stability } from './comparison.js';
 import { topicView, trafficCoverage, type TopicView } from './coverage.js';
-import { failureExplanation, violatedRuleNumber, type FailureExplanation } from './explain.js';
+import { failureExplanation, ruleRegister, violatedRuleNumber, type FailureExplanation } from './explain.js';
 import type { TopicCoverage } from './miner/coverage.js';
 import { deriveRun, NOT_MEASURED_CODES, type CardPart, type NotMeasuredCode, type RunDerivation, type Verdict } from './run.js';
 import { SMALL_SAMPLE } from './interval.js';
@@ -201,9 +201,11 @@ export interface ResultView {
   /**
    * The two halves of the headline over the counted situations: requests met of those decided, situations that broke a
    * prompt rule of those where the rules were decided, the rule broken more often than any other (named only with a
-   * strict top count) and the counted situations without the prompt-rule check. Never changes the headline.
+   * strict top count; `commonRuleQuote`, its words in the owner's material) and the counted situations without the
+   * prompt-rule check. Never changes the headline.
    */
-  breakdown: { goal: { met: number; decided: number }; rules: { broken: number; decided: number; commonRule: number | null; commonRuleCount: number }; withoutRules: number };
+  breakdown: { goal: { met: number; decided: number };
+    rules: { broken: number; decided: number; commonRule: number | null; commonRuleCount: number; commonRuleQuote: string | null }; withoutRules: number };
   /**
    * Counted situations whose customer states the request and those who cannot (card `clarity`), each as handled of
    * decided; absent when no counted situation has a vague customer. Never changes the headline.
@@ -364,10 +366,11 @@ function breakdownOf(run: RunDerivation, counted: ResultCard[]): ResultView['bre
   }
   const [top, next] = [...tally.entries()].sort((a, b) => b[1] - a[1]);
   const commonRule = top && (!next || top[1] > next[1]) ? top[0] : null;
+  const quote = commonRule === null ? null : [...ruleRegister(record).values()].find(rule => rule.number === commonRule)?.quote ?? null;
   return {
     goal,
     rules: { broken: counted.filter(card => card.rules === 'fail').length, decided: counted.filter(card => card.rules === 'pass' || card.rules === 'fail').length,
-      commonRule, commonRuleCount: top && commonRule !== null ? top[1] : 0 },
+      commonRule, commonRuleCount: top && commonRule !== null ? top[1] : 0, commonRuleQuote: quote },
     withoutRules: counted.filter(card => card.goal !== 'none' && card.rules === 'none').length,
   };
 }
