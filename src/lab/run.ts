@@ -4,6 +4,8 @@ import { dirname, resolve } from 'node:path';
 import { assessmentRubrics } from '../assessment.js';
 import { runCalls, type PlannedAttempt } from '../card/budget.js';
 import { calibrateRun } from '../card/calibrate.js';
+import { storedEvidence } from '../card/prepare.js';
+import { customerRealism } from '../realism.js';
 import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from '../connection.js';
@@ -301,7 +303,20 @@ async function evaluateReviewed(lab: Lab, record: Experiment, ctx: CallContext, 
   // The synthetic result is complete; the same situations are now judged on their recorded conversations, out of what the run left.
   await calibrateRun(record, { runtime, ctx, store: lab.store, checkpoint: message => lab.operations.checkpoint(record, record.phase, message),
     callsLeft: () => operation.callLimit - operation.spent });
+  await compareCustomers(lab, record);
   await lab.operations.checkpoint(record, 'results_review', 'Диалоги и оценки готовы. Разберите провалы и проверьте поведение симулятора, прежде чем принимать результат.');
+}
+
+/**
+ * How the customers Lab played compare with the logged ones of the same situations (realism.ts): free, read from the
+ * imports the cards were made from. Logs that cannot be read leave it unsaid; the result stands either way.
+ */
+async function compareCustomers(lab: Lab, record: Experiment): Promise<void> {
+  const library = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot : undefined;
+  if (!library?.imports.length) return;
+  const evidence = await storedEvidence(lab.store, library).catch(() => undefined);
+  const realism = evidence && customerRealism(record, evidence);
+  if (realism) record.realism = realism;
 }
 
 const MANIFEST_DRIFTED = 'Условия измерения изменились во время прогона. Запустите повтор заново.';

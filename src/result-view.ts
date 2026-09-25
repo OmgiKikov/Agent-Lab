@@ -1,5 +1,5 @@
 import { countingRuleOf, headlineRule } from './card/expectations.js';
-import type { Experiment, Scenario, Trial, ValidationExclusion } from './contracts.js';
+import type { Experiment, Realism, Scenario, Trial, ValidationExclusion } from './contracts.js';
 import { isRunning } from './phases.js';
 import { agentMetricResult, COUNTING_RULES, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
@@ -193,6 +193,11 @@ export interface ResultView {
    * from its quality. Absent when every conversation got the agent's reply. Never changes the headline.
    */
   operability?: { conversations: number; noReply: number; serviceReply: number; broken: number };
+  /**
+   * The customers Lab played against the logged ones of the same situations (realism.ts): the customer's second
+   * assessment, apart from its fidelity to the situation. Absent without a situation from a log. Never changes the headline.
+   */
+  realism?: Realism;
   /** How much of the logs' traffic the counted situations cover: a run of cards sampled from logs whose topics were mapped; null otherwise. */
   topicCoverage: TopicCoverage | null;
   /** Found flips against the source run; absent when there is nothing to compare with. Never changes the headline. */
@@ -445,6 +450,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   if (scenarios.length) view.scenarios = scenarios;
   const operability = operabilityOf(record);
   if (operability) view.operability = operability;
+  if (record.realism) view.realism = structuredClone(record.realism);
   const clarity = clarityOf(record, counted);
   if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});

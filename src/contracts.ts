@@ -503,6 +503,13 @@ const toolChannelSchema = z.strictObject({ confirmed: z.boolean(), tools: z.arra
  */
 export const EXAM_TURNS = ['reply', 'buttons', 'handoff', 'no_reply', 'empty', 'service', 'missing'] as const;
 export type ExamTurn = typeof EXAM_TURNS[number];
+/**
+ * How the customers Lab played compare with the logged ones of the same situations (realism.ts): the mean number of
+ * customer messages after the opening a conversation, and the mean words of such a message. Never moves the number.
+ */
+const realismSideSchema = z.strictObject({ messages: z.number().nonnegative(), words: z.number().nonnegative() });
+export const realismSchema = z.strictObject({ conversations: z.number().int().positive(), synthetic: realismSideSchema, logged: realismSideSchema });
+export type Realism = z.infer<typeof realismSchema>;
 export const examResultSchema = z.strictObject({
   checkedAt: z.string(), status: z.enum(['passed', 'failed', 'absent']),
   paths: z.array(z.strictObject({ name: z.string().max(200), passed: z.boolean(), steps: z.array(z.strictObject({
@@ -521,6 +528,7 @@ export interface Experiment {
   preparationProgress?: PreparationProgress;
   toolChannel?: ToolChannel;
   connectionExam?: ExamResult;
+  realism?: Realism;
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
   sources: Source[]; settings: Settings; target: Target; requirements: Requirement[]; questions: string[];
@@ -644,6 +652,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   preparationProgress: preparationProgressSchema.optional(),
   toolChannel: toolChannelSchema.optional(),
   connectionExam: examResultSchema.optional(),
+  realism: realismSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(PHASES), message: z.string(),

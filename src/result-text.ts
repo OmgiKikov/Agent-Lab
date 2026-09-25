@@ -285,7 +285,27 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
     : notMeasured.of > 0 && remaining > 0
     ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${remaining} оставшихся ситуаций. Это границы, не прогноз.`
     : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';
-  return [judge, customer, metric, bounds];
+  const realism = realismText(view);
+  return [judge, customer, ...(realism ? [realism.text] : []), metric, bounds];
+}
+
+/** A mean as a person reads it: «1,5», «3». */
+const decimal = (value: number): string => value.toLocaleString('ru-RU', { maximumFractionDigits: 1 });
+
+/**
+ * The second assessment of the customer, apart from whether it kept to its situation: how the customers Lab played
+ * compare with the logged ones of the same situations (realism.ts) — how many messages after the opening, how many words
+ * in one. A customer much wordier than the real ones makes the agent's task easier than in production: that is a
+ * warning. Null for a run with no situation from a log.
+ */
+export function realismText(view: Pick<ResultView, 'realism'>): { text: string; warn: boolean } | null {
+  const found = view.realism;
+  if (!found) return null;
+  const ratio = found.logged.words ? found.synthetic.words / found.logged.words : null;
+  const wordy = ratio !== null && ratio >= 1.5, terse = ratio !== null && ratio <= 2 / 3;
+  return { warn: wordy || terse,
+    text: `Похожесть клиента на реальных (${countText(found.conversations, ['разговор', 'разговора', 'разговоров'])} по ситуациям из логов): реплик после первой — в среднем ${decimal(found.synthetic.messages)} у клиента Lab и ${decimal(found.logged.messages)} у реального; слов в реплике — ${decimal(found.synthetic.words)} и ${decimal(found.logged.words)}.${
+      wordy ? ' Клиент Lab заметно многословнее реальных: с ним агенту может быть легче, чем в проде.' : terse ? ' Клиент Lab заметно немногословнее реальных.' : ''} Это сравнение длины и числа реплик, а не оценка того, похож ли клиент на человека.` };
 }
 
 /**
