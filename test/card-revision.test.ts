@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Experiment } from '../src/contracts.js';
 import type { Runtime } from '../src/runtime.js';
 import { preparationCeiling, PROPOSAL_ATTEMPTS } from '../src/card/budget.js';
+import { hostGrant } from '../src/card/commands.js';
 import { citationId, type DialogueProposal } from '../src/card/proposal.js';
 import { storedEvidence } from '../src/card/prepare.js';
 import { cardSchema, preparationProgressSchema, type CardPreparation } from '../src/card/schema.js';
@@ -148,6 +149,23 @@ test('a card whose review did not happen inside the preparation gets its one rev
     await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
     await lab.waitForIdle();
     assert.deepEqual([lateOf(seen).length, (await lab.get(draft.id)).usage.calls], [2, calls]);
+  });
+});
+
+test('a card the owner changed is theirs: the check does not have the model write it over', async () => {
+  const seen = received();
+  await withLab(failingFirstReview(seen), async lab => {
+    const draft = await lab.create(cardInput(), { parallel: 1 });
+    await lab.waitForIdle();
+    const late = (await lab.readCards(draft.id)).library.cards.find(card => card.title === proposals.late.title)!;
+    const owners = 'не спрашивать номер терминала второй раз';
+    const edit = await lab.prepareCardCommand(draft.id, { kind: 'edit_expectation', cardId: late.id, expectationId: 'e1', text: owners }, { via: 'cli-yes' });
+    await lab.applyCardCommand(draft.id, edit, hostGrant(edit, 'confirmed'));
+    await lab.checkCards(draft.id, libraryHash((await lab.readCards(draft.id)).library));
+    await lab.waitForIdle();
+    const card = (await lab.readCards(draft.id)).library.cards.find(item => item.number === late.number)!;
+    assert.deepEqual([lateOf(seen).length, card.agentMust[0]!.text, (await statuses(lab, draft.id))[0]], [1, owners, 'unusable'],
+      'the blocked claim stays for the owner; their wording is not replaced');
   });
 });
 

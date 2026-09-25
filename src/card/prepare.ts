@@ -140,6 +140,9 @@ function refusalText(failure: ProviderFailure, work: 'preparation' | 'check'): s
   return work === 'preparation' ? `${why} Готовые ситуации сохранены, и ни один разговор не потерян: продолжите подготовку${when}.`
     : `${why} Проверенное сохранено: повторите проверку${when}.`;
 }
+/** Whether one of the owner's commands names the card: an edit, an answer, a settled doubt, a filled mark. */
+const namedByOwner = (library: LibraryV2, cardId: string): boolean => library.receipts.some(({ command }) =>
+  'cardId' in command ? command.cardId === cardId : command.kind === 'decide_plausible' && command.facts.some(fact => fact.cardId === cardId));
 /** Why a step's answers never passed, in the owner's words. */
 function unusableText(stage: 'select' | 'propose', error: StructuredTaskError): string {
   if ([...causes(error)].some(cause => cause instanceof AllowanceSpent)) return ALLOWANCE_SPENT;
@@ -402,8 +405,9 @@ class Preparation {
    */
   private async revise(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, card: Card, whole: boolean): Promise<void> {
     if (this.progress.revised?.includes(unit)) return;
-    // A card of a logged conversation is written again only beside that conversation.
-    if (card.origin.kind === 'dialogue' && !dialogue) return;
+    // A card of a logged conversation is written again only beside that conversation; a card the owner changed or
+    // decided on is theirs, and no model writes it over.
+    if (card.origin.kind === 'dialogue' && !dialogue || namedByOwner(this.library, card.id)) return;
     const blocked = blockedClaims(card, { library: this.library, evidence: this.evidence });
     if (!blocked.length) return;
     const spent = async () => { this.progress.revised = [...this.progress.revised ?? [], unit]; await this.publish(); };
