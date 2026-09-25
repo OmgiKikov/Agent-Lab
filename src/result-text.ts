@@ -286,7 +286,8 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
     : 'Клиент: реактивное поведение в этом прогоне не измерено.';
   const remaining = Math.max(0, notMeasured.of - headline.decided);
   const metric = `Метрика: оценено ${headline.decided} из ${notMeasured.of} ситуаций. Процент относится только к оценённым ситуациям.`;
-  const bounds = view.connection && view.connection !== 'passed' ? 'Процент и его границы появятся, когда подключение агента пройдёт экзамен.'
+  const bounds = view.integrity === 'altered' ? 'Процент и его границы не считаются: запись изменена после прогона.'
+    : view.connection && view.connection !== 'passed' ? 'Процент и его границы появятся, когда подключение агента пройдёт экзамен.'
     : notMeasured.of > 0 && remaining > 0
     ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${remaining} оставшихся ситуаций. Это границы, не прогноз.`
     : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';

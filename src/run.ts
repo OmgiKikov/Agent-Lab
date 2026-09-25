@@ -34,7 +34,7 @@ export type Verdict = 'pass' | 'fail' | 'unknown';
  * leave a situation `unknown` and the tie-break when two reasons are equally frequent.
  */
 export const NOT_MEASURED_CODES = [
-  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'agent_no_reply', 'measurement_error', 'attempts_mismatch',
+  'record_altered', 'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'agent_no_reply', 'measurement_error', 'attempts_mismatch',
   'judge_error', 'judge_unavailable', 'judge_stopped', 'human_invalid', 'expectations_wrong', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
   'human_unknown', 'not_judged', 'judge_split', 'no_evidence', 'judge_unclear',
 ] as const;
@@ -397,6 +397,9 @@ export function deriveRun(input: Experiment): RunDerivation {
   const known = memo.get(input);
   if (known?.stamp === stamp) return known.run;
   const record = observedRecord(input);
+  // Evidence changed after the run decides nothing (seal.ts): every situation is «не измерено — запись изменена после прогона».
+  const integrity = recordIntegrity(input);
+  const altered = integrity === 'altered';
   const controls = new Set((record.positiveControlScenarioIds ?? []).filter(id => record.scenarios.some(scenario => scenario.id === id)));
   const attempts = new Map<string, AttemptDerivation>();
   const situations = record.scenarios.map((scenario): SituationDerivation => {
@@ -404,11 +407,14 @@ export function deriveRun(input: Experiment): RunDerivation {
     const verdict = cardVerdict(record, scenario, control ? 'goal' : 'headline');
     const parts = headlineCardOutcome(record, scenario);
     const own = record.trials.filter(trial => trial.scenarioId === scenario.id).map(trial => {
-      const attempt = { trial, usable: measurementUsable(scenario, trial, record.humanReviews), verdict: headlineTrialResult(scenario, trial, record.humanReviews) };
+      const attempt = { trial, usable: measurementUsable(scenario, trial, record.humanReviews), verdict: altered ? 'unknown' as const : headlineTrialResult(scenario, trial, record.humanReviews) };
       attempts.set(trial.id, attempt);
       return attempt;
     });
     const decided = new Set(own.map(attempt => attempt.verdict).filter(v => v !== 'unknown'));
+    const undecided = (part: Verdict | 'none'): Verdict | 'none' => part === 'none' ? 'none' : 'unknown';
+    if (altered) return { scenario, control, outcome: 'unknown', reason: 'record_altered', goal: undecided(parts.goal), rules: undecided(parts.rules),
+      parts: parts.parts.map(part => ({ ...part, outcome: 'unknown' })), attempts: own, flaky: false };
     return { scenario, control, outcome: verdict.outcome, ...(verdict.reason ? { reason: verdict.reason } : {}), goal: parts.goal, rules: parts.rules,
       parts: parts.parts, attempts: own, flaky: decided.size > 1 };
   });
@@ -417,7 +423,7 @@ export function deriveRun(input: Experiment): RunDerivation {
     const situation = byScenario.get(trial.scenarioId);
     return !!situation && !situation.control && situation.outcome === 'fail' && attempts.get(trial.id)?.verdict === 'fail';
   });
-  const run: RunDerivation = { record, situations, situation: id => byScenario.get(id), attempt: id => attempts.get(id), failedAttempts, integrity: recordIntegrity(input) };
+  const run: RunDerivation = { record, situations, situation: id => byScenario.get(id), attempt: id => attempts.get(id), failedAttempts, integrity };
   memo.set(input, { stamp, run });
   return run;
 }

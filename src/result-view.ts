@@ -32,6 +32,7 @@ export { SMALL_SAMPLE, wilson } from './interval.js';
 
 /** Why a situation was not measured, in the owner's words: the tail of «не измерено N — …». */
 export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
+  record_altered: 'запись изменена после прогона',
   in_progress: 'ещё проверяется',
   not_reached: 'прогон остановился раньше',
   stopped: 'разговор остановлен',
@@ -71,7 +72,7 @@ export const NOT_MEASURED_ABOUT_OWNER: Partial<Record<NotMeasuredCode, string>> 
  * Each side asks the owner a different decision (inbox.ts), and a customer's side is a problem of the test (problems.ts).
  */
 export const NOT_MEASURED_SIDE: Record<NotMeasuredCode, 'agent' | 'client' | 'judge' | null> = {
-  in_progress: null, not_reached: null, stopped: null, attempts_mismatch: null, human_invalid: null, expectations_wrong: null, human_unknown: null,
+  record_altered: null, in_progress: null, not_reached: null, stopped: null, attempts_mismatch: null, human_invalid: null, expectations_wrong: null, human_unknown: null,
   agent_error: 'agent', service_reply: 'agent', agent_no_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent',
   turn_limit: 'client', simulator_error: 'client', simulator_deviated: 'client', simulator_unclear: 'client',
   judge_error: 'judge', judge_unavailable: 'judge', judge_stopped: 'judge',
