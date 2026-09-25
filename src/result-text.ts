@@ -288,17 +288,34 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
   return [judge, customer, metric, bounds];
 }
 
+/**
+ * «Работоспособность»: the conversations where the customer got no reply of the agent, apart from its quality — «в 2 из
+ * 20 разговоров клиент не получил ответа агента (агент не дал ответа — 1, вместо агента ответил стенд — 1)». Null when
+ * the agent answered in every conversation.
+ */
+export function operabilityText(view: Pick<ResultView, 'operability'>): string | null {
+  const found = view.operability;
+  if (!found) return null;
+  const parts = [...(found.noReply ? [`агент не дал ответа — ${found.noReply}`] : []), ...(found.serviceReply ? [`вместо агента ответил стенд — ${found.serviceReply}`] : []),
+    ...(found.broken ? [`сбой агента — ${found.broken}`] : [])];
+  const total = found.noReply + found.serviceReply + found.broken;
+  return `Работоспособность: в ${total} из ${countText(found.conversations, ['разговора', 'разговоров', 'разговоров'])} клиент не получил ответа агента (${parts.join(', ')}). Эти разговоры не считаются ошибками агента по существу и не входят в процент.`;
+}
+
 /** The first block of every surface: alarm, number, trust line, reality line, the judge check, and how the synthetic customers compare with production. */
 export function headRows(view: ResultView): ResultRow[] {
   const segments = trustSegments(view);
   const trust = segments.map(part => part.text);
   const reality = realityParts(view);
   const checked = judgeCheckText(view);
+  const operability = operabilityText(view);
   return [
     ...[alarmRow(view)].filter((row): row is ResultRow => row !== null),
     accuracyRow(view),
     // A terminal paints a row in one colour: a trust line with a warning in it is painted as the warning.
     ...(trust.length ? [{ role: segments.some(part => part.warn) ? 'trust:small' : 'trust', indent: 0, text: trust.join(' · '), parts: trust } as ResultRow] : []),
+    // Whether the agent answered at all stands apart from how well: a conversation without its reply is its working state.
+    ...(operability ? [{ role: 'trust:small', indent: 0, text: operability } as ResultRow] : []),
     ...(reality.length ? [{ role: 'reality', indent: 0, text: reality.join(' · '), parts: reality } as ResultRow] : []),
     // How far the judge itself can be trusted, measured without a person: a warning is an alarm, like a failed control.
     ...(checked ? [{ role: checked.warn ? 'alarm' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
@@ -383,6 +400,28 @@ export const judgeQuestionText = (verdict: 'pass' | 'fail'): string => `Судь
 
 /** The same about the judge's reading of a logged conversation, expectation by expectation. */
 export const logQuestionText = (targets: readonly Pick<LogTarget, 'letter' | 'judge'>[]): string => `Судья по логу решил: ${logVerdictsText(targets)}. Вы согласны?`;
+
+/** «1 из 2», with the situations not measured beside it: a scenario is never read as handled on what was not measured. */
+const handledCell = (item: { passed: number; decided: number; unmeasured: number }): string =>
+  `${item.decided ? `${item.passed} из ${item.decided}` : '—'}${item.unmeasured ? ` · не измерено ${item.unmeasured}` : ''}`;
+
+/**
+ * «По сценариям» — the owner's business question answered in the plan's words (card/plan.ts): each scenario of the run,
+ * the customers' question and how many of its situations the agent handled; under it each variation, when there are
+ * several, and the expectations it broke most often, of the situations they were judged in. Shown once a situation of
+ * a scenario is decided or left unmeasured.
+ */
+export function scenarioRows(view: Pick<ResultView, 'scenarios'>): ResultRow[] {
+  const scenarios = view.scenarios?.filter(scenario => scenario.decided || scenario.unmeasured) ?? [];
+  if (!scenarios.length) return [];
+  return [{ role: 'heading', indent: 0, text: 'По сценариям', right: 'справился' }, ...scenarios.flatMap((scenario): ResultRow[] => [
+    { role: 'item', indent: 2, text: `«${oneLine(scenario.question)}»`, right: handledCell(scenario) },
+    ...(scenario.variations.length > 1 ? scenario.variations.filter(variation => variation.decided || variation.unmeasured)
+      .map((variation): ResultRow => ({ role: 'item:muted', indent: 4, text: `${oneLine(variation.title)}${variation.origin === 'rules' ? ' — не из логов' : ''}`, right: handledCell(variation) })) : []),
+    ...scenario.broken.slice(0, 2).map((item): ResultRow => ({ role: 'muted', indent: 4,
+      text: `Нарушено: ${item.mustNot ? 'нельзя — ' : ''}${oneLine(item.text)} — в ${item.count} из ${countText(item.of, SITUATIONS_OF)}` })),
+  ])];
+}
 
 const MAX_TOPICS = 5;
 /** «По темам»: at most five topics by share, the rest in one row, then the share no situation covers. */
@@ -617,7 +656,7 @@ export function barRows(view: ResultView): ResultRow[] {
 export function resultScreen(view: ResultView, options: { surface: 'board' | 'cli'; details?: boolean; now?: Date }): ResultRow[] {
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
-  const blocks = [headRows(view), topicRows(view), causeRows(view),
+  const blocks = [headRows(view), scenarioRows(view), topicRows(view), causeRows(view),
     ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
     [runLine(view, options.now), ...barRows(view)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
@@ -642,7 +681,7 @@ export function chatBlock(view: ResultView, options: { expanded: boolean }): Res
       ...(causeParts.length ? [{ role: 'muted' as const, indent: 2, text: `Чаще всего: ${causeParts.join(' · ')}`, parts: [`Чаще всего: ${causeParts[0]}`, ...causeParts.slice(1)] }] : [])];
   }
   const indent = (rows: ResultRow[]) => rows.map(row => ({ ...row, indent: row.indent + 2 }));
-  const blocks = [head, indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
+  const blocks = [head, indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
 

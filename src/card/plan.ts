@@ -201,3 +201,44 @@ export function variationOf(library: Pick<LibraryV2, 'plan'>, card: { scenarioRe
   const ref = card.scenarioRef;
   return ref && library.plan?.find(scenario => scenario.id === ref.scenarioId)?.variations.find(variation => variation.id === ref.variationId)?.title;
 }
+
+/** A situation of a run as the plan counts it: its verdict and each duty's (e1…), over every attempt (run.ts). */
+export interface PlannedSituation { scenarioId: string; outcome: 'pass' | 'fail' | 'unknown'; parts: readonly { id: string; outcome: 'pass' | 'fail' | 'unknown' }[] }
+
+/**
+ * One business scenario in a run's result: its situations handled of those decided and those not measured — over the
+ * scenario and over each variation — and the expectations of the plan the agent broke, most often first, each of the
+ * decided situations it was judged in. The answer to the owner's question in the plan's own words.
+ */
+export interface ScenarioOutcome {
+  question: string;
+  passed: number; decided: number; unmeasured: number;
+  variations: { title: string; origin: 'logs' | 'rules'; passed: number; decided: number; unmeasured: number }[];
+  broken: { text: string; mustNot: boolean; count: number; of: number }[];
+}
+
+/**
+ * The run's counted situations by the scenarios of the accepted plan; a scenario none of them is an example of is not
+ * listed, and neither are situations of no scenario. Pure: the verdicts are the run's own (run.ts), never decided here.
+ */
+export function planOutcomes(library: Pick<LibraryV2, 'plan' | 'cards'>, situations: readonly PlannedSituation[]): ScenarioOutcome[] {
+  const cards = new Map(library.cards.map(card => [card.id, card]));
+  return (library.plan ?? []).flatMap(scenario => {
+    const mine = situations.flatMap(situation => {
+      const card = cards.get(situation.scenarioId);
+      return card?.scenarioRef?.scenarioId === scenario.id ? [{ situation, card }] : [];
+    });
+    if (!mine.length) return [];
+    const count = (items: typeof mine) => ({ passed: items.filter(item => item.situation.outcome === 'pass').length,
+      decided: items.filter(item => item.situation.outcome !== 'unknown').length, unmeasured: items.filter(item => item.situation.outcome === 'unknown').length });
+    const variations = scenario.variations.map(variation => ({ title: variation.title, origin: variation.origin,
+      ...count(mine.filter(item => item.card.scenarioRef?.variationId === variation.id)) }));
+    const broken = scenario.expectations.map(expectation => {
+      const judged = mine.flatMap(({ situation, card }) => situation.outcome === 'unknown' ? []
+        : card.agentMust.filter(duty => duty.planExpectationId === expectation.id).map(duty => situation.parts.find(part => part.id === duty.id)?.outcome ?? 'unknown'));
+      return { text: expectation.text, mustNot: expectation.strength === 'must_not', count: judged.filter(outcome => outcome === 'fail').length,
+        of: judged.filter(outcome => outcome !== 'unknown').length };
+    }).filter(item => item.count > 0).sort((a, b) => b.count - a.count);
+    return [{ question: scenario.question, ...count(mine), variations, broken }];
+  });
+}

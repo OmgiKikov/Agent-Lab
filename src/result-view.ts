@@ -1,5 +1,5 @@
 import { countingRuleOf, headlineRule } from './card/expectations.js';
-import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
+import type { Experiment, Scenario, Trial, ValidationExclusion } from './contracts.js';
 import { isRunning } from './phases.js';
 import { agentMetricResult, COUNTING_RULES, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
@@ -16,6 +16,7 @@ import { ruleBar, type RuleBar } from './card/rulebook.js';
 import { judgeCheckSummary, type JudgeCheck, type JudgeCheckSummary } from './judge-check.js';
 import { roleChoices } from './llm/models.js';
 import { simulatorEvidence, type SimulatorEvidence } from './simulator-evidence.js';
+import { planOutcomes, type ScenarioOutcome } from './card/plan.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -180,6 +181,18 @@ export interface ResultView {
   moreCauses: number;
   /** Per-topic rows and the traffic-weighted estimate, when the run's situations come from at least two topics. */
   topics: TopicView | null;
+  /**
+   * The counted situations by the business scenarios of the accepted plan (card/plan.ts): handled of decided per scenario
+   * and variation, and the plan's expectations broken. Absent for a run of no plan. Never changes the headline.
+   */
+  scenarios?: ScenarioOutcome[];
+  /**
+   * Whether the agent answered its customers at all, over every conversation of the run: those it left without a reply
+   * (`no_reply`), answered with a stand's service text, or broke on (an error, a timeout). Such a conversation is never
+   * the agent's error of substance, and it never quietly drops out either: it is the agent's working state, told apart
+   * from its quality. Absent when every conversation got the agent's reply. Never changes the headline.
+   */
+  operability?: { conversations: number; noReply: number; serviceReply: number; broken: number };
   /** How much of the logs' traffic the counted situations cover: a run of cards sampled from logs whose topics were mapped; null otherwise. */
   topicCoverage: TopicCoverage | null;
   /** Found flips against the source run; absent when there is nothing to compare with. Never changes the headline. */
@@ -427,6 +440,11 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     ...(stability ? { stability } : {}),
   };
   if (withheld && view.topics) view.topics = { ...view.topics, weighted: null };
+  const library = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot : undefined;
+  const scenarios = library?.plan ? planOutcomes(library, counted) : [];
+  if (scenarios.length) view.scenarios = scenarios;
+  const operability = operabilityOf(record);
+  if (operability) view.operability = operability;
   const clarity = clarityOf(record, counted);
   if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
@@ -437,6 +455,13 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   if (judgeCheck) view.judgeCheck = judgeCheck;
   if (judgedByBuilder(record)) view.sameModelJudge = true;
   return { ...view, next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+}
+
+/** The conversations the agent left without its reply, by how; undefined when it answered in every one (the typed causes only). */
+function operabilityOf(record: Experiment): ResultView['operability'] {
+  const count = (cause: Trial['invalidCause']) => record.trials.filter(trial => trial.invalidCause === cause).length;
+  const operability = { conversations: record.trials.length, noReply: count('no_reply'), serviceReply: count('service_reply'), broken: count('agent') };
+  return operability.noReply + operability.serviceReply + operability.broken ? operability : undefined;
 }
 
 /**
