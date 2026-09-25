@@ -134,9 +134,14 @@ export class ExperimentStore {
     try { await work(); }
     finally { try { await unlink(path); } finally { held.delete(token); } }
   }
-  /** Only writers initialize; atomic records and the journal can be read without owning the lock. */
+  /**
+   * Only writers initialize; atomic records and the journal can be read without owning the lock. The folder lives in the
+   * owner's project and holds production dialogues: it ignores itself for git (`.gitignore` with `*`, the file included),
+   * written once, whatever the project's own .gitignore says, so `git add -A` never takes it into a repository.
+   */
   async init(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    await createFileExclusive(join(this.directory, '.gitignore'), '*\n');
     const observed = await this.lock();
     if (!observed) await this.acquire();
     else {
