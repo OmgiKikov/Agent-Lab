@@ -323,14 +323,20 @@ async function envNames(files: Entry[], reader: Reader): Promise<ProjectDetectio
 const entryFiles = (target: RunnableTarget, root: string): string[] =>
   target.kind === 'module' ? [target.path] : target.kind === 'command' ? target.args.map(arg => resolve(target.cwd ?? root, arg)) : [];
 /**
+ * A saved connection in the project folder itself — the one Lab or the owner put there. One deeper in the tree (a
+ * vendored tool, a cloned example) is someone else's: it may start anything and run any release hook, so it is only
+ * ever the owner's pick.
+ */
+const ownConnection = (item: AgentEvidence): boolean => item.kind === 'connection' && !item.file.includes(sep);
+/**
  * Sure only when a file speaks Lab's contract whole: a module's createSession with its respond, or a JSON-lines loop,
- * and the fields of a Lab request besides; either alone may expect other fields. A script or an address alone shows
- * nothing of the protocol. Whatever is not sure is the owner's pick.
+ * and the fields of a Lab request besides; either alone may expect other fields — or when it is the project's own saved
+ * connection. A script or an address alone shows nothing of the protocol. Whatever is not sure is the owner's pick.
  */
 function confidence(evidence: AgentEvidence[]): Confidence {
   const kinds = new Set(evidence.map(item => item.kind));
   const contract = kinds.has('factory') || kinds.has('json_lines');
-  return kinds.has('connection') || contract && kinds.has('protocol_fields') ? 'high' : contract ? 'medium' : 'low';
+  return evidence.some(ownConnection) || contract && kinds.has('protocol_fields') ? 'high' : contract ? 'medium' : 'low';
 }
 
 /** Looks through the project folder and proposes the agent connection, the logs, the materials and the prompt. Read-only. */
@@ -413,16 +419,18 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     const started = interpreter(script.argv[0]!);
     add(`file:${script.entry}`, { kind: 'command', command: started.command, args: script.argv.slice(1), cwd: script.cwd }, [script.evidence, ...started.evidence]);
   }
-  // A saved connection absorbs what the files it starts showed, so one agent is proposed once.
-  for (const [key, draft] of drafts) if (key.startsWith('connection:')) for (const entry of entryFiles(draft.target, root)) {
+  // The project's own saved connection absorbs what the files it starts showed, so one agent is proposed once; a
+  // connection from deeper in the tree does not, so the project's own file stays a choice without it.
+  for (const [key, draft] of drafts) if (key.startsWith('connection:') && draft.evidence.some(ownConnection)) for (const entry of entryFiles(draft.target, root)) {
     const same = drafts.get(`file:${entry}`);
     if (same) { draft.evidence.push(...same.evidence); drafts.delete(`file:${entry}`); }
   }
 
   const has = (agent: AgentCandidate, kind: AgentEvidence['kind']) => agent.evidence.some(item => item.kind === kind) ? 0 : 1;
+  const own = (agent: AgentCandidate) => agent.evidence.some(ownConnection) ? 0 : 1;
   const depth = (agent: AgentCandidate) => agent.evidence[0]!.file.split(sep).length;
   const agents = [...drafts.values()].map(draft => ({ ...draft, confidence: confidence(draft.evidence) }))
-    .sort((a, b) => RANK[a.confidence] - RANK[b.confidence] || has(a, 'connection') - has(b, 'connection') || has(a, 'script') - has(b, 'script')
+    .sort((a, b) => RANK[a.confidence] - RANK[b.confidence] || own(a) - own(b) || has(a, 'script') - has(b, 'script')
       || depth(a) - depth(b) || a.evidence[0]!.file.localeCompare(b.evidence[0]!.file));
 
   for (const name of systemNames) for (const { file, names } of constants) {
@@ -481,10 +489,45 @@ function shownFile(file: string, root: string): string {
   return file.startsWith(`${home}${sep}`) ? `~${file.slice(home.length)}` : file;
 }
 
+/** Characters a word of a command needs no quotes for; with any other — a space, a quote, `;`, `$`, a letter beyond Latin — it is quoted. */
+const PLAIN_WORD = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_@%+=:,./-~');
+/** A word of a command as a shell would take it: single-quoted wherever its bounds would not show otherwise. A command line is structure. */
+export const shellWord = (word: string): string => word && [...word].every(char => PLAIN_WORD.has(char)) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * A command exactly as Lab starts it — the program and every argument word for word, quoted where a shell would need
+ * it, so `bash -c 'touch x; …'` never reads as several arguments. Only an absolute path is shortened: from `cwd` when
+ * it lies inside it (a program as `./deploy.sh`, never to be taken for one found on PATH), from ~ otherwise.
+ */
+export function commandText(command: string, args: readonly string[], cwd: string): string {
+  const shown = (part: string) => isAbsolute(part) ? shownFile(part, cwd) : part;
+  const program = shown(command);
+  const local = isAbsolute(command) && !program.startsWith('~') && !isAbsolute(program);
+  return [local ? `./${program}` : program, ...args.map(shown)].map(shellWord).join(' ');
+}
+
+/** The folder a command runs in, as the owner finds it: the project folder itself, a folder inside it, a path from ~. */
+export const folderText = (folder: string, root: string): string => relative(root, folder) ? `в папке ${shownFile(folder, root)}` : 'в папке проекта';
+
+/** A connection's release hook as the run dialog and the owner's pick say it: the command word for word and its folder. */
+export const releaseText = (release: NonNullable<RunnableTarget['release']>, root: string): string =>
+  `${commandText(release.command, release.args, release.cwd ?? root)} ${folderText(release.cwd ?? root, root)}`;
+
 /** How the owner recognises the agent: its start command, its module or its address; files are shown from where the agent starts. */
 export function targetLabel(target: RunnableTarget, root: string): string {
-  if (target.kind === 'command') return [target.command, ...target.args].map(part => isAbsolute(part) ? shownFile(part, target.cwd ?? root) : part).join(' ');
+  if (target.kind === 'command') return commandText(target.command, target.args, target.cwd ?? root);
   return target.kind === 'module' ? `модуль ${shownFile(target.path, root)}` : target.url;
+}
+
+/**
+ * What the owner must know of a candidate before taking it, beyond how it starts: that it is a connection saved deeper
+ * in the tree, which nothing shows to be theirs, and the release hook it would run before every run.
+ */
+export function candidateWarnings(agent: AgentCandidate, root: string): string[] {
+  return [
+    ...agent.evidence.some(item => item.kind === 'connection') && !agent.evidence.some(ownConnection) ? ['подключение из вложенной папки — Lab возьмёт его, только если вы выберете'] : [],
+    ...agent.target.release ? [`перед прогоном выполнит: ${releaseText(agent.target.release, root)}`] : [],
+  ];
 }
 
 /**
@@ -519,8 +562,11 @@ export function detectionLines(detection: ProjectDetection): string[] {
   return [
     `Agent Lab посмотрел папку «${basename(root)}» — ничего не запускал и не менял.`, '',
     'Агент',
-    ...agents.length ? agents.slice(0, SHOWN).flatMap(agent => [`  ${agent.confidence === 'high' ? '✓' : '?'} ${targetLabel(agent.target, root)}${agent.target.kind === 'http' && !agent.evidence.some(item => item.kind === 'connection') ? ADDRESS_NOTE : CONFIDENCE_NOTE[agent.confidence]}`,
-      ...agent.evidence.map(item => `      ${evidenceText(item)}`)]) : ['  не нашёл — Lab спросит, как запускать агента'],
+    ...agents.length ? agents.slice(0, SHOWN).flatMap(agent => {
+      const warnings = candidateWarnings(agent, root);
+      const note = warnings.length ? ` — ${warnings.join('; ')}` : agent.target.kind === 'http' && !agent.evidence.some(item => item.kind === 'connection') ? ADDRESS_NOTE : CONFIDENCE_NOTE[agent.confidence];
+      return [`  ${agent.confidence === 'high' ? '✓' : '?'} ${targetLabel(agent.target, root)}${note}`, ...agent.evidence.map(item => `      ${evidenceText(item)}`)];
+    }) : ['  не нашёл — Lab спросит, как запускать агента'],
     ...more(agents.length), '',
     'Логи с разговорами',
     ...logs.length ? logs.slice(0, SHOWN).map(logLine) : ['  не нашёл файлов с разговорами (JSON, JSONL, XLSX, CSV)'],

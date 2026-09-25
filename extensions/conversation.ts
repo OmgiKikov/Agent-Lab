@@ -1,4 +1,4 @@
-import type { Experiment, Trial } from '../src/contracts.js';
+import { isRunnable, type Experiment, type RunnableTarget, type Trial } from '../src/contracts.js';
 import { assessmentRubrics } from '../src/assessment.js';
 import type { RunComparison } from '../src/comparison.js';
 import { plannedTrials } from '../src/run.js';
@@ -7,7 +7,9 @@ import { judgedScenario } from '../src/card/legacy-v1.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
 import { accuracyParts, comparisonRows, noRuleText, saidText, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
-import { agentLine } from '../src/workspace.js';
+import { shownAddress } from '../src/connect.js';
+import { commandText, folderText, releaseText, targetLabel } from '../src/detect.js';
+import { agentLine, agentOwnName, agentVersion } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
 import { clip, oneLine } from '../src/text.js';
 import { standing } from './records.ts';
@@ -93,14 +95,39 @@ export function scenarioPlan(record: Experiment): LaunchPlan {
     judgeCalls: record.scenarios.reduce((sum, scenario) => sum + votes(scenario) * attempts(scenario), 0), outside: null };
 }
 
+/** What of a run's connection the chat's model, not the owner, wrote: said next to it in the run dialog. */
+const PROPOSED: Record<RunnableTarget['kind'], string> = { command: 'команду предложила модель', module: 'модуль предложила модель', http: 'адрес предложила модель' };
+
 /**
- * The run dialog (docs/design/ui-spec.md §4.6): what runs, the agent and where Lab found it, the judge's ceiling and next to it what the
- * comparison with production costs, the time limit, what stays out.
+ * The agent of the run dialog: its name and, never hidden behind the name, what Lab will actually start — the command
+ * with every argument word for word and its folder, the module and its function, the address — marked when the chat's
+ * model proposed it rather than a connection the owner has; then the release hook the connection runs before every
+ * run, word for word. An agent without a name of its own is named by exactly that.
  */
-export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string, extra: { calibration?: string | null; note?: string } = {}): string[] {
+export function agentLines(record: Experiment, cwd?: string, proposed?: 'model'): string[] {
+  const target = record.target;
+  if (!isRunnable(target)) return [`Агент: ${agentLine(record, cwd)}`];
+  const root = cwd ?? (target.kind === 'command' && target.cwd || '/');
+  const how = target.kind === 'command' ? `${commandText(target.command, target.args, target.cwd ?? root)} ${folderText(target.cwd ?? root, root)}`
+    : target.kind === 'module' ? `${targetLabel(target, root)}, функция ${target.exportName}` : shownAddress(target);
+  const origin = proposed ? ` — ${PROPOSED[target.kind]}` : '';
+  const own = agentOwnName(record), version = agentVersion(record);
+  const versioned = version ? ` · версия ${version}` : '';
+  return [
+    ...own ? [`Агент: ${own}${versioned}`, `${target.kind === 'http' ? 'Адрес' : 'Запуск'}: ${how}${origin}`] : [`Агент: ${how}${versioned}${origin}`],
+    ...target.release ? [`Перед прогоном Lab выполнит: ${releaseText(target.release, root)}`] : [],
+  ];
+}
+
+/**
+ * The run dialog (docs/design/ui-spec.md §4.6): what runs, the agent — what exactly Lab starts, and where Lab found it —,
+ * the judge's ceiling and next to it what the comparison with production costs, the time limit, what stays out.
+ * `proposed`: the connection is the chat's model's, not one the owner has.
+ */
+export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string, extra: { calibration?: string | null; note?: string; proposed?: 'model' } = {}): string[] {
   return [
     `${countText(plan.situations, SITUATIONS)} · ${countText(plan.conversations, CONVERSATIONS)}: клиента играет Lab, ответы агента оценивает судья.`,
-    `Агент: ${agentLine(record, cwd)}`,
+    ...agentLines(record, cwd, extra.proposed),
     ...(extra.note ? [extra.note] : []),
     ...(record.mode === 'demo' ? ['Учебный пример: без модели и оплаты.'] : [`Судья: по 2 голоса на каждую проверку ответа и клиента — до ${plan.judgePerAttempt} вызовов на попытку, всего до ${plan.judgeCalls}.`,
       ...(extra.calibration ? [`${extra.calibration}.`] : []),

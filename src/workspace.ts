@@ -15,12 +15,20 @@ import { oneLine } from './text.js';
  * Pure: no I/O.
  */
 
+/**
+ * The agent's own name, as its owner or the teaching example gives it; null for an agent Lab names by how it is started.
+ * The placeholder of an agent the owner did not name says nothing, so it is no name.
+ */
+export function agentOwnName(record: Pick<Experiment, 'mode' | 'revisions'>): string | null {
+  const named = record.revisions[0]?.spec.name?.trim();
+  if (named && named !== EXTERNAL_AGENT.name) return oneLine(named);
+  return record.mode === 'demo' ? 'учебный агент' : null;
+}
+
 /** How the owner recognises the agent: its own name, else how it is started — a command, a module file, an address. */
 export function agentName(record: Pick<Experiment, 'mode' | 'target' | 'revisions'>, cwd?: string): string {
-  const named = record.revisions[0]?.spec.name?.trim();
-  // The placeholder of an agent the owner did not name says nothing: such an agent is named by how it is started.
-  if (named && named !== EXTERNAL_AGENT.name) return oneLine(named);
-  if (record.mode === 'demo') return 'учебный агент';
+  const named = agentOwnName(record);
+  if (named) return named;
   const target = record.target;
   if (target.kind === 'sandbox') return 'учебная песочница';
   if (target.kind === 'unconnected') return 'агент ещё не подключён';

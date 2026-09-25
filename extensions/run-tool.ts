@@ -63,7 +63,10 @@ const runParameters = Type.Object({
 }, closed);
 type AgentRequest = NonNullable<Static<typeof runParameters>['agent']>;
 
-/** The connection the owner described, in the form a run takes; paths are the project's or the owner's home. */
+/**
+ * The connection described in the chat, in the form a run takes; paths are the project's or the owner's home. The
+ * model wrote it, whatever the owner said: the run dialog shows the command and says the model proposed it.
+ */
 function agentOf(request: AgentRequest | undefined, cwd: string): LaunchAgent & { folder?: string } {
   if (!request) return {};
   const ways = [request.command, request.module, request.url, request.folder].filter(item => item !== undefined).length;
@@ -79,7 +82,7 @@ function agentOf(request: AgentRequest | undefined, cwd: string): LaunchAgent & 
   let target: RunnableTarget;
   try { target = runnableTarget(resolveTarget(raw, cwd)); }
   catch (error) { throw new NeedsOwner('needs_owner_input', `Так агента не запустить: ${error instanceof Error ? error.message : String(error)} Уточните у владельца.`, [], 'Так агента не запустить — как его запускать?'); }
-  return { target, ...version };
+  return { target, ...version, proposed: 'model' };
 }
 
 export function registerRunTool(pi: Pick<ExtensionAPI, 'registerTool'>, host: RunHost): void {

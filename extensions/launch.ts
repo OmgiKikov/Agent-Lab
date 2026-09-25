@@ -4,7 +4,7 @@ import { planSummary } from '../src/card/plan.js';
 import { calibrationConsent } from '../src/card/calibrate.js';
 import { describeCheck, type Experiment, type RunnableTarget } from '../src/contracts.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
-import { detectProject, evidenceText, targetLabel, type AgentCandidate } from '../src/detect.js';
+import { detectProject, evidenceText, releaseText, targetLabel, type AgentCandidate } from '../src/detect.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
 import { runPlan } from '../src/lab/run.js';
@@ -23,9 +23,11 @@ import { NeedsOwner } from './lab-ui.ts';
  *
  * Situations may be prepared before the agent is connected. The agent is then the one the owner named, or the one Lab
  * finds in the project folder — one sure candidate goes straight into the plan, several or unsure ones are the owner's
- * pick — and it is connected only when the owner says «Запустить»: a declined dialog writes nothing. An address alone
- * never becomes a connection here: Lab does not know the request the agent there expects, so the owner's curl goes
- * through agent_lab_connect (its fields read, two test messages, the owner's confirmation) first.
+ * pick, and so is one that runs a release hook — and it is connected only when the owner says «Запустить»: a declined
+ * dialog writes nothing. The dialog always shows what Lab will actually start and the hook it runs first, word for word,
+ * and says so when the chat's model proposed the command. An address alone never becomes a connection here: Lab does not
+ * know the request the agent there expects, so the owner's curl goes through agent_lab_connect (its fields read, two
+ * test messages, the owner's confirmation) first.
  */
 
 /** The two answers of every run dialog. */
@@ -103,9 +105,10 @@ function curlQuestion(url: string): NeedsOwner {
     `Агента по адресу ${shown} Lab подключает по вашему curl-запросу: пришлите команду curl, которой вы обращаетесь к нему (с телом запроса), — Lab разберёт её и проверит двумя тестовыми сообщениями.`);
 }
 
-/** A way to start the agent as the owner picks it: how it starts, and what in the folder says so. */
+/** A way to start the agent as the owner picks it: how it starts, what in the folder says so, and what else it would do — its release hook. */
 function candidateLabel(candidate: AgentCandidate, root: string): string {
-  return safeText(`${targetLabel(candidate.target, root)}${candidate.evidence[0] ? ` — ${evidenceText(candidate.evidence[0])}` : ''}`);
+  const release = candidate.target.release ? `; перед прогоном выполнит: ${releaseText(candidate.target.release, root)}` : '';
+  return safeText(`${targetLabel(candidate.target, root)}${candidate.evidence[0] ? ` — ${evidenceText(candidate.evidence[0])}` : ''}${release}`);
 }
 
 /** The agent Lab found for a run, and the line of the plan that says where it was found. */
@@ -113,8 +116,9 @@ export interface FoundAgent { target: RunnableTarget; note: string }
 
 /**
  * How to start an agent that is not connected yet, from what the folder `cwd` shows (read-only: nothing is run or
- * imported). One candidate Lab is sure of is proposed in the plan itself; several, or unsure ones, are the owner's
- * pick. Undefined when the owner stepped back; nothing found is a question to the owner.
+ * imported). One candidate Lab is sure of is proposed in the plan itself; several, unsure ones, or one with a release
+ * hook — a command it runs before every run — are the owner's pick. Undefined when the owner stepped back; nothing
+ * found is a question to the owner.
  */
 export async function findAgent(ctx: Pick<ExtensionContext, 'ui'>, cwd: string): Promise<FoundAgent | undefined> {
   const detection = await detectProject(cwd).catch(() => undefined);
@@ -123,8 +127,9 @@ export async function findAgent(ctx: Pick<ExtensionContext, 'ui'>, cwd: string):
     `${NO_AGENT} Как его запускать — команда или файл модуля? Если агент отвечает по адресу, пришлите curl-запрос, которым вы к нему обращаетесь.`);
   const root = detection!.root;
   const note = (candidate: AgentCandidate) => safeText(`Lab нашёл его в папке проекта: ${candidate.evidence.map(evidenceText).join('; ')}.`);
-  // Only a candidate Lab is sure of goes straight into the plan; an address never does.
-  if (found.length === 1 && found[0]!.confidence === 'high' && !needsCurl(found[0]!.target, found[0]!.evidence)) return { target: found[0]!.target, note: note(found[0]!) };
+  // Only a candidate Lab is sure of goes straight into the plan; an address never does, nor a connection with a release hook.
+  const sure = found.length === 1 ? found[0]! : undefined;
+  if (sure && sure.confidence === 'high' && !needsCurl(sure.target, sure.evidence) && !sure.target.release) return { target: sure.target, note: note(sure) };
   const labels = found.map(candidate => `${candidateLabel(candidate, root)}${needsCurl(candidate.target, candidate.evidence) ? ' — подключу по вашему curl' : ''}`);
   const picked = await ctx.ui.select(safeText(['Как запустить агента?', '', 'Ситуации готовы, а агент ещё не подключён. Lab нашёл в папке проекта — ничего не запускал и не менял:'].join('\n')),
     [...labels, NOT_NOW]);
@@ -133,8 +138,11 @@ export async function findAgent(ctx: Pick<ExtensionContext, 'ui'>, cwd: string):
   return chosen ? { target: chosen.target, note: note(chosen) } : undefined;
 }
 
-/** How the run reaches the agent: a new connection the owner named or Lab found, and the owner's name for its version. */
-export interface LaunchAgent { target?: RunnableTarget; version?: string; note?: string }
+/**
+ * How the run reaches the agent: a new connection named in the chat or found by Lab, and the owner's name for its
+ * version. `proposed`: the chat's model wrote the connection — the run dialog says so next to the command.
+ */
+export interface LaunchAgent { target?: RunnableTarget; version?: string; note?: string; proposed?: 'model' }
 
 /**
  * Asks the owner and starts the run of a draft; undefined when they said «Не сейчас». A card draft is accepted in
@@ -149,6 +157,7 @@ export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: 
   if (!agent.target && start.target.kind === 'unconnected' && !found) return undefined;
   const target = agent.target ?? found?.target;
   const note = agent.note ?? found?.note;
+  const proposed = agent.target && agent.proposed ? { proposed: agent.proposed } : {};
   const connect = target || agent.version ? { ...(target ? { target } : {}), ...(agent.version ? { targetVersion: agent.version } : {}) } : undefined;
   /** The draft as the plan names it: with the agent it will be connected to. */
   const shown = (record: Experiment): Experiment => connect ? { ...record, ...connect } : record;
@@ -163,7 +172,7 @@ export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: 
       'Запускать нечего: ни одна ситуация ещё не готова — ответьте на их вопросы.');
     const calibration = await calibrationConsent(lab.store, context.experiment, ready.map(view => view.id));
     const limit = limitLine(context.experiment, cardCalls(context.experiment, ready));
-    const lines = launchLines(shown(context.experiment), cardPlan(context.experiment, views), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) });
+    const lines = launchLines(shown(context.experiment), cardPlan(context.experiment, views), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}), ...proposed });
     // What the run checks, scenario by scenario: accepting the situations accepts what they are examples of.
     const scenarios = planSummary(context.library, ready.map(view => view.id));
     const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...(scenarios.length ? [...scenarios, ''] : []), ...lines, ...(limit ? [limit] : []),
@@ -179,7 +188,7 @@ export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: 
   const calibration = await calibrationConsent(lab.store, start);
   const scope = library ? [] : runScope(start);
   const limit = limitLine(start, runPlan(start));
-  const plan = [...scope, ...(scope.length ? [''] : []), ...launchLines(shown(start), scenarioPlan(start), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) }),
+  const plan = [...scope, ...(scope.length ? [''] : []), ...launchLines(shown(start), scenarioPlan(start), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}), ...proposed }),
     ...(limit ? [limit] : []), ...(library || confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'])];
   const picked = await ctx.ui.select(safeText([library || confirmed ? 'Запустить прогон?' : 'Подтвердить ожидания и запустить?', '', ...plan].join('\n')), [LAUNCH, NOT_NOW]);
   if (picked !== LAUNCH) return undefined;
