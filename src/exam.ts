@@ -22,6 +22,13 @@ import { clip } from './text.js';
 
 type Step = Exam[number]['steps'][number];
 
+/**
+ * Whether an exam can vouch for a percent: at least one path of two or more steps where a later step checks the reply
+ * with `contains` — the conversation's memory, shown through the connection. An exam without one is too weak to count.
+ */
+export const examShowsMemory = (exam: Exam | undefined): boolean =>
+  !!exam?.some(path => path.steps.length >= 2 && path.steps.slice(1).some(step => step.contains !== undefined));
+
 /** The agent's turn after one customer message, as the events recorded it. */
 function turnAfter(events: readonly TraceEvent[], from: number): { got: ExamTurn; text?: string; status?: string } {
   for (const event of events.slice(from + 1)) {
@@ -42,6 +49,15 @@ const GOT: Record<ExamTurn, string> = {
   reply: 'ответ клиенту', buttons: 'ответ с кнопками', handoff: 'передача человеку', no_reply: 'агент не дал ответа клиенту',
   empty: 'пустой ответ', service: 'вместо агента ответил стенд', missing: 'ответа не было',
 };
+
+/**
+ * An exam in the owner's words before it is written: every path, and at each of its steps exactly what the customer
+ * writes or presses and what the agent's turn must be — nothing of it goes to the agent unseen.
+ */
+export function examPlanLines(exam: Exam): string[] {
+  return exam.flatMap((path, index) => [`Путь ${index + 1}. ${path.name}${path.initialState === undefined ? '' : ' — со своим исходным состоянием'}`,
+    ...path.steps.map(step => `  ${step.press !== undefined ? `клиент нажимает «${step.press}»` : `клиент пишет «${step.say ?? ''}»`} → ${EXPECTED[step.expect]}${step.contains !== undefined ? `, в нём «${step.contains}»` : ''}`)]);
+}
 
 /** Whether the turn is what the step expects: a reply with buttons is still a reply to the customer. */
 function meets(expect: Step['expect'], got: ExamTurn): boolean {
