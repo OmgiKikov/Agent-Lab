@@ -10,6 +10,7 @@ import { cardChangeSchema, type Card, type CardCommand, type LibraryV2 } from '.
 import type { Reference } from '../src/reference.js';
 import { cardStatuses } from '../src/card/status.js';
 import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules } from '../src/card/rulebook.js';
+import { dutyLine } from '../src/card/duty-words.js';
 import { planData, planLines } from '../src/card/plan.js';
 import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationViews, type SituationView } from '../src/card/view.js';
 import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
@@ -101,7 +102,7 @@ export function situationFeed(view: SituationView, options: { running?: boolean;
   return {
     tone: view.status === 'ready' ? 'success' : 'warning',
     rows: [row(`${view.number}  ${brief.title} · ${chip(view, options.running).text}`, 'text', true),
-      row(`Клиент: «${clip(brief.writes, 120)}» · Агент должен: ${clip(brief.must[0]?.text ?? '—', 120)}`),
+      row(`Клиент: «${clip(brief.writes, 120)}» · ${brief.must[0] ? clip(dutyLine(brief.must[0]), 140) : 'Агент должен: —'}`),
       ...(view.question ? [row(`Вопрос: ${view.question.text}`, 'warning')] : view.problems[0] ? [row(`Не подходит: ${view.problems[0]}`, 'muted')] : [])],
     more: situationRows([...briefRows(view, { running: options.running }), ...(options.details ? [{ role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)] : [])]),
     expand: 'вся ситуация',

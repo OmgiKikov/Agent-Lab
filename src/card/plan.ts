@@ -4,6 +4,7 @@ import { text } from '../ids.js';
 import type { CardTopic } from '../miner/schema.js';
 import { countText } from '../plural.js';
 import { basisProposal, citationId, groundingSlip, located, type CallSource, type ProposalCall } from './proposal.js';
+import { dutyLine, dutyNotes } from './duty-words.js';
 import type { BusinessScenario, Card, LibraryV2 } from './schema.js';
 
 /*
@@ -128,10 +129,13 @@ function appliesText(scenario: BusinessScenario, expectation: BusinessScenario['
   return expectation.variationIds ? `для ${expectation.variationIds.length === 1 ? 'варианта' : 'вариантов'} ${expectation.variationIds.map(place).join(', ')}` : 'для всех вариантов';
 }
 
+/** A plan expectation as a duty is listed (card/duty-words.ts). */
+const listed = (expectation: BusinessScenario['expectations'][number]) => ({ text: expectation.text, forbidden: expectation.strength === 'must_not',
+  ...(expectation.acceptable ? { acceptable: expectation.acceptable } : {}), ...(expectation.violation ? { violation: expectation.violation } : {}) });
+
 /** One expectation of a scenario in a line: what the agent must (not) do, where it applies, the other ways and the violation the judge reads. */
 export function expectationLine(scenario: BusinessScenario, expectation: BusinessScenario['expectations'][number]): string {
-  return `${expectation.strength === 'must_not' ? 'нельзя: ' : ''}${expectation.text} — ${appliesText(scenario, expectation)}${
-    expectation.acceptable ? `; допустимо: ${expectation.acceptable}` : ''}${expectation.violation ? `; нарушение: ${expectation.violation}` : ''}`;
+  return [`${dutyLine(listed(expectation))} — ${appliesText(scenario, expectation)}`, ...dutyNotes(listed(expectation))].join('; ');
 }
 
 /** The cards of a library that are examples of a scenario, of one of its variations when named. */
@@ -144,8 +148,8 @@ const ORIGIN_TEXT = { rules: 'добавлен по правилам, не из 
 
 /** One variation in a line, as the owner confirms it: its title, where it comes from, and the expectations that apply to it. */
 export function variationLine(scenario: BusinessScenario, variation: BusinessScenario['variations'][number]): string {
-  const applies = variationExpectations(scenario, variation.id).map(expectation => `${expectation.strength === 'must_not' ? 'нельзя: ' : ''}${expectation.text}`);
-  return `«${variation.title}» — ${variation.origin === 'logs' ? 'из логов' : ORIGIN_TEXT[variation.origin]}; агент должен: ${applies.join('; ') || '—'}`;
+  const applies = variationExpectations(scenario, variation.id).map(expectation => dutyLine(listed(expectation)));
+  return `«${variation.title}» — ${variation.origin === 'logs' ? 'из логов' : ORIGIN_TEXT[variation.origin]}; ${applies.join('; ') || 'ожиданий нет'}`;
 }
 
 /** The variations of a library's plan no situation is an example of yet, and no conversation shows: the ones a situation is written for from the rules. */

@@ -8,6 +8,7 @@ import { cardStatuses } from '../src/card/status.js';
 import { shownRulebook } from '../src/card/rulebook.js';
 import { convertible } from '../src/card/legacy-v1.js';
 import { checkCalls } from '../src/card/check-calls.js';
+import { dutyHeading, dutyLine } from '../src/card/duty-words.js';
 import { situationViews, type SituationAction, type SituationView } from '../src/card/view.js';
 import { isRunning } from '../src/phases.js';
 import { demoInput } from '../src/demo.js';
@@ -68,11 +69,11 @@ async function editCommand(ctx: ExtensionCommandContext, view: SituationView): P
   if (picked === menu[4]) return client('leaves', 'Когда клиент уходит', brief.leaves ?? '');
   if (picked === menu[3]) {
     // A duty's words come from the record: every option crosses the terminal boundary, and the pick is matched as shown.
-    const duties = brief.must.map((duty, index) => safeLine(`${index + 1}  ${duty.text}`));
+    const duties = brief.must.map((duty, index) => safeLine(`${index + 1}  ${dutyLine(duty)}`));
     const index = duties.length === 1 ? 0 : duties.indexOf(await ctx.ui.select('Какое ожидание изменить?', duties) ?? '');
     const expectationId = view.refs.must[index];
     if (index < 0 || !expectationId) return undefined;
-    const text = await ownWords(ctx, 'Что агент должен · своими словами', brief.must[index]!.text);
+    const text = await ownWords(ctx, `${dutyHeading(brief.must[index]!)} · своими словами`, brief.must[index]!.text);
     return text === undefined ? undefined : { command: { kind: 'edit_expectation', cardId: view.id, expectationId, text }, words: text };
   }
   if (picked !== menu[2]) return undefined;
