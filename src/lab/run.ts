@@ -18,7 +18,7 @@ import { roleChoices } from '../llm/models.js';
 import { StructuredTaskError } from '../llm/structured.js';
 import type { CallContext, Runtime } from '../runtime.js';
 import { evaluateTrial } from '../evaluation.js';
-import { sealTrial } from '../seal.js';
+import { sealedTrial } from '../seal.js';
 import { scenarioSources } from '../judge.js';
 import { evaluatorVersion } from '../pi.js';
 import { countText } from '../plural.js';
@@ -498,8 +498,7 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
       // Every attempt of this run is counted by the rules of today's edition; a stored run keeps its own.
       trial.countingVersion = COUNTING_VERSION;
       // The attempt is final: sealed once, so the number is derived only while the record still holds it (seal.ts).
-      trial.seal = sealTrial(trial, record);
-      record.trials.push(trial);
+      record.trials.push(sealedTrial(trial, record));
       if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) addCaveat(record, { code: 'state_unconfirmed' });
       if (trial.observation?.version) {
         if (record.targetRelease && record.targetRelease !== trial.observation.version) throw new Error('Внешний агент сообщил разные версии в одном прогоне. Сравнение недоступно.');

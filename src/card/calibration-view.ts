@@ -262,11 +262,12 @@ interface Row { id: string; letter: string; text: string; synthetic: Verdict; lo
 type Compared = Row & { synthetic: Decided; log: Decided };
 const decided = (verdict: Verdict | undefined): verdict is Decided => verdict === 'pass' || verdict === 'fail';
 /**
- * The owner's when their latest verdict replaces the judge's `recorded` one; the judge's where there is none, or where the
- * owner's doubt leaves the judge's verdict standing (outcomes.ts humanOverride: «не знаю» never takes a failure away).
+ * The owner's when their latest word replaces the judge's `recorded` verdict; the judge's where there is none, or where the
+ * owner's doubt leaves the judge's verdict standing (outcomes.ts humanOverride): a one-key «не знаю», or any «не знаю» on a
+ * failure, which it never takes away.
  */
 const deciderOf = (review: Pick<HumanReview, 'verdict' | 'source'> | undefined, recorded: Verdict | undefined): Decider =>
-  !review || review.verdict === 'unknown' && humanOverride(review, recorded).result === recorded ? 'judge' : 'owner';
+  !review || review.verdict === 'unknown' && (review.source === 'quick' || recorded === 'fail') ? 'judge' : 'owner';
 
 /** The customer a calibration compares, by preference: the one that plays the card, then scripted lines, then the bare opening. */
 const MODE_ORDER: readonly Trial['userMode'][] = ['reactive', 'scripted', 'static'];

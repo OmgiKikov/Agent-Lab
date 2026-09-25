@@ -18,7 +18,7 @@ import { countingRuleFor, markTargets, measurementUsable } from '../outcomes.js'
 import { evaluatorVersion } from '../pi.js';
 import { CODE_ONLY_ASSESSMENT } from '../run.js';
 import { verifyAcceptedRun } from '../scenario-library.js';
-import { sealTrial } from '../seal.js';
+import { sealedTrial } from '../seal.js';
 import { simulatorChecks } from '../simulator.js';
 import type { Lab } from './context.js';
 import { isRunning, moveTo } from '../phases.js';
@@ -120,8 +120,7 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
         }
         trial.elapsedMs = Math.round(performance.now() - started);
         // The re-assessed attempt is final: sealed afresh, as a run's attempt is (seal.ts).
-        trial.seal = sealTrial(trial, record);
-        record.trials.push(trial);
+        record.trials.push(sealedTrial(trial, record));
         await lab.operations.checkpoint(record, 'evaluating', `Переоценено ${record.trials.length}/${trials.length}. Агент не запускался.`);
       }
       if (runtime) await nameFailureModes(record, runtime, ctx);
