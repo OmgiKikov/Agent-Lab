@@ -5,7 +5,8 @@ import type { Experiment } from '../src/contracts.js';
 import { contains, type CardEvidence } from '../src/card/checks.js';
 import { hostGrant, requiredAuthority, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
 import { convertible } from '../src/card/legacy-v1.js';
-import { cardChangeSchema, type CardCommand, type LibraryV2 } from '../src/card/schema.js';
+import { cardChangeSchema, type Card, type CardCommand, type LibraryV2 } from '../src/card/schema.js';
+import type { Reference } from '../src/reference.js';
 import { cardStatuses } from '../src/card/status.js';
 import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules } from '../src/card/rulebook.js';
 import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationViews, type SituationView } from '../src/card/view.js';
@@ -124,6 +125,12 @@ const change = Type.Union([
     Type.Object({ kind: Type.Literal('opening'), writes: Type.String({ minLength: 1, maxLength: 3000 }) }, closed),
     Type.Object({ kind: Type.Literal('turn'), turn }, closed),
   ], { description: 'The one difference; the original stays as it is.' }), title: Type.Optional(Type.String({ maxLength: 160 })) }, closed),
+  Type.Object({ kind: Type.Literal('reference'), reference: Type.Optional(Type.String({ pattern: '^[a-zA-Z0-9_-]{1,60}$', description: 'Id of an existing reference to change or remove; without it, a new one.' })),
+    doc: Type.Optional(Type.String({ minLength: 1, maxLength: 500, description: 'Id of the knowledge-base article the agent must retrieve, exactly as its adapter names it.' })),
+    chunk: Type.Optional(Type.String({ minLength: 1, maxLength: 500, description: 'Id of the fragment inside that article, only if the owner named one.' })),
+    text: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: 'The expected fact or answer the agent must convey.' })),
+    proposed: Type.Optional(Type.Literal(true, { description: 'You suggest it yourself; the owner did not say it. Waits for the owner\'s decision.' })),
+    remove: Type.Optional(Type.Literal(true)) }, closed),
   Type.Object({ kind: Type.Literal('remove') }, closed),
   Type.Object({ kind: Type.Literal('unmask') }, closed),
   Type.Object({ kind: Type.Literal('rules'), operatorInstructions: Type.Optional(Type.Boolean()), bind: Type.Optional(ruleIds), unbind: Type.Optional(ruleIds) },
@@ -165,7 +172,7 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
   });
   pi.registerTool({
     ...displayFor(TOOL.edit), name: TOOL.edit, label: 'Change a situation',
-    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms the exact change in a native dialog unless the new wording is verbatim from their own message. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
+    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms the exact change in a native dialog unless the new wording is verbatim from their own message. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); reference — what code checks besides the judge: doc (the article id the agent must actually retrieve, checked against the articles its adapter reports) and/or text (the expected fact; its values are checked by code, its meaning by the judge); never rewrite a duty\'s text to express this — a duty is only ever judged by the reply; proposed:true when you suggest it yourself; reference id with remove to drop one; similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
     parameters: editParameters,
     executionMode: 'sequential',
     execute: (callId, params, signal, _onUpdate, ctx) => changeSituation(host, callId, ctx, signal, params),
@@ -293,10 +300,35 @@ function commandOf(request: ChangeRequest, view: SituationView, library: Library
       return { heading: `Похожая на ситуацию ${view.number} «${view.brief.title}»`, command: { kind: 'add_similar', parentId: view.id, ...(request.title?.trim() ? { title: request.title } : {}),
         change: differs.kind === 'when' ? { kind: 'disclosure', factId: differs.fact, disclosure: differs.when, ...(differs.writes !== undefined ? { writes: differs.writes } : {}) } : differs } };
     }
+    case 'reference': return { command: { kind: 'set_references', cardId: view.id, references: referencesAfter(request, library.cards.find(item => item.id === view.id)!) },
+      heading: `${title}: что проверяется кодом` };
     case 'remove': return { command: { kind: 'remove_card', cardId: view.id }, heading: `Убрать ситуацию ${view.number} «${view.brief.title}» из черновика?` };
     case 'rules': throw new Error('The rulebook is changed for the whole set, not through one situation.');
     case 'unmask': throw new Error('Masked values are proposed by the lab, not built here.');
   }
+}
+
+/**
+ * The card's references after one change: a new one gets the next free id; an owner's change is theirs and confirmed, a
+ * reference the model suggests waits for the owner. Changing a reference keeps what the change does not name.
+ */
+function referencesAfter(request: Extract<ChangeRequest, { kind: 'reference' }>, card: Card): Reference[] {
+  const current = card.references ?? [];
+  const existing = request.reference === undefined ? undefined : current.find(item => item.id === request.reference);
+  if (request.reference !== undefined && !existing) throw new CommandRefused(`У ситуации №${card.number} нет эталона ${request.reference}${current.length ? `; есть: ${current.map(item => item.id).join(', ')}` : ''}.`);
+  if (request.remove) {
+    if (!existing) throw new CommandRefused('Скажите, какой эталон убрать.');
+    return current.filter(item => item.id !== existing.id);
+  }
+  const doc = request.doc ?? existing?.source?.doc, chunk = request.chunk ?? (request.doc === undefined ? existing?.source?.chunk : undefined);
+  const text = request.text ?? existing?.text;
+  if (doc === undefined && text === undefined) throw new CommandRefused('Скажите, что проверять кодом: статью, которую агент должен найти, и/или ожидаемый ответ.');
+  const origin = request.proposed ? 'proposed' as const : 'owner' as const;
+  const prefix = origin === 'proposed' ? 'proposed' : 'owner';
+  const id = existing?.id ?? Array.from({ length: 5 }, (_, index) => `${prefix}_${index + 1}`).find(candidate => !current.some(item => item.id === candidate))!;
+  const reference: Reference = { id, origin, confirmed: origin !== 'proposed', ...(doc !== undefined ? { source: { doc, ...(chunk !== undefined ? { chunk } : {}) } } : {}),
+    ...(text !== undefined ? { text } : {}) };
+  return existing ? current.map(item => item.id === existing.id ? reference : item) : [...current, reference];
 }
 
 /** Lab's values over the situation's masking marks: one model call, made only where the owner can then confirm them. */

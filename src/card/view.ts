@@ -8,6 +8,7 @@ import { contains, quotable, type CardEvidence } from './checks.js';
 import { compilePolicy, expectationLetter } from './compile.js';
 import { behaviorLines, convertible, libraryV1Of, orderedVariants, ownerQuestions, ownerRemarks, plainIssue } from './legacy-v1.js';
 import type { Card, LibraryV2 } from './schema.js';
+import type { Reference } from '../reference.js';
 import { cardStatuses, type CardStatus, type CardStatusKind, type QuestionChoice } from './status.js';
 
 /*
@@ -44,6 +45,8 @@ export interface Brief {
   must: { text: string; rule: string | null }[];
   /** The values Lab wrote over the log's masking marks, when it did: «подставлено вместо обезличенного». */
   filled?: string[];
+  /** What code checks besides the judge (reference.ts): «находит статью 24 — разметка асессора». */
+  references?: { id: string; text: string }[];
 }
 
 export interface SituationView {
@@ -125,7 +128,19 @@ export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumb
     leaves: oneLine(leaves), turn: turn ? turnText(turn.after, turn.says) : null,
     must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes) })),
     ...(card.filled ? { filled: card.filled.map(item => oneLine(item.value)) } : {}),
+    ...(card.references ? { references: card.references.map(reference => ({ id: reference.id, text: referenceText(reference) })) } : {}),
   };
+}
+
+const VOUCHED = { assessor: 'разметка асессора', log: 'из логов', owner: 'задали вы', proposed: 'предложил Lab' } as const;
+/** One reference as the owner reads it: what code checks, and who vouches for it. */
+export function referenceText(reference: Reference): string {
+  const checks = [
+    reference.source ? `находит статью ${reference.source.doc}${reference.source.chunk ? `, фрагмент ${reference.source.chunk}` : ''}` : '',
+    reference.text ? `отвечает по эталону «${quoteText(oneLine(reference.text))}»` : '',
+  ].filter(Boolean).join(' и ');
+  const vouched = reference.origin === 'proposed' ? reference.confirmed ? 'предложил Lab, вы подтвердили' : 'предложил Lab — ждёт вашего решения' : VOUCHED[reference.origin];
+  return `${checks} — ${vouched}`;
 }
 
 const OBSERVED = { reply: 'по ответу агента', tool: 'по вызовам инструментов', state: 'по состоянию системы' } as const;
@@ -156,6 +171,10 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
     ...knows.map(fact => ({ label: 'Откуда факт', text: `${factText(fact)} — ${vouched(fact.source)}` })),
     ...(card.filled ?? []).map(item => ({ label: 'Подставлено', text: `«${oneLine(item.value)}» вместо «${oneLine(item.mark)}» — ${message(item.event.eventIndex)} диалога, значение придумал Lab` })),
     ...card.coverage.map(entry => ({ label: 'Поздние реплики', text: `${message(entry.event.eventIndex)} — ${ACCOUNTED[entry.as]}${entry.reason ? `: ${oneLine(entry.reason)}` : ''}` })),
+    ...(card.references ?? []).flatMap(reference => [
+      ...(reference.source ? [{ label: 'Эталон', text: `статья ${reference.source.doc}${reference.source.chunk ? `#${reference.source.chunk}` : ''} — код сверяет с найденными статьями (retrievals адаптера); не видно полного контекста — не измерено` }] : []),
+      ...(reference.text ? [{ label: 'Эталон', text: `«${quoteText(oneLine(reference.text))}» — значения (суммы, сроки, коды) сверяет код, смысл — судья` }] : []),
+    ]),
     ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${OBSERVED[expectation.observation]}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
     ...rules,
     { label: 'Запись', text: `ситуация ${card.id} · версия ${card.revision} · набор ${library.id}, ревизия ${library.revision}` },
@@ -448,6 +467,8 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
     blank,
     { role: 'heading', indent: 0, text: 'Агент должен' },
     ...must,
+    ...(brief.references ? [blank, { role: 'heading' as const, indent: 0, text: 'Проверяется кодом' },
+      ...brief.references.map((reference, index): SituationRow => ({ role: 'field', indent: 3, text: `${String(index + 1).padEnd(3)}${reference.text}`, hang: 3 }))] : []),
     ...(view.problems.length ? [blank, { role: 'heading' as const, indent: 0, text: 'Почему не подходит' },
       ...view.problems.map(text => ({ role: 'problem' as const, indent: 3, text }))] : []),
     ...questionRows(view),
@@ -512,6 +533,8 @@ export function briefChanges(before: SituationView | undefined, after: Situation
   text('Уходит', before.brief.leaves, after.brief.leaves);
   text('Поворот', before.brief.turn, after.brief.turn);
   paired('Агент должен', before.brief.must, after.brief.must, before.refs.must, after.refs.must, duty => duty.text);
+  const references = (brief: Brief) => brief.references ?? [];
+  paired('Проверяется кодом', references(before.brief), references(after.brief), references(before.brief).map(item => item.id), references(after.brief).map(item => item.id), item => item.text);
   return changes;
 }
 
