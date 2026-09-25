@@ -8,7 +8,8 @@ import type { Verdict } from './run.js';
 /*
  * How close the number is to real traffic (E2): the counted situations grouped by the topic of the
  * logged conversations they came from, each topic's share of those conversations, and the accuracy
- * weighted by that share. A card library carries the traffic of the logs' topic map (miner/): every
+ * weighted by that share over the measured topics — with the share of the traffic those topics hold,
+ * and none at all when they hold less than half of it. A card library carries the traffic of the logs' topic map (miner/): every
  * conversation of the import has its topic, so the shares are those of the whole import, and a card
  * stands for the topic of its conversation. A first-format library has no map: there a topic is a
  * business scenario, and a logged conversation has one only when a business scenario names it as a
@@ -28,11 +29,22 @@ export interface TopicView {
   rows: TopicRow[];
   /** Topics of logged conversations without any counted situation: their share of the conversations with a known topic. */
   uncovered: { topics: number; share: number } | null;
-  /** The per-topic accuracy weighted by each measured topic's share of conversations; null without shares or with fewer than two measured topics. */
+  /**
+   * The per-topic accuracy weighted by each measured topic's share of conversations; null without shares, with fewer
+   * than two measured topics, or when the measured topics hold less than WEIGHTED_FROM of the conversations.
+   */
   weighted: number | null;
+  /** The share of the conversations with a known topic whose topic has a decided situation: the traffic `weighted` speaks for. */
+  measuredShare: number;
   /** Logged conversations of the imports, and those among them with a known topic. */
   logged: number; labeled: number;
 }
+
+/**
+ * Below this share of the conversations the weighted estimate would stand for topics it never measured, and a number
+ * «с учётом частоты тем» would say more about the unmeasured traffic than about the agent: it is not given.
+ */
+export const WEIGHTED_FROM = 0.5;
 
 interface CountedCard { scenarioId: string; outcome: Verdict; control: boolean }
 
@@ -42,12 +54,24 @@ function topicRow(id: string, title: string, own: readonly CountedCard[], share:
   return { id, title, situations: own.length, passed, decided: passed + own.filter(card => card.outcome === 'fail').length, share };
 }
 
-/** The accuracy of each measured topic weighted by its share: null without shares or with fewer than two measured topics. */
+/** The topics with a decided situation and a share of the conversations: the ones an estimate can weigh. */
+const measuredRows = (rows: readonly TopicRow[]) => rows.filter(row => row.decided > 0 && row.share !== null && row.share > 0);
+const shareOf = (rows: readonly TopicRow[]) => rows.reduce((sum, row) => sum + (row.share ?? 0), 0);
+
+/**
+ * The accuracy of each measured topic weighted by its share, normalised over the measured topics: what the agent
+ * would score on the traffic of those topics. Null without shares, with fewer than two measured topics, or when those
+ * topics hold less than WEIGHTED_FROM of the conversations (the shares are ratios of counts, hence the tolerance).
+ */
 function weightedAccuracy(rows: readonly TopicRow[]): number | null {
-  const measured = rows.filter(row => row.decided > 0 && row.share !== null && row.share > 0);
-  const measuredShare = measured.reduce((sum, row) => sum + row.share!, 0);
-  return measured.length >= 2 && measuredShare > 0 ? measured.reduce((sum, row) => sum + row.share! * (row.passed / row.decided), 0) / measuredShare : null;
+  const measured = measuredRows(rows);
+  const measuredShare = shareOf(measured);
+  return measured.length >= 2 && measuredShare + 1e-9 >= WEIGHTED_FROM
+    ? measured.reduce((sum, row) => sum + row.share! * (row.passed / row.decided), 0) / measuredShare : null;
 }
+
+/** The rows' view parts that follow from the rows alone. */
+const estimateOf = (rows: readonly TopicRow[]) => ({ weighted: weightedAccuracy(rows), measuredShare: Math.min(1, shareOf(measuredRows(rows))) });
 
 /** The topic rows of a run of accepted cards: each counted card under the topic of the logs it stands for, shares from the library's traffic. */
 function cardTopicView(library: LibraryV2, cards: CountedCard[]): TopicView | null {
@@ -67,7 +91,7 @@ function cardTopicView(library: LibraryV2, cards: CountedCard[]): TopicView | nu
     .sort((a, b) => b.share! - a.share! || b.situations - a.situations || order.get(a.id)! - order.get(b.id)!);
   const missing = traffic.topics.filter(topic => !used.has(topic.id));
   const uncovered = missing.length ? { topics: missing.length, share: missing.reduce((sum, topic) => sum + topic.dialogues, 0) / traffic.labeled } : null;
-  return { rows, uncovered, weighted: weightedAccuracy(rows), logged: traffic.logged, labeled: traffic.labeled };
+  return { rows, uncovered, ...estimateOf(rows), logged: traffic.logged, labeled: traffic.labeled };
 }
 
 /** The topic rows of a run made from a library with at least two topics among its counted situations; null otherwise. */
@@ -99,7 +123,7 @@ export function topicView(record: Experiment, cards: CountedCard[]): TopicView |
   const missing = [...conversations.keys()].filter(id => !used.has(id));
   const uncovered = labeled && missing.length
     ? { topics: missing.length, share: missing.reduce((sum, id) => sum + (conversations.get(id) ?? 0), 0) / labeled } : null;
-  return { rows, uncovered, weighted: weightedAccuracy(rows), logged: logged.size, labeled };
+  return { rows, uncovered, ...estimateOf(rows), logged: logged.size, labeled };
 }
 
 /** How much of the logged traffic the counted situations of a card run cover (E1); null without the logs' topics. */

@@ -131,9 +131,9 @@ test('the result names the parts of every card and says which expectation failed
   assert.equal(view.countingRules, 'all-expectations-v1', 'the view names the rule its situations are counted by');
   const [failure] = view.failures;
   assert.ok(failure);
-  assert.ok(failure.lines.includes('  Должен был: Б — объяснить, как оформить возврат'), failure.lines.join('\n'));
-  assert.ok(failure.lines.some(line => line.includes('Если номер терминала уже указан')), 'the owner rule of the failed expectation');
-  assert.ok(!failure.lines.some(line => line.includes('Без чека возврат')), 'not the rule of an expectation that passed');
+  assert.equal(failure.expected, 'Б — объяснить, как оформить возврат');
+  assert.ok(failure.rules.some(rule => rule.quote.includes('Если номер терминала уже указан')), 'the owner rule of the failed expectation');
+  assert.ok(!failure.rules.some(rule => rule.quote.includes('Без чека возврат')), 'not the rule of an expectation that passed');
 });
 
 test('the run plan states the judge\'s ceiling: two votes on every expectation of every attempt', () => {

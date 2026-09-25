@@ -264,7 +264,7 @@ test('the headline counts a situation as handled only when the request was met a
   // The saved example is the verified agent reply of that dialogue, not the judge's rationale.
   const example = view.topCauses[0]?.example;
   assert.equal(example?.trialId, 't2', 'a business failure explains the headline');
-  assert.deepEqual(example?.said, { seq: 1, quote: 'ok', judgeCited: true }, 'the quote is the reply the judge pointed at');
+  assert.deepEqual(example?.said, { seq: 1, quote: 'ok' }, 'the quote is the reply the judge pointed at');
 });
 
 // ---- Phase 03.1: the report number is the CLI number — same rule, same non-control cards. ----
@@ -318,7 +318,7 @@ test('an unresolved simulator flag leaves the situation unmeasured instead of co
   // A human clears the suspicion: the same dialogue becomes a decided failure, explained by the verified agent reply.
   const cleared = buildResultView({ ...r, humanReviews: [{ id: 'h', trialId: 't1', verdict: 'pass', note: 'ложная тревога', createdAt: '2026-09-14T00:00:00Z', checkId: 'simulator_fabrication' }] });
   assert.deepEqual([cleared.headline.passed, cleared.headline.decided], [0, 1]);
-  assert.deepEqual(cleared.failures[0]?.said, { seq: 1, quote: 'ok', judgeCited: true }, 'the verified agent reply is quoted, never the judge rationale');
+  assert.deepEqual(cleared.failures[0]?.said, { seq: 1, quote: 'ok' }, 'the verified agent reply is quoted, never the judge rationale');
 });
 
 test('plural forms', () => {

@@ -274,7 +274,7 @@ test('golden: a calibration adds its line and its block and changes nothing else
   assert.deepEqual(screenWith.filter(row => !added.has(row)).filter((row, i, rows) => !(row === rows[i - 1] && row === JSON.stringify({ role: 'blank', indent: 0, text: '' }))), screenWithout);
 });
 
-test('the CLI screen and the customer report show the line, what was not compared and each disagreement; a logged conversation is never quoted', () => {
+test('the CLI screen and the customer report show the line, what was not compared and each disagreement; the logged conversation of a disagreement is named, never shown', () => {
   const { run, record } = example();
   const view = buildResultView(record, { numbers: dialogueNumbers([run.batch]) });
   const lines = plainText(resultScreen(view, { surface: 'cli' }), MAX_WIDTH).split('\n');
@@ -293,7 +293,9 @@ test('the CLI screen and the customer report show the line, what was not compare
   const markdown = markdownReport(bundle), html = htmlReport(bundle);
   for (const text of [view.calibration!.text, 'Не сравнивались: 4 — ситуация изменена \\(2\\), в логе не дошло до ожидания \\(2\\).', '## Сверка с продом', '### ≠ 14. ', 'диалог №14 из логов']) assert.ok(markdown.includes(text), text);
   assert.ok(html.includes('Сверка с продом') && html.includes('≠ 14'));
-  for (const report of [markdown, html]) assert.equal(report.includes('Спасибо!'), false, 'the logged customer\'s words stay in the logs');
+  // A situation made from a log opens with its first customer message (the report's footer says so); the rest of the logged
+  // conversation a disagreement points at stays in the logs.
+  for (const report of [markdown, html]) assert.equal(report.includes('Спасибо!'), false, 'the logged conversation of a disagreement is not shown');
 });
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));

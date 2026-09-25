@@ -333,7 +333,8 @@ test('a card run reads its topics from the record alone: rows by traffic share, 
     // (5/11 · 1 + 3/11 · 0 + 2/11 · 1) / (10/11) = 0.7: the uncovered «Другое» weighs nothing.
     assert.ok(Math.abs(view.topics!.weighted! - 0.7) < 1e-9, String(view.topics!.weighted));
     assert.deepEqual([view.topics!.uncovered, view.topics!.labeled, view.topics!.logged], [{ topics: 1, share: 1 / 11 }, 11, 12]);
-    assert.deepEqual(realityParts(view), ['С учётом частоты тем — около 70% (темы известны у 11 из 12 разговоров)'], 'the masked conversation has no topic');
+    // The estimate names the share of the conversations its measured topics hold; the masked conversation has no topic.
+    assert.deepEqual(realityParts(view), ['С учётом частоты тем — около 70% (измерены темы 91% диалогов; темы известны у 11 из 12 разговоров)']);
     assert.deepEqual([coverageLine(view.topicCoverage!), uncoveredLine(view.topicCoverage!)], ['3 ситуации покрывают 3 из 4 тем — 91% диалогов', 'Не покрыта: Другое (9% диалогов)']);
     assert.deepEqual(topicRows(view).map(row => [row.text, row.right?.trim().split(/\s{3,}/)]), [
       ['По темам', ['справился', 'доля диалогов']], ['Возврат оплаты', ['1 из 1', '45%']], ['Статус заявки', ['0 из 1', '27%']], ['Смена тарифа', ['1 из 1', '18%']],
