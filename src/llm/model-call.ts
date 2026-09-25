@@ -410,7 +410,7 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
     if (!signal.aborted) defect = new ModelCallDefect(`${model.provider}/${model.id}`, error);
   } finally { clearTimeout(timer); }
   if (signal.aborted || !reply) {
-    ctx.addUsage(usageOf(reply, model));
+    ctx.addUsage({ ...usageOf(reply, model), attempts: 1 });
     if (signal.aborted) throw signal.reason;
     defect ??= new ModelCallDefect(`${model.provider}/${model.id}`, new Error('The SDK returned no reply'));
     reportDefect(ctx, defect);
@@ -422,7 +422,7 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
   const usage = usageOf(reply, model);
   // A request refused before any answer generated nothing: its cost is known, and it is zero.
   if (failure?.delivery === 'refused' && usage.inputTokens === 0 && usage.outputTokens === 0) usage.costUsd = 0;
-  ctx.addUsage(usage);
+  ctx.addUsage({ ...usage, attempts: 1 });
   if (!failure) return { ok: true, text, message: reply };
   if (reply.stopReason !== 'stop' && text.trim()) onIncomplete?.(text);
   return { ok: false, failure, ...(observed.retryAfterMs === undefined ? {} : { retryAfterMs: observed.retryAfterMs }) };
