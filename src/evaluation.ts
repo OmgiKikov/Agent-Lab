@@ -117,7 +117,8 @@ export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
     }
   }
   const retrieved = retrievedChunks(trial.events);
-  const answers = trial.events.filter(e => e.type === 'assistant').map(e => e.text ?? '').join('\n').toLocaleLowerCase();
+  // Case is folded without the host's locale: under tr_TR «ID» would fold to «ıd» and miss «id».
+  const answers = trial.events.filter(e => e.type === 'assistant').map(e => e.text ?? '').join('\n').toLowerCase();
   return scenario.checks.map(check => {
     let passed: boolean;
     let evidence: string;
@@ -130,7 +131,7 @@ export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
       passed = last?.text === check.value;
       evidence = `Последний ответ${last ? ` #${last.seq}` : ' отсутствует'}: ожидается ${JSON.stringify(check.value)}, получено ${JSON.stringify(last?.text)}. Регистр, пробелы и переносы строк значимы.`;
     } else if (check.kind === 'answer_contains' || check.kind === 'answer_omits') {
-      const present = answers.includes(check.value.toLocaleLowerCase());
+      const present = answers.includes(check.value.toLowerCase());
       passed = check.kind === 'answer_contains' ? present : !present;
       evidence = `Assistant transcript ${present ? 'contains' : 'does not contain'} ${JSON.stringify(check.value)}. This is an exact text check, not a semantic judgment.`;
     } else if (check.kind === 'source_retrieved') {

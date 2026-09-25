@@ -27,11 +27,11 @@ function leaves(value: unknown, out: string[] = []): string[] {
 }
 /** Scalar leaves of the initial world the card did not disclose to the user, lower-cased. */
 export function hiddenLiterals(scenario: Scenario): string[] {
-  const known = knownText(scenario.user).toLocaleLowerCase();
-  const values = [...leaves(scenario.initialState.records), ...leaves(scenario.initialState.external)].map(v => v.toLocaleLowerCase());
+  const known = knownText(scenario.user).toLowerCase();
+  const values = [...leaves(scenario.initialState.records), ...leaves(scenario.initialState.external)].map(v => v.toLowerCase());
   return [...new Set(values.filter(v => !mentions(known, v)))];
 }
-const normalize = (text: string) => text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
 export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorCheck[] {
   // Fixed controller messages are harness text. Free card customers need the same retrospective
@@ -56,8 +56,8 @@ export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorChec
   if (hidden.length) {
     let leak: { seq: number; value: string } | undefined;
     for (const message of simulated) {
-      const said = (message.text ?? '').toLocaleLowerCase();
-      const revealed = textBefore(message.seq, ['assistant']).toLocaleLowerCase();
+      const said = (message.text ?? '').toLowerCase();
+      const revealed = textBefore(message.seq, ['assistant']).toLowerCase();
       const value = hidden.find(h => mentions(said, h) && !mentions(revealed, h));
       if (value) { leak = { seq: message.seq, value }; break; }
     }
