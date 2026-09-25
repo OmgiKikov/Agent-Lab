@@ -45,7 +45,8 @@ test('ten tools, each with a small closed schema: every value typed, and none ta
     walk(tool.parameters, tool.name);
     const text = JSON.stringify(tool.parameters);
     total += text.length + tool.description.length;
-    assert.ok(text.length < 5000, `${tool.name}: ${text.length} bytes of schema`);
+    // agent_lab_edit alone carries every kind of change a situation takes, the reference one included (~340 bytes).
+    assert.ok(text.length < (tool.name === 'agent_lab_edit' ? 5400 : 5000), `${tool.name}: ${text.length} bytes of schema`);
     for (const forbidden of ['approved', 'expectedHash', 'draftHash', 'patch', 'settings', 'maxCalls', 'grant', 'authority', 'ownerWords', 'via', 'receipt',
       'verdict', 'judgeVerdict', 'quick', 'reviewMode', 'target', 'dialogues', 'command_json'])
       assert.ok(!text.includes(`"${forbidden}"`), `${tool.name} offers ${forbidden}`);
