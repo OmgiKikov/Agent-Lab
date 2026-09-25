@@ -5,6 +5,7 @@ import { wordsOf } from '../src/card/commands.js';
 import type { CardCommand } from '../src/card/schema.js';
 import type { Decision, DecisionChoice } from '../src/inbox.js';
 import { decisionsLine } from '../src/inbox.js';
+import { countText, pluralForm } from '../src/plural.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { safeLine, safeText } from '../src/text.js';
 import type { Background } from './background.ts';
@@ -37,11 +38,12 @@ const closed = { additionalProperties: false } as const;
 function queueFeed(decisions: readonly Decision[]): Feed {
   if (!decisions.length) return { rows: [row('Решений не ждёт ничего.', 'text', true)] };
   const first = decisions[0]!;
+  const count = decisions.length;
   return { tone: 'warning',
-    rows: [row(`Нужно ваше решение: ${decisions.length} — запуску готовых ситуаций они не мешают`, 'text', true), row(`${first.subject} — ${first.text}`, 'muted')],
+    rows: [row(`Нужно ваше решение: ${count} — запуску готовых ситуаций ${pluralForm(count, ['оно не мешает', 'они не мешают', 'они не мешают'])}`, 'text', true), row(`${first.subject} — ${first.text}`, 'muted')],
     more: decisions.flatMap(decision => [row(decision.subject, 'text', true), row(decision.text, 'muted', false, 2),
       row(decision.choices.filter(choice => choice.settles).map((choice, index) => `${index + 1} ${choice.label}`).join('  ·  '), 'accent', false, 2), row('')]),
-    expand: `все ${decisions.length} с вариантами ответа` };
+    expand: count === 1 ? 'решение с вариантами ответа' : `все ${countText(count, ['решение', 'решения', 'решений'])} с вариантами ответа` };
 }
 
 export function registerDecideTool(pi: Pick<ExtensionAPI, 'registerTool'>, host: DecideHost): void {

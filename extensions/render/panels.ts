@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
-import { safeLine } from '../../src/text.js';
+import { safeLine, wrapHanging } from '../../src/text.js';
 import type { Line, Segment } from '../workspace-screens.ts';
 import type { Tone } from './theme.ts';
 
@@ -46,12 +46,19 @@ export function beside(left: Line[], right: Line[], leftWidth: number): Line[] {
   return Array.from({ length: Math.max(left.length, right.length) }, (_, i) => [...pad(left[i] ?? [], leftWidth), span('  '), ...(right[i] ?? [])]);
 }
 
-/** Equal-height counters on a wide terminal, a readable list on a narrow one. */
+/**
+ * Equal-height counters on a wide terminal; on a narrow one a list that reads as words whatever the number —
+ * «Готовы: 1 · можно запускать», never «1 готовы» —, a line too long for the terminal wrapped under its own text.
+ */
 export function metrics(values: { label: string; value: string; note: string; tone: Tone }[], width: number): Line[] {
-  if (width < 76) return values.flatMap(value => [
-    [span(`${value.value.padStart(2)}  `, value.tone, true), span(value.label.toLocaleLowerCase('ru')), span(` · ${value.note}`, 'muted')],
-  ]).flatMap(line => line.reduce((size, part) => size + visibleWidth(part.text), 0) > width
-    ? wrap(line.map(part => part.text).join(''), width) : [line]);
+  if (width < 76) return values.flatMap((value): Line[] => {
+    const label = value.label.toLocaleLowerCase('ru');
+    const name = `${label.charAt(0).toLocaleUpperCase('ru')}${label.slice(1)}: `;
+    const line: Line = [span(name), span(value.value, value.tone, true), span(` · ${value.note}`, 'muted')];
+    if (size(line) <= width) return [line];
+    const [first = '', ...rest] = wrapHanging(safeLine(`${name}${value.value} · ${value.note}`), width, width - 2);
+    return [row(first), ...rest.map(piece => [span('  '), ...row(piece)])];
+  });
   const cell = Math.floor((width - (values.length - 1) * 2) / values.length);
   const contents = values.map(value => [row(value.value, value.tone, true),
     ...wrap(value.label.toLocaleLowerCase('ru'), cell), ...wrap(value.note, cell, 'muted')]);

@@ -627,10 +627,17 @@ export function helpScreen(width: number): Screen {
 
 /** The folder with nothing in it yet (docs/design/ui-spec.md §4.9): what Lab does, and the two ways to begin. */
 export function startScreen(selected: number, width: number): Screen {
-  const choice = (index: number, label: string, note: string) => ws(index === selected ? 'selected' : 'text', `${index === selected ? '›' : ' '} ${label.padEnd(30)}${note}`, 1, { clip: true });
+  // Each choice with its note beside it when every note fits its line; otherwise every note under its choice, wrapped, never cut.
+  const choices = [['Проверить своего агента', 'нужна папка агента и, если есть, файл с разговорами'], ['Учебный пример', 'без модели и ключей, 1 минута']] as const;
+  const beside = choices.every(([, note]) => 1 + 32 + visibleWidth(note) <= room(width));
+  const choice = ([label, note]: readonly [string, string], index: number): LayoutRow<WsRole>[] => {
+    const head = `${index === selected ? '›' : ' '} ${label}`;
+    const role: WsRole = index === selected ? 'selected' : 'text';
+    return beside ? [ws(role, `${head.padEnd(32)}${note}`)] : [ws(role, head), ws('muted', note, 3)];
+  };
   return { head: wsLines([ws('answer', 'Agent Lab — насколько хорош ваш агент')], room(width)),
     body: wsLines([ws('muted', 'Lab разыграет с агентом ситуации из ваших разговоров и скажет, где и почему он ошибается.'), ws('blank', ''),
-      choice(0, 'Проверить своего агента', 'нужна папка агента и, если есть, файл с разговорами'), choice(1, 'Учебный пример', 'без модели и ключей, 1 минута')], room(width)),
+      ...choices.flatMap(choice)], room(width)),
     anchor: 2, foot: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'начать' }, { key: 'Esc', text: 'закрыть' }] };
 }
 

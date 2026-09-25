@@ -190,11 +190,12 @@ export function decisions(input: InboxInput): Decision[] {
     const variations = progress && 'variations' in progress ? progress.variations?.filter(item => progress.pending.includes(item.unit)).length ?? 0 : 0;
     const waiting = [...(pending - variations ? [`${countText(pending - variations, CONVERSATIONS)} из логов`] : []),
       ...(variations ? [countText(variations, ['ситуация варианта', 'ситуации вариантов', 'ситуаций вариантов'])] : [])].join(' и ');
+    const wait = pending - variations && variations ? 'ждут' : pluralForm(pending, ['ждёт', 'ждут', 'ждут']);
     // A continuation spends out of the ceiling the owner agreed to, or the higher one it asks them for: its pick says how much.
     const budget = preparationBudget(draft.record);
     const resumeCalls = budget ? ` (до ${countText(budget.resume - budget.spent, CALLS_UP_TO)} модели)` : '';
     if (editable && pending && !draft.record.librarySnapshot?.acceptance) spending.push({ key: `resume:${draft.record.id}`, subject: 'Подготовка ситуаций',
-      text: `Подготовка ещё не закончена: ${waiting} ждут разбора.`,
+      text: `Подготовка ещё не закончена: ${waiting} ${wait} разбора.`,
       choices: [{ label: `Продолжить подготовку${resumeCalls}`, action: { kind: 'resume_preparation', runId: draft.record.id }, settles: true },
         { label: 'Открыть ситуации', action: { kind: 'open_situations' }, settles: false }] });
     // Variations of the plan no conversation shows and no situation checks yet: the owner decides whether to pay for them.
