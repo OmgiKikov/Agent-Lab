@@ -3,7 +3,7 @@ import { LibraryConflict } from '../errors.js';
 import type { Traffic } from '../miner/schema.js';
 import { libraryHash, snapshotDigest, verifiedAcceptance } from '../scenario-library.js';
 import { compileCard } from './compile.js';
-import { cardSchema, libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type ScenarioLibrary } from './schema.js';
+import { cardSchema, libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type ScenarioLibrary, type BusinessScenario } from './schema.js';
 import { cardStatuses, type StatusContext } from './status.js';
 import type { CustomerProfile } from '../target-schema.js';
 
@@ -35,6 +35,13 @@ export function withRequirements(library: LibraryV2, requirements: readonly Requ
   if (fingerprint(library.requirements) === fingerprint(requirements)) return library;
   draftOnly(library);
   return libraryV2Schema.parse({ ...library, revision: library.revision + 1, requirements: structuredClone(requirements) });
+}
+
+/** A draft with one more business scenario in its plan (card/plan.ts): one per topic, never replaced by a later one. */
+export function withScenario(library: LibraryV2, scenario: BusinessScenario): LibraryV2 {
+  draftOnly(library);
+  if (library.plan?.some(item => item.id === scenario.id || item.topic === scenario.topic)) throw new Error('Сценарий этой темы уже есть в плане.');
+  return libraryV2Schema.parse({ ...library, revision: library.revision + 1, plan: [...library.plan ?? [], scenario] });
 }
 
 /**

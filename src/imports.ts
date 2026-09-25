@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { dialogueSchema, type Dialogue, type ValidationExclusion } from './contracts.js';
-import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES, LOG_CONVERSATIONS, STREAMED_LOG_BYTES } from './limits.js';
+import { IMPORT_DIALOGUE_LIMIT, IMPORT_FILE_BYTES, LOG_CONVERSATIONS, LOGGED_CUSTOMER_MESSAGES, STREAMED_LOG_BYTES } from './limits.js';
 import { hiddenMessage, MASK_VERSION, type MaskVersion } from './masking.js';
 import { ScenarioFiles } from './scenario-store.js';
 import { readConfirmedTable } from './spreadsheet/import.js';
@@ -24,7 +24,7 @@ import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
  */
 export function validationDialogueIssue(dialogue: Pick<Dialogue, 'messages'>, maskVersion: MaskVersion = MASK_VERSION): Omit<ValidationExclusion, 'dialogueId'> | undefined {
   const users = dialogue.messages.filter(message => message.role === 'user');
-  if (!users.length || users.length > 16) return { kind: 'length', reason: 'нужны 1–16 реплик клиента' };
+  if (!users.length || users.length > LOGGED_CUSTOMER_MESSAGES) return { kind: 'length', reason: users.length ? `клиент пишет больше ${LOGGED_CUSTOMER_MESSAGES} раз` : 'в разговоре нет ни одной реплики клиента' };
   if (users.some(message => hiddenMessage(message.content, maskVersion))) return { kind: 'masked', reason: 'реплика клиента целиком скрыта обезличиванием' };
   return undefined;
 }

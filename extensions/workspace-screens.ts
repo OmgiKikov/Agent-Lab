@@ -313,10 +313,10 @@ export function runActions(data: SpaceData): string[] {
  * says — the judge's review opens its queue, the report is saved, the situations run again, the unmeasured ones are
  * listed, the connection goes to the conversation.
  */
-export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'log'; cardId: string } | { kind: 'review' } | { kind: 'report' } | { kind: 'repeat' } | { kind: 'unmeasured' } | { kind: 'connection' };
+export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'log'; cardId: string } | { kind: 'review' } | { kind: 'blind' } | { kind: 'report' } | { kind: 'repeat' } | { kind: 'unmeasured' } | { kind: 'connection' };
 
 /** What Enter does on each step of «Дальше»; waiting for a run to end is nothing to do. */
-const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, report: { kind: 'report' }, repeat: { kind: 'repeat' },
+const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, blind_check: { kind: 'blind' }, report: { kind: 'report' }, repeat: { kind: 'repeat' },
   why_unmeasured: { kind: 'unmeasured' }, check_connection: { kind: 'connection' }, wait: null };
 
 const sameRow = (a: ResultRow, b: ResultRow): boolean => a.role === b.role && a.indent === b.indent && a.text === b.text && a.right === b.right;

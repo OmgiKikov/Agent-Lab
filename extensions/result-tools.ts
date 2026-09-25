@@ -17,7 +17,7 @@ import { buildResultView } from '../src/result-view.js';
 import { clip, oneLine, safeText } from '../src/text.js';
 import { comparisonFeed, dialogueFeed, failureFeed, feedRows, progressText, row, runStamp, statusFeed } from './conversation.ts';
 import { busyFor, chatQueue, writer } from './decisions.ts';
-import { agreementTarget, judgeWord, markRefusal, recordLogMark, recordMark, seenVerdicts, type Answer } from './judge-review.ts';
+import { agreementTarget, blindCheck, judgeWord, markRefusal, recordLogMark, recordMark, seenVerdicts, type Answer } from './judge-review.ts';
 import { displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { resultOutput } from './model-output.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
@@ -203,8 +203,8 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
   });
   pi.registerTool({
     ...displayFor(TOOL.agree), name: TOOL.agree, label: 'The owner\'s word on the judge',
-    description: 'The owner\'s own word on the judge\'s decision about one situation of a finished run: yes, the judge is right / no (with the owner\'s reason) / don\'t know — chosen by the owner in a native dialog; you only name the situation by its number and never supply the answer. It is what makes the accuracy trustworthy: offer it after showing a failure. log: the judge\'s reading of the situation\'s logged conversation (the comparison with production) instead of the run\'s.',
-    parameters: Type.Object({ run: runRef, situation: number, log: Type.Optional(Type.Literal(true)) }, closed),
+    description: 'The owner\'s own word on the judge\'s decision about one situation of a finished run: yes, the judge is right / no (with the owner\'s reason) / don\'t know — chosen by the owner in a native dialog; you only name the situation by its number and never supply the answer. It is what makes the accuracy trustworthy: offer it after showing a failure. log: the judge\'s reading of the situation\'s logged conversation (the comparison with production) instead of the run\'s. blind: the judge\'s blind check — omit situation; the owner labels up to 20 of the agent\'s answers in native dialogs WITHOUT seeing the judge\'s verdicts, then sees where the judge differs, false passes first. Offer it before any verdict is discussed, when the result says the judge was not checked blind; never tell the owner the judge\'s verdicts before it.',
+    parameters: Type.Object({ run: runRef, situation: Type.Optional(number), log: Type.Optional(Type.Literal(true)), blind: Type.Optional(Type.Literal(true)) }, closed),
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -216,6 +216,15 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
         if (busy) throw new Error(busy);
         const record = recordFor(await host.reading(directory).list(), params.run, 'results');
         if (isRunning(record.phase)) throw new Error('Прогон ещё идёт: ответить о решении судьи можно, когда он завершится.');
+        if (params.blind) {
+          const { notice, labelled } = await blindCheck(ctx, writer(host.operations, host.open, ctx.cwd, directory), () => host.reading(directory).get(record.id));
+          const fresh = buildResultView(await host.reading(directory).get(record.id));
+          return host.feedResult(callId, { run: record.id, blind: true, labelled, notice, falsePasses: fresh.blind?.falsePasses.map(diff => ({ situation: situationNumber(record, diff.scenarioId, 0), expectation: diff.letter })) ?? [],
+            falseFails: fresh.blind?.falseFails.map(diff => ({ situation: situationNumber(record, diff.scenarioId, 0), expectation: diff.letter })) ?? [],
+            instruction: 'Tell the owner in plain words how the judge compares with their labels. Where it differs, offer to open that situation (agent_lab_explain) and to fix the expectation when the owner found it wrong.' },
+          { rows: [row(safeText(notice), 'text', true), row(safeText(accuracyRow(fresh).text), 'muted')] }, `Слепая проверка судьи · ${runStamp(record)}`);
+        }
+        if (params.situation === undefined) throw new NeedsOwner('unknown_reference', 'Назовите ситуацию по номеру — или проверку судьи вслепую (blind).', [], 'О какой ситуации ответ?');
         const scenario = scenarioNumbered(record, params.situation);
         if (params.log) return await agreeOnLog(callId, ctx, record, scenario, params.situation, directory);
         const view = buildResultView(record);

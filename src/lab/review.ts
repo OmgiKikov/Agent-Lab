@@ -64,6 +64,10 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
     record.evidenceHash = fingerprint(trials.map(t => ({ id: t.id, events: t.events, initialState: t.initialState, finalState: t.finalState, observation: t.observation })));
     record.sourceEvidence = suiteEvidence(previous, record.scenarios.map(s => s.id));
     record.targetRelease = previous.targetRelease;
+    // The conversations judged again were recorded through the connection their run examined.
+    if (previous.connectionExam) record.connectionExam = structuredClone(previous.connectionExam);
+    // The same recorded conversations: how the customers compare with the logged ones does not change with the judge.
+    if (previous.realism) record.realism = structuredClone(previous.realism);
     record.reviewedAt = new Date().toISOString(); record.reviewMode = 'automated';
     record.manifestHash = measurementHash(record);
     addCaveat(record, { code: 'reassessment' });

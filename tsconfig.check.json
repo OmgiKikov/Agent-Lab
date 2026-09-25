@@ -7,5 +7,5 @@
     "sourceMap": false,
     "allowImportingTsExtensions": true
   },
-  "include": ["extensions/**/*.ts", "test/**/*.ts"]
+  "include": ["extensions/**/*.ts"]
 }

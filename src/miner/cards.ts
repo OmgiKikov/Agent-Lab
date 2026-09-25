@@ -1,7 +1,8 @@
-import { cardSchema, type Card, type LibraryV2 } from '../card/schema.js';
+import { cardSchema, type Card, type LibraryV2, type PreparationProgress } from '../card/schema.js';
 import type { CardStatus } from '../card/status.js';
 import { coverageLine, topicCoverage, uncoveredLine, withShares, type TopicCoverage, type TopicTraffic } from './coverage.js';
 import type { CardTopic } from './schema.js';
+import { countText } from '../plural.js';
 
 /*
  * The logs' topics as a card library carries them: each card the topic it stands for, the library the traffic of
@@ -63,4 +64,15 @@ export function situationCoverage(library: LibraryV2, statuses: ReadonlyMap<stri
   const coverage = cardCoverage(library, library.cards.filter(card => statuses.get(card.id)?.status === 'ready').map(card => card.id));
   const line = coverage && coverageLine(coverage);
   return coverage && line ? { line, uncovered: uncoveredLine(coverage) } : undefined;
+}
+
+/**
+ * The requests of the logs the owner's rules leave open, as a preparation found them (card/prepare.ts): «Правил нет для
+ * 3 запросов из логов: …» — a gap in the rules for the owner to fill, never a failure of Lab. Undefined when there is none.
+ */
+export function gapsLine(progress: PreparationProgress | undefined): string | undefined {
+  const gaps = progress?.protocol === 'cards-v1' || progress?.protocol === 'cards-v2' ? progress.excluded.flatMap(item => item.uncovered ? [item.uncovered] : []) : [];
+  if (!gaps.length) return undefined;
+  return `Правил нет для ${countText(gaps.length, ['запроса', 'запросов', 'запросов'])} из логов: ${gaps.slice(0, 3).map(gap => `«${gap}»`).join('; ')}${
+    gaps.length > 3 ? ` и ещё ${gaps.length - 3}` : ''}. Добавьте правила в материалы — иначе такие запросы не проверяются.`;
 }

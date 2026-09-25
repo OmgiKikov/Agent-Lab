@@ -1,4 +1,4 @@
-import { COUNTING_VERSION, countingVersionOf, headlineRule, undecidedExpectation, type CountedExpectation } from './card/expectations.js';
+import { countingVersionOf, headlineRule, undecidedExpectation, type CountedExpectation } from './card/expectations.js';
 import { directChecks } from './checkpoints.js';
 import { fingerprint, type AssessmentFailure, type Experiment, type InvalidCause, type Scenario, type Trial } from './contracts.js';
 import type { MetricAssessment } from './assessment.js';
@@ -33,7 +33,7 @@ export type Verdict = 'pass' | 'fail' | 'unknown';
  * leave a situation `unknown` and the tie-break when two reasons are equally frequent.
  */
 export const NOT_MEASURED_CODES = [
-  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'measurement_error', 'attempts_mismatch',
+  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'agent_no_reply', 'measurement_error', 'attempts_mismatch',
   'judge_error', 'judge_unavailable', 'judge_stopped', 'human_invalid', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
   'human_unknown', 'not_judged', 'judge_split', 'no_evidence', 'judge_unclear',
 ] as const;
@@ -152,7 +152,7 @@ export function cardOutcome(record: Experiment, scenario: Scenario, allowPartial
   if (!trials.length) return 'unknown';
   const state = attemptsState({ ...record, scenarios: [scenario], trials });
   const outcomes = trials.map(t => automaticTrialResult(scenario, t, record.humanReviews));
-  if (countingVersionOf(trials) === COUNTING_VERSION && state.intact && outcomes.includes('fail')) return 'fail';
+  if (countingVersionOf(trials) >= 2 && state.intact && outcomes.includes('fail')) return 'fail';
   if (!state.finished || !state.intact || !allowPartial && !state.whole) return 'unknown';
   return failFirst(outcomes);
 }
@@ -204,7 +204,7 @@ const failFirst = (results: Verdict[]): Verdict => results.includes('fail') ? 'f
  */
 function countedOutcome(record: Experiment, scenario: Scenario, trials: Trial[], partial: boolean, read: (trial: Trial) => Verdict): Verdict {
   const usable = (trial: Trial) => measurementUsable(scenario, trial, record.humanReviews);
-  if (countingVersionOf(trials) === COUNTING_VERSION) {
+  if (countingVersionOf(trials) >= 2) {
     if (!attemptsIntact(record, scenario, trials, partial)) return 'unknown';
     const results = trials.map(trial => usable(trial) ? read(trial) : 'unknown');
     if (results.includes('fail')) return 'fail';
@@ -271,7 +271,8 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   const codes: NotMeasuredCode[] = [];
   const latest = latestHumanReviews({ trials: [trial], humanReviews: record.humanReviews });
   if (trial.outcome === 'cancelled') codes.push('stopped');
-  else if (trial.outcome === 'invalid') codes.push(({ turn_limit: 'turn_limit', simulator: 'simulator_error', agent: 'agent_error', service_reply: 'service_reply', measurement: 'measurement_error' } as const)[invalidCauseOf(trial)]);
+  else if (trial.outcome === 'invalid') codes.push(({ turn_limit: 'turn_limit', simulator: 'simulator_error', agent: 'agent_error', service_reply: 'service_reply', measurement: 'measurement_error',
+    no_reply: 'agent_no_reply' } as const)[invalidCauseOf(trial)]);
   const failure = assessmentFailureOf(trial);
   if (failure) codes.push(({ code_only: 'not_judged', stopped: 'judge_stopped', unavailable: 'judge_unavailable', rejected: 'judge_error' } as const)[failure]);
   if (latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid'

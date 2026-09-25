@@ -407,16 +407,17 @@ export interface Trial {
    * run or a re-assessment records it. Absent in attempts recorded before editions existed: they keep edition 1, so a
    * stored result never moves.
    */
-  countingVersion?: 2;
+  countingVersion?: 2 | 3;
 }
 /**
  * Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed
  * to answer, a service text stood in for the agent's reply, or `measurement`: the agent's side answered but the
  * measurement could not be made — the adapter reported a measurementError, or the connection did not show the
- * state, tool log, reset or observed field the checks need. Values are only ever appended, never renamed or
- * reordered, so every stored cause stays valid.
+ * state, tool log, reset or observed field the checks need; `no_reply`: the adapter said the turn gave the customer
+ * nothing (a service status, a failed generation) — the agent's operability, never the Lab's error nor a failed duty.
+ * Values are only ever appended, never renamed or reordered, so every stored cause stays valid.
  */
-export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement'] as const;
+export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement', 'no_reply'] as const;
 export type InvalidCause = typeof INVALID_CAUSES[number];
 /** Why an attempt has no judgment: only code checks were re-run, the run was stopped, the model provider did not answer, or the judge's answers were rejected. */
 export const ASSESSMENT_FAILURES = ['code_only', 'stopped', 'unavailable', 'rejected'] as const;
@@ -436,8 +437,11 @@ export const humanReviewInputSchema = z.strictObject({
   trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
   verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000),
   durationMs: z.number().int().nonnegative().max(3600000).optional(),
-  /** A one-key agreement mark on a metric that decided the situation (outcomes.ts markTargets). */
-  source: z.literal('quick').optional(),
+  /**
+   * `quick`: a one-key agreement mark on a metric that decided the situation (outcomes.ts markTargets). `blind`: the
+   * owner's label of one expectation given without seeing the judge's verdict (blind.ts) — the judge's calibration.
+   */
+  source: z.enum(['quick', 'blind']).optional(),
   /** The recorded judge result the person saw; filled and checked by the lab, never trusted from a caller. */
   judgeVerdict: z.enum(['pass', 'fail', 'unknown']).optional(),
   /** The judgment the person agreed or disagreed with; absent when the trial has neither receipt nor audit (demo). */
@@ -445,7 +449,8 @@ export const humanReviewInputSchema = z.strictObject({
   /** The counting rule a quick mark was given under (COUNTING_RULES); filled by the lab, never trusted from a caller. */
   countingRules: text.optional(),
 }).refine(v => !(v.metricId && v.checkId), 'Review either one metric, one check, or the whole trial')
-  .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.');
+  .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.')
+  .refine(v => v.source !== 'blind' || !!v.metricId, 'Слепая оценка ставится на одно ожидание.');
 export type HumanReviewInput = z.infer<typeof humanReviewInputSchema>;
 /**
  * A stored verdict. `reviewedDialogue` marked, before cards, a whole-dialogue review whose note cited an event as `#N`.
@@ -495,6 +500,29 @@ export interface ToolChannel { confirmed: boolean; tools: string[]; reason?: str
 const toolChannelSchema = z.strictObject({ confirmed: z.boolean(), tools: z.array(z.string().min(1).max(200)).max(50),
   reason: z.string().max(300).optional(), checkedAt: z.string() });
 
+/**
+ * What the connection exam (exam.ts) saw before a run's first dialogue: each path and step, the turn the agent gave and
+ * whether it was the one the path expects. `absent` — the connection has no exam: the run is measured, its percent is
+ * not shown (result-view.ts). Absent in runs made before the exam existed; a re-assessment carries its run's.
+ */
+export const EXAM_TURNS = ['reply', 'buttons', 'handoff', 'no_reply', 'empty', 'service', 'missing'] as const;
+export type ExamTurn = typeof EXAM_TURNS[number];
+/**
+ * How the customers Lab played compare with the logged ones of the same situations (realism.ts): the mean number of
+ * customer messages after the opening a conversation, and the mean words of such a message. Never moves the number.
+ */
+const realismSideSchema = z.strictObject({ messages: z.number().nonnegative(), words: z.number().nonnegative() });
+export const realismSchema = z.strictObject({ conversations: z.number().int().positive(), synthetic: realismSideSchema, logged: realismSideSchema });
+export type Realism = z.infer<typeof realismSchema>;
+export const examResultSchema = z.strictObject({
+  checkedAt: z.string(), status: z.enum(['passed', 'failed', 'absent']),
+  paths: z.array(z.strictObject({ name: z.string().max(200), passed: z.boolean(), steps: z.array(z.strictObject({
+    said: z.string().max(3000), pressed: z.boolean(), expect: z.enum(['reply', 'buttons', 'handoff']), got: z.enum(EXAM_TURNS),
+    passed: z.boolean(), problem: z.string().max(1000).optional(), status: z.string().max(200).optional(),
+  })).max(8) })).max(10),
+});
+export type ExamResult = z.infer<typeof examResultSchema>;
+
 export interface Experiment {
   generatorConfig?: unknown;
   generatorIdentity?: unknown;
@@ -503,6 +531,8 @@ export interface Experiment {
   originalImport?: { id: string; contentHash: string };
   preparationProgress?: PreparationProgress;
   toolChannel?: ToolChannel;
+  connectionExam?: ExamResult;
+  realism?: Realism;
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
   sources: Source[]; settings: Settings; target: Target; requirements: Requirement[]; questions: string[];
@@ -575,7 +605,7 @@ export const trialSchema = z.strictObject({
   invalidCause: z.enum(INVALID_CAUSES).optional(),
   assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
   turnLimit: z.literal(true).optional(),
-  countingVersion: z.literal(2).optional(),
+  countingVersion: z.union([z.literal(2), z.literal(3)]).optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),
@@ -625,6 +655,8 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   originalImport: z.strictObject({ id: identifier, contentHash: sha256Schema }).optional(),
   preparationProgress: preparationProgressSchema.optional(),
   toolChannel: toolChannelSchema.optional(),
+  connectionExam: examResultSchema.optional(),
+  realism: realismSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(PHASES), message: z.string(),

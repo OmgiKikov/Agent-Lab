@@ -122,9 +122,30 @@ export const judgeReceiptSchema = z.strictObject({
   complete: z.boolean(),
 });
 export type JudgeReceipt = z.infer<typeof judgeReceiptSchema>;
-export const assessmentEventContent = (event: TraceEvent): string =>
-  event.text !== undefined && [event.tool, event.args, event.result, event.state].every(value => value === undefined) ? event.text
+export const assessmentEventContent = (event: TraceEvent): string => {
+  const facts = turnFacts(event);
+  if (facts) return [event.text ?? '', ...facts].join('\n');
+  return event.text !== undefined && [event.tool, event.args, event.result, event.state].every(value => value === undefined) ? event.text
     : JSON.stringify({ text: event.text, tool: event.tool, args: event.args, result: event.result, state: event.state });
+};
+const TURN_FACT_KEYS = new Set(['outcome', 'status', 'buttons', 'choice']);
+/**
+ * What the adapter said of a customer's or an agent's turn beside its text (evaluation.ts): the buttons the reply
+ * offered, a handoff to a person, a pressed button — as plain lines after the text, so a quote of the text stays
+ * verbatim. The agent's own status code is kept in the record and never shown: its meaning is the adapter's, not the
+ * judge's. Turns recorded before these facts existed carry only their text and read exactly as they always did.
+ */
+function turnFacts(event: TraceEvent): string[] | undefined {
+  if (event.type !== 'user' && event.type !== 'assistant' || event.text === undefined || event.tool !== undefined || event.args !== undefined || event.state !== undefined) return undefined;
+  const facts = event.result;
+  if (!facts || typeof facts !== 'object' || Array.isArray(facts) || !Object.keys(facts).every(key => TURN_FACT_KEYS.has(key))) return undefined;
+  const { outcome, buttons, choice } = facts as { outcome?: unknown; buttons?: unknown; choice?: unknown };
+  const lines: string[] = [];
+  if (Array.isArray(buttons) && buttons.length) lines.push(`[Кнопки: ${buttons.map(button => `«${String((button as { text?: unknown }).text)}»`).join(' · ')}]`);
+  if (outcome === 'handoff') lines.push('[Агент передал разговор человеку]');
+  if (choice) lines.push('[Клиент нажал кнопку]');
+  return lines;
+}
 /**
  * The rubrics of a judgment: the card's own. Under `ragDiagnostics` — the rule of the judgments that voted on them
  * (judge.ts JUDGE_PROTOCOL), kept so they verify — the RAG diagnostics were added whenever the target exposed retrieval

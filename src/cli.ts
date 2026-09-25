@@ -8,9 +8,12 @@ import { ExperimentLab } from './experiment.js';
 import type { CreateOptions, PreparationOptions } from './lab/library.js';
 import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, isRunnable, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
+import { createInputSchema, isRunnable, materialSources, runnableTarget, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
 import { compareRuns } from './comparison.js';
-import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
+import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection, type Connection } from './connection.js';
+import { examConnection, examLines } from './exam.js';
+import { planLines, variationLine, variationsWithout } from './card/plan.js';
+import { gapsLine } from './miner/cards.js';
 import { detectionLines, detectProject, promptLine } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials, promptMaterials } from './materials.js';
@@ -25,11 +28,11 @@ import { ANSWER_TEXT, calibrationRows, comparisonRows, judgeCheckText, logQuesti
 import { judgeCheckPlan, judgeCheckSummary } from './judge-check.js';
 import { evidenceBundle, exportArtifacts, importNumbers, readJudgeCheck, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
-import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
+import { hostGrant, preparedLines, requiredAuthority, wordsOf } from './card/commands.js';
 import { conversionText } from './card/convert.js';
 import { cardCommandSchema, type CardCommand, type LibraryV2 } from './card/schema.js';
-import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules, type RulebookView } from './card/rulebook.js';
-import { briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationData, situationNumber, situationViews, type SituationView } from './card/view.js';
+import { rulebookLines, rulebookOf, shownRulebook, withKind, withRules, type RulebookView } from './card/rulebook.js';
+import { briefRows, countsText, detailRows, formatNote, listRows, plainSituationText, situationData, situationNumber, situationViews, type SituationView } from './card/view.js';
 import { logAnswerOf, logAnswerReviews, logRefusal, logTargets, logVerdictsText, NO_CALIBRATION } from './card/calibration-view.js';
 import { safeLine, wrapHanging } from './text.js';
 import { countText } from './plural.js';
@@ -217,7 +220,10 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     if (number !== undefined && !view) throw new Error(`Ситуации №${values.card} нет. Есть: ${views.map(item => item.number).join(', ')}.`);
     if (values.json) { await writeStdout(`${JSON.stringify({ runId: id, counts: countsText(views), ...(changes.length ? { changes } : {}), ...(view ? { situation: { id: view.id, ...situationData(view), details: view.details } } : { situations: views.map(item => ({ id: item.id, ...situationData(item) })), ...(rulebook ? { rulebook } : {}) }) }, null, 2)}\n`); return; }
     const rows = view ? [...briefRows(view), { role: 'blank' as const, indent: 0, text: '' }, ...detailRows(view)] : views.flatMap(item => listRows(item));
-    const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), '', ...(rulebook ? [...rulebookLines(rulebook), ''] : [])];
+    const plan = record.librarySnapshot?.formatVersion === 2 ? planLines(record.librarySnapshot) : [];
+    const gaps = gapsLine(record.preparationProgress);
+    const head = view ? [] : [countsText(views), ...(formatNote(record) ? [formatNote(record)!] : []), '', ...(plan.length ? [...plan, ''] : []), ...(gaps ? [gaps, ''] : []),
+      ...(rulebook ? [...rulebookLines(rulebook), ''] : [])];
     const choices = view?.format === 'card' ? view.question?.choices ?? [] : [];
     const next = !view || view.format !== 'card' ? [] : choices.length
       ? [`Ответить: agent-lab cards --id ${id} --card ${view.number} --choice ${choices.map(choice => choice.id).join('|')} --yes — ${choices.map((choice, index) => `${choice.id} — ответ ${index + 1}${choice.needsText ? ' со своими словами в --text «…»' : ''}`).join(', ')}.`]
@@ -238,9 +244,10 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     return;
   }
   const rulebookFlags = values['operator-rules'] !== undefined || !!values['bind-rule']?.length || !!values['unbind-rule']?.length;
-  if (!values.input && !values.choice && !values.check && !values.resume && !values.accept && !rulebookFlags) { await show(values.id); return; }
+  if (!values.input && !values.choice && !values.check && !values.resume && !values.accept && !values.variations && !rulebookFlags) { await show(values.id); return; }
   await lab.init();
   try {
+    if (values.variations) { await variationSituations(lab, values, show); return; }
     const target: { id: string; preview?: true } = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
     // A fresh copy of a finished run is only previewed: without --yes nothing is written, so it has no id to name yet.
     if (target.preview) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка пойдёт в новый черновик того же набора.\n`);
@@ -276,8 +283,7 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     // The command file and the text on the command line are the owner's own: their words, confirmed by --yes.
     const words = wordsOf(command).join('\n');
     const prepared = await lab.prepareCardCommand(target.id, command, { via: 'cli-yes', ...(words && words.length <= 1000 ? { ownerWords: words } : {}) });
-    const changes = [...prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`)),
-      ...(prepared.rulebook ? rulebookChangeLines(prepared.rulebook.before, prepared.rulebook.after, prepared.next.requirements, prepared.rulebook.flagged) : [])];
+    const changes = preparedLines(prepared);
     if (!values.yes) {
       await writeStdout(`${[...changes, '', ...(prepared.recheck.length ? ['После записи Lab проверит изменённое заново.'] : []), 'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
       return;
@@ -288,6 +294,33 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     if (check.decision.action === 'run') await lab.waitForIdle();
     await show(target.id, changes.map(line => safeLine(line)));
   } finally { await lab.close(); }
+}
+
+/**
+ * `cards --variations`: situations for the variations of the plan that have none — from the rules, never traffic. Without
+ * --yes the variations and the ceiling the preparation would continue under; with it they are queued and the preparation
+ * continues, the ceiling raised to what they need as the owner's word, like `--resume --yes`.
+ */
+async function variationSituations(lab: ExperimentLab, values: Flags, show: (id: string) => Promise<void>): Promise<void> {
+  const record = await lab.get(values.id!);
+  const library = record.librarySnapshot;
+  if (library?.formatVersion !== 2 || !library.plan?.length) throw new Error('У этого набора нет плана сценариев.');
+  const wanted = variationsWithout(library);
+  if (!wanted.length) throw new Error('У всех вариантов плана уже есть ситуации.');
+  const progress = record.preparationProgress;
+  const after = progress && progress.protocol !== 'chronological-scenarios-v1' ? preparationBudget({ ...record, preparationProgress: { ...progress, pending: [...progress.pending, ...wanted.map((_, index) => `rules_${index}`)] } }) : undefined;
+  if (!values.yes) {
+    await writeStdout(`${['Составить ситуации для вариантов без ситуаций — по правилам, не из логов:', ...wanted.map(({ scenario, variation }) => `  ${variationLine(scenario, variation)} — сценарий «${scenario.question}»`),
+      ...(after ? [`Потрачено ${after.spent} из ${after.ceiling} согласованных вызовов модели; с --yes потолок всей подготовки станет ${Math.max(after.ceiling, after.resume)}. Агент не запускается.`] : []),
+      'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
+    return;
+  }
+  const { experiment } = await lab.queueVariations(record.id, libraryHash(library));
+  const budget = preparationBudget(experiment);
+  const raise = budget && budget.resume > budget.ceiling ? budget.resume : undefined;
+  await lab.resumePreparation(record.id, libraryHash(experiment.librarySnapshot!), { ...preparationFlags(values), ...(raise !== undefined ? { callCeiling: raise } : {}) });
+  await lab.waitForIdle();
+  await show(record.id);
 }
 
 /** The rulebook command of `cards --operator-rules on|off --bind-rule ID --unbind-rule ID`: the current rulebook with the owner's changes. */
@@ -324,16 +357,32 @@ async function logs({ values, directory }: CommandInput): Promise<void> {
 async function checkConnection({ values, directory }: CommandInput): Promise<void> {
   const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
   const target = connection?.target;
+  const exam = target && isRunnable(target) ? target.exam : undefined;
   if (connection && target?.kind === 'http' && target.request) {
     await doctorTemplate({ connection, target: { ...target, request: target.request }, directory, yes: values.yes, file: values.connection && resolve(values.connection), reply: values.reply });
+    if (exam && values.yes && !process.exitCode) await examCommand(connection, directory);
     return;
   }
-  if (!connection?.probe) throw new Error('Укажите --connection с probe.write/read/reset и initialState.');
-  if (!values.yes) { process.stdout.write(JSON.stringify({ target: connection.target, probe: connection.probe, requests: 3 }, null, 2) + '\n'); throw new Error('Для трёх пробных запросов укажите --yes.'); }
-  const result = await doctor(connection);
-  if (result.passed) await rememberConnection(directory, connection);
+  if (!connection?.probe && !exam) throw new Error('Укажите --connection с разделом exam (многоходовые пути экзамена) или с probe.write/read/reset и initialState.');
+  if (!values.yes) {
+    if (exam) { process.stdout.write(`Экзамен подключения: ${countText(exam.length, ['путь', 'пути', 'путей'])}, ${countText(exam.reduce((n, path) => n + path.steps.length, 0), ['сообщение', 'сообщения', 'сообщений'])} агенту, без моделей.\n`); throw new Error('Для пробных разговоров с агентом укажите --yes.'); }
+    process.stdout.write(JSON.stringify({ target: connection!.target, probe: connection!.probe, requests: 3 }, null, 2) + '\n'); throw new Error('Для трёх пробных запросов укажите --yes.');
+  }
+  if (!connection!.probe) { await examCommand(connection!, directory); return; }
+  const result = await doctor(connection!);
+  if (result.passed && !exam) await rememberConnection(directory, connection!);
   if (values.output) await writeFile(values.output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   process.stdout.write(JSON.stringify(result, null, 2) + '\n'); process.exitCode = result.passed ? 0 : 2;
+  if (exam && result.passed) await examCommand(connection!, directory);
+}
+
+/** The connection exam from the command line: its lines, and the connection remembered only when every path passed. */
+async function examCommand(connection: Connection, directory: string): Promise<void> {
+  const result = await examConnection(runnableTarget(connection.target), new AbortController().signal,
+    (name, index, of) => process.stderr.write(`Путь ${index + 1} из ${of}: ${safeLine(name)}\n`));
+  for (const line of examLines(result)) process.stdout.write(`${safeLine(line)}\n`);
+  if (result.status === 'passed') await rememberConnection(directory, connection);
+  process.exitCode = result.status === 'passed' ? 0 : 2;
 }
 
 async function summary({ values, directory }: CommandInput): Promise<void> {
@@ -775,9 +824,10 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     ['agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes', 'Ответ на вопрос ситуации'],
     ['agent-lab cards --id RUN --input команда.json [--yes]', 'Команда владельца; без --yes — только «было → стало»'],
     ['agent-lab cards --id RUN --check|--resume|--accept --yes [--parallel 4]', 'Проверить ситуации · продолжить подготовку · утвердить готовые'],
+    ['agent-lab cards --id RUN --variations [--yes]', 'Ситуации для вариантов плана, которых нет в логах: по правилам'],
     ['agent-lab cards --id RUN [--operator-rules on|off] [--bind-rule ID] [--unbind-rule ID] [--yes]', 'Свод правил: входят ли инструкции для операторов, отдельные правила, обязательные для бота'],
     ['agent-lab cards --id RUN --convert', 'Черновик старого формата — продолжить в новом формате; старый останется как есть']],
-  flags: ['id', 'card', 'json', 'input', 'choice', 'text', 'check', 'resume', 'accept', 'convert', 'yes', 'parallel', 'operator-rules', 'bind-rule', 'unbind-rule'], run: cards },
+  flags: ['id', 'card', 'json', 'input', 'choice', 'text', 'check', 'resume', 'accept', 'variations', 'convert', 'yes', 'parallel', 'operator-rules', 'bind-rule', 'unbind-rule'], run: cards },
   accept: { help: [['agent-lab accept --id RUN [--yes] [--json]', 'Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания']], flags: ['id', 'yes', 'json'], run: accept },
   run: { help: [['agent-lab run --id RUN --yes [--parallel 4]', 'Прогнать утверждённые ситуации; итог — JSON для скрипта']], flags: ['id', 'yes', 'parallel', 'json'], failure: 2, run },
   repeat: { help: [['agent-lab repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID]', 'Новый черновик тех же ситуаций']], flags: ['id', 'case', 'control'], run: repeat },

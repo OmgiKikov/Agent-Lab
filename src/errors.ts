@@ -19,7 +19,7 @@ export class CommandRefused extends Error {}
 
 /** A command names a card, fact, duty or answer that is not there; `allowed` lists what is, in the caller's own terms. */
 export class UnknownReference extends Error {
-  constructor(readonly what: 'card' | 'fact' | 'expectation' | 'choice' | 'requirement', readonly allowed: string[], message: string) { super(message); }
+  constructor(readonly what: 'card' | 'fact' | 'expectation' | 'choice' | 'requirement' | 'scenario', readonly allowed: string[], message: string) { super(message); }
 }
 
 /** Another Agent Lab process holds the writer lock of this data directory. */

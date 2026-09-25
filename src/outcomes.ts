@@ -1,4 +1,4 @@
-import { countingRuleOf, GOAL_METRIC_ID, headlineRule, recordedExpectationResult, type CountedExpectation, type CountingRule } from './card/expectations.js';
+import { countingRuleOf, editionOf, GOAL_METRIC_ID, headlineRule, recordedExpectationResult, type CountedExpectation, type CountingRule } from './card/expectations.js';
 import { requiredCheckpointResult } from './checkpoints.js';
 import { simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
 import { metricApplies } from './assessment.js';
@@ -120,8 +120,12 @@ export function trialAssessmentComplete(scenario: Scenario, trial: Trial, review
  */
 export function simulatorVerdicts(scenario: Scenario | undefined, trial: Trial, reviews: HumanReview[] = []): { checks: boolean[]; fidelity: (Judged | undefined)[] } {
   const latest = latestHumanReviews({ trials: [trial], humanReviews: reviews });
+  // From edition 3 a heuristic's suspicion is a note for review: only a person's word that the customer went astray
+  // takes the attempt out (card/expectations.ts).
+  const heuristicsDecide = editionOf(trial) < 3;
   const checks = (simulatorWasUsed(trial) ? trial.simulatorChecks ?? [] : []).map(c => {
-    const judged = humanOverride(latest.get(`${trial.id}|check:${c.id}`), c.passed ? 'pass' : 'fail');
+    const review = latest.get(`${trial.id}|check:${c.id}`);
+    const judged = humanOverride(review, c.passed || c.heuristic && !heuristicsDecide && !review ? 'pass' : 'fail');
     return judged.invalid || judged.result === 'pass';
   });
   const fidelity = (scenario?.metrics ?? []).filter(m => m.subject === 'simulator' && metricApplies(m, trial)).flatMap(m => {

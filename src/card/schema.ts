@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
-import { MATERIAL_LIMIT, MAX_PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
+import { CARD_LATER_MESSAGES, MATERIAL_LIMIT, MAX_PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
 import { cardTopicSchema, sampleSchema, topicsKnown, trafficSchema } from '../miner/schema.js';
 import { referencesSchema } from '../reference.js';
 import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema, requirementKindSchema } from '../scenario-contracts.js';
@@ -66,6 +66,14 @@ export const expectationSchema = z.strictObject({
   // A duty observed on the tools: the tool whose result proves it (card/expectations.ts). Absent — any tool's result,
   // as on every card before it.
   tool: toolNameSchema.optional(),
+  // How the rule binds: `must_not` — the agent must not do it; absent — it must, as on every card before it.
+  strength: z.literal('must_not').optional(),
+  // What else fulfils it, so a permitted way is never judged a failure («может сначала уточнить номер, если его нет в запросе»),
+  // and what exactly breaks it. Absent on every card before them: the duty's words alone decide, as they always did.
+  acceptable: text(600).optional(),
+  violation: text(600).optional(),
+  // The expectation of the business scenario this duty is (card/plan.ts): its words, rules, strength and ways are the plan's.
+  planExpectationId: id.optional(),
 }).refine(expectation => expectation.tool === undefined || expectation.observation === 'tool', 'Only a duty observed on the tools names a tool');
 
 /** The one difference of a similar card from its parent. */
@@ -122,7 +130,7 @@ export const cardSchema = z.strictObject({
     turn: turnSchema.optional(),
   }),
   agentMust: z.array(expectationSchema).min(1).max(3), // АГЕНТ ДОЛЖЕН
-  coverage: z.array(coverageEntrySchema).max(60),
+  coverage: z.array(coverageEntrySchema).max(CARD_LATER_MESSAGES),
   revision: z.number().int().positive(),
   // The customer cannot say what is wrong («не работает»): the card tests that the agent clarifies instead of guessing, and
   // the result counts such situations apart. Absent on a card whose customer states the request, as on every card before it.
@@ -133,10 +141,33 @@ export const cardSchema = z.strictObject({
   // What code checks besides the judge: the article the agent must retrieve and/or the fact it must convey (reference.ts).
   // Absent on a card without them, as on every card before them.
   references: referencesSchema.refine(v => v.length > 0, 'Empty references').optional(),
+  // The business scenario and the variation this card is an example of (card/plan.ts); absent on every card before plans.
+  scenarioRef: z.strictObject({ scenarioId: id, variationId: id }).optional(),
 }).refine(card => distinctIds(card.client.knows) && distinctIds(card.agentMust), 'Fact and expectation ids repeat')
   // Only a card written from the owner's rules, with no dialogue behind it, opens with the model's words.
   .refine(card => card.client.writesSource.kind !== 'model' || card.origin.kind === 'rules', 'Model-written opening outside a rules card');
 export type Card = z.infer<typeof cardSchema>;
+
+/**
+ * A business scenario (card/plan.ts): what the preparation checks for one topic of the logs before any card is written —
+ * the question the customers come with, the variations of their circumstances that change what the agent must do, and
+ * the expectations every card of the scenario shares. A variation from the logs names the sampled conversations it
+ * stands for; one no conversation shows (`rules`) is an addition from the rules and is never presented as traffic.
+ */
+// `owner`: a circumstance the owner added to the plan (add_variation) — like `rules`, never presented as traffic.
+export const scenarioVariationSchema = z.strictObject({ id, title: text(160), origin: z.enum(['logs', 'rules', 'owner']), examples: ids(40) });
+export const planExpectationSchema = z.strictObject({
+  id, text: text(300), requirementIds: z.array(id).min(1).max(3),
+  strength: z.literal('must_not').optional(), acceptable: text(600).optional(), violation: text(600).optional(),
+  // The variations it applies to; absent — every variation of the scenario.
+  variationIds: ids(8).min(1).optional(),
+});
+export const businessScenarioSchema = z.strictObject({
+  id, topic: text(120), trafficTopic: cardTopicSchema.optional(), question: text(300),
+  variations: z.array(scenarioVariationSchema).min(1).max(8).refine(distinctIds, 'Variation ids repeat'),
+  expectations: z.array(planExpectationSchema).min(1).max(8).refine(distinctIds, 'Expectation ids repeat'),
+});
+export type BusinessScenario = z.infer<typeof businessScenarioSchema>;
 
 /**
  * «Свод правил»: which requirements may back what the agent must do. `kinds` bind as a whole; `included` are single rules
@@ -156,7 +187,9 @@ const setFact = z.strictObject({ kind: z.literal('set_fact'), cardId: id, factId
   disclosure: disclosureSchema, askedAs: text(200).optional() });
 const removeFact = z.strictObject({ kind: z.literal('remove_fact'), cardId: id, factId: id });
 const editExpectation = z.strictObject({ kind: z.literal('edit_expectation'), cardId: id, expectationId: id, text: text(300).optional(),
-  requirementIds: z.array(id).min(1).max(3).optional(), appliesWhen: text(300).nullable().optional() });
+  requirementIds: z.array(id).min(1).max(3).optional(), appliesWhen: text(300).nullable().optional(),
+  // How the rule binds, what else fulfils the duty, what breaks it; null removes the words.
+  strength: z.enum(['must', 'must_not']).optional(), acceptable: text(600).nullable().optional(), violation: text(600).nullable().optional() });
 const removeExpectation = z.strictObject({ kind: z.literal('remove_expectation'), cardId: id, expectationId: id });
 // `clarity`: whether the customer states their request — the owner's decision about the customer, beside the words.
 const editClient = z.strictObject({ kind: z.literal('edit_client'), cardId: id, wants: text(300).optional(), writes: text(3000).optional(), leaves: text(300).optional(),
@@ -196,6 +229,17 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
     facts: z.array(z.strictObject({ cardId: id, factId: id })).min(1).max(200) }),
   // The whole rulebook as it will be: a library-wide change, whose receipt names no card.
   z.strictObject({ kind: z.literal('set_rulebook'), rulebook: rulebookSchema }),
+  // An expectation of the plan (card/plan.ts) as the owner words it: it changes in the scenario and in every card's duty
+  // that is it, together; null removes the words. A library-wide change, whose receipt names the scenario, not a card.
+  z.strictObject({ kind: z.literal('edit_plan_expectation'), scenarioId: id, expectationId: id, text: text(300).optional(),
+    requirementIds: z.array(id).min(1).max(3).optional(), strength: z.enum(['must', 'must_not']).optional(),
+    acceptable: text(600).nullable().optional(), violation: text(600).nullable().optional() }),
+  // The expectation leaves the scenario and every card's duty that is it; a card it would leave without a duty is refused.
+  z.strictObject({ kind: z.literal('remove_plan_expectation'), scenarioId: id, expectationId: id }),
+  // A kind of customer the owner adds to a scenario: a new variation, its situations written from the rules when the owner
+  // asks. `expectationIds`: the scenario's expectations of some variations only that apply to it too; the ones of every
+  // variation always do.
+  z.strictObject({ kind: z.literal('add_variation'), scenarioId: id, title: text(160), expectationIds: ids(8).optional() }),
 ]);
 export type CardCommand = z.infer<typeof cardCommandSchema>;
 
@@ -241,6 +285,8 @@ export const libraryV2Schema = z.strictObject({
   traffic: z.array(trafficSchema).max(30).optional(),
   /** The owner's rulebook; absent until the owner changes it (card/rulebook.ts reads the default). */
   rulebook: rulebookSchema.optional(),
+  /** The business scenarios the cards are examples of, one per topic (card/plan.ts); absent in libraries made before plans. */
+  plan: z.array(businessScenarioSchema).max(30).refine(distinctIds, 'Scenario ids repeat').optional(),
 }).refine(library => new Set(library.cards.map(card => card.number)).size === library.cards.length
   && library.cards.every(card => card.number < library.nextNumber), 'A card number repeats or is not below nextNumber: a number is never given twice')
   .refine(topicsKnown, 'A card stands for a topic its library has no traffic of');
@@ -251,7 +297,7 @@ export const scenarioLibrarySchema = z.discriminatedUnion('formatVersion', [libr
 export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;
 
 /** The paid step of a unit a call belongs to. */
-const preparationStageSchema = z.enum(['select', 'ground', 'propose', 'review']);
+const preparationStageSchema = z.enum(['select', 'ground', 'propose', 'review', 'plan']);
 
 /**
  * The checkpoint of a card preparation (card/prepare.ts), saved with the draft after every step. A unit of work
@@ -278,7 +324,9 @@ const cardPreparationSchema = z.strictObject({
    */
   status: z.unknown().optional(),
   pending: ids(300), processed: ids(300),
-  excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
+  // `uncovered`: the unit made no situation because the owner's rules leave its request open — in the builder's words,
+  // a gap the owner is told of, not a failure of Lab. Absent on every other unit left out, and before gaps were told apart.
+  excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000), uncovered: text(300).optional() })).max(300),
   /** `cards-v1`: the whole policy was grounded in one call (a knowledge base small enough to read at once). */
   groundingComplete: z.boolean().optional(),
   /** Situations asked for — from the owner's rules alone, or from the logs' sample: never more are made. */
@@ -324,6 +372,17 @@ const cardPreparationSchema = z.strictObject({
   cards: z.array(z.strictObject({ dialogueId: id, cardId: id })).max(300).optional(),
   /** Units whose card the reviewer blocked and that spent their one revision, whatever it gave. */
   revised: ids(300).optional(),
+  /**
+   * The business scenario of each topic the units stand for (card/plan.ts): made — its id in the library's plan —, left
+   * out with why, or neither while its call is under way; a resume never plans a topic twice, and a plan that died in
+   * flight is left out, its cost unknown. Absent in preparations made before plans.
+   */
+  plans: z.array(z.strictObject({ topic: text(120), scenarioId: id.optional(), reason: text(2000).optional() })).max(30).optional(),
+  /**
+   * Units that write one situation of a variation of the plan from the rules — a variation no sampled conversation shows,
+   * or one the owner added — queued on the owner's word (lab/library.ts queueVariations). Absent before such units.
+   */
+  variations: z.array(z.strictObject({ unit: id, scenarioId: id, variationId: id })).max(60).optional(),
 });
 export type CardPreparation = z.infer<typeof cardPreparationSchema>;
 

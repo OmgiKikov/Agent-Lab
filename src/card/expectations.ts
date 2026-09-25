@@ -16,29 +16,33 @@ import { judgedByCheckpoints, projectedExpectations, projectedLetter } from './l
  *   edition 1 (no stamp)   every attempt must be a usable measurement before any verdict is read: one unmeasured
  *                          attempt leaves the situation «не измерено» even when another one failed; a tool
  *                          expectation stands only on a cited tool result.
- *   edition 2 (current)    a usable failure in any attempt fails the situation before usability is asked, and
+ *   edition 2              a usable failure in any attempt fails the situation before usability is asked, and
  *                          usability guards only «справился». With a complete tool log a failed tool expectation
  *                          stands without a cited tool result — the log shows the call was never made — while a
  *                          pass still needs one.
+ *   edition 3 (current)    as edition 2, and the heuristic checks of the customer Lab plays (a repeat, a value not in
+ *                          its card) are notes for review: they take an attempt out of the count only once a person
+ *                          confirms them. The judge's verdict that the customer left its situation still does.
  *
- * Edition 2 decides every situation edition 1 decides, the same way; it only stops hiding failures.
+ * Each edition decides every situation the one before decides, the same way; each only stops hiding failures.
  */
 
 export type Expectation = CardExecution['evaluatorView']['expectations'][number];
 /** An expectation of the rule with the letter the owner reads it by (А, Б, В…). */
 export type CountedExpectation = Expectation & { letter: string };
 
-/** The edition of the counting rules every attempt is recorded under now; the stored attempt field accepts exactly it. */
-export const COUNTING_VERSION = 2;
-export type CountingVersion = 1 | typeof COUNTING_VERSION;
+/** The edition of the counting rules every attempt is recorded under now; the stored attempt field accepts 2 and 3. */
+export const COUNTING_VERSION = 3;
+export type CountingVersion = 1 | 2 | typeof COUNTING_VERSION;
+/** The edition one attempt is read by: the one it was recorded under, 1 when it carries none. */
+export const editionOf = (trial: Pick<Trial, 'countingVersion'>): CountingVersion => trial.countingVersion ?? 1;
 
 /**
- * The edition these attempts are counted by: the current one only when every attempt was recorded under it, as with a
- * checkpoint verdict one older attempt keeps the whole card on the older rule. A situation with no attempt yet waits
- * for attempts of the current edition.
+ * The edition these attempts are counted by: the oldest one among them, as with a checkpoint verdict one older attempt
+ * keeps the whole card on the older rule. A situation with no attempt yet waits for attempts of the current edition.
  */
 export function countingVersionOf(trials: readonly Pick<Trial, 'countingVersion'>[]): CountingVersion {
-  return trials.every(trial => trial.countingVersion === COUNTING_VERSION) ? COUNTING_VERSION : 1;
+  return trials.reduce<CountingVersion>((oldest, trial) => editionOf(trial) < oldest ? editionOf(trial) : oldest, COUNTING_VERSION);
 }
 
 export type HeadlineRule =
@@ -86,17 +90,19 @@ export function headlineRule(scenario: Scenario | undefined, trials: readonly Co
  * A card counted by its expectations is `all-expectations-v1` in edition 1 and `all-expectations-v2` in edition 2,
  * every other card `goal-and-rules-v2` and `goal-and-rules-v3`.
  */
-export type CountingRule = 'all-expectations-v1' | 'all-expectations-v2' | 'goal-and-rules-v2' | 'goal-and-rules-v3' | 'library-v1';
+export type CountingRule = 'all-expectations-v1' | 'all-expectations-v2' | 'all-expectations-v3' | 'goal-and-rules-v2' | 'goal-and-rules-v3' | 'goal-and-rules-v4' | 'library-v1';
 export function countingRuleOf(scenario: Scenario | undefined, rule: HeadlineRule): CountingRule {
-  if (rule.kind === 'expectations') return rule.version === COUNTING_VERSION ? 'all-expectations-v2' : 'all-expectations-v1';
+  if (rule.kind === 'expectations') return rule.version === 3 ? 'all-expectations-v3' : rule.version === 2 ? 'all-expectations-v2' : 'all-expectations-v1';
   if (rule.kind === 'strict' && scenario?.execution) return 'library-v1';
-  return rule.version === COUNTING_VERSION ? 'goal-and-rules-v3' : 'goal-and-rules-v2';
+  return rule.version === 3 ? 'goal-and-rules-v4' : rule.version === 2 ? 'goal-and-rules-v3' : 'goal-and-rules-v2';
 }
 
 /** How a situation is counted under each rule, in the owner's words: the one line «Как считали» shows for it. */
 export const COUNTING_RULE_TEXT: Record<CountingRule, string> = {
+  'all-expectations-v3': 'Агент справился с ситуацией, если выполнил все её ожидания в каждой попытке. Ошибка в любой измеренной попытке — провал, даже если другую попытку измерить не удалось; при полном журнале инструментов пропущенный вызов — тоже ошибка. Подозрения к клиенту, которого играет Lab, — пометки на разбор: попытку убирает из счёта только подтверждённый сбой клиента.',
   'all-expectations-v2': 'Агент справился с ситуацией, если выполнил все её ожидания в каждой попытке. Ошибка в любой измеренной попытке — провал, даже если другую попытку измерить не удалось; при полном журнале инструментов пропущенный вызов — тоже ошибка.',
   'all-expectations-v1': 'Агент справился с ситуацией, если выполнил все её ожидания в каждой попытке, и провалил её при ошибке в любой попытке — но только когда измерены все попытки; иначе ситуация не измерена.',
+  'goal-and-rules-v4': 'Агент справился с ситуацией, если в каждой попытке выполнил запрос клиента и не нарушил правила промпта. Ошибка в любой измеренной попытке — провал, даже если другую попытку измерить не удалось. Подозрения к клиенту, которого играет Lab, — пометки на разбор: попытку убирает из счёта только подтверждённый сбой клиента.',
   'goal-and-rules-v3': 'Агент справился с ситуацией, если в каждой попытке выполнил запрос клиента и не нарушил правила промпта. Ошибка в любой измеренной попытке — провал, даже если другую попытку измерить не удалось.',
   'goal-and-rules-v2': 'Агент справился с ситуацией, если в каждой попытке выполнил запрос клиента и не нарушил правила промпта, и провалил её при ошибке в любой попытке — но только когда измерены все попытки; иначе ситуация не измерена.',
   'library-v1': 'Ситуация первого формата: агент справился, если прошёл все обязательные контрольные точки так, как их оценил судья при прогоне; провал любой точки — провал ситуации.',
@@ -121,7 +127,7 @@ const stateObserved = (trial: Trial): boolean => !!trial.observation && trial.ob
 function toolEvidence(trial: Trial, expectation: Pick<Expectation, 'tool'>, result: 'pass' | 'fail', cited: readonly Trial['events'][number][]): boolean {
   if (trial.observation?.tools !== 'complete') return false;
   const proves = (event: Trial['events'][number]) => event.type === 'tool_result' && (expectation.tool === undefined || event.tool === expectation.tool);
-  return cited.some(proves) || result === 'fail' && trial.countingVersion === COUNTING_VERSION;
+  return cited.some(proves) || result === 'fail' && editionOf(trial) >= 2;
 }
 
 /**

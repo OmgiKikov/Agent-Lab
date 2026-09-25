@@ -28,6 +28,14 @@ export const LOG_CONVERSATIONS = 100_000;
 /** Dialogues one import batch takes; a longer log gives a sample of this many (scenario-library.ts logImport). */
 export const IMPORT_DIALOGUE_LIMIT = 300;
 /**
+ * Later customer messages one situation accounts for (card/schema.ts `coverage`), and so the customer messages of a
+ * logged conversation a situation can be made from: its opening and those. Long conversations are where agents lose
+ * customers, so the bound is the card's, never the sample's convenience; a conversation too large for one model call is
+ * left out later, with that reason (card/prepare.ts).
+ */
+export const CARD_LATER_MESSAGES = 60;
+export const LOGGED_CUSTOMER_MESSAGES = CARD_LATER_MESSAGES + 1;
+/**
  * The data one model request carries, in UTF-8 bytes of its JSON: the role prompt, the answer's schema and a repair's
  * feedback come on top. Sized for today's long-context models (≈60–90 thousand tokens of Russian text): a card built
  * on the agent's prompts, its articles and a long dialogue must be proposed and reviewed whole, because dropping the

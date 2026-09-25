@@ -19,7 +19,7 @@ try {
       process.stdout.write('""\n');
     } else if (request.type === 'close') break;
     else if (request.type === 'respond' && session) {
-      const reply = await session.respond(request.message, request.messages);
+      const reply = await session.respond(request.message, request.messages, request.choice);
       process.stdout.write(`${JSON.stringify(reply)}\n`);
     } else throw new Error('Модуль агента получил сообщение, которого нет в протоколе Lab.');
   }

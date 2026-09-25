@@ -109,6 +109,7 @@ export class ExperimentLab {
   prepareLogVersion(command: LogVersionCommand, options: { via: Via; at?: string }): Promise<PreparedLogVersion> { return library.prepareLogVersion(this.lab, command, options); }
   applyLogVersion(prepared: PreparedLogVersion, grant: HostGrant): Promise<LogVersionJournal> { return library.applyLogVersion(this.lab, prepared, grant); }
   resumePreparation(id: string, expectedHash: string, options?: library.ResumeOptions): Promise<Experiment> { return library.resumePreparation(this.lab, id, expectedHash, options); }
+  queueVariations(id: string, expectedHash: string): Promise<{ experiment: Experiment; queued: { scenario: string; variation: string }[] }> { return library.queueVariations(this.lab, id, expectedHash); }
   convertV1Draft(id: string): Promise<Pick<Conversion, 'library' | 'left' | 'calls'> & { experiment: Experiment }> { return library.convertV1Draft(this.lab, id); }
 
   updateDraft(id: string, expectedHash: string, raw: DraftPatch): Promise<Experiment> { return run.updateDraft(this.lab, id, expectedHash, raw); }

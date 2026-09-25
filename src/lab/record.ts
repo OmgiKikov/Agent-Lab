@@ -114,6 +114,8 @@ export function freshDraft(previous: Experiment, scenarioIds?: string[]): Experi
   delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes;
   delete record.acceptedDraftHash;
   delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog; delete record.calibration;
+  // A new run takes the connection exam anew; the earlier one belongs to the earlier run's conversations.
+  delete record.connectionExam; delete record.realism;
   retainAcceptedTests(record);
   record.evaluatorVersion = evaluatorVersion(record.settings);
   // Every note is about the work done on the earlier record — its run, its review, its re-assessment, its usage — and

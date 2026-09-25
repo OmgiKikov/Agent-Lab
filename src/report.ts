@@ -7,7 +7,7 @@ import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
 import {
   accuracyParts, alarmRow, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, moreCausesText, noErrorsText, noRuleText, realityParts, reasonLabel,
-  saidText, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
+  operabilityText, saidText, scenarioRows, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { briefFields, situationBrief, situationNumber } from './card/view.js';
@@ -82,6 +82,17 @@ function causesBlock(view: ResultView): Block[] {
   const more = view.topCauses.length && view.moreCauses ? [{ kind: 'paragraph' as const, muted: true, text: moreCausesText(view.moreCauses) }] : [];
   return [{ kind: 'section', title: 'Почему ошибается', blocks: [{ kind: 'causes', items }, ...more] }];
 }
+
+/**
+ * «По сценариям»: the business scenarios of the plan in result-text.ts's rows, as one table — a scenario, its variations
+ * under it, and the expectations it broke, muted, beside no count of their own.
+ */
+const scenariosBlock = (view: ResultView): Block[] => {
+  const [heading, ...rows] = scenarioRows(view);
+  if (!heading) return [];
+  return [{ kind: 'section', title: heading.text, blocks: [{ kind: 'table', head: ['Сценарий и его варианты', heading.right ?? ''],
+    rows: rows.map(row => ({ muted: row.role !== 'item', cells: [row.indent > 2 ? `— ${row.text}` : row.text, row.right ?? ''] })) }] }];
+};
 
 function topicsBlock(view: ResultView): Block[] {
   const topics = view.topics;
@@ -208,12 +219,14 @@ export function runReport(bundle: EvidenceBundle): Report {
       { kind: 'accuracy', lead: accuracy.lead, value: accuracy.value, tail: accuracy.tail, level: accuracy.level,
         band: null },
       ...(trust.length ? [{ kind: 'trust' as const, parts: trust }] : []),
+      ...(operabilityText(view) ? [{ kind: 'trust' as const, parts: [{ text: operabilityText(view)!, warn: true }] }] : []),
       ...(reality.length ? [{ kind: 'trust' as const, parts: reality.map(text => ({ text, warn: false })) }] : []),
       ...(judgeChecked ? [{ kind: 'trust' as const, parts: [judgeChecked] }] : []),
       ...(view.calibration ? [{ kind: 'trust' as const, parts: [{ text: view.calibration.text, warn: false }] }] : []),
     ],
     blocks: [
       { kind: 'section', title: 'Основания доверия', blocks: [{ kind: 'list', items: evaluationEvidenceLines(view) }] },
+      ...scenariosBlock(view),
       ...topicsBlock(view),
       ...causesBlock(view),
       ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),

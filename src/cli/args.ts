@@ -14,7 +14,7 @@ export const FLAGS = {
   connection: { type: 'string' }, directory: { type: 'string' }, 'code-only': { type: 'boolean' },
   'dialogues-file': { type: 'string' }, trial: { type: 'string', multiple: true },
   yes: { type: 'boolean' }, case: { type: 'string', multiple: true }, control: { type: 'string', multiple: true }, parallel: { type: 'string' },
-  card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' }, convert: { type: 'boolean' },
+  card: { type: 'string' }, choice: { type: 'string' }, text: { type: 'string' }, check: { type: 'boolean' }, resume: { type: 'boolean' }, accept: { type: 'boolean' }, variations: { type: 'boolean' }, convert: { type: 'boolean' },
   expectation: { type: 'string' },
   'agent-version': { type: 'string' }, unknown: { type: 'boolean' }, import: { type: 'string' },
   file: { type: 'string' }, sheet: { type: 'string' }, 'id-column': { type: 'string' }, 'text-column': { type: 'string' }, separator: { type: 'string' },

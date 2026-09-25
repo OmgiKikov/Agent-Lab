@@ -25,7 +25,7 @@ import { safeLine, safeText } from '../src/text.js';
 import { launchLines, progressText, scenarioPlan } from './conversation.ts';
 import { applyRulebookChange, applySituationCommand, logsOf, settle, writer, type DecisionSurface } from './decisions.ts';
 import type { LabHost } from './host.ts';
-import { recordLogMark, recordMark } from './judge-review.ts';
+import { blindCheck, recordLogMark, recordMark } from './judge-review.ts';
 import { ask, boardDiscussionContext, inputError, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun } from './launch.ts';
 import type { SessionOperation } from './operations.ts';
@@ -364,6 +364,11 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
               () => inform(`Отчёт для заказчика сохранён: ${artifacts.htmlReport.replace(`${ctx.cwd}/`, '')}`));
             continue;
           }
+          if (action.type === 'blind') {
+            const { notice } = await blindCheck(ctx, work => writing(work), () => reading().get(action.runId));
+            inform(notice);
+            continue;
+          }
           if (action.type === 'mark_log') {
             const notice = await writing(async lab => recordLogMark(ctx, lab, await lab.get(action.runId), action.cardId, action.answer, { seen: action.seen }));
             if (notice) inform(notice);
@@ -425,7 +430,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             const version = (await ctx.ui.editor('Какая версия агента записала логи · как вы её называете', ''))?.trim();
             return version ? settle(surface, { kind: 'declare_log_version', importId: action.importId, version }, data.runs.map(run => run.record)) : undefined;
           }
-          case 'check_situations': case 'resume_preparation': case 'convert_draft': case 'declare_log_version':
+          case 'check_situations': case 'resume_preparation': case 'prepare_variations': case 'convert_draft': case 'declare_log_version':
             return settle(surface, action, data.runs.map(run => run.record));
           case 'open_situation': case 'open_situations': case 'open_conversation': return undefined;
         }

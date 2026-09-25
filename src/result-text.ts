@@ -98,10 +98,13 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
   const lead = 'Точность агента:';
   const value = percentOf(view);
   if (value === null) {
+    const { passed, decided } = view.headline;
+    const unexamined = view.connection === 'absent' ? 'подключение агента не проверено экзаменом' : view.connection === 'failed' ? 'подключение агента не прошло экзамен' : null;
     const tail = view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
       : view.pending ? `считается — ждут проверки ${countText(view.pending, SITUATIONS)}`
+      : unexamined && decided ? `не считается: ${unexamined}. Справился в ${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}, ошибся в ${decided - passed}`
       : 'нет данных — ни одна ситуация не измерена';
-    return { lead, value: null, tail, level: 'none' };
+    return { lead, value: null, tail, level: unexamined && decided ? 'warn' : 'none' };
   }
   const { passed, decided } = view.headline;
   const unmeasured = view.notMeasured.total;
@@ -270,18 +273,68 @@ export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: st
 /** Three separate evidence statements. Agreement and consistency never certify correctness. */
 export function evaluationEvidenceLines(view: ResultView): string[] {
   const { agreement, simulator, headline, notMeasured } = view;
-  const judge = agreement.checked
+  const judge = blindText(view) ?? (agreement.checked
     ? `Судья: человек согласился в ${agreement.agreed} из ${agreement.checked} проверенных разговоров; это сверка после показа оценки, не слепая калибровка.`
-    : 'Судья: ручной сверки оценок этого прогона пока нет.';
+    : 'Судья: ручной сверки оценок этого прогона пока нет.');
   const customer = simulator?.conversations
     ? `Клиент: соблюдение карточки подтверждено моделью в ${simulator.passed} из ${simulator.conversations} разговоров; нарушений ${simulator.failed}, без вывода ${simulator.unknown}, без проверки ${simulator.notChecked}.${simulator.heuristicFlags ? ` Отдельно эвристики отметили ${simulator.heuristicFlags} разговоров для разбора.` : ''}`
     : 'Клиент: реактивное поведение в этом прогоне не измерено.';
   const remaining = Math.max(0, notMeasured.of - headline.decided);
   const metric = `Метрика: оценено ${headline.decided} из ${notMeasured.of} ситуаций. Процент относится только к оценённым ситуациям.`;
-  const bounds = notMeasured.of > 0 && remaining > 0
+  const bounds = view.connection && view.connection !== 'passed' ? 'Процент и его границы появятся, когда подключение агента пройдёт экзамен.'
+    : notMeasured.of > 0 && remaining > 0
     ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${remaining} оставшихся ситуаций. Это границы, не прогноз.`
     : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';
-  return [judge, customer, metric, bounds];
+  const realism = realismText(view);
+  return [judge, customer, ...(realism ? [realism.text] : []), metric, bounds];
+}
+
+/**
+ * The judge against the owner's blind labels (blind.ts): how often they agree, and each kind of disagreement — the false
+ * «справился» first: an error of the agent the number hides. Null before the first label.
+ */
+export function blindText(view: Pick<ResultView, 'blind'>): string | null {
+  const blind = view.blind;
+  if (!blind?.labelled) return null;
+  const decided = blind.agreed + blind.falsePasses.length + blind.falseFails.length;
+  const parts = [`ложных «справился» — ${blind.falsePasses.length}`, `ложных «не справился» — ${blind.falseFails.length}`,
+    ...(blind.judgeUndecided ? [`судья не решил, где решили вы, — ${blind.judgeUndecided}`] : []), ...(blind.ownerUnsure ? [`вы не смогли решить — ${blind.ownerUnsure}`] : []),
+    ...(blind.wrongExpectations ? [`ожидание неверно — ${blind.wrongExpectations}`] : [])];
+  const tail = blind.falsePasses.length ? ' Судья пропускал ошибки агента: где оценивал только он, процент может быть завышен.' : '';
+  return `Судья, слепая проверка: совпал с вами в ${blind.agreed} из ${countText(decided, ['оценки', 'оценок', 'оценок'])}; ${parts.join(', ')}${blind.labelled < blind.drawn ? ` (размечено ${blind.labelled} из ${blind.drawn})` : ''}.${tail}`;
+}
+
+/** A mean as a person reads it: «1,5», «3». */
+const decimal = (value: number): string => value.toLocaleString('ru-RU', { maximumFractionDigits: 1 });
+
+/**
+ * The second assessment of the customer, apart from whether it kept to its situation: how the customers Lab played
+ * compare with the logged ones of the same situations (realism.ts) — how many messages after the opening, how many words
+ * in one. A customer much wordier than the real ones makes the agent's task easier than in production: that is a
+ * warning. Null for a run with no situation from a log.
+ */
+export function realismText(view: Pick<ResultView, 'realism'>): { text: string; warn: boolean } | null {
+  const found = view.realism;
+  if (!found) return null;
+  const ratio = found.logged.words ? found.synthetic.words / found.logged.words : null;
+  const wordy = ratio !== null && ratio >= 1.5, terse = ratio !== null && ratio <= 2 / 3;
+  return { warn: wordy || terse,
+    text: `Похожесть клиента на реальных (${countText(found.conversations, ['разговор', 'разговора', 'разговоров'])} по ситуациям из логов): реплик после первой — в среднем ${decimal(found.synthetic.messages)} у клиента Lab и ${decimal(found.logged.messages)} у реального; слов в реплике — ${decimal(found.synthetic.words)} и ${decimal(found.logged.words)}.${
+      wordy ? ' Клиент Lab заметно многословнее реальных: с ним агенту может быть легче, чем в проде.' : terse ? ' Клиент Lab заметно немногословнее реальных.' : ''} Это сравнение длины и числа реплик, а не оценка того, похож ли клиент на человека.` };
+}
+
+/**
+ * «Работоспособность»: the conversations where the customer got no reply of the agent, apart from its quality — «в 2 из
+ * 20 разговоров клиент не получил ответа агента (агент не дал ответа — 1, вместо агента ответил стенд — 1)». Null when
+ * the agent answered in every conversation.
+ */
+export function operabilityText(view: Pick<ResultView, 'operability'>): string | null {
+  const found = view.operability;
+  if (!found) return null;
+  const parts = [...(found.noReply ? [`агент не дал ответа — ${found.noReply}`] : []), ...(found.serviceReply ? [`вместо агента ответил стенд — ${found.serviceReply}`] : []),
+    ...(found.broken ? [`сбой агента — ${found.broken}`] : [])];
+  const total = found.noReply + found.serviceReply + found.broken;
+  return `Работоспособность: в ${total} из ${countText(found.conversations, ['разговора', 'разговоров', 'разговоров'])} клиент не получил ответа агента (${parts.join(', ')}). Эти разговоры не считаются ошибками агента по существу и не входят в процент.`;
 }
 
 /** The first block of every surface: alarm, number, trust line, reality line, the judge check, and how the synthetic customers compare with production. */
@@ -290,11 +343,14 @@ export function headRows(view: ResultView): ResultRow[] {
   const trust = segments.map(part => part.text);
   const reality = realityParts(view);
   const checked = judgeCheckText(view);
+  const operability = operabilityText(view);
   return [
     ...[alarmRow(view)].filter((row): row is ResultRow => row !== null),
     accuracyRow(view),
     // A terminal paints a row in one colour: a trust line with a warning in it is painted as the warning.
     ...(trust.length ? [{ role: segments.some(part => part.warn) ? 'trust:small' : 'trust', indent: 0, text: trust.join(' · '), parts: trust } as ResultRow] : []),
+    // Whether the agent answered at all stands apart from how well: a conversation without its reply is its working state.
+    ...(operability ? [{ role: 'trust:small', indent: 0, text: operability } as ResultRow] : []),
     ...(reality.length ? [{ role: 'reality', indent: 0, text: reality.join(' · '), parts: reality } as ResultRow] : []),
     // How far the judge itself can be trusted, measured without a person: a warning is an alarm, like a failed control.
     ...(checked ? [{ role: checked.warn ? 'alarm' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
@@ -379,6 +435,28 @@ export const judgeQuestionText = (verdict: 'pass' | 'fail'): string => `Судь
 
 /** The same about the judge's reading of a logged conversation, expectation by expectation. */
 export const logQuestionText = (targets: readonly Pick<LogTarget, 'letter' | 'judge'>[]): string => `Судья по логу решил: ${logVerdictsText(targets)}. Вы согласны?`;
+
+/** «1 из 2», with the situations not measured beside it: a scenario is never read as handled on what was not measured. */
+const handledCell = (item: { passed: number; decided: number; unmeasured: number }): string =>
+  `${item.decided ? `${item.passed} из ${item.decided}` : '—'}${item.unmeasured ? ` · не измерено ${item.unmeasured}` : ''}`;
+
+/**
+ * «По сценариям» — the owner's business question answered in the plan's words (card/plan.ts): each scenario of the run,
+ * the customers' question and how many of its situations the agent handled; under it each variation, when there are
+ * several, and the expectations it broke most often, of the situations they were judged in. Shown once a situation of
+ * a scenario is decided or left unmeasured.
+ */
+export function scenarioRows(view: Pick<ResultView, 'scenarios'>): ResultRow[] {
+  const scenarios = view.scenarios?.filter(scenario => scenario.decided || scenario.unmeasured) ?? [];
+  if (!scenarios.length) return [];
+  return [{ role: 'heading', indent: 0, text: 'По сценариям', right: 'справился' }, ...scenarios.flatMap((scenario): ResultRow[] => [
+    { role: 'item', indent: 2, text: `«${oneLine(scenario.question)}»`, right: handledCell(scenario) },
+    ...(scenario.variations.length > 1 ? scenario.variations.filter(variation => variation.decided || variation.unmeasured)
+      .map((variation): ResultRow => ({ role: 'item:muted', indent: 4, text: `${oneLine(variation.title)}${variation.origin !== 'logs' ? ' — не из логов' : ''}`, right: handledCell(variation) })) : []),
+    ...scenario.broken.slice(0, 2).map((item): ResultRow => ({ role: 'muted', indent: 4,
+      text: `Нарушено: ${item.mustNot ? 'нельзя — ' : ''}${oneLine(item.text)} — в ${item.count} из ${countText(item.of, SITUATIONS_OF)}` })),
+  ])];
+}
 
 const MAX_TOPICS = 5;
 /** «По темам»: at most five topics by share, the rest in one row, then the share no situation covers. */
@@ -542,6 +620,7 @@ export function nextStepText(step: NextStep): string {
       ];
       return `Проверить, прав ли судья — ${parts.join(', ')}`;
     }
+    case 'blind_check': return `Проверить судью вслепую — ${countText(step.left, ['оценка', 'оценки', 'оценок'])} без его вердиктов`;
     case 'why_unmeasured': return `Посмотреть, почему не измерено ${countText(step.count, SITUATIONS)}`;
     case 'repeat': return 'Повторить прогон на новой версии агента';
     case 'report': return 'Отчёт для заказчика';
@@ -554,6 +633,7 @@ function chatNextText(step: NextStep): string {
     case 'check_connection': return 'Дальше: проверьте связь с агентом — скажите «проверь подключение».';
     case 'wait': return 'Дальше: дождитесь конца прогона — результат придёт сюда.';
     case 'review_judge': return 'Дальше: проверьте, прав ли судья, — скажите «покажи ошибку 1».';
+    case 'blind_check': return 'Дальше: проверьте судью вслепую — скажите «проверь судью вслепую»: вы оцените ответы агента, не видя его вердиктов.';
     case 'why_unmeasured': return 'Дальше: спросите, почему ситуации не измерены.';
     case 'repeat': return 'Дальше: исправьте агента и скажите «повтори прогон».';
     case 'report': return 'Дальше: скажите «отчёт для заказчика».';
@@ -566,6 +646,7 @@ function cliNextText(step: NextStep, runId: string): string {
     case 'check_connection': return 'Проверьте подключение: agent-lab doctor --yes';
     case 'wait': return 'Дождитесь конца прогона';
     case 'review_judge': return 'Проверьте, прав ли судья: откройте прогон в Pi (/agent-lab)';
+    case 'blind_check': return 'Проверьте судью вслепую: откройте прогон в Pi (/agent-lab)';
     case 'why_unmeasured': return 'Причины — в списке «Не измерено» выше';
     case 'repeat': return `Повторите прогон: agent-lab repeat --id ${runId}`;
     case 'report': return `Отчёт для заказчика: agent-lab export --id ${runId} --format html`;
@@ -613,7 +694,7 @@ export function barRows(view: ResultView): ResultRow[] {
 export function resultScreen(view: ResultView, options: { surface: 'board' | 'cli'; details?: boolean; now?: Date }): ResultRow[] {
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
-  const blocks = [headRows(view), topicRows(view), causeRows(view),
+  const blocks = [headRows(view), scenarioRows(view), topicRows(view), causeRows(view),
     ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
     [runLine(view, options.now), ...barRows(view)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
@@ -638,7 +719,7 @@ export function chatBlock(view: ResultView, options: { expanded: boolean }): Res
       ...(causeParts.length ? [{ role: 'muted' as const, indent: 2, text: `Чаще всего: ${causeParts.join(' · ')}`, parts: [`Чаще всего: ${causeParts[0]}`, ...causeParts.slice(1)] }] : [])];
   }
   const indent = (rows: ResultRow[]) => rows.map(row => ({ ...row, indent: row.indent + 2 }));
-  const blocks = [head, indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
+  const blocks = [head, indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
 

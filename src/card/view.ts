@@ -6,6 +6,7 @@ import type { ImportBatch, LibraryV1, ScenarioVariant } from '../scenario-contra
 import { oneLine, wrapHanging } from '../text.js';
 import { contains, quotable, type CardEvidence } from './checks.js';
 import { compilePolicy, expectationLetter } from './compile.js';
+import { planPlace, variationOf } from './plan.js';
 import { behaviorLines, convertible, libraryV1Of, orderedVariants, ownerQuestions, ownerRemarks, plainIssue } from './legacy-v1.js';
 import type { Card, LibraryV2 } from './schema.js';
 import type { Reference } from '../reference.js';
@@ -42,7 +43,10 @@ export interface Brief {
   leaves: string | null;
   /** The customer's late move: «после «…»: «…»»; null when the situation has none. */
   turn: string | null;
-  must: { text: string; rule: string | null }[];
+  /** What the agent must do; `forbidden` — what it must not; `acceptable` and `violation` where the card says them. */
+  must: { text: string; rule: string | null; forbidden?: true; acceptable?: string; violation?: string }[];
+  /** The variation of the business scenario the situation is an example of (card/plan.ts); absent for a card of no plan. */
+  variation?: string;
   /** The values Lab wrote over the log's masking marks, when it did: «подставлено вместо обезличенного». */
   filled?: string[];
   /** What code checks besides the judge (reference.ts): «находит статью 24 — разметка асессора». */
@@ -58,8 +62,11 @@ export interface SituationView {
   /** «№3»: a card's own number, never given twice; the place in the list for the older formats. */
   number: number;
   brief: Brief;
-  /** The ids a command names, parallel to `brief.knows` and `brief.must` (f1, e2); null where there is none to name. */
-  refs: { knows: (string | null)[]; must: (string | null)[] };
+  /**
+   * The ids a command names, parallel to `brief.knows` and `brief.must` (f1, e2); null where there is none to name. `plan`,
+   * parallel to `must`: the scenario's place and the plan expectation a duty is (card/plan.ts), null for a duty of its own.
+   */
+  refs: { knows: (string | null)[]; must: (string | null)[]; plan?: ({ scenario: number; expectation: string } | null)[] };
   /**
    * A card's terms the brief does not print but a change can move, parallel to `refs`: every rule of a duty, when it
    * applies and how it is observed; the agent's question a fact answers (its label unless the card names another); what
@@ -143,7 +150,11 @@ export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumb
     title: oneLine(card.title), source: cardSource(library, card, numbers, reader), wants: oneLine(wants), writes: oneLine(writes),
     knows: knows.map(fact => ({ what: factText(fact), when: saidOf(fact) })),
     leaves: oneLine(leaves), turn: turn ? turnText(turn.after, turn.says) : null,
-    must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes) })),
+    must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes),
+      ...(expectation.strength === 'must_not' ? { forbidden: true as const } : {}),
+      ...(expectation.acceptable !== undefined ? { acceptable: oneLine(expectation.acceptable) } : {}),
+      ...(expectation.violation !== undefined ? { violation: oneLine(expectation.violation) } : {}) })),
+    ...(variationOf(library, card) ? { variation: oneLine(variationOf(library, card)!) } : {}),
     ...(card.filled ? { filled: card.filled.map(item => oneLine(item.value)) } : {}),
     ...(card.clarity === 'vague' ? { vague: true } : {}),
     ...(card.references ? { references: card.references.map(reference => ({ id: reference.id, text: referenceText(reference) })) } : {}),
@@ -221,7 +232,8 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
 export function cardSituation(library: LibraryV2, card: Card, status?: CardStatus, numbers?: DialogueNumbers, maxTurns?: number): SituationView {
   return {
     format: 'card', id: card.id, number: card.number, brief: cardBrief(library, card, numbers),
-    refs: { knows: card.client.knows.map(fact => fact.id), must: card.agentMust.map(expectation => expectation.id) }, terms: cardTerms(library, card),
+    refs: { knows: card.client.knows.map(fact => fact.id), must: card.agentMust.map(expectation => expectation.id),
+      ...(card.scenarioRef ? { plan: card.agentMust.map(expectation => planPlace(library, card, expectation) ?? null) } : {}) }, terms: cardTerms(library, card),
     // Without the imports at hand the status is not known; a card is read then as it was accepted: ready.
     status: status?.status ?? 'ready',
     ...(status?.question ? { question: { id: status.question.id, text: status.question.text, choices: status.question.choices } } : {}),
@@ -397,7 +409,8 @@ export function situationData(view: SituationView) {
     ...(view.brief.vague ? { clarity: 'vague' as const } : {}), writes: view.brief.writes,
     knows: view.brief.knows.map((fact, index) => ({ ...(view.refs.knows[index] ? { id: view.refs.knows[index] } : {}), ...fact })),
     leaves: view.brief.leaves, turn: view.brief.turn, ...(view.brief.filled ? { filledOverMasks: view.brief.filled } : {}),
-    must: view.brief.must.map((duty, index) => ({ ...(view.refs.must[index] ? { id: view.refs.must[index] } : {}), ...duty })),
+    must: view.brief.must.map((duty, index) => ({ ...(view.refs.must[index] ? { id: view.refs.must[index] } : {}), ...duty,
+      ...(view.refs.plan?.[index] ? { plan: view.refs.plan[index] } : {}) })),
     ...questionData(view), ...(view.problems.length ? { problems: view.problems } : {}),
   };
 }
@@ -506,12 +519,15 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
   const fields = briefFields(brief);
   const column = Math.max(...fields.map(([label]) => label.length)) + 3;
   const must = brief.must.flatMap((duty, index): SituationRow[] => [
-    { role: 'field', indent: 3, text: `${String(index + 1).padEnd(3)}${duty.text}`, hang: 3 },
+    { role: 'field', indent: 3, text: `${String(index + 1).padEnd(3)}${duty.forbidden ? 'нельзя: ' : ''}${duty.text}`, hang: 3 },
+    ...(duty.acceptable ? [{ role: 'rule' as const, indent: 6, text: `допустимо: ${duty.acceptable}`, hang: 16 }] : []),
+    ...(duty.violation ? [{ role: 'rule' as const, indent: 6, text: `нарушение: ${duty.violation}`, hang: 16 }] : []),
     ...(duty.rule && duty.rule !== brief.must[index - 1]?.rule ? [{ role: 'rule' as const, indent: 6, text: `правило: «${quoteText(duty.rule)}»`, hang: 10 }] : []),
   ]);
   return [
     { role: 'title', indent: 0, text: `${String(view.number).padEnd(2)} ${brief.title}`, right: chip(view, !!options.running, options.narrow), clip: true },
     { role: 'source', indent: 3, text: brief.source },
+    ...(brief.variation ? [{ role: 'source' as const, indent: 3, text: `вариант: ${brief.variation}` }] : []),
     blank,
     { role: 'heading', indent: 0, text: 'Клиент' },
     ...fields.map(([label, value]): SituationRow => ({ role: 'field', indent: 3, text: `${label.padEnd(column)}${value}`, hang: column })),

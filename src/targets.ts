@@ -173,10 +173,24 @@ export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, s
  * time and never enter the persisted record. Every failure reaches the owner in Russian; a network failure keeps
  * its kind (AgentRequestFailed) and its cause's code.
  */
+/** A button the agent offers with its reply: the text the customer sees, and the adapter's own value for it. */
+export const agentButtonSchema = z.strictObject({ text: z.string().trim().min(1).max(300), value: z.string().max(300).optional() });
+export type AgentButton = z.infer<typeof agentButtonSchema>;
+/**
+ * What a turn gave the customer, as the adapter knows it: `reply` — a message (the default of every adapter that does not
+ * say), `handoff` — the agent passed the conversation to a person, `no_reply` — the customer got nothing (a service
+ * status, an internal error, a generation that failed). A `no_reply` turn never reaches the customer Lab plays.
+ */
+export const TURN_OUTCOMES = ['reply', 'handoff', 'no_reply'] as const;
+export type TurnOutcome = typeof TURN_OUTCOMES[number];
 export const externalReplySchema = z.union([
   z.string().max(20000),
   z.strictObject({
     reply: z.string().max(20000),
+    outcome: z.enum(TURN_OUTCOMES).optional(),
+    /** The agent's own status of the turn («202-7»), kept for the record: Lab never reads its meaning. */
+    status: z.string().trim().min(1).max(200).optional(),
+    buttons: z.array(agentButtonSchema).max(20).optional(),
     measurementError: z.string().trim().min(1).max(2000).optional(),
     /** Exact chunks supplied to the model for this reply; Agent Lab persists them as cited trace evidence. */
     retrievals: z.array(z.strictObject({
@@ -201,7 +215,7 @@ export const externalReplySchema = z.union([
     usage: usageSchema.optional(),
   }),
 ]);
-type ExternalReply = z.infer<typeof externalReplySchema>;
+export type ExternalReply = z.infer<typeof externalReplySchema>;
 interface ExternalTargetInput {
   target: RunnableTarget; sessionId: string; scenarioId: string;
   state: World; history: () => DialogueMessage[]; ctx: CallContext;
@@ -347,7 +361,7 @@ async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> 
   // The conversation id the agent itself named, carried from each reply into the next request.
   let session: string | number | undefined;
   return {
-    async respond(message) {
+    async respond(message, options) {
       if (closed) throw new Error('Сессия с внешним агентом закрыта.');
       ctx.signal.throwIfAborted();
       if (templated) {
@@ -361,6 +375,7 @@ async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> 
         return applyReply(replyText(body, replyPointer(templated)), state, ctx, input.onRecords, input.onReply);
       }
       const body = await postJson(renderAddress(target.url), headers, { sessionId, scenarioId, initialState, messages: history(), message,
+        ...(options?.choice ? { choice: options.choice } : {}),
         ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) }, target.timeoutMs, ctx.signal);
       return applyReply(body, state, ctx, input.onRecords, input.onReply);
     },
@@ -378,8 +393,8 @@ async function moduleSession(input: SessionInput<'module'>): Promise<TargetSessi
 
 /*
  * Command adapter: one process per dialogue, JSON lines both ways.
- *   stdin  → {"type":"respond", sessionId, scenarioId, initialState, messages, message}
- *   stdout ← "reply"  |  {"reply", "events"?, "records"?}      one JSON line per request
+ *   stdin  → {"type":"respond", sessionId, scenarioId, initialState, messages, message, choice?}
+ *   stdout ← "reply"  |  {"reply", "outcome"?, "buttons"?, "events"?, "records"?}      one JSON line per request
  *   stdin  → {"type":"close", sessionId}, then stdin ends
  * A stdout line that is not JSON (a stray print) is diagnostics, kept with the stderr tail; it never answers a request.
  * A reply that misses the deadline kills the process; an early exit surfaces the exit code and the diagnostics tail.
@@ -443,8 +458,9 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
     } finally { clearTimeout(timer); ctx.signal.removeEventListener('abort', onAbort); }
   };
   const session: TargetSession = {
-    async respond(message) {
-      const body = await exchange({ type: 'respond', sessionId, scenarioId, initialState, messages: history(), message, ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) });
+    async respond(message, options) {
+      const body = await exchange({ type: 'respond', sessionId, scenarioId, initialState, messages: history(), message, ...(options?.choice ? { choice: options.choice } : {}),
+        ...(input.prompt !== undefined ? { prompt: input.prompt, promptHash: fingerprint(input.prompt) } : {}) });
       return applyReply(body, state, ctx, input.onRecords, input.onReply);
     },
     async close() {

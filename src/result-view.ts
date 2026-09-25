@@ -1,5 +1,5 @@
 import { countingRuleOf, headlineRule } from './card/expectations.js';
-import type { Experiment, Scenario, ValidationExclusion } from './contracts.js';
+import type { Experiment, Realism, Scenario, Trial, ValidationExclusion } from './contracts.js';
 import { isRunning } from './phases.js';
 import { agentMetricResult, COUNTING_RULES, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
@@ -16,6 +16,8 @@ import { ruleBar, type RuleBar } from './card/rulebook.js';
 import { judgeCheckSummary, type JudgeCheck, type JudgeCheckSummary } from './judge-check.js';
 import { roleChoices } from './llm/models.js';
 import { simulatorEvidence, type SimulatorEvidence } from './simulator-evidence.js';
+import { planOutcomes, type ScenarioOutcome } from './card/plan.js';
+import { blindAgreement, type BlindAgreement } from './blind.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -37,6 +39,7 @@ export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
   simulator_error: 'сбой клиента, которого играет Lab',
   agent_error: 'агент не ответил',
   service_reply: 'вместо агента ответил стенд',
+  agent_no_reply: 'агент не дал ответа клиенту',
   measurement_error: 'подключение не показало, что нужно для проверки',
   attempts_mismatch: 'запись разговоров неполная',
   judge_error: 'судья ответил не по формату',
@@ -67,7 +70,7 @@ export const NOT_MEASURED_ABOUT_OWNER: Partial<Record<NotMeasuredCode, string>> 
  */
 export const NOT_MEASURED_SIDE: Record<NotMeasuredCode, 'agent' | 'client' | 'judge' | null> = {
   in_progress: null, not_reached: null, stopped: null, attempts_mismatch: null, human_invalid: null, human_unknown: null,
-  agent_error: 'agent', service_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent',
+  agent_error: 'agent', service_reply: 'agent', agent_no_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent',
   turn_limit: 'client', simulator_error: 'client', simulator_deviated: 'client', simulator_unclear: 'client',
   judge_error: 'judge', judge_unavailable: 'judge', judge_stopped: 'judge',
   not_judged: null, judge_split: null, no_evidence: null, judge_unclear: null,
@@ -103,6 +106,8 @@ export type NextStep =
   | { kind: 'wait' }
   /** The judge's failures and sampled passes still wait for the owner's «да» or «нет». */
   | { kind: 'review_judge'; failures: number; passes: number; unsure: number }
+  /** The judge was never checked blind: `left` expectations wait for the owner's labels, given without its verdicts (blind.ts). */
+  | { kind: 'blind_check'; left: number }
   /** Nothing was decided: the reasons of the unmeasured situations are the next thing to read. */
   | { kind: 'why_unmeasured'; count: number }
   | { kind: 'repeat' }
@@ -128,6 +133,11 @@ export interface ResultCard {
 }
 
 export interface ResultView {
+  /**
+   * The connection exam the run took before its first dialogue (exam.ts): unless it passed, no percent is shown — the
+   * headline's, the topics' or the bounds' — while the counts stay. Absent for runs made before the exam existed.
+   */
+  connection?: 'passed' | 'failed' | 'absent';
   /** How many reactive conversations actually had a semantic customer assessment. */
   simulator?: SimulatorEvidence;
   runId: string;
@@ -174,6 +184,28 @@ export interface ResultView {
   moreCauses: number;
   /** Per-topic rows and the traffic-weighted estimate, when the run's situations come from at least two topics. */
   topics: TopicView | null;
+  /**
+   * The counted situations by the business scenarios of the accepted plan (card/plan.ts): handled of decided per scenario
+   * and variation, and the plan's expectations broken. Absent for a run of no plan. Never changes the headline.
+   */
+  scenarios?: ScenarioOutcome[];
+  /**
+   * Whether the agent answered its customers at all, over every conversation of the run: those it left without a reply
+   * (`no_reply`), answered with a stand's service text, or broke on (an error, a timeout). Such a conversation is never
+   * the agent's error of substance, and it never quietly drops out either: it is the agent's working state, told apart
+   * from its quality. Absent when every conversation got the agent's reply. Never changes the headline.
+   */
+  operability?: { conversations: number; noReply: number; serviceReply: number; broken: number };
+  /**
+   * The customers Lab played against the logged ones of the same situations (realism.ts): the customer's second
+   * assessment, apart from its fidelity to the situation. Absent without a situation from a log. Never changes the headline.
+   */
+  realism?: Realism;
+  /**
+   * The judge's blind check (blind.ts): the owner's labels of up to twenty expectations given without its verdicts,
+   * against them. Absent for a run nothing can be drawn from. A label decides its expectation like any full review.
+   */
+  blind?: BlindAgreement;
   /** How much of the logs' traffic the counted situations cover: a run of cards sampled from logs whose topics were mapped; null otherwise. */
   topicCoverage: TopicCoverage | null;
   /** Found flips against the source run; absent when there is nothing to compare with. Never changes the headline. */
@@ -319,7 +351,9 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   const { alarm, total } = view.notMeasured;
   const why: NextStep[] = total ? [{ kind: 'why_unmeasured', count: total }] : [];
   // Too many situations unmeasured: why is the first thing to read, before any verdict of the judge.
-  const steps: NextStep[] = [...(alarm ? why : []), ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
+  // The judge is checked blind first, before any of its verdicts is shown: an owner who saw them would only agree.
+  const blind: NextStep[] = view.blind && view.blind.labelled < view.blind.drawn ? [{ kind: 'blind_check', left: view.blind.drawn - view.blind.labelled }] : [];
+  const steps: NextStep[] = [...(alarm ? why : []), ...blind, ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
   const after = alarm ? [] : why;
   if (!view.headline.decided) return [...steps, ...after];
   const failed = view.headline.decided > view.headline.passed;
@@ -386,12 +420,16 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   }, 0);
   const unmeasured = reasons.reduce((n, reason) => n + reason.count, 0);
   const causes = causesOf(run, failures);
+  // A connection nobody has shown to work carries no percent: the counts stand, the number waits for the exam.
+  const examined = record.connectionExam?.status;
+  const withheld = examined !== undefined && examined !== 'passed';
   const view: Omit<ResultView, 'next'> = {
+    ...(examined ? { connection: examined } : {}),
     simulator: simulatorEvidence(record),
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
     // This is a curated/stratified set, not independent Bernoulli sampling from production.
     // Keep the compatibility field empty rather than attach a population confidence claim.
-    headline: { passed, decided, accuracy, range: null, smallSample: decided > 0 && decided < SMALL_SAMPLE },
+    headline: { passed, decided, accuracy: withheld ? null : accuracy, range: null, smallSample: decided > 0 && decided < SMALL_SAMPLE },
     pending: notStarted ? 0 : counted.filter(card => card.reason === 'in_progress').length,
     notMeasured: { total: unmeasured, reasons, of: counted.length,
       alarm: decided > 0 && unmeasured > 0 && unmeasured >= UNMEASURED_ALARM * counted.length },
@@ -416,6 +454,15 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     notes: { ...(record.caveats ? { caveats: structuredClone(record.caveats) } : {}), limitations: [...record.limitations] },
     ...(stability ? { stability } : {}),
   };
+  if (withheld && view.topics) view.topics = { ...view.topics, weighted: null };
+  const library = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot : undefined;
+  const scenarios = library?.plan ? planOutcomes(library, counted) : [];
+  if (scenarios.length) view.scenarios = scenarios;
+  const operability = operabilityOf(record);
+  if (operability) view.operability = operability;
+  if (record.realism) view.realism = structuredClone(record.realism);
+  const blind = blindAgreement(record);
+  if (blind) view.blind = blind;
   const clarity = clarityOf(record, counted);
   if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
@@ -426,6 +473,13 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   if (judgeCheck) view.judgeCheck = judgeCheck;
   if (judgedByBuilder(record)) view.sameModelJudge = true;
   return { ...view, next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+}
+
+/** The conversations the agent left without its reply, by how; undefined when it answered in every one (the typed causes only). */
+function operabilityOf(record: Experiment): ResultView['operability'] {
+  const count = (cause: Trial['invalidCause']) => record.trials.filter(trial => trial.invalidCause === cause).length;
+  const operability = { conversations: record.trials.length, noReply: count('no_reply'), serviceReply: count('service_reply'), broken: count('agent') };
+  return operability.noReply + operability.serviceReply + operability.broken ? operability : undefined;
 }
 
 /**

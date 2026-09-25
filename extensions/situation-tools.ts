@@ -3,18 +3,19 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-
 import { Type, type Static } from 'typebox';
 import type { Experiment } from '../src/contracts.js';
 import { contains, type CardEvidence } from '../src/card/checks.js';
-import { hostGrant, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
+import { hostGrant, preparedLines, wordsOf, type HostGrant, type Prepared } from '../src/card/commands.js';
 import { identifierPattern } from '../src/ids.js';
 import { convertible } from '../src/card/legacy-v1.js';
 import { cardChangeSchema, type Card, type CardCommand, type LibraryV2 } from '../src/card/schema.js';
 import type { Reference } from '../src/reference.js';
 import { cardStatuses } from '../src/card/status.js';
 import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules } from '../src/card/rulebook.js';
+import { planData, planLines } from '../src/card/plan.js';
 import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRows, situationViews, type SituationView } from '../src/card/view.js';
 import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
 import { countText } from '../src/plural.js';
 import type { ExperimentLab } from '../src/experiment.js';
-import { situationCoverage } from '../src/miner/cards.js';
+import { gapsLine, situationCoverage } from '../src/miner/cards.js';
 import { clip, safeText } from '../src/text.js';
 import { ownerMessages, row, runStamp } from './conversation.ts';
 import { displayFor, isInteractive, NeedsOwner, recordErrorText, requireInteractive } from './lab-ui.ts';
@@ -78,13 +79,17 @@ export function situationsFeed(record: Experiment, views: SituationView[], runni
   const note = formatNote(record);
   const coverage = coverageOf(topics, record.settings.maxTurns);
   const waitingLine = waiting.length ? `Ждут ответа: ${waiting.slice(0, 3).map(view => `${view.number} ${clip(view.brief.title, 60)}`).join(' · ')}${waiting.length > 3 ? ` · ещё ${waiting.length - 3}` : ''}` : undefined;
-  const lines = [waitingLine, coverage?.line, note].filter((line): line is string => !!line);
+  // Requests of the logs the owner's rules leave open: theirs to fill, said beside the situations, never as Lab's failure.
+  const gaps = gapsLine(record.preparationProgress);
+  const lines = [waitingLine, coverage?.line, gaps, note].filter((line): line is string => !!line);
   const rulebook = topics && shownRulebook(topics.library);
+  const plan = topics ? planLines(topics.library) : [];
   return {
     tone: waiting.length ? 'warning' : 'success',
     rows: [row(countsText(views), 'text', true), ...lines.slice(0, next ? 1 : 2).map(line => row(line, 'muted')), ...(next ? [row(next, 'muted')] : [])],
     // The coverage line may already stand in the summary; its uncovered topics are named on expand.
-    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...(rulebook ? [...rulebookLines(rulebook).map(line => row(line, 'muted')), row('')] : []),
+    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...(gaps ? [row(gaps, 'muted'), row('')] : []), ...(plan.length ? [...plan.map(line => row(line, 'muted')), row('')] : []),
+      ...(rulebook ? [...rulebookLines(rulebook).map(line => row(line, 'muted')), row('')] : []),
       ...situationRows(views.flatMap(view => listRows(view, { running })))],
     expand: `все ${views.length}: что пишет клиент и что должен агент`,
   };
@@ -112,6 +117,18 @@ const when = Type.Enum(['initial', 'on_request', 'unknown'], { description: 'ini
 const turn = Type.Union([Type.Object({ kind: Type.Enum(['change_intent', 'report']), after: Type.String({ minLength: 1, maxLength: 300 }),
   says: Type.String({ minLength: 1, maxLength: 1000 }) }, closed), Type.Null()], { description: 'The customer\'s late turn: says it after the agent does `after`; null: none.' });
 
+/** How a duty binds and what else fulfils or breaks it — the same fields for one situation's duty and for the plan's expectation. */
+const dutyWays = {
+  mustNot: Type.Optional(Type.Boolean({ description: 'true: the agent must NOT do it; false: it must.' })),
+  acceptable: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 600 }), Type.Null()], { description: 'What else fulfils it and is never a failure, e.g. «может сразу помочь, не уточняя»; null removes.' })),
+  violation: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 600 }), Type.Null()], { description: 'What exactly breaks it; null removes.' })),
+};
+/** The command fields of `dutyWays` as the model passed them. */
+const waysOf = (request: { mustNot?: boolean; acceptable?: string | null; violation?: string | null }) => ({
+  ...(request.mustNot !== undefined ? { strength: request.mustNot ? 'must_not' as const : 'must' as const } : {}),
+  ...(request.acceptable !== undefined ? { acceptable: request.acceptable } : {}), ...(request.violation !== undefined ? { violation: request.violation } : {}),
+});
+
 /** A requirement id as the lab stores it (ids.ts): the model is held to the stored shape before any command is built. */
 const ruleId = Type.String({ pattern: identifierPattern });
 const ruleIds = Type.Array(ruleId, { minItems: 1, maxItems: 20 });
@@ -121,7 +138,17 @@ const change = Type.Union([
     value: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 120 }), Type.Number(), Type.Boolean()])), when: Type.Optional(when), remove: Type.Optional(Type.Literal(true)) }, closed),
   Type.Object({ kind: Type.Literal('duty'), duty: Type.String({ pattern: '^e[0-9]{1,2}$', description: 'A duty id (e1…).' }), text: text(300, 'What the agent must do, as an infinitive.'),
     rules: Type.Optional(Type.Array(ruleId, { minItems: 1, maxItems: 3, description: 'Requirement ids of the owner rules it rests on.' })),
-    appliesWhen: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 300 }), Type.Null()], { description: 'When it applies; null: always.' })), remove: Type.Optional(Type.Literal(true)) }, closed),
+    appliesWhen: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 300 }), Type.Null()], { description: 'When it applies; null: always.' })),
+    ...dutyWays, remove: Type.Optional(Type.Literal(true)) }, closed),
+  Type.Object({ kind: Type.Literal('plan'), scenario: Type.Integer({ minimum: 1, maximum: 30, description: 'The scenario number in the plan, as agent_lab_cards shows it.' }),
+    expectation: Type.String({ pattern: '^s[0-9]{1,2}$', description: 'A plan expectation id (s1…).' }), text: text(300, 'What the agent must (or must not) do, as an infinitive.'),
+    rules: Type.Optional(Type.Array(ruleId, { minItems: 1, maxItems: 3, description: 'Requirement ids of the owner rules it rests on.' })),
+    ...dutyWays, remove: Type.Optional(Type.Literal(true)) },
+  { ...closed, description: 'An expectation of a business scenario: it changes in the plan and in every situation that is its example; omit situation.' }),
+  Type.Object({ kind: Type.Literal('variation'), scenario: Type.Integer({ minimum: 1, maximum: 30, description: 'The scenario number in the plan, as agent_lab_cards shows it.' }),
+    title: Type.String({ minLength: 1, maxLength: 160, description: 'The kind of customer, in the owner\'s words: «Клиент не знает номер терминала».' }),
+    expectations: Type.Optional(Type.Array(Type.String({ pattern: '^s[0-9]{1,2}$' }), { maxItems: 8, description: 'Expectations of some variations only (s1…) that apply to this one too; those of every variation always do.' })) },
+  { ...closed, description: 'A new kind of customer in a business scenario, not from the logs; omit situation.' }),
   Type.Object({ kind: Type.Literal('client'), wants: text(300, 'What the customer wants.'), writes: text(3000, 'Their exact first message.'), leaves: text(300, 'When they leave.') }, closed),
   Type.Object({ kind: Type.Literal('turn'), turn }, closed),
   Type.Object({ kind: Type.Literal('similar'), differs: Type.Union([
@@ -146,7 +173,7 @@ const SERIES = new Set<ChangeRequest['kind']>(['fact', 'duty', 'client', 'turn']
 export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, host: SituationHost): void {
   pi.registerTool({
     ...displayFor(TOOL.cards), name: TOOL.cards, label: 'Show situations',
-    description: 'Read-only. The situations of the draft (or of a run): number, title, status (ready, needs_owner, unusable, checking) and, for one waiting for the owner, its question with numbered answers and the decision key agent_lab_decide answers it with. situation: one situation whole — what the customer wants, writes first, knows (fact ids f1…) and when they leave; what the agent must do (duty ids e1…), each with the owner\'s rule; details: also how it is run and judged. Read a situation before changing it.',
+    description: 'Read-only. The situations of the draft (or of a run): number, title, status (ready, needs_owner, unusable, checking); the plan, when the draft has one: its business scenarios by number — the customers\' question, the variations and the shared expectations (s1…) every situation of the scenario checks; and, for one waiting for the owner, its question with numbered answers and the decision key agent_lab_decide answers it with. situation: one situation whole — what the customer wants, writes first, knows (fact ids f1…) and when they leave; what the agent must do (duty ids e1…), each with the owner\'s rule; details: also how it is run and judged. Read a situation before changing it.',
     parameters: Type.Object({ run: runRef, situation: Type.Optional(number), details: Type.Optional(Type.Boolean()) }, closed),
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
@@ -160,7 +187,11 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
         const readOnly = record.librarySnapshot?.formatVersion !== 2 || record.phase !== 'review' || record.trials.length > 0;
         if (params.situation === undefined) {
           const rulebook = topics && shownRulebook(topics.library);
-          return host.feedResult(callId, situationsOutput(record, views, { readOnly, ...(rulebook ? { rulebook: { lines: rulebookLines(rulebook), operatorInstructions: rulebook.kinds.find(item => item.kind === 'operator_procedure')!.binds } } : {}) }),
+          // What the situations are examples of: the plan the copilot tells the owner in words (card/plan.ts), by the ids a change names.
+          const plan = topics ? planData(topics.library) : [];
+          const gaps = gapsLine(record.preparationProgress);
+          return host.feedResult(callId, situationsOutput(record, views, { readOnly, ...(plan.length ? { plan } : {}), ...(gaps ? { rulesGap: gaps } : {}),
+            ...(rulebook ? { rulebook: { lines: rulebookLines(rulebook), operatorInstructions: rulebook.kinds.find(item => item.kind === 'operator_procedure')!.binds } } : {}) }),
             situationsFeed(record, views, running, topics), `Ситуации · ${runStamp(record)}`);
         }
         const view = views.find(item => item.number === params.situation);
@@ -173,7 +204,7 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
   });
   pi.registerTool({
     ...displayFor(TOOL.edit), name: TOOL.edit, label: 'Change a situation',
-    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms every change in a native dialog that shows it exactly — wording taken word for word from the owner\'s own message is marked as theirs, never written without that dialog. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen; remove; one duty always stays); client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); reference — what code checks besides the judge: doc (the knowledge-base article id the agent must actually retrieve, as its adapter names it) and/or text (the expected fact; its values are checked by code, its meaning by the judge); reference id to change one, without it a new one; never rewrite a duty\'s text to express this — a duty is only ever judged by the reply; proposed:true when you suggest it yourself; reference id with remove to drop one; similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
+    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms every change in a native dialog that shows it exactly — wording taken word for word from the owner\'s own message is marked as theirs, never written without that dialog. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen, mustNot, acceptable — what else fulfils it and is never a failure, violation — what exactly breaks it; remove; one duty always stays); variation — a new kind of customer in a business scenario that the logs do not show (scenario number, title in the owner\'s words, expectations: the s-ids of expectations of some variations only that apply to it too); it has no situation until the owner agrees that Lab writes one from the rules; omit situation. plan — an expectation of a business scenario (scenario number and expectation id s1… as agent_lab_cards shows the plan; the same fields as a duty): it changes in the plan and in every situation that is its example — use it when the owner\'s correction holds for the whole scenario, e.g. a duty demands too much everywhere; omit situation. A duty that shows plan in a situation is the plan\'s: changing it there alone makes it that situation\'s own; client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); reference — what code checks besides the judge: doc (the knowledge-base article id the agent must actually retrieve, as its adapter names it) and/or text (the expected fact; its values are checked by code, its meaning by the judge); reference id to change one, without it a new one; never rewrite a duty\'s text to express this — a duty is only ever judged by the reply; proposed:true when you suggest it yourself; reference id with remove to drop one; similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
     parameters: editParameters,
     executionMode: 'sequential',
     execute: (callId, params, signal, _onUpdate, ctx) => changeSituation(host, callId, ctx, signal, params),
@@ -187,6 +218,7 @@ const UNKNOWN_WORDS: Record<UnknownReference['what'], string> = {
   expectation: 'У этой ситуации нет такого пункта «агент должен» — какой вы имели в виду?',
   choice: 'У этого вопроса нет такого ответа — какой вы выбираете?',
   requirement: 'Такого правила в ваших материалах нет — какое вы имели в виду?',
+  scenario: 'Такого сценария в плане нет — какой вы имели в виду?',
 };
 
 /** What followed a change: the situation checked again (here, or later as a message), or why not now. */
@@ -232,8 +264,7 @@ async function decide(ctx: ExtensionContext, lab: ExperimentLab, id: string, com
   const joined = words.join('\n');
   const prepared = await lab.prepareCardCommand(id, command, { via: 'pi-confirm', ...(theirs && joined.length <= 1000 ? { ownerWords: joined } : {}) });
   requireInteractive(ctx, DECIDES_IN_TERMINAL);
-  const lines = [...prepared.diff.flatMap(item => item.changes.map(change => `${item.number}  ${changeText(change)}`)),
-    ...(prepared.rulebook ? rulebookChangeLines(prepared.rulebook.before, prepared.rulebook.after, prepared.next.requirements, prepared.rulebook.flagged) : [])];
+  const lines = preparedLines(prepared);
   const picked = await ctx.ui.select(safeText([heading, ...(lines.length ? ['', ...lines] : []),
     ...(theirs ? ['', 'Формулировка — ваши слова из разговора.'] : []), '', 'Записать это от вашего имени?'].join('\n')), ['Записать', 'Не записывать']);
   if (picked !== 'Записать') return undefined;
@@ -288,6 +319,74 @@ async function changeRulebook(host: SituationHost, callId: string, ctx: Extensio
   } finally { await owned.close(); }
 }
 
+/**
+ * An expectation of a business scenario, for the whole plan: it changes in the scenario and in every situation that is
+ * its example, confirmed once natively with its line before and after and the numbers of those situations; they are
+ * then checked again within the agreed calls, like any changed situation.
+ */
+async function changePlan(host: SituationHost, callId: string, ctx: ExtensionContext, signal: AbortSignal | undefined, found: Experiment,
+  request: Extract<ChangeRequest, { kind: 'plan' }>, later: boolean): Promise<AgentToolResult<unknown>> {
+  if (found.librarySnapshot?.formatVersion !== 2) throw new CommandRefused('У ситуаций этого прогона нет плана сценариев: он есть у наборов, подготовленных с планом.');
+  const owned = await host.open(ctx.cwd);
+  let handedOver = false;
+  try {
+    await owned.lab.init();
+    const target = await owned.lab.editableCards(found.id);
+    const { library } = await owned.lab.cardContext(target.id);
+    const plan = library.plan ?? [];
+    const scenario = plan[request.scenario - 1];
+    if (!scenario) throw new UnknownReference('scenario', plan.map((item, index) => `${index + 1} «${clip(item.question, 60)}»`), plan.length ? `Сценария ${request.scenario} в плане нет.` : 'У этого набора нет плана сценариев.');
+    const command: CardCommand = request.remove ? { kind: 'remove_plan_expectation', scenarioId: scenario.id, expectationId: request.expectation }
+      : { kind: 'edit_plan_expectation', scenarioId: scenario.id, expectationId: request.expectation, ...(request.text !== undefined ? { text: request.text } : {}),
+        ...(request.rules ? { requirementIds: request.rules } : {}), ...waysOf(request) };
+    const decided = await decide(ctx, owned.lab, target.id, command, `Сценарий «${scenario.question}»: общее ожидание — для всех его ситуаций`);
+    if (!decided) return host.feedResult(callId, { applied: false, declined: true, instruction: 'The owner did not confirm. Nothing was written; do not ask again unless they do.' },
+      { tone: 'warning', rows: [row('Не записано: вы не подтвердили.')] }, 'План не изменён');
+    await owned.lab.applyCardCommand(target.id, decided.prepared, decided.grant);
+    const check: CheckState = decided.prepared.scope.length ? await recheck(host, ctx, owned, target.id, undefined, later, signal) : { status: 'none' };
+    handedOver = check.status === 'running';
+    const changes = preparedLines(decided.prepared);
+    const fresh = await host.reading(resolve(ctx.cwd, '.agent-lab')).cardContext(target.id);
+    const copied = target.copiedFrom && target.copiedFrom !== target.id;
+    const tail = [copied ? 'прошлый прогон не меняется: правка — в черновике того же набора' : '', CHECK_TEXT(check) ?? ''].filter(Boolean).join('; ');
+    return host.feedResult(callId, { run: target.id, applied: true, changes, plan: planData(fresh.library), check,
+      ...(copied ? { unchangedRun: target.copiedFrom, instruction: 'The finished run never changes, so the change went into a fresh draft of the same set. Say so in one phrase and keep working on this draft.' } : {}),
+      ...(check.status === 'running' ? { checkNote: 'The check continues in the background and reports back as a message. Do not wait for it or poll; further changes are fine.' } : {}) },
+    { tone: 'success', rows: [row(`План записан: ${request.remove ? 'ожидание убрано' : 'ожидание изменено'} во всём сценарии.`, 'text', true), ...changes.slice(1, 4).map(line => row(line.trim())),
+      ...(tail ? [row(tail.charAt(0).toLocaleUpperCase('ru') + tail.slice(1), 'muted')] : [])],
+    more: planLines(fresh.library).map(line => row(line, 'muted')), expand: 'весь план' }, `План · ${runStamp(found)}`);
+  } finally { if (!handedOver) await owned.close(); }
+}
+
+/**
+ * A kind of customer the owner adds to a scenario of the plan: confirmed natively with the expectations that will apply
+ * to it. Nothing is paid: its situation is written from the rules when the owner agrees to that (agent_lab_decide).
+ */
+async function addVariation(host: SituationHost, callId: string, ctx: ExtensionContext, found: Experiment, request: Extract<ChangeRequest, { kind: 'variation' }>): Promise<AgentToolResult<unknown>> {
+  if (found.librarySnapshot?.formatVersion !== 2) throw new CommandRefused('У ситуаций этого прогона нет плана сценариев: он есть у наборов, подготовленных с планом.');
+  const owned = await host.open(ctx.cwd);
+  try {
+    await owned.lab.init();
+    const target = await owned.lab.editableCards(found.id);
+    const { library } = await owned.lab.cardContext(target.id);
+    const plan = library.plan ?? [];
+    const scenario = plan[request.scenario - 1];
+    if (!scenario) throw new UnknownReference('scenario', plan.map((item, index) => `${index + 1} «${clip(item.question, 60)}»`), plan.length ? `Сценария ${request.scenario} в плане нет.` : 'У этого набора нет плана сценариев.');
+    const command: CardCommand = { kind: 'add_variation', scenarioId: scenario.id, title: request.title, ...(request.expectations?.length ? { expectationIds: request.expectations } : {}) };
+    const decided = await decide(ctx, owned.lab, target.id, command, `Сценарий «${scenario.question}»: новый вариант клиента`);
+    if (!decided) return host.feedResult(callId, { applied: false, declined: true, instruction: 'The owner did not confirm. Nothing was written; do not ask again unless they do.' },
+      { tone: 'warning', rows: [row('Не записано: вы не подтвердили.')] }, 'План не изменён');
+    await owned.lab.applyCardCommand(target.id, decided.prepared, decided.grant);
+    const fresh = await host.reading(resolve(ctx.cwd, '.agent-lab')).cardContext(target.id);
+    const changes = preparedLines(decided.prepared);
+    return host.feedResult(callId, { run: target.id, applied: true, changes, plan: planData(fresh.library), decision: `variations:${target.id}`,
+      instruction: 'The variation has no situation yet. Ask the owner whether Lab should write its situation from the rules — it spends model calls; on their yes answer the decision with agent_lab_decide.' },
+    { tone: 'success', rows: [row('Вариант добавлен в план.', 'text', true), ...changes.slice(1, 2).map(line => row(line.trim())),
+      row('Ситуацию для него Lab составит по правилам, когда вы скажете.', 'muted')],
+    more: planLines(fresh.library).map(line => row(line, 'muted')), expand: 'весь план' }, `План · ${runStamp(found)}`);
+  } finally { await owned.close(); }
+}
+
 /** The command a change stands for, with the heading of its dialog; refused with the reason when the change cannot be made as asked. */
 function commandOf(request: ChangeRequest, view: SituationView, library: LibraryV2): { command: CardCommand; heading: string } {
   const title = `Ситуация ${view.number} «${view.brief.title}»`;
@@ -314,7 +413,7 @@ function commandOf(request: ChangeRequest, view: SituationView, library: Library
       const heading = `${title}: что должен агент`;
       return request.remove ? { command: { kind: 'remove_expectation', cardId: view.id, expectationId: request.duty }, heading }
         : { command: { kind: 'edit_expectation', cardId: view.id, expectationId: request.duty, ...(request.text !== undefined ? { text: request.text } : {}),
-          ...(request.rules ? { requirementIds: request.rules } : {}), ...(request.appliesWhen !== undefined ? { appliesWhen: request.appliesWhen } : {}) }, heading };
+          ...(request.rules ? { requirementIds: request.rules } : {}), ...(request.appliesWhen !== undefined ? { appliesWhen: request.appliesWhen } : {}), ...waysOf(request) }, heading };
     }
     case 'client': return { command: { kind: 'edit_client', cardId: view.id, ...(request.wants !== undefined ? { wants: request.wants } : {}),
       ...(request.writes !== undefined ? { writes: request.writes } : {}), ...(request.leaves !== undefined ? { leaves: request.leaves } : {}) }, heading: `${title}: клиент` };
@@ -328,6 +427,7 @@ function commandOf(request: ChangeRequest, view: SituationView, library: Library
       heading: `${title}: что проверяется кодом` };
     case 'remove': return { command: { kind: 'remove_card', cardId: view.id }, heading: `Убрать ситуацию ${view.number} «${view.brief.title}» из черновика?` };
     case 'rules': throw new Error('The rulebook is changed for the whole set, not through one situation.');
+    case 'plan': case 'variation': throw new Error('The plan is changed for the whole scenario, not through one situation.');
     case 'unmask': throw new Error('Masked values are proposed by the lab, not built here.');
   }
 }
@@ -364,7 +464,7 @@ async function unmaskOf(ctx: ExtensionContext, lab: ExperimentLab, id: string, v
 /** Several changes of one situation as one series: checked together as they leave it, confirmed and recorded once. */
 function seriesOf(requests: readonly ChangeRequest[], view: SituationView, library: LibraryV2): { command: CardCommand; heading: string } {
   if (requests.some(request => !SERIES.has(request.kind))) {
-    throw new CommandRefused('Вместе передаются только правки одной ситуации: что знает клиент, что должен агент, слова клиента и поворот. Похожую ситуацию, удаление, подстановку значений и свод правил — отдельно.');
+    throw new CommandRefused('Вместе передаются только правки одной ситуации: что знает клиент, что должен агент, слова клиента и поворот. Похожую ситуацию, удаление, подстановку значений, свод правил и план сценария — отдельно.');
   }
   const changes = requests.map(request => {
     const { cardId: _card, ...change } = commandOf(request, view, library).command as Extract<CardCommand, { cardId: string }>;
@@ -388,6 +488,8 @@ async function changeSituation(host: SituationHost, callId: string, ctx: Extensi
     if (!request) throw new CommandRefused('Скажите, что изменить.');
     const found = recordFor(await host.reading(directory).list(), run, 'situations');
     if (request.kind === 'rules' && requests.length === 1) return await changeRulebook(host, callId, ctx, found, request);
+    if (request.kind === 'plan' && requests.length === 1) return await changePlan(host, callId, ctx, signal, found, request, !!later);
+    if (request.kind === 'variation' && requests.length === 1) return await addVariation(host, callId, ctx, found, request);
     if (situation === undefined) throw new CommandRefused('Скажите, какую ситуацию изменить: её номер.');
     const owned = await host.open(ctx.cwd);
     try {
