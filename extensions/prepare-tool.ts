@@ -194,8 +194,9 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   if (logs !== 'rules' && !await stat(logs).then(info => info.isFile(), () => false)) {
     throw new NeedsOwner('unknown_reference', `Файла с логами ${shownPath(logs, ctx.cwd)} нет. Спросите владельца, где он лежит.`, [], `Файла ${shownPath(logs, ctx.cwd)} нет — где лежат логи?`);
   }
-  // The model can say this itself from the project or the owner's words: a plain error it corrects, never a question to the owner.
-  if (!params.task) throw new Error('Не хватает описания агента: одной-двумя фразами — что он делает и что проверить (task).');
+  // The model can say this itself from the project or the owner's words: a plain error it corrects, never a question to
+  // the owner. The owner reads it too, so it names no parameter: the tool's schema tells the model which one it is.
+  if (!params.task) throw new Error('Не хватает описания агента: одной-двумя фразами — что он делает и что проверить.');
   // The rules: the files named, otherwise the knowledge folders found in the project and the prompts the owner picks among
   // those found; the owner's own words on top.
   let prompts: PromptCandidate[];

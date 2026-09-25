@@ -29,6 +29,8 @@ export function tableFormat(path: string): TableFormat {
   const extension = extname(path).toLowerCase();
   const format = TABLE_EXTENSIONS.get(extension);
   if (format) return format;
+  // Logs in JSON need no reading confirmed: they are read as written when situations are built from them.
+  if (extension === '.json' || extension === '.jsonl') throw new Error(`Логи в JSON Lab читает сам, без разметки: agent-lab build --input задача.json --dialogues-file ${basename(path)}. Роли, которых Lab не знает, — флагом --roles client=клиент,operator=агент.`);
   const other = OTHER_FORMATS[extension];
   throw new Error(other ? `Lab читает таблицы .xlsx и .csv; ${other} сохраните как .xlsx или .csv.` : `Файл «${basename(path)}» — не таблица: Lab читает таблицы .xlsx и .csv.`);
 }
