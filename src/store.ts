@@ -10,9 +10,9 @@ import { clearGate, find, HEARTBEAT_MS, held, provedDead, sameFound, SYSTEM, tok
 import type { GeneratorEvidence } from './generator-evidence.js';
 import { libraryHash } from './scenario-library.js';
 import { LibraryMemo, ScenarioFiles } from './scenario-store.js';
-import { oneLine } from './text.js';
+import type { z } from 'zod';
 import { isIdentifier } from './ids.js';
-import { LockedError } from './errors.js';
+import { LockedError, UnreadableRecord } from './errors.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import type { ScenarioLibrary } from './card/schema.js';
 import { readTopicMapFile, writeTopicMapFile } from './miner/files.js';
@@ -35,6 +35,30 @@ import type { SentCalls } from './lab/interrupted.js';
 
 type AuditFolder = 'judge' | 'calibration' | 'judge-check';
 
+/** What one schema issue says of a record's field, in plain words. */
+function issueWords(issue: z.core.$ZodIssue): string {
+  const field = issue.path.length ? `поле «${issue.path.join('.')}»` : 'запись';
+  switch (issue.code) {
+    case 'invalid_type': return `${field} не того вида`;
+    case 'too_big': return `${field} больше допустимого`;
+    case 'too_small': return `${field} меньше допустимого`;
+    default: return `${field} не проходит проверку`;
+  }
+}
+/**
+ * A record file's text as a record. What this Lab does not know — a field it has no name for, a value or a kind it does
+ * not have, which is how a newer Lab's additive changes read here — means the record comes from a newer Lab.
+ */
+function recordIn(id: string, text: string): Experiment {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { throw new UnreadableRecord(id, false, 'файл повреждён — это не JSON'); }
+  const parsed = experimentSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues;
+  const newer = issues.every(issue => issue.code === 'unrecognized_keys' || issue.code === 'invalid_value' || issue.code === 'invalid_union');
+  throw new UnreadableRecord(id, newer, issues.slice(0, 2).map(issueWords).join('; '));
+}
+
 /**
  * A writer whose heartbeat is this late was frozen — a laptop asleep, a stopped process — and may have lost its lock to
  * another machine meanwhile (folder-lock.ts): before its next write it reads the lock again.
@@ -49,7 +73,8 @@ const LIVE_WRITE_MS = 60_000;
 
 export class ExperimentStore {
   readonly directory: string;
-  diagnostics: { id: string; message: string }[] = [];
+  /** The records the last listing could not read, and why (UnreadableRecord): the surfaces show them. */
+  diagnostics: UnreadableRecord[] = [];
   private lockToken: string | null = null;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   /** When this writer last found its lock its own and renewed it. */
@@ -246,9 +271,9 @@ export class ExperimentStore {
   async get(id: string): Promise<Experiment> {
     const file = await open(this.path(id), 'r');
     try {
-      if ((await file.stat()).size > 50_000_000) throw new Error('Experiment record exceeds 50 MB');
-      const record = experimentSchema.parse(JSON.parse(await file.readFile('utf8')));
-      if (record.id !== id) throw new Error('Experiment ID does not match its file');
+      if ((await file.stat()).size > 50_000_000) throw new UnreadableRecord(id, false, 'она больше 50 МБ');
+      const record = recordIn(id, await file.readFile('utf8'));
+      if (record.id !== id) throw new UnreadableRecord(id, false, 'в файле записан другой прогон');
       return record;
     } finally { await file.close(); }
   }
@@ -262,8 +287,9 @@ export class ExperimentStore {
     const records: Experiment[] = [];
     results.forEach((result, index) => {
       if (result.status === 'fulfilled') records.push(result.value);
-      else this.diagnostics.push({ id: ids[index]!, message: result.reason instanceof SyntaxError ? 'Некорректный JSON. Исходный файл сохранён.'
-        : oneLine(result.reason instanceof Error ? result.reason.message : result.reason).slice(0, 240) });
+      // A record that cannot be read is listed apart, with why — never dropped without a word.
+      else this.diagnostics.push(result.reason instanceof UnreadableRecord ? result.reason
+        : new UnreadableRecord(ids[index]!, false, `файл не открывается (${(result.reason as NodeJS.ErrnoException)?.code ?? 'ошибка чтения'})`));
     });
     return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }

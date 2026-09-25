@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { countText } from './plural.js';
 
 /*
  * Failures a caller reacts to by kind, not by reading the message. The messages themselves stay
@@ -80,4 +81,25 @@ export class NotADraft extends CommandRefused {}
  */
 export class AgentRequestFailed extends Error {
   constructor(readonly kind: 'unreachable' | 'tls' | 'timeout' | 'status', message: string, readonly status?: number, readonly code?: string) { super(message); }
+}
+
+/**
+ * A record file the store cannot read, and why, in the owner's words: written by a newer Lab (fields or values this one
+ * does not know — «обновите Lab»), or damaged. Lists show it instead of dropping it; the file stays as it is.
+ */
+export class UnreadableRecord extends Error {
+  constructor(readonly id: string, readonly newer: boolean, readonly reason: string) {
+    super(newer ? `Запись ${id}.json от более новой версии Agent Lab — обновите Lab, чтобы её открыть.`
+      : `Запись ${id}.json не читается: ${reason}. Файл оставлен как есть.`);
+  }
+}
+
+/** The records a listing could not read, in the owner's words: those of a newer Lab together, the damaged ones with the first reason. */
+export function unreadableLines(unreadable: readonly UnreadableRecord[]): string[] {
+  const records = (n: number) => countText(n, ['запись', 'записи', 'записей']);
+  const newer = unreadable.filter(item => item.newer), damaged = unreadable.filter(item => !item.newer);
+  return [
+    ...(newer.length ? [`Не открывается ${records(newer.length)} от более новой версии Agent Lab — обновите Lab, чтобы ${newer.length === 1 ? 'её' : 'их'} открыть.`] : []),
+    ...(damaged.length ? [`Не читается ${records(damaged.length)}: ${damaged[0]!.reason}${damaged.length > 1 ? ' и другое' : ''}. Файлы оставлены как есть.`] : []),
+  ];
 }
