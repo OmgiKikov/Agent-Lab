@@ -153,7 +153,8 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
   try {
     await owned.lab.init();
     let draft = await owned.lab.get(found.id);
-    if (isRunning(draft.phase)) throw new Error(draft.phase === 'preparing' ? 'Ситуации ещё готовятся: запуск — после подготовки.' : 'Этот прогон уже идёт.');
+    if (isRunning(draft.phase)) throw new Error(draft.phase === 'preparing' ? 'Ситуации ещё готовятся: запуск — после подготовки.'
+      : draft.phase === 'checking' ? 'Ситуации сейчас проверяются: запуск — после проверки.' : 'Этот прогон уже идёт.');
     let note = `Запуск · ${runStamp(draft)}`;
     // A run that started is never run again in place: its accepted set goes into a fresh draft, the agent as it is now —
     // previewed, and written only when the owner says «Запустить».
@@ -225,9 +226,11 @@ async function progress(host: RunHost, callId: string, ctx: ExtensionContext, id
     { rows: [row('Проверяю изменённые ситуации в фоне; итог придёт сообщением.', 'text', true)] }, note);
   const feed: Feed = { rows: running ? [row(progressText(record), 'text', true), row(`Идёт в фоне; ${STOP_HINT}.`, 'muted')]
     : [row(`Сейчас ничего не идёт: ${runWhen(record)} — ${record.trials.length ? 'прогон завершён' : 'черновик'}.`, 'muted')] };
-  return host.feedResult(callId, { run: record.id, running, working: record.phase === 'preparing' ? 'preparation' : running ? 'run' : null, inThisSession: !!job && job.id === record.id,
+  // A check of situations has a phase of its own (phases.ts): it is neither a preparation nor a run.
+  const working = record.phase === 'preparing' ? 'preparation' : record.phase === 'checking' ? 'check' : running ? 'run' : null;
+  return host.feedResult(callId, { run: record.id, running, working, inThisSession: !!job && job.id === record.id,
     // A preparation stops at the ceiling its consent stated; the draft's limit is the run's budget, so only a run names it.
-    ...(record.phase === 'preparing' ? {} : { finished: record.trials.length, planned: plannedTrials(record), callLimit: record.settings.maxCalls }), calls: record.usage.calls }, feed, note);
+    ...(working === 'preparation' || working === 'check' ? {} : { finished: record.trials.length, planned: plannedTrials(record), callLimit: record.settings.maxCalls }), calls: record.usage.calls }, feed, note);
 }
 
 /** Stops the work of this session — only the work that is going on — and says what was kept. */

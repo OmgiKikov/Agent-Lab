@@ -12,9 +12,12 @@ import { OperationRunner } from '../src/lab/operation.js';
 import { draftHash, newRecord } from '../src/lab/record.js';
 import { runPlan } from '../src/lab/run.js';
 import type { Phase } from '../src/phases.js';
+import { accuracyParts } from '../src/result-text.js';
+import { buildResultView } from '../src/result-view.js';
 import type { Runtime } from '../src/runtime.js';
 import { libraryHash } from '../src/scenario-library.js';
 import { ExperimentStore } from '../src/store.js';
+import { settle, type DecisionSurface, type Writing } from '../extensions/decisions.ts';
 import { cardInput, cardRuntime } from './helpers/card-prep.js';
 
 /*
@@ -82,7 +85,9 @@ test('a check runs in a phase of its own and gives the draft back: stopped, it i
     const phases = new Set<Phase>();
     lab.follow(record => phases.add(record.phase));
     await lab.checkCards(draft.id, libraryHash(changed));
-    assert.equal((await lab.get(draft.id)).phase, 'checking');
+    const checking = await lab.get(draft.id);
+    assert.equal(checking.phase, 'checking');
+    assert.equal(accuracyParts(buildResultView(checking)).tail, 'прогон ещё не запускался', 'a draft under its check is a draft, not a run going on');
     await lab.cancel(draft.id);
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
@@ -122,6 +127,25 @@ test('a check never spends the preparation\'s time: a draft whose preparation us
     const checked = await lab.get(draft.id);
     assert.deepEqual([checked.phase, checked.error, checked.stop], ['review', null, undefined], 'the check has its own time');
     assert.equal(checked.preparationProgress!.elapsedMs, 60_000, 'and is never charged to the preparation');
+  });
+});
+
+test('«поднять лимит» raises what stopped the draft\'s last work: its calls, and its time too when the time cut it short', async () => {
+  await withLab(cardRuntime(), async lab => {
+    const draft = await prepared(lab);
+    // The surface hands the owner's pick to the lab: no background work is started here.
+    const surface = { ctx: {}, origin: 'chat', writing: async (work: Parameters<Writing>[0]) => work(lab, () => undefined), background: {} } as unknown as DecisionSurface;
+    const stoppedBy = async (stop: 'budget' | 'time') => lab.store.save({ ...(await lab.get(draft.id)), stop, error: STOP_LABEL[stop], message: STOP_LABEL[stop] });
+
+    await stoppedBy('budget');
+    assert.equal(await settle(surface, { kind: 'raise_limit', runId: draft.id, to: 90 }, []), 'Решено: лимит поднят до 90 вызовов. Проверяю ситуации — итог придёт сюда отдельным сообщением.');
+    const calls = await lab.get(draft.id);
+    assert.deepEqual([calls.settings.maxCalls, calls.settings.maxDurationMs], [90, draft.settings.maxDurationMs], 'the budget stopped it: the calls are raised');
+
+    await stoppedBy('time');
+    assert.equal(await settle(surface, { kind: 'raise_limit', runId: draft.id, to: 120 }, []), 'Решено: лимит поднят до 120 вызовов и время — до 20 мин. Проверяю ситуации — итог придёт сюда отдельным сообщением.');
+    const time = await lab.get(draft.id);
+    assert.deepEqual([time.settings.maxCalls, time.settings.maxDurationMs], [120, 2 * draft.settings.maxDurationMs], 'the time stopped it: the time is raised with the calls');
   });
 });
 

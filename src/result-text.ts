@@ -88,7 +88,7 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
   const lead = 'Точность агента:';
   const value = percentOf(view);
   if (value === null) {
-    const tail = view.phase === 'review' || view.phase === 'preparing' && !view.pending ? 'прогон ещё не запускался'
+    const tail = view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
       : view.pending ? `считается — ждут проверки ${countText(view.pending, SITUATIONS)}`
       : 'нет данных — ни одна ситуация не измерена';
     return { lead, value: null, tail, level: 'none' };
