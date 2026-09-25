@@ -46,11 +46,11 @@ p{margin:0}
 .good .pct{color:var(--ok)}.warn .pct{color:var(--warn)}.bad .pct{color:var(--err)}.none{color:var(--muted)}
 .trust{display:flex;flex-wrap:wrap;column-gap:1ch;color:var(--muted)}.trust .warn{color:var(--warn)}
 .tbl{overflow-x:auto;max-width:720px}
-table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
-th{font:500 12px/1.5 var(--mono);color:var(--dim);text-align:right;padding:0 0 6px 18px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;overflow-wrap:normal}
+th{font:500 12px/1.5 var(--mono);color:var(--dim);text-align:right;padding:0 0 6px 18px;white-space:nowrap}
 th:first-child,td:first-child{text-align:left;padding-left:0}
 td{padding:6px 0 6px 18px;border-top:1px solid var(--line);text-align:right;white-space:nowrap}
-td:first-child{white-space:normal;color:var(--bright)}
+td:first-child{white-space:normal;color:var(--bright);overflow-wrap:anywhere}
 tr.muted td,tr.muted td:first-child{color:var(--muted)}
 .why{display:grid;gap:4px}
 details>summary{list-style:none;cursor:pointer}details>summary::-webkit-details-marker{display:none}
@@ -102,6 +102,9 @@ ul.plain,ol.plain{margin:0;padding-left:2.4ch;display:grid;gap:4px}
 :root{color-scheme:light;--page:#fff;--glow:#fff;--win:#fff;--bar:#f4f5f7;--edge:#d4d8de;--line:#e3e6ea;--hover:#f4f5f7;--well:#fafbfc;
 --text:#1b1f24;--bright:#000;--muted:#4d5661;--dim:#6b7580;--accent:#1f5f8f;--accent-bg:#eef4f9;--accent-line:#a9c4db;
 --ok:#1f7a3a;--ok-bg:#edf7f0;--ok-line:#a8d3b4;--warn:#8a5a00;--warn-bg:#fdf6e7;--warn-line:#e4c98d;--err:#b0322a;--err-bg:#fcefee;--err-line:#e7aba6}
-body{background:#fff;font-size:12.5px}.stage{max-width:none;padding:0}.win{box-shadow:none;border-radius:8px}
-.card,.failure,.cause{break-inside:avoid}.chev{display:none}}
+body{background:#fff;font-size:12.5px}.stage{max-width:none;padding:0}.win{box-shadow:none;border:0;border-radius:0}.wbar{display:none}
+.screen{padding:0;gap:22px}.tbl{overflow:visible}
+h2,h3,.card .ttl,.failure .ttl{break-after:avoid}
+.card,.failure,.cause,.ex,.turn,dl>div,tr,li,.alarm,.acc,.trust{break-inside:avoid}
+.chev{display:none}.alarm{border-width:2px}.trust .warn{font-weight:600;text-decoration:underline dotted}}
 `;

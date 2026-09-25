@@ -17,8 +17,10 @@ import { oneLine } from './text.js';
 /*
  * The customer report: the result the owner reads in Pi, as one page for someone who never opened
  * Pi. It is built only from the ResultView of the run (plus the stored dialogues it quotes), in the
- * order a reader asks: how good is the agent, can I trust the number, where does it fail and why,
- * what was checked, each failure with its evidence, and what the result does not prove. Its words
+ * order a reader asks: how good is the agent and can the number be trusted (the head, on the first
+ * screen of a phone), where does it fail and why, each failure with its evidence, what was not
+ * checked, the situations themselves, and the fine print — what the trust stands on, how the number
+ * was made and what the result does not prove. Its words
  * are result-text.ts's, for this reader. Its reader did none of the owner's work, so
  * the page speaks about the owner of the agent, never to «вы», and asks its reader to do nothing: the
  * owner's next steps stay in the owner's tools. A situation made from a logged conversation opens
@@ -227,17 +229,19 @@ export function runReport(bundle: EvidenceBundle): Report {
       ...(judgeChecked ? [{ kind: 'trust' as const, parts: [judgeChecked] }] : []),
       ...(view.calibration ? [{ kind: 'trust' as const, parts: [{ text: view.calibration.text, warn: false }] }] : []),
     ],
+    // The first screen answers how good the agent is and whether to believe it (the head), then where and why it fails;
+    // the evidence behind the trust line and how the number was made are the fine print at the end.
     blocks: [
-      { kind: 'section', title: 'Основания доверия', blocks: [{ kind: 'list', items: evaluationEvidenceLines(view) }] },
       ...scenariosBlock(view),
       ...topicsBlock(view),
       ...causesBlock(view),
-      ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),
       ...(failures.length ? [{ kind: 'section' as const, title: 'Разбор ошибок', blocks: [{ kind: 'failures' as const, items: failures }] }] : []),
       ...(unmeasured.length ? [{ kind: 'section' as const, title: 'Не измерено', blocks: [{ kind: 'list' as const, items: unmeasured }] }] : []),
       ...gapsBlock(view),
       ...calibrationBlock(bundle),
       ...comparisonBlock(bundle),
+      ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),
+      { kind: 'section', title: 'Основания доверия', blocks: [{ kind: 'list', items: evaluationEvidenceLines(view) }] },
       basisBlock(bundle, view),
       ...rowSection(caveatRows(view, READER)),
     ],
