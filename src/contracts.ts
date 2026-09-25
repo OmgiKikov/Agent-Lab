@@ -2,13 +2,15 @@ import { USER_CONTROLLER_PROTOCOL, userViewSchema } from './user-controller.js';
 import { checkpointSchema, importBatchSchema, requirementKindSchema } from './scenario-contracts.js';
 import { expectationSchema, preparationProgressSchema, scenarioLibrarySchema, type PreparationProgress, type ScenarioLibrary } from './card/schema.js';
 import { calibrationSchema, calibrationSettingSchema, type Calibration } from './card/calibration.js';
-import { judgeAuditSchema, judgeReceiptSchema, metricAssessmentSchema, rubricSchema, stage, type JudgeAudit, type JudgeReceipt, type MetricAssessment } from './assessment.js';
+import { judgeAuditSchema, judgeReceiptSchema, metricAssessmentSchema, rubricSchema, stage, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Rubric } from './assessment.js';
 import { createHash } from 'node:crypto';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS, RECORD_REQUIREMENT_LIMIT } from './limits.js';
 import { z } from 'zod';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { PHASES, type Phase } from './phases.js';
 import { valueTokens } from './verbatim.js';
+import { referencesSchema, type Reference } from './reference.js';
+export { referenceSchema, referencesSchema, type Reference } from './reference.js';
 
 /*
  * The stored record: a run of situations against an agent — its sources and rules, its situations, every dialogue
@@ -160,6 +162,10 @@ export const checkSchema = z.discriminatedUnion('kind', [
   z.strictObject({ ...checkBase, kind: z.literal('answer_equals'), value: z.string().min(1).max(8000) }),
   /** Wording that must never reach the user: internal instructions, staff-only phrasing, forbidden promises. */
   z.strictObject({ ...checkBase, kind: z.literal('answer_omits'), value: text.max(1000) }),
+  /** Derived from a reference: the article (and chunk) is among the chunks retrieved for some reply. */
+  z.strictObject({ ...checkBase, kind: z.literal('source_retrieved'), doc: text.max(500), chunk: text.max(500).optional() }),
+  /** Derived from a reference: every value token of the expected fact appears in the assistant replies. */
+  z.strictObject({ ...checkBase, kind: z.literal('answer_reference_tokens'), value: text.max(400) }),
 ]);
 export type Check = z.infer<typeof checkSchema>;
 export function describeCheck(check: Check): string {
@@ -167,10 +173,51 @@ export function describeCheck(check: Check): string {
   if (check.kind === 'answer_equals') return `Последний ответ в точности: ${JSON.stringify(check.value)}`;
   if (check.kind === 'answer_contains') return `В ответах есть: ${JSON.stringify(check.value)} (без учёта регистра)`;
   if (check.kind === 'answer_omits') return `В ответах нет: ${JSON.stringify(check.value)} (без учёта регистра)`;
+  if (check.kind === 'source_retrieved') return `Найдена статья ${check.doc}${check.chunk ? `, фрагмент ${check.chunk}` : ''}`;
+  if (check.kind === 'answer_reference_tokens') return `В ответах есть значения эталона: ${[...valueTokens(check.value)].join(', ')}`;
   if (check.kind === 'tool_called') return `Есть вызов ${check.tool}`;
   if (check.kind === 'tool_not_called') return `Нет вызовов ${check.tool}`;
   if (check.kind === 'tool_count') return `${check.tool}: от ${check.min} до ${check.max} попыток вызова`;
   return 'Перед каждым изменением — успешное чтение той же записи';
+}
+export const REFERENCE_METRIC_ID = 'reference_match';
+const DERIVED_CHECK_KINDS: ReadonlySet<Check['kind']> = new Set(['source_retrieved', 'answer_reference_tokens']);
+
+/**
+ * The checks and the judge rubric a card's references imply. Rebuilt from the references on every
+ * validation, so the expectation lives only in `references` and an edit never leaves stale criteria.
+ */
+export function withReferenceCriteria<S extends Pick<Scenario, 'checks' | 'metrics' | 'references'>>(scenario: S): Pick<S, 'checks' | 'metrics'> {
+  const references = scenario.references ?? [];
+  const stale = scenario.checks.some(c => DERIVED_CHECK_KINDS.has(c.kind)) || !!scenario.metrics?.some(m => m.id === REFERENCE_METRIC_ID);
+  if (!references.length && !stale) return { checks: scenario.checks, metrics: scenario.metrics };
+  const checks = [...scenario.checks.filter(c => !DERIVED_CHECK_KINDS.has(c.kind)), ...references.flatMap(referenceChecks)];
+  const kept = (scenario.metrics ?? []).filter(m => m.id !== REFERENCE_METRIC_ID);
+  const texts = references.flatMap(r => r.text ? [r.text] : []);
+  const metrics = texts.length ? [...kept, referenceMatch(texts)] : kept;
+  return { checks, metrics: metrics.length || scenario.metrics ? metrics : undefined };
+}
+
+export function unconfirmedReferences(scenarios: Pick<Scenario, 'id' | 'references'>[]): string[] {
+  return scenarios.flatMap(s => (s.references ?? []).filter(r => !r.confirmed).map(r => `${s.id}/${r.id}`));
+}
+
+function referenceChecks(reference: Reference): Check[] {
+  const checks: Check[] = [];
+  if (reference.source) checks.push({ id: `ref_${reference.id}_source`, kind: 'source_retrieved', stage: 'поиск',
+    description: `Агент нашёл эталонную статью ${reference.source.doc}`, doc: reference.source.doc,
+    ...(reference.source.chunk ? { chunk: reference.source.chunk } : {}) });
+  if (reference.text && valueTokens(reference.text).size) checks.push({ id: `ref_${reference.id}_tokens`, kind: 'answer_reference_tokens', stage: 'ответ',
+    description: 'Ответ содержит значения из эталона', value: reference.text });
+  return checks;
+}
+
+function referenceMatch(texts: string[]): Rubric {
+  const expected = texts.map(t => `«${t}»`).join('; ');
+  return { id: REFERENCE_METRIC_ID, name: 'Совпадение с эталоном', subject: 'agent', stage: 'ответ',
+    description: `Передают ли ответы агента факты эталона: ${expected}.`,
+    passCriteria: `Ответы агента передают каждый факт эталона (${expected}) по смыслу, перефраз допустим, и ничему в нём не противоречат.`,
+    failCriteria: `Хотя бы один факт эталона (${expected}) не передан, искажён или ответ ему противоречит.` };
 }
 const validationExclusionSchema = z.strictObject({
   dialogueId: identifier, kind: z.enum(['customer_data', 'masked', 'length', 'unconfirmed']), reason: text.max(1000),
@@ -243,6 +290,7 @@ export const scenarioSchema = z.strictObject({
   goalObservation: goalObservationSchema.optional(),
   successCriteria: text.max(3000).optional(), assumptions: z.array(text.max(1000)).max(12).optional(),
   metrics: z.array(rubricSchema).max(8).optional(),
+  references: referencesSchema.optional(),
 });
 export type Scenario = z.infer<typeof scenarioSchema> & { split: 'dev' | 'control' };
 
@@ -386,6 +434,7 @@ export const draftPatchSchema = z.strictObject({
 export const reassessmentSchema = z.strictObject({
   criteria: z.array(z.strictObject({ scenarioId: identifier, successCriteria: text.max(3000).optional(),
     checks: z.array(checkSchema).max(12).optional(), metrics: z.array(rubricSchema).max(8).optional(),
+    references: referencesSchema.optional(),
   })).max(200).refine(v => unique(v.map(c => c.scenarioId)), 'Duplicate scenario criteria').default([]),
   trialIds: z.array(identifier).min(1).max(3000).refine(unique, 'Duplicate trial IDs').optional(),
   judge: settingsSchema.shape.judge, codeOnly: z.boolean().default(false),
@@ -604,6 +653,11 @@ export function validatePreparation(raw: unknown, sources: Source[]): Preparatio
     if (!source?.content.includes(r.quote)) throw new Error(`Requirement ${r.id} has an ungrounded source quote`);
   }
   for (const s of p.scenarios) {
+    const derived = withReferenceCriteria(s);
+    s.checks = derived.checks;
+    if (derived.metrics) s.metrics = derived.metrics; else delete s.metrics;
+    if (s.checks.length > 12) throw new Error(`Карточка ${s.id}: вместе с проверками эталонов больше 12 проверок. Уберите лишние проверки или эталоны.`);
+    if ((s.metrics?.length ?? 0) > 8) throw new Error(`Карточка ${s.id}: вместе с рубрикой эталона больше 8 рубрик.`);
     const synthetic = s.provenance === 'synthetic';
     if (synthetic && !s.requirementIds.length) throw new Error(`Scenario ${s.id} needs at least one grounded requirement`);
     if (synthetic) for (const answer of s.user.answers ?? []) {

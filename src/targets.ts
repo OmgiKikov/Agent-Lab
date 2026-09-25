@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { fingerprint, isRunnable, scalarSchema, usageSchema, type ReleaseHook, type ReleaseLog, type RunnableTarget, type Target, type World } from './contracts.js';
 import type { CallContext, DialogueMessage, TargetSession } from './runtime.js';
 import { targetEntryPath } from './target-version.js';
+import { AgentRequestFailed } from './errors.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { renderRequest, replyText, type RequestTemplate, type RequestValues } from './http-template.js';
 
@@ -131,6 +132,7 @@ export const externalReplySchema = z.union([
     /** Exact chunks supplied to the model for this reply; Agent Lab persists them as cited trace evidence. */
     retrievals: z.array(z.strictObject({
       source: z.string().trim().min(1).max(500),
+      chunkId: z.string().trim().min(1).max(500).optional(),
       content: z.string().min(1).max(12000).refine(value => !!value.trim(), 'Empty retrieval chunk'),
       score: z.number().finite().optional(),
       documentId: z.string().trim().min(1).max(500).optional(),
@@ -189,10 +191,10 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
   try { response = await fetch(url, { method: 'POST', headers, signal, body: JSON.stringify(body) }); }
   catch (error) {
     if (parent.aborted) throw parent.reason;
-    if (signal.aborted) throw new Error(`External agent request exceeded ${timeoutMs} ms`);
-    throw new Error(`External agent request failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (signal.aborted) throw new AgentRequestFailed('timeout', `External agent request exceeded ${timeoutMs} ms`);
+    throw new AgentRequestFailed('unreachable', `External agent request failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!response.ok) { await response.body?.cancel(); throw new Error(`External agent responded ${response.status}`); }
+  if (!response.ok) { await response.body?.cancel(); throw new AgentRequestFailed('status', `External agent responded ${response.status}`, response.status); }
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;

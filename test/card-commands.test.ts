@@ -57,12 +57,12 @@ test('changing when the customer names a fact: preview, receipt, a new version o
   assert.deepEqual([late(next).revision, next.revision, known(next)], [2, draft.library.revision + 1, known(draft.library)], 'only this card gets a new version');
 });
 
-test('a disclosure that contradicts the first message is refused with what to change first', () => {
+test('a disclosure that contradicts the first message is refused with what to pass together with it', () => {
   const draft = cardDraft();
   assert.throws(() => prepare(draft.library, { kind: 'set_fact_disclosure', cardId: late(draft.library).id, factId: 'f1', disclosure: 'initial' }, draft),
-    (error: unknown) => error instanceof CommandRefused && /в первой реплике этого нет\. Сначала измените первую реплику\./.test(error.message));
+    (error: unknown) => error instanceof CommandRefused && /в первой реплике этого нет\. Передайте вместе с первой репликой, где это есть, — одной правкой\./.test(error.message));
   assert.throws(() => prepare(draft.library, { kind: 'set_fact_disclosure', cardId: known(draft.library).id, factId: 'f1', disclosure: 'on_request' }, draft),
-    (error: unknown) => error instanceof CommandRefused && /уже есть в первой реплике\. Сначала уберите это из первой реплики\./.test(error.message));
+    (error: unknown) => error instanceof CommandRefused && /уже есть в первой реплике\. Передайте вместе с первой репликой без этого — одной правкой\./.test(error.message));
 });
 
 test('a new fact gets the next id and never an id a removed fact had', () => {

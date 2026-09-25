@@ -29,7 +29,8 @@ const inDialogue = (event: EventRef, origin: { batchId: string; dialogueId: stri
  * message, turn and every fact come from that dialogue, and whose account of the later messages holds no change.
  * A similar card, one added by the owner or written from the rules has no log of its own; a card of a dialogue
  * that the owner changed stands for another situation now — and so does one whose customer holds a plausible fact,
- * confirmed or not: it is in no message of the log, so the synthetic customer knows more than the logged one did.
+ * confirmed or not: it is in no message of the log, so the synthetic customer knows more than the logged one did —
+ * and so does one whose masked values Lab filled in.
  */
 export function cardExclusion(card: Card): Exclusion | undefined {
   const { origin } = card;
@@ -38,7 +39,9 @@ export function cardExclusion(card: Card): Exclusion | undefined {
   const fromLog = writesSource.kind === 'dialogue' && inDialogue(writesSource.event, origin)
     && (!turn || turn.source.kind === 'dialogue' && inDialogue(turn.source.event, origin))
     && knows.every(fact => fact.source.kind === 'dialogue' && inDialogue(fact.source.event, origin))
-    && !card.coverage.some(entry => entry.as === 'changed');
+    && !card.coverage.some(entry => entry.as === 'changed')
+    // Values Lab wrote over the log's masking marks: the synthetic customer says what the logged one's words hid.
+    && !card.filled;
   return fromLog ? undefined : 'situation_edited';
 }
 

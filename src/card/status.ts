@@ -5,6 +5,7 @@ import { messageAt, normalizeText, problemText, quotable, unusableFindings, type
 import { planClaims, type Claim, type ClaimKind } from './review.js';
 import { KIND_WORDS, rulebookOf, unboundCitation, withRules } from './rulebook.js';
 import type { Card, CardCommand, ClaimReceipt, LibraryV2 } from './schema.js';
+import type { Reference } from '../reference.js';
 
 /*
  * The status of a card and the one question the owner is asked (docs/design/card-v2-spec.md §2.6). Both are derived, never stored:
@@ -41,7 +42,8 @@ export interface StatusContext { library: LibraryV2; evidence: CardEvidence; max
 function definitionIdentity(card: Card): string {
   const { wants, writes, knows, leaves, turn } = card.client;
   return fingerprint({ wants, writes, knows: knows.map(({ source: _source, ...fact }) => fact), leaves,
-    turn: turn ? { kind: turn.kind, after: turn.after, says: turn.says } : null, agentMust: card.agentMust });
+    turn: turn ? { kind: turn.kind, after: turn.after, says: turn.says } : null, agentMust: card.agentMust,
+    ...(card.references ? { references: card.references } : {}) });
 }
 
 /** A doubt the owner settled in their own name: a `settle_claim` receipt on exactly this key. */
@@ -64,6 +66,23 @@ function unconfirmedQuestion(card: Card, fact: Fact, claim: Claim): Question {
     { label: 'Да, скажет, если спросят', command: disclose('on_request') },
     { label: 'Нет, не знает', command: disclose('unknown') },
     { label: 'Убрать', command: { kind: 'remove_fact', cardId: card.id, factId: fact.id } },
+  ]);
+}
+
+/**
+ * A reference the model proposed: nothing checks the agent against it until the owner keeps it. Confirming keeps the
+ * reference as written; removing drops only it, so the card's other references stay.
+ */
+function proposalQuestion(card: Card, proposal: Reference): Question {
+  const references = card.references ?? [];
+  const basisHash = fingerprint(proposal);
+  const id = fingerprint({ kind: 'reference', subject: proposal.id, basisHash });
+  const set = (next: Reference[]): CardCommand => ({ kind: 'set_references', cardId: card.id, references: next });
+  const what = [proposal.source ? `статья ${proposal.source.doc}${proposal.source.chunk ? `, фрагмент ${proposal.source.chunk}` : ''}` : '',
+    proposal.text ? `«${clip(proposal.text, 160)}»` : ''].filter(Boolean).join(' · ');
+  return question(id, basisHash, `Lab предлагает эталон: ${what}. Проверять агента по нему?`, [
+    { label: 'Да, это верный эталон', command: set(references.map(item => item.id === proposal.id ? { ...item, confirmed: true } : item)) },
+    { label: 'Убрать эталон', command: set(references.filter(item => item.id !== proposal.id)) },
   ]);
 }
 
@@ -190,7 +209,9 @@ function statusOf(card: Card, context: StatusContext, twin: Card | undefined): C
   const doubt = receipts.filter(item => item.receipt.status === 'needs_owner' && !settled(library, item.claim.key))
     .sort((a, b) => DOUBT_ORDER.indexOf(a.claim.kind) - DOUBT_ORDER.indexOf(b.claim.kind))[0];
   const duplicate = twin && duplicateQuestion(card, twin);
-  const open = unconfirmed ? unconfirmedQuestion(card, unconfirmed, receipts.find(item => item.claim.kind === 'fact' && item.claim.subject === unconfirmed.id)!.claim)
+  const proposal = card.references?.find(reference => !reference.confirmed);
+  const open = proposal ? proposalQuestion(card, proposal)
+    : unconfirmed ? unconfirmedQuestion(card, unconfirmed, receipts.find(item => item.claim.kind === 'fact' && item.claim.subject === unconfirmed.id)!.claim)
     : doubt ? doubtQuestion(card, doubt.claim, doubt.receipt, evidence)
     : plausible ? plausibleQuestion(library, plausible)
     : duplicate && !settled(library, duplicate.id) ? duplicate : undefined;

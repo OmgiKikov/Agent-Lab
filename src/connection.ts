@@ -7,6 +7,7 @@ import type { Runtime } from './runtime.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
+import { observabilityLevel } from './observability.js';
 import { preflightTarget, templateExchange, type TemplateTarget } from './targets.js';
 import { atPointer, replyStructure } from './http-template.js';
 import { writeFileAtomic } from './fs-atomic.js';
@@ -71,7 +72,7 @@ export async function rememberConnection(directory: string, connection: Connecti
   const kept = previous && 'customerProfile' in previous.target ? previous.target.customerProfile : undefined;
   if (kept?.length && !('customerProfile' in connection.target && connection.target.customerProfile?.length)) connection = { ...connection, target: { ...connection.target, customerProfile: kept } as Connection['target'] };
   const path = resolve(directory, 'connection.local.json');
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await writeFileAtomic(path, JSON.stringify(connectionSchema.parse({ ...connection, verifiedAt: new Date().toISOString() }), null, 2) + '\n');
 }
 
@@ -127,6 +128,7 @@ export async function doctor(connection: Connection, signal = new AbortControlle
       && trials.every(t => t.observation?.resetConfirmed === true && t.observation.tools === 'complete' && !!t.observation.version)
       && trials[0]!.observation?.version === trials[1]!.observation?.version;
     return { format: 'agent-lab-doctor-1', passed, createdAt: new Date().toISOString(), target: connection.target, trials,
+      observability: observabilityLevel(trials),
       message: passed ? 'История и сброс прошли заданную проверку; адаптер сообщил версию и полную трассу в заявленной области инструментов.'
         : 'Проверьте ответы, итоговое состояние, resetConfirmed, eventsComplete и стабильную version.',
       limitation: 'Это проверка заданного поведения. Состояние и полноту событий сообщает адаптер; его реализацию нужно сверять с тестовой системой.' };
@@ -151,12 +153,15 @@ export interface TemplateCheck {
 /**
  * The connection check of an agent in its own format: one test message shows the reply's structure; with the
  * text's path known, a second message in the same conversation must be answered too. There is no reset to check:
- * every dialogue of a run is a new conversation id, and the agent is judged on its replies.
+ * every dialogue of a run is a new conversation id, and the agent is judged on its replies. `reply` is the path, or
+ * how to pick it from the first reply (the chat asks the owner there); undefined leaves it unpicked.
  */
-export async function checkTemplate(target: TemplateTarget, reply: string | undefined, signal = new AbortController().signal): Promise<TemplateCheck> {
+export async function checkTemplate(target: TemplateTarget, reply: string | undefined | ((first: unknown) => Promise<string | undefined>),
+  signal = new AbortController().signal): Promise<TemplateCheck> {
   const conversation = randomUUID();
   const first = await templateExchange(target, { message: TOOL_PROBE_OPENING, conversation }, signal);
   const structure = replyStructure(first);
+  if (typeof reply === 'function') reply = await reply(first);
   if (reply === undefined) return { structure, turns: [], passed: false };
   const length = (document: unknown) => { const text = atPointer(document, reply); return typeof text === 'string' && text.trim() ? text.length : null; };
   const turns = [length(first)];

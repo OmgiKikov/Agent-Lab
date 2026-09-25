@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from '../ids.js';
 import { MATERIAL_LIMIT, MAX_PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
 import { cardTopicSchema, sampleSchema, topicsKnown, trafficSchema } from '../miner/schema.js';
+import { referencesSchema } from '../reference.js';
 import { libraryRequirementsSchema, librarySourcesSchema, libraryV1Schema, preparationProgressSchema as variantPreparationSchema, requirementKindSchema } from '../scenario-contracts.js';
 
 /*
@@ -84,6 +85,17 @@ const coverageEntrySchema = z.strictObject({
 
 const distinctIds = (items: { id: string }[]) => new Set(items.map(item => item.id)).size === items.length;
 
+/** What kind of value Lab wrote over a masking mark: the model names it, the harness holds the value to its shape (card/unmask.ts). */
+export const fillKindSchema = z.enum(['count', 'amount', 'date', 'time', 'name', 'phone', 'card_number', 'account', 'address', 'code', 'other']);
+
+/**
+ * A value Lab wrote in where the de-identified log had a mark («#», «*», «<PHONE>»): the `span`-th mark (from 0) of the
+ * message `event`, the mark as it stood and the plausible value in its place. The log keeps the mark; the card's opening,
+ * turn and facts read the message with the value, and the brief says so («подставлено вместо обезличенного»).
+ */
+const filledSchema = z.strictObject({ event: eventRefSchema, span: z.number().int().nonnegative(), mark: text(60), kind: fillKindSchema, value: text(80) });
+export type Filled = z.infer<typeof filledSchema>;
+
 export const cardSchema = z.strictObject({
   id,                                  // card_<digest>
   number: z.number().int().positive(), // «№3»; assigned once, never reused
@@ -106,6 +118,11 @@ export const cardSchema = z.strictObject({
   // The customer cannot say what is wrong («не работает»): the card tests that the agent clarifies instead of guessing, and
   // the result counts such situations apart. Absent on a card whose customer states the request, as on every card before it.
   clarity: z.literal('vague').optional(),
+  // Values Lab wrote over the log's masking marks; absent on a card whose messages had none, as on every card before it.
+  filled: z.array(filledSchema).min(1).max(40).optional(),
+  // What code checks besides the judge: the article the agent must retrieve and/or the fact it must convey (reference.ts).
+  // Absent on a card without them, as on every card before them.
+  references: referencesSchema.refine(v => v.length > 0, 'Empty references').optional(),
 }).refine(card => distinctIds(card.client.knows) && distinctIds(card.agentMust), 'Fact and expectation ids repeat')
   // Only a card written from the owner's rules, with no dialogue behind it, opens with the model's words.
   .refine(card => card.client.writesSource.kind !== 'model' || card.origin.kind === 'rules', 'Model-written opening outside a rules card');
@@ -123,18 +140,38 @@ export const rulebookSchema = z.strictObject({
 export type Rulebook = z.infer<typeof rulebookSchema>;
 
 /** What the owner can do to a card. Every applied command is kept verbatim in an owner receipt, so this union is part of the stored format. */
+const setFactDisclosure = z.strictObject({ kind: z.literal('set_fact_disclosure'), cardId: id, factId: id, disclosure: disclosureSchema });
+// A new fact when factId is absent; the owner vouches for it.
+const setFact = z.strictObject({ kind: z.literal('set_fact'), cardId: id, factId: id.optional(), label: text(120), value: factSchema.shape.value,
+  disclosure: disclosureSchema, askedAs: text(200).optional() });
+const removeFact = z.strictObject({ kind: z.literal('remove_fact'), cardId: id, factId: id });
+const editExpectation = z.strictObject({ kind: z.literal('edit_expectation'), cardId: id, expectationId: id, text: text(300).optional(),
+  requirementIds: z.array(id).min(1).max(3).optional(), appliesWhen: text(300).nullable().optional() });
+const removeExpectation = z.strictObject({ kind: z.literal('remove_expectation'), cardId: id, expectationId: id });
+const editClient = z.strictObject({ kind: z.literal('edit_client'), cardId: id, wants: text(300).optional(), writes: text(3000).optional(), leaves: text(300).optional() });
+// `event` present: the turn is that later message of the source dialogue, `says` its exact text; absent: the owner's words. null removes it.
+// The card's whole list of references as it will be; an empty list removes them.
+const setReferences = z.strictObject({ kind: z.literal('set_references'), cardId: id, references: referencesSchema });
+const setTurn = z.strictObject({ kind: z.literal('set_turn'), cardId: id, turn: turnSchema.omit({ source: true }).extend({ event: eventRefSchema.optional() }).nullable() });
+
+/**
+ * One change of one card inside `edit_card`: a command of one card without the card, since the whole series names it once.
+ * The changes are applied in order and the card is checked once, as they leave it, so an opening and the facts it
+ * states can change together where either alone would break the card.
+ */
+const noCard = { cardId: true } as const;
+export const cardChangeSchema = z.discriminatedUnion('kind', [setFactDisclosure.omit(noCard), setFact.omit(noCard), removeFact.omit(noCard),
+  editExpectation.omit(noCard), removeExpectation.omit(noCard), editClient.omit(noCard), setTurn.omit(noCard)]);
+export type CardChange = z.infer<typeof cardChangeSchema>;
+
 export const cardCommandSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('set_fact_disclosure'), cardId: id, factId: id, disclosure: disclosureSchema }),
-  // A new fact when factId is absent; the owner vouches for it.
-  z.strictObject({ kind: z.literal('set_fact'), cardId: id, factId: id.optional(), label: text(120), value: factSchema.shape.value,
-    disclosure: disclosureSchema, askedAs: text(200).optional() }),
-  z.strictObject({ kind: z.literal('remove_fact'), cardId: id, factId: id }),
-  z.strictObject({ kind: z.literal('edit_expectation'), cardId: id, expectationId: id, text: text(300).optional(),
-    requirementIds: z.array(id).min(1).max(3).optional(), appliesWhen: text(300).nullable().optional() }),
-  z.strictObject({ kind: z.literal('remove_expectation'), cardId: id, expectationId: id }),
-  z.strictObject({ kind: z.literal('edit_client'), cardId: id, wants: text(300).optional(), writes: text(3000).optional(), leaves: text(300).optional() }),
-  // `event` present: the turn is that later message of the source dialogue, `says` its exact text; absent: the owner's words. null removes it.
-  z.strictObject({ kind: z.literal('set_turn'), cardId: id, turn: turnSchema.omit({ source: true }).extend({ event: eventRefSchema.optional() }).nullable() }),
+  setFactDisclosure, setFact, removeFact, editExpectation, removeExpectation, editClient, setTurn, setReferences,
+  // A series of changes of one card, confirmed and recorded once.
+  z.strictObject({ kind: z.literal('edit_card'), cardId: id, changes: z.array(cardChangeSchema).min(1).max(12) }),
+  // Lab's plausible values over the log's masking marks (card/unmask.ts): the marks of the card's messages, and the facts whose value was a mark.
+  z.strictObject({ kind: z.literal('fill_masked'), cardId: id,
+    spans: z.array(filledSchema.omit({ mark: true })).max(40), facts: z.array(z.strictObject({ factId: id, value: text(120) })).max(8) })
+    .refine(command => command.spans.length + command.facts.length > 0, 'Nothing to fill'),
   // Only offered as a choice of a question: the owner settles the doubt behind that exact key.
   z.strictObject({ kind: z.literal('settle_claim'), cardId: id, key: hash }),
   z.strictObject({ kind: z.literal('answer_question'), cardId: id, questionId: hash, choice: z.enum(['a', 'b', 'c']), text: text(1000).optional() }),

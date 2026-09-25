@@ -198,7 +198,10 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const failed = rule.kind === 'expectations' ? rule.expectations.filter(expectation => expectationResult(chosen, expectation, reviews) === 'fail') : [];
   const cited = failed[0] ? assessment(chosen, failed[0].id) : kind === 'rules' ? assessment(chosen, COMPLIANCE)
     : assessment(chosen, GOAL) ?? chosen.assessments?.find(item => item.result === 'fail' && agentMetrics.includes(item.metricId));
-  const details = detailRows(record, owed(scenario, failed), chosen, kind, cited);
+  // A card may fail on code alone — the article its reference names was not retrieved: then that check is what it owed.
+  const failedChecks = chosen.checks.filter(check => !check.passed && isReferenceCheck(check.id));
+  const owedScenario = !failed.length && failedChecks.length ? { ...scenario, successCriteria: failedChecks.map(check => oneLine(check.description)).join('; ') } : owed(scenario, failed);
+  const details = detailRows(record, owedScenario, chosen, kind, cited);
   const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${oneLine(scenario.title)}` }, ...details.rows];
   return {
     scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, expected: details.expected, said: details.said,
@@ -264,6 +267,7 @@ function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind:
     rows.push({ role: 'unverified', indent: 2, text: 'Должен был: ожидание не записано в ситуации.' });
   }
 
+  for (const check of chosen.checks.filter(item => !item.passed && isReferenceCheck(item.id))) rows.push({ role: 'expected', indent: 2, text: `Проверка кода: ${oneLine(check.evidence)}` });
   const { row, said } = saidRow(chosen, cited);
   rows.push(row);
 
@@ -303,3 +307,6 @@ export function exampleRows(explanation: FailureExplanation): ExplanationRow[] {
     ? { role: 'example', indent: row.indent + 3, text: `Пример: ${oneLine(explanation.title)}` }
     : { ...row, indent: row.indent + 3 });
 }
+
+/** A check derived from a card's reference (contracts.ts referenceChecks): the only code check a card of the library carries. */
+const isReferenceCheck = (id: string) => id.startsWith('ref_');

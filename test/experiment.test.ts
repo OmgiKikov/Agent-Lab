@@ -1284,3 +1284,15 @@ test('a retired sandbox or compare record opens and reassesses but never runs ag
   assert.equal(result.phase, 'results_review', result.error ?? '');
   assert.deepEqual(result.trials.map(trial => trial.events), record.trials.map(trial => trial.events));
 });
+
+test('references can be added to a recorded run without running the agent again', async t => {
+  const { lab } = await setup(t, legacyDemoRuntime());
+  const record = await runDraft(lab, await externalDraft(lab, { count: 1, settings: { repeats: 1 } }));
+  const measured = record.trials.find(trial => !['invalid', 'cancelled'].includes(trial.outcome))!;
+  const reference = { id: 'r1', origin: 'owner' as const, confirmed: true, text: 'Код услуги 999-777' };
+  const copy = await lab.reassess(record.id, { codeOnly: true, criteria: [{ scenarioId: measured.scenarioId, references: [reference] }] });
+  await lab.waitForIdle();
+  const reassessed = (await lab.get(copy.id)).trials.find(trial => trial.id === measured.id)!;
+  assert.equal(reassessed.checks.find(check => check.id === 'ref_r1_tokens')?.passed, false, 'a value the agent never said fails the reference');
+  assert.deepEqual(reassessed.events, measured.events, 'reassessment reads the recorded dialogue, it does not run the agent');
+});

@@ -154,14 +154,18 @@ export function callText(tool: string, args: Record<string, unknown> | undefined
     }
     case 'agent_lab_cards': return number ? `Открываю ситуацию${number}` : 'Показываю ситуации';
     case 'agent_lab_edit': {
-      const kind = (a.change as { kind?: unknown } | undefined)?.kind;
+      const changes = Array.isArray(a.changes) ? a.changes as { kind?: unknown }[] : [];
+      const kind = changes[0]?.kind;
+      if (changes.length > 1) return `Меняю ситуацию${number}: несколько правок вместе`;
       return kind === 'rules' ? 'Меняю свод правил' : kind === 'similar' ? `Добавляю похожую на ситуацию${number}` : kind === 'remove' ? `Убираю ситуацию${number}`
+        : kind === 'unmask' ? `Подставляю значения вместо обезличенных в ситуации${number}`
         : `Меняю ситуацию${number}: ${kind === 'fact' ? 'что знает клиент' : kind === 'duty' ? 'что должен агент' : kind === 'turn' ? 'поворот' : 'клиент'}`;
     }
     case 'agent_lab_decide': return typeof a.decision === 'string' ? 'Записываю ваше решение' : 'Смотрю, что ждёт вашего решения';
     case 'agent_lab_run': return a.action === 'stop' ? 'Останавливаю' : a.action === 'progress' ? 'Смотрю, как идёт работа' : a.action === 'accept' ? 'Утверждаю ситуации' : 'Запускаю прогон';
     case 'agent_lab_results': return a.compare === true ? 'Сравниваю с прошлым прогоном' : a.report === true ? 'Сохраняю отчёт для заказчика' : typeof a.save === 'string' ? 'Сохраняю набор в файл' : 'Показываю результат';
     case 'agent_lab_explain': return `Разбираю ситуацию${number}`;
+    case 'agent_lab_connect': return 'Подключаю агента';
     case 'agent_lab_agree': return `Записываю вашу отметку о решении судьи${number ? ` по ситуации${number}` : ''}`;
     default: return 'Agent Lab';
   }

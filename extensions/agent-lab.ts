@@ -8,6 +8,7 @@ import { safeText } from '../src/text.js';
 import { rememberFeed, type Feed } from './render/feed.ts';
 import { row } from './conversation.ts';
 import { registerBoardCommand } from './board-command.ts';
+import { registerConnectTool } from './connect-tool.ts';
 import { registerDecideTool } from './decide-tool.ts';
 import { registerPrepareTool } from './prepare-tool.ts';
 import { registerResultTools } from './result-tools.ts';
@@ -22,7 +23,7 @@ import { isInteractive, NeedsOwner } from './lab-ui.ts';
 import { createGateway, type GatewayOptions } from './gateway.ts';
 
 /*
- * Agent Lab inside Pi: nine tools, of which the model sees only those of the step the project is at (steps.ts), the
+ * Agent Lab inside Pi: ten tools, of which the model sees only those of the step the project is at (steps.ts), the
  * /agent-lab workspace, and the messages long work reports back with. What the model is told comes from one source,
  * the agent-builder skill (skills/agent-builder/SKILL.md): its body joins the system prompt of an Agent Lab session;
  * everything a tool itself can say is in that tool's description. The owner's personal model gateway (provider giga)
@@ -101,6 +102,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
   registerDecideTool(tools, host);
   registerRunTool(tools, host);
   registerResultTools(tools, host);
+  registerConnectTool(tools, host);
   registerBoardCommand(pi, host, { gateway: gateway.command, ...(options.openReport ? { openReport: options.openReport } : {}) });
   pi.on('session_shutdown', () => operations.shutdown());
   return gateway.ready;

@@ -4,10 +4,12 @@ import type { LogJudge } from './card/calibration.js';
 import type { ErrorPlanter } from './judge-check-task.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
 import type { CardReview, CardReviewRequest } from './card/review.js';
+import type { MaskFiller } from './card/unmask.js';
 import type { FailureMode, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
 import { identifierSchema as identifier } from './ids.js';
 import type { BuilderModel, TopicMap, TopicMapPlan, TopicMapProgress } from './miner/topic-map.js';
 import type { PurposeReader } from './prompt-purpose.js';
+import type { ConnectionReader } from './connect.js';
 import type { TableReader } from './spreadsheet/reading-task.js';
 import type { AllowedUserAction, UserDecision, UserView } from './user-controller.js';
 import type { CustomerBrief, CustomerReply } from './card-customer.js';
@@ -62,6 +64,8 @@ export interface Runtime {
   logJudge?: LogJudge;
   /** The builder's planted errors of a judge check (judge-check-task.ts): one agent reply rewritten so one expectation is broken. */
   plantError?: ErrorPlanter;
+  /** The builder's plausible values over the masking marks of one existing card (card/unmask.ts), made into a command the owner confirms. */
+  maskFill?: MaskFiller;
   /** Which articles of a large knowledge base one dialogue needs: the model reads the table of contents, never the bodies. */
   selectSources?(input: SourceSelectionInput, ctx: CallContext): Promise<SourceSelection>;
   /** The topic map of an import (miner/topic-map.ts), built by `builder` from a plan made for it; each finished step reaches `onProgress` before the next call. */
@@ -70,5 +74,7 @@ export interface Runtime {
   tableReading?: TableReader;
   /** Which of the agent's prompts write the reply to the customer (prompt-purpose.ts): proposed by `builder` from each prompt's beginning, confirmed by the owner. */
   promptPurposes?: PurposeReader;
+  /** How an agent in its own request format is connected (connect.ts): the message field of the owner's curl and the text of the agent's reply, proposed by `builder`, confirmed by the owner. */
+  connectionReading?: ConnectionReader;
   failureModes?(input: { task: string; failures: { trialId: string; card: string; reason: string; failed: string[]; trace: string }[]; prompt?: string }, ctx: CallContext): Promise<FailureMode[]>;
 }

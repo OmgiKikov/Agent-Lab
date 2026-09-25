@@ -49,6 +49,12 @@ export const requestTemplateSchema = z.strictObject({
 });
 export type RequestTemplate = z.infer<typeof requestTemplateSchema>;
 
+/** The environment variables a template reads, each once: the owner sets them before Pi starts. */
+export function templateVariables(template: RequestTemplate): string[] {
+  const texts = [...stringFields(template.body).map(field => field.value), ...Object.values(template.headers)];
+  return [...new Set(texts.flatMap(text => [...text.matchAll(PLACEHOLDER)].map(m => m[1]!).filter(name => name.startsWith('env:')).map(name => name.slice('env:'.length))))];
+}
+
 /** The values of one request: the message and conversation of the turn, a fresh id and time. */
 export interface RequestValues { message: string; conversation: string }
 

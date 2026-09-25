@@ -77,6 +77,8 @@ export class ExperimentLab {
   editableCards(id: string): Promise<{ id: string; copiedFrom?: string }> { return library.editableCards(this.lab, id); }
   prepareCardCommand(id: string, command: CardCommand, options: { via: Via; ownerWords?: string }): Promise<Prepared> { return library.prepareCardCommand(this.lab, id, command, options); }
   applyCardCommand(id: string, prepared: Prepared, grant: HostGrant): Promise<{ library: LibraryV2; experiment: Experiment }> { return library.applyCardCommand(this.lab, id, prepared, grant); }
+  /** Lab's plausible values over one card's masking marks, as the command the owner confirms; one model call, nothing written to the draft. */
+  proposeFill(id: string, cardId: string): Promise<Extract<CardCommand, { kind: 'fill_masked' }>> { return library.proposeFill(this.lab, id, cardId); }
   recheckCards(id: string, options?: { defer?: boolean; expectedHash?: string; explicit?: boolean }) { return library.recheckCards(this.lab, id, options); }
   prepareLogVersion(command: LogVersionCommand, options: { via: Via; at?: string }): Promise<PreparedLogVersion> { return library.prepareLogVersion(this.lab, command, options); }
   applyLogVersion(prepared: PreparedLogVersion, grant: HostGrant): Promise<LogVersionJournal> { return library.applyLogVersion(this.lab, prepared, grant); }

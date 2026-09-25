@@ -57,7 +57,10 @@ export const CASES: readonly EvalCase[] = [
       return library?.receipts.some(receipt => receipt.command.kind === 'settle_claim') ? undefined : 'no answer was recorded';
     } },
   { id: 'customer-knows-nothing', phrase: 'В ситуации, где клиент называет номер терминала только по просьбе, пусть он вообще не знает номер.', fixture: 'draft', pick: says('Записать'),
-    expect: { tool: TOOL.edit, args: args => (args.change as { kind?: string } | undefined)?.kind === 'fact' && (args.change as { when?: string }).when === 'unknown' },
+    expect: { tool: TOOL.edit, args: args => {
+      const [change] = Array.isArray(args.changes) ? args.changes as { kind?: string; when?: string }[] : [];
+      return change?.kind === 'fact' && change.when === 'unknown';
+    } },
     state: async cwd => {
       const library = (await records(cwd))[0]?.librarySnapshot as LibraryV2 | undefined;
       const late = library?.cards.find(card => card.origin.kind === 'dialogue' && card.origin.dialogueId === 'late');

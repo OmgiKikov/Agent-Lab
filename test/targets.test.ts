@@ -316,3 +316,18 @@ test('release cancellation cannot start work and a grandchild cannot hold the ho
   assert.match(result.stderr, /exceeded/);
   assert.ok(performance.now() - start < 4000);
 });
+
+for (const [name, command, script] of [['TypeScript', process.execPath, 'examples/adapter-reference.mjs'], ['Python', 'python3', 'examples/agent_lab_adapter.py']] as const) {
+  test(`the ${name} level-2 reference adapter reports the tool call and the retrieved article`, async t => {
+    const { spawnSync } = await import('node:child_process');
+    if (spawnSync(command, ['--version']).status !== 0) { t.skip(`${command} not installed`); return; }
+    const { ctx, events } = context();
+    const session = await openExternalTarget({ target: { kind: 'command', command, args: [resolve(script)], timeoutMs: 10000 },
+      sessionId: 't', scenarioId: 's', state: world(), history: () => [], ctx });
+    t.after(() => session.close());
+    assert.match(await session.respond('Какая комиссия за эквайринг?'), /1\.5%/);
+    assert.deepEqual(events.find(e => e.type === 'retrieval'), { type: 'retrieval', result: { complete: true,
+      chunks: [{ source: 'KB-2', chunkId: 'KB-2#1', content: 'Комиссия за эквайринг 1.5% от суммы операции.', score: 2 }] } });
+    assert.deepEqual(events.find(e => e.type === 'tool_call'), { type: 'tool_call', tool: 'search_kb', args: { query: 'Какая комиссия за эквайринг?' } });
+  });
+}
