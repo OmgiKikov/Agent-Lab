@@ -1,7 +1,7 @@
 import { countingRuleOf, headlineRule } from './card/expectations.js';
 import type { Experiment, Realism, Scenario, Trial, ValidationExclusion } from './contracts.js';
 import { isRunning } from './phases.js';
-import { agentMetricResult, COUNTING_RULES, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
+import { agentMetricResult, COUNTING_RULES, expectationsFoundWrong, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
 import { judgeModel, stabilityAfterReassess, stabilityBetweenRuns, type Stability } from './comparison.js';
 import { topicView, trafficCoverage, type TopicView } from './coverage.js';
@@ -46,6 +46,7 @@ export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
   judge_unavailable: 'судья не ответил — сбой связи или лимит запросов',
   judge_stopped: 'оценку прервали — кончились время или бюджет',
   human_invalid: 'вы отметили разговор как негодный',
+  expectations_wrong: 'вы признали ожидания ситуации неверными',
   reset_unconfirmed: 'агент не подтвердил сброс состояния',
   simulator_deviated: 'клиент в симуляции отошёл от ситуации',
   simulator_unclear: 'судья не уверен, что клиент держался ситуации',
@@ -59,6 +60,7 @@ export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
 /** The reasons that name the owner, as a page for someone else says them: about the owner of the agent, never to them. */
 export const NOT_MEASURED_ABOUT_OWNER: Partial<Record<NotMeasuredCode, string>> = {
   human_invalid: 'владелец агента отметил разговор как негодный',
+  expectations_wrong: 'владелец агента признал ожидания ситуации неверными',
   human_unknown: 'владелец агента не смог решить',
 };
 
@@ -69,7 +71,7 @@ export const NOT_MEASURED_ABOUT_OWNER: Partial<Record<NotMeasuredCode, string>> 
  * Each side asks the owner a different decision (inbox.ts), and a customer's side is a problem of the test (problems.ts).
  */
 export const NOT_MEASURED_SIDE: Record<NotMeasuredCode, 'agent' | 'client' | 'judge' | null> = {
-  in_progress: null, not_reached: null, stopped: null, attempts_mismatch: null, human_invalid: null, human_unknown: null,
+  in_progress: null, not_reached: null, stopped: null, attempts_mismatch: null, human_invalid: null, expectations_wrong: null, human_unknown: null,
   agent_error: 'agent', service_reply: 'agent', agent_no_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent',
   turn_limit: 'client', simulator_error: 'client', simulator_deviated: 'client', simulator_unclear: 'client',
   judge_error: 'judge', judge_unavailable: 'judge', judge_stopped: 'judge',
@@ -230,6 +232,11 @@ export interface ResultView {
    * the whole dialogue does not (counting rule), so a contradiction is named, never silently absorbed.
    */
   reviewed: { situations: number; contradicted: number };
+  /**
+   * Expectations of the counted situations a person found wrong themselves («ожидание само неверное»): errors of the
+   * cards, not of the agent. They left the count; this says how many. Absent when there are none.
+   */
+  wrongExpectations?: number;
   /** The rules the counted situations were judged by, by source, and whether operator instructions bind; null for rules grounded before kinds. */
   bar: RuleBar | null;
   /** `target` is the agent version the owner or the adapter named; null when none was named (a fingerprint is not a name). */
@@ -463,6 +470,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   if (record.realism) view.realism = structuredClone(record.realism);
   const blind = blindAgreement(record);
   if (blind) view.blind = blind;
+  const wrong = expectationsFoundWrong(record).length;
+  if (wrong) view.wrongExpectations = wrong;
   const clarity = clarityOf(record, counted);
   if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});

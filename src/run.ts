@@ -34,7 +34,7 @@ export type Verdict = 'pass' | 'fail' | 'unknown';
  */
 export const NOT_MEASURED_CODES = [
   'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'agent_no_reply', 'measurement_error', 'attempts_mismatch',
-  'judge_error', 'judge_unavailable', 'judge_stopped', 'human_invalid', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
+  'judge_error', 'judge_unavailable', 'judge_stopped', 'human_invalid', 'expectations_wrong', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
   'human_unknown', 'not_judged', 'judge_split', 'no_evidence', 'judge_unclear',
 ] as const;
 export type NotMeasuredCode = typeof NOT_MEASURED_CODES[number];
@@ -285,11 +285,14 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   // A conversation cut at the run's limit on the customer's messages was judged as it went: what the judge could not
   // decide in it is undecided because the conversation did not fit the limit.
   const unsure = (code: NotMeasuredCode): NotMeasuredCode => trial.turnLimit && (code === 'judge_split' || code === 'judge_unclear') ? 'turn_limit' : code;
-  for (const expectation of expectations) {
+  // An expectation found wrong itself left the agent's count (outcomes.ts allExpectations): it is a reason only when none is left.
+  const counted = expectations.filter(expectation => latest.get(`${trial.id}|metric:${expectation.id}`)?.verdict !== 'invalid');
+  if (expectations.length && !counted.length) codes.push('expectations_wrong');
+  for (const expectation of counted) {
     const result = expectationResult(trial, expectation, record.humanReviews);
     if (result === 'pass' || result === 'fail') continue;
     const review = latest.get(`${trial.id}|metric:${expectation.id}`);
-    codes.push(review?.verdict === 'invalid' ? 'human_invalid' : review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : unsure(undecidedExpectation(trial, expectation)));
+    codes.push(review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : unsure(undecidedExpectation(trial, expectation)));
   }
   for (const id of ids) {
     const result = agentMetricResult(trial, id, record.humanReviews);

@@ -50,16 +50,26 @@ type Judged = 'pass' | 'fail' | 'unknown';
 
 /**
  * The human-override rule — the only copy of it. The latest human verdict on a target (one metric,
- * one check) replaces the recorded result, with two exceptions: a one-key «не могу сказать» is
- * doubt, not a verdict, so the recorded result stays and the owner's hesitation can never quietly
- * take a failure out of the headline (a full review that says `unknown` still overrides); and
- * «invalid» takes the target out of the judgment altogether (`invalid: true`, no result). The owner's verdict on
- * a logged conversation (card/calibration.ts LogReview) follows the same rule.
+ * one check) replaces the recorded result, with two exceptions. «Не понять» (`unknown`) is doubt, not a
+ * verdict: whatever the path — a one-key mark, a full review, a blind label — it never takes the judge's
+ * failure out of the count, so the owner's hesitation can never raise the number; a one-key doubt leaves
+ * any recorded result as it is, a considered one (a full review, a blind label) leaves a pass undecided.
+ * And «invalid» takes the target out of the judgment altogether (`invalid: true`, no result). The owner's
+ * verdict on a logged conversation (card/calibration.ts LogReview) follows the same rule.
  */
 export function humanOverride(review: Pick<HumanReview, 'verdict' | 'source'> | undefined, recorded: Judged | undefined): { invalid: boolean; result: Judged | undefined } {
   if (review?.verdict === 'invalid') return { invalid: true, result: undefined };
-  if (!review || (review.source === 'quick' && review.verdict === 'unknown')) return { invalid: false, result: recorded };
+  if (!review) return { invalid: false, result: recorded };
+  if (review.verdict === 'unknown') return { invalid: false, result: recorded === 'fail' || review.source === 'quick' ? recorded : 'unknown' };
   return { invalid: false, result: review.verdict };
+}
+
+/**
+ * Whether a person found this expectation of an attempt wrong itself («ожидание само неверное»): the card's error, not
+ * the agent's. It leaves the agent's count (allExpectations) and is counted apart (expectationsFoundWrong).
+ */
+export function expectationFoundWrong(trial: Trial, expectationId: string, reviews: HumanReview[] = []): boolean {
+  return latestHumanReviews({ trials: [trial], humanReviews: reviews }).get(`${trial.id}|metric:${expectationId}`)?.verdict === 'invalid';
 }
 
 /** Rubric outcomes stay separate from objective checks everywhere they are presented; a human verdict applies by `humanOverride`. */
@@ -74,9 +84,15 @@ export function agentMetricResult(trial: Trial, metricId: string, reviews: Human
 export function expectationResult(trial: Trial, expectation: CountedExpectation, reviews: HumanReview[] = []): 'pass' | 'fail' | 'unknown' | undefined {
   return agentMetricResult(trial, expectation.id, reviews, recordedExpectationResult(trial, expectation));
 }
-/** Every expectation of one attempt, fail-first: any fail fails, all pass passes, anything else is unknown. */
+/**
+ * Every expectation of one attempt the agent is counted by, fail-first: any fail fails, all pass passes, anything else is
+ * unknown. An expectation a person found wrong itself is the card's error and leaves the count; with none left, nothing of
+ * the agent is measured.
+ */
 function allExpectations(trial: Trial, expectations: CountedExpectation[], reviews: HumanReview[]): 'pass' | 'fail' | 'unknown' {
-  const results = expectations.map(expectation => expectationResult(trial, expectation, reviews) ?? 'unknown');
+  const results = expectations.filter(expectation => !expectationFoundWrong(trial, expectation.id, reviews))
+    .map(expectation => expectationResult(trial, expectation, reviews) ?? 'unknown');
+  if (!results.length) return 'unknown';
   return results.includes('fail') ? 'fail' : results.every(result => result === 'pass') ? 'pass' : 'unknown';
 }
 /**
@@ -158,6 +174,21 @@ export function automaticTrialResult(scenario: Scenario | undefined, trial: Tria
   if (trial.outcome === 'fail' || rubric === 'fail') return 'fail';
   return (!scenario.checks.length || trial.outcome === 'pass' || checkpoint === 'pass')
     && (rubric === 'pass' || (rubric === undefined && scenario.checks.length > 0)) ? 'pass' : 'unknown';
+}
+
+/**
+ * The expectations a person found wrong themselves in the counted situations of a run, each once however many of its
+ * attempts carry the mark: «ожиданий признано неверными: N», shown apart from the number they left.
+ */
+export function expectationsFoundWrong(record: Experiment): { scenarioId: string; expectationId: string }[] {
+  const controls = new Set(record.positiveControlScenarioIds ?? []);
+  return record.scenarios.filter(scenario => !controls.has(scenario.id)).flatMap(scenario => {
+    const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
+    const rule = headlineRule(scenario, trials);
+    if (rule.kind !== 'expectations') return [];
+    return rule.expectations.filter(expectation => trials.some(trial => expectationFoundWrong(trial, expectation.id, record.humanReviews)))
+      .map(expectation => ({ scenarioId: scenario.id, expectationId: expectation.id }));
+  });
 }
 
 export { GOAL_METRIC_ID, RULES_METRIC_ID } from './card/expectations.js';

@@ -182,6 +182,7 @@ export function trustSegments(view: ResultView, reader: Reader = 'owner'): { tex
   if (agreement.checked) add(`с судьёй согласны ${agreement.agreed} из ${agreement.checked}`);
   else if (view.reviewed.situations) add(owner ? `вы проверили ${reviewed}` : `владелец агента проверил ${reviewed}`);
   else if (agreement.queueFailures.length + agreement.sampledPasses.length) add('судью ещё не проверяли');
+  if (view.wrongExpectations) add(`ожиданий признано неверными: ${view.wrongExpectations} — это ошибки ситуаций, в процент они не входят`);
   if (view.sameModelJudge) add('судья — та же модель, что готовила ситуации', true);
   if (view.reviewed.contradicted) add(`${owner ? 'ваши отметки' : 'отметки владельца агента'} расходятся с итогом: ${view.reviewed.contradicted}`, true);
   const unstable = unstableCount(view);
