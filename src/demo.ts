@@ -3,6 +3,7 @@ import { createInputSchema, type CreateInput, type RunnableTarget, type TraceEve
 import { simulatorFidelity, type MetricAssessment } from './assessment.js';
 import type { Runtime } from './runtime.js';
 import type { DialogueProposal } from './card/proposal.js';
+import type { PlanProposal } from './card/plan.js';
 import type { ReviewVerdict } from './card/review.js';
 import { buildTopicMap, type TopicTaskRunner } from './miner/topic-map.js';
 
@@ -62,6 +63,17 @@ const DEMO_CARDS: Record<'known' | 'late', DialogueProposal> = {
     agentMust: [{ text: 'спросить номер терминала один раз, до инструкции', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply', strength: 'must', acceptable: null, violation: null },
       { text: 'объяснить, как оформить возврат', basis: DEMO_BASIS, appliesWhen: 'клиент назвал номер терминала', observation: 'reply', strength: 'must', acceptable: null, violation: null }] },
 };
+/** The example's business scenario: one topic, two variations the logs show, the duties every card of it shares (card/plan.ts). */
+const DEMO_PLAN: PlanProposal = {
+  question: 'Клиент просит вернуть оплату за покупку',
+  variations: [{ title: 'Клиент сразу называет номер терминала', examples: ['known'] }, { title: 'Клиент называет номер терминала только по просьбе агента', examples: ['late'] }],
+  expectations: [
+    { text: 'не спрашивать номер терминала ещё раз, если клиент его уже назвал', strength: 'must', acceptable: null,
+      violation: 'агент снова просит номер терминала, который клиент уже назвал', basis: DEMO_BASIS, variations: [0] },
+    { text: 'спросить номер терминала один раз, до инструкции', strength: 'must', acceptable: null, violation: null, basis: DEMO_BASIS, variations: [1] },
+    { text: 'объяснить, как оформить возврат', strength: 'must', acceptable: 'сначала уточнить номер терминала, если клиент его не назвал', violation: null, basis: DEMO_BASIS, variations: null },
+  ],
+};
 /** The example's one question for the owner: the number the customer named only after the agent asked — did they know it before? */
 const DEMO_DOUBT: ReviewVerdict = { status: 'needs_owner', reason: 'В исходном разговоре клиент назвал номер только после вопроса агента.' };
 const DEMO_READY: ReviewVerdict = { status: 'ready', reason: 'Учебный пример проверен по заранее заданным правилам; это не оценка модели.' };
@@ -110,6 +122,10 @@ export function createDemoRuntime(): Runtime {
       const { source, sources } = input.call;
       if (sources.length !== 1 || sources[0].content !== demoPolicy || source.kind !== 'dialogue' || (source.dialogueId !== 'known' && source.dialogueId !== 'late')) throw new Error(DEMO_ONLY);
       return DEMO_CARDS[source.dialogueId];
+    },
+    async proposeScenario(input) {
+      if (input.call.topic.title !== 'Возврат оплаты' || input.call.examples.some(example => example.dialogueId !== 'known' && example.dialogueId !== 'late')) throw new Error(DEMO_ONLY);
+      return { ...DEMO_PLAN, variations: DEMO_PLAN.variations.map(variation => ({ ...variation, examples: variation.examples.filter(id => input.call.examples.some(example => example.dialogueId === id)) })) };
     },
     /** Every claim holds except the one the example teaches with: a number named after the agent's question, while no one has vouched for it. */
     async reviewCard(input) {

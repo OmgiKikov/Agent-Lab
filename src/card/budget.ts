@@ -26,10 +26,14 @@ export const REVIEW_CALLS = 2;
 /** Reviews one unit may need: its card's, and its revision's. */
 const REVIEWS = 2;
 
+/** Business scenarios a preparation from logs plans at most: one for each topic of the map, «Другое» included (card/plan.ts). */
+const PLAN_TOPICS = 16;
+
 /**
- * The most model calls a preparation makes: the topic map's calls, and for each situation promised the choice of
- * articles of a large knowledge base for its conversation, its proposal allowance and the review of its card and of that
- * card's one revision. Requests are counted as the topic map's are — each answer passing the first time — and only the
+ * The most model calls a preparation makes: the topic map's calls; from logs, the plan of each topic the situations
+ * stand for — at most one topic a situation — with the choice of its articles from a large knowledge base; and for each
+ * situation promised the choice of articles of a large knowledge base for its conversation, its proposal allowance and
+ * the review of its card and of that card's one revision. Requests are counted as the topic map's are — each answer passing the first time — and only the
  * proposal allowance holds its repairs; a preparation whose repairs reach the ceiling stops there with what it made, and
  * continues on the owner's word. A conversation that makes no situation spends out of the same ceiling, so the
  * preparation never spends more than it promised — over its creation and every resume together (preparationBudget).
@@ -37,7 +41,8 @@ const REVIEWS = 2;
 export function preparationCeiling(input: { task: string; sources: readonly Source[]; situations: number; fromLogs: boolean; topicMapCalls?: number }): number {
   const whole = !workInputIssue({ task: input.task, sources: input.sources });
   const reading = whole || !input.fromLogs ? 0 : READING_CALLS;
-  return (input.topicMapCalls ?? 0) + input.situations * (reading + PROPOSAL_ATTEMPTS + REVIEWS * REVIEW_CALLS);
+  const plans = input.fromLogs ? Math.min(input.situations, PLAN_TOPICS) * (1 + reading) : 0;
+  return (input.topicMapCalls ?? 0) + plans + input.situations * (reading + PROPOSAL_ATTEMPTS + REVIEWS * REVIEW_CALLS);
 }
 
 /** Where a preparation stands against its ceiling. */

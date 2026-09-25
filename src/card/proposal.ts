@@ -70,7 +70,7 @@ export const KNOWS_LIMIT = 8;
 const coverageAnswer = z.strictObject({ as: z.enum(['fact', 'turn', 'stop', 'ignored']), reason: text(200).nullable() });
 
 /** A duty's basis: a sentence of a source of this call, the rule it states in one line, and the kind of that rule. */
-function basisProposal(call: ProposalCall) {
+export function basisProposal(call: Pick<ProposalCall, 'sources'>) {
   const ids = call.sources.map(source => source.id) as [string, ...string[]];
   return z.strictObject({ sourceId: z.enum(ids, { error: 'Not a supplied source: cite only ids from sources.' }), quote: text(1500),
     rule: text(300), kind: requirementKindSchema });
@@ -144,13 +144,13 @@ export const proposalBounds = (call: ProposalCall) => ({
 
 const said = (call: ProposalCall, index: number): string => call.messages.find(message => message.index === index)?.content ?? '';
 
-type Basis = CardProposal['agentMust'][number]['basis'][number];
+type Basis = z.infer<ReturnType<typeof basisProposal>>;
 
 /**
  * Where a basis quote is verbatim, in the source's own characters: its cited source, or else exactly one other source of
  * the call, which then owns it — the sentence was copied right and the source named wrong.
  */
-function located(basis: Basis, call: ProposalCall): { sourceId: string; quote: string } | undefined {
+export function located(basis: Pick<Basis, 'sourceId' | 'quote'>, call: Pick<ProposalCall, 'sources'>): { sourceId: string; quote: string } | undefined {
   const cited = call.sources.find(source => source.id === basis.sourceId);
   const exact = cited && verbatimSpan(cited.content, basis.quote);
   if (cited && exact) return { sourceId: cited.id, quote: exact };

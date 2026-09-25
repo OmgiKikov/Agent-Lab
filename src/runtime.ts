@@ -3,6 +3,7 @@ import type { JudgeAudit, MetricAssessment } from './assessment.js';
 import type { LogJudge } from './card/calibration.js';
 import type { ErrorPlanter } from './judge-check-task.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
+import type { PlanProposal, PlanRequest } from './card/plan.js';
 import type { CardReview, CardReviewRequest } from './card/review.js';
 import type { MaskFiller } from './card/unmask.js';
 import type { FailureMode, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
@@ -58,6 +59,8 @@ export interface Runtime {
   speakAsCustomer?(input: { brief: CustomerBrief; messages: DialogueMessage[]; turn: number; turned: boolean }, ctx: CallContext): Promise<CustomerReply>;
   /** One card from one dialogue or from the owner's rules alone; every reference in the answer is an enum of this call. */
   proposeCard?(input: CardProposalRequest, ctx: CallContext): Promise<CardProposal>;
+  /** The business scenario of one topic, before its cards (card/plan.ts): a proposal the harness checks and binds. */
+  proposeScenario?(input: PlanRequest, ctx: CallContext): Promise<PlanProposal>;
   /** The independent reviewer's verdict on each listed claim of one card, and the model that gave it. */
   reviewCard?(input: CardReviewRequest, ctx: CallContext): Promise<CardReview>;
   /** The free LLM user of scenarios without an `execution` block: recorded runs made before the scenario library. */

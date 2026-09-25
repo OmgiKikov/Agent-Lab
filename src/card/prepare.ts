@@ -14,7 +14,8 @@ import type { ExperimentStore } from '../store.js';
 import { clip } from '../text.js';
 import { PROPOSAL_ATTEMPTS, promptsOversize } from './budget.js';
 import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
-import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, withRequirements } from './library.js';
+import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, withRequirements, withScenario } from './library.js';
+import { bindPlan, planProblem, planProposalSchema, type PlanCall } from './plan.js';
 import { rulebookOf } from './rulebook.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, proposalRequirements, type CardProposalRequest, type ProposalCall } from './proposal.js';
 import { revisionClaims, claimReceipts, pendingClaims, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
@@ -100,6 +101,15 @@ const ALLOWANCE_SPENT = `Для этой ситуации исчерпаны ${P
 const UNBOUND_PROPOSAL = 'Предложенная ситуация не прошла проверку Lab и не сохранена.';
 const OVER_WINDOW = 'Разговор вместе с материалами не поместился в окно модели.';
 const INTERRUPTED = 'Подготовка прервалась во время платного вызова: его стоимость неизвестна, поэтому этот источник не разбирается повторно.';
+const UNUSABLE_PLAN = 'Ни один ответ модели не прошёл проверку Lab: план сценария не составлен — ситуации темы пишут свои ожидания, как раньше.';
+const PLAN_INTERRUPTED = 'Подготовка прервалась во время платного вызова плана: его стоимость неизвестна, поэтому план этой темы не составляется повторно.';
+/** The conversations of a topic the plan reads, and how much of each: the customers' own words, a screen of them. */
+const PLAN_EXAMPLES = 8;
+const PLAN_MESSAGES = 4;
+const PLAN_MESSAGE_CHARS = 600;
+/** The in-flight name of a topic's plan call: never a unit of the preparation. */
+const planUnit = (topic: string): string => `plan_${fingerprint(topic).slice(0, 16)}`;
+const isPlanUnit = (unit: string | undefined): boolean => !!unit?.startsWith('plan_');
 /** Why a preparation stopped on an answer cut off after it began: the one failure whose cost nobody knows. */
 const CUT = 'Ответ модели оборвался на середине: стоимость этого вызова неизвестна, поэтому его разговор не будет разобран повторно. Готовые ситуации сохранены; продолжите подготовку, когда связь с моделью наладится.';
 /** What the provider said when it turned a request away before any answer began: nothing was billed. */
@@ -174,6 +184,8 @@ export function preparationParallel(value: number | undefined): number {
 }
 /** A card cites at most three sentences for each of its three duties. */
 const CARD_CITATIONS = 9;
+/** A plan cites at most three sentences for each of its expectations (card/plan.ts). */
+const PLAN_CITATIONS = 18;
 /** A card the reviewer blocked and the reviewer's reason for each blocked claim. */
 type Revision = { card: Card; blocked: { claim: string; reason: string }[] };
 
@@ -472,6 +484,78 @@ class Preparation {
     return own;
   }
 
+  /**
+   * The business scenario of every topic the sample's units stand for (card/plan.ts): one call each, before any card of
+   * the topic is proposed, saved with the draft so a resume never pays for it twice. A topic whose plan cannot be made —
+   * its answers never passed, or its call died in flight — goes on without one: its cards write their own duties, as
+   * before plans. A refusal by the budget or the provider stops the preparation, and the resume plans the topic again.
+   */
+  private async planTopics(whole: boolean): Promise<void> {
+    const { progress, batch, record } = this;
+    if (!batch || !this.runtime.proposeScenario || !progress.sample) return;
+    const topics = new Map<string, { topic: { ref: NonNullable<ReturnType<typeof unitTopic>>['ref']; title: string }; units: string[] }>();
+    for (const unit of [...progress.processed, ...progress.pending]) {
+      const topic = unitTopic(progress, this.library, batch.id, unit);
+      if (!topic) continue;
+      const group = topics.get(topic.title) ?? { topic, units: [] };
+      group.units.push(unit);
+      topics.set(topic.title, group);
+    }
+    for (const { topic, units } of topics.values()) {
+      this.ctx.signal.throwIfAborted();
+      if (progress.plans?.some(item => item.topic === topic.title) || this.library.plan?.some(scenario => scenario.topic === topic.title)) continue;
+      if (record.requirements.length + PLAN_CITATIONS > RECORD_REQUIREMENT_LIMIT) return;
+      const unit = planUnit(topic.title);
+      const examples = units.slice(0, PLAN_EXAMPLES).flatMap(id => {
+        const dialogue = batch.dialogues.find(item => item.id === id);
+        const customer = dialogue ? loggedMessages(dialogue).filter(message => message.role === 'user').slice(0, PLAN_MESSAGES).map(message => clip(message.content, PLAN_MESSAGE_CHARS)) : [];
+        return customer.length ? [{ dialogueId: id, customer }] : [];
+      });
+      const entry: NonNullable<CardPreparation['plans']>[number] = { topic: topic.title };
+      progress.plans = [...progress.plans ?? [], entry];
+      try {
+        const scenario = await this.planTopic(unit, { title: topic.title, key: topic.ref }, examples, whole);
+        entry.scenarioId = scenario;
+      } catch (error) {
+        this.ctx.signal.throwIfAborted();
+        const unusable = error instanceof StructuredTaskError || overWindow(error);
+        if (unusable) entry.reason = UNUSABLE_PLAN;
+        else if (this.inFlight(unit)) { entry.reason = PLAN_INTERRUPTED; await this.publish(); throw error instanceof ProviderFailure ? new Error(CUT, { cause: error }) : error; }
+        else { progress.plans = progress.plans.filter(item => item !== entry); await this.publish(); throw error; }
+      }
+      await this.publish();
+    }
+  }
+
+  /** One topic's plan: its reading, the builder's proposal, checked and bound into the library with the rules it cites. */
+  private async planTopic(unit: string, topic: PlanCall['topic'], examples: PlanCall['examples'], whole: boolean): Promise<string> {
+    const { record } = this;
+    const prompts = record.sources.filter(source => source.kind === 'prompt');
+    const articles = record.sources.filter(source => source.kind !== 'prompt');
+    let read = [...prompts, ...articles];
+    if (!whole) {
+      const chosen = this.progress.sourceSelection?.find(row => row.dialogueId === unit)?.sourceIds ?? (articles.length ? (await this.call(unit, 'select', ctx => selectScenarioSources({
+        task: record.task, limit: SOURCES_PER_DIALOGUE, catalog: articles.map(({ id, name, content }) => ({ id, name, chars: content.length })),
+        dialogue: { id: unit, messages: examples.flatMap(example => example.customer.map(content => ({ role: 'user' as const, content }))) } }, articles, this.runtime, ctx))).map(source => source.id) : []);
+      if (!this.progress.sourceSelection?.some(row => row.dialogueId === unit)) this.progress.sourceSelection = [...this.progress.sourceSelection ?? [], { dialogueId: unit, sourceIds: chosen }];
+      read = [...prompts, ...chosen.flatMap(id => articles.find(source => source.id === id) ?? [])];
+    }
+    const [first, ...rest] = read.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) }));
+    if (!first) throw new StructuredTaskError(UNUSABLE_PLAN);
+    const rulebook = rulebookOf(this.library);
+    const call: PlanCall = { topic, examples, sources: [first, ...rest], binds: { kinds: rulebook.kinds,
+      rules: this.library.requirements.filter(requirement => rulebook.included.includes(requirement.id)).map(({ sourceId, quote }) => ({ sourceId, quote })) } };
+    const answer = await this.call(unit, 'plan', ctx => this.runtime.proposeScenario!({ task: record.task, call }, ctx));
+    // The runtime's own check is not taken on trust: the harness parses, finds every quote and holds every kind to the rulebook.
+    const parsed = planProposalSchema(call).safeParse(answer);
+    if (!parsed.success || planProblem(parsed.data, call)) throw new StructuredTaskError(UNUSABLE_PLAN);
+    const { scenario, requirements } = bindPlan(parsed.data, call);
+    const cited = requirements.filter(requirement => !record.requirements.some(known => known.id === requirement.id));
+    record.requirements = [...record.requirements, ...cited];
+    this.library = withScenario(withRequirements(this.library, record.requirements), scenario);
+    return scenario.id;
+  }
+
   /** `landed`: the unit's card step is done, and the units after it may land theirs. */
   private async prepareUnit(unit: string, whole: boolean, landed: () => void): Promise<void> {
     const dialogue = this.batch?.dialogues.find(item => item.id === unit);
@@ -506,8 +590,12 @@ class Preparation {
     // An earlier Lab counted a unit it left out among the processed ones too: it counts once, as left out.
     const left = new Set(this.progress.excluded.map(item => item.dialogueId));
     if (this.progress.processed.some(id => left.has(id))) this.progress.processed = this.progress.processed.filter(id => !left.has(id));
+    // A plan whose call died in flight is left out: its cost is unknown, and no model is asked the same twice.
+    if (this.progress.plans?.some(item => !item.scenarioId && !item.reason)) {
+      this.progress.plans = this.progress.plans.map(item => item.scenarioId || item.reason ? item : { ...item, reason: PLAN_INTERRUPTED });
+    }
     for (const { dialogueId: unit, stage } of calls) {
-      if (unit === undefined) continue;
+      if (unit === undefined || isPlanUnit(unit) || stage === 'plan') continue;
       // A call in flight for a unit that has its card was its review, or its revision (the reading or the proposal of
       // it): the card stays, and a revision in flight is spent.
       if (this.progress.cards?.some(item => item.dialogueId === unit)) {
@@ -533,6 +621,7 @@ class Preparation {
         // The materials fit no call: no conversation could take a unit's seat either.
         for (const unit of [...progress.pending]) this.exclude(unit, issue, false);
       } else if (!whole) progress.sourceSelection ??= [];
+      await this.planTopics(whole);
       // A replacement joins the pending units while the run goes on; a unit whose step failed unsent stays pending for a resume.
       const tried = new Set<string>();
       const next = () => progress.pending.find(id => !tried.has(id));

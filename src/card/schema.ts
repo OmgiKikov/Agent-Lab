@@ -72,6 +72,8 @@ export const expectationSchema = z.strictObject({
   // and what exactly breaks it. Absent on every card before them: the duty's words alone decide, as they always did.
   acceptable: text(600).optional(),
   violation: text(600).optional(),
+  // The expectation of the business scenario this duty is (card/plan.ts): its words, rules, strength and ways are the plan's.
+  planExpectationId: id.optional(),
 }).refine(expectation => expectation.tool === undefined || expectation.observation === 'tool', 'Only a duty observed on the tools names a tool');
 
 /** The one difference of a similar card from its parent. */
@@ -139,10 +141,32 @@ export const cardSchema = z.strictObject({
   // What code checks besides the judge: the article the agent must retrieve and/or the fact it must convey (reference.ts).
   // Absent on a card without them, as on every card before them.
   references: referencesSchema.refine(v => v.length > 0, 'Empty references').optional(),
+  // The business scenario and the variation this card is an example of (card/plan.ts); absent on every card before plans.
+  scenarioRef: z.strictObject({ scenarioId: id, variationId: id }).optional(),
 }).refine(card => distinctIds(card.client.knows) && distinctIds(card.agentMust), 'Fact and expectation ids repeat')
   // Only a card written from the owner's rules, with no dialogue behind it, opens with the model's words.
   .refine(card => card.client.writesSource.kind !== 'model' || card.origin.kind === 'rules', 'Model-written opening outside a rules card');
 export type Card = z.infer<typeof cardSchema>;
+
+/**
+ * A business scenario (card/plan.ts): what the preparation checks for one topic of the logs before any card is written —
+ * the question the customers come with, the variations of their circumstances that change what the agent must do, and
+ * the expectations every card of the scenario shares. A variation from the logs names the sampled conversations it
+ * stands for; one no conversation shows (`rules`) is an addition from the rules and is never presented as traffic.
+ */
+export const scenarioVariationSchema = z.strictObject({ id, title: text(160), origin: z.enum(['logs', 'rules']), examples: ids(40) });
+export const planExpectationSchema = z.strictObject({
+  id, text: text(300), requirementIds: z.array(id).min(1).max(3),
+  strength: z.literal('must_not').optional(), acceptable: text(600).optional(), violation: text(600).optional(),
+  // The variations it applies to; absent — every variation of the scenario.
+  variationIds: ids(8).min(1).optional(),
+});
+export const businessScenarioSchema = z.strictObject({
+  id, topic: text(120), trafficTopic: cardTopicSchema.optional(), question: text(300),
+  variations: z.array(scenarioVariationSchema).min(1).max(8).refine(distinctIds, 'Variation ids repeat'),
+  expectations: z.array(planExpectationSchema).min(1).max(8).refine(distinctIds, 'Expectation ids repeat'),
+});
+export type BusinessScenario = z.infer<typeof businessScenarioSchema>;
 
 /**
  * «Свод правил»: which requirements may back what the agent must do. `kinds` bind as a whole; `included` are single rules
@@ -249,6 +273,8 @@ export const libraryV2Schema = z.strictObject({
   traffic: z.array(trafficSchema).max(30).optional(),
   /** The owner's rulebook; absent until the owner changes it (card/rulebook.ts reads the default). */
   rulebook: rulebookSchema.optional(),
+  /** The business scenarios the cards are examples of, one per topic (card/plan.ts); absent in libraries made before plans. */
+  plan: z.array(businessScenarioSchema).max(30).refine(distinctIds, 'Scenario ids repeat').optional(),
 }).refine(library => new Set(library.cards.map(card => card.number)).size === library.cards.length
   && library.cards.every(card => card.number < library.nextNumber), 'A card number repeats or is not below nextNumber: a number is never given twice')
   .refine(topicsKnown, 'A card stands for a topic its library has no traffic of');
@@ -259,7 +285,7 @@ export const scenarioLibrarySchema = z.discriminatedUnion('formatVersion', [libr
 export type ScenarioLibrary = z.infer<typeof scenarioLibrarySchema>;
 
 /** The paid step of a unit a call belongs to. */
-const preparationStageSchema = z.enum(['select', 'ground', 'propose', 'review']);
+const preparationStageSchema = z.enum(['select', 'ground', 'propose', 'review', 'plan']);
 
 /**
  * The checkpoint of a card preparation (card/prepare.ts), saved with the draft after every step. A unit of work
@@ -332,6 +358,12 @@ const cardPreparationSchema = z.strictObject({
   cards: z.array(z.strictObject({ dialogueId: id, cardId: id })).max(300).optional(),
   /** Units whose card the reviewer blocked and that spent their one revision, whatever it gave. */
   revised: ids(300).optional(),
+  /**
+   * The business scenario of each topic the units stand for (card/plan.ts): made — its id in the library's plan —, left
+   * out with why, or neither while its call is under way; a resume never plans a topic twice, and a plan that died in
+   * flight is left out, its cost unknown. Absent in preparations made before plans.
+   */
+  plans: z.array(z.strictObject({ topic: text(120), scenarioId: id.optional(), reason: text(2000).optional() })).max(30).optional(),
 });
 export type CardPreparation = z.infer<typeof cardPreparationSchema>;
 
