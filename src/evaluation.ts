@@ -251,6 +251,7 @@ export async function evaluateTrial(input: {
   // The Lab's own refusal before the agent is contacted: its cause is set right before the throw, never read from the text.
   let refusal: InvalidCause | undefined;
   let stopped = false;
+  let handedOff = false;
   let finalUserReply = false;
   let reportedState = false;
   let controlled: ReturnType<typeof createUserState> | undefined;
@@ -349,7 +350,7 @@ export async function evaluateTrial(input: {
       const serviceMarker = target.serviceReplies?.find(marker => response.includes(marker));
       if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; trial.invalidCause = 'service_reply'; break; }
       // The agent passed the conversation to a person: it ends here, and it is judged as it went.
-      if (facts.outcome === 'handoff') { stopped = true; break; }
+      if (facts.outcome === 'handoff') { stopped = true; handedOff = true; break; }
       if (control || controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
       if (!controlled && !free && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
       if (userMode === 'scripted') {
@@ -410,10 +411,10 @@ export async function evaluateTrial(input: {
     // The agent answered the last message the run allows the customer while the talk was still going: the conversation
     // ends here as it stands. It is an observation about the agent's conversation, never a failed measurement.
     if (turn === settings.maxTurns) { stopped = true; trial.turnLimit = true; }
-    if (!control && free?.brief.turn?.required && !free.turned && stopped) {
-      refusal = 'simulator';
-      throw new Error('Обязательный поворот клиента не был отправлен агенту: ситуация не измерена.');
-    }
+    // The card's turn never came up: the agent handed the conversation to a person first, or never gave the customer its
+    // opening before the run's messages ran out. That is the agent's conversation, judged as it went; a customer who had
+    // the opening and let it pass is what the judge of its fidelity, which reads the turn in its brief, catches.
+    const turnMissed = !control && !!free?.brief.turn?.required && !free.turned && stopped;
     trial.finalState = structuredClone(state);
     // Simulator checks describe the user side only; they are computed before grading and never touch the outcome.
     trial.simulatorChecks = simulatorChecks(scenario, trial);
@@ -428,6 +429,8 @@ export async function evaluateTrial(input: {
     trial.reason ||= trial.checks.length === 0
       ? 'Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно.'
       : allPassed ? 'Все объективные проверки пройдены.' : 'Часть объективных проверок провалена.';
+    if (turnMissed) trial.reason += handedOff ? ' Поворот ситуации не состоялся: агент передал разговор человеку раньше.'
+      : ' Поворот ситуации не состоялся: за отведённые реплики агент не дал клиенту к нему повода.';
     if (trial.turnLimit) trial.reason += ' Клиенту не хватило реплик: разговор оценён таким, каким успел сложиться.';
     trial.reason += reportedState
       ? ' Состояние сообщил сам агент, доверенный код его не наблюдал.'
