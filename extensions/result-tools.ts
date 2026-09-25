@@ -1,4 +1,6 @@
-import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { relative, resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { judgeAgreement } from '../src/agreement.js';
@@ -10,6 +12,7 @@ import { isRunning } from '../src/phases.js';
 import { detectionLines, detectProject, evidenceText, targetLabel, type ProjectDetection } from '../src/detect.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { resultHash } from '../src/lab/record.js';
+import { suitePlace, type SuitePlace } from '../src/lab/run.js';
 import { countText } from '../src/plural.js';
 import { suiteHoldsLogs, suiteSavedText } from '../src/suite.js';
 import { accuracyRow, loggedTurns, logDisagreementRows, logQuestionText, saidText, trialTurns } from '../src/result-text.js';
@@ -18,7 +21,7 @@ import { clip, oneLine, safeText } from '../src/text.js';
 import { comparisonFeed, dialogueFeed, failureFeed, feedRows, progressText, row, runStamp, statusFeed } from './conversation.ts';
 import { busyFor, chatQueue, writer } from './decisions.ts';
 import { agreementTarget, blindCheck, judgeWord, markRefusal, recordLogMark, recordMark, seenVerdicts, type Answer } from './judge-review.ts';
-import { displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
+import { ask, displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { resultOutput } from './model-output.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
 import { projectPath } from './prepare-tool.ts';
@@ -63,6 +66,14 @@ function foundRows(found: ProjectDetection): { rows: Feed['rows']; more: Feed['r
     log ? `логи — ${log.file} (${countText(log.dialogues, CONVERSATIONS)})` : 'логов нет',
     ...(material ? [`материалы — ${material.folder} (${countText(material.documents, DOCUMENTS)})`] : []), ...(found.prompts.length ? [`промпты — ${found.prompts.length} на выбор`] : [])];
   return { rows: [row(`В папке: ${parts.join(' · ')}`, 'muted')], more: detectionLines(found).map(line => row(line, line && !line.startsWith(' ') ? 'accent' : undefined)) };
+}
+
+/** How a file is named to the owner: inside the project relative to it, elsewhere from ~. */
+function shownPath(file: string, cwd: string): string {
+  const inside = relative(cwd, file);
+  if (inside && !inside.startsWith('..')) return inside;
+  const home = homedir();
+  return file.startsWith(`${home}/`) ? `~/${file.slice(home.length + 1)}` : file;
 }
 
 /** The situation of `record` numbered `number`: a card's own number, the place in the run for older formats. */
@@ -112,9 +123,10 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
   });
   pi.registerTool({
     ...displayFor(TOOL.results), name: TOOL.results, label: 'The result of a run',
-    description: 'Read-only. The result of a run (the newest by default): the accuracy with its trust line and the comparison with production, the causes, every failure by its situation number, what was not measured. compare: this repeat against the run it repeats. report: saves the one-page report for the customer and says where. save: saves the run\'s situations as a suite file (a path such as .evals/regression.json); nothing runs. A suite made from logs holds the customers\' conversations: it stays on the owner\'s machine, out of Git.',
+    description: 'The result of a run (the newest by default): the accuracy with its trust line and the comparison with production, the causes, every failure by its situation number, what was not measured; nothing runs. compare: this repeat against the run it repeats. report: saves the one-page report for the customer and says where. save: saves the run\'s situations as a suite file. A suite made from logs holds the customers\' conversations: by default it goes into the project\'s .agent-lab beside the logs, private to the owner; a suite made from the rules alone goes into .evals/regression.json, where Git and CI take it. file: only a place the owner named themselves. The owner confirms natively before a suite with customers\' conversations leaves .agent-lab and before an existing file is replaced; you never pass that consent.',
     parameters: Type.Object({ run: runRef, compare: Type.Optional(Type.Literal(true)), report: Type.Optional(Type.Literal(true)),
-      save: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: 'Where to save the suite file.' })) }, closed),
+      save: Type.Optional(Type.Literal(true, { description: 'Save the run\'s situations as a suite file.' })),
+      file: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: 'With save: the place the owner named for the suite file. Omit it otherwise.' })) }, closed),
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -123,20 +135,7 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
         const lab = host.reading(directory);
         const record = recordFor(await lab.list(), params.run, 'results');
         const note = `Результат · ${runStamp(record)}`;
-        if (params.save) {
-          const file = await lab.saveSuite(record.id, projectPath(params.save, ctx.cwd));
-          const shown = file.replace(`${ctx.cwd}/`, '');
-          // A suite made from the logs holds the customers' conversations: the owner is told to keep it out of Git, in the
-          // same words as `agent-lab save-suite`. Only a suite without them gets the command for CI — in the owner's row alone.
-          const logs = suiteHoldsLogs(record);
-          const advice = suiteSavedText(record);
-          return host.feedResult(callId, { run: record.id, suite: file, holdsLogs: logs, advice,
-            instruction: logs ? 'The suite holds conversations from the owner\'s logs. Tell the owner in one sentence, as advice says: keep it out of Git and do not share it.'
-              : 'Tell the owner in one sentence that the suite can go into Git and run in their CI after every change of the agent; the command is shown to them.' },
-          { ...(logs ? { tone: 'warning' as const } : {}),
-            rows: [row(`Набор сохранён: ${safeText(shown)}`, 'text', true), row(advice, logs ? 'warning' : 'muted'),
-              ...(logs ? [] : [row(safeText(`В CI: agent-lab evaluate --input ${JSON.stringify(shown)} --yes`), 'muted')])] }, 'Набор сохранён');
-        }
+        if (params.save || params.file !== undefined) return await saveSuite(callId, ctx, lab, record, params.file, directory);
         if (!record.trials.length) return host.feedResult(callId, { run: record.id, result: null, instruction: 'This run has no result yet.' },
           { tone: 'warning', rows: [row('У этого прогона ещё нет результата.')] }, note);
         const bundle = await evidenceBundle(record, lab.store);
@@ -252,6 +251,45 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
       } catch (error) { return host.askOwner(callId, error); }
     },
   });
+
+  /**
+   * A run's situations saved as a suite file. One holding the customers' conversations goes beside the logs in the data
+   * folder, private, unless the owner agrees in a dialog that says what it holds to the place they named; a file already
+   * there is replaced only on their word. The owner hears where it is and what not to do with it, in the words of
+   * `agent-lab save-suite`; only a suite without conversations gets the command for CI.
+   */
+  async function saveSuite(callId: string, ctx: ExtensionContext, lab: ExperimentLab, record: Experiment, named: string | undefined, directory: string): Promise<AgentToolResult<unknown>> {
+    const declined = (instruction: string, text: string) => host.feedResult(callId, { run: record.id, saved: false, declined: true, instruction }, { tone: 'warning', rows: [row(text)] }, 'Набор не сохранён');
+    const logs = suiteHoldsLogs(record);
+    const safe = suitePlace(record, directory, ctx.cwd);
+    let place: SuitePlace = named === undefined ? safe : suitePlace(record, directory, ctx.cwd, projectPath(named, ctx.cwd));
+    if (logs && !place.private) {
+      requireInteractive(ctx, `Набор с разговорами клиентов сохраняется вне .agent-lab только после вашего согласия в интерактивном терминале Pi. Без пути он сохранится в ${shownPath(safe.file, ctx.cwd)}, закрыто.`);
+      const options = ['Сохранить туда', `Сохранить в ${shownPath(safe.file, ctx.cwd)}`, 'Не сохранять'].map(option => safeText(option));
+      const picked = await ctx.ui.select(safeText([`Сохранить набор с разговорами клиентов в ${shownPath(place.file, ctx.cwd)}?`, '',
+        'В наборе — разговоры клиентов из ваших логов, дословно, и записанные разговоры прогона.',
+        `Вне .agent-lab файл легко добавить в Git или переслать; в ${shownPath(safe.file, ctx.cwd)} он закрыт — только для вас.`].join('\n')), options);
+      if (picked === options[1]) place = safe;
+      else if (picked !== options[0]) return declined('The owner did not agree to save the suite there. Nothing was saved; do not ask again unless they do.', 'Набор не сохранён: вы не согласились.');
+    }
+    const shown = shownPath(place.file, ctx.cwd);
+    let replace = false;
+    if (existsSync(place.file)) {
+      requireInteractive(ctx, `Файл ${shown} уже есть: заменить его можно только с вашего согласия в интерактивном терминале Pi. Ничего не сохранено.`);
+      if (!await ask(ctx, `Файл ${shown} уже есть — заменить?`, ['Прежний набор в нём заменится этим.'], 'Заменить', 'Не сохранять')) {
+        return declined('The file exists and the owner did not replace it. Nothing was saved; do not ask again unless they do.', `Набор не сохранён: файл ${shown} остался прежним.`);
+      }
+      replace = true;
+    }
+    const file = await lab.saveSuite(record.id, place.file, undefined, { replace });
+    const advice = suiteSavedText(record, place);
+    return host.feedResult(callId, { run: record.id, suite: file, holdsLogs: logs, private: place.private, advice,
+      instruction: logs ? 'The suite holds conversations from the owner\'s logs. Tell the owner in one sentence where it is and, as advice says, that it stays out of Git and is not shared.'
+        : 'Tell the owner in one sentence that the suite can go into Git and run in their CI after every change of the agent; the command is shown to them.' },
+    { ...(logs && !place.private ? { tone: 'warning' as const } : {}),
+      rows: [row(`Набор сохранён: ${safeText(shownPath(file, ctx.cwd))}`, 'text', true), row(advice, logs ? 'warning' : 'muted'),
+        ...(logs ? [] : [row(safeText(`В CI: agent-lab evaluate --input ${JSON.stringify(shownPath(file, ctx.cwd))} --yes`), 'muted')])] }, 'Набор сохранён');
+  }
 
   /**
    * The owner's word on the judge's reading of a situation's logged conversation (docs/design/card-v2-spec.md §10.3): the

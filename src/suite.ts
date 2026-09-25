@@ -46,13 +46,14 @@ export function suiteHoldsLogs(definition: SuiteSource): boolean {
 
 /**
  * What the owner is told once a suite is saved, the same in the chat and in `agent-lab save-suite`. A suite made from the
- * logs holds the customers' conversations, and those stay on the owner's machine and never go into a repository; a suite
- * made from the owner's rules alone can live in Git and run after every change of the agent.
+ * logs holds the customers' conversations, and those stay on the owner's machine and never go into a repository —
+ * `private` when the file lies in the data folder, beside the logs; a suite made from the owner's rules alone can live
+ * in Git and run after every change of the agent.
  */
-export function suiteSavedText(definition: SuiteSource): string {
-  return suiteHoldsLogs(definition)
-    ? 'В наборе — разговоры клиентов из ваших логов: не добавляйте его в Git и не пересылайте. Храните его там же, где логи, — на этой машине, вне репозитория (например, в .agent-lab, закрытой в .gitignore).'
-    : 'Его можно добавить в Git и запускать после каждой правки агента.';
+export function suiteSavedText(definition: SuiteSource, place: { private: boolean }): string {
+  if (!suiteHoldsLogs(definition)) return 'Его можно добавить в Git и запускать после каждой правки агента.';
+  return place.private ? 'В наборе — разговоры клиентов из ваших логов. Файл лежит рядом с логами и закрыт — только для вас: не переносите его в репозиторий и не пересылайте.'
+    : 'В наборе — разговоры клиентов из ваших логов, а файл лежит вне папки Lab: не добавляйте его в Git и не пересылайте.';
 }
 
 /**

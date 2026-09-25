@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { ExperimentLab } from './experiment.js';
 import type { CreateOptions, PreparationOptions } from './lab/library.js';
 import { draftHash } from './lab/record.js';
+import { suitePlace } from './lab/run.js';
+import { suiteHoldsLogs, suiteSavedText } from './suite.js';
 import { demoInput } from './demo.js';
 import { createInputSchema, isRunnable, materialSources, runnableTarget, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
 import { compareRuns } from './comparison.js';
@@ -116,7 +119,7 @@ const writeStdout = (value: string): Promise<void> => new Promise((resolve, reje
  * (`env -u AGENT_LAB_SESSION …`), so the real guard is Pi asking the owner before it runs a shell command.
  */
 const IN_CHAT = process.env.AGENT_LAB_SESSION !== undefined;
-const CHAT_ASKS = 'Из чата Agent Lab команда с --yes не выполняется: в чате согласие на расход и решения спрашивает сам чат. '
+const CHAT_ASKS = 'Из чата Agent Lab команда с --yes, --allow-logs или --replace не выполняется: в чате согласие на расход, решения и то, куда уходят разговоры клиентов, спрашивает сам чат. '
   + 'Скажите обычными словами, что сделать, — Lab спросит вас. Ничего не записано и не потрачено.';
 
 /** Opens the data folder as its one writer for `work`; Ctrl+C closes it, and the work going on stops with its evidence kept. */
@@ -554,10 +557,27 @@ async function checkJudgeCommand({ values, directory }: CommandInput): Promise<v
   });
 }
 
+/**
+ * A run's situations as a suite file. One holding the customers' conversations goes beside the logs in the data folder,
+ * private, unless the owner names another place and says --allow-logs; an existing file is replaced only with
+ * --replace. The path goes to stdout for scripts, what the owner must know about the file to stderr — the chat's words.
+ */
 async function saveSuite({ values, directory }: CommandInput): Promise<void> {
   await asWriter(directory, async lab => {
-    if (!values.id || !values.output) throw new Error('Укажите --id RUN --output .evals/regression.json.');
-    process.stdout.write(`${await lab.saveSuite(values.id, values.output, values.case)}\n`);
+    if (!values.id) throw new Error('Укажите --id RUN; --output — только если набор нужен в другом месте.');
+    const record = await lab.get(values.id);
+    const place = suitePlace(record, directory, process.cwd(), values.output);
+    const safe = suitePlace(record, directory, process.cwd());
+    // Files in this folder are named as the owner would type them.
+    const shown = (file: string) => relative(process.cwd(), file).startsWith('..') ? file : relative(process.cwd(), file);
+    if (suiteHoldsLogs(record) && !place.private && !values['allow-logs']) {
+      throw new Error(`В наборе — разговоры клиентов из ваших логов, а ${shown(place.file)} — вне папки Lab: оттуда файл легко добавить в Git или переслать. `
+        + `Без --output набор сохранится в ${shown(safe.file)}, закрыто. Чтобы сохранить именно туда, повторите с --allow-logs. Ничего не записано.`);
+    }
+    if (existsSync(place.file) && !values.replace) throw new Error(`Файл ${shown(place.file)} уже есть. Чтобы заменить его, повторите с --replace. Ничего не записано.`);
+    const file = await lab.saveSuite(record.id, place.file, values.case, { replace: !!values.replace });
+    await writeStdout(`${file}\n`);
+    process.stderr.write(`${safeLine(suiteSavedText(record, place))}\n`);
   });
 }
 
@@ -846,7 +866,9 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     flags: ['id', 'planted', 'controls', 'yes', 'json'], run: checkJudgeCommand },
   export: { help: [['agent-lab export --id RUN --format html|markdown|json [--before RUN] [--output отчёт.html]', 'Отчёт для заказчика']], flags: ['id', 'format', 'before', 'output'], run: exportRun },
   diff: { help: [['agent-lab diff --before RUN --after RUN [--json]', 'Что сломалось и что исправилось между двумя прогонами']], flags: ['before', 'after', 'json'], run: diff },
-  'save-suite': { help: [['agent-lab save-suite --id RUN --output .evals/regression.json [--case ID]', 'Сохранить набор ситуаций в файл']], flags: ['id', 'output', 'case'], run: saveSuite },
+  'save-suite': { help: [['agent-lab save-suite --id RUN [--output файл.json] [--allow-logs] [--replace] [--case ID]',
+    'Сохранить набор ситуаций в файл. Набор с разговорами клиентов ложится в .agent-lab/suites, закрыто, а в другое место — только с --allow-logs; набор по одним правилам — в .evals для CI. --replace заменяет файл']],
+  flags: ['id', 'output', 'case', 'allow-logs', 'replace'], run: saveSuite },
   evaluate: { help: [['agent-lab evaluate --input .evals/regression.json --yes [--case ID] [--parallel 4] [--connection подключение.json] [--before RUN]', 'Прогнать сохранённый набор (CI)']],
     flags: ['input', 'yes', 'case', 'parallel', 'connection', 'before'], failure: 2, run: evaluate },
   suites: { help: [['agent-lab suites [--directory .evals]', 'Сохранённые наборы']], flags: ['directory'],
@@ -863,7 +885,7 @@ const INTRO = 'Agent Lab — насколько хорош ваш агент: т
 const CHAT: readonly (readonly [string, string])[] = [['agent-lab', 'Диалог с Agent Lab в текущем проекте'], ['agent-lab chat [опции Pi]', 'То же; задачу пишите обычными словами']];
 const RULES = [
   'evaluate, run и reassess: 0 — все оценки пройдены; 1 — зарегистрирован провал агента; 2 — ошибка теста или среды, неполные данные.',
-  '--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается. Из чата Agent Lab --yes не принимается: там согласие спрашивает сам чат.',
+  '--yes разрешает расход в пределах сохранённых лимитов; ручной оценкой ожиданий это не считается. Из чата Agent Lab --yes, --allow-logs и --replace не принимаются: там согласие спрашивает сам чат.',
 ];
 
 /**
@@ -885,7 +907,7 @@ async function main(): Promise<void> {
   if (args[0] === 'chat' || (!args.length && process.stdin.isTTY)) { await chat(args.slice(args[0] === 'chat' ? 1 : 0)); return; }
   const line = readCommandLine(args, name => COMMANDS[name]?.flags, Object.keys(COMMANDS).filter(name => COMMANDS[name]!.help.length));
   if (line.help || !line.name) { await writeStdout(helpText(line.name)); return; }
-  if (line.values.yes && IN_CHAT) throw new Error(CHAT_ASKS);
+  if ((line.values.yes || line.values['allow-logs'] || line.values.replace) && IN_CHAT) throw new Error(CHAT_ASKS);
   await COMMANDS[line.name]!.run({ values: line.values, directory: line.values['data-dir'] ?? resolve('.agent-lab') });
 }
 

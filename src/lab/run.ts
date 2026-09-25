@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { mkdir, readFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { assessmentRubrics } from '../assessment.js';
 import { runCalls, type PlannedAttempt } from '../card/budget.js';
 import { calibrateRun } from '../card/calibrate.js';
@@ -23,7 +23,8 @@ import { evaluatorVersion } from '../pi.js';
 import { countText } from '../plural.js';
 import { deriveRun, plannedTrials } from '../run.js';
 import { verifyAcceptedRun } from '../scenario-library.js';
-import { SUITE_FORMAT, carriedImports, suiteText } from '../suite.js';
+import { SUITE_FORMAT, carriedImports, suiteHoldsLogs, suiteText } from '../suite.js';
+import { createFileExclusive, writeFileAtomic } from '../fs-atomic.js';
 import { preflightTarget, readPrompt, runRelease } from '../targets.js';
 import { sameTargetVersion, targetFingerprint } from '../target-version.js';
 import type { Lab } from './context.js';
@@ -126,8 +127,31 @@ export function repeat(lab: Lab, id: string, scenarioIds?: string[], controlScen
   });
 }
 
-/** A versionable local definition: provenance survives, run results and approvals do not; a card library's logs travel with it (suite.ts). */
-export async function saveSuite(lab: Lab, id: string, file: string, scenarioIds?: string[]): Promise<string> {
+/** Whether `file` lies inside `folder` (or is it). */
+const inside = (folder: string, file: string): boolean => {
+  const path = relative(resolve(folder), resolve(file));
+  return !path.startsWith('..') && !isAbsolute(path);
+};
+
+/** Where a suite goes and whether the file stays private: the data folder is the owner's alone (0700), any other place is not. */
+export interface SuitePlace { file: string; private: boolean }
+
+/**
+ * Where a suite of `record` goes when the owner names no file: one holding the customers' conversations (suite.ts
+ * suiteHoldsLogs) beside the logs in the data folder `directory`, private to the owner; one from the rules alone in
+ * the project's `.evals`, where Git and CI can take it. A named file is private only inside the data folder.
+ */
+export function suitePlace(record: Experiment, directory: string, project: string, named?: string): SuitePlace {
+  const file = resolve(named ?? (suiteHoldsLogs(record) ? join(directory, 'suites', 'regression.json') : join(project, '.evals', 'regression.json')));
+  return { file, private: inside(directory, file) };
+}
+
+/**
+ * A versionable local definition: provenance survives, run results and approvals do not; a card library's logs travel
+ * with it (suite.ts). The file is the owner's alone (0600, its new folders 0700); one already there is replaced only
+ * with `replace` — the owner's word —, otherwise the save is refused before anything is written.
+ */
+export async function saveSuite(lab: Lab, id: string, file: string, scenarioIds?: string[], options: { replace?: boolean } = {}): Promise<string> {
   const previous = await lab.get(id);
   if (previous.workflow !== 'evaluate' || !previous.scenarios.length || isRunning(previous.phase)) throw new Error('Сначала дождитесь готовых тестов.');
   const definition = freshDraft(previous, scenarioIds);
@@ -135,8 +159,9 @@ export async function saveSuite(lab: Lab, id: string, file: string, scenarioIds?
   if (previous.trials.length) definition.sourceEvidence = suiteEvidence(previous, definition.scenarios.map(s => s.id));
   const path = resolve(file);
   const text = await suiteText(lab.store, definition, portableTarget(definition.target, dirname(path)));
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, text, { flag: 'wx', mode: 0o600 });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  if (options.replace) await writeFileAtomic(path, text);
+  else if (!await createFileExclusive(path, text)) throw new Error(`Файл ${path} уже есть: набор не сохранён, прежний файл не тронут.`);
   return path;
 }
 
