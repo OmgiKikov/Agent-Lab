@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { judgeAuditSchema, type JudgeAudit } from './assessment.js';
 import { judgeCheckSchema, type JudgeCheck } from './judge-check.js';
 import { experimentSchema, fingerprint, type Experiment, type TraceEvent } from './contracts.js';
-import { createFileExclusive, writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
+import { createFileExclusive, syncDirectory, writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
 import { clearGate, find, HEARTBEAT_MS, held, provedDead, sameFound, SYSTEM, tokenNow, type Found, type Processes } from './folder-lock.js';
 import type { GeneratorEvidence } from './generator-evidence.js';
 import { libraryHash } from './scenario-library.js';
@@ -215,7 +215,28 @@ export class ExperimentStore {
   private async saveRecord(validated: Experiment): Promise<void> {
     this.assertWriting('Для изменения записи откройте лабораторию как писатель.');
     if (validated.librarySnapshot) await this.files().retainLibrary(validated.librarySnapshot);
+    // A checkpoint covers the evidence its record points at: the dialogue lines and the judges' audits reach the disk first.
+    await this.flushEvidence(validated.id);
     await writeFileAtomic(this.path(validated.id), JSON.stringify(validated, null, 2));
+  }
+  /**
+   * What a record's work wrote since its last checkpoint without flushing it: the trace journal, which takes a line per
+   * event of every dialogue, and the folders of the audits replaced at every vote — too many to flush one by one. They are
+   * flushed at the record's next checkpoint (saveRecord). The other journals flush every line: one per call or verdict.
+   */
+  private readonly unflushed = new Map<string, Set<string>>();
+  private written(id: string, path: string): void {
+    const paths = this.unflushed.get(id) ?? new Set<string>();
+    paths.add(path); this.unflushed.set(id, paths);
+  }
+  private async flushEvidence(id: string): Promise<void> {
+    const paths = this.unflushed.get(id);
+    if (!paths) return;
+    this.unflushed.delete(id);
+    for (const path of paths) {
+      if (path.endsWith('.jsonl')) { const file = await open(path, 'r'); try { await file.sync(); } finally { await file.close(); } }
+      else await syncDirectory(path);
+    }
   }
   async get(id: string): Promise<Experiment> {
     const file = await open(this.path(id), 'r');
@@ -262,7 +283,9 @@ export class ExperimentStore {
     this.assertWriting('Для записи трассы откройте лабораторию как писатель.');
     this.path(id);
     if (!isIdentifier(trialId)) throw new Error('Invalid trial ID');
-    appendFileSync(join(this.directory, `${id}.trace.jsonl`), `${JSON.stringify({ trialId, event })}\n`, { mode: 0o600 });
+    const path = join(this.directory, `${id}.trace.jsonl`);
+    appendFileSync(path, `${JSON.stringify({ trialId, event })}\n`, { mode: 0o600 });
+    this.written(id, path);
   }
   /** Same writer as the library; each raw attempt is durable before parsing or another call. */
   appendGeneratorEvidence(id: string, event: GeneratorEvidence): void {
@@ -351,6 +374,7 @@ export class ExperimentStore {
     const content = JSON.stringify(judgeAuditSchema.parse(audit));
     mkdirSync(join(this.directory, `${id}.${folder}`), { recursive: true, mode: 0o700 });
     writeFileAtomicSync(target, content);
+    this.written(id, join(this.directory, `${id}.${folder}`));
   }
   private async readAudit(id: string, folder: AuditFolder, name: string): Promise<JudgeAudit | null> {
     const target = this.auditPath(id, folder, name);
