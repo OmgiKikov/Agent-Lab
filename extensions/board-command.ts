@@ -25,7 +25,7 @@ import { safeLine, safeText } from '../src/text.js';
 import { launchLines, progressText, scenarioPlan } from './conversation.ts';
 import { applyRulebookChange, applySituationCommand, logsOf, settle, writer, type DecisionSurface } from './decisions.ts';
 import type { LabHost } from './host.ts';
-import { recordLogMark, recordMark } from './judge-review.ts';
+import { blindCheck, recordLogMark, recordMark } from './judge-review.ts';
 import { ask, boardDiscussionContext, inputError, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun } from './launch.ts';
 import type { SessionOperation } from './operations.ts';
@@ -362,6 +362,11 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             const artifacts = await exportArtifacts(await evidenceBundle(record, reading().store), directory);
             await (options.openReport ?? openFile)(artifacts.htmlReport).then(() => inform(`Отчёт для заказчика открыт в браузере: ${artifacts.htmlReport.replace(`${ctx.cwd}/`, '')}`),
               () => inform(`Отчёт для заказчика сохранён: ${artifacts.htmlReport.replace(`${ctx.cwd}/`, '')}`));
+            continue;
+          }
+          if (action.type === 'blind') {
+            const { notice } = await blindCheck(ctx, work => writing(work), () => reading().get(action.runId));
+            inform(notice);
             continue;
           }
           if (action.type === 'mark_log') {

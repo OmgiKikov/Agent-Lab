@@ -10,6 +10,7 @@ function entries(view: ResultView): { title: string; note?: string; pick: Result
       case 'why_unmeasured': return [{ title: `Разобрать ${step.count} ситуаций без оценки`, pick: { kind: 'unmeasured' } as ResultPick }];
       case 'check_connection': return [{ title: 'Проверить подключение и контрольные ситуации', pick: { kind: 'connection' } as ResultPick }];
       case 'review_judge': return [{ title: 'Проверить оценки судьи', note: 'Открыть разговор и сверить вывод с ответом агента', pick: { kind: 'review' } as ResultPick }];
+      case 'blind_check': return [{ title: 'Проверить судью вслепую', note: `${step.left} ответов агента — оценить, не видя вердиктов судьи`, pick: { kind: 'blind' } as ResultPick }];
       case 'repeat': return [{ title: 'Повторить проверку', pick: { kind: 'repeat' } as ResultPick }];
       case 'report': return [{ title: 'Сохранить отчёт', pick: { kind: 'report' } as ResultPick }];
       case 'wait': return [];

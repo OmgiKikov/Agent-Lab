@@ -71,6 +71,8 @@ export type WorkspaceAction =
   | { type: 'run' }
   | { type: 'stop' }
   | { type: 'report'; runId: string }
+  /** The judge's blind check of a run: the owner labels its expectations in native dialogs, without the judge's verdicts. */
+  | { type: 'blind'; runId: string }
   /** `seen`: the judge's decision the owner was answering; the lab refuses when the recorded one moved meanwhile. */
   | { type: 'mark'; runId: string; trialId: string; answer: Answer; readingMs: number; seen: 'pass' | 'fail' }
   /** The same about the judge's reading of a situation's logged conversation; `seen`: its verdicts the owner was shown, by receipt. */
@@ -379,6 +381,7 @@ export class LabWorkspace implements Component {
         return;
       }
       case 'report': return this.finish({ type: 'report', runId: run.record.id });
+      case 'blind': return this.finish({ type: 'blind', runId: run.record.id });
       case 'repeat': return this.finish({ type: 'run' });
       // The unmeasured situations and their reasons are in the details of the same screen.
       case 'unmeasured': this.state.details = true; this.state.selected[this.listKey()] = 0; this.home(); this.redraw(); return;

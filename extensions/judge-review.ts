@@ -7,10 +7,13 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { resultHash } from '../src/lab/record.js';
 import { markTargets, measurementUsable } from '../src/outcomes.js';
 import { buildResultView } from '../src/result-view.js';
-import type { JudgeAnswer } from '../src/result-text.js';
+import { blindText, trialTurns, type JudgeAnswer } from '../src/result-text.js';
+import { blindQueue, blindSample, type BlindItem } from '../src/blind.js';
+import { situationNumber } from '../src/card/view.js';
+import { countText } from '../src/plural.js';
 import { cardVerdict, headlineCardOutcome } from '../src/run.js';
 import { headlineRule } from '../src/card/expectations.js';
-import { clip, oneLine, safeLine } from '../src/text.js';
+import { clip, oneLine, safeLine, safeText } from '../src/text.js';
 
 /*
  * «Проверить, прав ли судья» (docs/design/ui-spec.md §4.8): the owner's own word on the judge's decision about one situation — the
@@ -223,4 +226,64 @@ function markNotice(record: Experiment, after: Experiment, scenario: Experiment[
   const still = parts.goal === 'fail' && parts.rules === 'fail' ? 'запрос не выполнен, нарушены правила промпта' : parts.goal === 'fail' ? 'запрос не выполнен'
     : parts.rules === 'fail' ? 'нарушены правила промпта' : 'другие ожидания не выполнены';
   return `Отмечено: не согласен · «${title}». Ситуация остаётся «не справился»: ${still}.`;
+}
+
+/* ───────────────────────────── the blind check ───────────────────────────── */
+
+/** The owner's answers in a blind check, as the label each writes; the last one pauses the check. */
+const BLIND_ANSWERS = [
+  { label: 'Выполнил', verdict: 'pass' as const, note: 'Слепая оценка: агент выполнил ожидание.' },
+  { label: 'Не выполнил', verdict: 'fail' as const, note: 'Слепая оценка: агент не выполнил ожидание.' },
+  { label: 'Из разговора не понять', verdict: 'unknown' as const, note: 'Слепая оценка: из разговора не понять.' },
+  { label: 'Само ожидание неверное', verdict: 'invalid' as const, note: 'Слепая оценка: ожидание неверное — ошибка ситуации, а не агента.' },
+];
+const BLIND_PAUSE = 'Хватит на сейчас';
+
+/** One expectation as the owner reads it blind: the situation, what the customer wanted, the expectation with its ways, the whole conversation — never the judge's verdict. */
+function blindQuestion(record: Experiment, item: BlindItem, place: number, of: number): string {
+  const trial = record.trials.find(entry => entry.id === item.trialId);
+  const scenario = record.scenarios.find(entry => entry.id === item.scenarioId);
+  const library = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot : undefined;
+  const card = library?.cards.find(entry => entry.id === item.scenarioId);
+  const duty = card?.agentMust.find(entry => entry.id === item.metricId);
+  const number = situationNumber(record, item.scenarioId, record.scenarios.findIndex(entry => entry.id === item.scenarioId) + 1);
+  return [`Слепая проверка судьи · ${place} из ${of}. Вердикт судьи не показывается.`, '',
+    `Ситуация ${number} «${oneLine(scenario?.title ?? '')}»`,
+    ...(card ? [`Клиент хотел: ${oneLine(card.client.wants)}`] : []),
+    `Ожидание ${item.letter}: ${duty?.strength === 'must_not' ? 'нельзя — ' : ''}${oneLine(item.text)}`,
+    ...(duty?.acceptable ? [`  допустимо: ${oneLine(duty.acceptable)}`] : []), ...(duty?.violation ? [`  нарушение: ${oneLine(duty.violation)}`] : []),
+    '', 'Разговор:', ...trialTurns(trial).map(turn => `  ${turn.who}: ${clip(turn.text, 600)}`), '',
+    'Выполнил ли агент это ожидание?'].join('\n');
+}
+
+/**
+ * The judge's blind check (src/blind.ts), one expectation at a time in native dialogs: the owner labels what they see
+ * without the judge's verdict, each label written at once, so a pause loses nothing and the check continues where it
+ * stopped. `write` holds the writer's lease for one label; `read` reads the run fresh. The notice says how far the check
+ * got and how the judge compares; undefined when the owner stopped before the first label.
+ */
+export async function blindCheck(ctx: Pick<ExtensionContext, 'ui'>, write: <T>(work: (lab: ExperimentLab) => Promise<T>) => Promise<T>,
+  read: () => Promise<Experiment>, options: { limit?: number } = {}): Promise<{ notice: string; labelled: number }> {
+  let record = await read();
+  const total = blindSample(record).length;
+  if (!total) return { notice: 'Проверять вслепую нечего: в прогоне нет оценок судьи по ожиданиям ситуаций.', labelled: 0 };
+  let labelled = 0;
+  for (let item = blindQueue(record)[0]; item && labelled < (options.limit ?? total); item = blindQueue(record)[0]) {
+    const place = total - blindQueue(record).length + 1;
+    const started = performance.now();
+    const picked = await ctx.ui.select(safeText(blindQuestion(record, item, place, total)), [...BLIND_ANSWERS.map(answer => answer.label), BLIND_PAUSE]);
+    const answer = BLIND_ANSWERS.find(entry => entry.label === picked);
+    if (!answer) break;
+    const current = item;
+    await write(lab => lab.addHumanReview(record.id, { trialId: current.trialId, metricId: current.metricId, source: 'blind', verdict: answer.verdict, note: answer.note,
+      durationMs: Math.min(3600000, Math.round(performance.now() - started)) }));
+    labelled++;
+    record = await read();
+  }
+  const blind = buildResultView(record).blind;
+  const left = blindQueue(record).length;
+  const verdict = blindText({ blind }) ?? 'Слепых оценок пока нет.';
+  const misses = blind?.falsePasses.slice(0, 3).map(diff => `ситуация ${situationNumber(record, diff.scenarioId, 0)}, ожидание ${diff.letter} — «${clip(oneLine(diff.text), 80)}»`) ?? [];
+  return { labelled, notice: [verdict, ...(misses.length ? [`Судья сказал «справился», а вы — нет: ${misses.join('; ')}.`] : []),
+    left ? `Осталось ${countText(left, ['оценка', 'оценки', 'оценок'])}: проверку можно продолжить.` : 'Слепая проверка закончена.'].join(' ') };
 }

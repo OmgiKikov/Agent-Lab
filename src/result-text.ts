@@ -273,9 +273,9 @@ export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: st
 /** Three separate evidence statements. Agreement and consistency never certify correctness. */
 export function evaluationEvidenceLines(view: ResultView): string[] {
   const { agreement, simulator, headline, notMeasured } = view;
-  const judge = agreement.checked
+  const judge = blindText(view) ?? (agreement.checked
     ? `Судья: человек согласился в ${agreement.agreed} из ${agreement.checked} проверенных разговоров; это сверка после показа оценки, не слепая калибровка.`
-    : 'Судья: ручной сверки оценок этого прогона пока нет.';
+    : 'Судья: ручной сверки оценок этого прогона пока нет.');
   const customer = simulator?.conversations
     ? `Клиент: соблюдение карточки подтверждено моделью в ${simulator.passed} из ${simulator.conversations} разговоров; нарушений ${simulator.failed}, без вывода ${simulator.unknown}, без проверки ${simulator.notChecked}.${simulator.heuristicFlags ? ` Отдельно эвристики отметили ${simulator.heuristicFlags} разговоров для разбора.` : ''}`
     : 'Клиент: реактивное поведение в этом прогоне не измерено.';
@@ -287,6 +287,21 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
     : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';
   const realism = realismText(view);
   return [judge, customer, ...(realism ? [realism.text] : []), metric, bounds];
+}
+
+/**
+ * The judge against the owner's blind labels (blind.ts): how often they agree, and each kind of disagreement — the false
+ * «справился» first: an error of the agent the number hides. Null before the first label.
+ */
+export function blindText(view: Pick<ResultView, 'blind'>): string | null {
+  const blind = view.blind;
+  if (!blind?.labelled) return null;
+  const decided = blind.agreed + blind.falsePasses.length + blind.falseFails.length;
+  const parts = [`ложных «справился» — ${blind.falsePasses.length}`, `ложных «не справился» — ${blind.falseFails.length}`,
+    ...(blind.judgeUndecided ? [`судья не решил, где решили вы, — ${blind.judgeUndecided}`] : []), ...(blind.ownerUnsure ? [`вы не смогли решить — ${blind.ownerUnsure}`] : []),
+    ...(blind.wrongExpectations ? [`ожидание неверно — ${blind.wrongExpectations}`] : [])];
+  const tail = blind.falsePasses.length ? ' Судья пропускал ошибки агента: где оценивал только он, процент может быть завышен.' : '';
+  return `Судья, слепая проверка: совпал с вами в ${blind.agreed} из ${countText(decided, ['оценки', 'оценок', 'оценок'])}; ${parts.join(', ')}${blind.labelled < blind.drawn ? ` (размечено ${blind.labelled} из ${blind.drawn})` : ''}.${tail}`;
 }
 
 /** A mean as a person reads it: «1,5», «3». */
@@ -605,6 +620,7 @@ export function nextStepText(step: NextStep): string {
       ];
       return `Проверить, прав ли судья — ${parts.join(', ')}`;
     }
+    case 'blind_check': return `Проверить судью вслепую — ${countText(step.left, ['оценка', 'оценки', 'оценок'])} без его вердиктов`;
     case 'why_unmeasured': return `Посмотреть, почему не измерено ${countText(step.count, SITUATIONS)}`;
     case 'repeat': return 'Повторить прогон на новой версии агента';
     case 'report': return 'Отчёт для заказчика';
@@ -617,6 +633,7 @@ function chatNextText(step: NextStep): string {
     case 'check_connection': return 'Дальше: проверьте связь с агентом — скажите «проверь подключение».';
     case 'wait': return 'Дальше: дождитесь конца прогона — результат придёт сюда.';
     case 'review_judge': return 'Дальше: проверьте, прав ли судья, — скажите «покажи ошибку 1».';
+    case 'blind_check': return 'Дальше: проверьте судью вслепую — скажите «проверь судью вслепую»: вы оцените ответы агента, не видя его вердиктов.';
     case 'why_unmeasured': return 'Дальше: спросите, почему ситуации не измерены.';
     case 'repeat': return 'Дальше: исправьте агента и скажите «повтори прогон».';
     case 'report': return 'Дальше: скажите «отчёт для заказчика».';
@@ -629,6 +646,7 @@ function cliNextText(step: NextStep, runId: string): string {
     case 'check_connection': return 'Проверьте подключение: agent-lab doctor --yes';
     case 'wait': return 'Дождитесь конца прогона';
     case 'review_judge': return 'Проверьте, прав ли судья: откройте прогон в Pi (/agent-lab)';
+    case 'blind_check': return 'Проверьте судью вслепую: откройте прогон в Pi (/agent-lab)';
     case 'why_unmeasured': return 'Причины — в списке «Не измерено» выше';
     case 'repeat': return `Повторите прогон: agent-lab repeat --id ${runId}`;
     case 'report': return `Отчёт для заказчика: agent-lab export --id ${runId} --format html`;

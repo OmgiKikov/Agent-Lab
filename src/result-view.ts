@@ -17,6 +17,7 @@ import { judgeCheckSummary, type JudgeCheck, type JudgeCheckSummary } from './ju
 import { roleChoices } from './llm/models.js';
 import { simulatorEvidence, type SimulatorEvidence } from './simulator-evidence.js';
 import { planOutcomes, type ScenarioOutcome } from './card/plan.js';
+import { blindAgreement, type BlindAgreement } from './blind.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -105,6 +106,8 @@ export type NextStep =
   | { kind: 'wait' }
   /** The judge's failures and sampled passes still wait for the owner's «да» or «нет». */
   | { kind: 'review_judge'; failures: number; passes: number; unsure: number }
+  /** The judge was never checked blind: `left` expectations wait for the owner's labels, given without its verdicts (blind.ts). */
+  | { kind: 'blind_check'; left: number }
   /** Nothing was decided: the reasons of the unmeasured situations are the next thing to read. */
   | { kind: 'why_unmeasured'; count: number }
   | { kind: 'repeat' }
@@ -198,6 +201,11 @@ export interface ResultView {
    * assessment, apart from its fidelity to the situation. Absent without a situation from a log. Never changes the headline.
    */
   realism?: Realism;
+  /**
+   * The judge's blind check (blind.ts): the owner's labels of up to twenty expectations given without its verdicts,
+   * against them. Absent for a run nothing can be drawn from. A label decides its expectation like any full review.
+   */
+  blind?: BlindAgreement;
   /** How much of the logs' traffic the counted situations cover: a run of cards sampled from logs whose topics were mapped; null otherwise. */
   topicCoverage: TopicCoverage | null;
   /** Found flips against the source run; absent when there is nothing to compare with. Never changes the headline. */
@@ -343,7 +351,9 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   const { alarm, total } = view.notMeasured;
   const why: NextStep[] = total ? [{ kind: 'why_unmeasured', count: total }] : [];
   // Too many situations unmeasured: why is the first thing to read, before any verdict of the judge.
-  const steps: NextStep[] = [...(alarm ? why : []), ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
+  // The judge is checked blind first, before any of its verdicts is shown: an owner who saw them would only agree.
+  const blind: NextStep[] = view.blind && view.blind.labelled < view.blind.drawn ? [{ kind: 'blind_check', left: view.blind.drawn - view.blind.labelled }] : [];
+  const steps: NextStep[] = [...(alarm ? why : []), ...blind, ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
   const after = alarm ? [] : why;
   if (!view.headline.decided) return [...steps, ...after];
   const failed = view.headline.decided > view.headline.passed;
@@ -451,6 +461,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const operability = operabilityOf(record);
   if (operability) view.operability = operability;
   if (record.realism) view.realism = structuredClone(record.realism);
+  const blind = blindAgreement(record);
+  if (blind) view.blind = blind;
   const clarity = clarityOf(record, counted);
   if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});

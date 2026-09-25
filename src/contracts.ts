@@ -437,8 +437,11 @@ export const humanReviewInputSchema = z.strictObject({
   trialId: identifier, metricId: identifier.optional(), checkId: identifier.optional(),
   verdict: z.enum(['pass', 'fail', 'unknown', 'invalid']), note: text.max(3000),
   durationMs: z.number().int().nonnegative().max(3600000).optional(),
-  /** A one-key agreement mark on a metric that decided the situation (outcomes.ts markTargets). */
-  source: z.literal('quick').optional(),
+  /**
+   * `quick`: a one-key agreement mark on a metric that decided the situation (outcomes.ts markTargets). `blind`: the
+   * owner's label of one expectation given without seeing the judge's verdict (blind.ts) — the judge's calibration.
+   */
+  source: z.enum(['quick', 'blind']).optional(),
   /** The recorded judge result the person saw; filled and checked by the lab, never trusted from a caller. */
   judgeVerdict: z.enum(['pass', 'fail', 'unknown']).optional(),
   /** The judgment the person agreed or disagreed with; absent when the trial has neither receipt nor audit (demo). */
@@ -446,7 +449,8 @@ export const humanReviewInputSchema = z.strictObject({
   /** The counting rule a quick mark was given under (COUNTING_RULES); filled by the lab, never trusted from a caller. */
   countingRules: text.optional(),
 }).refine(v => !(v.metricId && v.checkId), 'Review either one metric, one check, or the whole trial')
-  .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.');
+  .refine(v => v.source !== 'quick' || (!!v.metricId && v.verdict !== 'invalid'), 'Быстрая отметка ставится на одну оценку судьи.')
+  .refine(v => v.source !== 'blind' || !!v.metricId, 'Слепая оценка ставится на одно ожидание.');
 export type HumanReviewInput = z.infer<typeof humanReviewInputSchema>;
 /**
  * A stored verdict. `reviewedDialogue` marked, before cards, a whole-dialogue review whose note cited an event as `#N`.
