@@ -359,6 +359,7 @@ export function situationData(view: SituationView) {
     knows: view.brief.knows.map((fact, index) => ({ ...(view.refs.knows[index] ? { id: view.refs.knows[index] } : {}), ...fact })),
     leaves: view.brief.leaves, turn: view.brief.turn, ...(view.brief.filled ? { filledOverMasks: view.brief.filled } : {}),
     must: view.brief.must.map((duty, index) => ({ ...(view.refs.must[index] ? { id: view.refs.must[index] } : {}), ...duty })),
+    ...(view.brief.references ? { references: view.brief.references } : {}),
     ...questionData(view), ...(view.problems.length ? { problems: view.problems } : {}),
   };
 }
