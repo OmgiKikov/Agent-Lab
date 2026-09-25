@@ -22,15 +22,16 @@ export { missingVariables } from './targets.js';
  *        ──owner confirms──► second message in the same conversation ──► connection.json + Lab's remembered connection
  *
  * What the builder reads is the owner's own example request — its secrets already placeholders — and the agent's
- * replies to Lab's fixed test phrases, never a customer's conversation. Its answer is a proposal: every reference is
- * an enum of this call, and the owner confirms or corrects it in a native dialog. Without a model the owner picks
- * from the same lists.
+ * replies to Lab's fixed test phrases, never a customer's conversation; the request only once the owner chose to let
+ * it read (the offer in the owner's own pick of the field), the replies as the consent to the test messages says.
+ * Its answer is a proposal: every reference is an enum of this call, and the owner confirms or corrects it in a native
+ * dialog. Without a model the owner picks from the same lists.
  */
 
 /** The project file the chat writes; the command line may name another. */
 export const CONNECTION_FILE = 'connection.json';
 /** One answer and one repair per reading: each proposal costs at most two calls. */
-const READING_ATTEMPTS = 2;
+export const READING_ATTEMPTS = 2;
 const REASON_CHARS = 160;
 /** How much of a reply field the builder reads, and how many fields. */
 const REPLY_TEXT_CHARS = 500;
