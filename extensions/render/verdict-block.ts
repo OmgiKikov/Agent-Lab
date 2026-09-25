@@ -106,15 +106,18 @@ export function storedLines(result: Pick<AgentToolResult<unknown>, 'content'>): 
   return lines;
 }
 
+/** The stored lines a reopened result shows folded: the alarm or the number and the trust line under it, not the fine print. */
+const STORED_HEAD = 3;
+
 /**
- * A result drawn from its stored lines: the head of the screen — the number, its trust — under the branch sign, the
- * rest on ctrl+o. The lines keep the one-column margin they were laid out with, as the block's own rows do.
+ * A result drawn from its stored lines: the start of the screen's head — the number and its trust — under the branch
+ * sign, the rest on ctrl+o. The lines keep the one-column margin they were laid out with, as the block's own rows do.
  */
 export class StoredVerdict implements Component {
   private readonly head: string[];
   constructor(private readonly lines: string[], private readonly expanded: boolean, private readonly theme: PaintTheme, private readonly hint: (expanded: boolean) => string) {
     const end = lines.findIndex(line => !line.trim());
-    this.head = end < 0 ? lines : lines.filter((_, index) => index < end);
+    this.head = (end < 0 ? lines : lines.filter((_, index) => index < end)).slice(0, STORED_HEAD);
   }
   invalidate(): void {}
   render(width: number): string[] {

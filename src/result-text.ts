@@ -685,10 +685,10 @@ export function disagreementRows(view: ResultView): ResultRow[] {
 /** The fix a connection's exam asks for, by how it ended: every surface says it first while the percent waits. */
 const EXAM_STEP: Readonly<Record<ExamWithheld, { board: string; chat: string; cli: string }>> = {
   absent: { board: 'Добавить экзамен подключения — без него процент не считается',
-    chat: 'Дальше: добавьте экзамен подключения — скажите «составь экзамен подключения»: без него процент не считается.',
+    chat: 'Дальше: добавьте экзамен подключения — скажите «составь экзамен».',
     cli: 'Добавьте экзамен подключения: раздел exam в файле подключения, затем agent-lab doctor --connection подключение.json --yes' },
   failed: { board: 'Исправить подключение: экзамен не пройден — без него процент не считается',
-    chat: 'Дальше: исправьте подключение — экзамен не пройден, процент не считается; скажите «проверь подключение».',
+    chat: 'Дальше: исправьте подключение — скажите «проверь подключение».',
     cli: 'Исправьте подключение и сдайте экзамен: agent-lab doctor --connection подключение.json --yes' },
 };
 
@@ -720,7 +720,7 @@ function chatNextText(step: NextStep): string {
     case 'check_connection': return 'Дальше: проверьте связь с агентом — скажите «проверь подключение».';
     case 'wait': return 'Дальше: дождитесь конца прогона — результат придёт сюда.';
     case 'review_judge': return `Дальше: проверьте, прав ли судья, — скажите ${step.situation === null ? '«покажи ошибки»' : `«разбери ситуацию ${step.situation}»`}.`;
-    case 'blind_check': return 'Дальше: проверьте судью вслепую — скажите «проверь судью вслепую»: вы оцените ответы агента, не видя его вердиктов.';
+    case 'blind_check': return 'Дальше: скажите «проверь судью вслепую» — вы оцените ответы агента, не видя его оценок.';
     case 'why_unmeasured': return 'Дальше: спросите, почему ситуации не измерены.';
     case 'repeat': return 'Дальше: исправьте агента и скажите «повтори прогон».';
     case 'report': return 'Дальше: скажите «отчёт для заказчика».';
@@ -789,19 +789,48 @@ export function resultScreen(view: ResultView, options: { surface: 'board' | 'cl
 }
 
 /**
- * The chat block (docs/design/ui-spec.md §4.10). Collapsed: the number, the trust line, the calibration line and the causes in one row.
- * Expanded: the number, the trust and reality lines, every cause with its example, the unmeasured
- * situations, what the result does not prove and «Дальше». The host adds the ctrl+o hint under the last row.
+ * Whether to believe the number, in one line of the collapsed chat block: the alarm when there is one; otherwise the trust
+ * line without its reading note (what the number is read over stays in the full line), with whether the agent answered
+ * at all. Null when there is nothing to say.
+ */
+function believeRow(view: ResultView): ResultRow | null {
+  const alarm = alarmRow(view);
+  if (alarm) return alarm;
+  const segments = trustSegments(view);
+  const said = [...(segments.length > 1 ? segments.slice(1) : segments), ...(operabilityShort(view) ? [{ text: operabilityShort(view)!, warn: true }] : [])];
+  if (!said.length) return null;
+  const parts = said.map((part, i) => i ? part.text : part.text.charAt(0).toLocaleUpperCase('ru') + part.text.slice(1));
+  return { role: said.some(part => part.warn) ? 'trust:small' : 'trust', indent: 2, text: parts.join(' · '), parts };
+}
+
+/** «без ответа агента — 2 из 20 разговоров»: the operability line in a few words, for the collapsed chat block. */
+function operabilityShort(view: Pick<ResultView, 'operability'>): string | null {
+  const found = view.operability;
+  const total = found ? found.noReply + found.serviceReply + found.broken : 0;
+  return found && total ? `без ответа агента — ${total} из ${countText(found.conversations, CONVERSATIONS_OF)}` : null;
+}
+
+/**
+ * The chat block (docs/design/ui-spec.md §4.10). Collapsed, a few lines at 80 columns and no fine print: the number (with
+ * the alarm above it when there is one), whether to believe it, the main cause of failure — the cause, never a
+ * situation's title — and what to do next; when the next step is the judge's blind check it comes before the cause, so
+ * the owner checks the judge before reading its verdicts. Expanded: the whole head with its evidence, the scenarios,
+ * every cause with its example, the unmeasured situations, what the result does not prove and «Дальше». The host adds
+ * the ctrl+o hint under the last row.
  */
 export function chatBlock(view: ResultView, options: { expanded: boolean }): ResultRow[] {
-  const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
   if (!options.expanded) {
-    const { items, more, moreText } = causeItems(view);
-    const causeParts = [...items.map(cause => `${cause.text} (${cause.count})`), ...(more ? [moreText] : [])];
-    const noErrors = view.failures.length ? [] : causeRows(view).map(row => ({ ...row, indent: 2 }));
-    return [...head.filter(row => row.role !== 'reality'), ...noErrors,
-      ...(causeParts.length ? [{ role: 'muted' as const, indent: 2, text: `Чаще всего: ${causeParts.join(' · ')}`, parts: [`Чаще всего: ${causeParts[0]}`, ...causeParts.slice(1)] }] : [])];
+    const believe = believeRow(view);
+    const [top] = causeItems(view).items;
+    const cause: ResultRow[] = top ? [{ role: 'muted', indent: 2, text: `Чаще всего — ${top.text}`, right: countText(top.count, SITUATIONS), short: String(top.count) }]
+      : causeRows(view).map(row => ({ ...row, indent: 2 }));
+    const next = nextRows(view, 'chat').map(row => ({ ...row, indent: 2 }));
+    const blindFirst = view.next[0]?.kind === 'blind_check';
+    // The alarm stands above the number, as on every surface; it then says whether to believe it.
+    const head = believe?.role === 'alarm' ? [believe, accuracyRow(view)] : [accuracyRow(view), ...(believe ? [believe] : [])];
+    return [...head, ...(blindFirst ? [...next, ...cause] : [...cause, ...next])];
   }
+  const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
   const indent = (rows: ResultRow[]) => rows.map(row => ({ ...row, indent: row.indent + 2 }));
   const blocks = [head, indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
