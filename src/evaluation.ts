@@ -205,6 +205,8 @@ export async function evaluateTrial(input: {
   sources: Source[]; judgeSources?: Source[]; requirements: Requirement[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
   control?: boolean;
   onStage?(stage: 'target' | 'user' | 'assessment'): void;
+  /** Awaited before each message goes to the agent: the connection exam takes turns among conversations held open together (exam.ts). */
+  beforeTurn?(turn: number): Promise<void>;
 }): Promise<Trial> {
   const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, control, onStage } = input;
   const target = runnableTarget(input.target);
@@ -315,6 +317,7 @@ export async function evaluateTrial(input: {
     let userMessage = scenario.user.opening;
     let turn = 0;
     for (; turn < settings.maxTurns; turn += 1) {
+      await input.beforeTurn?.(turn);
       ctx.signal.throwIfAborted();
       // A press goes to the agent as the button's own text, whatever case or spacing the customer wrote it in.
       const choice = pressOf(offered, userMessage);

@@ -99,7 +99,8 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
   const value = percentOf(view);
   if (value === null) {
     const { passed, decided } = view.headline;
-    const unexamined = view.connection === 'absent' ? 'подключение агента не проверено экзаменом' : view.connection === 'failed' ? 'подключение агента не прошло экзамен' : null;
+    const unexamined = view.connection === 'absent' ? 'подключение агента не проверено экзаменом' : view.connection === 'failed' ? 'подключение агента не прошло экзамен'
+      : view.connection === 'simple' ? 'экзамен подключения слишком простой — нет проверки памяти разговора' : null;
     const tail = view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
       : view.pending ? `считается — ждут проверки ${countText(view.pending, SITUATIONS)}`
       : unexamined && decided ? `не считается: ${unexamined}. Справился в ${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}, ошибся в ${decided - passed}`

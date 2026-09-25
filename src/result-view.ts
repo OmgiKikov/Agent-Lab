@@ -139,7 +139,7 @@ export interface ResultView {
    * The connection exam the run took before its first dialogue (exam.ts): unless it passed, no percent is shown — the
    * headline's, the topics' or the bounds' — while the counts stay. Absent for runs made before the exam existed.
    */
-  connection?: 'passed' | 'failed' | 'absent';
+  connection?: 'passed' | 'failed' | 'absent' | 'simple';
   /** How many reactive conversations actually had a semantic customer assessment. */
   simulator?: SimulatorEvidence;
   runId: string;

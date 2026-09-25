@@ -507,7 +507,8 @@ const toolChannelSchema = z.strictObject({ confirmed: z.boolean(), tools: z.arra
 /**
  * What the connection exam (exam.ts) saw before a run's first dialogue: each path and step, the turn the agent gave and
  * whether it was the one the path expects. `absent` — the connection has no exam: the run is measured, its percent is
- * not shown (result-view.ts). Absent in runs made before the exam existed; a re-assessment carries its run's.
+ * not shown (result-view.ts); `simple` — every path passed, but none checks the conversation's memory (exam.ts), so it
+ * counts as no exam. Absent in runs made before the exam existed; a re-assessment carries its run's.
  */
 export const EXAM_TURNS = ['reply', 'buttons', 'handoff', 'no_reply', 'empty', 'service', 'missing'] as const;
 export type ExamTurn = typeof EXAM_TURNS[number];
@@ -519,7 +520,7 @@ const realismSideSchema = z.strictObject({ messages: z.number().nonnegative(), w
 export const realismSchema = z.strictObject({ conversations: z.number().int().positive(), synthetic: realismSideSchema, logged: realismSideSchema });
 export type Realism = z.infer<typeof realismSchema>;
 export const examResultSchema = z.strictObject({
-  checkedAt: z.string(), status: z.enum(['passed', 'failed', 'absent']),
+  checkedAt: z.string(), status: z.enum(['passed', 'failed', 'absent', 'simple']),
   paths: z.array(z.strictObject({ name: z.string().max(200), passed: z.boolean(), steps: z.array(z.strictObject({
     said: z.string().max(3000), pressed: z.boolean(), expect: z.enum(['reply', 'buttons', 'handoff']), got: z.enum(EXAM_TURNS),
     passed: z.boolean(), problem: z.string().max(1000).optional(), status: z.string().max(200).optional(),
