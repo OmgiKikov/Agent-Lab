@@ -10,7 +10,7 @@ import { MATERIAL_EXTENSIONS, materialText } from './materials.js';
 import { codePrompts, jsonPrompts, MIN_PROMPT_CHARS, type PromptCandidate } from './prompt-candidates.js';
 import { countText, pluralForm } from './plural.js';
 import { logImport, sampleWords } from './scenario-library.js';
-import { codeFacts, codeHasWord, FACTORY, languageOf } from './source-facts.js';
+import { codeFacts, codeHasWord, FACTORY, languageOf, type CodeFacts, type Language } from './source-facts.js';
 import { proposeTableBytes } from './spreadsheet/import.js';
 import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 
@@ -32,6 +32,8 @@ export type AgentEvidence =
   | { kind: 'script'; file: string; name: string; command: string }  // package.json: scripts.start = python agent.py
   | { kind: 'factory'; file: string }                                 // exports createSession returning a session with respond
   | { kind: 'json_lines'; file: string }                              // reads requests from stdin line by line, answers JSON
+  | { kind: 'runs'; file: string; helper: string }                    // a program that runs the JSON-lines loop a helper module defines
+  | { kind: 'no_entry'; file: string }                                // defines its loop, but started it runs nothing
   | { kind: 'protocol_fields'; file: string }                         // names the fields of an Agent Lab request
   | { kind: 'url'; file: string; url: string }                        // a local address under a key that names the agent
   | { kind: 'interpreter'; file: string };                            // the project's own Python environment: .venv/bin/python
@@ -335,8 +337,23 @@ const ownConnection = (item: AgentEvidence): boolean => item.kind === 'connectio
  */
 function confidence(evidence: AgentEvidence[]): Confidence {
   const kinds = new Set(evidence.map(item => item.kind));
+  if (evidence.some(ownConnection)) return 'high';
+  // A loop nothing starts is no program: whatever its file shows, it is at most a guess.
+  if (kinds.has('no_entry')) return 'low';
   const contract = kinds.has('factory') || kinds.has('json_lines');
-  return evidence.some(ownConnection) || contract && kinds.has('protocol_fields') ? 'high' : contract ? 'medium' : 'low';
+  return contract && kinds.has('protocol_fields') ? 'high' : contract ? 'medium' : 'low';
+}
+
+/**
+ * The files a Python import names, nearest first: `lab.protocol` → lab/protocol.py or lab/protocol/__init__.py beside
+ * the importing file, then at the project root; a relative `.protocol` only from the importing file's package.
+ */
+function pythonModule(module: string, dir: string, root: string): string[] {
+  let dots = 0;
+  while (module[dots] === '.') dots++;
+  const parts = module.slice(dots).split('.').filter(Boolean);
+  const bases = dots ? [resolve(dir, ...Array<string>(dots - 1).fill('..'))] : [dir, root];
+  return bases.flatMap(base => parts.length ? [`${join(base, ...parts)}.py`, join(base, ...parts, '__init__.py')] : [join(base, '__init__.py')]);
 }
 
 /** Looks through the project folder and proposes the agent connection, the logs, the materials and the prompt. Read-only. */
@@ -395,6 +412,8 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     ? { command: join(root, python), evidence: [{ kind: 'interpreter', file: python }] } : { command, evidence: [] };
   // Constants of every source file, so a system message naming a constant of another module finds it there.
   const constants: { file: string; names: Map<string, string> }[] = [], systemNames = new Set<string>();
+  // Every source file is read first: which program runs the loop a helper module defines shows only once both are.
+  const sources: { file: Entry; language: Language; facts: CodeFacts; factory: boolean }[] = [];
   for (const file of walked.files) {
     const language = languageOf(file.path), name = basename(file.path);
     if (!language || name.includes('.test.') || name.includes('.spec.')) continue;
@@ -403,13 +422,32 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     const found = codePrompts(source, language, file.rel);
     prompts.push(...found.candidates); constants.push({ file: file.rel, names: found.constants });
     for (const system of found.systemNames) systemNames.add(system);
-    const facts = codeFacts(source, language), script = scripts.find(item => item.entry === file.path);
+    const facts = codeFacts(source, language);
     // A module is the agent by its contract, not by a name: Next.js keeps a createSession for its logins, with no respond.
-    const factory = facts.factory && codeHasWord(source, language, 'respond');
-    if (!factory && !facts.jsonLines) continue;
+    sources.push({ file, language, facts, factory: facts.factory && codeHasWord(source, language, 'respond') });
+  }
+  // A program that imports a helper's JSON-lines loop and runs it is the agent; the helper alone runs nothing.
+  const loops = new Map(sources.filter(item => item.facts.jsonLines).map(item => [item.file.path, item]));
+  const helpersOf = new Map<Entry, (typeof sources)[number][]>(), run = new Set<string>();
+  for (const item of sources) if (item.facts.entry) for (const module of item.facts.runs) {
+    const helper = pythonModule(module, dirname(item.file.path), root).map(path => loops.get(path)).find(found => found !== undefined);
+    if (!helper || helper === item) continue;
+    helpersOf.set(item.file, [...helpersOf.get(item.file) ?? [], helper]);
+    run.add(helper.file.path);
+  }
+  for (const { file, language, facts, factory } of sources) {
+    const script = scripts.find(item => item.entry === file.path), helpers = helpersOf.get(file) ?? [];
+    if (!factory && !facts.jsonLines && !helpers.length) continue;
+    // A helper whose loop a program of the project runs is proposed as that program, unless a package script starts it itself.
+    if (!factory && run.has(file.path) && !script) continue;
     const started = interpreter(script ? script.argv[0]! : language === 'python' ? 'python3' : 'node');
-    const evidence: AgentEvidence[] = [...(script ? [script.evidence] : []), { kind: factory ? 'factory' : 'json_lines', file: file.rel },
-      ...(facts.protocol ? [{ kind: 'protocol_fields' as const, file: file.rel }] : []), ...(factory ? [] : started.evidence)];
+    const evidence: AgentEvidence[] = [...(script ? [script.evidence] : []),
+      ...(factory || facts.jsonLines ? [{ kind: factory ? 'factory' as const : 'json_lines' as const, file: file.rel }, ...(facts.protocol ? [{ kind: 'protocol_fields' as const, file: file.rel }] : [])] : []),
+      ...helpers.flatMap((helper): AgentEvidence[] => [{ kind: 'runs', file: file.rel, helper: helper.file.rel }, { kind: 'json_lines', file: helper.file.rel },
+        ...(helper.facts.protocol ? [{ kind: 'protocol_fields' as const, file: helper.file.rel }] : [])]),
+      // Started as it is, a file that only defines its loop — no `__main__` guard, no call, no package script — runs nothing.
+      ...(!factory && !facts.entry && !script ? [{ kind: 'no_entry' as const, file: file.rel }] : []),
+      ...(factory ? [] : started.evidence)];
     add(`file:${file.path}`, factory ? { kind: 'module', path: file.path }
       : script ? { kind: 'command', command: started.command, args: script.argv.slice(1), cwd: script.cwd }
       : { kind: 'command', command: started.command, args: [file.rel], cwd: root }, evidence);
@@ -474,6 +512,8 @@ export function evidenceText(evidence: AgentEvidence): string {
     case 'script': return `${evidence.file}: scripts.${evidence.name} = ${evidence.command}`;
     case 'factory': return `${evidence.file}: объявляет ${FACTORY} — Lab подключит модуль напрямую`;
     case 'json_lines': return `${evidence.file}: читает запросы из stdin построчно и отвечает JSON`;
+    case 'runs': return `${evidence.file}: запускает цикл запросов из ${evidence.helper}`;
+    case 'no_entry': return `${evidence.file}: только объявляет цикл запросов — запущенный сам по себе, файл ничего не делает`;
     case 'protocol_fields': return `${evidence.file}: знает поля запроса Agent Lab (sessionId, initialState)`;
     case 'url': return `${evidence.file}: адрес ${evidence.url}`;
     case 'interpreter': return `${evidence.file}: окружение Python проекта — агент запустится с его пакетами`;
