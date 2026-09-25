@@ -1,10 +1,12 @@
-import { MASKED_REASON, NO_CUSTOMER_REASON } from '../scenario-library.js';
+import { MASK_VERSION } from '../masking.js';
+import { EVENTS_REASON, MASKED_REASON, NO_CUSTOMER_REASON } from '../scenario-library.js';
 import { analyzeSheet, columnNames, type SheetAnalysis } from './analysis.js';
 import { importTable, type TablePreview } from './dialogues.js';
 import { findColumn, tableMappingSchema, toColumn, type ColumnInfo, type MarkerRole, type RepeatJudgement, type Role, type TableChoices, type TableMapping } from './mapping.js';
 import type { TableProposal } from './proposal.js';
 import { frequentCopies } from './repeats.js';
-import { conversationRows, selectableColumns, whereOutcome } from './selection.js';
+import { conversationRows, selectableColumns, whereOutcome, type ValueCount, type WhereChoice } from './selection.js';
+import type { Sheet } from './sheet.js';
 import type { TableFile, Workbook } from './workbook.js';
 
 /*
@@ -14,6 +16,9 @@ import type { TableFile, Workbook } from './workbook.js';
  * next to the other; nearly every conversation read, and why the rest are left out; every value of a role column
  * decided; copies not passed over. A reading that fails says why in words its model can act on: the repair loop of
  * the model's task sends them back verbatim.
+ *
+ * Both readings of a table — this one and Lab's own (proposal.ts) — end the same way (applyReading): the conversations
+ * the owner keeps, the copies read once when that was chosen, and the numbers of the import, counted once.
  */
 
 /** How the messages are told apart, every part decided; a marker decided as `text` is a word of the messages. */
@@ -30,11 +35,16 @@ export interface CompleteReading {
   where?: { column: string; values?: string[] };
 }
 
-/** Each side writes at least this share of the other side's messages: a side near zero was read into the other's messages. */
+/** Each side writes at least this share of the other side's messages: a side near zero was read into the other side's messages. */
 const PLAUSIBLE_SIDE = 0.1;
 /** A real export has a few odd rows; a reading that leaves out more than this share of the conversations reads the table wrong. */
 const LEFT_OUT = 0.1;
-const DATA_REASONS: ReadonlySet<string> = new Set([MASKED_REASON, NO_CUSTOMER_REASON]);
+/**
+ * Reasons that are the data, whatever the reading: customer messages hidden by de-identification, a customer who
+ * opened a chat and left, a conversation longer than one import keeps. A reading that misses the customer
+ * everywhere is caught by the sides.
+ */
+const DATA_REASONS: ReadonlySet<string> = new Set([MASKED_REASON, NO_CUSTOMER_REASON, EVENTS_REASON]);
 
 const quoted = (text: string) => `"${text}"`;
 
@@ -66,6 +76,37 @@ type Where = Extract<TableProposal, { status: 'question' }> & { question: { kind
 /** The reading applied: a ready proposal, the owner's question of which values to keep, or why it does not read the table. */
 export type ExactOutcome = { proposal: Omit<Ready, 'basis'> | Omit<Where, 'basis'> } | { problem: string };
 
+/** What every proposal of a sheet says of the file: its sheets, the header row, the columns. */
+export function proposalBase(workbook: Workbook, file: TableFile, sheet: Sheet, a: SheetAnalysis): Omit<Ready, 'status' | 'mapping' | 'preview' | 'selectable' | 'basis'> {
+  return { file, sheets: workbook.sheets.map(item => item.name), sheet: sheet.name, ...workbook.csv ? { csv: workbook.csv } : {}, headerRow: a.header + 1, columns: a.columns };
+}
+
+/** A mapping of `sheet` in its file's format, read by today's table of masks; undefined parts are the caller's to check. */
+export const sheetMapping = (workbook: Workbook, sheet: Sheet, a: SheetAnalysis, parts: Pick<TableMapping, 'id' | 'text' | 'layout'>): unknown =>
+  ({ version: 1, source: workbook.csv ? { format: 'csv', ...workbook.csv } : { format: 'xlsx', sheet: sheet.name }, headerRow: a.header + 1, ...parts, maskVersion: MASK_VERSION });
+
+/** A reading applied: the owner's choice of conversations refused (`issue`) or asked (`ask`), or the mapping and what it reads. */
+export type AppliedReading =
+  | { issue: string }
+  | { ask: { column: ColumnInfo; values: ValueCount[]; more: number }; found: number }
+  | { mapping: TableMapping; preview: TablePreview; selectable: ColumnInfo[] };
+
+/**
+ * A complete reading of `sheet` applied once: the owner's choice of conversations (`where`), then every row read —
+ * with copied exchanges read once when `collapse` says so, which is how its numbers are counted and checked. Collapsing
+ * where nothing is copied changes nothing: the mapping records it only when copies were dropped.
+ */
+export function applyReading(sheet: Sheet, a: SheetAnalysis, reading: TableMapping, where: WhereChoice | undefined, collapse: boolean | undefined): AppliedReading {
+  const conversations = conversationRows(sheet, reading, a.rows);
+  const selection = whereOutcome(sheet, reading, conversations, where);
+  if ('issue' in selection) return selection;
+  if ('ask' in selection) return { ask: selection.ask, found: conversations.length };
+  const chosen = selection.filter ? tableMappingSchema.parse({ ...reading, filter: selection.filter }) : reading;
+  const trial = collapse ? tableMappingSchema.parse({ ...chosen, collapseRepeats: true }) : chosen;
+  const { preview } = importTable(sheet, trial);
+  return { mapping: collapse && preview.repeats ? trial : chosen, preview, selectable: selectableColumns(sheet, reading, conversations, a.columns) };
+}
+
 /**
  * Applies `reading` to every row of its sheet and checks the outcome. `judged` is the model's own conclusion about
  * copies, checked against the counted copies; absent when the owner decided them.
@@ -76,22 +117,14 @@ export function readExactly(workbook: Workbook, file: TableFile, reading: Comple
   const a = analyzeSheet(sheet);
   const resolved = resolve(a, reading);
   if ('problem' in resolved) return resolved;
-  const parsed = tableMappingSchema.safeParse({ version: 1, source: workbook.csv ? { format: 'csv', ...workbook.csv } : { format: 'xlsx', sheet: sheet.name },
-    headerRow: a.header + 1, id: toColumn(resolved.id), text: toColumn(resolved.text), layout: resolved.layout });
+  const parsed = tableMappingSchema.safeParse(sheetMapping(workbook, sheet, a, { id: toColumn(resolved.id), text: toColumn(resolved.text), layout: resolved.layout }));
   if (!parsed.success) return { problem: `This reading is not possible: ${parsed.error.issues.map(issue => issue.message).join('; ')}.` };
-  const conversations = conversationRows(sheet, parsed.data, a.rows);
-  const selection = whereOutcome(sheet, parsed.data, conversations, resolved.where);
-  const base = { file, sheets: workbook.sheets.map(item => item.name), sheet: sheet.name, ...workbook.csv ? { csv: workbook.csv } : {}, headerRow: a.header + 1, columns: a.columns };
-  if ('issue' in selection) return { problem: `The conversations cannot be chosen that way: ${selection.issue}` };
-  if ('ask' in selection) return { proposal: { ...base, status: 'question', question: { kind: 'where', ...selection.ask }, found: conversations.length } };
-  const chosen = selection.filter ? { ...parsed.data, filter: selection.filter } : parsed.data;
-  const { preview } = importTable(sheet, chosen);
-  const problem = readingProblem(a, chosen, preview, judged);
-  if (problem) return { problem };
-  // Collapsing where nothing is copied changes nothing: the mapping records it only when copies were dropped.
-  const mapping = reading.collapseRepeats && preview.repeats ? tableMappingSchema.parse({ ...chosen, collapseRepeats: true }) : chosen;
-  return { proposal: { ...base, status: 'ready', mapping, preview: mapping === chosen ? preview : importTable(sheet, mapping).preview,
-    selectable: selectableColumns(sheet, parsed.data, conversations, a.columns) } };
+  const applied = applyReading(sheet, a, parsed.data, resolved.where, reading.collapseRepeats);
+  const base = proposalBase(workbook, file, sheet, a);
+  if ('issue' in applied) return { problem: `The conversations cannot be chosen that way: ${applied.issue}` };
+  if ('ask' in applied) return { proposal: { ...base, status: 'question', question: { kind: 'where', ...applied.ask }, found: applied.found } };
+  const problem = readingProblem(a, applied.mapping, applied.preview, judged);
+  return problem ? { problem } : { proposal: { ...base, status: 'ready', mapping: applied.mapping, preview: applied.preview, selectable: applied.selectable } };
 }
 
 type Resolved = { id: ColumnInfo; text: ColumnInfo; layout: TableMapping['layout']; where?: { column: ColumnInfo; values?: string[] } };
@@ -115,7 +148,8 @@ function resolve(a: SheetAnalysis, reading: CompleteReading): Resolved | { probl
 
 /**
  * Why the outcome of a reading shows it does not read the table, in the order a fix should take: every role value
- * decided, the conversations read, both sides present and plausible, every marker used, copies decided on.
+ * decided, the conversations read, both sides present and plausible, every marker used, copies decided on. The
+ * outcome is the one the mapping reads: with the copies read once when the reading drops them.
  */
 function readingProblem(a: SheetAnalysis, mapping: TableMapping, preview: TablePreview, judged: RepeatJudgement | undefined): string | undefined {
   const layout = mapping.layout;
@@ -129,8 +163,6 @@ function readingProblem(a: SheetAnalysis, mapping: TableMapping, preview: TableP
     const undecided = [...written].filter(value => !decided.has(value));
     if (undecided.length) return `Values ${undecided.slice(0, 12).map(quoted).join(', ')} of the role column ${quoted(layout.role.header)} have no role in roles: give each of them one.`;
   }
-  // Customer messages hidden by de-identification, or a customer who opened a chat and left, are the data, not the
-  // reading; a reading that misses the customer everywhere is caught below, by the sides.
   const reasons = preview.rejected.filter(item => !DATA_REASONS.has(item.reason));
   const left = reasons.reduce((sum, item) => sum + item.count, 0);
   if (left > considered * LEFT_OUT) {

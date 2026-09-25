@@ -8,7 +8,7 @@ import { addCard, createLibraryV2 } from '../src/card/library.js';
 import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, type DialogueProposal, type ProposalCall } from '../src/card/proposal.js';
 import { cardSchema, libraryV2Schema, type Card, type LibraryV2 } from '../src/card/schema.js';
 import { cardStatus } from '../src/card/status.js';
-import { unmaskCommand, unmaskProblem, unmaskRequest, unmaskSchema } from '../src/card/unmask.js';
+import { fillSlip, unmaskCommand, unmaskProblem, unmaskRequest, unmaskSchema } from '../src/card/unmask.js';
 import { briefRows, cardSituation, changeText } from '../src/card/view.js';
 import { fingerprint } from '../src/contracts.js';
 import { CommandRefused } from '../src/errors.js';
@@ -85,7 +85,56 @@ test('a value of the wrong kind, a mark again or a masked fact goes back to the 
   assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_0 = { kind: 'count', value: 'три' }; }), masked)!, /m0_0.*count: write digits only/);
   assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_1 = { kind: 'amount', value: 'пятьсот' }; }), masked)!, /amount: write it with digits/);
   assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_2 = { kind: 'other', value: '*' }; }), masked)!, /still holds a masking character/);
+  // The table of masks reads «xxx» and «ХХХ» as marks: written in for a mark, they are a mark again.
+  for (const value of ['xxx', 'ХХХ', 'Иван Хххх']) assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_2 = { kind: 'other', value }; }), masked)!, /still holds a masking character/, value);
   assert.match(cardProposalProblem(proposal(made => { made.knows[0]!.value = '###'; }), masked)!, /knows\[0\] "Номер терминала": the value "###" is a masking mark/);
+});
+
+test('a product, a number sign and a Roman numeral are no masks: nothing is filled in, and the situation stays in the check against production', () => {
+  const plain = importBatch([{ id: 'plain', messages: [
+    { role: 'user', content: 'Заказ # 123: пришло 5 * 3 = 15 штук, как в XXX веке. Верните деньги за лишние.' },
+    { role: 'assistant', content: 'Проверю заказ.' },
+    { role: 'user', content: 'Спасибо!' },
+  ] }]);
+  const logged = plain.dialogues[0]!;
+  const made = proposalCall({ source: { kind: 'dialogue', batchId: plain.id, dialogueId: logged.id }, messages: loggedMessages(logged), sources, maxTurns: 6 });
+  assert.deepEqual(made.masked, [], 'no slot for the model to invent a value in');
+  const unfilled = proposal(item => { delete item.masked; item.knows = []; item.coverage = { 2: { as: 'stop', reason: null } }; });
+  const card = bindProposal(unfilled, made, 1);
+  assert.equal(card.filled, undefined);
+  assert.deepEqual(unusableFindings(card, { evidence: importEvidence([plain]), maxTurns: 6 }), []);
+  assert.equal(cardExclusion(card), undefined, 'the logged situation, checked against production');
+});
+
+test('a value that reads as a mark itself — xxx, ХХХ, a tag — goes back with its reason instead of leaving the card masked', () => {
+  const masked = call();
+  for (const value of ['xxx', 'ХХХ', 'хххх', '<PHONE>', '[скрыто]', '###', 'ул. *']) {
+    assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_2 = { kind: 'other', value }; }), masked) ?? '', /masked\["m0_2"\]: ".*" still holds a masking character/, value);
+  }
+  // What such a value would have made: an opening that reads a mark again, a card that cannot be a test.
+  const marked = bindProposal(proposal(made => { made.masked!.m0_2 = { kind: 'other', value: 'ХХХ' }; }), masked, 1);
+  assert.equal(marked.client.writes, 'С утра было 3 покупки, на 500 ₽ и ХХХ, терминал пишет «нет связи».');
+  assert.deepEqual(unusableFindings(marked, { evidence, maxTurns: 6 }), [{ check: 'masked-opening' }]);
+  assert.equal(fillSlip('m0_2', { kind: 'name', value: 'Ирина' }), undefined);
+});
+
+test('a mark longer than a card keeps is shortened where it is shown; the card binds and the owner\'s fill applies', () => {
+  const mark = '*'.repeat(70);
+  const long = importBatch([{ id: 'long-mark', messages: [{ role: 'user', content: `Курьер не приехал по адресу ${mark}, верните оплату.` }, { role: 'assistant', content: 'Уточняю.' }] }]);
+  const longCall = proposalCall({ source: { kind: 'dialogue', batchId: long.id, dialogueId: 'long-mark' }, messages: loggedMessages(long.dialogues[0]!), sources, maxTurns: 6 });
+  const answer: DialogueProposal = { ...proposal(), knows: [], coverage: {}, masked: { m0_0: { kind: 'address', value: 'ул. Садовая, 5' } } };
+  assert.equal(cardProposalProblem(answer, longCall), undefined);
+  const card = bindProposal(answer, longCall, 1);
+  assert.equal(card.client.writes, 'Курьер не приехал по адресу ул. Садовая, 5, верните оплату.');
+  assert.equal(card.filled![0]!.mark, `${'*'.repeat(59)}…`);
+  // The same mark filled later, by the owner's confirmed command.
+  const bare = bindProposal({ ...answer, masked: undefined } as DialogueProposal, { ...longCall, masked: [] }, 1);
+  const library = addCard(createLibraryV2({ id: 'library_long_mark', imports: [{ id: long.id, contentHash: long.contentHash }], sources,
+    requirements: [{ ...refundRule, sourceId: 'source-1' }], createdAt: '2026-09-24T10:00:00.000Z' }), bare, { dialogueId: 'long-mark', batchId: long.id, sourceIds: ['source-1'] });
+  const longEvidence = importEvidence([long]);
+  const prepared = prepareCommand(library, { kind: 'fill_masked', cardId: bare.id, spans: [{ event: { batchId: long.id, dialogueId: 'long-mark', eventIndex: 0 }, span: 0, kind: 'address', value: 'ул. Садовая, 5' }], facts: [] },
+    { ...context, evidence: longEvidence });
+  assert.equal(prepared.next.cards[0]!.filled![0]!.mark.length, 60);
 });
 
 test('when filling fails the check stays: the opening keeps its marks, the card is not ready and says Lab can fill it', () => {
@@ -119,6 +168,8 @@ test('an existing card is filled by one builder answer turned into one command t
   const answer = { slots: structuredClone(FILLS), facts: { f1: '4471' } };
   assert.equal(unmaskSchema(request).safeParse(answer).success, true);
   assert.match(unmaskProblem(request, { ...answer, facts: { f1: '9999' } })!, /facts\.f1: "9999" is not in message 2/, 'a fact reads as its message does with the values in');
+  assert.match(unmaskProblem(request, { ...answer, facts: { f1: 'xxxx' } })!, /facts\.f1: "xxxx" still holds a masking character/);
+  assert.match(unmaskProblem(request, { ...answer, slots: { ...answer.slots, m0_0: { kind: 'other', value: 'ХХХ' } } })!, /m0_0: "ХХХ" still holds a masking character/);
   assert.equal(unmaskProblem(request, answer), undefined);
 
   const command = unmaskCommand(request, answer);

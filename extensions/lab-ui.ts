@@ -103,6 +103,7 @@ const AGENT: Record<AgentRequestFailed['kind'], string> = {
   unreachable: 'Агент не отвечает. Проверьте, что он запущен и доступен, и повторите.',
   timeout: 'Агент не ответил вовремя. Проверьте его и повторите.',
   status: 'Агент ответил ошибкой. Посмотрите его журнал и повторите.',
+  tls: 'Сертификат агента не прошёл проверку. Укажите корневой сертификат (CA) в NODE_EXTRA_CA_CERTS и перезапустите Pi.',
 };
 /** The fields an input names, as the owner calls them. */
 const FIELD: Readonly<Record<string, string>> = {
@@ -157,7 +158,9 @@ function knownText(error: unknown): string | undefined {
   if (error instanceof CommandRefused || error instanceof UnknownReference) return error.message;
   if (error instanceof Stopped) return STOPPED[error.reason];
   if (error instanceof ProviderFailure) return error.kind === 'unavailable' && forOwner(error.message) ? error.message : PROVIDER[error.kind];
-  if (error instanceof AgentRequestFailed) return error.kind === 'status' && error.status !== undefined ? `Агент ответил ошибкой ${error.status}. Посмотрите его журнал и повторите.` : AGENT[error.kind];
+  // The target names the cause in the owner's words (an expired or untrusted certificate, a refused port); the table is the fallback.
+  if (error instanceof AgentRequestFailed) return error.kind === 'status' ? (error.status !== undefined ? `Агент ответил ошибкой ${error.status}. Посмотрите его журнал и повторите.` : AGENT.status)
+    : forOwner(error.message) ? error.message : AGENT[error.kind];
   if (error instanceof StructuredTaskError) { diagnose(error); return 'Модель Lab несколько раз ответила не в том виде; ничего не записано. Повторите позже или выберите другую модель (/model).'; }
   if (error instanceof z.ZodError) return `Не получилось: ${zodText(error)}. Ничего не записано.`;
   // The engine's own refusals are plain errors worded for the owner; a plain error in English is a diagnostic.

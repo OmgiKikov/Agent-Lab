@@ -1,9 +1,9 @@
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { CONNECTION_FORMAT, rememberConnection, saveConnection, TOOL_PROBE_OPENING, type Connection } from './connection.js';
-import { conversationFields, type CurlFields, type CurlReady } from './curl.js';
+import { conversationFields, type CurlField, type CurlFields, type CurlReady, type Place } from './curl.js';
 import { AgentRequestFailed } from './errors.js';
-import { stringFields, templateVariables } from './http-template.js';
+import { atPointer, pointerTokens, stringFields } from './http-template.js';
 import type { StructuredTask, TaskRunner } from './llm/structured.js';
 import type { BuilderModel } from './miner/topic-map.js';
 import { CONNECT_REPLY_ROLE, CONNECT_REQUEST_ROLE } from './prompts.js';
@@ -11,17 +11,20 @@ import type { CallContext } from './runtime.js';
 import type { TemplateTarget } from './targets.js';
 import { clip } from './text.js';
 
+export { missingVariables } from './targets.js';
+
 /*
  * Connecting an agent in its own request format from the owner's curl, the part the chat and the command line share.
  *
- *   curl ──connectionFromCurl──► request fields ──conversation: by key names (structure)──┐
- *                                              └─message: the only text field, or the builder's pick (enum of pointers)
+ *   curl ──connectionFromCurl──► request fields ──conversation: by key names and turns (structure)──┐
+ *                                              └─message: the last turn, the only text field, or the builder's pick (enum of pointers)
  *        ──owner confirms──► test message ──reply fields──► the reply's text: the only one, or the builder's pick
  *        ──owner confirms──► second message in the same conversation ──► connection.json + Lab's remembered connection
  *
- * What the builder reads is the owner's own example request and the agent's replies to Lab's fixed test phrases —
- * never a customer's conversation. Its answer is a proposal: every reference is an enum of this call, and the owner
- * confirms or corrects it in a native dialog. Without a model the owner picks from the same lists.
+ * What the builder reads is the owner's own example request — its secrets already placeholders — and the agent's
+ * replies to Lab's fixed test phrases, never a customer's conversation. Its answer is a proposal: every reference is
+ * an enum of this call, and the owner confirms or corrects it in a native dialog. Without a model the owner picks
+ * from the same lists.
  */
 
 /** The project file the chat writes; the command line may name another. */
@@ -33,11 +36,16 @@ const REASON_CHARS = 160;
 const REPLY_TEXT_CHARS = 500;
 const REPLY_FIELDS = 100;
 
-const decode = (token: string) => token.replaceAll('~1', '/').replaceAll('~0', '~');
-/** The keys from the root to a field, as the curl names them. */
-const keysOf = (pointer: string): string[] => pointer === '' ? [] : pointer.slice(1).split('/').map(decode);
 /** A field in the owner's words: its keys joined by dots, as the owner's JSON writes them. */
-export const fieldLabel = (pointer: string): string => pointer === '' ? 'весь ответ' : keysOf(pointer).join('.');
+export const fieldLabel = (pointer: string): string => pointer === '' ? 'весь ответ' : pointerTokens(pointer).join('.');
+/** The reply's field in the owner's words; a path through every bubble says that several are joined. */
+export function replyLabel(pointer: string): string {
+  const tokens = pointerTokens(pointer);
+  const at = tokens.lastIndexOf('-');
+  if (at < 0) return fieldLabel(pointer);
+  const list = tokens.slice(0, at).join('.'), item = tokens.slice(at + 1).join('.');
+  return `${item || 'текст'} каждого сообщения${list ? ` в ${list}` : ' ответа'} (несколько сообщений Lab склеит)`;
+}
 
 /** A body field that may carry the customer's message: its example value from the curl, verbatim. */
 export interface RequestField { pointer: string; keys: string[]; value: string }
@@ -87,12 +95,16 @@ export function connectionReaderWith(builder: BuilderModel, run: TaskRunner): Co
   };
 }
 
-/** The conversation fields the key names show, placeholders included: `$(uuidgen)` under conversation_id is still the conversation. */
+/** The conversation fields the key names show, placeholders, numbers and empty values included: `$(uuidgen)` under conversation_id is still the conversation. */
 export const defaultConversation = (asked: CurlFields): string[] => conversationFields(asked.fields.map(field => field.pointer));
 
-/** The body's fields the owner wrote as text: a field Lab substitutes (a time, an id, a variable) carries no message. */
-export const literalFields = (asked: CurlFields): RequestField[] => asked.fields.filter(field => !field.value.includes('{{'))
-  .map(field => ({ pointer: field.pointer, keys: keysOf(field.pointer), value: field.value }));
+/** A field's value as the owner's JSON writes it. */
+export const fieldValue = (field: CurlField): string => typeof field.value === 'string' ? field.value : JSON.stringify(field.value);
+
+/** The body's fields the owner wrote as text: a field Lab substitutes (a time, an id, a variable, a secret) or a turn's role carries no message. */
+export const literalFields = (asked: CurlFields): RequestField[] => asked.fields
+  .filter((field): field is CurlField & { value: string } => typeof field.value === 'string' && !field.value.includes('{{') && pointerTokens(field.pointer).at(-1) !== 'role')
+  .map(field => ({ pointer: field.pointer, keys: pointerTokens(field.pointer), value: field.value }));
 
 /** The fields that may carry the message: literal text of the curl, not a conversation field. */
 export function requestFields(asked: CurlFields): RequestField[] {
@@ -102,7 +114,7 @@ export function requestFields(asked: CurlFields): RequestField[] {
 
 /** The reply's fields with text, in document order. */
 export const replyFields = (document: unknown): ReplyField[] => stringFields(document).filter(field => field.value.trim())
-  .slice(0, REPLY_FIELDS).map(field => ({ pointer: field.pointer, keys: keysOf(field.pointer), text: field.value }));
+  .slice(0, REPLY_FIELDS).map(field => ({ pointer: field.pointer, keys: pointerTokens(field.pointer), text: field.value }));
 
 /** A call budget for one reading: its attempts and nothing more. */
 function readingContext(signal: AbortSignal, timeoutMs: number): CallContext {
@@ -117,17 +129,19 @@ function readingContext(signal: AbortSignal, timeoutMs: number): CallContext {
 interface ReadingOptions { reader?: ConnectionReader; timeoutMs: number; signal: AbortSignal }
 
 /**
- * Lab's reading of the request. The conversation is read from the key names; the message is the only text field
- * left, or the builder's pick among them (its conversation pick counts only where the key names show none).
- * Undefined when the owner has to pick: no model, or the model gave no usable answer.
+ * Lab's reading of the request. The conversation is read from the key names; the message is the last turn where the
+ * body carries its conversation as turns, the only text field left, or the builder's pick among them (its conversation
+ * pick counts only where the key names show none). Undefined when the owner has to pick: no model, or no usable answer.
  */
 export async function proposeRequest(asked: CurlFields, options: ReadingOptions): Promise<RequestChoice | undefined> {
   const conversation = defaultConversation(asked);
+  if (asked.lastTurn !== undefined) return { message: asked.lastTurn, conversation };
   const fields = requestFields(asked);
   if (!fields.length) throw new Error('В теле запроса curl нет текстового поля для сообщения клиента: вставьте запрос, где в теле есть пример сообщения.');
   if (fields.length === 1) return { message: fields[0]!.pointer, conversation };
   if (!options.reader) return undefined;
-  const all = asked.fields.map(field => ({ pointer: field.pointer, keys: keysOf(field.pointer), value: field.value }));
+  // Secrets are placeholders by now ({{env:…}}): the builder reads the owner's example request, never a secret's value.
+  const all = asked.fields.map(field => ({ pointer: field.pointer, keys: pointerTokens(field.pointer), value: fieldValue(field) }));
   try {
     const answer = await options.reader.request({ fields: all, candidates: fields.map(field => field.pointer) }, readingContext(options.signal, options.timeoutMs));
     return { message: answer.message, conversation: conversation.length ? conversation : answer.conversation.filter(pointer => pointer !== answer.message), reason: answer.reason };
@@ -151,32 +165,67 @@ export async function proposeReply(fields: readonly ReplyField[], options: Readi
   }
 }
 
-/** What the confirmation shows, in the owner's words: the address, the message, the conversation, what Lab fills in itself, the secrets. */
+/** A template's text as the owner reads it: what Lab fills in, in words; the owner's variables as $NAME. The template is structure the owner wrote. */
+function shownText(text: string): string {
+  return text.replace(/\{\{([^{}]+)\}\}/g, (_, name: string) => name.startsWith('env:') ? `$${name.slice('env:'.length)}`
+    : name.startsWith('uuid') ? 'новый id' : name.startsWith('now') ? 'текущее время' : name === 'message' ? 'сообщение клиента' : 'id разговора');
+}
+/** The address as the owner reads it: a query value read from the environment shows as $NAME. */
+export const shownAddress = (target: { url: string }): string => shownText(target.url);
+const placeOf = (place: Place) => 'header' in place ? `заголовок ${place.header}` : 'query' in place ? `параметр адреса ${place.query}` : `поле ${fieldLabel(place.pointer)}`;
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * The one confirmation of a connection from curl, in the owner's words, for the chat and the command line alike: the
+ * address, the message, how the conversation is kept, what Lab fills in itself, every saved header and how it is
+ * stored (its value, or the name of the variable it is read from), and where each secret of the curl went.
+ */
 export function connectionLines(made: CurlReady, reason?: string): string[] {
-  if (made.target.kind !== 'http') return [];
+  if (made.target.kind !== 'http' || !made.target.request) return [];
+  const { request, headersEnv } = made.target;
+  const valueOf = (pointer: string) => atPointer(request.body, pointer);
+  const lines = [`Адрес: ${shownAddress(made.target)}`, `Сообщение клиента → ${fieldLabel(made.message)}${reason ? ` (${reason})` : ''}`];
+  if (made.history) {
+    const roles = `реплики клиента — с ролью ${made.history.roles.user}, агента — ${made.history.roles.assistant}`;
+    lines.push(made.history.withMessage
+      ? `Разговор → ${fieldLabel(made.history.at)}: в каждом запросе вся история разговора, ${roles}${made.history.fixed ? '; инструкции из curl остаются первыми' : ''}`
+      : `История → ${fieldLabel(made.history.at)}: реплики до нового сообщения, ${roles}`);
+  }
+  const ours = made.conversation.filter(pointer => valueOf(pointer) !== '{{session}}');
+  const agents = made.conversation.filter(pointer => valueOf(pointer) === '{{session}}');
+  if (ours.length) lines.push(`Разговор → ${ours.map(fieldLabel).join(', ')} (новый в каждой ситуации${ours.some(pointer => valueOf(pointer) === '{{conversation:number}}') ? ', числом, как в curl' : ''})`);
+  if (agents.length) lines.push(`Разговор → ${agents.map(fieldLabel).join(', ')}: в первом сообщении пусто, как в curl, дальше — идентификатор, который назовёт агент`);
+  if (!made.history && !made.conversation.length) lines.push('Разговор: в запросе нет ни идентификатора разговора, ни истории сообщений — каждое сообщение уйдёт само по себе: если агент помнит разговор по чему-то другому, ситуации смешаются, если не помнит — многоходовые измерятся без памяти');
   const chosen = new Set([made.message, ...made.conversation]);
-  const own = made.substitutions.filter(item => !('pointer' in item && chosen.has(item.pointer)));
-  const place = (item: (typeof own)[number]) => 'header' in item ? item.header : fieldLabel(item.pointer);
-  const automatic = own.filter(item => item.by !== 'env').map(place);
-  return [`Адрес: ${made.target.url}`,
-    `Сообщение клиента → ${fieldLabel(made.message)}${reason ? ` (${reason})` : ''}`,
-    made.conversation.length ? `Разговор → ${made.conversation.map(fieldLabel).join(', ')} (новый в каждой ситуации)`
-      : 'Разговор: поле не найдено — агент может смешать ситуации',
-    ...(automatic.length ? [`Время и идентификатор запроса → ${automatic.join(', ')}: подставляются сами`] : []),
-    ...own.filter(item => item.by === 'env').map(item => `${place(item)} → из переменной окружения ${item.variable}`),
-    ...Object.entries(made.target.headersEnv).map(([header, variable]) => `Заголовок ${header} — секрет, в файл не пишется: Lab прочтёт его из переменной ${variable}`),
-    ...made.warnings];
+  const fields = made.substitutions.flatMap(item => 'pointer' in item && !chosen.has(item.pointer) ? [{ by: item.by, variable: item.variable, pointer: item.pointer }] : []);
+  const automatic = fields.filter(item => item.by !== 'env').map(item => fieldLabel(item.pointer));
+  if (automatic.length) lines.push(`Время и идентификатор запроса → ${automatic.join(', ')}: подставляются сами`);
+  lines.push(...fields.filter(item => item.by === 'env').map(item => `${fieldLabel(item.pointer)} → из переменной окружения ${item.variable}`),
+    ...made.substitutions.flatMap(item => 'query' in item && item.by === 'env' ? [`Параметр адреса ${item.query} → из переменной окружения ${item.variable}`] : []));
+  const secretHeaders = new Set(made.secrets.flatMap(item => 'header' in item ? [item.header] : []));
+  for (const [name, value] of Object.entries(request.headers)) {
+    const variables = [...value.matchAll(/\{\{env:([^{}]+)\}\}/g)].map(m => m[1]!);
+    const filled = value.includes('{{') && !variables.length;
+    lines.push(`Заголовок ${name}: ${shownText(value)}${variables.length ? ` — из переменной окружения ${variables.join(', ')}, в файле только её имя` : filled ? ' — подставляется при каждом запросе' : ''}`);
+  }
+  for (const [name, variable] of Object.entries(headersEnv)) lines.push(secretHeaders.has(name)
+    ? `Заголовок ${name} — секрет из curl: в файл не пишется, Lab прочтёт его из переменной ${variable}`
+    : `Заголовок ${name} → из переменной окружения ${variable}, в файле только её имя`);
+  lines.push(...made.secrets.filter(item => !('header' in item)).map(item => `${capital(placeOf(item))} — секрет из curl: в файл не пишется, Lab прочтёт его из переменной ${item.variable}`));
+  return [...lines, ...made.warnings];
 }
 
-/** The environment variables the connection reads that are not set in this process. */
-export function missingVariables(target: TemplateTarget): string[] {
-  return [...new Set([...Object.values(target.headersEnv), ...templateVariables(target.request)])].filter(name => !process.env[name]);
+/** Where a variable the connection reads comes from, in the owner's words: a secret of the curl, or the owner's own variable the curl names. */
+export function variableUse(made: CurlReady, variable: string): string {
+  const secret = made.secrets.find(item => item.variable === variable);
+  return secret ? `${variable} (значение: ${placeOf(secret)} из вашего curl)` : `${variable} (её называет ваш curl)`;
 }
 
 /** Why the test message got no reply, in the owner's words with the next step. */
 export function testCallFailure(error: unknown): string {
   if (error instanceof AgentRequestFailed) {
-    if (error.kind === 'unreachable') return 'Агент не отвечает по этому адресу: проверьте адрес и сеть (VPN, доступ с этой машины).';
+    // The failure says itself what is wrong and what to do: the address, the network, the certificate.
+    if (error.kind === 'unreachable' || error.kind === 'tls') return error.message;
     if (error.kind === 'timeout') return 'Агент не ответил за отведённое время: проверьте, что он запущен, или добавьте в curl --max-time с большим числом секунд.';
     const status = error.status ?? 0;
     if (status === 401 || status === 403) return `Агент отказал в доступе (${status}): проверьте значения переменных с секретами.`;

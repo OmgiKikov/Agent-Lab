@@ -44,6 +44,8 @@ export interface Brief {
   must: { text: string; rule: string | null }[];
   /** The values Lab wrote over the log's masking marks, when it did: «подставлено вместо обезличенного». */
   filled?: string[];
+  /** The customer never says clearly what they want («невнятный запрос»): the result counts such situations apart. */
+  vague?: true;
 }
 
 export interface SituationView {
@@ -134,10 +136,18 @@ export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumb
     leaves: oneLine(leaves), turn: turn ? turnText(turn.after, turn.says) : null,
     must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes) })),
     ...(card.filled ? { filled: card.filled.map(item => oneLine(item.value)) } : {}),
+    ...(card.clarity === 'vague' ? { vague: true } : {}),
   };
 }
 
+/** The customer's request as the brief and a change name it: the mark of a vague one, and the word for a clear one. */
+const VAGUE_REQUEST = 'невнятный: клиент не говорит прямо, чего хочет';
+const CLEAR_REQUEST = 'внятный';
+
 const OBSERVED = { reply: 'по ответу агента', tool: 'по вызовам инструментов', state: 'по состоянию системы' } as const;
+/** How a duty is observed; a duty on the tools names the tool whose call proves it, when it names one. */
+const observedText = (expectation: Card['agentMust'][number]): string =>
+  expectation.observation === 'tool' && expectation.tool !== undefined ? `по вызову инструмента «${oneLine(expectation.tool)}»` : OBSERVED[expectation.observation];
 const ACCOUNTED = { fact: 'факт', turn: 'поворот', stop: 'здесь клиент уходит', ignored: 'не влияет на проверку', changed: 'изменено' } as const;
 const TURN_KIND = { change_intent: 'меняет намерение', report: 'сообщает, что видит' } as const;
 
@@ -146,7 +156,7 @@ function cardTerms(library: LibraryV2, card: Card): NonNullable<SituationView['t
   const quotes = new Map(library.requirements.map(item => [item.id, oneLine(item.quote)]));
   return {
     must: card.agentMust.map(expectation => ({ rules: expectation.requirementIds.map(id => ({ id, quote: quotes.get(id) ?? '' })),
-      when: expectation.appliesWhen === undefined ? null : oneLine(expectation.appliesWhen), observed: OBSERVED[expectation.observation] })),
+      when: expectation.appliesWhen === undefined ? null : oneLine(expectation.appliesWhen), observed: observedText(expectation) })),
     knows: card.client.knows.map(fact => ({ askedAs: oneLine(fact.askedAs ?? fact.label) })),
     turn: card.client.turn ? TURN_KIND[card.client.turn.kind] : null,
   };
@@ -177,7 +187,7 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
     ...knows.map(fact => ({ label: 'Откуда факт', text: `${factText(fact)} — ${vouched(fact.source)}` })),
     ...(card.filled ?? []).map(item => ({ label: 'Подставлено', text: `«${oneLine(item.value)}» вместо «${oneLine(item.mark)}» — ${message(item.event.eventIndex)} диалога, значение придумал Lab` })),
     ...card.coverage.map(entry => ({ label: 'Поздние реплики', text: `${message(entry.event.eventIndex)} — ${ACCOUNTED[entry.as]}${entry.reason ? `: ${oneLine(entry.reason)}` : ''}` })),
-    ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${OBSERVED[expectation.observation]}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
+    ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${observedText(expectation)}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
     ...rules,
     { label: 'Запись', text: `ситуация ${card.id} · версия ${card.revision} · набор ${library.id}, ревизия ${library.revision}` },
   ];
@@ -355,7 +365,8 @@ const questionData = (view: SituationView) => view.question
 /** A situation for a machine reader (the chat's model, `--json`): the brief with the ids a command names, the status and the question with numbered answers. */
 export function situationData(view: SituationView) {
   return {
-    number: view.number, title: view.brief.title, status: view.status, source: view.brief.source, wants: view.brief.wants, writes: view.brief.writes,
+    number: view.number, title: view.brief.title, status: view.status, source: view.brief.source, wants: view.brief.wants,
+    ...(view.brief.vague ? { clarity: 'vague' as const } : {}), writes: view.brief.writes,
     knows: view.brief.knows.map((fact, index) => ({ ...(view.refs.knows[index] ? { id: view.refs.knows[index] } : {}), ...fact })),
     leaves: view.brief.leaves, turn: view.brief.turn, ...(view.brief.filled ? { filledOverMasks: view.brief.filled } : {}),
     must: view.brief.must.map((duty, index) => ({ ...(view.refs.must[index] ? { id: view.refs.must[index] } : {}), ...duty })),
@@ -449,6 +460,7 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
   const same = (a: string, b: string) => a.toLocaleLowerCase('ru') === b.toLocaleLowerCase('ru');
   const fields: [string, string][] = [
     ...(same(brief.wants, brief.title) ? [] : [['Хочет', brief.wants] as [string, string]]),
+    ...(brief.vague ? [['Запрос', VAGUE_REQUEST] as [string, string]] : []),
     ['Пишет', `«${brief.writes}»`],
     ...(brief.filled ? [['', `подставлено вместо обезличенного: ${brief.filled.map(value => `«${value}»`).join(', ')}`] as [string, string]] : []),
     ...brief.knows.map((fact, index): [string, string] => [index ? '' : 'Знает', `${fact.what} — ${fact.when}`]),
@@ -524,6 +536,7 @@ export function briefChanges(before: SituationView | undefined, after: Situation
   const text = (field: string, a: string | null, b: string | null) => { if (a !== b) changes.push({ field, before: a, after: b }); };
   text('Название', before.brief.title, after.brief.title);
   text('Хочет', before.brief.wants, after.brief.wants);
+  text('Запрос', requestLine(before), requestLine(after));
   text('Пишет', `«${before.brief.writes}»`, `«${after.brief.writes}»`);
   const byId = <T>(items: readonly T[], ids: readonly (string | null)[]) => new Map(items.flatMap((item, index) => ids[index] ? [[ids[index]!, item] as const] : []));
   const paired = <T>(field: string, a: T[], b: T[], idsA: (string | null)[], idsB: (string | null)[], show: (item: T) => string) => {
@@ -556,6 +569,8 @@ export function briefChanges(before: SituationView | undefined, after: Situation
   return changes;
 }
 
+/** Whether a card's customer can say what they want, as a change shows it; the older formats have no such mark. */
+const requestLine = (view: SituationView): string | null => view.format !== 'card' ? null : view.brief.vague ? VAGUE_REQUEST : CLEAR_REQUEST;
 /** The late turn as a change shows it: what the customer does, after what and with which words — «меняет намерение после «…»: «…»». */
 const turnLine = (view: SituationView): string | null => view.brief.turn === null ? null : view.terms?.turn ? `${view.terms.turn} ${view.brief.turn}` : view.brief.turn;
 /** A duty's rules in one line, each quote kept to its beginning and end. */

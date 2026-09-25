@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { requestTemplateSchema } from './http-template.js';
+import { envNameSchema, requestTemplateSchema } from './http-template.js';
 
 /*
  * Who answers the simulated user: an external agent speaking a JSON contract (see targets.ts); its secrets stay
@@ -21,7 +21,7 @@ const serviceReplies = z.array(text.max(300)).max(20).optional();
 const retired = z.unknown().optional();
 const httpTargetSchema = z.strictObject({
   kind: z.literal('http'), diagnosticCapabilities: retired, promptFile, serviceReplies, url: z.string().url().max(2000),
-  headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/, 'Header values must name environment variables')).default({}),
+  headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), envNameSchema).default({}),
   timeoutMs: z.number().int().min(1000).max(600000).default(60000),
   release: releaseSchema,
   /** The agent's own request format (http-template.ts); without it Lab speaks its own JSON contract. */
@@ -44,7 +44,7 @@ const unconnectedTargetSchema = z.strictObject({ kind: z.literal('unconnected') 
 export const targetSchema = z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('sandbox') }), httpTargetSchema, moduleTargetSchema, commandTargetSchema, unconnectedTargetSchema]);
 export type Target = z.infer<typeof targetSchema>;
 export const SANDBOX_RETIRED = 'Встроенная учебная песочница больше не запускается: подключите своего агента (http, module или command). Сохранённые результаты песочницы по-прежнему открываются.';
-export const UNCONNECTED = 'Агент ещё не подключён: скажите, как его запускать — команда, файл модуля или адрес.';
+export const UNCONNECTED = 'Агент ещё не подключён: скажите, как его запускать — команда или файл модуля, а для агента по адресу пришлите curl-запрос к нему.';
 const targetError = (issue: { input?: unknown }) => issue.input === undefined ? 'Укажите подключение агента: http, module или command.'
   : (issue.input as { kind?: unknown } | null)?.kind === 'sandbox' ? SANDBOX_RETIRED : undefined;
 /** A target Lab can run today. A run and a changed connection take only these. */

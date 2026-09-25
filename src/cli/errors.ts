@@ -28,6 +28,7 @@ const PROVIDER: Record<ProviderFailureKind, string> = {
 };
 const AGENT: Record<AgentRequestFailed['kind'], string> = {
   unreachable: 'Агент не отвечает. Проверьте, что он запущен и доступен: agent-lab doctor --connection подключение.json --yes.',
+  tls: 'Сертификат агента не прошёл проверку. Укажите корневой сертификат (CA) в NODE_EXTRA_CA_CERTS и повторите.',
   timeout: 'Агент не ответил вовремя. Проверьте его: agent-lab doctor --connection подключение.json --yes.',
   status: 'Агент ответил ошибкой. Посмотрите его журнал и повторите.',
 };
@@ -95,7 +96,9 @@ export function errorText(error: unknown, context: ErrorContext): { text: string
   if (error instanceof LibraryConflict || error instanceof CommandRefused || error instanceof UnknownReference) return { text: error.message };
   if (error instanceof Stopped) return { text: STOPPED[error.reason] };
   if (error instanceof ProviderFailure) return { text: error.kind === 'unavailable' && forOwner(error.message) ? error.message : PROVIDER[error.kind] };
-  if (error instanceof AgentRequestFailed) return { text: error.kind === 'status' && error.status !== undefined ? `Агент ответил ошибкой ${error.status}. Посмотрите его журнал и повторите.` : AGENT[error.kind] };
+  // The target names the cause in the owner's words (an expired or untrusted certificate, a refused port); the table is the fallback.
+  if (error instanceof AgentRequestFailed) return { text: error.kind === 'status' ? (error.status !== undefined ? `Агент ответил ошибкой ${error.status}. Посмотрите его журнал и повторите.` : AGENT.status)
+    : forOwner(error.message) ? error.message : AGENT[error.kind] };
   if (error instanceof StructuredTaskError) return { text: 'Модель несколько раз ответила не в том виде; ничего не записано. Повторите позже или выберите другую модель.', detail: error.message };
   if (error instanceof z.ZodError) return { text: `Файл не в формате Agent Lab: ${error.issues.slice(0, 3).map(issue => `${issue.path.length ? issue.path.join('.') : 'файл'} — ${problemOf(issue)}`).join('; ')}. Исправьте файл и повторите.` };
   if (systemError(error)) {
