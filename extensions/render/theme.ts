@@ -2,13 +2,14 @@ import type { Theme } from '@earendil-works/pi-coding-agent';
 import { visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { layoutRows } from '../../src/card/view.js';
 import type { ResultRole } from '../../src/result-text.js';
-import { safeText } from '../../src/text.js';
+import { safeText, wrapHanging } from '../../src/text.js';
 
 /*
- * The one place that paints (docs/design/ui-spec.md §6). Every row of the chat, the workspace and the progress row goes
- * through `renderRows`: escaping, word wrap and colour happen here and nowhere else. Only the semantic
- * tokens of Pi's `Theme` are used, and width is never measured by hand: wrapping works through pi-tui's
- * `wrapTextWithAnsi`, a list line is laid out by the shared `layoutRows`.
+ * The painter of the chat (docs/design/ui-spec.md §6): every row of a Lab action, a result block and a message that
+ * arrives later goes through `renderRows` — escaping, word wrap and colour. The workspace lays its screens out as
+ * lines of its own (workspace-screens.ts) and paints them with the same tokens and glyphs (workspace.ts). Only the
+ * semantic tokens of Pi's `Theme` are used, and width is never measured by hand: wrapping works through pi-tui's
+ * `wrapTextWithAnsi` (src/text.ts `wrapHanging` for a hanging indent), a list line is laid out by the shared `layoutRows`.
  */
 
 /** The only foreground tokens a row may carry. */
@@ -68,15 +69,16 @@ export function paint(row: Row, theme: PaintTheme): string {
 /**
  * A row as plain lines of at most `width` columns: the first at its indent, the rest under its hanging
  * column (two past the indent unless `hang` says otherwise). A terminal too narrow for the hang wraps flush.
+ * The text itself never changes: its line breaks stay, and a word longer than the line (an address, a number)
+ * breaks between its characters with nothing inserted.
  */
 export function wrapRow(row: Pick<Row, 'text' | 'indent' | 'hang'>, width: number): string[] {
   const room = Math.max(1, Math.floor(width));
   const indent = row.indent ?? 0;
   const hang = row.hang ?? (indent ? indent + 2 : 0);
   if (!indent && !hang || room <= Math.max(indent, hang) + 1) return wrapTextWithAnsi(row.text, room);
-  const [first = '', ...rest] = wrapTextWithAnsi(row.text, room - indent);
-  const tail = rest.join(' ');
-  return [' '.repeat(indent) + first, ...(tail ? wrapTextWithAnsi(tail, room - hang).map(piece => ' '.repeat(hang) + piece) : [])];
+  const [first = '', ...rest] = wrapHanging(row.text, room - indent, room - hang);
+  return [' '.repeat(indent) + first, ...rest.map(piece => ' '.repeat(hang) + piece)];
 }
 
 /**

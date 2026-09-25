@@ -1,9 +1,9 @@
-import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { describeCheck, isCardExecution, type Experiment, type Scenario } from '../contracts.js';
 import { countText } from '../plural.js';
 import { MAX_WIDTH } from '../result-text.js';
 import type { ImportBatch, LibraryV1, ScenarioVariant } from '../scenario-contracts.js';
-import { oneLine } from '../text.js';
+import { oneLine, wrapHanging } from '../text.js';
 import { contains, quotable, type CardEvidence } from './checks.js';
 import { compilePolicy, expectationLetter } from './compile.js';
 import { behaviorLines, convertible, libraryV1Of, orderedVariants, ownerQuestions, ownerRemarks, plainIssue } from './legacy-v1.js';
@@ -593,7 +593,6 @@ export type LayoutRow<Role extends string> = Omit<SituationRow, 'role' | 'right'
 export interface LaidOut<Role extends string> { role: Role; text: string; right?: { role: Role; text: string } }
 export type SituationLine = LaidOut<SituationRole>;
 
-const wrap = (text: string, width: number): string[] => wrapTextWithAnsi(text, Math.max(1, width));
 // truncateToWidth closes its ellipsis with style resets for a live terminal; these lines are plain text, painted later by role.
 const clipTo = (text: string, width: number) => stripTerminalSequences(truncateToWidth(text, Math.max(1, width), '…'));
 
@@ -616,9 +615,9 @@ export function layoutRows<Role extends string = SituationRole>(rows: readonly L
     }
     if (!row.text) return [{ role: row.role, text: '' }];
     const hang = row.hang ?? 0;
-    const [first = '', ...rest] = wrap(row.text, room);
-    const tail = rest.join(' ');
-    return [{ role: row.role, text: pad + first }, ...(tail ? wrap(tail, room - hang).map(piece => ({ role: row.role, text: pad + ' '.repeat(hang) + piece })) : [])];
+    // The text never changes on its way into lines: its line breaks stay, and a long word breaks with nothing inserted.
+    const [first = '', ...rest] = wrapHanging(row.text, room, room - hang);
+    return [{ role: row.role, text: pad + first }, ...rest.map(piece => ({ role: row.role, text: pad + ' '.repeat(hang) + piece }))];
   });
 }
 

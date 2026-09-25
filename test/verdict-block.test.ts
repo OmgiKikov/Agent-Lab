@@ -122,18 +122,35 @@ test('ни текст ситуаций, ни их названия не попа
   assert.ok(view && scenarios.every(card => view.cards.some(shown => shown.title === card.title)));
 });
 
-test('без запомненного вида строка инструмента честно говорит, что блок нельзя показать', async t => {
+test('в открытой заново сессии результат рисуется из его сохранённых строк; без них строка честно говорит, что блок нельзя показать', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-verdict-missing-'));
   const { tools, shutdown } = registered();
   t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
   const { result, run } = await demoRun(directory, tools);
   initTheme('dark', false);
+  const view = viewFor(result.details as VerdictDetails)!;
   forgetViews();
   assert.equal(viewFor(result.details as VerdictDetails), null);
+  // What the session file holds of the result — the model's content — carries the screen's own lines: the number comes back.
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
-  assert.deepEqual(lines, ['● Запускаю прогон', `└ ${MISSING_RESULT}`], 'no id on screen: the owner asks for the result again');
-  assert.ok(!lines.join(' ').includes(run.run.slice(0, 8)));
+  assert.equal(lines[0], '● Запускаю прогон');
+  assert.equal(lines[1], `└ ${accuracyRow(view).text}`, 'the number the owner saw, in the same words');
+  assert.ok(lines.some(line => line.startsWith('Вероятно, от')), 'and its trust line under it');
+  assert.ok(!lines.join(' ').includes(run.run.slice(0, 8)), 'no id on screen');
+  assert.ok(!lines.some(line => line.includes('"lines"') || line.includes(SHOWN_TO_OWNER)), 'never the JSON or what only the model reads');
   for (const line of raw) assert.ok(visibleWidth(line) <= 80);
+  // Expanded, every stored line is there, the causes too.
+  const expanded = strip(renderAgentLabResult(result as never, { expanded: true, isPartial: false }, realTheme(), () => new Text('legacy', 0, 0)).render(100));
+  for (const line of run.lines as string[]) if (line.trim()) assert.ok(expanded.some(shown => shown.includes(line.trim())), `«${line.trim()}» is missing`);
+  // A result whose content holds no such lines, or holds something else under that name, keeps the honest row.
+  for (const content of ['{}', '{"lines":"Точность агента: 100%"}', '{"lines":[1,2]}', 'не JSON']) {
+    const drawn = strip(renderAgentLabResult({ content: [{ type: 'text', text: content }], details: result.details } as never, { expanded: false, isPartial: false }, realTheme(), () => new Text('legacy', 0, 0)).render(80));
+    assert.deepEqual(drawn, [`└ ${MISSING_RESULT}`], content);
+  }
+  // An escape sequence in a stored line never reaches the terminal.
+  const tampered = strip(renderAgentLabResult({ content: [{ type: 'text', text: JSON.stringify({ lines: [' Точность агента: \u001b[2J50%'] }) }], details: result.details } as never,
+    { expanded: false, isPartial: false }, realTheme(), () => new Text('legacy', 0, 0)).render(80));
+  assert.deepEqual(tampered, ['└ Точность агента: 50%']);
 });
 
 // ---- Task 3: both Pi themes at every width, old sessions untouched, a failing view never reaches Pi. ----

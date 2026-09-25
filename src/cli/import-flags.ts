@@ -33,8 +33,8 @@ function whereChoice(text: string): NonNullable<TableChoices['where']> {
 /** The owner's choices from the command line; each overrides what Lab would propose. */
 export function tableChoicesOf(values: Record<string, string | boolean | string[] | undefined>): TableChoices {
   const text = (key: string) => typeof values[key] === 'string' ? values[key] as string : undefined;
-  // A shell passes \n and \t literally; the owner means the characters.
-  const separator = text('separator')?.replace('\\n', '\n').replace('\\t', '\t');
+  // A shell passes \n and \t literally; the owner means the characters, every one of them («\n\n» is an empty line).
+  const separator = text('separator')?.replaceAll('\\n', '\n').replaceAll('\\t', '\t');
   if (separator && values['no-separator']) throw new Error('Выберите одно: --separator ЗНАК или --no-separator.');
   if (values['collapse-repeats'] && values['keep-repeats']) throw new Error('Выберите одно: --collapse-repeats или --keep-repeats.');
   return tableChoicesSchema.parse({
