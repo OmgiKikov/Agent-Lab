@@ -8,6 +8,7 @@ import { convertedPreparation, convertV1Library, type Conversion } from '../card
 import { convertible, libraryV1Of } from '../card/legacy-v1.js';
 import { acceptLibraryV2, requireLibraryV2 } from '../card/library.js';
 import { notContinuable, preparationParallel, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
+import { variationsWithout } from '../card/plan.js';
 import type { CardCommand, LibraryV2 } from '../card/schema.js';
 import { unmaskCommand, unmaskRequest } from '../card/unmask.js';
 import { dialogueNumbers, type DialogueNumbers } from '../card/view.js';
@@ -309,6 +310,35 @@ export function resumePreparation(lab: Lab, id: string, expectedHash: string, op
     }, { ownsMutation: true, budget: { calls: ceiling - budget.spent, timeMs: preparationTime(progress.pending.length) },
       carried: { calls: budget.spent, elapsedMs: progress.elapsedMs ?? 0 } });
     return structuredClone(experiment);
+  });
+}
+
+/**
+ * Situations for the variations of the plan no conversation shows — added from the rules by the builder, or by the
+ * owner — that have none yet: one unit each joins the preparation's queue and is written from the rules, as an example
+ * of that variation, when the preparation continues (resumePreparation), within the ceiling the owner agrees to then.
+ * Nothing is paid here; the variations queued are returned in the plan's order.
+ */
+export function queueVariations(lab: Lab, id: string, expectedHash: string): Promise<{ experiment: Experiment; queued: { scenario: string; variation: string }[] }> {
+  return lab.operations.change(async () => {
+    const experiment = await lab.get(id);
+    const progress = experiment.preparationProgress;
+    const library = experiment.librarySnapshot;
+    if (experiment.phase !== 'review') throw notADraft(experiment, 'Составить ситуации вариантов');
+    if (library?.formatVersion !== 2 || library.acceptance || experiment.trials.length || experiment.acceptedTests?.length) throw new Error('Принятый или выполненный набор не меняется. Создайте новый черновик.');
+    if (libraryHash(library) !== expectedHash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
+    if (progress?.protocol !== 'cards-v2') throw new CommandRefused('Ситуации вариантов составляет только подготовка нового формата.');
+    const waiting = new Set((progress.variations ?? []).filter(item => progress.pending.includes(item.unit)).map(item => `${item.scenarioId}/${item.variationId}`));
+    const wanted = variationsWithout(library).filter(({ scenario, variation }) => !waiting.has(`${scenario.id}/${variation.id}`));
+    if (!wanted.length) throw new CommandRefused(waiting.size ? 'Ситуации вариантов уже в очереди: продолжите подготовку.' : 'У всех вариантов плана уже есть ситуации.');
+    const units = wanted.map(({ scenario, variation }, index) => ({ scenarioId: scenario.id, variationId: variation.id,
+      unit: `rules_${fingerprint({ scenario: scenario.id, variation: variation.id, queued: (progress.variations?.length ?? 0) + index }).slice(0, 16)}` }));
+    progress.variations = [...progress.variations ?? [], ...units];
+    progress.pending = [...progress.pending, ...units.map(item => item.unit)];
+    progress.requestedCount = Math.min(200, (progress.requestedCount ?? progress.processed.length) + units.length);
+    experiment.updatedAt = new Date().toISOString();
+    await lab.store.save(experiment);
+    return { experiment: structuredClone(experiment), queued: wanted.map(({ scenario, variation }) => ({ scenario: scenario.question, variation: variation.title })) };
   });
 }
 

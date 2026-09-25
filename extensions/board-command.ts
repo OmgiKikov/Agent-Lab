@@ -425,7 +425,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             const version = (await ctx.ui.editor('Какая версия агента записала логи · как вы её называете', ''))?.trim();
             return version ? settle(surface, { kind: 'declare_log_version', importId: action.importId, version }, data.runs.map(run => run.record)) : undefined;
           }
-          case 'check_situations': case 'resume_preparation': case 'convert_draft': case 'declare_log_version':
+          case 'check_situations': case 'resume_preparation': case 'prepare_variations': case 'convert_draft': case 'declare_log_version':
             return settle(surface, action, data.runs.map(run => run.record));
           case 'open_situation': case 'open_situations': case 'open_conversation': return undefined;
         }

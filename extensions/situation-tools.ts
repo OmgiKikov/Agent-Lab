@@ -145,6 +145,10 @@ const change = Type.Union([
     rules: Type.Optional(Type.Array(ruleId, { minItems: 1, maxItems: 3, description: 'Requirement ids of the owner rules it rests on.' })),
     ...dutyWays, remove: Type.Optional(Type.Literal(true)) },
   { ...closed, description: 'An expectation of a business scenario: it changes in the plan and in every situation that is its example; omit situation.' }),
+  Type.Object({ kind: Type.Literal('variation'), scenario: Type.Integer({ minimum: 1, maximum: 30, description: 'The scenario number in the plan, as agent_lab_cards shows it.' }),
+    title: Type.String({ minLength: 1, maxLength: 160, description: 'The kind of customer, in the owner\'s words: «Клиент не знает номер терминала».' }),
+    expectations: Type.Optional(Type.Array(Type.String({ pattern: '^s[0-9]{1,2}$' }), { maxItems: 8, description: 'Expectations of some variations only (s1…) that apply to this one too; those of every variation always do.' })) },
+  { ...closed, description: 'A new kind of customer in a business scenario, not from the logs; omit situation.' }),
   Type.Object({ kind: Type.Literal('client'), wants: text(300, 'What the customer wants.'), writes: text(3000, 'Their exact first message.'), leaves: text(300, 'When they leave.') }, closed),
   Type.Object({ kind: Type.Literal('turn'), turn }, closed),
   Type.Object({ kind: Type.Literal('similar'), differs: Type.Union([
@@ -200,7 +204,7 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
   });
   pi.registerTool({
     ...displayFor(TOOL.edit), name: TOOL.edit, label: 'Change a situation',
-    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms every change in a native dialog that shows it exactly — wording taken word for word from the owner\'s own message is marked as theirs, never written without that dialog. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen, mustNot, acceptable — what else fulfils it and is never a failure, violation — what exactly breaks it; remove; one duty always stays); plan — an expectation of a business scenario (scenario number and expectation id s1… as agent_lab_cards shows the plan; the same fields as a duty): it changes in the plan and in every situation that is its example — use it when the owner\'s correction holds for the whole scenario, e.g. a duty demands too much everywhere; omit situation. A duty that shows plan in a situation is the plan\'s: changing it there alone makes it that situation\'s own; client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); reference — what code checks besides the judge: doc (the knowledge-base article id the agent must actually retrieve, as its adapter names it) and/or text (the expected fact; its values are checked by code, its meaning by the judge); reference id to change one, without it a new one; never rewrite a duty\'s text to express this — a duty is only ever judged by the reply; proposed:true when you suggest it yourself; reference id with remove to drop one; similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
+    description: 'Changes one situation of the draft, or the rulebook of the whole set; the owner confirms every change in a native dialog that shows it exactly — wording taken word for word from the owner\'s own message is marked as theirs, never written without that dialog. Each item of changes has a kind: rules — which rules bind the bot: operatorInstructions (instructions for human operators as a whole), bind/unbind (single requirement ids the bot must or no longer must follow), no situation; fact — what the customer knows (fact id; when; label/value rewrite it, without a fact id they add one; remove); duty — what the agent must do (duty id; text, rules, appliesWhen, mustNot, acceptable — what else fulfils it and is never a failure, violation — what exactly breaks it; remove; one duty always stays); variation — a new kind of customer in a business scenario that the logs do not show (scenario number, title in the owner\'s words, expectations: the s-ids of expectations of some variations only that apply to it too); it has no situation until the owner agrees that Lab writes one from the rules; omit situation. plan — an expectation of a business scenario (scenario number and expectation id s1… as agent_lab_cards shows the plan; the same fields as a duty): it changes in the plan and in every situation that is its example — use it when the owner\'s correction holds for the whole scenario, e.g. a duty demands too much everywhere; omit situation. A duty that shows plan in a situation is the plan\'s: changing it there alone makes it that situation\'s own; client — what the customer wants, writes first or when they leave; turn — the customer\'s late turn (null removes it); reference — what code checks besides the judge: doc (the knowledge-base article id the agent must actually retrieve, as its adapter names it) and/or text (the expected fact; its values are checked by code, its meaning by the judge); reference id to change one, without it a new one; never rewrite a duty\'s text to express this — a duty is only ever judged by the reply; proposed:true when you suggest it yourself; reference id with remove to drop one; similar — a new situation with exactly one difference, the original unchanged; remove — takes the situation out, only when the owner asked for exactly that; unmask — Lab writes plausible values where the de-identified log left marks (#, *): offer it when a situation is unusable for that reason. Fact, duty, client and turn changes of one situation that fit only together (a refusal says «передайте вместе с …») go in one call: checked once, confirmed once. A change after a run goes into a fresh draft of the same set: the finished run never changes, say so in one phrase. The changed situation is checked again within the agreed calls; several situations changed in one message: later:true on every one but the last.',
     parameters: editParameters,
     executionMode: 'sequential',
     execute: (callId, params, signal, _onUpdate, ctx) => changeSituation(host, callId, ctx, signal, params),
@@ -354,6 +358,35 @@ async function changePlan(host: SituationHost, callId: string, ctx: ExtensionCon
   } finally { if (!handedOver) await owned.close(); }
 }
 
+/**
+ * A kind of customer the owner adds to a scenario of the plan: confirmed natively with the expectations that will apply
+ * to it. Nothing is paid: its situation is written from the rules when the owner agrees to that (agent_lab_decide).
+ */
+async function addVariation(host: SituationHost, callId: string, ctx: ExtensionContext, found: Experiment, request: Extract<ChangeRequest, { kind: 'variation' }>): Promise<AgentToolResult<unknown>> {
+  if (found.librarySnapshot?.formatVersion !== 2) throw new CommandRefused('У ситуаций этого прогона нет плана сценариев: он есть у наборов, подготовленных с планом.');
+  const owned = await host.open(ctx.cwd);
+  try {
+    await owned.lab.init();
+    const target = await owned.lab.editableCards(found.id);
+    const { library } = await owned.lab.cardContext(target.id);
+    const plan = library.plan ?? [];
+    const scenario = plan[request.scenario - 1];
+    if (!scenario) throw new UnknownReference('scenario', plan.map((item, index) => `${index + 1} «${clip(item.question, 60)}»`), plan.length ? `Сценария ${request.scenario} в плане нет.` : 'У этого набора нет плана сценариев.');
+    const command: CardCommand = { kind: 'add_variation', scenarioId: scenario.id, title: request.title, ...(request.expectations?.length ? { expectationIds: request.expectations } : {}) };
+    const decided = await decide(ctx, owned.lab, target.id, command, `Сценарий «${scenario.question}»: новый вариант клиента`);
+    if (!decided) return host.feedResult(callId, { applied: false, declined: true, instruction: 'The owner did not confirm. Nothing was written; do not ask again unless they do.' },
+      { tone: 'warning', rows: [row('Не записано: вы не подтвердили.')] }, 'План не изменён');
+    await owned.lab.applyCardCommand(target.id, decided.prepared, decided.grant);
+    const fresh = await host.reading(resolve(ctx.cwd, '.agent-lab')).cardContext(target.id);
+    const changes = preparedLines(decided.prepared);
+    return host.feedResult(callId, { run: target.id, applied: true, changes, plan: planData(fresh.library), decision: `variations:${target.id}`,
+      instruction: 'The variation has no situation yet. Ask the owner whether Lab should write its situation from the rules — it spends model calls; on their yes answer the decision with agent_lab_decide.' },
+    { tone: 'success', rows: [row('Вариант добавлен в план.', 'text', true), ...changes.slice(1, 2).map(line => row(line.trim())),
+      row('Ситуацию для него Lab составит по правилам, когда вы скажете.', 'muted')],
+    more: planLines(fresh.library).map(line => row(line, 'muted')), expand: 'весь план' }, `План · ${runStamp(found)}`);
+  } finally { await owned.close(); }
+}
+
 /** The command a change stands for, with the heading of its dialog; refused with the reason when the change cannot be made as asked. */
 function commandOf(request: ChangeRequest, view: SituationView, library: LibraryV2): { command: CardCommand; heading: string } {
   const title = `Ситуация ${view.number} «${view.brief.title}»`;
@@ -394,7 +427,7 @@ function commandOf(request: ChangeRequest, view: SituationView, library: Library
       heading: `${title}: что проверяется кодом` };
     case 'remove': return { command: { kind: 'remove_card', cardId: view.id }, heading: `Убрать ситуацию ${view.number} «${view.brief.title}» из черновика?` };
     case 'rules': throw new Error('The rulebook is changed for the whole set, not through one situation.');
-    case 'plan': throw new Error('The plan is changed for the whole scenario, not through one situation.');
+    case 'plan': case 'variation': throw new Error('The plan is changed for the whole scenario, not through one situation.');
     case 'unmask': throw new Error('Masked values are proposed by the lab, not built here.');
   }
 }
@@ -456,6 +489,7 @@ async function changeSituation(host: SituationHost, callId: string, ctx: Extensi
     const found = recordFor(await host.reading(directory).list(), run, 'situations');
     if (request.kind === 'rules' && requests.length === 1) return await changeRulebook(host, callId, ctx, found, request);
     if (request.kind === 'plan' && requests.length === 1) return await changePlan(host, callId, ctx, signal, found, request, !!later);
+    if (request.kind === 'variation' && requests.length === 1) return await addVariation(host, callId, ctx, found, request);
     if (situation === undefined) throw new CommandRefused('Скажите, какую ситуацию изменить: её номер.');
     const owned = await host.open(ctx.cwd);
     try {

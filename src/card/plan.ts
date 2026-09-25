@@ -135,6 +135,20 @@ const examplesOf = (library: Pick<LibraryV2, 'cards'>, scenarioId: string, varia
   library.cards.filter(card => card.scenarioRef?.scenarioId === scenarioId && (variationId === undefined || card.scenarioRef.variationId === variationId));
 
 const SCENARIOS = ['сценарий', 'сценария', 'сценариев'] as const;
+/** Where a variation no conversation shows comes from: never presented as traffic. */
+const ORIGIN_TEXT = { rules: 'добавлен по правилам, не из трафика', owner: 'добавлен вами, не из трафика' } as const;
+
+/** One variation in a line, as the owner confirms it: its title, where it comes from, and the expectations that apply to it. */
+export function variationLine(scenario: BusinessScenario, variation: BusinessScenario['variations'][number]): string {
+  const applies = variationExpectations(scenario, variation.id).map(expectation => `${expectation.strength === 'must_not' ? 'нельзя: ' : ''}${expectation.text}`);
+  return `«${variation.title}» — ${variation.origin === 'logs' ? 'из логов' : ORIGIN_TEXT[variation.origin]}; агент должен: ${applies.join('; ') || '—'}`;
+}
+
+/** The variations of a library's plan no situation is an example of yet, and no conversation shows: the ones a situation is written for from the rules. */
+export function variationsWithout(library: Pick<LibraryV2, 'plan' | 'cards'>): { scenario: BusinessScenario; variation: BusinessScenario['variations'][number] }[] {
+  return (library.plan ?? []).flatMap(scenario => scenario.variations.filter(variation => variation.origin !== 'logs'
+    && !examplesOf(library, scenario.id, variation.id).length).map(variation => ({ scenario, variation })));
+}
 
 /**
  * The plan in the owner's words: each scenario's question, its variations — from the logs with their conversations, or
@@ -151,7 +165,7 @@ export function planLines(library: Pick<LibraryV2, 'plan' | 'cards'>): string[] 
       `«${scenario.question}» — тема «${scenario.topic}»`,
       '  Варианты:',
       ...scenario.variations.map((variation, index) => `    ${index + 1}) ${variation.title} — ${variation.origin === 'logs'
-        ? `из логов, ${countText(variation.examples.length, [...conversations])}` : 'добавлен по правилам, не из трафика'}${cards(variation.id) ? `; ситуаций: ${cards(variation.id)}` : ''}`),
+        ? `из логов, ${countText(variation.examples.length, [...conversations])}` : ORIGIN_TEXT[variation.origin]}${cards(variation.id) ? `; ситуаций: ${cards(variation.id)}` : '; ситуаций нет'}`),
       '  Ожидания:',
       ...scenario.expectations.map((expectation, index) => `    ${index + 1}. ${expectationLine(scenario, expectation)}`),
     ];
@@ -213,7 +227,7 @@ export interface PlannedSituation { scenarioId: string; outcome: 'pass' | 'fail'
 export interface ScenarioOutcome {
   question: string;
   passed: number; decided: number; unmeasured: number;
-  variations: { title: string; origin: 'logs' | 'rules'; passed: number; decided: number; unmeasured: number }[];
+  variations: { title: string; origin: BusinessScenario['variations'][number]['origin']; passed: number; decided: number; unmeasured: number }[];
   broken: { text: string; mustNot: boolean; count: number; of: number }[];
 }
 

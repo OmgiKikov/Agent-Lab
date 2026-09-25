@@ -206,6 +206,19 @@ export async function settle(surface: DecisionSurface, action: DecisionAction, r
         handOver(lease => surface.background.preparation(surface.ctx, lease, draft.id));
         return 'Продолжаю подготовку с сохранённого места — ситуации придут в чат.';
       });
+    case 'prepare_variations':
+      return surface.writing(async (lab, handOver) => {
+        const draft = await lab.get(action.runId);
+        if (!draft.librarySnapshot) throw new Error('У черновика нет ситуаций.');
+        const { experiment, queued } = await lab.queueVariations(draft.id, libraryHash(draft.librarySnapshot));
+        const callCeiling = await resumeCeiling(surface.ctx, experiment);
+        // Declined: the variations stay queued, and «Продолжить подготовку» writes them later.
+        if (callCeiling === null) return 'Ситуации вариантов поставлены в очередь: они составятся, когда вы продолжите подготовку.';
+        const resumed = await lab.resumePreparation(draft.id, libraryHash(experiment.librarySnapshot!), callCeiling === undefined ? {} : { callCeiling });
+        if (resumed.phase !== 'preparing') return 'Подготовка успела разобрать всё: черновик снова открыт.';
+        handOver(lease => surface.background.preparation(surface.ctx, lease, draft.id));
+        return `Составляю ${countText(queued.length, ['ситуацию', 'ситуации', 'ситуаций'])} по правилам: ${queued.slice(0, 3).map(item => `«${clip(oneLine(item.variation), 60)}»`).join(', ')} — придут в чат.`;
+      });
     case 'convert_draft':
       return surface.writing(async lab => {
         const text = conversionText(await lab.convertV1Draft(action.runId));

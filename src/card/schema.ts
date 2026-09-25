@@ -154,7 +154,8 @@ export type Card = z.infer<typeof cardSchema>;
  * the expectations every card of the scenario shares. A variation from the logs names the sampled conversations it
  * stands for; one no conversation shows (`rules`) is an addition from the rules and is never presented as traffic.
  */
-export const scenarioVariationSchema = z.strictObject({ id, title: text(160), origin: z.enum(['logs', 'rules']), examples: ids(40) });
+// `owner`: a circumstance the owner added to the plan (add_variation) — like `rules`, never presented as traffic.
+export const scenarioVariationSchema = z.strictObject({ id, title: text(160), origin: z.enum(['logs', 'rules', 'owner']), examples: ids(40) });
 export const planExpectationSchema = z.strictObject({
   id, text: text(300), requirementIds: z.array(id).min(1).max(3),
   strength: z.literal('must_not').optional(), acceptable: text(600).optional(), violation: text(600).optional(),
@@ -235,6 +236,10 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
     acceptable: text(600).nullable().optional(), violation: text(600).nullable().optional() }),
   // The expectation leaves the scenario and every card's duty that is it; a card it would leave without a duty is refused.
   z.strictObject({ kind: z.literal('remove_plan_expectation'), scenarioId: id, expectationId: id }),
+  // A kind of customer the owner adds to a scenario: a new variation, its situations written from the rules when the owner
+  // asks. `expectationIds`: the scenario's expectations of some variations only that apply to it too; the ones of every
+  // variation always do.
+  z.strictObject({ kind: z.literal('add_variation'), scenarioId: id, title: text(160), expectationIds: ids(8).optional() }),
 ]);
 export type CardCommand = z.infer<typeof cardCommandSchema>;
 
@@ -373,6 +378,11 @@ const cardPreparationSchema = z.strictObject({
    * flight is left out, its cost unknown. Absent in preparations made before plans.
    */
   plans: z.array(z.strictObject({ topic: text(120), scenarioId: id.optional(), reason: text(2000).optional() })).max(30).optional(),
+  /**
+   * Units that write one situation of a variation of the plan from the rules — a variation no sampled conversation shows,
+   * or one the owner added — queued on the owner's word (lab/library.ts queueVariations). Absent before such units.
+   */
+  variations: z.array(z.strictObject({ unit: id, scenarioId: id, variationId: id })).max(60).optional(),
 });
 export type CardPreparation = z.infer<typeof cardPreparationSchema>;
 

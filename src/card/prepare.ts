@@ -364,9 +364,14 @@ class Preparation {
     const binds: ProposalCall['binds'] = { kinds: rulebook.kinds,
       rules: this.library.requirements.filter(requirement => rulebook.included.includes(requirement.id)).map(({ sourceId, quote }) => ({ sourceId, quote })) };
     const messages = dialogue ? loggedMessages(dialogue) : [];
-    // The business scenario of the unit's topic, when the preparation planned one: the card is an example of it.
-    const planned = dialogue && batch ? scenarioOfTopic(this.library.plan, unitTopic(progress, this.library, batch.id, unit)?.title ?? '') : undefined;
-    const plan = planned && { scenario: planned, requirements: this.library.requirements.filter(requirement => planned.expectations.some(expectation => expectation.requirementIds.includes(requirement.id))) };
+    // The business scenario of the unit's topic, when the preparation planned one: the card is an example of it. A unit
+    // queued for one variation of the plan writes that variation's situation from the rules (lab/library.ts queueVariations).
+    const queued = progress.variations?.find(item => item.unit === unit);
+    const planned = queued ? this.library.plan?.find(scenario => scenario.id === queued.scenarioId)
+      : dialogue && batch ? scenarioOfTopic(this.library.plan, unitTopic(progress, this.library, batch.id, unit)?.title ?? '') : undefined;
+    if (queued && !planned?.variations.some(variation => variation.id === queued.variationId)) return { excluded: 'Этого варианта больше нет в плане сценария.' };
+    const plan = planned && { scenario: planned, requirements: this.library.requirements.filter(requirement => planned.expectations.some(expectation => expectation.requirementIds.includes(requirement.id))),
+      ...(queued ? { variationId: queued.variationId } : {}) };
     const call = (sources: readonly Source[]) => proposalCall({ source: dialogue && batch ? { kind: 'dialogue', batchId: batch.id, dialogueId: unit } : { kind: 'rules', unit },
       messages, sources, binds, maxTurns: record.settings.maxTurns, ...(plan ? { plan } : {}),
       // The tool channel the probe before the preparation confirmed: its tools may be what a duty is observed on.
@@ -375,7 +380,7 @@ class Preparation {
     // A sampled conversation's topic is the map's: the model is offered it alone, and the card takes it as the map words it.
     const topic = dialogue && batch ? unitTopic(progress, this.library, batch.id, unit) : undefined;
     const request = (sources: readonly Source[]): CardProposalRequest => ({ task: record.task, call: call(sources),
-      topics: topic ? [topic.title] : [...new Set(this.library.cards.map(card => card.topic))],
+      topics: topic ? [topic.title] : queued && planned ? [planned.topic] : [...new Set(this.library.cards.map(card => card.topic))],
       written: dialogue ? [] : this.library.cards.filter(card => card.origin.kind === 'rules' && card.id !== revision?.card.id).map(card => card.title),
       ...(revision ? { revision: { previous: reviewedBrief(revision.card, this.library), blocked: revision.blocked } } : {}) });
     // Over the request's cap the last articles give way first; the agent's prompts and the customer's messages never do.

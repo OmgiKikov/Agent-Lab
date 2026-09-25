@@ -1,5 +1,6 @@
 import type { Experiment } from './contracts.js';
 import { convertible, libraryV1Of } from './card/legacy-v1.js';
+import { variationsWithout } from './card/plan.js';
 import type { QuestionChoice } from './card/status.js';
 import type { SituationView } from './card/view.js';
 import { countText, pluralForm } from './plural.js';
@@ -33,6 +34,8 @@ export type DecisionAction =
   | { kind: 'raise_limit'; runId: string; to: number }
   | { kind: 'check_situations'; runId: string }
   | { kind: 'resume_preparation'; runId: string }
+  /** Situations for the variations of the plan that have none, written from the rules: queued, then the preparation continues. */
+  | { kind: 'prepare_variations'; runId: string }
   /** A draft of the first format goes on as a new draft of cards; the old one stays as it was. */
   | { kind: 'convert_draft'; runId: string }
   /** The owner's word on which agent version wrote an import's logs: a version, or null — «неизвестна». */
@@ -180,10 +183,22 @@ export function decisions(input: InboxInput): Decision[] {
       text: checking ? `${countText(checking, ['ситуация ещё не проверена', 'ситуации ещё не проверены', 'ситуаций ещё не проверены'])} — без проверки ${pluralForm(checking, ['она не войдёт', 'они не войдут', 'они не войдут'])} в прогон.`
         : `${REVISION} и проверить снова: без этого они не войдут в прогон.`,
       choices: [{ label: `Проверить (до ${countText(owed, CALLS_UP_TO)} модели)`, action: { kind: 'check_situations', runId: draft.record.id }, settles: true }, open] });
-    const pending = draft.record.preparationProgress?.pending.length ?? 0;
+    const progress = draft.record.preparationProgress;
+    const pending = progress?.pending.length ?? 0;
+    // Units queued for variations of the plan are situations from the rules, not conversations of the logs.
+    const variations = progress && 'variations' in progress ? progress.variations?.filter(item => progress.pending.includes(item.unit)).length ?? 0 : 0;
+    const waiting = [...(pending - variations ? [`${countText(pending - variations, CONVERSATIONS)} из логов`] : []),
+      ...(variations ? [countText(variations, ['ситуация варианта', 'ситуации вариантов', 'ситуаций вариантов'])] : [])].join(' и ');
     if (editable && pending && !draft.record.librarySnapshot?.acceptance) spending.push({ key: `resume:${draft.record.id}`, subject: 'Подготовка ситуаций',
-      text: `Подготовка остановилась: ${countText(pending, CONVERSATIONS)} из логов ещё не ${pluralForm(pending, ['разобран', 'разобраны', 'разобраны'])}.`,
+      text: `Подготовка ещё не закончена: ${waiting} ждут разбора.`,
       choices: [{ label: 'Продолжить подготовку', action: { kind: 'resume_preparation', runId: draft.record.id }, settles: true },
+        { label: 'Открыть ситуации', action: { kind: 'open_situations' }, settles: false }] });
+    // Variations of the plan no conversation shows and no situation checks yet: the owner decides whether to pay for them.
+    const library = draft.record.librarySnapshot;
+    const bare = editable && !pending && library?.formatVersion === 2 && !library.acceptance ? variationsWithout(library) : [];
+    if (bare.length) spending.push({ key: `variations:${draft.record.id}`, subject: 'Варианты без ситуаций',
+      text: `${bare.length === 1 ? 'Вариант' : 'Варианты'} ${bare.slice(0, 3).map(item => `«${clip(oneLine(item.variation.title), 60)}»`).join(', ')}${bare.length > 3 ? ` и ещё ${bare.length - 3}` : ''} пока ничем не ${bare.length === 1 ? 'проверяется' : 'проверяются'}: в логах таких разговоров нет. Lab может составить по ситуации для каждого по правилам.`,
+      choices: [{ label: 'Составить ситуации', action: { kind: 'prepare_variations', runId: draft.record.id }, settles: true },
         { label: 'Открыть ситуации', action: { kind: 'open_situations' }, settles: false }] });
   }
   if (run) {

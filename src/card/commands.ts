@@ -4,9 +4,9 @@ import type { ImportBatch } from '../scenario-contracts.js';
 import { libraryHash } from '../scenario-library.js';
 import { clip } from '../text.js';
 import { logVersionCommandSchema, logVersionJournalSchema, type LogVersionCommand, type LogVersionJournal } from './calibration.js';
-import { cardMessage, messageAt, problemText, unusableFindings, type CardEvidence, type CheckFinding } from './checks.js';
+import { cardMessage, messageAt, normalizeText, problemText, unusableFindings, type CardEvidence, type CheckFinding } from './checks.js';
 import { pendingClaims } from './review.js';
-import { expectationLine } from './plan.js';
+import { expectationLine, variationExpectations, variationLine } from './plan.js';
 import { bindsBot, KIND_WORDS, rulebookChangeLines, rulebookOf, unboundCitation } from './rulebook.js';
 import { cardCommandSchema, cardSchema, libraryV2Schema, type BusinessScenario, type Card, type CardChange, type CardCommand, type EventRef, type LibraryV2, type Rulebook } from './schema.js';
 import { cardStatus, plausibleGroup } from './status.js';
@@ -74,7 +74,8 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
     case 'edit_card': return strictest(command.changes.map(change => requiredAuthority(withCard(change, command.cardId))));
     // Lab's values over the log's masks speak for the customer: the owner confirms them as shown.
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card':
-    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': case 'set_references': case 'remove_plan_expectation': return 'owner-confirm';
+    // A new kind of customer is a decision about who the agent is checked with, whatever its words.
+    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': case 'set_references': case 'remove_plan_expectation': case 'add_variation': return 'owner-confirm';
   }
 }
 
@@ -88,6 +89,7 @@ export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
     case 'edit_client': return texts(command.wants, command.writes, command.leaves);
     case 'edit_expectation': return texts(command.text, command.appliesWhen, command.acceptable, command.violation);
     case 'edit_plan_expectation': return texts(command.text, command.acceptable, command.violation);
+    case 'add_variation': return [command.title];
     case 'set_turn': return command.turn && !command.turn.event ? texts(command.turn.after, command.turn.says) : [];
     case 'add_similar': return command.change.kind === 'opening' ? [command.change.writes] : command.change.kind === 'turn' ? texts(command.change.turn?.after, command.change.turn?.says)
       : texts(command.change.writes);
@@ -128,8 +130,11 @@ export interface Prepared {
   recheck: string[];
   /** A change of the rulebook: what bound the bot before and after, and the situations whose expectations it leaves without a binding rule. */
   rulebook?: { before: Rulebook; after: Rulebook; flagged: number[] };
-  /** A change of the plan: the scenario's question and its expectation in a line before and after (null — removed); `diff` holds the situations that change with it. */
-  plan?: { scenario: string; before: string; after: string | null };
+  /**
+   * A change of the plan: the scenario's question and, in a line, its expectation or variation before and after (null —
+   * none: added, or removed); `diff` holds the situations that change with it.
+   */
+  plan?: { scenario: string; what: 'expectation' | 'variation'; before: string | null; after: string | null };
   next: LibraryV2;
 }
 
@@ -442,6 +447,7 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
     }
     case 'set_rulebook': return rulebookChange(library, command.rulebook);
     case 'edit_plan_expectation': case 'remove_plan_expectation': return planChange(library, command, context);
+    case 'add_variation': return variationAdded(library, command);
     case 'answer_question': throw new Error('An answer is resolved to its own command before it is applied.');
   }
 }
@@ -487,7 +493,29 @@ function planChange(library: LibraryV2, command: Extract<CardCommand, { kind: 'e
   }
   const kept = after.expectations.find(item => item.id === expectation.id);
   return { cards, scope: linked.map(card => card.id), plan: plan.map(item => item.id === scenario.id ? after : item),
-    planChange: { scenario: scenario.question, before: expectationLine(scenario, expectation), after: kept ? expectationLine(after, kept) : null } };
+    planChange: { scenario: scenario.question, what: 'expectation', before: expectationLine(scenario, expectation), after: kept ? expectationLine(after, kept) : null } };
+}
+
+/**
+ * A kind of customer the owner adds to a scenario: a new variation, never traffic, that the scenario's expectations of
+ * every variation apply to, and those of some variations the command names. No card changes: a situation of it is written
+ * from the rules when the owner asks (lab/library.ts queueVariations). A variation nothing would check is refused.
+ */
+function variationAdded(library: LibraryV2, command: Extract<CardCommand, { kind: 'add_variation' }>): Edited {
+  const plan = library.plan ?? [];
+  const scenario = plan.find(item => item.id === command.scenarioId);
+  if (!scenario) throw new UnknownReference('scenario', plan.map((item, index) => `${index + 1} «${clip(item.question, 60)}»`), 'Такого сценария в плане нет.');
+  const named = command.expectationIds ?? [];
+  const unknown = named.filter(id => !scenario.expectations.some(expectation => expectation.id === id));
+  if (unknown.length) throw new UnknownReference('expectation', scenario.expectations.map(item => `${item.id} ${clip(item.text, 60)}`), `У сценария «${clip(scenario.question, 80)}» нет такого ожидания.`);
+  if (scenario.variations.some(variation => normalizeText(variation.title) === normalizeText(command.title))) throw new CommandRefused(`Вариант «${clip(command.title, 80)}» в сценарии уже есть.`);
+  if (scenario.variations.length >= 8) throw new CommandRefused('В сценарии уже 8 вариантов — больше план не держит.');
+  const id = `v${Math.max(0, ...scenario.variations.map(variation => Number(variation.id.slice(1))).filter(Number.isInteger)) + 1}`;
+  const after: BusinessScenario = { ...scenario, variations: [...scenario.variations, { id, title: command.title, origin: 'owner', examples: [] }],
+    expectations: scenario.expectations.map(expectation => expectation.variationIds && named.includes(expectation.id) ? { ...expectation, variationIds: [...expectation.variationIds, id] } : expectation) };
+  if (!variationExpectations(after, id).length) throw new CommandRefused('Для нового варианта нет ни одного ожидания: отметьте, какие ожидания сценария к нему относятся.');
+  return { cards: library.cards, scope: [], plan: plan.map(item => item.id === scenario.id ? after : item),
+    planChange: { scenario: scenario.question, what: 'variation', before: null, after: variationLine(after, after.variations.at(-1)!) } };
 }
 
 /**
@@ -568,9 +596,11 @@ export function prepareCommand(library: LibraryV2, raw: CardCommand, context: Co
  */
 export function preparedLines(prepared: Pick<Prepared, 'diff' | 'rulebook' | 'plan' | 'next'>): string[] {
   const { plan } = prepared;
+  if (plan?.what === 'variation') return [`Сценарий «${plan.scenario}» — новый вариант клиента:`, `  ${plan.after ?? ''}`,
+    'Ситуацию этого варианта Lab составит по правилам, когда вы скажете: это расходует вызовы модели.'];
   if (plan) {
     const numbers = prepared.diff.map(item => item.number).sort((a, b) => a - b);
-    return [`Сценарий «${plan.scenario}» — общее ожидание`, `  было: ${plan.before}`, `  стало: ${plan.after ?? 'убрано из плана'}`,
+    return [`Сценарий «${plan.scenario}» — общее ожидание`, `  было: ${plan.before ?? '—'}`, `  стало: ${plan.after ?? 'убрано из плана'}`,
       numbers.length === 1 ? `Вместе с ним ${plan.after ? 'меняется' : 'теряет его'} ситуация ${numbers[0]}.`
         : numbers.length ? `Вместе с ним ${plan.after ? 'меняются' : 'теряют его'} ситуации ${numbers.join(', ')}.` : 'Ситуаций с этим ожиданием сейчас нет.'];
   }

@@ -47,7 +47,9 @@ export interface ProposalCall {
    * The business scenario of the unit's topic (card/plan.ts), when the preparation planned one: the card is an example of
    * one of its variations, and its duties are the plan's expectations for it — its words, rules, strength and ways.
    */
-  plan?: { scenario: BusinessScenario; requirements: Requirement[] };
+  plan?: { scenario: BusinessScenario; requirements: Requirement[];
+    /** A situation from the rules written for this one variation (a variation no conversation shows): the builder does not choose it. */
+    variationId?: string };
 }
 
 export type CallSource = Pick<Source, 'id' | 'name' | 'content' | 'kind'>;
@@ -180,6 +182,10 @@ export function located(basis: Pick<Basis, 'sourceId' | 'quote'>, call: Pick<Pro
 /** The id of the rule one cited sentence stands for: the same sentence of the same source is the same rule in every card. */
 export const citationId = (sourceId: string, quote: string): string => `rule_${fingerprint({ sourceId, quote }).slice(0, 24)}`;
 
+/** The variation a card is an example of: the one a situation from the rules was written for, else the one the builder chose. */
+const variationOfProposal = (proposal: CardProposal, call: ProposalCall): string | undefined =>
+  call.plan?.variationId ?? ('variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined);
+
 /** The plan's expectation a duty is, by its words up to case and spacing; undefined without a plan or when it is none of them. */
 function plannedOf(duty: Pick<DutyProposal, 'text'>, call: ProposalCall): BusinessScenario['expectations'][number] | undefined {
   const said = normalizeText(duty.text);
@@ -190,7 +196,7 @@ function plannedOf(duty: Pick<DutyProposal, 'text'>, call: ProposalCall): Busine
 function planSlips(proposal: CardProposal, call: ProposalCall): string[] {
   const plan = call.plan;
   if (!plan) return [];
-  const variation = 'variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined;
+  const variation = variationOfProposal(proposal, call);
   const slips: string[] = [];
   const seen = new Set<string>();
   proposal.agentMust.forEach((duty, i) => {
@@ -279,7 +285,7 @@ export function bindProposal(proposal: CardProposal, call: ProposalCall, number:
       ...(own.acceptable !== undefined ? { acceptable: own.acceptable } : {}), ...(own.violation !== undefined ? { violation: own.violation } : {}),
       ...(planned ? { planExpectationId: planned.id } : {}) };
   });
-  const variation = 'variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined;
+  const variation = variationOfProposal(proposal, call);
   const common = { id: `card_${fingerprint({ source: call.source, proposal })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1,
     ...(call.plan && variation ? { scenarioRef: { scenarioId: call.plan.scenario.id, variationId: variation } } : {}) };
   if ('writes' in proposal) {
@@ -465,10 +471,10 @@ export function proposalPayload(request: CardProposalRequest) {
   };
 }
 
-/** The plan as the card writer reads it: the scenario's variations and its expectations with their rules, quoted. */
+/** The plan as the card writer reads it: the scenario's variations and its expectations with their rules, quoted; the variation a situation from the rules is written for. */
 function planView(plan: NonNullable<ProposalCall['plan']>) {
   const { scenario, requirements } = plan;
-  return { question: scenario.question, variations: scenario.variations.map(({ id, title }) => ({ id, title })),
+  return { question: scenario.question, variations: scenario.variations.map(({ id, title }) => ({ id, title })), ...(plan.variationId ? { variation: plan.variationId } : {}),
     expectations: scenario.expectations.map(expectation => ({ id: expectation.id, text: expectation.text, strength: expectation.strength ?? 'must',
       acceptable: expectation.acceptable ?? null, violation: expectation.violation ?? null, variations: expectation.variationIds ?? null,
       rules: expectation.requirementIds.flatMap(id => requirements.filter(requirement => requirement.id === id).map(({ quote, text }) => ({ quote, rule: text }))) })) };

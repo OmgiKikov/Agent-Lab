@@ -12,7 +12,7 @@ import { createInputSchema, isRunnable, materialSources, runnableTarget, SCENARI
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection, type Connection } from './connection.js';
 import { examConnection, examLines } from './exam.js';
-import { planLines } from './card/plan.js';
+import { planLines, variationLine, variationsWithout } from './card/plan.js';
 import { gapsLine } from './miner/cards.js';
 import { detectionLines, detectProject, promptLine } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
@@ -244,9 +244,10 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     return;
   }
   const rulebookFlags = values['operator-rules'] !== undefined || !!values['bind-rule']?.length || !!values['unbind-rule']?.length;
-  if (!values.input && !values.choice && !values.check && !values.resume && !values.accept && !rulebookFlags) { await show(values.id); return; }
+  if (!values.input && !values.choice && !values.check && !values.resume && !values.accept && !values.variations && !rulebookFlags) { await show(values.id); return; }
   await lab.init();
   try {
+    if (values.variations) { await variationSituations(lab, values, show); return; }
     const target: { id: string; preview?: true } = values.check || values.resume || values.accept ? { id: values.id } : await lab.editableCards(values.id);
     // A fresh copy of a finished run is only previewed: without --yes nothing is written, so it has no id to name yet.
     if (target.preview) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка пойдёт в новый черновик того же набора.\n`);
@@ -293,6 +294,33 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     if (check.decision.action === 'run') await lab.waitForIdle();
     await show(target.id, changes.map(line => safeLine(line)));
   } finally { await lab.close(); }
+}
+
+/**
+ * `cards --variations`: situations for the variations of the plan that have none — from the rules, never traffic. Without
+ * --yes the variations and the ceiling the preparation would continue under; with it they are queued and the preparation
+ * continues, the ceiling raised to what they need as the owner's word, like `--resume --yes`.
+ */
+async function variationSituations(lab: ExperimentLab, values: Flags, show: (id: string) => Promise<void>): Promise<void> {
+  const record = await lab.get(values.id!);
+  const library = record.librarySnapshot;
+  if (library?.formatVersion !== 2 || !library.plan?.length) throw new Error('У этого набора нет плана сценариев.');
+  const wanted = variationsWithout(library);
+  if (!wanted.length) throw new Error('У всех вариантов плана уже есть ситуации.');
+  const progress = record.preparationProgress;
+  const after = progress && progress.protocol !== 'chronological-scenarios-v1' ? preparationBudget({ ...record, preparationProgress: { ...progress, pending: [...progress.pending, ...wanted.map((_, index) => `rules_${index}`)] } }) : undefined;
+  if (!values.yes) {
+    await writeStdout(`${['Составить ситуации для вариантов без ситуаций — по правилам, не из логов:', ...wanted.map(({ scenario, variation }) => `  ${variationLine(scenario, variation)} — сценарий «${scenario.question}»`),
+      ...(after ? [`Потрачено ${after.spent} из ${after.ceiling} согласованных вызовов модели; с --yes потолок всей подготовки станет ${Math.max(after.ceiling, after.resume)}. Агент не запускается.`] : []),
+      'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
+    return;
+  }
+  const { experiment } = await lab.queueVariations(record.id, libraryHash(library));
+  const budget = preparationBudget(experiment);
+  const raise = budget && budget.resume > budget.ceiling ? budget.resume : undefined;
+  await lab.resumePreparation(record.id, libraryHash(experiment.librarySnapshot!), { ...preparationFlags(values), ...(raise !== undefined ? { callCeiling: raise } : {}) });
+  await lab.waitForIdle();
+  await show(record.id);
 }
 
 /** The rulebook command of `cards --operator-rules on|off --bind-rule ID --unbind-rule ID`: the current rulebook with the owner's changes. */
@@ -796,9 +824,10 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     ['agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes', 'Ответ на вопрос ситуации'],
     ['agent-lab cards --id RUN --input команда.json [--yes]', 'Команда владельца; без --yes — только «было → стало»'],
     ['agent-lab cards --id RUN --check|--resume|--accept --yes [--parallel 4]', 'Проверить ситуации · продолжить подготовку · утвердить готовые'],
+    ['agent-lab cards --id RUN --variations [--yes]', 'Ситуации для вариантов плана, которых нет в логах: по правилам'],
     ['agent-lab cards --id RUN [--operator-rules on|off] [--bind-rule ID] [--unbind-rule ID] [--yes]', 'Свод правил: входят ли инструкции для операторов, отдельные правила, обязательные для бота'],
     ['agent-lab cards --id RUN --convert', 'Черновик старого формата — продолжить в новом формате; старый останется как есть']],
-  flags: ['id', 'card', 'json', 'input', 'choice', 'text', 'check', 'resume', 'accept', 'convert', 'yes', 'parallel', 'operator-rules', 'bind-rule', 'unbind-rule'], run: cards },
+  flags: ['id', 'card', 'json', 'input', 'choice', 'text', 'check', 'resume', 'accept', 'variations', 'convert', 'yes', 'parallel', 'operator-rules', 'bind-rule', 'unbind-rule'], run: cards },
   accept: { help: [['agent-lab accept --id RUN [--yes] [--json]', 'Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания']], flags: ['id', 'yes', 'json'], run: accept },
   run: { help: [['agent-lab run --id RUN --yes [--parallel 4]', 'Прогнать утверждённые ситуации; итог — JSON для скрипта']], flags: ['id', 'yes', 'parallel', 'json'], failure: 2, run },
   repeat: { help: [['agent-lab repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID]', 'Новый черновик тех же ситуаций']], flags: ['id', 'case', 'control'], run: repeat },
