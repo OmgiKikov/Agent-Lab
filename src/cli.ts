@@ -45,7 +45,7 @@ import { importHints, tableChoicesOf } from './cli/import-flags.js';
 import { connectFromCurl, doctorTemplate } from './cli/connect.js';
 import { commandOf, readCommandLine, type Flag, type Flags } from './cli/args.js';
 import { errorText, stopText } from './cli/errors.js';
-import { preparationBudget, preparationCeiling } from './card/budget.js';
+import { preparationBudget, preparationCeiling, resumeLines, type PreparationBudget } from './card/budget.js';
 import { builderOf, consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
 
 /*
@@ -253,16 +253,16 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
     if (target.preview) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка пойдёт в новый черновик того же набора.\n`);
     else if (target.id !== values.id) process.stderr.write(`Прогон ${values.id} уже выполнен и не меняется: правка идёт в черновик ${target.id}.\n`);
     if (values.resume || values.check || values.accept) {
-      // The ceiling the owner agreed to covers the whole preparation: continuing past it is their word too, the number stated.
-      const budget = values.resume ? preparationBudget(await lab.get(target.id)) : undefined;
-      const raise = budget && budget.resume > budget.ceiling ? budget.resume : undefined;
+      // Continuing a preparation spends out of the ceiling the owner agreed to for all of it: the preview says what it spent
+      // and the ceiling it goes on under, and a new one is agreed to only as the number shown (ceilingConsent).
+      const consent = values.resume ? await ceilingConsent(values, preparationBudget(await lab.get(target.id)), `agent-lab cards --id ${values.id} --resume`) : {};
+      if (!consent) return;
       if (!values.yes) throw new Error(values.accept ? 'Утверждение фиксирует готовые ситуации для прогона; укажите --yes. Агент не запускается.'
-        : raise !== undefined ? `Подготовка потратила ${budget!.spent} из ${budget!.ceiling} согласованных вызовов модели; с --yes потолок всей подготовки станет ${raise}. Агент не запускается.`
         : 'Это расходует вызовы модели в пределах лимита; укажите --yes.');
       const { record, views } = await situations(target.id);
       if (values.resume) {
         if (!record.librarySnapshot) throw new Error('Продолжать нечего.');
-        await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot), { ...preparationFlags(values), ...(raise !== undefined ? { callCeiling: raise } : {}) }); await lab.waitForIdle();
+        await lab.resumePreparation(target.id, libraryHash(record.librarySnapshot), { ...preparationFlags(values), ...consent }); await lab.waitForIdle();
       }
       else if (values.check) { await lab.recheckCards(target.id, { explicit: true }); await lab.waitForIdle(); }
       else {
@@ -297,9 +297,26 @@ async function cards({ values, directory }: CommandInput): Promise<void> {
 }
 
 /**
+ * The owner's word on the ceiling a preparation continues under (`cards --resume`, `cards --variations`): without --yes
+ * the preview — what it spent, and the ceiling it goes on under, the same or a new one — and the command that agrees to
+ * it; a new ceiling is agreed to only as the number shown, typed back with --ceiling, and --yes alone never raises one.
+ * Undefined when there is no consent yet (the preview is printed); otherwise the options it gives the resume.
+ */
+async function ceilingConsent(values: Flags, budget: PreparationBudget | undefined, again: string): Promise<{ callCeiling?: number } | undefined> {
+  const raise = budget && budget.resume > budget.ceiling ? budget.resume : undefined;
+  const next = `${again}${raise === undefined ? '' : ` --ceiling ${raise}`} --yes`;
+  const asked = values.ceiling === undefined ? undefined : Number(values.ceiling);
+  if (values.yes && asked === raise) return raise === undefined ? {} : { callCeiling: raise };
+  const lines = [...budget ? resumeLines(budget) : [], 'Агент не запускается.'];
+  if (values.yes) throw new Error([...lines, raise === undefined ? `Потолок не меняется — продолжить: ${next}.` : `Потолок поднимается только до показанного числа — продолжить: ${next}.`].join(' '));
+  await writeStdout(`${[...lines, `Продолжить: ${next}`].map(line => safeLine(line)).join('\n')}\n`);
+  return undefined;
+}
+
+/**
  * `cards --variations`: situations for the variations of the plan that have none — from the rules, never traffic. Without
- * --yes the variations and the ceiling the preparation would continue under; with it they are queued and the preparation
- * continues, the ceiling raised to what they need as the owner's word, like `--resume --yes`.
+ * --yes the variations and the ceiling the preparation would continue under; with it — and the new ceiling typed back
+ * when one is needed (ceilingConsent) — they are queued and the preparation continues under that ceiling.
  */
 async function variationSituations(lab: ExperimentLab, values: Flags, show: (id: string) => Promise<void>): Promise<void> {
   const record = await lab.get(values.id!);
@@ -309,16 +326,12 @@ async function variationSituations(lab: ExperimentLab, values: Flags, show: (id:
   if (!wanted.length) throw new Error('У всех вариантов плана уже есть ситуации.');
   const progress = record.preparationProgress;
   const after = progress && progress.protocol !== 'chronological-scenarios-v1' ? preparationBudget({ ...record, preparationProgress: { ...progress, pending: [...progress.pending, ...wanted.map((_, index) => `rules_${index}`)] } }) : undefined;
-  if (!values.yes) {
-    await writeStdout(`${['Составить ситуации для вариантов без ситуаций — по правилам, не из логов:', ...wanted.map(({ scenario, variation }) => `  ${variationLine(scenario, variation)} — сценарий «${scenario.question}»`),
-      ...(after ? [`Потрачено ${after.spent} из ${after.ceiling} согласованных вызовов модели; с --yes потолок всей подготовки станет ${Math.max(after.ceiling, after.resume)}. Агент не запускается.`] : []),
-      'Записать: та же команда с --yes.'].map(line => safeLine(line)).join('\n')}\n`);
-    return;
-  }
+  if (!values.yes) await writeStdout(`${['Составить ситуации для вариантов без ситуаций — по правилам, не из логов:', ...wanted.map(({ scenario, variation }) => `  ${variationLine(scenario, variation)} — сценарий «${scenario.question}»`)]
+    .map(line => safeLine(line)).join('\n')}\n`);
+  const consent = await ceilingConsent(values, after, `agent-lab cards --id ${values.id} --variations`);
+  if (!consent) return;
   const { experiment } = await lab.queueVariations(record.id, libraryHash(library));
-  const budget = preparationBudget(experiment);
-  const raise = budget && budget.resume > budget.ceiling ? budget.resume : undefined;
-  await lab.resumePreparation(record.id, libraryHash(experiment.librarySnapshot!), { ...preparationFlags(values), ...(raise !== undefined ? { callCeiling: raise } : {}) });
+  await lab.resumePreparation(record.id, libraryHash(experiment.librarySnapshot!), { ...preparationFlags(values), ...consent });
   await lab.waitForIdle();
   await show(record.id);
 }
@@ -824,10 +837,11 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     ['agent-lab cards --id RUN --card N --choice a|b|c [--text «…»] --yes', 'Ответ на вопрос ситуации'],
     ['agent-lab cards --id RUN --input команда.json [--yes]', 'Команда владельца; без --yes — только «было → стало»'],
     ['agent-lab cards --id RUN --check|--resume|--accept --yes [--parallel 4]', 'Проверить ситуации · продолжить подготовку · утвердить готовые'],
+    ['agent-lab cards --id RUN --resume|--variations [--ceiling N --yes]', 'Без --yes — сколько потрачено и под каким потолком продолжится; новый потолок — только показанным числом N'],
     ['agent-lab cards --id RUN --variations [--yes]', 'Ситуации для вариантов плана, которых нет в логах: по правилам'],
     ['agent-lab cards --id RUN [--operator-rules on|off] [--bind-rule ID] [--unbind-rule ID] [--yes]', 'Свод правил: входят ли инструкции для операторов, отдельные правила, обязательные для бота'],
     ['agent-lab cards --id RUN --convert', 'Черновик старого формата — продолжить в новом формате; старый останется как есть']],
-  flags: ['id', 'card', 'json', 'input', 'choice', 'text', 'check', 'resume', 'accept', 'variations', 'convert', 'yes', 'parallel', 'operator-rules', 'bind-rule', 'unbind-rule'], run: cards },
+  flags: ['id', 'card', 'json', 'input', 'choice', 'text', 'check', 'resume', 'accept', 'variations', 'convert', 'yes', 'parallel', 'operator-rules', 'bind-rule', 'unbind-rule', 'ceiling'], run: cards },
   accept: { help: [['agent-lab accept --id RUN [--yes] [--json]', 'Что агент должен сделать в каждой ситуации; --yes подтверждает все ожидания']], flags: ['id', 'yes', 'json'], run: accept },
   run: { help: [['agent-lab run --id RUN --yes [--parallel 4]', 'Прогнать утверждённые ситуации; итог — JSON для скрипта']], flags: ['id', 'yes', 'parallel', 'json'], failure: 2, run },
   repeat: { help: [['agent-lab repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID]', 'Новый черновик тех же ситуаций']], flags: ['id', 'case', 'control'], run: repeat },

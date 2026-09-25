@@ -1,6 +1,7 @@
 import type { Experiment, Source } from '../contracts.js';
 import { MODEL_INPUT_BYTES, serializedBytes, workInputIssue } from '../limits.js';
 import { TASK_ATTEMPTS } from '../llm/structured.js';
+import { countText } from '../plural.js';
 
 /*
  * What work on situations may spend: their preparation, and a run of them. Each unit of a preparation (a logged
@@ -73,6 +74,20 @@ export function preparationBudget(record: Pick<Experiment, 'task' | 'sources' | 
   const pending = progress.pending.length;
   const needs = preparationCeiling({ task: record.task, sources: record.sources, situations: pending, fromLogs: !!record.originalImport });
   return { ceiling, spent, left: Math.max(0, ceiling - spent), pending, resume: Math.max(ceiling, spent + needs) };
+}
+
+const CALLS: [string, string, string] = ['вызов', 'вызова', 'вызовов'];
+const CALLS_UP_TO: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
+
+/**
+ * What continuing a preparation will spend, as the owner agrees to it: what it spent of the ceiling agreed to, and the
+ * ceiling it goes on under — the same one, or, when that cannot take what is left, the new one: the one number a consent
+ * to continue stands for.
+ */
+export function resumeLines(budget: PreparationBudget): string[] {
+  const spent = `Подготовка потратила ${countText(budget.spent, CALLS)} модели из ${budget.ceiling} согласованных.`;
+  return budget.resume <= budget.ceiling ? [spent, `На то, что осталось разобрать (${budget.pending}), хватит этого потолка: он не меняется.`]
+    : [spent, `На то, что осталось разобрать (${budget.pending}), нужно до ${countText(budget.resume - budget.spent, CALLS_UP_TO)}: потолок всей подготовки станет ${budget.resume}.`];
 }
 
 /** The longest any one operation may take: the most the settings allow a run. */
