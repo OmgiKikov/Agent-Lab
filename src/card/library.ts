@@ -3,7 +3,7 @@ import { LibraryConflict } from '../errors.js';
 import type { Traffic } from '../miner/schema.js';
 import { libraryHash, snapshotDigest, verifiedAcceptance } from '../scenario-library.js';
 import { compileCard } from './compile.js';
-import { cardSchema, libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type ScenarioLibrary, type BusinessScenario } from './schema.js';
+import { cardSchema, libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type RuleGap, type ScenarioLibrary, type BusinessScenario } from './schema.js';
 import { REVIEW_PROTOCOLS } from './review.js';
 import { cardStatuses, type StatusContext } from './status.js';
 import type { CustomerProfile } from '../target-schema.js';
@@ -75,6 +75,13 @@ export function replaceCard(library: LibraryV2, previousId: string, card: Card):
     ? { ...row, cardIds: row.cardIds.map(id => id === previousId ? replaced.id : id) } : row);
   return libraryV2Schema.parse({ ...library, revision: library.revision + 1, readingManifest,
     cards: library.cards.map(item => item.id === previousId ? replaced : item) });
+}
+
+/** A draft with one more confirmed gap in the owner's rules; a conversation is a gap once. */
+export function withGap(library: LibraryV2, gap: RuleGap): LibraryV2 {
+  draftOnly(library);
+  if (library.gaps?.some(item => item.batchId === gap.batchId && item.dialogueId === gap.dialogueId)) return library;
+  return libraryV2Schema.parse({ ...library, revision: library.revision + 1, gaps: [...library.gaps ?? [], gap] });
 }
 
 /**

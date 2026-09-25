@@ -75,6 +75,13 @@ export function planProblem(proposal: PlanProposal, call: PlanCall): string | un
     if (earlier !== undefined && earlier !== i) slips.push(`variations[${i}] and variations[${earlier}] both name conversation ${dialogueId}: every conversation is an example of one variation at most.`);
     seen.set(dialogueId, i);
   }));
+  // A variation is a circumstance that changes what the agent must do: one no expectation applies to would leave its
+  // conversations with nothing to check, and the builder would report them as a gap in the owner's rules.
+  proposal.variations.forEach((variation, i) => {
+    if (!proposal.expectations.some(expectation => !expectation.variations || expectation.variations.includes(i))) {
+      slips.push(`variations[${i}] «${variation.title}»: no expectation applies to it. A variation is a circumstance that changes what the agent must do: give it the expectations that apply to it (list its place in their variations, or null for all), or drop the variation and move its examples to the variation they belong to.`);
+    }
+  });
   proposal.expectations.forEach((expectation, i) => {
     for (const index of expectation.variations ?? []) if (index >= proposal.variations.length) slips.push(`expectations[${i}].variations names ${index}, and there are ${proposal.variations.length} variations: use their places from 0, or null for all.`);
     expectation.basis.forEach((basis, j) => {

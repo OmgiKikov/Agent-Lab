@@ -128,7 +128,7 @@ export function createDemoRuntime(): Runtime {
     },
     /** Every claim holds except the one the example teaches with: a number named after the agent's question, while no one has vouched for it. */
     async reviewCard(input) {
-      const fact = input.payload.card.knows[0];
+      const fact = input.payload.card?.knows[0];
       const doubted = (alias: string) => alias === 'fact_f1' && fact?.from === 2 && !fact.owner;
       return { verdicts: Object.fromEntries(input.aliases.map(alias => [alias, doubted(alias) ? DEMO_DOUBT : DEMO_READY])), model: 'demo/reviewer' };
     },

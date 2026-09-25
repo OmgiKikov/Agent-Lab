@@ -33,7 +33,8 @@ const PLAN_TOPICS = 16;
  * The most model calls a preparation makes: the topic map's calls; from logs, the plan of each topic the situations
  * stand for — at most one topic a situation — with the choice of its articles from a large knowledge base; and for each
  * situation promised the choice of articles of a large knowledge base for its conversation, its proposal allowance and
- * the review of its card and of that card's one revision. Requests are counted as the topic map's are — each answer passing the first time — and only the
+ * the review of its card and of that card's one revision — or, for a conversation the builder finds no rule for, the
+ * reviewer's check of that gap and the one revision it may send back. Requests are counted as the topic map's are — each answer passing the first time — and only the
  * proposal allowance holds its repairs; a preparation whose repairs reach the ceiling stops there with what it made, and
  * continues on the owner's word. A conversation that makes no situation spends out of the same ceiling, so the
  * preparation never spends more than it promised — over its creation and every resume together (preparationBudget).

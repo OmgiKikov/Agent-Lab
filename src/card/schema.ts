@@ -272,6 +272,16 @@ const cardAcceptanceSchema = z.strictObject({
 }).refine(acceptance => acceptance.definitions.length === acceptance.cardIds.length
   && acceptance.definitions.every((definition, index) => definition.cardId === acceptance.cardIds[index]), 'Every accepted card has exactly one definition, in order');
 
+/**
+ * A request of the logs the owner's rules leave open, as a preparation found it (card/prepare.ts): the conversation, what
+ * the customer asks in the builder's words, the topic of the logs it belongs to, and the reviewer's word that no sentence
+ * of the materials read speaks to it. A gap is never a situation and never counted in a result's accuracy: the result names
+ * it apart — such requests are not checked until the owner adds a rule.
+ */
+export const ruleGapSchema = z.strictObject({ batchId: id, dialogueId: id, asks: text(300), topic: cardTopicSchema.optional(),
+  reviewer: z.strictObject({ protocol: z.literal('card-review-v2'), model: text(200), reason: text(240) }) });
+export type RuleGap = z.infer<typeof ruleGapSchema>;
+
 export const libraryV2Schema = z.strictObject({
   formatVersion: z.literal(2), id, revision: z.number().int().positive(), createdAt: z.iso.datetime(),
   imports: z.array(z.strictObject({ id, contentHash: hash })).max(30),     // references; the batches live in the store's imports
@@ -288,6 +298,11 @@ export const libraryV2Schema = z.strictObject({
   rulebook: rulebookSchema.optional(),
   /** The business scenarios the cards are examples of, one per topic (card/plan.ts); absent in libraries made before plans. */
   plan: z.array(businessScenarioSchema).max(30).refine(distinctIds, 'Scenario ids repeat').optional(),
+  /**
+   * The requests of the logs the owner's rules leave open, each confirmed by the reviewer (card/prepare.ts): sealed with
+   * the situations, so a run's result names them. Absent in libraries made before gaps were checked, and where none was found.
+   */
+  gaps: z.array(ruleGapSchema).max(300).optional(),
 }).refine(library => new Set(library.cards.map(card => card.number)).size === library.cards.length
   && library.cards.every(card => card.number < library.nextNumber), 'A card number repeats or is not below nextNumber: a number is never given twice')
   .refine(topicsKnown, 'A card stands for a topic its library has no traffic of');
@@ -326,7 +341,8 @@ const cardPreparationSchema = z.strictObject({
   status: z.unknown().optional(),
   pending: ids(300), processed: ids(300),
   // `uncovered`: the unit made no situation because the owner's rules leave its request open — in the builder's words,
-  // a gap the owner is told of, not a failure of Lab. Absent on every other unit left out, and before gaps were told apart.
+  // a gap the owner is told of, not a failure of Lab; since gaps are checked, only one the reviewer confirmed (the
+  // library's `gaps` holds it too). Absent on every other unit left out, and before gaps were told apart.
   excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000), uncovered: text(300).optional() })).max(300),
   /** `cards-v1`: the whole policy was grounded in one call (a knowledge base small enough to read at once). */
   groundingComplete: z.boolean().optional(),

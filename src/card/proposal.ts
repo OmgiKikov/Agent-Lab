@@ -460,6 +460,17 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
 export const uncoveredOf = (proposal: CardProposal): string | undefined =>
   'writes' in proposal || proposal.agentMust.length ? undefined : proposal.uncovered ?? undefined;
 
+/**
+ * Why «no expectation of the plan fits» cannot be the answer: the plan names this conversation as an example of a
+ * variation, and every variation has expectations that apply to it (card/plan.ts planProblem).
+ */
+function coveredByPlan(call: ProposalCall): string | undefined {
+  const named = call.plan && namedVariation(call.plan.scenario, call.source);
+  // An expectation without variations applies to all of them (card/plan.ts variationExpectations).
+  if (!call.plan || !named || !call.plan.scenario.expectations.some(expectation => !expectation.variationIds || expectation.variationIds.includes(named.id))) return undefined;
+  return `uncovered is set, but the plan names this conversation as an example of ${named.id} («${named.title}»), whose expectations apply to it: answer variation ${named.id}, take agentMust from its expectations (their text exactly) and set uncovered to null.`;
+}
+
 /** Duties or a gap, never both and never neither. */
 function gapSlips(proposal: CardProposal): string[] {
   if ('writes' in proposal) return [];
@@ -471,8 +482,9 @@ function gapSlips(proposal: CardProposal): string[] {
 export function cardProposalProblem(proposal: CardProposal, call: ProposalCall): string | undefined {
   const gap = gapSlips(proposal);
   if (gap.length) return gap.join(' ');
-  // A gap is an answer, not a card: nothing of it is bound or kept, so nothing else of it is held to the card's checks.
-  if (uncoveredOf(proposal)) return undefined;
+  // A gap is an answer, not a card: nothing of it is bound or kept, so nothing else of it is held to the card's checks —
+  // but a conversation the plan names as an example of a variation is covered by that variation's expectations.
+  if (uncoveredOf(proposal)) return coveredByPlan(call);
   const slips = [...planSlips(proposal, call), ...basisSlips(proposal, call), ...toolSlips(proposal), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
   if (slips.length) return slips.join(' ');
   // Every bound of the stored card an answer can break is a slip above: binding never stops the step with a schema error.

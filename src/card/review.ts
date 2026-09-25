@@ -133,7 +133,7 @@ export function cardReviewSchema(aliases: readonly string[], later: readonly num
 
 /** The later customer messages a review call's verdict on the account may name: the ones the brief it reads accounts for. */
 export const laterMessages = (request: Pick<CardReviewRequest, 'aliases' | 'payload'>): number[] =>
-  request.aliases.includes('coverage') ? request.payload.card.coverage.map(entry => entry.message) : [];
+  request.aliases.includes('coverage') ? request.payload.card?.coverage.map(entry => entry.message) ?? [] : [];
 
 /** The brief as the reviewer reads it: no receipts, message numbers instead of references, the owner's own words for the facts they vouched for. */
 export function reviewedBrief(card: Card, library: LibraryV2) {
@@ -170,16 +170,36 @@ export function reviewedRule(requirement: Requirement, sources: readonly Pick<So
     sentence: source ? quotedClause(source.content, requirement.quote)?.sentence ?? null : null, rule: requirement.text };
 }
 
-/** One review call: the claims it answers, by alias, and what the reviewer reads. */
+/**
+ * One review call: the claims it answers, by alias, and what the reviewer reads — a card's claims, or the one claim of a
+ * gap the author reported instead of a card (gapRequest), which has no card.
+ */
 export interface CardReviewRequest {
   aliases: string[];
   payload: {
-    card: ReturnType<typeof reviewedBrief>;
+    card: ReturnType<typeof reviewedBrief> | null;
+    /** The request the author found no rule for, in its words: asked only of a gap. */
+    gap?: { asks: string };
     dialogue: { messages: readonly LoggedMessage[] } | null;
     requirements: ReturnType<typeof reviewedRule>[];
     articles: { id: string; name: string; content: string }[];
-    claims: { alias: string; kind: ClaimKind; subject: string }[];
+    claims: { alias: string; kind: ClaimKind | typeof GAP_CLAIM; subject: string }[];
   };
+}
+
+/** The alias and kind of a gap's one claim: no sentence of what the author read says what the agent must do here. */
+export const GAP_CLAIM = 'gap';
+
+/**
+ * The review of a gap the author reported instead of a card (card/prepare.ts): whether no sentence of the materials it read
+ * says what the agent must do for the customer's request. The reviewer reads the conversation, the request in the author's
+ * words and every source the author read, in full; a gap is told to the owner only on its word. Its answer is kept with
+ * the gap (schema.ts ruleGapSchema), never as a card's receipt.
+ */
+export function gapRequest(input: { asks: string; messages: readonly LoggedMessage[]; sources: readonly Pick<Source, 'id' | 'name' | 'content' | 'kind'>[] }): CardReviewRequest {
+  return { aliases: [GAP_CLAIM], payload: { card: null, gap: { asks: input.asks }, dialogue: { messages: input.messages }, requirements: [],
+    articles: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
+    claims: [{ alias: GAP_CLAIM, kind: GAP_CLAIM, subject: '' }] } };
 }
 
 /** The reviewer's answers and the model that gave them, as the runtime reports them. */
