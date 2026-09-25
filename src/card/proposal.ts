@@ -120,7 +120,10 @@ function dialogueProposalSchema(call: ProposalCall) {
     plausibleKnows: z.array(z.strictObject({ label: text(120), value: z.union([text(120), z.boolean()]).nullable(), askedAs: text(200).nullable() })).max(PLAUSIBLE_LIMIT),
     leaves: text(300),
     turn: call.laterEvents.length ? z.strictObject({ kind: turnSchema.shape.kind, after: text(300), from: z.literal(call.laterEvents) }).nullable() : z.null(),
-    agentMust: z.array(expectationProposal(call)).min(1).max(3),
+    // Empty only with `uncovered`: what the customer asks that no sentence of the sources — or no expectation of the plan — covers.
+    agentMust: z.array(expectationProposal(call)).max(3),
+    // A gap in the owner's rules, never a card: the owner is told of it. An answer written before the field existed covered its request.
+    uncovered: text(300).nullable().default(null),
     // One key per later customer message: the schema, not a check after the answer, makes the account complete.
     coverage: z.strictObject(Object.fromEntries(call.laterEvents.map(index => [String(index), coverageAnswer]))),
     // One value per masking mark of the customer's messages, asked only when the dialogue has any.
@@ -404,7 +407,26 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
  * The structured task's domain check of a proposal: undefined when it binds into a card that passes every
  * deterministic check, otherwise every reason at once, so one repair fixes them all.
  */
+/**
+ * What the customer of a dialogue asks that the owner's rules leave open, when the builder found no duty for it: a gap
+ * in the rules the owner is told of, never a card. Undefined for a proposal with duties, or one from the rules.
+ */
+export const uncoveredOf = (proposal: CardProposal): string | undefined =>
+  'writes' in proposal || proposal.agentMust.length ? undefined : proposal.uncovered ?? undefined;
+
+/** Duties or a gap, never both and never neither. */
+function gapSlips(proposal: CardProposal): string[] {
+  if ('writes' in proposal) return [];
+  if (!proposal.agentMust.length && proposal.uncovered === null) return ['agentMust is empty and uncovered is null: name the duties the quoted rules give the agent here, or — only when no sentence of the sources says what the agent must do for this request — say in uncovered what the customer asks.'];
+  if (proposal.agentMust.length && proposal.uncovered !== null) return ['uncovered is set while agentMust names duties: when a rule covers the request, uncovered is null.'];
+  return [];
+}
+
 export function cardProposalProblem(proposal: CardProposal, call: ProposalCall): string | undefined {
+  const gap = gapSlips(proposal);
+  if (gap.length) return gap.join(' ');
+  // A gap is an answer, not a card: nothing of it is bound or kept, so nothing else of it is held to the card's checks.
+  if (uncoveredOf(proposal)) return undefined;
   const slips = [...planSlips(proposal, call), ...basisSlips(proposal, call), ...toolSlips(proposal), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
   if (slips.length) return slips.join(' ');
   // Every bound of the stored card an answer can break is a slip above: binding never stops the step with a schema error.

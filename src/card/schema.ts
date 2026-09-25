@@ -319,7 +319,9 @@ const cardPreparationSchema = z.strictObject({
    */
   status: z.unknown().optional(),
   pending: ids(300), processed: ids(300),
-  excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
+  // `uncovered`: the unit made no situation because the owner's rules leave its request open — in the builder's words,
+  // a gap the owner is told of, not a failure of Lab. Absent on every other unit left out, and before gaps were told apart.
+  excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000), uncovered: text(300).optional() })).max(300),
   /** `cards-v1`: the whole policy was grounded in one call (a knowledge base small enough to read at once). */
   groundingComplete: z.boolean().optional(),
   /** Situations asked for — from the owner's rules alone, or from the logs' sample: never more are made. */

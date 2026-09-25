@@ -15,7 +15,7 @@ import { briefRows, changeText, chip, countsText, detailRows, formatNote, listRo
 import { CommandRefused, LibraryConflict, UnknownReference } from '../src/errors.js';
 import { countText } from '../src/plural.js';
 import type { ExperimentLab } from '../src/experiment.js';
-import { situationCoverage } from '../src/miner/cards.js';
+import { gapsLine, situationCoverage } from '../src/miner/cards.js';
 import { clip, safeText } from '../src/text.js';
 import { ownerMessages, row, runStamp } from './conversation.ts';
 import { displayFor, isInteractive, NeedsOwner, recordErrorText, requireInteractive } from './lab-ui.ts';
@@ -79,14 +79,16 @@ export function situationsFeed(record: Experiment, views: SituationView[], runni
   const note = formatNote(record);
   const coverage = coverageOf(topics, record.settings.maxTurns);
   const waitingLine = waiting.length ? `Ждут ответа: ${waiting.slice(0, 3).map(view => `${view.number} ${clip(view.brief.title, 60)}`).join(' · ')}${waiting.length > 3 ? ` · ещё ${waiting.length - 3}` : ''}` : undefined;
-  const lines = [waitingLine, coverage?.line, note].filter((line): line is string => !!line);
+  // Requests of the logs the owner's rules leave open: theirs to fill, said beside the situations, never as Lab's failure.
+  const gaps = gapsLine(record.preparationProgress);
+  const lines = [waitingLine, coverage?.line, gaps, note].filter((line): line is string => !!line);
   const rulebook = topics && shownRulebook(topics.library);
   const plan = topics ? planLines(topics.library) : [];
   return {
     tone: waiting.length ? 'warning' : 'success',
     rows: [row(countsText(views), 'text', true), ...lines.slice(0, next ? 1 : 2).map(line => row(line, 'muted')), ...(next ? [row(next, 'muted')] : [])],
     // The coverage line may already stand in the summary; its uncovered topics are named on expand.
-    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...(plan.length ? [...plan.map(line => row(line, 'muted')), row('')] : []),
+    more: [...(coverage?.uncovered ? [row(coverage.uncovered, 'muted'), row('')] : []), ...(gaps ? [row(gaps, 'muted'), row('')] : []), ...(plan.length ? [...plan.map(line => row(line, 'muted')), row('')] : []),
       ...(rulebook ? [...rulebookLines(rulebook).map(line => row(line, 'muted')), row('')] : []),
       ...situationRows(views.flatMap(view => listRows(view, { running })))],
     expand: `все ${views.length}: что пишет клиент и что должен агент`,
@@ -183,7 +185,8 @@ export function registerSituationTools(pi: Pick<ExtensionAPI, 'registerTool'>, h
           const rulebook = topics && shownRulebook(topics.library);
           // What the situations are examples of: the plan the copilot tells the owner in words (card/plan.ts), by the ids a change names.
           const plan = topics ? planData(topics.library) : [];
-          return host.feedResult(callId, situationsOutput(record, views, { readOnly, ...(plan.length ? { plan } : {}),
+          const gaps = gapsLine(record.preparationProgress);
+          return host.feedResult(callId, situationsOutput(record, views, { readOnly, ...(plan.length ? { plan } : {}), ...(gaps ? { rulesGap: gaps } : {}),
             ...(rulebook ? { rulebook: { lines: rulebookLines(rulebook), operatorInstructions: rulebook.kinds.find(item => item.kind === 'operator_procedure')!.binds } } : {}) }),
             situationsFeed(record, views, running, topics), `Ситуации · ${runStamp(record)}`);
         }

@@ -40,6 +40,7 @@ export function preparationPanel(view: PreparationView, cards: SituationView[], 
   if (logs) current.push([], ...wrap(`${logs.classified === logs.total ? '✓' : '◌'} Разбор логов${logs.classified === logs.total ? ' завершён' : ' идёт'}`, leftWidth - 4, logs.classified === logs.total ? 'success' : 'text'));
   if (logs?.excluded) current.push(...wrap(`Пропущено до генерации: ${logs.excluded}`, leftWidth - 4, 'muted'));
   if (count?.failed) current.push([], ...wrap(`Не удалось собрать карточку: ${count.failed}`, leftWidth - 4, 'error'), ...wrap('Причины сохранены в журнале подготовки.', leftWidth - 4, 'muted'));
+  if (count?.gaps) current.push([], ...wrap(`Правил нет для запросов: ${count.gaps} — это пробел в материалах, а не ошибка Lab.`, leftWidth - 4, 'muted'));
   const examples: Line[] = [];
   for (const [i, example] of view.examples.entries()) {
     if (i) examples.push([]);

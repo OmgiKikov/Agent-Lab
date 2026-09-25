@@ -8,7 +8,8 @@ export interface PreparationView {
   state: 'working' | 'paused' | 'complete';
   logs?: { classified: number; total: number; excluded: number; topics: string[] };
   examples: { quote: string; topic: string }[];
-  cards?: { completed: number; total: number; pending: number; failed: number; lastFailure?: string };
+  /** `gaps`: units the owner's rules leave open — told apart from the ones Lab failed to make. */
+  cards?: { completed: number; total: number; pending: number; failed: number; gaps?: number; lastFailure?: string };
   activities: { label: string; count: number }[];
   elapsedMinutes: number;
   costUsd: number | null;
@@ -51,8 +52,9 @@ export async function preparationDetails(store: ExperimentStore, record: Experim
   if (progress) {
     const total = progress.requestedCount ?? progress.processed.length + progress.pending.length;
     share = progress.processed.length / Math.max(1, total);
-    const failed = progress.excluded.filter(item => !unsuitable.has(item.dialogueId));
-    preparation.cards = { completed: progress.processed.length, total, pending: progress.pending.length, failed: failed.length,
+    const gaps = progress.excluded.filter(item => 'uncovered' in item && item.uncovered).length;
+    const failed = progress.excluded.filter(item => !unsuitable.has(item.dialogueId) && !('uncovered' in item && item.uncovered));
+    preparation.cards = { completed: progress.processed.length, total, pending: progress.pending.length, failed: failed.length, ...(gaps ? { gaps } : {}),
       ...(failed.length ? { lastFailure: clip(safeLine(failed.at(-1)!.reason), 240) } : {}) };
     const stages = { select: 'Подбор материалов', ground: 'Проверка оснований', plan: 'План сценария', propose: 'Составление ситуаций', review: 'Проверка ситуаций', extract: 'Извлечение ситуаций', repair: 'Исправление ситуаций' };
     const active = ('active' in progress ? progress.active : undefined) ?? (progress.activeStage ? [{ stage: progress.activeStage }] : []);
