@@ -249,7 +249,8 @@ export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: 
   const scope = library ? [] : runScope(start);
   const limit = limitLine(start, runPlan(start));
   const plan = [...scope, ...(scope.length ? [''] : []), ...launchLines(shown(start), scenarioPlan(start), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}), ...proposed, ...examined }),
-    ...(limit ? [limit] : []), ...(library || confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'])];
+    // Before a run there are no verdicts of the judge to speak of: the confirmation covers the expectations, and the result says the rest.
+    ...(limit ? [limit] : []), ...(library || confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше.'])];
   const picked = await ctx.ui.select(safeText([library || confirmed ? 'Запустить прогон?' : 'Подтвердить ожидания и запустить?', '', ...plan].join('\n')), answers);
   if (picked === EXAM_FIRST) return EXAM_FIRST;
   if (picked !== LAUNCH) return undefined;
