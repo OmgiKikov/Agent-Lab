@@ -212,8 +212,9 @@ export function validateAssessments(metrics: Rubric[], events: TraceEvent[], raw
   const quoted = (citation: { seq: number; quote: string }): void => {
     const event = events.find(e => e.seq === citation.seq);
     const text = event && quotedText(event, citation.quote);
-    if (text === undefined) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
-    if (options.meaningfulQuotes && !meaningfulQuote(text, citation.quote)) {
+    if (!event || text === undefined) throw new Error(`Citation #${citation.seq} is not a verbatim quote from that event's content.`);
+    // A short reply is quoted whole by its own words, whatever facts the event shows beside them (buttons, a handoff).
+    if (options.meaningfulQuotes && !meaningfulQuote(text, citation.quote) && !(event.text !== undefined && meaningfulQuote(event.text, citation.quote))) {
       throw new Error(`Citation #${citation.seq} is not meaningful: quote whole words, at least ${QUOTE_MIN_LETTERS} letters or digits unless the quote is every word of the event.`);
     }
   };
