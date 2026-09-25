@@ -2,17 +2,24 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import test, { type TestContext } from 'node:test';
 import { ExperimentStore } from '../src/store.js';
+import { LibraryMemo } from '../src/scenario-store.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash, newRecord } from '../src/lab/record.js';
+import { acceptLibraryV2 } from '../src/card/library.js';
+import { libraryV2Schema } from '../src/card/schema.js';
+import { fingerprint, type Experiment } from '../src/contracts.js';
+import { libraryHash } from '../src/scenario-library.js';
 import { demoInput } from '../src/demo.js';
 import type { JudgeAudit } from '../src/assessment.js';
 import { acceptedDemoDraft, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
+import { cardDraft } from './helpers/card-library.js';
 import { cardInput } from './helpers/card-prep.js';
 
 async function directory(t: TestContext) {
@@ -289,4 +296,75 @@ test('the writer renews its heartbeat and writes no more once the lock is not it
   await assert.rejects(store.save(newRecord(cardInput())), /как писатель/);
   await store.close();
   assert.equal((await lockOf(dir)).token, 'another-writer', 'the other writer\'s lock stays');
+});
+
+/* ── saves: the record of one moment, and no work the store already did ── */
+
+test('a save takes the record as it is at the call: what changes while it waits its turn belongs to the next save', async t => {
+  const dir = await directory(t);
+  const store = new ExperimentStore(dir);
+  await store.init();
+  t.after(() => store.close());
+  const { library, batch } = cardDraft();
+  await store.writeImport(batch);
+  const record: Experiment = { ...newRecord(cardInput()), librarySnapshot: library };
+  const publishing = store.publishLibrary(record, library);
+  record.message = 'a unit took its next step while the save waited';
+  await publishing;
+  assert.notEqual((await store.get(record.id)).message, record.message, 'the published record is the one of the call');
+  const saving = store.save(record);
+  record.message = 'and another one';
+  await saving;
+  assert.equal((await store.get(record.id)).message, 'a unit took its next step while the save waited');
+});
+
+/** Bytes every hash of this process reads from now on (node:crypto, as the modules import it). */
+function hashedBytes(t: TestContext): { bytes: number } {
+  const crypto = createRequire(import.meta.url)('node:crypto') as typeof import('node:crypto');
+  const original = crypto.createHash;
+  const counted = { bytes: 0 };
+  crypto.createHash = ((...args: Parameters<typeof original>) => {
+    const hash = original(...args);
+    const update = hash.update.bind(hash) as (data: string | NodeJS.ArrayBufferView, encoding?: BufferEncoding) => typeof hash;
+    hash.update = ((data: string | NodeJS.ArrayBufferView, encoding?: BufferEncoding) => {
+      counted.bytes += typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength;
+      return update(data, encoding);
+    }) as typeof hash.update;
+    return hash;
+  }) as typeof original;
+  syncBuiltinESMExports();
+  t.after(() => { crypto.createHash = original; syncBuiltinESMExports(); });
+  return counted;
+}
+
+test('saving an unchanged library again hashes, validates and reads back nothing of it', async t => {
+  const dir = await directory(t);
+  const store = new ExperimentStore(dir);
+  await store.init();
+  t.after(() => store.close());
+  const { library, batch, evidence } = cardDraft();
+  const article = 'Статья базы знаний о возвратах и доставке. '.repeat(5000);
+  const large = libraryV2Schema.parse({ ...library, sources: [...library.sources, { id: 'source-kb', name: 'База знаний', content: article, hash: fingerprint(article) }] });
+  const accepted = acceptLibraryV2(large, libraryHash(large), large.cards.map(card => card.id), { evidence, maxTurns: 3 }).library;
+  await store.writeImport(batch);
+  const record: Experiment = { ...newRecord(cardInput()), sources: large.sources, librarySnapshot: accepted };
+  await store.publishLibrary(record, accepted);
+  const head = libraryHash(accepted);
+  const hashed = hashedBytes(t);
+  // A run's checkpoints save the same accepted snapshot again and again; a preparation's step may change only the record.
+  await store.save(record);
+  await store.save(record);
+  await store.publishLibrary(record, accepted, head);
+  assert.ok(hashed.bytes < Buffer.byteLength(article), `${hashed.bytes} bytes hashed for a library of ${Buffer.byteLength(article)}`);
+  assert.deepEqual((await store.get(record.id)).librarySnapshot, accepted, 'what is saved is still the library');
+});
+
+test('a library is admitted once per object, and a change made in place at its top level is seen', () => {
+  const memo = new LibraryMemo();
+  const { library } = cardDraft();
+  const first = memo.admit(library);
+  assert.equal(memo.admit(library), first);
+  assert.equal(memo.admit(first.library).hash, first.hash, 'its validated copy is known too');
+  library.cards.pop();
+  assert.notEqual(memo.admit(library).hash, first.hash);
 });

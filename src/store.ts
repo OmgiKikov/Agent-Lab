@@ -9,7 +9,7 @@ import { experimentSchema, fingerprint, type Experiment, type TraceEvent } from 
 import { createFileExclusive, writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
 import type { GeneratorEvidence } from './generator-evidence.js';
 import { libraryHash } from './scenario-library.js';
-import { ScenarioFiles } from './scenario-store.js';
+import { LibraryMemo, ScenarioFiles } from './scenario-store.js';
 import { oneLine } from './text.js';
 import { isIdentifier } from './ids.js';
 import { LockedError } from './errors.js';
@@ -152,11 +152,14 @@ export class ExperimentStore {
   private lockToken: string | null = null;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private writerQueue: Promise<unknown> = Promise.resolve();
+  /** What this writer knows of its libraries, so an unchanged one is not validated, hashed and read back on every save. */
+  private readonly memo = new LibraryMemo();
   constructor(directory: string) { this.directory = resolve(directory); }
   private path(id: string): string {
     if (!isIdentifier(id)) throw new Error('Invalid experiment ID');
     return join(this.directory, `${id}.json`);
   }
+  private files(): ScenarioFiles { return new ScenarioFiles(this.directory, this.memo); }
 
   /* ── the writer: the lock and the queue every write goes through ── */
   /** The lock as it is now; a lock no Lab wrote is refused and kept for a person to inspect. */
@@ -169,7 +172,7 @@ export class ExperimentStore {
   private async acquire(): Promise<void> {
     const token = randomUUID();
     if (!await createFileExclusive(join(this.directory, '.lock'), JSON.stringify({ ...await thisProcess(), token }))) throw new LockedError();
-    this.lockToken = token; held.add(token);
+    this.lockToken = token; held.add(token); this.memo.forget();
     this.heartbeat = setInterval(() => { void this.beat(); }, HEARTBEAT_MS);
     this.heartbeat.unref();
   }
@@ -189,7 +192,7 @@ export class ExperimentStore {
   private release(token: string): void {
     if (this.lockToken === token) this.lockToken = null;
     clearInterval(this.heartbeat); this.heartbeat = undefined;
-    held.delete(token);
+    held.delete(token); this.memo.forget();
   }
   /**
    * Passes the one recovery gate of the folder, clearing once a gate its dead holder left. A gate held by a process
@@ -236,7 +239,7 @@ export class ExperimentStore {
     try {
       const owner = await this.lock();
       if (owner?.holder?.token === token) await unlink(join(this.directory, '.lock'));
-    } finally { held.delete(token); }
+    } finally { held.delete(token); this.memo.forget(); }
   }
   private async writeTransaction<T>(work: () => Promise<T>): Promise<T> {
     const pending = this.writerQueue.then(async () => {
@@ -249,11 +252,23 @@ export class ExperimentStore {
   }
 
   /* ── records ── */
-  save(record: Experiment): Promise<void> { return this.writeTransaction(() => this.saveRecord(record)); }
-  private async saveRecord(record: Experiment): Promise<void> {
-    if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
+  /**
+   * The record as it is at the call, validated and detached from the live one: a write waits its turn in the queue,
+   * and what the caller changes meanwhile belongs to its next save. The library is the one the caller holds, as the memo
+   * admitted it: a run saves the same accepted snapshot at every checkpoint.
+   */
+  private snapshot(record: Experiment): Experiment {
     const validated = experimentSchema.parse(record);
-    if (validated.librarySnapshot) await new ScenarioFiles(this.directory).retainLibrary(validated.librarySnapshot);
+    if (record.librarySnapshot && validated.librarySnapshot) validated.librarySnapshot = this.memo.admit(record.librarySnapshot, validated.librarySnapshot).library;
+    return validated;
+  }
+  async save(record: Experiment): Promise<void> {
+    const validated = this.snapshot(record);
+    await this.writeTransaction(() => this.saveRecord(validated));
+  }
+  private async saveRecord(validated: Experiment): Promise<void> {
+    if (!this.lockToken) throw new Error('Для изменения записи откройте лабораторию как писатель.');
+    if (validated.librarySnapshot) await this.files().retainLibrary(validated.librarySnapshot);
     await writeFileAtomic(this.path(validated.id), JSON.stringify(validated, null, 2));
   }
   async get(id: string): Promise<Experiment> {
@@ -411,16 +426,17 @@ export class ExperimentStore {
   writeLogVersions(journal: LogVersionJournal, expectedHash: string | null): Promise<void> {
     return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLogVersions(journal, expectedHash));
   }
+  /** A stored library, read and checked afresh: the head, or the revision `hash` names. */
   readLibrary(id: string, hash?: string): Promise<ScenarioLibrary> { return new ScenarioFiles(this.directory).readLibrary(id, hash); }
   writeLibrary(library: ScenarioLibrary, expectedHash?: string): Promise<void> {
-    return this.writeTransaction(() => new ScenarioFiles(this.directory).writeLibrary(library, expectedHash));
+    return this.writeTransaction(() => this.files().writeLibrary(library, expectedHash));
   }
 
   /* ── publication: a library and its record written together, finished after a crash ── */
   /** Finish durable publication intents before accepting another mutation; readers remain lock-free. */
   recoverPublications(): Promise<void> { return this.writeTransaction(async () => {}); }
   private async recoverPendingPublications(): Promise<void> {
-    const files = new ScenarioFiles(this.directory);
+    const files = this.files();
     for (const { record, expectedHash } of await files.pendingPublications()) {
       const library = record.librarySnapshot!;
       const current = await files.readLibrary(library.id).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
@@ -429,14 +445,22 @@ export class ExperimentStore {
       await files.finishPublication(record.id);
     }
   }
-  publishLibrary(record: Experiment, library: ScenarioLibrary, expectedHash?: string): Promise<void> {
-    return this.writeTransaction(async () => {
-      const next = experimentSchema.parse({ ...record, librarySnapshot: library });
-      const files = new ScenarioFiles(this.directory);
-      await files.checkLibraryWrite(library, expectedHash);
-      await files.retainLibrary(library);
+  /**
+   * Saves a draft's library and its record together. Both are taken as they are at the call (see snapshot): the units
+   * of a preparation go on changing the live record while this save waits its turn, and a saved record must never name
+   * a card its saved library does not hold.
+   */
+  async publishLibrary(record: Experiment, library: ScenarioLibrary, expectedHash?: string): Promise<void> {
+    const next = this.snapshot({ ...record, librarySnapshot: library });
+    const published = next.librarySnapshot!;
+    await this.writeTransaction(async () => {
+      const files = this.files();
+      await files.checkLibraryWrite(published, expectedHash);
+      // The library is the head already (a step that changed only the record): the record alone is written, atomically.
+      if (expectedHash === this.memo.admit(published).hash) { await this.saveRecord(next); return; }
+      await files.retainLibrary(published);
       await files.writePublication(next, expectedHash);
-      await files.writeLibrary(library, expectedHash ?? libraryHash(library));
+      await files.writeLibrary(published, expectedHash ?? this.memo.admit(published).hash);
       await this.saveRecord(next);
       await files.finishPublication(next.id);
     });
