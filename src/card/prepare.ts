@@ -14,11 +14,11 @@ import type { ExperimentStore } from '../store.js';
 import { clip } from '../text.js';
 import { PROPOSAL_ATTEMPTS, promptsOversize } from './budget.js';
 import { importEvidence, loggedMessages, type CardEvidence } from './checks.js';
-import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, withRequirements, withScenario } from './library.js';
+import { addCard, createLibraryV2, recordClaims, replaceCard, requireLibraryV2, withGap, withRequirements, withScenario } from './library.js';
 import { bindPlan, planProblem, planProposalSchema, scenarioOfTopic, type PlanCall } from './plan.js';
 import { rulebookOf } from './rulebook.js';
-import { bindProposal, cardProposalProblem, cardProposalSchema, proposalCall, proposalPayload, proposalRequirements, uncoveredOf, type CardProposalRequest, type ProposalCall } from './proposal.js';
-import { revisionClaims, claimReceipts, pendingClaims, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
+import { bindProposal, cardProposalProblem, cardProposalSchema, namedVariation, proposalCall, proposalPayload, proposalRequirements, uncoveredOf, type CardProposalRequest, type ProposalCall } from './proposal.js';
+import { revisionClaims, claimReceipts, GAP_CLAIM, gapRequest, pendingClaims, REVIEW_PROTOCOL, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
 import type { Card, CardPreparation, LibraryV2, PreparationProgress } from './schema.js';
 
 /*
@@ -99,9 +99,18 @@ const UNUSABLE_SELECTION = 'Ни один ответ модели не прош�
 const UNUSABLE_PROPOSAL = 'Ни один ответ модели не прошёл проверку Lab: ситуация не составлена.';
 const ALLOWANCE_SPENT = `Для этой ситуации исчерпаны ${PROPOSAL_ATTEMPTS} попыток предложить вариант, который проходит проверку Lab.`;
 const UNBOUND_PROPOSAL = 'Предложенная ситуация не прошла проверку Lab и не сохранена.';
-/** A request no rule the builder read covers: what the customer asks, what was read — all the materials or a part — and the way on. */
+/**
+ * A request no rule the builder read covers, as the reviewer confirmed it: what the customer asks, what was read — all the
+ * materials or a part — and the way on.
+ */
 const gapText = (asks: string, read: number, total: number): string => `Правила для этого запроса нет: ${asks}. ${read >= total ? 'Lab прочитал все ваши материалы'
-  : `Lab прочитал ${read} из ${total} материалов, подобранных под этот разговор`} и не нашёл в них, что агент должен ответить. Добавьте правило в базу знаний или промпт агента — иначе такие запросы не проверяются.`;
+  : `Lab прочитал ${read} из ${total} материалов, подобранных под этот разговор`}, и проверяющий подтвердил: в них не сказано, что агент должен ответить. Добавьте правило в базу знаний или промпт агента — иначе такие запросы не проверяются.`;
+/** The builder found no rule for a request and the reviewer found one, or doubted: Lab's failure, never a gap in the owner's rules. */
+const disputedGapText = (asks: string, reason: string): string => `Ситуация не составлена: Lab не нашёл в материалах правила для запроса «${asks}», а проверяющий не подтвердил, что его там нет: ${reason}`;
+/** The builder found no rule for a request, and no check of that came back: never told as a gap. */
+const uncheckedGapText = (asks: string): string => `Ситуация не составлена: Lab не нашёл в материалах правила для запроса «${asks}», а проверить, что его там действительно нет, не удалось.`;
+/** A conversation no variation of the plan covers: a limit of the plan, never a gap in the owner's rules. */
+const planMissText = (asks: string, question: string): string => `Разговор не подошёл ни к одному варианту плана сценария «${question}»: ${asks}. Это не пробел в ваших правилах, а случай, которого нет в плане: если такие разговоры важны, добавьте в план вариант клиента.`;
 const OVER_WINDOW = 'Разговор вместе с материалами не поместился в окно модели.';
 const INTERRUPTED = 'Подготовка прервалась во время платного вызова: его стоимость неизвестна, поэтому этот источник не разбирается повторно.';
 const UNUSABLE_PLAN = 'Ни один ответ модели не прошёл проверку Lab: план сценария не составлен — ситуации темы пишут свои ожидания, как раньше.';
@@ -189,8 +198,15 @@ export function preparationParallel(value: number | undefined): number {
 const CARD_CITATIONS = 9;
 /** A plan cites at most three sentences for each of its expectations (card/plan.ts). */
 const PLAN_CITATIONS = 18;
-/** A card the reviewer blocked and the reviewer's reason for each blocked claim. */
-type Revision = { card: Card; blocked: { claim: string; reason: string }[] };
+/**
+ * The one revision of a unit: its card the reviewer blocked (`card`, replaced by the revision) or the gap the reviewer did
+ * not confirm (no card: the revision adds one), what the builder reads of it and the reviewer's reason for each claim.
+ */
+type Revision = { card?: Card; previous: unknown; blocked: { claim: string; reason: string }[] };
+/** A request the builder found no rule for, with the sources it read: a gap only once the reviewer confirms it (Preparation.checkGap). */
+type Uncovered = { uncovered: string; sources: Source[] };
+/** Why a unit makes no situation; `uncovered` — a gap in the owner's rules the reviewer confirmed. */
+type LeftOut = { excluded: string; uncovered?: string };
 
 class Preparation {
   private readonly evidence: CardEvidence;
@@ -355,9 +371,9 @@ class Preparation {
    * the unit makes none. With `revision`, the card the reviewer blocked is written again against the reviewer's reasons
    * and replaces it.
    */
-  private async propose(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, read: Source[], revision?: Revision): Promise<Card | { excluded: string; uncovered?: string }> {
+  private async propose(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, read: Source[], revision?: Revision): Promise<Card | LeftOut | Uncovered> {
     const { record, batch, progress } = this;
-    if (!revision && this.library.cards.length >= CARD_LIMIT) return { excluded: `В наборе уже ${CARD_LIMIT} ситуаций.` };
+    if (!revision?.card && this.library.cards.length >= CARD_LIMIT) return { excluded: `В наборе уже ${CARD_LIMIT} ситуаций.` };
     if (record.requirements.length + CARD_CITATIONS > RECORD_REQUIREMENT_LIMIT) return { excluded: `В наборе уже ${countText(record.requirements.length, ['правило', 'правила', 'правил'])} — больше одна подготовка не держит.` };
     // What binds the bot: the kinds of the owner's rulebook, and the single rules of another kind the owner included.
     const rulebook = rulebookOf(this.library);
@@ -370,8 +386,10 @@ class Preparation {
     const planned = queued ? this.library.plan?.find(scenario => scenario.id === queued.scenarioId)
       : dialogue && batch ? scenarioOfTopic(this.library.plan, unitTopic(progress, this.library, batch.id, unit)?.title ?? '') : undefined;
     if (queued && !planned?.variations.some(variation => variation.id === queued.variationId)) return { excluded: 'Этого варианта больше нет в плане сценария.' };
+    // The variation the plan decided: the one a queued unit is written for, or the one whose examples name this conversation.
+    const decided = queued?.variationId ?? (planned && dialogue && batch ? namedVariation(planned, { kind: 'dialogue', batchId: batch.id, dialogueId: unit })?.id : undefined);
     const plan = planned && { scenario: planned, requirements: this.library.requirements.filter(requirement => planned.expectations.some(expectation => expectation.requirementIds.includes(requirement.id))),
-      ...(queued ? { variationId: queued.variationId } : {}) };
+      ...(decided ? { variationId: decided } : {}) };
     const call = (sources: readonly Source[]) => proposalCall({ source: dialogue && batch ? { kind: 'dialogue', batchId: batch.id, dialogueId: unit } : { kind: 'rules', unit },
       messages, sources, binds, maxTurns: record.settings.maxTurns, ...(plan ? { plan } : {}),
       // The tool channel the probe before the preparation confirmed: its tools may be what a duty is observed on.
@@ -381,8 +399,8 @@ class Preparation {
     const topic = dialogue && batch ? unitTopic(progress, this.library, batch.id, unit) : undefined;
     const request = (sources: readonly Source[]): CardProposalRequest => ({ task: record.task, call: call(sources),
       topics: topic ? [topic.title] : queued && planned ? [planned.topic] : [...new Set(this.library.cards.map(card => card.topic))],
-      written: dialogue ? [] : this.library.cards.filter(card => card.origin.kind === 'rules' && card.id !== revision?.card.id).map(card => card.title),
-      ...(revision ? { revision: { previous: reviewedBrief(revision.card, this.library), blocked: revision.blocked } } : {}) });
+      written: dialogue ? [] : this.library.cards.filter(card => card.origin.kind === 'rules' && card.id !== revision?.card?.id).map(card => card.title),
+      ...(revision ? { revision: { previous: revision.previous, blocked: revision.blocked } } : {}) });
     // Over the request's cap the last articles give way first; the agent's prompts and the customer's messages never do.
     const prompts = read.filter(source => source.kind === 'prompt').length;
     let sources = read;
@@ -401,14 +419,15 @@ class Preparation {
     // Its reasons are the model's, in English: the owner reads that the situation did not pass.
     const parsed = cardProposalSchema(asked.call).safeParse(answer);
     if (!parsed.success || cardProposalProblem(parsed.data, asked.call)) return { excluded: UNBOUND_PROPOSAL };
-    // A request the owner's rules leave open is the owner's to know, not a situation Lab failed to make.
+    // A request the builder found no rule for. With a plan, the plan's expectations were all it could take: a limit of the
+    // plan, said as such. Without one, a gap in the owner's rules — once the reviewer confirms it (checkGap).
     const gap = uncoveredOf(parsed.data);
-    if (gap) return { excluded: gapText(gap, sources.length, record.sources.length), uncovered: gap };
-    const card = withTrafficTopic(bindProposal(parsed.data, asked.call, revision ? revision.card.number : this.library.nextNumber), topic);
+    if (gap) return plan ? { excluded: planMissText(gap, plan.scenario.question) } : { uncovered: gap, sources: [...sources] };
+    const card = withTrafficTopic(bindProposal(parsed.data, asked.call, revision?.card ? revision.card.number : this.library.nextNumber), topic);
     // A sentence another card already cites is already a rule of the library, by the same id: the first wording stays.
     const cited = proposalRequirements(parsed.data, asked.call).filter(requirement => !record.requirements.some(known => known.id === requirement.id));
     const requirements = [...record.requirements, ...cited];
-    const next = revision ? replaceCard(withRequirements(this.library, requirements), revision.card.id, card)
+    const next = revision?.card ? replaceCard(withRequirements(this.library, requirements), revision.card.id, card)
       : addCard(withRequirements(this.library, requirements), card, dialogue && batch ? { dialogueId: unit, batchId: batch.id, sourceIds: sources.map(source => source.id) } : undefined);
     // A card that could never be checked is not kept: its review is sized against the draft that holds its reading row.
     const context: ReviewContext = { library: next, evidence: this.evidence };
@@ -418,7 +437,7 @@ class Preparation {
     this.library = next;
     const made = next.cards.find(item => item.number === card.number)!;
     progress.cards = [...(progress.cards ?? []).filter(item => item.dialogueId !== unit), { dialogueId: unit, cardId: made.id }];
-    if (revision) progress.revised = [...progress.revised ?? [], unit];
+    if (revision && !progress.revised?.includes(unit)) progress.revised = [...progress.revised ?? [], unit];
     await this.publish();
     return made;
   }
@@ -437,18 +456,58 @@ class Preparation {
     const blocked = revisionClaims(card, { library: this.library, evidence: this.evidence });
     if (!blocked.length) return;
     const spent = async () => { this.progress.revised = [...this.progress.revised ?? [], unit]; await this.publish(); };
-    let revised: Card | { excluded: string };
+    let revised: Card | LeftOut | Uncovered;
     try {
       // The unit's reading is saved with the draft: reading it again sends no call.
       const read = await this.readFor(unit, dialogue, whole);
-      revised = 'excluded' in read ? read : await this.propose(unit, dialogue, read, { card, blocked });
+      revised = 'excluded' in read ? read : await this.propose(unit, dialogue, read, { card, previous: reviewedBrief(card, this.library), blocked });
     } catch (error) {
       this.ctx.signal.throwIfAborted();
       if (error instanceof StructuredTaskError || overWindow(error)) { await spent(); return; }
       throw error;
     }
-    if ('excluded' in revised) { await spent(); return; }
+    // A revision that writes no card leaves the card it was to replace as it is.
+    if ('excluded' in revised || 'sources' in revised) { await spent(); return; }
     await this.review(revised, unit);
+  }
+
+  /**
+   * A request the builder found no rule for is a gap in the owner's rules only once the reviewer confirms that no sentence
+   * of what the builder read speaks to it: then the draft keeps it (its `gaps`) and its conversation is left out as a gap.
+   * A reviewer who finds such a sentence, or doubts, sends the builder back once with the reason — the unit's one
+   * revision, as for a blocked card —; a builder that still writes no card, or a check that gives no answer, leaves the
+   * conversation out as Lab's failure, never as the owner's gap. Either way its seat goes to the next conversation.
+   */
+  private async checkGap(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, read: Source[], found: Uncovered): Promise<Card | LeftOut> {
+    const { batch, record, progress } = this;
+    if (!dialogue || !batch || !this.runtime.reviewCard) return { excluded: uncheckedGapText(found.uncovered) };
+    const request = gapRequest({ asks: found.uncovered, messages: loggedMessages(dialogue), sources: found.sources });
+    if (workInputIssue(request.payload)) return { excluded: uncheckedGapText(found.uncovered) };
+    let review: CardReview;
+    try { review = await this.call(unit, 'review', ctx => this.runtime.reviewCard!(request, ctx)); }
+    catch (error) {
+      this.ctx.signal.throwIfAborted();
+      if (error instanceof StructuredTaskError || overWindow(error)) return { excluded: uncheckedGapText(found.uncovered) };
+      throw error;
+    }
+    const verdict = review.verdicts[GAP_CLAIM];
+    if (verdict?.status === 'ready') {
+      const topic = unitTopic(progress, this.library, batch.id, unit);
+      this.library = withGap(this.library, { batchId: batch.id, dialogueId: unit, asks: found.uncovered, ...(topic ? { topic: topic.ref } : {}),
+        reviewer: { protocol: REVIEW_PROTOCOL, model: review.model, reason: verdict.reason } });
+      return { excluded: gapText(found.uncovered, found.sources.length, record.sources.length), uncovered: found.uncovered };
+    }
+    const reason = verdict?.reason ?? 'ответа на этот вопрос нет.';
+    if (progress.revised?.includes(unit) || !read.length) return { excluded: disputedGapText(found.uncovered, reason) };
+    progress.revised = [...progress.revised ?? [], unit];
+    let revised: Card | LeftOut | Uncovered;
+    try { revised = await this.propose(unit, dialogue, read, { previous: { agentMust: [], uncovered: found.uncovered }, blocked: [{ claim: GAP_CLAIM, reason }] }); }
+    catch (error) {
+      this.ctx.signal.throwIfAborted();
+      if (error instanceof StructuredTaskError || overWindow(error)) return { excluded: disputedGapText(found.uncovered, reason) };
+      throw error;
+    }
+    return 'excluded' in revised || 'sources' in revised ? { excluded: disputedGapText(found.uncovered, reason) } : revised;
   }
 
   /** The reviewer answers every claim of the card no receipt answers yet; a similar claim already answered is not asked again. */
@@ -579,12 +638,13 @@ class Preparation {
     if (!card) {
       const read = await this.readFor(unit, dialogue, whole);
       if (!('excluded' in read) && this.readsEarlierCards(unit, dialogue)) await this.inTurn(unit);
-      const proposed = 'excluded' in read ? read : await this.propose(unit, dialogue, read);
+      const proposed: Card | LeftOut | Uncovered = 'excluded' in read ? read : await this.propose(unit, dialogue, read);
+      const made: Card | LeftOut = 'sources' in proposed ? await this.checkGap(unit, dialogue, 'excluded' in read ? [] : read, proposed) : proposed;
       // A unit left out calls in its replacement: in plan order too, so the next units are the same whoever finishes first.
-      if ('excluded' in proposed) {
-        await this.inTurn(unit); this.exclude(unit, proposed.excluded, true, (proposed as { uncovered?: string }).uncovered); landed(); await this.publish(); return;
+      if ('excluded' in made) {
+        await this.inTurn(unit); this.exclude(unit, made.excluded, true, made.uncovered); landed(); await this.publish(); return;
       }
-      card = proposed;
+      card = made;
     }
     landed();
     await this.review(card, unit);

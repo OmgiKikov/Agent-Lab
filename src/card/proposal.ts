@@ -3,7 +3,8 @@ import { fingerprint, type Requirement, type Source } from '../contracts.js';
 import { text } from '../ids.js';
 import { MODEL_REQUEST_BYTES } from '../limits.js';
 import { requirementKindSchema, type RequirementKind } from '../scenario-contracts.js';
-import { verbatimSpan } from '../verbatim.js';
+import { clip } from '../text.js';
+import { enoughWords, quotedClause, type QuotedClause } from '../verbatim.js';
 import { cardFindings, filledMessage, normalizeText, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
 import { cardSchema, disclosureSchema, toolNameSchema, turnSchema, type BusinessScenario, type Card, type EventRef } from './schema.js';
 import { fillSlip, maskSlots, slotAnswersSchema, slotFills, slotPayload, type FillAnswer, type MaskSlot } from './unmask.js';
@@ -48,7 +49,10 @@ export interface ProposalCall {
    * one of its variations, and its duties are the plan's expectations for it — its words, rules, strength and ways.
    */
   plan?: { scenario: BusinessScenario; requirements: Requirement[];
-    /** A situation from the rules written for this one variation (a variation no conversation shows): the builder does not choose it. */
+    /**
+     * The variation the plan decided for this situation — one written from the rules for a variation no conversation shows,
+     * or a conversation the plan names as an example of one —: the builder is told it and does not choose.
+     */
     variationId?: string };
 }
 
@@ -76,11 +80,14 @@ export const KNOWS_LIMIT = 8;
 
 const coverageAnswer = z.strictObject({ as: z.enum(['fact', 'turn', 'stop', 'ignored']), reason: text(200).nullable() });
 
-/** A duty's basis: a sentence of a source of this call, the rule it states in one line, and the kind of that rule. */
+/**
+ * A duty's basis: a sentence of a source of this call, or a whole clause of one, and the kind of rule it is. What the rule
+ * says is that sentence itself, as the owner wrote it (located): the builder never words a rule of its own.
+ */
 export function basisProposal(call: Pick<ProposalCall, 'sources'>) {
   const ids = call.sources.map(source => source.id) as [string, ...string[]];
   return z.strictObject({ sourceId: z.enum(ids, { error: 'Not a supplied source: cite only ids from sources.' }), quote: text(1500),
-    rule: text(300), kind: requirementKindSchema });
+    kind: requirementKindSchema });
 }
 
 /**
@@ -164,25 +171,47 @@ const said = (call: ProposalCall, index: number): string => call.messages.find(m
 
 type Basis = z.infer<ReturnType<typeof basisProposal>>;
 
+/** Where a basis quote stands: the source that holds it, the source's own characters, and the clause of the source it is. */
+export interface Located { sourceId: string; quote: string; clause: QuotedClause }
+
 /**
  * Where a basis quote is verbatim, in the source's own characters: its cited source, or else exactly one other source of
  * the call, which then owns it — the sentence was copied right and the source named wrong.
  */
-export function located(basis: Pick<Basis, 'sourceId' | 'quote'>, call: Pick<ProposalCall, 'sources'>): { sourceId: string; quote: string } | undefined {
+export function located(basis: Pick<Basis, 'sourceId' | 'quote'>, call: Pick<ProposalCall, 'sources'>): Located | undefined {
+  const within = (source: CallSource): Located | undefined => {
+    const clause = quotedClause(source.content, basis.quote);
+    return clause && { sourceId: source.id, quote: clause.span, clause };
+  };
   const cited = call.sources.find(source => source.id === basis.sourceId);
-  const exact = cited && verbatimSpan(cited.content, basis.quote);
-  if (cited && exact) return { sourceId: cited.id, quote: exact };
-  const found = call.sources.flatMap(source => {
-    const span = source.id === basis.sourceId ? undefined : verbatimSpan(source.content, basis.quote);
-    return span ? [{ sourceId: source.id, quote: span }] : [];
-  });
+  const own = cited && within(cited);
+  if (own) return own;
+  const found = call.sources.flatMap(source => source.id === basis.sourceId ? [] : within(source) ?? []);
   return found.length === 1 ? found[0] : undefined;
+}
+
+/**
+ * Why a verbatim quote cannot back a rule, in the builder's terms: it is not a whole clause of its sentence — a quote that
+ * starts after «Не» or stops before «, только если…» says what the source does not —, or it is too short to state a rule.
+ * The judge reads the whole sentence either way (dutyRequirements); this keeps what the owner reads as the rule honest too.
+ */
+export function groundingSlip(name: string, at: Located): string | undefined {
+  const { clause } = at;
+  const quote = `«${clip(clause.span, 120)}»`, sentence = `its sentence reads «${clip(clause.sentence, 300)}»`;
+  if (!clause.opens) return `${name}: ${quote} starts in the middle of a clause — ${sentence}. Quote a whole sentence, or a whole clause of it from its first word: a quote that leaves out the words before it (a negation such as «Не», a condition) says what the source does not.`;
+  if (!clause.closes) return `${name}: ${quote} stops in the middle of a clause — ${sentence}. Quote on to the end of the clause or of the sentence: a quote that leaves out the words after it (an exception, a condition) says what the source does not.`;
+  if (!enoughWords(clause)) return `${name}: ${quote} is too short to state a rule — ${sentence}. Quote the whole clause or sentence the duty rests on.`;
+  return undefined;
 }
 
 /** The id of the rule one cited sentence stands for: the same sentence of the same source is the same rule in every card. */
 export const citationId = (sourceId: string, quote: string): string => `rule_${fingerprint({ sourceId, quote }).slice(0, 24)}`;
 
-/** The variation a card is an example of: the one a situation from the rules was written for, else the one the builder chose. */
+/** The variation of the plan whose examples name a conversation: the plan decided that conversation's variation. */
+export const namedVariation = (scenario: BusinessScenario, source: ProposalCall['source']): BusinessScenario['variations'][number] | undefined =>
+  source.kind === 'dialogue' ? scenario.variations.find(item => item.examples.includes(source.dialogueId)) : undefined;
+
+/** The variation a card is an example of: the one the plan decided for it (plan.variationId), else the one the builder chose. */
 const variationOfProposal = (proposal: CardProposal, call: ProposalCall): string | undefined =>
   call.plan?.variationId ?? ('variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined);
 
@@ -192,12 +221,20 @@ function plannedOf(duty: Pick<DutyProposal, 'text'>, call: ProposalCall): Busine
   return call.plan?.scenario.expectations.find(expectation => normalizeText(expectation.text) === said);
 }
 
-/** Why the duties of a card of a planned scenario are not the plan's expectations of its variation. */
+/**
+ * Why the card of a planned scenario is not what the plan makes it: of another variation than the one the plan names its
+ * conversation an example of, or with duties that are not the plan's expectations of its variation.
+ */
 function planSlips(proposal: CardProposal, call: ProposalCall): string[] {
   const plan = call.plan;
   if (!plan) return [];
   const variation = variationOfProposal(proposal, call);
   const slips: string[] = [];
+  const named = namedVariation(plan.scenario, call.source);
+  const answered = 'variation' in proposal && typeof proposal.variation === 'string' ? proposal.variation : undefined;
+  if (named && answered !== undefined && answered !== named.id) {
+    slips.push(`variation is ${answered}, but the plan names this conversation as an example of ${named.id} («${named.title}»): answer ${named.id} and take agentMust from the expectations of ${named.id}.`);
+  }
   const seen = new Set<string>();
   proposal.agentMust.forEach((duty, i) => {
     const expectation = plannedOf(duty, call);
@@ -210,9 +247,10 @@ function planSlips(proposal: CardProposal, call: ProposalCall): string[] {
 }
 
 /**
- * The rules each duty of a proposal rests on, as the library stores them. A cited sentence is a rule a user can see kept
- * or broken in a reply — the proposal may cite nothing else (CARD_ROLE) — so `observable` is stated, never guessed. A
- * duty that is an expectation of the plan rests on the plan's rules, already in the library.
+ * The rules each duty of a proposal rests on, as the library stores them. The rule's text — what the judge reads as the
+ * rule — is the sentence of the source the quote stands in, never the builder's own words. A cited sentence is a rule a
+ * user can see kept or broken in a reply — the proposal may cite nothing else (CARD_ROLE) — so `observable` is stated,
+ * never guessed. A duty that is an expectation of the plan rests on the plan's rules, already in the library.
  */
 function dutyRequirements(proposal: CardProposal, call: ProposalCall): Requirement[][] {
   return proposal.agentMust.map(duty => {
@@ -222,7 +260,7 @@ function dutyRequirements(proposal: CardProposal, call: ProposalCall): Requireme
     return duty.basis.map(basis => {
     const at = located(basis, call);
     if (!at) throw new Error('Основание ожидания не найдено дословно в материалах.');
-    return { id: citationId(at.sourceId, at.quote), text: basis.rule, sourceId: at.sourceId, quote: at.quote, critical: true, observable: true, kind: basis.kind };
+    return { id: citationId(at.sourceId, at.quote), text: at.clause.sentence, sourceId: at.sourceId, quote: at.quote, critical: true, observable: true, kind: basis.kind };
     });
   });
 }
@@ -234,17 +272,19 @@ export function proposalRequirements(proposal: CardProposal, call: ProposalCall)
   return [...unique.values()];
 }
 
-/** Why a basis cannot back a duty: its quote is not in the sources, or its kind of rule is outside the owner's rulebook. */
+/** Why a basis cannot back a duty: its quote is not in the sources or not a whole clause there, or its kind of rule is outside the owner's rulebook. */
 function basisSlips(proposal: CardProposal, call: ProposalCall): string[] {
   const slips: string[] = [];
   // A duty that is an expectation of the plan rests on the plan's rules: its own citations are not read.
   proposal.agentMust.forEach((duty, i) => plannedOf(duty, call) ? undefined : duty.basis.forEach((basis, j) => {
     const at = located(basis, call);
     const name = `agentMust[${i}].basis[${j}]`;
+    const grounding = at && groundingSlip(name, at);
     if (!at) {
       const source = call.sources.find(item => item.id === basis.sourceId);
-      slips.push(`${name}: the quote is not a verbatim substring of "${source?.name ?? basis.sourceId}". Copy the exact characters from the source instead of paraphrasing; a shorter contiguous fragment is safer than a long one.`);
-    } else if (!call.binds.kinds.includes(basis.kind) && !call.binds.rules.some(rule => rule.sourceId === at.sourceId && rule.quote === at.quote)) {
+      slips.push(`${name}: the quote is not a verbatim substring of "${source?.name ?? basis.sourceId}". Copy the exact characters of a whole sentence or clause from the source instead of paraphrasing.`);
+    } else if (grounding) slips.push(grounding);
+    else if (!call.binds.kinds.includes(basis.kind) && !call.binds.rules.some(rule => rule.sourceId === at.sourceId && rule.quote === at.quote)) {
       slips.push(`${name} is a rule of kind ${basis.kind}, and the owner's rulebook binds the agent only by ${call.binds.kinds.join(', ')}: cite a rule of those kinds, or drop this duty.`);
     }
   }));
@@ -420,6 +460,17 @@ function repairText(finding: CheckFinding, card: Card, call: ProposalCall): stri
 export const uncoveredOf = (proposal: CardProposal): string | undefined =>
   'writes' in proposal || proposal.agentMust.length ? undefined : proposal.uncovered ?? undefined;
 
+/**
+ * Why «no expectation of the plan fits» cannot be the answer: the plan names this conversation as an example of a
+ * variation, and every variation has expectations that apply to it (card/plan.ts planProblem).
+ */
+function coveredByPlan(call: ProposalCall): string | undefined {
+  const named = call.plan && namedVariation(call.plan.scenario, call.source);
+  // An expectation without variations applies to all of them (card/plan.ts variationExpectations).
+  if (!call.plan || !named || !call.plan.scenario.expectations.some(expectation => !expectation.variationIds || expectation.variationIds.includes(named.id))) return undefined;
+  return `uncovered is set, but the plan names this conversation as an example of ${named.id} («${named.title}»), whose expectations apply to it: answer variation ${named.id}, take agentMust from its expectations (their text exactly) and set uncovered to null.`;
+}
+
 /** Duties or a gap, never both and never neither. */
 function gapSlips(proposal: CardProposal): string[] {
   if ('writes' in proposal) return [];
@@ -431,8 +482,9 @@ function gapSlips(proposal: CardProposal): string[] {
 export function cardProposalProblem(proposal: CardProposal, call: ProposalCall): string | undefined {
   const gap = gapSlips(proposal);
   if (gap.length) return gap.join(' ');
-  // A gap is an answer, not a card: nothing of it is bound or kept, so nothing else of it is held to the card's checks.
-  if (uncoveredOf(proposal)) return undefined;
+  // A gap is an answer, not a card: nothing of it is bound or kept, so nothing else of it is held to the card's checks —
+  // but a conversation the plan names as an example of a variation is covered by that variation's expectations.
+  if (uncoveredOf(proposal)) return coveredByPlan(call);
   const slips = [...planSlips(proposal, call), ...basisSlips(proposal, call), ...toolSlips(proposal), ...'writes' in proposal ? [] : bindingSlips(proposal, call)];
   if (slips.length) return slips.join(' ');
   // Every bound of the stored card an answer can break is a slip above: binding never stops the step with a schema error.

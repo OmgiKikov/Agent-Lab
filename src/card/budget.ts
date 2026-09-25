@@ -1,6 +1,7 @@
 import type { Experiment, Source } from '../contracts.js';
 import { MODEL_INPUT_BYTES, serializedBytes, workInputIssue } from '../limits.js';
 import { TASK_ATTEMPTS } from '../llm/structured.js';
+import { countText } from '../plural.js';
 
 /*
  * What work on situations may spend: their preparation, and a run of them. Each unit of a preparation (a logged
@@ -33,7 +34,8 @@ const PLAN_TOPICS = 16;
  * The most model calls a preparation makes: the topic map's calls; from logs, the plan of each topic the situations
  * stand for — at most one topic a situation — with the choice of its articles from a large knowledge base; and for each
  * situation promised the choice of articles of a large knowledge base for its conversation, its proposal allowance and
- * the review of its card and of that card's one revision. Requests are counted as the topic map's are — each answer passing the first time — and only the
+ * the review of its card and of that card's one revision — or, for a conversation the builder finds no rule for, the
+ * reviewer's check of that gap and the one revision it may send back. Requests are counted as the topic map's are — each answer passing the first time — and only the
  * proposal allowance holds its repairs; a preparation whose repairs reach the ceiling stops there with what it made, and
  * continues on the owner's word. A conversation that makes no situation spends out of the same ceiling, so the
  * preparation never spends more than it promised — over its creation and every resume together (preparationBudget).
@@ -72,6 +74,20 @@ export function preparationBudget(record: Pick<Experiment, 'task' | 'sources' | 
   const pending = progress.pending.length;
   const needs = preparationCeiling({ task: record.task, sources: record.sources, situations: pending, fromLogs: !!record.originalImport });
   return { ceiling, spent, left: Math.max(0, ceiling - spent), pending, resume: Math.max(ceiling, spent + needs) };
+}
+
+const CALLS: [string, string, string] = ['вызов', 'вызова', 'вызовов'];
+const CALLS_UP_TO: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
+
+/**
+ * What continuing a preparation will spend, as the owner agrees to it: what it spent of the ceiling agreed to, and the
+ * ceiling it goes on under — the same one, or, when that cannot take what is left, the new one: the one number a consent
+ * to continue stands for.
+ */
+export function resumeLines(budget: PreparationBudget): string[] {
+  const spent = `Подготовка потратила ${countText(budget.spent, CALLS)} модели из ${budget.ceiling} согласованных.`;
+  return budget.resume <= budget.ceiling ? [spent, `На то, что осталось разобрать (${budget.pending}), хватит этого потолка: он не меняется.`]
+    : [spent, `На то, что осталось разобрать (${budget.pending}), нужно до ${countText(budget.resume - budget.spent, CALLS_UP_TO)}: потолок всей подготовки станет ${budget.resume}.`];
 }
 
 /** The longest any one operation may take: the most the settings allow a run. */

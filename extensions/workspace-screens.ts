@@ -1,6 +1,7 @@
 import { visibleWidth } from '@earendil-works/pi-tui';
 import type { Experiment } from '../src/contracts.js';
 import { logAnswerOf, logTargets, type CalibrationDisagreement } from '../src/card/calibration-view.js';
+import { dutyLine } from '../src/card/duty-words.js';
 import { actionRow, briefRows, countsText, detailRows, formatNote, layoutRows, listRows, situationActions, situationBrief, type LayoutRow, type SituationRow, type SituationView } from '../src/card/view.js';
 import type { Decision } from '../src/inbox.js';
 import { rulebookLines, type RulebookView } from '../src/card/rulebook.js';
@@ -515,7 +516,7 @@ export function judgedScreen(run: { record: Experiment; view: ResultView }, tria
     const label = (name: string, text: string): ResultRow => ({ role: 'item', indent: 4, text: `${name.padEnd(16)}${text}`, hang: 16 });
     const passed = view.cards.find(card => card.scenarioId === trial?.scenarioId)?.outcome === 'pass';
     rows = [{ role: passed ? 'good' : 'muted', indent: 0, text: `${passed ? GLYPH.pass : '?'} ${oneLine(scenario?.title ?? '')}`, right: passed ? 'справился' : 'разговор' }, { role: 'blank', indent: 0, text: '' },
-      label('Ожидалось', brief?.must.map(duty => duty.text).join('; ') || 'не записано в ситуации'),
+      label('Ожидалось', brief?.must.map(dutyLine).join('; ') || 'не записано в ситуации'),
       label('Агент ответил', said ? `«${oneLine(said.text)}»` : 'ответа нет'),
       ...(brief?.must[0]?.rule ? [label('Правило', `«${brief.must[0].rule}»`)] : [])];
   }

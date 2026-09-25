@@ -7,7 +7,7 @@ import type { CallContext, Runtime } from './runtime.js';
  * preparations made before the proposal cited the materials itself, `prepare` how still older journals name it, and
  * `scenarioProposals` and `assessScenarioProposals` are the first format's preparation; nothing makes any of them now.
  */
-type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeCard' | 'reviewCard' | 'topicMap';
+type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeScenario' | 'proposeCard' | 'reviewCard' | 'topicMap';
 export type GeneratorEvidence = {
   workId: string;
   method: Method;
@@ -52,6 +52,8 @@ export function captureGeneratorEvidence(runtime: Runtime, emit: (event: Generat
   return { ...runtime,
     ...(topicMap ? { topicMap } : {}),
     ...(runtime.selectSources ? { selectSources: capture('selectSources', runtime.selectSources.bind(runtime)) } : {}),
+    // The plan of a topic is the builder's paid work like a card: its request and answer are evidence too.
+    ...(runtime.proposeScenario ? { proposeScenario: capture('proposeScenario', runtime.proposeScenario.bind(runtime)) } : {}),
     ...(runtime.proposeCard ? { proposeCard: capture('proposeCard', runtime.proposeCard.bind(runtime)) } : {}),
     ...(runtime.reviewCard ? { reviewCard: capture('reviewCard', runtime.reviewCard.bind(runtime)) } : {}),
   };

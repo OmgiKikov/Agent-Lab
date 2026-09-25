@@ -1,4 +1,5 @@
 import { stripVTControlCharacters } from 'node:util';
+import { dutyNotes, dutySections } from './card/duty-words.js';
 import type { Brief } from './card/view.js';
 import { REPORT_CSS, REPORT_SCRIPT, REPORT_SCRIPT_HASH } from './report-style.js';
 import type { Level, Turn } from './result-text.js';
@@ -98,7 +99,7 @@ function cardHtml(item: CardItem): string {
   return `<details class="card"><summary><div class="l1"><span class="ttl"><span class="num">${item.number}</span>${e(brief.title)}</span><span class="chip ${item.chip.tone}">${e(item.chip.text)}</span></div>`
     + `<span class="srcline">${e(brief.source)}</span><span class="peek">Клиент: «${e(brief.writes)}»</span></summary>`
     + `<div class="body"><div class="sec"><h3>КЛИЕНТ</h3><div class="kv">${dl(item.client)}</div></div>`
-    + `<div class="sec"><h3>АГЕНТ ДОЛЖЕН</h3><ol class="must">${brief.must.map((must, i) => `<li><span class="i">${i + 1}.</span><div><div>${e(must.text)}</div>${must.rule ? `<div class="rule">правило: «${e(must.rule)}»</div>` : ''}</div></li>`).join('')}</ol></div>`
+    + dutySections(brief.must).map(({ heading, items }) => `<div class="sec"><h3>${e(heading.toLocaleUpperCase('ru'))}</h3><ol class="must">${items.map(({ number, duty: must }) => `<li><span class="i">${number}.</span><div><div>${e(must.text)}</div>${dutyNotes(must).map(note => `<div class="rule">${e(note)}</div>`).join('')}${must.rule ? `<div class="rule">правило: «${e(must.rule)}»</div>` : ''}</div></li>`).join('')}</ol></div>`).join('')
     + (item.dialogue.length ? `<details class="fold"><summary>Разговор в прогоне</summary>${turnsHtml(item.dialogue)}</details>` : '') + `</div></details>`;
 }
 
@@ -166,8 +167,8 @@ function blockMarkdown(block: Block): string[] {
       ...cause.examples.flatMap(example => [`   - ${md(example.situation)}`, `     - Ожидалось: ${md(example.expected)}`,
         `     - Агент ответил: ${md(example.said.text)}`, ...(example.rule ? [`     - Правило: ${md(example.rule)}`] : [])])]).concat('');
     case 'cards': return block.items.flatMap(item => [`### ${item.number}. ${md(item.brief.title)} — ${md(item.chip.text)}`, '', md(item.brief.source), '', '**Клиент**', '',
-      ...mdDl(item.client), '', '**Агент должен**', '',
-      ...item.brief.must.map((must, i) => `${i + 1}. ${md(must.text)}${must.rule ? ` — правило: «${md(must.rule)}»` : ''}`), '',
+      ...mdDl(item.client), '', ...dutySections(item.brief.must).flatMap(({ heading, items }) => [`**${heading}**`, '',
+        ...items.map(({ number, duty: must }) => `${number}. ${md(must.text)}${[...dutyNotes(must), ...(must.rule ? [`правило: «${must.rule}»`] : [])].map(note => ` — ${md(note)}`).join('')}`), '']),
       ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
     case 'failures': return block.items.flatMap(item => [`### ✗ ${item.number}. ${md(item.title)}`, '',
       ...mdDl([['Ожидалось', item.expected], ['Агент ответил', item.said.text], ['Правило', item.rule], ...(item.customer ? [['Клиент', item.customer] as [string, string]] : [])]), '',

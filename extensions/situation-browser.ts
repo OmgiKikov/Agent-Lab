@@ -1,3 +1,4 @@
+import { dutyNotes, dutySections } from '../src/card/duty-words.js';
 import { situationActions, type SituationView } from '../src/card/view.js';
 import type { Line, Screen, SpaceData, Hint } from './workspace-screens.ts';
 import type { Tone } from './render/theme.ts';
@@ -38,11 +39,13 @@ export function situationExplanation(view: SituationView, width: number, editabl
     for (const [index, problem] of view.problems.entries()) body.push(...numbered(readable(problem), index + 1, width), []);
     if (!view.problems.length) body.push(...wrap('Причина не сохранена. Нельзя объяснить отказ по имеющимся данным.', width), []);
   }
-  body.push(row('Что должен сделать агент', 'text', true), []);
-  for (const [index, must] of view.brief.must.entries()) {
-    body.push(...numbered(must.text, index + 1, width));
-    if (sources && must.rule) body.push(row('Основание в материалах:', 'muted'), ...wrap(`«${must.rule}»`, width, 'muted'));
-    body.push([]);
+  for (const { heading, items } of dutySections(view.brief.must)) {
+    body.push(row(heading, 'text', true), []);
+    for (const { number, duty: must } of items) {
+      body.push(...numbered(must.text, number, width), ...dutyNotes(must).flatMap(note => wrap(note, width, 'muted')));
+      if (sources && must.rule) body.push(row('Основание в материалах:', 'muted'), ...wrap(`«${must.rule}»`, width, 'muted'));
+      body.push([]);
+    }
   }
   if (!sources) body.push(...wrap('Enter  Открыть основания из материалов', width, 'accent'));
   body.push(...wrap('a  Обсудить эту ситуацию с Lab', width, 'muted'));

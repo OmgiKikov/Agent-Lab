@@ -24,6 +24,7 @@ export const FLAGS = {
   planted: { type: 'string' }, controls: { type: 'string' },
   curl: { type: 'string' }, message: { type: 'string' }, conversation: { type: 'string', multiple: true }, reply: { type: 'string' },
   'operator-rules': { type: 'string' }, 'bind-rule': { type: 'string', multiple: true }, 'unbind-rule': { type: 'string', multiple: true },
+  ceiling: { type: 'string' },
 } as const;
 export type Flag = keyof typeof FLAGS;
 export type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];

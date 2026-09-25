@@ -2,7 +2,7 @@ import { fingerprint } from '../contracts.js';
 import { countText } from '../plural.js';
 import { clip } from '../text.js';
 import { messageAt, normalizeText, problemText, quotable, unusableFindings, type CardEvidence } from './checks.js';
-import { planClaims, type Claim, type ClaimKind } from './review.js';
+import { planClaims, receiptFor, type Claim, type ClaimKind } from './review.js';
 import { KIND_WORDS, rulebookOf, unboundCitation, withRules } from './rulebook.js';
 import type { Card, CardCommand, ClaimReceipt, LibraryV2 } from './schema.js';
 import type { Reference } from '../reference.js';
@@ -207,7 +207,7 @@ function statusOf(card: Card, context: StatusContext, twin: Card | undefined): C
   if (unbound) return { status: 'needs_owner', question: rulebookQuestion(card, library, unbound), problems: [] };
   const claims = planClaims(card, context);
   const receipts = claims.flatMap(claim => {
-    const receipt = library.claims.find(item => item.key === claim.key);
+    const receipt = receiptFor(library, claim);
     return receipt ? [{ claim, receipt }] : [];
   });
   if (receipts.length < claims.length) return { status: 'checking', problems: [] };
