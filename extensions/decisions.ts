@@ -4,7 +4,7 @@ import { hostGrant, type Via } from '../src/card/commands.js';
 import { logImports } from '../src/card/calibration-scope.js';
 import { conversionText } from '../src/card/convert.js';
 import { convertible } from '../src/card/legacy-v1.js';
-import { pendingReviewCalls } from '../src/card/prepare.js';
+import { checkCalls } from '../src/card/check-calls.js';
 import type { CardCommand } from '../src/card/schema.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
 import { rulebookChangeLines, rulebookOf, withKind } from '../src/card/rulebook.js';
@@ -86,7 +86,7 @@ export async function queueDraft(reader: ExperimentLab, record: Experiment): Pro
   if (isRunning(record.phase)) return undefined;
   const context = await reader.cardContext(record.id);
   const views = situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns });
-  const pendingCalls = record.phase === 'review' && !record.trials.length ? pendingReviewCalls(context.library, context.evidence) : 0;
+  const pendingCalls = record.phase === 'review' && !record.trials.length ? checkCalls(context.experiment, context.library, context.evidence) : 0;
   return { record: context.experiment, views, pendingCalls };
 }
 

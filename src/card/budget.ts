@@ -22,7 +22,7 @@ export const PROPOSAL_ATTEMPTS = TASK_ATTEMPTS + REVISIONS;
 /** Calls a conversation spends choosing articles of a knowledge base too large for one request: from the titles, then on reading them. */
 const READING_CALLS = 2;
 /** Review requests one card makes at most: its story and its duties apart when together they do not fit one request. */
-const REVIEW_CALLS = 2;
+export const REVIEW_CALLS = 2;
 /** Reviews one unit may need: its card's, and its revision's. */
 const REVIEWS = 2;
 

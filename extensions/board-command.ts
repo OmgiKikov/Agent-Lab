@@ -6,7 +6,7 @@ import type { CardCommand } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { shownRulebook } from '../src/card/rulebook.js';
 import { convertible } from '../src/card/legacy-v1.js';
-import { pendingReviewCalls } from '../src/card/prepare.js';
+import { checkCalls } from '../src/card/check-calls.js';
 import { situationViews, type SituationAction, type SituationView } from '../src/card/view.js';
 import { isRunning } from '../src/phases.js';
 import { demoInput } from '../src/demo.js';
@@ -118,7 +118,7 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     // A card set can always be worked on: a finished run's situations are changed in a fresh draft of the same set.
     const editable = !!context && !isRunning(setRecord.phase);
     const coverage = context ? situationCoverage(context.library, cardStatuses({ library: context.library, evidence: context.evidence, maxTurns })) : undefined;
-    if (context && editable && setRecord.phase === 'review' && !setRecord.trials.length) pendingCalls = pendingReviewCalls(context.library, context.evidence);
+    if (context && editable && setRecord.phase === 'review' && !setRecord.trials.length) pendingCalls = checkCalls(context.experiment, context.library, context.evidence);
     const rulebook = context && shownRulebook(context.library);
     set = { record: setRecord, views, editable, ...(coverage ? { coverage } : {}), ...(rulebook ? { rulebook } : {}), running: job?.kind === 'assessment' && job.id === setRecord.id,
       plan: context && !context.library.acceptance ? cardPlan(setRecord, views) : scenarioPlan(setRecord) };

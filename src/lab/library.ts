@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { preparationBudget, preparationCeiling, preparationTime, promptsOversize } from '../card/budget.js';
 import type { LogVersionCommand, LogVersionJournal } from '../card/calibration.js';
+import { checkCalls } from '../card/check-calls.js';
 import { importEvidence, type CardEvidence } from '../card/checks.js';
 import { applyCommand, applyLogVersion as appendLogVersion, prepareCommand, prepareLogVersion as previewLogVersion, type HostGrant, type Prepared, type PreparedLogVersion, type Via } from '../card/commands.js';
 import { convertedPreparation, convertV1Library, type Conversion } from '../card/convert.js';
 import { convertible, libraryV1Of } from '../card/legacy-v1.js';
 import { acceptLibraryV2, requireLibraryV2 } from '../card/library.js';
-import { notContinuable, pendingReviewCalls, preparationParallel, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
+import { notContinuable, preparationParallel, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
 import type { CardCommand, LibraryV2 } from '../card/schema.js';
 import { unmaskCommand, unmaskRequest } from '../card/unmask.js';
 import { dialogueNumbers, type DialogueNumbers } from '../card/view.js';
@@ -226,14 +227,15 @@ export async function proposeFill(lab: Lab, id: string, cardId: string): Promise
 }
 
 /**
- * After an owner command: the claims it opened are checked now, later, or wait for a larger limit. A check is its own
- * operation: the calls it may make are the draft's limit from its start, whatever the preparation and earlier checks spent.
+ * After an owner command: the claims it opened — and the revisions a check owes blocked cards (card/check-calls.ts) — are
+ * checked now, later, or wait for a larger limit. A check is its own operation: the calls it may make are the draft's
+ * limit from its start, whatever the preparation and earlier checks spent.
  */
 export async function recheckCards(lab: Lab, id: string, options: { defer?: boolean; expectedHash?: string; explicit?: boolean } = {}) {
   const { experiment, library, evidence } = await cardContext(lab, id);
   const hash = libraryHash(library);
   if (options.expectedHash && options.expectedHash !== hash) throw new LibraryConflict('Библиотека изменилась: хеш устарел.');
-  const pendingJobs = pendingReviewCalls(library, evidence), remainingCalls = draftBudget(experiment).calls;
+  const pendingJobs = checkCalls(experiment, library, evidence), remainingCalls = draftBudget(experiment).calls;
   const decision = recheckDecision({ pendingJobs, remainingCalls, defer: !!options.defer, askedHash: options.explicit ? hash : undefined, libraryHash: hash });
   if (decision.action === 'run') await checkCards(lab, id, decision.startHash);
   return { decision, before: experiment };
