@@ -78,3 +78,19 @@ test('an answer no article holds stays text for the judge; no markup gives no re
     [{ id: 'assessor', origin: 'assessor', confirmed: true, text: 'Позвоните в поддержку банка.' }]);
   assert.equal(assessorReference({ columns: { Ожидалось: 'x' } }, kb), undefined);
 });
+
+test('a text column without role marks reads as one question per row, and Lab asks which column holds the assessor\'s result', async () => {
+  const { questionAnswers, withAnswer } = await import('../src/spreadsheet/answers.js');
+  const bytes = xlsxFile([{ name: 'раг', rows }]), file = tableFileOf('кейсы.xlsx', bytes), workbook = readWorkbook(bytes, file);
+  const asked = proposeTable(workbook, file, { text: 'Вопрос клиента' });
+  assert.equal(asked.status, 'question');
+  const question = (asked as Extract<TableProposal, { status: 'question' }>).question;
+  assert.equal(question.kind, 'expected');
+  const answers = questionAnswers(question);
+  assert.ok(answers.some(answer => answer.label === 'колонка «Ожидалось» — ожидаемый ответ'));
+  assert.equal(answers.at(-1)!.label, 'такой колонки нет');
+  const chosen = answers.find(answer => answer.label === 'колонка «Ожидалось» — ожидаемый ответ')!;
+  const proposal = ready(proposeTable(workbook, file, withAnswer({ text: 'Вопрос клиента' }, chosen.choices)));
+  assert.deepEqual(proposal.mapping.expected, [{ column: { index: 2, header: 'Ожидалось' }, kind: 'answer' }]);
+  assert.equal(ready(proposeTable(workbook, file, { text: 'Вопрос клиента', expected: [] })).mapping.expected, undefined, 'the owner said there is none');
+});

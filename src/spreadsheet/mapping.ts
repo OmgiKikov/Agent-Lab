@@ -114,7 +114,8 @@ export const tableChoicesSchema = z.strictObject({
   /** One case per row: the text column is the customer's message; `answer` the agent's logged reply, null for none. */
   perRow: z.literal('question').optional(),
   answer: columnChoice.nullable().optional(),
-  expected: z.array(z.strictObject({ column: columnChoice, kind: z.enum(EXPECTED_KINDS) })).min(1).max(3).optional(),
+  /** The assessor's columns; an empty list is the owner's word that the table has none. */
+  expected: z.array(z.strictObject({ column: columnChoice, kind: z.enum(EXPECTED_KINDS) })).max(3).optional(),
 });
 export type TableChoices = z.infer<typeof tableChoicesSchema>;
 

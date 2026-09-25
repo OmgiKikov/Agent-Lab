@@ -48,6 +48,7 @@ function basisLine(basis: ReadingBasis): string {
 export function questionText(question: TableQuestion, found: number): string {
   switch (question.kind) {
     case 'text': return `Lab не нашёл разговоров: в какой колонке их текст? Колонки: ${question.columns.map(column => quoted(columnLabel(column))).join(', ')}.`;
+    case 'expected': return `Одна строка — один вопрос клиента: Lab видит ${countText(found, ROWS)}. В какой колонке ожидаемый результат асессора — он станет эталоном каждой ситуации?`;
     case 'id': return `${found ? `Lab видит ${countText(found, CONVERSATIONS)}. ` : ''}В какой колонке id разговора? Подходят: ${question.columns.map(column => quoted(columnLabel(column))).join(', ')}.`;
     case 'marker': return `Lab видит ${countText(found, CONVERSATIONS)}, но не знает, кто пишет сообщения с меткой ${question.token} в колонке ${quoted(columnLabel(question.column))} (${countText(question.messages, MESSAGES)}): клиент, агент, служебное — или это не метка, а слово в тексте?`;
     case 'role': return `Lab видит ${countText(found, CONVERSATIONS)}, но не знает, кто пишет сообщения со значением ${quoted(question.value)} в колонке ${quoted(columnLabel(question.column))} (${countText(question.messages, MESSAGES)}): клиент, агент или служебное?`;

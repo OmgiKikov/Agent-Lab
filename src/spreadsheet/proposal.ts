@@ -6,7 +6,7 @@ import { importTable, parseOrder, type TablePreview } from './dialogues.js';
 import { readExactly } from './exact.js';
 import {
   LABEL_LIMIT, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
-  type ColumnInfo, type ReadingBasis, type Role, type TableChoices, type TableLayout, type TableMapping,
+  type ColumnInfo, type ExpectedKind, type ReadingBasis, type Role, type TableChoices, type TableLayout, type TableMapping,
 } from './mapping.js';
 import { boundaryCounts, detectMarkers, type MarkerStructure } from './markers.js';
 import { frequentCopies } from './repeats.js';
@@ -33,6 +33,8 @@ export type TableQuestion =
   | { kind: 'text'; columns: ColumnInfo[] }
   /** Which column identifies a conversation? */
   | { kind: 'id'; columns: ColumnInfo[] }
+  /** One question per row: which column holds the assessor's expected result — an answer, an article id, an answer code — or none? */
+  | { kind: 'expected'; columns: { column: ColumnInfo; kinds: ExpectedKind[] }[] }
   /** Who writes the messages this marker starts in the text column: клиент, агент, служебное — or is it not a marker? */
   | { kind: 'marker'; column: ColumnInfo; token: string; messages: number }
   /** Who writes the messages with this value in the role column? */
@@ -107,6 +109,11 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   if (!analysis.rows.length) return { ...base, status: 'refused', choice: 'sheet', reason: `В листе ${quoted(sheet.name)} нет строк под заголовком.` };
   if (chosen.perRow === 'question' || chosen.answer !== undefined) return questionTable(workbook, file, sheet, chosen, base);
   const outcome = decide(analysis, chosen);
+  // A column the owner named that holds no conversation marked message by message holds one question per row.
+  const textColumn = chosen.text ? findColumn(chosen.text, analysis.columns) : undefined;
+  if ('refused' in outcome && outcome.refused === 'text' && textColumn && !isNumeric(analysis, textColumn) && chosen.markers === undefined && chosen.separator === undefined) {
+    return questionTable(workbook, file, sheet, { ...chosen, perRow: 'question' }, base);
+  }
   if ('refused' in outcome) return { ...base, status: 'refused', choice: outcome.refused, reason: outcome.reason };
   if ('question' in outcome) return { ...base, status: 'question', question: outcome.question, found: outcome.found };
   const reading = tableMappingSchema.parse({ version: 1, source: workbook.csv ? { format: 'csv', ...workbook.csv } : { format: 'xlsx', sheet: sheet.name },
@@ -135,10 +142,22 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
  */
 function questionTable(workbook: Workbook, file: TableFile, sheet: Sheet, chosen: TableChoices, base: ProposalBase): TableProposal {
   if (!chosen.text) return { ...base, status: 'refused', choice: 'text', reason: 'Назовите колонку с вопросом клиента: одна строка — один вопрос.' };
+  if (chosen.expected === undefined) {
+    const a = analyzeSheet(sheet);
+    const taken = new Set([chosen.text, chosen.answer, chosen.id, chosen.where?.column].flatMap(name => name ? [findColumn(name, a.columns)?.index] : []));
+    const columns = a.columns.filter(column => column.filled && !taken.has(column.index)).slice(0, 12).map(column => ({ column, kinds: expectedKinds(a, column) }));
+    if (columns.length) return { ...base, status: 'question', question: { kind: 'expected', columns }, found: a.rows.length };
+  }
   const outcome = readExactly(workbook, file, { sheet: sheet.name, id: chosen.id ?? null, text: chosen.text,
     layout: { kind: 'question_per_row', answer: chosen.answer ?? null }, collapseRepeats: false,
-    ...chosen.where ? { where: chosen.where } : {}, ...chosen.expected ? { expected: chosen.expected } : {} });
+    ...chosen.where ? { where: chosen.where } : {}, ...chosen.expected?.length ? { expected: chosen.expected } : {} });
   return 'proposal' in outcome ? outcome.proposal as TableProposal : { ...base, status: 'refused', choice: 'text', reason: outcome.problem };
+}
+
+/** What a column of the assessor's markup may hold: short single-word values are an article id or an answer code, anything longer an expected answer. */
+function expectedKinds(a: SheetAnalysis, column: ColumnInfo): ExpectedKind[] {
+  const values = filledValues(a, column);
+  return values.length && values.every(value => value.length <= 40 && !/\s/.test(value.trim())) ? ['article', 'code'] : ['answer'];
 }
 
 /** A sheet as Lab's own reading sees it: the shared analysis, and the marker structure of each column once it was looked for. */
