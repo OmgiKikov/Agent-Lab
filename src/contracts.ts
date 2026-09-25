@@ -407,7 +407,7 @@ export interface Trial {
    * run or a re-assessment records it. Absent in attempts recorded before editions existed: they keep edition 1, so a
    * stored result never moves.
    */
-  countingVersion?: 2;
+  countingVersion?: 2 | 3;
 }
 /**
  * Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed
@@ -593,7 +593,7 @@ export const trialSchema = z.strictObject({
   invalidCause: z.enum(INVALID_CAUSES).optional(),
   assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
   turnLimit: z.literal(true).optional(),
-  countingVersion: z.literal(2).optional(),
+  countingVersion: z.union([z.literal(2), z.literal(3)]).optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),

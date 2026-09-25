@@ -181,6 +181,9 @@ export async function evaluateTrial(input: {
     addUsage(usage) { ctx.addUsage(usage); addUsage(trial.usage, usage); },
   };
   const messages: DialogueMessage[] = [];
+  // The conversation as the customer Lab plays sees it: the agent's buttons shown under its text, so the customer can
+  // press one and the check of its words finds a button's values in what was said. The agent's history stays plain.
+  const shown: DialogueMessage[] = [];
   let persistenceError: unknown;
   let persistenceFailed = false;
   const emit = (event: Omit<Trial['events'][number], 'seq'>) => {
@@ -194,6 +197,8 @@ export async function evaluateTrial(input: {
   // `facts`: what the adapter said of the turn beside its text — a handoff, the agent's status, the buttons offered or pressed.
   const append = (role: 'user' | 'assistant', content: string, facts?: Record<string, unknown>) => {
     messages.push({ role, content });
+    const buttons = role === 'assistant' && Array.isArray(facts?.buttons) ? facts.buttons as AgentButton[] : [];
+    shown.push({ role, content: buttons.length ? `${content}\n[Кнопки: ${buttons.map(button => `«${button.text}»`).join(' · ')}]` : content });
     emit({ type: role, text: content, ...(facts && Object.keys(facts).length ? { result: facts } : {}) });
   };
   let session: TargetSession | undefined;
@@ -318,9 +323,9 @@ export async function evaluateTrial(input: {
         // The customer leaves on their own words' budget: past the card's follow-ups they have nothing more to say.
         if (free.said >= free.brief.maxFollowUps && !(free.brief.turn?.required && !free.turned)) { stopped = true; break; }
         ctx.signal.throwIfAborted();
-        const reply = customerReplySchema.parse(await runtime.speakAsCustomer!({ brief: structuredClone(free.brief), messages: structuredClone(messages), turn, turned: free.turned }, userCtx));
+        const reply = customerReplySchema.parse(await runtime.speakAsCustomer!({ brief: structuredClone(free.brief), messages: structuredClone(shown), turn, turned: free.turned }, userCtx));
         ctx.signal.throwIfAborted();
-        const problem = customerReplyProblem(reply, free.brief, messages, free.turned);
+        const problem = customerReplyProblem(reply, free.brief, shown, free.turned);
         if (problem) throw new Error(`Симулятор нарушил карточку: ${problem}`);
         emit({ type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: reply.move, message: reply.message, ...(reply.conditions ? { conditions: reply.conditions } : {}) } });
         if (reply.move === 'leave') { stopped = true; break; }
@@ -335,7 +340,7 @@ export async function evaluateTrial(input: {
         const choice = userDecisionSchema(actions);
         ctx.signal.throwIfAborted();
         const answer = choice.safeParse(await runtime.selectUserAction!({ user: structuredClone(scenario.execution!.userView), state: controlled.position,
-          actions, messages: structuredClone(messages), turn }, userCtx));
+          actions, messages: structuredClone(shown), turn }, userCtx));
         ctx.signal.throwIfAborted();
         if (!answer.success) throw new Error('Симулятор выбрал действие, которого нет среди допустимых сейчас.');
         const decision = answer.data;
@@ -350,7 +355,7 @@ export async function evaluateTrial(input: {
         continue;
       }
       if (!runtime.userTurn) throw new Error('Среда не поддерживает свободного симулятора пользователя для карточек без управляемой политики.');
-      const decision = await runtime.userTurn({ user: structuredClone(scenario.user), messages: structuredClone(messages), turn }, userCtx);
+      const decision = await runtime.userTurn({ user: structuredClone(scenario.user), messages: structuredClone(shown), turn }, userCtx);
       emit({ type: 'simulator', result: decision });
       const user = userTurnSchema.parse(decision);
       ctx.signal.throwIfAborted();
@@ -420,9 +425,27 @@ export async function evaluateTrial(input: {
       trial.assessmentFailure = judgmentFailure(error, ctx.signal);
     }
     trial.elapsedMs = Math.round(performance.now() - started);
+  } else if (trial.outcome === 'invalid' && trial.invalidCause !== undefined && AGENT_SIDE.has(trial.invalidCause)) {
+    // The agent's side broke the conversation, so it measures nothing of the agent; whether the customer Lab plays kept
+    // its situation up to there is still known, and counted apart (simulator-evidence.ts). Only the customer's rubric is
+    // judged. A judge that fails here leaves the customer unchecked and the conversation keeps its own cause.
+    const customer = (scenario.metrics ?? []).filter(metric => metric.subject === 'simulator' && metricApplies(metric, trial));
+    if (customer.length && !ctx.signal.aborted) try {
+      onStage?.('assessment');
+      trial.assessments = await assessTrial(runtime, { ...scenario, metrics: customer }, input.judgeSources ?? sources, trial, { ...localCtx, onJudgment: (id, audit, final) => {
+        try { ctx.onJudgment?.(id, audit, final); }
+        catch (error) { persistenceFailed = true; persistenceError = error; throw error; }
+      } }, requirements);
+      trial.elapsedMs = Math.round(performance.now() - started);
+    } catch (error) {
+      if (persistenceFailed) throw persistenceError;
+    }
   }
   return trial;
 }
+
+/** Where a conversation broke on the agent's side — not on the customer's, the Lab's own refusal or the limit. */
+const AGENT_SIDE: ReadonlySet<InvalidCause> = new Set(['agent', 'no_reply', 'service_reply', 'measurement']);
 
 /**
  * Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt

@@ -1,4 +1,4 @@
-import { COUNTING_VERSION, countingVersionOf, headlineRule, undecidedExpectation, type CountedExpectation } from './card/expectations.js';
+import { countingVersionOf, headlineRule, undecidedExpectation, type CountedExpectation } from './card/expectations.js';
 import { directChecks } from './checkpoints.js';
 import { fingerprint, type AssessmentFailure, type Experiment, type InvalidCause, type Scenario, type Trial } from './contracts.js';
 import type { MetricAssessment } from './assessment.js';
@@ -152,7 +152,7 @@ export function cardOutcome(record: Experiment, scenario: Scenario, allowPartial
   if (!trials.length) return 'unknown';
   const state = attemptsState({ ...record, scenarios: [scenario], trials });
   const outcomes = trials.map(t => automaticTrialResult(scenario, t, record.humanReviews));
-  if (countingVersionOf(trials) === COUNTING_VERSION && state.intact && outcomes.includes('fail')) return 'fail';
+  if (countingVersionOf(trials) >= 2 && state.intact && outcomes.includes('fail')) return 'fail';
   if (!state.finished || !state.intact || !allowPartial && !state.whole) return 'unknown';
   return failFirst(outcomes);
 }
@@ -204,7 +204,7 @@ const failFirst = (results: Verdict[]): Verdict => results.includes('fail') ? 'f
  */
 function countedOutcome(record: Experiment, scenario: Scenario, trials: Trial[], partial: boolean, read: (trial: Trial) => Verdict): Verdict {
   const usable = (trial: Trial) => measurementUsable(scenario, trial, record.humanReviews);
-  if (countingVersionOf(trials) === COUNTING_VERSION) {
+  if (countingVersionOf(trials) >= 2) {
     if (!attemptsIntact(record, scenario, trials, partial)) return 'unknown';
     const results = trials.map(trial => usable(trial) ? read(trial) : 'unknown');
     if (results.includes('fail')) return 'fail';

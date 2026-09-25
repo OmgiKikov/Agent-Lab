@@ -1,4 +1,4 @@
-import { COUNTING_VERSION, countingVersionOf } from './card/expectations.js';
+import { countingVersionOf } from './card/expectations.js';
 import { fingerprint, simulatorWasUsed, type Experiment, type HumanReview, type Scenario, type Trial } from './contracts.js';
 import { metricApplies } from './assessment.js';
 import { isRunning } from './phases.js';
@@ -90,7 +90,7 @@ function situations(record: Experiment): Situation[] {
     let known = asked.get(scenario.id);
     if (known === undefined) {
       const trials = record.trials.filter(trial => trial.scenarioId === scenario.id);
-      known = countingVersionOf(trials) !== COUNTING_VERSION || headlineCardOutcome(record, scenario).outcome !== 'unknown';
+      known = countingVersionOf(trials) < 2 || headlineCardOutcome(record, scenario).outcome !== 'unknown';
       asked.set(scenario.id, known);
     }
     return known;
