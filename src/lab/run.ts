@@ -466,7 +466,7 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
       // Every attempt of this run is counted by the rules of today's edition; a stored run keeps its own.
       trial.countingVersion = COUNTING_VERSION;
       // The attempt is final: sealed once, so the number is derived only while the record still holds it (seal.ts).
-      trial.seal = sealTrial(trial, scenario);
+      trial.seal = sealTrial(trial, record);
       record.trials.push(trial);
       if (scenario.initialState.external && trial.observation?.resetConfirmed !== true) addCaveat(record, { code: 'state_unconfirmed' });
       if (trial.observation?.version) {

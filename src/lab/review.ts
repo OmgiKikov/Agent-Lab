@@ -118,7 +118,7 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
         }
         trial.elapsedMs = Math.round(performance.now() - started);
         // The re-assessed attempt is final: sealed afresh, as a run's attempt is (seal.ts).
-        trial.seal = sealTrial(trial, scenario);
+        trial.seal = sealTrial(trial, record);
         record.trials.push(trial);
         await lab.operations.checkpoint(record, 'evaluating', `Переоценено ${record.trials.length}/${trials.length}. Агент не запускался.`);
       }
