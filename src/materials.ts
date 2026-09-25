@@ -4,16 +4,32 @@ import type { SourceKind } from './contracts.js';
 import { docxText, htmlText } from './docx.js';
 import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIAL_PART_CHARS } from './limits.js';
 import type { PromptCandidate } from './prompt-candidates.js';
+import { textEncoding } from './spreadsheet/csv.js';
 
 interface FileMaterial { name: string; content: string; kind: SourceKind; file: string }
 interface MaterialsReport { materials: FileMaterial[]; skipped: Array<{ file: string; reason: string }> }
 
+/**
+ * The text of a plain document in the encoding its bytes are written in (spreadsheet/csv.ts textEncoding): UTF-8,
+ * UTF-16 by its byte order mark, else Windows-1251, which Notepad and Word save in a Russian locale. A text that
+ * would hold replacement characters or zero bytes is refused: garbled words must never become the agent's rules.
+ */
+function documentText(bytes: Buffer): string {
+  const encoding = textEncoding(bytes);
+  let text: string;
+  try { text = new TextDecoder(encoding, { fatal: encoding !== 'windows-1251' }).decode(bytes); }
+  catch { throw new Error(`текст не читается в кодировке ${encoding === 'utf-8' ? 'UTF-8' : 'UTF-16'} — сохраните файл заново в UTF-8`); }
+  if (text.includes('�')) throw new Error('в тексте испорченные знаки «�» — сохраните файл заново в UTF-8 из исходного документа');
+  if (text.includes('\u0000')) throw new Error('это не текст: в файле нулевые байты — сохраните его как текст в UTF-8');
+  return text;
+}
+
 const READERS: Record<string, (file: Buffer) => string> = {
   '.docx': docxText,
-  '.md': file => file.toString('utf8'),
-  '.txt': file => file.toString('utf8'),
-  '.html': file => htmlText(file.toString('utf8')),
-  '.htm': file => htmlText(file.toString('utf8')),
+  '.md': documentText,
+  '.txt': documentText,
+  '.html': file => htmlText(documentText(file)),
+  '.htm': file => htmlText(documentText(file)),
 };
 /** The document types Lab reads as materials; project detection proposes only these. */
 export const MATERIAL_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(READERS));
