@@ -1,6 +1,7 @@
 import type { Experiment } from '../src/contracts.js';
 import type { ExperimentStore } from '../src/store.js';
 import { roleChoices } from '../src/llm/models.js';
+import { leftBeforeSpending } from '../src/miner/plan.js';
 import { planTopicMap, reusableTopicMap, topicMapKey } from '../src/miner/topic-map.js';
 import { clip, safeLine } from '../src/text.js';
 
@@ -30,10 +31,11 @@ export async function preparationDetails(store: ExperimentStore, record: Experim
     const builder = { provider: choice.provider, id: choice.model };
     const stored = await store.readTopicMap(topicMapKey(batch, builder)).catch(() => undefined);
     const plan = planTopicMap(batch, builder, stored);
-    for (const item of plan.excluded) unsuitable.add(item.dialogueId);
+    // Left out before anything was spent — refused by the import, or no situation can be made of them: never a failure.
+    for (const item of leftBeforeSpending(batch, plan.unsuitable)) unsuitable.add(item.dialogueId);
     const map = reusableTopicMap(stored, batch, builder) ?? plan.resume;
     const classified = Object.keys(map?.assignments ?? {}).length;
-    preparation.logs = { classified, total: plan.dialogues, excluded: plan.excluded.length, topics: map?.topics.map(topic => topic.title) ?? [] };
+    preparation.logs = { classified, total: plan.dialogues, excluded: plan.unsuitable.length, topics: map?.topics.map(topic => topic.title) ?? [] };
     if (!progress) share = classified / Math.max(1, plan.dialogues);
     if (map) {
       const shown = new Set<string>();

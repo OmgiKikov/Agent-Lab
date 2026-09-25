@@ -13,8 +13,9 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { readDialogueImport } from '../src/imports.js';
 import { expandMaterials, promptMaterials } from '../src/materials.js';
 import type { PromptCandidate } from '../src/prompt-candidates.js';
-import { consentText, DEFAULT_SITUATIONS, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
+import { consentText, DEFAULT_SITUATIONS, loggedRolesToMap, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
 import { countText } from '../src/plural.js';
+import type { Encoding } from '../src/spreadsheet/csv.js';
 import { TABLE_EXTENSIONS } from '../src/spreadsheet/workbook.js';
 import { safeText } from '../src/text.js';
 import { preparedAnswer, STOP_HINT, type Background } from './background.ts';
@@ -67,12 +68,14 @@ export const prepareParameters = Type.Object({
     }, { ...closed, description: 'Only when the owner named the column whose values choose the conversations to evaluate. Without values the host asks the owner which to keep.' })),
     request: Type.Optional(Type.String({ minLength: 1, maxLength: 500, description: 'The owner\'s own words about which conversations to evaluate, when they did not name the column (e.g. «только те, где отвечал один агент эквайринга»): Lab\'s model finds the column and its values in the table.' })),
     collapseRepeats: Type.Optional(Type.Boolean({ description: 'Only after the owner said what to do with exchanges the export repeated: true — read each once, false — keep them as written.' })),
-  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where, or request in the owner\'s words), the repeated exchanges. A column is a header or a letter.' })),
+    encoding: Type.Optional(Type.Union([Type.Literal('utf-8'), Type.Literal('utf-16le'), Type.Literal('windows-1251'), Type.Literal('windows-1252')],
+      { description: 'Only for a CSV file, when the owner said its text reads garbled or named its encoding: windows-1251 (Russian Excel), windows-1252 (Western Excel), utf-8, utf-16le.' })),
+  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where, or request in the owner\'s words), the repeated exchanges, the encoding of a CSV. A column is a header or a letter.' })),
   suite: Type.Optional(path('A saved set of situations (.evals/*.json) to load into a fresh draft instead of preparing: free, nothing runs.')),
   demo: Type.Optional(Type.Literal(true, { description: 'The built-in teaching example: no model, no keys, one minute.' })),
 }, closed);
 type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string;
-  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean }; suite?: string; demo?: true };
+  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean; encoding?: Encoding }; suite?: string; demo?: true };
 
 /** A path the owner or the model named: `~/…` is the owner's home, anything else is relative to the project. */
 export function projectPath(named: string, cwd: string): string {
@@ -153,6 +156,26 @@ function unknownPrompt(id: string, found: ProjectDetection | undefined): never {
     'Такого промпта Lab в проекте не нашёл — какой из найденных задаёт ответ клиенту?');
 }
 
+/** The answers to «кто пишет под этой ролью?»: a role of the conversation, or the owner's word that Lab should leave those conversations aside. */
+const ROLE_ANSWERS = [['клиент', 'user'], ['агент — бот, которого проверяем', 'assistant'], ['служебное', 'system']] as const;
+const LEAVE_ROLE = 'не знаю — оставить эти разговоры в стороне';
+
+/**
+ * Who writes under each role name of the logs Lab does not know (`client`, `operator`): one native question per name,
+ * never guessed — a bank's «operator» may be a person, not the bot. `declined` when the owner stepped back.
+ */
+async function askLoggedRoles(ctx: ExtensionContext, names: readonly string[]): Promise<ReadonlyMap<string, 'user' | 'assistant' | 'system'> | 'declined'> {
+  const roles = new Map<string, 'user' | 'assistant' | 'system'>();
+  for (const name of names) {
+    const picked = await ctx.ui.select(safeText(`Кто пишет сообщения с ролью «${name}» в логах?\n\nLab читает роли user, assistant, system и tool, а эту не угадывает: под ней может быть и бот, и живой сотрудник.`),
+      [...ROLE_ANSWERS.map(([label]) => label), LEAVE_ROLE, 'Не сейчас']);
+    const role = ROLE_ANSWERS.find(([label]) => label === picked)?.[1];
+    if (role) roles.set(name, role);
+    else if (picked !== LEAVE_ROLE) return 'declined';
+  }
+  return roles;
+}
+
 const declined = (host: PrepareHost, callId: string, text: string) =>
   host.feedResult(callId, { cancelled: true, spent: 0, instruction: 'The owner stepped back: nothing was spent or written. Do not ask again unless they do.' },
     { tone: 'warning', rows: [row(text)] }, 'Сбор ситуаций отменён');
@@ -204,9 +227,10 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   let libraryImport: Awaited<ReturnType<typeof readDialogueImport>> | undefined;
   if (logs !== 'rules') {
     if (TABLE_EXTENSIONS.has(extname(logs).toLowerCase())) {
-      const { sheet, id, text, where, request: words, collapseRepeats } = params.table ?? {};
+      const { sheet, id, text, where, request: words, collapseRepeats, encoding } = params.table ?? {};
       // The owner's corrections, said in words; which conversations to keep is asked natively when no value was named.
-      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }) };
+      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }),
+        ...(encoding ? { encoding } : {}) };
       if (Object.keys(choices).length || words || !await confirmedBefore(logs, directory)) {
         requireInteractive(ctx, 'Как читать таблицу, решаете вы в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не прочитано и не потрачено.');
         const owned = await host.open(ctx.cwd);
@@ -223,9 +247,20 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
           { tone: 'warning', rows: [row(safeText(imported.refused))] }, 'Таблица не прочитана');
       }
     }
-    try { libraryImport = await readDialogueImport(logs, { directory }); }
-    catch (error) { throw new Error(safeText(`Не удалось прочитать логи ${shownPath(logs, ctx.cwd)}: ${error instanceof Error ? error.message : String(error)} Агент не запускался, ничего не потрачено.`)); }
-    if (!libraryImport.originalImport.dialogues.length) throw new Error(`В ${shownPath(logs, ctx.cwd)} нет разговоров, которые Lab может прочитать.`);
+    const read = async (roles?: ReadonlyMap<string, 'user' | 'assistant' | 'system'>) => {
+      try { return await readDialogueImport(logs, { directory, ...(roles ? { roles } : {}) }); }
+      catch (error) { throw new Error(safeText(`Не удалось прочитать логи ${shownPath(logs, ctx.cwd)}: ${error instanceof Error ? error.message : String(error)} Агент не запускался, ничего не потрачено.`)); }
+    };
+    libraryImport = await read();
+    // A table's roles are its confirmed reading; a JSON log's unknown role names are the owner's word, asked before the consent.
+    const names = TABLE_EXTENSIONS.has(extname(logs).toLowerCase()) ? [] : loggedRolesToMap(libraryImport);
+    if (names.length) {
+      requireInteractive(ctx, `В логах роли, которых Lab не знает (${names.join(', ')}): кто пишет под ними, решаете вы в интерактивном терминале Pi. Откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не потрачено.`);
+      const roles = await askLoggedRoles(ctx, names);
+      if (roles === 'declined') return declined(host, callId, 'Не собираю: вы не сказали, кто пишет под ролями логов. Ничего не потрачено.');
+      if (roles.size) libraryImport = await read(roles);
+    }
+    if (!libraryImport.dialogues.length) throw new Error(`В ${shownPath(logs, ctx.cwd)} нет разговоров, которые Lab может прочитать.`);
   }
 
   // The run's settings are the host's: the model names neither a limit nor a model.
@@ -244,7 +279,8 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
     input = createInputSchema.parse({
       task: params.task, mode: 'live', workflow: 'evaluate', materials: expanded.materials, scenarioCount: libraryImport ? 0 : count,
       target: connection?.target ?? { kind: 'unconnected' }, ...(connection?.targetVersion ? { targetVersion: connection.targetVersion } : {}),
-      ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
+      // The import is what the preparation reads; no older projection of it gates what the import accepted.
+      ...(libraryImport ? { originalImport: libraryImport } : {}),
       settings: settingsSchema.parse({ provider: ctx.model?.provider ?? '', model: ctx.model?.id ?? '', judge, ...run, userModes: ['reactive'],
         maxCalls: runLimit(count, run, !!libraryImport), maxDurationMs: runTime(count * run.repeats),
         // A proposal that reads the agent's prompts and articles whole routinely exceeds the two-minute default per call.

@@ -3,13 +3,17 @@
  * whatever the export's masking tool writes — so this module is the one place that reads them, as llm/model-call.ts
  * is for providers' error phrases.
  *
- * One table of marks (version 2), every reading follows from it:
+ * One table of marks (version 3), every reading follows from it:
  *
  *   ***, ###            a run of symbols written over a value — not a lone * between numbers («5 * 3»: a product),
  *                       not a lone # before a number («Заказ # 123»: a number sign)
  *   xxx, хххх, XXXX     three or more Latin or Cyrillic x — not XXX or ХХХ between two words («в XXX веке»: a Roman numeral)
  *   <PHONE>, <ФИО>      a tag in angle brackets
  *   [redacted] [masked] [скрыто] [удалено]
+ *   [ФИО] [PHONE] [CARD_NUMBER] {PHONE} <ФИО клиента>
+ *                       a placeholder, read by its structure: up to 40 capital Latin or Cyrillic letters, digits,
+ *                       underscores and spaces, at least one letter, in square, curly or angle brackets — whatever
+ *                       words a masking tool writes. A bracket of lower-case Latin words ({x}) or without a letter ([1]) is none.
  *
  * A mark stands alone: one touching a letter or a digit is not a mask («*важно*», «5*3», «№#12»). The readings: the
  * masked values of a message (maskedSpans, where card/unmask.ts writes plausible values in), a message nothing the
@@ -19,20 +23,23 @@
  * Version 1 is the three readings that disagreed before the table; it stays for what was stored under it, frozen: an
  * import batch or a table's mapping without `maskVersion` was read so, the topic map of such an import left out what
  * its exclusion left out, and a value Lab filled in without `maskVersion` (card/schema.ts `filled`) stands over the
- * mark version 1 counted — every mark the pattern finds, its context unread. A new batch records version 2 only where
- * a message reads otherwise (readAlike); a new fill always records the table it counted its marks by.
+ * mark version 1 counted — every mark the pattern finds, its context unread. Version 2 is the table without its
+ * placeholders, frozen for what was read by it. A new batch records the table only where a message reads otherwise
+ * than version 1 reads it (readAlike); a new fill always records the table it counted its marks by.
  */
 
-/** 1: the frozen readings of what was stored before the table; 2: the table. */
-export type MaskVersion = 1 | 2;
+/** 1: the frozen readings of what was stored before the table; 2: the table before placeholders; 3: the table. */
+export type MaskVersion = 1 | 2 | 3;
 /** The table every new reading follows; an import and a table's mapping record it. */
-export const MASK_VERSION = 2 satisfies MaskVersion;
+export const MASK_VERSION = 3 satisfies MaskVersion;
 
 /** A mark written the way the table writes it, standing alone between words; its context is checked in code. */
 const MASK_MARK = /(?<![\p{L}\p{N}])(?:[*#]+|[xх]{3,}|<[^<>\s]{1,40}>|\[(?:redacted|masked|скрыто|удалено)\])(?![\p{L}\p{N}])/giu;
+/** A placeholder of version 3 standing alone: capitals or Cyrillic, digits, underscores and spaces, a letter among them, in [], {} or <>. */
+const PLACEHOLDER = /(?<![\p{L}\p{N}])(?:\[(?=[^\]]*[A-ZА-Яа-яЁё])[A-Z0-9_ А-Яа-яЁё]{1,40}\]|\{(?=[^}]*[A-ZА-Яа-яЁё])[A-Z0-9_ А-Яа-яЁё]{1,40}\}|<(?=[^>]*[A-ZА-Яа-яЁё])[A-Z0-9_ А-Яа-яЁё]{1,40}>)(?![\p{L}\p{N}])/gu;
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 /** The characters marks are written with: a value holding one is no plain value. */
-const MARK_CHARACTERS: ReadonlySet<string> = new Set(['*', '#', '<', '>', '[', ']']);
+const MARK_CHARACTERS: ReadonlySet<string> = new Set(['*', '#', '<', '>', '[', ']', '{', '}']);
 
 /** One masked value of a message: where its mark stands and the mark itself. */
 export interface MaskedSpan { start: number; end: number; mark: string }
@@ -71,13 +78,20 @@ function masks(content: string, start: number, end: number): boolean {
 
 /**
  * The masked values of a message, in order, as the table of `version` reads them. Version 1 — the frozen reading the
- * values Lab filled in before the table were counted by — takes every mark the pattern finds, its context unread.
+ * values Lab filled in before the table were counted by — takes every mark the pattern finds, its context unread;
+ * version 3 adds the placeholders, a placeholder the older marks already read (<PHONE>) being one mark.
  */
 export function maskedSpans(content: string, version: MaskVersion = MASK_VERSION): MaskedSpan[] {
-  return [...content.matchAll(MASK_MARK)].flatMap(match => {
+  const marks = [...content.matchAll(MASK_MARK)].flatMap(match => {
     const start = match.index, end = match.index + match[0].length;
     return version === 1 || masks(content, start, end) ? [{ start, end, mark: match[0] }] : [];
   });
+  if (version < 3) return marks;
+  const placeholders = [...content.matchAll(PLACEHOLDER)].flatMap(match => {
+    const start = match.index, end = match.index + match[0].length;
+    return marks.some(mark => mark.start < end && start < mark.end) ? [] : [{ start, end, mark: match[0] }];
+  });
+  return [...marks, ...placeholders].sort((a, b) => a.start - b.start);
 }
 
 /** A value to write over a mark: where the mark stands in its message (a span maskedSpans found) and the value. */
@@ -108,7 +122,7 @@ const MASK_ONLY_V1 = /^(?:\s|\*|x|х|\[(?:redacted|masked|скрыто|удал�
  */
 export function maskedThrough(content: string, version: MaskVersion = MASK_VERSION): boolean {
   if (version === 1) return MASK_ONLY_V1.test(content);
-  const spans = maskedSpans(content);
+  const spans = maskedSpans(content, version);
   if (!spans.length) return false;
   let rest = '', from = 0;
   for (const span of spans) { rest += content.slice(from, span.start); from = span.end; }
@@ -120,7 +134,7 @@ export function maskedThrough(content: string, version: MaskVersion = MASK_VERSI
  * reading, which the stored topic maps of such imports left out by — a `*` or `#` and not one letter or digit.
  */
 export function hiddenMessage(content: string, version: MaskVersion = MASK_VERSION): boolean {
-  return version === 1 ? /[*#]/u.test(content) && !LETTER_OR_DIGIT.test(content) : maskedThrough(content);
+  return version === 1 ? /[*#]/u.test(content) && !LETTER_OR_DIGIT.test(content) : maskedThrough(content, version);
 }
 
 /**
@@ -131,7 +145,7 @@ function mayHoldMark(content: string): boolean {
   let run = 0, onlyX = true;
   for (let i = 0; i < content.length; i++) {
     const code = content.charCodeAt(i);
-    if (code === 42 || code === 35 || code === 60 || code === 91) return true; // * # < [
+    if (code === 42 || code === 35 || code === 60 || code === 91 || code === 123) return true; // * # < [ {
     if (code === 120 || code === 88 || code === 0x445 || code === 0x425) { if (++run >= 3) return true; continue; } // x X х Х
     run = 0;
     if (code > 32 && code !== 0xa0 && code < 0x1680) onlyX = false; // any other space keeps the full reading below
@@ -145,7 +159,7 @@ function mayHoldMark(content: string): boolean {
  * alike is the very import the first readings made of them, stored or not, and its topic map is the same.
  */
 export const readAlike = (content: string): boolean => !mayHoldMark(content)
-  || maskedThrough(content, 1) === maskedThrough(content, 2) && hiddenMessage(content, 1) === hiddenMessage(content, 2);
+  || maskedThrough(content, 1) === maskedThrough(content, MASK_VERSION) && hiddenMessage(content, 1) === hiddenMessage(content, MASK_VERSION);
 
 /** A value that is a mark again, or holds a character marks are written with: never a value written in for a mark. */
 export const holdsMark = (value: string): boolean => maskedSpans(value).length > 0 || [...value].some(char => MARK_CHARACTERS.has(char));

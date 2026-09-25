@@ -1,3 +1,4 @@
+import type { Encoding } from '../spreadsheet/csv.js';
 import { ROLES, ROLE_WORDS, columnLabel, tableChoicesSchema, type MarkerRole, type TableChoices } from '../spreadsheet/mapping.js';
 import type { TableProposal } from '../spreadsheet/proposal.js';
 
@@ -30,6 +31,31 @@ function whereChoice(text: string): NonNullable<TableChoices['where']> {
   if (!column) throw new Error('--where: ожидается КОЛОНКА=ЗНАЧЕНИЕ, несколько значений — через |; одна КОЛОНКА покажет её значения.');
   return at < 0 ? { column } : { column, values: text.slice(at + 1).split('|').map(value => value.trim()) };
 }
+/**
+ * `build --roles client=клиент,operator=агент`: who writes under the role names of a JSON log Lab does not know — the
+ * owner's word, never Lab's guess. Undefined without the flag.
+ */
+export function loggedRolesOf(text: string | undefined): ReadonlyMap<string, 'user' | 'assistant' | 'system'> | undefined {
+  if (text === undefined) return undefined;
+  const pairs = rolePairs(text, '--roles', false);
+  return new Map(pairs.map(({ label, role }) => [label, role as 'user' | 'assistant' | 'system']));
+}
+
+/** How to answer role names Lab does not know from the command line: the flag of the same command, a role for each. */
+export const loggedRolesHint = (names: readonly string[]): string =>
+  `Кто есть кто: та же команда с --roles "${names.map(name => `${name}=РОЛЬ`).join(',')}", где РОЛЬ — клиент, агент или служебное.`;
+
+/** `--encoding`: the names an owner may know an encoding by. */
+const ENCODING_BY_NAME: Readonly<Record<string, Encoding>> = {
+  'utf-8': 'utf-8', utf8: 'utf-8', 'utf-16': 'utf-16le', 'utf-16le': 'utf-16le', unicode: 'utf-16le',
+  'windows-1251': 'windows-1251', cp1251: 'windows-1251', '1251': 'windows-1251', 'windows-1252': 'windows-1252', cp1252: 'windows-1252', '1252': 'windows-1252', latin1: 'windows-1252',
+};
+function encodingOf(name: string): Encoding {
+  const encoding = ENCODING_BY_NAME[name.trim().toLowerCase()];
+  if (!encoding) throw new Error('--encoding: ожидается utf-8, utf-16, windows-1251 или windows-1252.');
+  return encoding;
+}
+
 /** The owner's choices from the command line; each overrides what Lab would propose. */
 export function tableChoicesOf(values: Record<string, string | boolean | string[] | undefined>): TableChoices {
   const text = (key: string) => typeof values[key] === 'string' ? values[key] as string : undefined;
@@ -46,6 +72,7 @@ export function tableChoicesOf(values: Record<string, string | boolean | string[
     ...text('order-column') ? { order: text('order-column') } : values['row-order'] ? { order: null } : {},
     ...text('where') ? { where: whereChoice(text('where')!) } : {},
     ...values['collapse-repeats'] ? { collapseRepeats: true } : values['keep-repeats'] ? { collapseRepeats: false } : {},
+    ...text('encoding') ? { encoding: encodingOf(text('encoding')!) } : {},
   });
 }
 /** How to answer the proposal from the command line. */
@@ -54,6 +81,7 @@ export function importHints(proposal: TableProposal): string[] {
   if (proposal.status === 'refused') return ['Поправьте выбор и повторите команду.'];
   if (proposal.status === 'ready') return ['Загрузить: та же команда с --yes.',
     'Поправить: --sheet, --id-column, --text-column; метки — --markers CLIENT=клиент,AGENT=агент и --separator ЗНАК или --no-separator; сообщение в строке — --role-column, --roles, --order-column или --row-order.',
+    ...proposal.csv ? ['Текст читается кракозябрами — другая кодировка: --encoding windows-1251, windows-1252 или utf-8.'] : [],
     ...!proposal.mapping.filter && proposal.selectable.length ? ['Отобрать разговоры: --where "КОЛОНКА" покажет её значения, --where "КОЛОНКА=ЗНАЧЕНИЕ|ЗНАЧЕНИЕ" оставит только их.'] : [],
     ...proposal.preview.repeats && !proposal.mapping.collapseRepeats ? ['Убрать повторы обменов: --collapse-repeats.'] : []];
   const question = proposal.question;

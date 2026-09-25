@@ -1,5 +1,5 @@
 import { MASK_VERSION } from '../masking.js';
-import { EVENTS_REASON, MASKED_REASON, NO_CUSTOMER_REASON } from '../scenario-library.js';
+import type { LeftOutCode } from '../scenario-contracts.js';
 import { analyzeSheet, columnNames, type SheetAnalysis } from './analysis.js';
 import { importTable, type TablePreview } from './dialogues.js';
 import { findColumn, tableMappingSchema, toColumn, type ColumnInfo, type MarkerRole, type RepeatJudgement, type Role, type TableChoices, type TableMapping } from './mapping.js';
@@ -41,10 +41,10 @@ const PLAUSIBLE_SIDE = 0.1;
 const LEFT_OUT = 0.1;
 /**
  * Reasons that are the data, whatever the reading: customer messages hidden by de-identification, a customer who
- * opened a chat and left, a conversation longer than one import keeps. A reading that misses the customer
+ * opened a chat and left, a conversation or a message larger than an import keeps. A reading that misses the customer
  * everywhere is caught by the sides.
  */
-const DATA_REASONS: ReadonlySet<string> = new Set([MASKED_REASON, NO_CUSTOMER_REASON, EVENTS_REASON]);
+const DATA_REASONS: ReadonlySet<LeftOutCode> = new Set(['masked', 'no_customer', 'empty', 'large', 'long_message']);
 
 const quoted = (text: string) => `"${text}"`;
 
@@ -163,7 +163,7 @@ function readingProblem(a: SheetAnalysis, mapping: TableMapping, preview: TableP
     const undecided = [...written].filter(value => !decided.has(value));
     if (undecided.length) return `Values ${undecided.slice(0, 12).map(quoted).join(', ')} of the role column ${quoted(layout.role.header)} have no role in roles: give each of them one.`;
   }
-  const reasons = preview.rejected.filter(item => !DATA_REASONS.has(item.reason));
+  const reasons = preview.rejected.filter(item => !DATA_REASONS.has(item.code));
   const left = reasons.reduce((sum, item) => sum + item.count, 0);
   if (left > considered * LEFT_OUT) {
     return `This reading leaves out ${left} of ${considered} conversations: ${reasons.slice(0, 5).map(item => `${quoted(item.reason)} — ${item.count}`).join('; ')}. `

@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { isIdentifier } from './ids.js';
-import { IMPORT_DIALOGUE_LIMIT } from './limits.js';
-import { MASK_VERSION, maskedThrough, readAlike, type MaskVersion } from './masking.js';
+import { IMPORT_BATCH_CHARS, IMPORT_DIALOGUE_LIMIT, LOGGED_CONVERSATION_CHARS, LOGGED_CUSTOMER_MESSAGES, LOGGED_MESSAGE_CHARS } from './limits.js';
+import { countLeftOut, issueText, type LeftOutRow } from './log-issues.js';
+import { hiddenMessage, MASK_VERSION, maskedThrough, readAlike, type MaskVersion } from './masking.js';
 import { fingerprint, type Experiment } from './contracts.js';
 import type { LibraryV2, ScenarioLibrary } from './card/schema.js';
-import { importBatchSchema, type ImportBatch, type LibraryV1 } from './scenario-contracts.js';
+import { importBatchSchema, type ImportBatch, type LeftOutIssue, type LibraryV1, type loggedRoleSchema } from './scenario-contracts.js';
 
 /*
  * What a library stands on and what seals it, for both stored formats: the verbatim import of the logs, the hash of
@@ -28,21 +29,26 @@ function canonical(value: unknown): string {
 const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** Why a conversation is refused when de-identification hid every customer message: the data, not the way it was read. */
-export const MASKED_REASON = 'Пользовательские реплики полностью замаскированы';
-/** Why a conversation is refused when the customer wrote nothing: they opened it and left, or the reading missed them. */
-export const NO_CUSTOMER_REASON = 'Нет пользовательских реплик';
-
-/** Why a conversation is refused when it holds no event, or more than one import keeps of it: a long conversation is the data, not the way it was read. */
-export const EVENTS_REASON = 'Пустые события или превышен лимит событий';
-
-/** A row read: kept or refused, and whether its customer's messages read alike under both tables of masks (masking.ts readAlike). */
-type ReadRow = ({ dialogue: ImportBatch['dialogues'][number] } | { rejected: ImportBatch['rejected'][number] }) & { alike: boolean };
+/**
+ * A row read: kept or refused, whether its customer's messages read alike under both tables of masks (masking.ts
+ * readAlike), the length of its JSON, and the role names it was read by the owner's word on.
+ */
+type ReadRow = ({ dialogue: ImportBatch['dialogues'][number] } | { rejected: ImportBatch['rejected'][number] }) & { alike: boolean; chars: number; mapped: ReadonlySet<string> };
 type ImportedEvent = ImportBatch['dialogues'][number]['events'][number];
+type LoggedRole = z.infer<typeof loggedRoleSchema>['role'];
 
 const EVENT_SCHEMA = importBatchSchema.shape.dialogues.element.shape.events.element;
 const EVENT_TYPES: ReadonlySet<unknown> = new Set(['message', 'tool', 'retrieval', 'state']);
 const EVENT_ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'tool', 'system']);
+/** Who writes a message, as Lab reads it; any other role name is the owner's to map (loggedRoleSchema). */
+const MESSAGE_ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'system']);
+const OBSERVATIONS: ReadonlySet<unknown> = new Set(['complete', 'partial', 'unknown']);
+
+/**
+ * How rows are read besides the import's own rules: the table of masks (masking.ts) and the owner's word on role names
+ * Lab does not know. Both decide which rows are usable, so an import records them.
+ */
+export interface RowReading { maskVersion?: MaskVersion; roles?: ReadonlyMap<string, LoggedRole> }
 
 /**
  * JSON as a parser or a sheet reader makes it — finite numbers, strings, booleans, null, arrays without holes, plain
@@ -66,86 +72,138 @@ function plainJson(value: unknown, depth = 0): boolean {
 /**
  * An event as the import keeps it, or undefined when the event schema refuses it. A plain event is checked here by the
  * schema's own rules — a long log read event by event through the schema spent most of its time there — and any
- * other one by the schema itself, so the verdict is the schema's either way.
+ * other one by the schema itself, so the verdict is the schema's either way. The conversation's own size was checked
+ * before (LOGGED_CONVERSATION_CHARS), and it holds every event's data.
  */
 function importedEvent(candidate: { index: number; type: unknown; role?: string; content?: string; data: unknown }): ImportedEvent | undefined {
   const { type, role, content, data } = candidate;
-  if (EVENT_TYPES.has(type) && (role === undefined || EVENT_ROLES.has(role)) && (content === undefined || content.length >= 1 && content.length <= 8000 && content.trim() !== '')
-    && plainJson(data)) return JSON.stringify(data).length <= 500_000 ? candidate as ImportedEvent : undefined;
+  if (EVENT_TYPES.has(type) && (role === undefined || EVENT_ROLES.has(role)) && (content === undefined || content.length >= 1 && content.length <= LOGGED_MESSAGE_CHARS && content.trim() !== '')
+    && plainJson(data)) return candidate as ImportedEvent;
   const validated = EVENT_SCHEMA.safeParse(candidate);
   return validated.success ? validated.data : undefined;
 }
 
+/** A value of the log as the owner recognises it in a reason: a string as written, anything else as JSON. */
+const shown = (value: unknown): string => (typeof value === 'string' ? value : JSON.stringify(value) ?? String(value)).slice(0, 200);
+/** The issues of a row, each once, in the order they were found. */
+const once = (issues: readonly LeftOutIssue[]): LeftOutIssue[] =>
+  issues.filter((issue, index) => issues.findIndex(other => other.code === issue.code && other.value === issue.value) === index);
+
 /**
  * One row of a log by the import's rules: its id (once per log: `seen` holds the ids of the rows before it), its
- * events verbatim with stable indexes, whether a customer wrote anything a mask left. `known` is a reason a reader of
- * another format already found for the row (a spreadsheet row whose text has no role marker): the row is refused
- * with it and its events are not read.
+ * events verbatim with stable indexes, whether a customer wrote anything a mask left — or every reason it cannot be
+ * read, typed (LeftOutIssue). `known` is a reason a reader of another format already found for the row (a spreadsheet
+ * row whose text has no role marker, a line of JSON Lines that is not JSON): the row is refused with it and its
+ * events are not read. A row larger than LOGGED_CONVERSATION_CHARS is refused before anything else: nothing of it can
+ * be kept (logImport keeps such a log's rows out of the batch).
  */
-function readRow(row: unknown, index: number, seen: Set<string>, known: string | undefined, maskVersion: MaskVersion): ReadRow {
-  const reasons: string[] = [];
+function readRow(row: unknown, index: number, seen: Set<string>, known: LeftOutIssue | undefined, reading: RowReading): ReadRow {
+  const { maskVersion = MASK_VERSION, roles } = reading;
+  const chars = JSON.stringify(row)?.length ?? 0;
+  const issues: LeftOutIssue[] = known ? [known] : [];
   const dialogueId = record(row) && typeof row.id === 'string' ? row.id : undefined;
-  if (!dialogueId || !isIdentifier(dialogueId)) reasons.push('Некорректный id диалога');
-  if (dialogueId && seen.has(dialogueId)) reasons.push('Повторяющийся id диалога');
-  if (dialogueId) seen.add(dialogueId);
-  const rich = record(row) && Array.isArray(row.events);
-  const events = record(row) ? (rich ? row.events : row.messages) : undefined;
-  const retained: ImportBatch['dialogues'][number]['events'] = [];
-  if (known !== undefined) reasons.push(known);
-  else if (!Array.isArray(events) || events.length === 0 || events.length > (rich ? 120 : 60)) reasons.push(EVENTS_REASON);
-  else events.forEach((event, eventIndex) => {
-    if (!record(event)) { reasons.push(`Событие ${eventIndex}: ожидается объект`); return; }
-    const type = rich ? event.type : 'message';
-    if (!['message', 'tool', 'retrieval', 'state'].includes(String(type))) { reasons.push(`Событие ${eventIndex}: неизвестный тип`); return; }
-    const candidate = { index: eventIndex, type, ...(typeof event.role === 'string' ? { role: event.role } : {}), ...(typeof event.content === 'string' ? { content: event.content } : {}), data: event };
-    const kept = importedEvent(candidate);
-    if (!kept || type === 'message' && (event.role !== 'user' && event.role !== 'assistant' && event.role !== 'system' || typeof event.content !== 'string')) reasons.push(`Событие ${eventIndex}: некорректная роль или пустое содержимое`);
-    else retained.push(kept);
-  });
-  const userEvents = retained.filter(event => event.type === 'message' && event.role === 'user');
-  if (!userEvents.length && known === undefined) reasons.push(NO_CUSTOMER_REASON);
-  if (userEvents.length && userEvents.every(event => maskedThrough(event.content ?? '', maskVersion))) reasons.push(MASKED_REASON);
-  const observation = record(row) ? row.observation ?? (rich ? 'unknown' : 'partial') : 'unknown';
-  if (!['complete', 'partial', 'unknown'].includes(String(observation))) reasons.push('Некорректная полнота наблюдения');
   // JSON as read: importBatch checks every row it keeps, and the batch before it is returned.
   const original = row as z.infer<ReturnType<typeof z.json>>;
-  const alike = maskVersion === 1 || userEvents.every(event => readAlike(event.content ?? ''));
-  return reasons.length ? { rejected: { index, ...(dialogueId ? { id: dialogueId.slice(0, 200) } : {}), reasons: [...new Set(reasons)].slice(0, 20), original }, alike }
-    : { dialogue: { id: dialogueId!, events: retained, observation: observation as 'complete' | 'partial' | 'unknown', original }, alike };
+  const mapped = new Set<string>();
+  const refused = (alike = true): ReadRow => ({ rejected: { index, ...(dialogueId ? { id: dialogueId.slice(0, 200) } : {}),
+    reasons: [...new Set(issues.map(issueText))].slice(0, 20), issues: once(issues).slice(0, 20), original }, alike, chars, mapped });
+  if (chars > LOGGED_CONVERSATION_CHARS) { issues.push({ code: 'large', ...(dialogueId ? { value: dialogueId.slice(0, 200) } : {}) }); return refused(); }
+  if (!record(row)) { if (!known) issues.push({ code: 'shape' }); return refused(); }
+  if (!dialogueId || !isIdentifier(dialogueId)) issues.push({ code: 'id', ...(row.id === undefined ? {} : { value: shown(row.id) }) });
+  else if (seen.has(dialogueId)) issues.push({ code: 'duplicate', value: dialogueId });
+  if (dialogueId) seen.add(dialogueId);
+  if (known) return refused();
+  const rich = Array.isArray(row.events);
+  const events = rich ? row.events : row.messages;
+  if (!Array.isArray(events)) { issues.push({ code: 'shape' }); return refused(); }
+  if (!events.length) { issues.push({ code: 'empty' }); return refused(); }
+  const retained: ImportBatch['dialogues'][number]['events'] = [];
+  let unread = false;
+  events.forEach((event: unknown, eventIndex) => {
+    const position = String(eventIndex + 1);
+    const skip = (issue: LeftOutIssue) => { issues.push(issue); unread = true; };
+    if (!record(event)) return skip({ code: 'event', value: position });
+    const type = rich ? event.type : 'message';
+    if (!EVENT_TYPES.has(type)) return skip({ code: 'event', value: position });
+    const logged = event.role, content = event.content;
+    // A message is written by a role Lab reads, or by one the owner said who it is; any other name is theirs to say.
+    const role = type !== 'message' || typeof logged !== 'string' || MESSAGE_ROLES.has(logged) ? logged : roles?.get(logged);
+    if (type === 'message' && typeof logged === 'string' && role === undefined) return skip({ code: 'roles', value: logged.slice(0, 80) });
+    if (role !== logged) mapped.add(logged as string);
+    if (type === 'message' && typeof role !== 'string') return skip({ code: 'event', value: position });
+    if (typeof content === 'string' && content.length > LOGGED_MESSAGE_CHARS) return skip({ code: 'long_message', value: String(content.length) });
+    if (type === 'message' && (typeof content !== 'string' || !content.trim())) return skip({ code: 'blank' });
+    const kept = importedEvent({ index: eventIndex, type, ...(typeof role === 'string' ? { role } : {}), ...(typeof content === 'string' ? { content } : {}), data: event });
+    if (!kept) return skip({ code: 'event', value: position });
+    retained.push(kept);
+  });
+  const customers = retained.filter(event => event.type === 'message' && event.role === 'user');
+  // A customer who wrote nothing is the data only when every message was read: unknown roles hide the customer too.
+  if (!customers.length && !unread) issues.push({ code: 'no_customer' });
+  if (customers.length && customers.every(event => maskedThrough(event.content ?? '', maskVersion))) issues.push({ code: 'masked' });
+  const observation = row.observation ?? (rich ? 'unknown' : 'partial');
+  if (!OBSERVATIONS.has(observation)) issues.push({ code: 'observation', value: shown(observation) });
+  const alike = maskVersion === 1 || customers.every(event => readAlike(event.content ?? ''));
+  return issues.length ? refused(alike)
+    : { dialogue: { id: dialogueId!, events: retained, observation: observation as 'complete' | 'partial' | 'unknown', original }, alike, chars, mapped };
+}
+
+/**
+ * Why no situation can be made of a conversation the import kept: it is still read, sorted into its topic and counted
+ * in the traffic (miner/), only no situation stands for it — the customer writes more than a situation holds
+ * (LOGGED_CUSTOMER_MESSAGES), or de-identification hid one of their messages whole. `maskVersion` is the table the
+ * import was read by.
+ */
+export function situationIssue(dialogue: Pick<ImportBatch['dialogues'][number], 'events'>, maskVersion: MaskVersion = MASK_VERSION): LeftOutIssue | undefined {
+  const customer = dialogue.events.flatMap(event => event.type === 'message' && event.role === 'user' && event.content !== undefined ? [event.content] : []);
+  if (!customer.length) return { code: 'no_customer' };
+  if (customer.length > LOGGED_CUSTOMER_MESSAGES) return { code: 'long', value: String(customer.length) };
+  if (customer.some(content => hiddenMessage(content, maskVersion))) return { code: 'hidden' };
+  return undefined;
 }
 
 /** The rows of a raw import: an array of conversations, or `{ formatVersion?: 1, dialogues: [...] }`. */
 function rowsOf(raw: unknown): unknown[] {
-  if (raw === undefined) throw new Error('Импорт пуст или превышает 12000000 символов');
+  if (raw === undefined) throw new Error('Импорт пуст.');
   if (record(raw) && raw.formatVersion !== undefined && raw.formatVersion !== 1) throw new Error('Неподдерживаемая версия импорта');
   const rows = Array.isArray(raw) ? raw : record(raw) ? raw.dialogues : undefined;
   if (!Array.isArray(rows)) throw new Error('Ожидается массив диалогов или объект {dialogues: [...]}');
   return rows;
 }
 
+/** What seals an import: its rows, and the owner's word on role names when it was read by one. */
+const importContent = (rows: readonly unknown[], roles: ImportBatch['roles']): unknown => roles ? { rows, roles } : rows;
+
 /**
  * No inference: ingest source evidence verbatim and give every retained event a stable index. `known` holds reasons
- * a reader of another format already found for rows (by index), see readRow. `maskVersion` is the table of masks the
- * rows are read by (masking.ts). Where a customer's message reads otherwise under it than under the first readings,
- * the batch records it, so its conversations and the topic map of them keep the reading they were made with; where
- * every message reads alike, the batch is the one the first readings made — the same import of the same rows. One
- * batch holds IMPORT_DIALOGUE_LIMIT conversations; a longer log is sampled (logImport).
+ * a reader of another format already found for rows (by index), see readRow. `reading` is the table of masks the rows
+ * are read by (masking.ts) and the owner's word on role names. Where a customer's message reads otherwise under the
+ * table than under the first readings, the batch records it, so its conversations and the topic map of them keep the
+ * reading they were made with; where every message reads alike, the batch is the one the first readings made — the
+ * same import of the same rows. The role names the owner mapped and the rows used are recorded and sealed with the
+ * rows. One batch holds IMPORT_DIALOGUE_LIMIT conversations of IMPORT_BATCH_CHARS at most, each within
+ * LOGGED_CONVERSATION_CHARS; a larger log is sampled (logImport).
  */
-export function importBatch(raw: unknown, known: ReadonlyMap<number, string> = new Map(), maskVersion: MaskVersion = MASK_VERSION): ImportBatch {
-  const serialized = JSON.stringify(raw);
-  if (!serialized || serialized.length > 12_000_000) throw new Error('Импорт пуст или превышает 12000000 символов');
+export function importBatch(raw: unknown, known: ReadonlyMap<number, LeftOutIssue> = new Map(), reading: RowReading = {}): ImportBatch {
+  const { maskVersion = MASK_VERSION } = reading;
   const rows = rowsOf(z.json().parse(raw));
   if (rows.length > IMPORT_DIALOGUE_LIMIT) throw new Error(`В одном импорте не больше ${IMPORT_DIALOGUE_LIMIT} разговоров.`);
-  const contentHash = digest(rows);
-  const batch: ImportBatch = { formatVersion: 1, id: `import_${contentHash.slice(0, 32)}`, contentHash, createdAt: new Date().toISOString(), dialogues: [], rejected: [] };
+  if ((JSON.stringify(rows)?.length ?? 0) > IMPORT_BATCH_CHARS) throw new Error(`Разговоры одного импорта занимают больше ${IMPORT_BATCH_CHARS.toLocaleString('ru-RU')} знаков. Загрузите их файлом логов: из большого Lab сам возьмёт выборку.`);
+  const used = new Set<string>();
+  const batch: Omit<ImportBatch, 'id' | 'contentHash'> = { formatVersion: 1, createdAt: new Date().toISOString(), dialogues: [], rejected: [] };
   const seen = new Set<string>();
   let alike = true;
   rows.forEach((row, index) => {
-    const read = readRow(row, index, seen, known.get(index), maskVersion);
+    const read = readRow(row, index, seen, known.get(index), reading);
     alike &&= read.alike;
+    for (const value of read.mapped) used.add(value);
     if ('dialogue' in read) batch.dialogues.push(read.dialogue); else batch.rejected.push(read.rejected);
   });
-  return importBatchSchema.parse(maskVersion === 1 || alike ? batch : { ...batch, maskVersion });
+  // Only the names the rows were read by: a mapping that names more reads the same log to the same import.
+  const roles = used.size ? [...used].sort().map(value => ({ value, role: reading.roles!.get(value)! })) : undefined;
+  const contentHash = digest(importContent(rows, roles));
+  return importBatchSchema.parse({ ...batch, id: `import_${contentHash.slice(0, 32)}`, contentHash, ...(roles ? { roles } : {}),
+    ...(maskVersion === 1 || alike ? {} : { maskVersion }) });
 }
 
 /** A conversation of a log as the order of a sample sees it: a hash of its id and its messages, never where it stands or how it ended. */
@@ -154,32 +212,47 @@ export const conversationKey = (dialogue: ImportBatch['dialogues'][number]): str
 
 type Dialogue = ImportBatch['dialogues'][number];
 /** The order of a sample: `key` of a usable conversation, `index` its row in the log. */
-export interface LogOptions { maskVersion?: MaskVersion; key?: (dialogue: Dialogue, index: number) => string }
-/** What a log longer than one batch held: its conversations and the usable ones among them. */
+export interface LogOptions extends RowReading { key?: (dialogue: Dialogue, index: number) => string }
+/** What a log larger than one batch held: its conversations, the readable ones, and why the others make no situation. */
 export type LogSample = NonNullable<ImportBatch['sample']>;
+/** Why a row of a log is refused, typed; undefined for a row the import reads. */
+export type Verdict = LeftOutIssue[] | undefined;
 
 /**
- * A log read a row at a time by the import's rules, so that a log too long to hold is read in a stream: `read` says why
- * a row is refused (undefined for a usable one), a conversation id taken once in the whole log; `sample` names the rows
- * a batch takes of a log longer than one — IMPORT_DIALOGUE_LIMIT of the usable ones, first in the order of `key` (by
- * default conversationKey, a hash of what each conversation is: blind to outcomes and to where it stands), kept in the
- * log's order. The same log gives the same rows.
+ * A log read a row at a time by the import's rules, so that a log too large to hold is read in a stream: `read` says why
+ * a row is refused (undefined for a readable one), a conversation id taken once in the whole log; `skip` counts a row
+ * too large to hold at all. Every conversation of the log no situation can be made of is counted with its reason — the
+ * rows refused, and the ones read that no situation stands for (situationIssue). `sample` names the rows a batch takes
+ * of a log larger than one — the readable ones first in the order of `key` (by default conversationKey, a hash of what
+ * each conversation is: blind to outcomes, to length and to where it stands), up to IMPORT_DIALOGUE_LIMIT of them and
+ * cut where the next would take the batch past IMPORT_BATCH_CHARS, kept in the log's order. Cutting, never skipping a
+ * large conversation for smaller ones after it, keeps the sample blind to length. The same log gives the same rows.
  */
-export function logReader(options: LogOptions = {}): { read(row: unknown, known?: string): string[] | undefined; sample(): { indexes: number[]; sample: LogSample } } {
+export function logReader(options: LogOptions = {}): { read(row: unknown, known?: LeftOutIssue): Verdict; skip(issue: LeftOutIssue): void; sample(): { indexes: number[]; sample: LogSample } } {
   const { maskVersion = MASK_VERSION, key = conversationKey } = options;
-  const seen = new Set<string>(), usable: { index: number; key: string }[] = [];
+  const seen = new Set<string>(), usable: { index: number; key: string; chars: number }[] = [], left: LeftOutRow[] = [];
   let rows = 0;
   return {
     read(row, known) {
       const index = rows++;
-      const read = readRow(row, index, seen, known, maskVersion);
-      if ('rejected' in read) return read.rejected.reasons;
-      usable.push({ index, key: key(read.dialogue, index) });
+      const read = readRow(row, index, seen, known, options);
+      if ('rejected' in read) {
+        left.push({ issues: read.rejected.issues ?? [], ...(read.rejected.id ? { id: read.rejected.id } : {}) });
+        return read.rejected.issues;
+      }
+      const issue = situationIssue(read.dialogue, maskVersion);
+      if (issue) left.push({ issues: [issue], id: read.dialogue.id });
+      usable.push({ index, key: key(read.dialogue, index), chars: read.chars });
       return undefined;
     },
+    skip(issue) { rows++; left.push({ issues: [issue] }); },
     sample() {
-      const taken = [...usable].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index).slice(0, IMPORT_DIALOGUE_LIMIT);
-      return { indexes: taken.map(item => item.index).sort((a, b) => a - b), sample: { dialogues: rows, usable: usable.length } };
+      const ordered = [...usable].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index);
+      // The JSON of the taken rows as one array: its brackets, and each row with the comma before the next.
+      let chars = 1, count = 0;
+      while (count < ordered.length && count < IMPORT_DIALOGUE_LIMIT && chars + ordered[count]!.chars + 1 <= IMPORT_BATCH_CHARS) chars += ordered[count++]!.chars + 1;
+      return { indexes: ordered.slice(0, count).map(item => item.index).sort((a, b) => a - b),
+        sample: { dialogues: rows, usable: usable.length, ...(left.length ? { left: countLeftOut(left) } : {}) } };
     },
   };
 }
@@ -188,29 +261,32 @@ export function logReader(options: LogOptions = {}): { read(row: unknown, known?
 export const sampleWords = (taken: number, usable: number): string => `Lab возьмёт ${taken} из ${usable} подходящих — по хешу содержимого, без отбора по исходу`;
 
 /** The batch of a log's sample: the rows taken, in the log's order, and what the log held. */
-export const sampledBatch = (rows: readonly unknown[], sample: LogSample, maskVersion: MaskVersion = MASK_VERSION): ImportBatch =>
-  importBatchSchema.parse({ ...importBatch(rows, new Map(), maskVersion), sample });
+export const sampledBatch = (rows: readonly unknown[], sample: LogSample, reading: RowReading = {}): ImportBatch =>
+  importBatchSchema.parse({ ...importBatch(rows, new Map(), reading), sample });
 
-/** A log read whole: the import, and why each row of the log is refused (undefined for a usable one), in the log's order. */
-export interface LogImport { batch: ImportBatch; verdicts: (string[] | undefined)[] }
+/** A log read whole: the import, and why each row of the log is refused (undefined for a readable one), in the log's order. */
+export interface LogImport { batch: ImportBatch; verdicts: Verdict[] }
 
 /**
- * The import of a log of any length, the same for the same log: at most IMPORT_DIALOGUE_LIMIT rows are one batch
- * (importBatch); a longer log gives the batch of its sample (logReader), which records how many conversations the log
- * held and how many were usable. `known` holds reasons another format's reader found for rows (readRow).
+ * The import of a log of any size, the same for the same log: a log of at most IMPORT_DIALOGUE_LIMIT rows, each within
+ * LOGGED_CONVERSATION_CHARS and all within IMPORT_BATCH_CHARS, is one batch that keeps every row, refused ones with
+ * their reasons (importBatch); any other log gives the batch of its sample (logReader), which records how many
+ * conversations the log held, how many were readable and why the others make no situation. `known` holds reasons
+ * another format's reader found for rows (readRow).
  */
-export function logImport(raw: unknown, options: LogOptions & { known?: ReadonlyMap<number, string> } = {}): LogImport {
-  const { known = new Map(), maskVersion = MASK_VERSION } = options;
+export function logImport(raw: unknown, options: LogOptions & { known?: ReadonlyMap<number, LeftOutIssue> } = {}): LogImport {
+  const { known = new Map() } = options;
   const rows = rowsOf(raw);
-  if (rows.length <= IMPORT_DIALOGUE_LIMIT) {
-    const batch = importBatch(raw, known, maskVersion);
-    const reasons = new Map(batch.rejected.map(item => [item.index, item.reasons]));
-    return { batch, verdicts: rows.map((_, index) => reasons.get(index)) };
+  const sizes = rows.map(row => JSON.stringify(row)?.length ?? 0);
+  if (rows.length <= IMPORT_DIALOGUE_LIMIT && sizes.every(size => size <= LOGGED_CONVERSATION_CHARS) && sizes.reduce((sum, size) => sum + size + 1, 1) <= IMPORT_BATCH_CHARS) {
+    const batch = importBatch(raw, known, options);
+    const issues = new Map(batch.rejected.map(item => [item.index, item.issues]));
+    return { batch, verdicts: rows.map((_, index) => issues.get(index)) };
   }
   const reader = logReader(options);
   const verdicts = rows.map((row, index) => reader.read(row, known.get(index)));
   const { indexes, sample } = reader.sample();
-  return { batch: sampledBatch(indexes.map(index => rows[index]), sample, maskVersion), verdicts };
+  return { batch: sampledBatch(indexes.map(index => rows[index]), sample, options), verdicts };
 }
 
 /**
@@ -233,7 +309,7 @@ export function verifiedImport(raw: unknown): ImportBatch {
     else if (read < batch.dialogues.length) rows.push(batch.dialogues[read++]!.original);
   }
   // A refused row named twice, or placed beyond the rows, leaves the order of the rows unknown.
-  const contentHash = refused.size === batch.rejected.length && rows.length === count ? digest(rows) : undefined;
+  const contentHash = refused.size === batch.rejected.length && rows.length === count ? digest(importContent(rows, batch.roles)) : undefined;
   if (!contentHash || contentHash !== batch.contentHash || batch.id !== `import_${contentHash.slice(0, 32)}`) throw damaged();
   return batch;
 }

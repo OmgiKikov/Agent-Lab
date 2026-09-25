@@ -4,20 +4,27 @@ import { SHEET_COLUMNS, SHEET_ROWS, tooManyColumns, tooManyRows } from './sheet.
  * CSV per RFC 4180: fields separated by the delimiter, records by CRLF (a bare LF or CR is accepted too),
  * a field in double quotes may hold delimiters, line breaks and doubled quotes. Spreadsheet programs vary
  * where the RFC is silent, so the reading is told, not guessed, once the owner has confirmed it: the
- * delimiter and the encoding are part of the confirmed mapping. Detection only proposes them.
+ * delimiter and the encoding are part of the confirmed mapping. Detection only proposes them; the owner may
+ * name either.
  */
 
 export const DELIMITERS = [',', ';', '\t'] as const;
 export type Delimiter = typeof DELIMITERS[number];
-/** Excel in a Russian locale saves «CSV» in Windows-1251 and «Unicode text» in UTF-16; everything else writes UTF-8. */
-export const ENCODINGS = ['utf-8', 'utf-16le', 'windows-1251'] as const;
+/**
+ * Excel in a Russian locale saves «CSV» in Windows-1251 and «Unicode text» in UTF-16, in a Western locale in
+ * Windows-1252; everything else writes UTF-8. Values are only ever appended: a confirmed mapping names one.
+ */
+export const ENCODINGS = ['utf-8', 'utf-16le', 'windows-1251', 'windows-1252'] as const;
 export type Encoding = typeof ENCODINGS[number];
 export interface CsvDialect { delimiter: Delimiter; encoding: Encoding }
+/** Single-byte encodings read every byte: there is no invalid text in them to refuse. */
+const SINGLE_BYTE: ReadonlySet<Encoding> = new Set(['windows-1251', 'windows-1252']);
 
 /** Detection reads the beginning of the file; the whole file is parsed once, with the chosen delimiter. */
 const SAMPLE_CHARS = 65_536;
 
-export function readCsv(bytes: Buffer, given?: CsvDialect): { rows: string[][]; dialect: CsvDialect } {
+/** The rows of a CSV file and the dialect they were read in: the one given, part by part, or the one detected. */
+export function readCsv(bytes: Buffer, given?: Partial<CsvDialect>): { rows: string[][]; dialect: CsvDialect } {
   const encoding = given?.encoding ?? detectEncoding(bytes);
   const text = decode(bytes, encoding);
   const delimiter = given?.delimiter ?? detectDelimiter(text);
@@ -25,13 +32,31 @@ export function readCsv(bytes: Buffer, given?: CsvDialect): { rows: string[][]; 
 }
 
 /**
- * How text bytes are written: UTF-16 by its byte order mark, UTF-8 when every byte reads as UTF-8, else Windows-1251 —
- * what Excel and Notepad save in a Russian locale. Documents are read the same way (materials.ts).
+ * How text bytes are written: UTF-16 by its byte order mark, UTF-8 when every byte reads as UTF-8, else one of the two
+ * single-byte encodings Excel and Notepad save in, told apart by where the letters 0xC0–0xFF stand (singleByte).
+ * Documents are read the same way (materials.ts).
  */
 export function textEncoding(bytes: Uint8Array): Encoding | 'utf-16be' {
   if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
   if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
-  try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); return 'utf-8'; } catch { return 'windows-1251'; }
+  try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); return 'utf-8'; } catch { return singleByte(bytes); }
+}
+
+const high = (byte: number | undefined): boolean => byte !== undefined && byte >= 0xc0;
+const latin = (byte: number | undefined): boolean => byte !== undefined && (byte >= 0x41 && byte <= 0x5a || byte >= 0x61 && byte <= 0x7a);
+/**
+ * Windows-1251 or Windows-1252, by the structure of the bytes 0xC0–0xFF — letters in both. In Windows-1251 they are
+ * the Cyrillic alphabet: a Russian word is a run of them. In Windows-1252 they are accented Latin letters, one here and
+ * there inside a word of plain Latin letters («Café», «naïve»). Whichever neighbour most of them have decides.
+ */
+function singleByte(bytes: Uint8Array): Encoding {
+  let cyrillic = 0, western = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    if (!high(bytes[i])) continue;
+    if (high(bytes[i - 1]) || high(bytes[i + 1])) cyrillic++;
+    else if (latin(bytes[i - 1]) || latin(bytes[i + 1])) western++;
+  }
+  return western > cyrillic ? 'windows-1252' : 'windows-1251';
 }
 
 function detectEncoding(bytes: Buffer): Encoding {
@@ -42,7 +67,7 @@ function detectEncoding(bytes: Buffer): Encoding {
 
 function decode(bytes: Buffer, encoding: Encoding): string {
   // TextDecoder drops the byte order mark of UTF-8 and UTF-16 itself.
-  try { return new TextDecoder(encoding, { fatal: encoding !== 'windows-1251' }).decode(bytes); }
+  try { return new TextDecoder(encoding, { fatal: !SINGLE_BYTE.has(encoding) }).decode(bytes); }
   catch { throw new Error(`Файл не читается в кодировке ${encoding === 'utf-8' ? 'UTF-8' : 'UTF-16'}. Сохраните таблицу как CSV в UTF-8.`); }
 }
 

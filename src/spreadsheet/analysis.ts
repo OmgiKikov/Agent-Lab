@@ -1,4 +1,4 @@
-import { parseOrder } from './dialogues.js';
+import { parseOrder } from './order.js';
 import { HEADER_SCAN, columnLabel, type ColumnInfo } from './mapping.js';
 import { cellOf, columnLetter, type Sheet } from './sheet.js';
 

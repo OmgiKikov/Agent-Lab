@@ -1,7 +1,7 @@
 import { cardSchema, type Card, type LibraryV2, type PreparationProgress } from '../card/schema.js';
 import type { CardStatus } from '../card/status.js';
 import { coverageLine, topicCoverage, uncoveredLine, withShares, type TopicCoverage, type TopicTraffic } from './coverage.js';
-import type { CardTopic } from './schema.js';
+import { OTHER, type CardTopic } from './schema.js';
 import { countText } from '../plural.js';
 
 /*
@@ -20,7 +20,8 @@ export const trafficKey = (topic: CardTopic): string => `${topic.batchId}/${topi
 export function libraryTraffic(library: Pick<LibraryV2, 'traffic'>): TopicTraffic | undefined {
   const summaries = library.traffic ?? [];
   if (!summaries.length) return undefined;
-  const topics = summaries.flatMap(traffic => traffic.topics.map(topic => ({ id: trafficKey({ batchId: traffic.importId, id: topic.id }), title: topic.title, dialogues: topic.dialogues })))
+  const topics = summaries.flatMap(traffic => traffic.topics.map(topic => ({ id: trafficKey({ batchId: traffic.importId, id: topic.id }), ...(topic.id === OTHER ? { other: true as const } : {}),
+    title: topic.title, dialogues: topic.dialogues })))
     // Sorting is stable: equal shares keep the order of the imports and of each map.
     .sort((a, b) => b.dialogues - a.dialogues);
   return withShares(topics, summaries.reduce((sum, traffic) => sum + traffic.logged, 0));

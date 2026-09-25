@@ -1,5 +1,6 @@
 import { countText } from '../plural.js';
 import { FILTER_VALUES, VALUE_CHARS, columnLabel, toColumn, type ColumnInfo, type TableFilter, type TableMapping } from './mapping.js';
+import { parseOrder } from './order.js';
 import { cellOf, type Sheet } from './sheet.js';
 
 /*
@@ -26,24 +27,54 @@ type Reading = Omit<TableMapping, 'filter'>;
 const quoted = (text: string) => `«${text}»`;
 const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
 
+/** A sheet that keeps each conversation's rows together in nearly all of them: a conversation whose rows stand apart is two. */
+const TOGETHER = 0.9;
+/** Two messages of one id on different days this far apart are two conversations, not one that went on past midnight. */
+const APART_MS = 12 * 3_600_000;
+const DAY_MS = 86_400_000;
+
 /**
  * The rows of every conversation of the sheet, in the order of the sheet: a row each when a row holds a whole
- * conversation, else the rows that share an id — messages of one conversation may be anywhere in the sheet,
- * and a row without an id stays on its own. A row with neither an id nor a text (a note under the table, an
- * empty line) is no conversation.
+ * conversation, else the rows that share an id — messages of one conversation may be anywhere in the sheet, and a
+ * row without an id stays on its own. A row with neither an id nor a text (a note under the table, an empty line) is
+ * no conversation. One id written on different conversations is told apart, as a JSON log tells a repeated id: where
+ * the sheet keeps conversations together (TOGETHER of them), rows of one id that stand apart are another conversation;
+ * where the order column writes dates, so are messages of one id on another day, APART_MS or more after the one
+ * before. The first stays the conversation of that id; each later one is a conversation of its own under the same id,
+ * which the reading refuses as such (dialogues.ts).
  */
 export function conversationRows(sheet: Sheet, mapping: Reading, rows: readonly number[]): number[][] {
   const filled = (row: number, index: number) => cellOf(sheet, row, index).trim() !== '';
   const layout = mapping.layout;
   if (layout.kind === 'dialogue_per_row') return rows.filter(row => filled(row, mapping.id.index) || filled(row, mapping.text.index)).map(row => [row]);
   const groups = new Map<string, number[]>();
+  const position = new Map<number, number>();
   for (const row of rows) {
     const id = cellOf(sheet, row, mapping.id.index).trim();
     if (!id && !filled(row, layout.role.index) && !filled(row, mapping.text.index)) continue;
+    position.set(row, position.size);
     const key = id || `\u0000${row}`, group = groups.get(key);
     if (group) group.push(row); else groups.set(key, [row]);
   }
-  return [...groups.values()];
+  // A run: rows of one id with no other conversation's row between them (empty lines aside).
+  const runs = (group: readonly number[]) => group.filter((row, i) => i === 0 || position.get(row)! !== position.get(group[i - 1]!)! + 1).length;
+  const several = [...groups.values()].filter(group => group.length > 1);
+  const together = several.length > 0 && several.filter(group => runs(group) === 1).length >= several.length * TOGETHER;
+  const day = (row: number): number | undefined => {
+    const order = layout.order && parseOrder(cellOf(sheet, row, layout.order.index));
+    return order?.kind === 'date' ? order.value : undefined;
+  };
+  return [...groups.values()].flatMap(group => {
+    const parts: number[][] = [[group[0]!]];
+    for (let i = 1; i < group.length; i++) {
+      const row = group[i]!, before = group[i - 1]!;
+      const [at, last] = [day(row), day(before)];
+      const apart = together && position.get(row)! !== position.get(before)! + 1
+        || at !== undefined && last !== undefined && Math.floor(at / DAY_MS) !== Math.floor(last / DAY_MS) && Math.abs(at - last) >= APART_MS;
+      if (apart) parts.push([row]); else parts.at(-1)!.push(row);
+    }
+    return parts;
+  });
 }
 
 /** A conversation's value in a column: the one value its rows write — a blank cell writes none, so all blank is '' — or undefined when they write two. */

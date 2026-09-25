@@ -41,12 +41,12 @@ import { confirmTableImport, planTableReading, proposeReading, proposeTableImpor
 import type { TableProposal } from './spreadsheet/proposal.js';
 import { READING_CALLS } from './spreadsheet/reading-task.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
-import { importHints, tableChoicesOf } from './cli/import-flags.js';
+import { importHints, loggedRolesHint, loggedRolesOf, tableChoicesOf } from './cli/import-flags.js';
 import { connectFromCurl, doctorTemplate } from './cli/connect.js';
 import { commandOf, readCommandLine, type Flag, type Flags } from './cli/args.js';
 import { errorText, stopText } from './cli/errors.js';
 import { preparationBudget, preparationCeiling, resumeLines, type PreparationBudget } from './card/budget.js';
-import { builderOf, consentText, preparationConsent, rulesConsentText, situationCount } from './miner/plan.js';
+import { builderOf, consentText, loggedRolesToMap, NothingFits, preparationConsent, rulesConsentText, situationCount, type PreparationConsent } from './miner/plan.js';
 
 /*
  * `agent-lab`: one table of commands over the operations Pi's tools use (experiment.ts). A command that writes or
@@ -612,12 +612,17 @@ async function taskInput(values: Flags, directory: string): Promise<{ input: Cre
     raw = { ...raw, materials: [...raw.materials ?? [], ...promptMaterials(chosen).map(({ name, content, kind }) => ({ name, content, kind }))] };
   }
   const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
-  const libraryImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory }) : raw.dialogues ? importDialogues(raw.dialogues) : undefined;
+  // Role names of the logs Lab does not know are read by the owner's word only (--roles), never guessed.
+  const roles = loggedRolesOf(values.roles);
+  const originalImport = values['dialogues-file'] ? await readDialogueImport(values['dialogues-file'], { directory, ...(roles ? { roles } : {}) })
+    : raw.dialogues ? importDialogues(raw.dialogues, roles ? { roles } : {}) : undefined;
   // From the rules alone, --situations is the number of situations the rules are written into.
-  const rules = !libraryImport && values.situations !== undefined ? Number(values.situations) : undefined;
+  const rules = !originalImport && values.situations !== undefined ? Number(values.situations) : undefined;
   if (rules !== undefined && !(Number.isInteger(rules) && rules >= 1 && rules <= SCENARIO_LIMIT)) throw new Error(`По правилам без логов Lab готовит от 1 до ${SCENARIO_LIMIT} ситуаций за раз.`);
+  // The import is what a preparation reads: the conversations of a task file become one and leave the input, so no
+  // older projection of them gates what the import accepted.
   const input = createInputSchema.parse({ ...raw, ...(connection ? { target: connection.target, targetVersion: connection.targetVersion } : {}),
-    ...(libraryImport ? { originalImport: libraryImport.originalImport, dialogues: libraryImport.dialogues.slice(0, 200) } : {}),
+    ...(originalImport ? { originalImport, dialogues: [] } : {}),
     ...(rules !== undefined ? { scenarioCount: rules } : {}) });
   return { input, logs: basename(values['dialogues-file'] ?? values.input) };
 }
@@ -688,8 +693,11 @@ async function promptChoice(folder: string, values: Flags, directory: string): P
  */
 async function buildConsent(input: CreateInput, logs: string, directory: string, values: Flags): Promise<{ question: string; lines: string[]; situations: number; callCeiling: number }> {
   if (input.originalImport) {
-    const consent = await preparationConsent(new ExperimentStore(directory), { input, situations: situationCount(values.situations === undefined ? undefined : Number(values.situations)) });
-    return { ...consentText(consent, logs), situations: consent.promised, callCeiling: consent.callCeiling };
+    let consent: PreparationConsent;
+    try { consent = await preparationConsent(new ExperimentStore(directory), { input, situations: situationCount(values.situations === undefined ? undefined : Number(values.situations)) }); }
+    catch (error) { throw error instanceof NothingFits && error.roles.length ? new Error(`${error.message}\n${loggedRolesHint(error.roles)}`) : error; }
+    const text = consentText(consent, logs), roles = loggedRolesToMap(input.originalImport);
+    return { ...text, lines: [...text.lines, ...(roles.length ? [loggedRolesHint(roles)] : [])], situations: consent.promised, callCeiling: consent.callCeiling };
   }
   const situations = input.scenarioCount || 1;
   const callCeiling = preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations, fromLogs: false });
@@ -817,17 +825,17 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
 
 /** The flags of `import`: the owner's answers about the table, as the chat asks them one at a time. */
 const TABLE_FLAGS: readonly Flag[] = ['file', 'input', 'json', 'yes', 'sheet', 'id-column', 'text-column', 'separator', 'no-separator', 'markers', 'role-column', 'roles',
-  'order-column', 'row-order', 'where', 'collapse-repeats', 'keep-repeats'];
-const BUILD_FLAGS: readonly Flag[] = ['input', 'dialogues-file', 'situations', 'connection', 'parallel', 'yes', 'json', 'prompts-from', 'prompt', 'prompts'];
+  'order-column', 'row-order', 'where', 'collapse-repeats', 'keep-repeats', 'encoding'];
+const BUILD_FLAGS: readonly Flag[] = ['input', 'dialogues-file', 'roles', 'situations', 'connection', 'parallel', 'yes', 'json', 'prompts-from', 'prompt', 'prompts'];
 
 /** Every command in the order `--help` lists them: first the owner's path, then what scripts and CI use. */
 const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: [['agent-lab detect [--directory ПАПКА] [--json]', 'Что Lab нашёл в папке проекта: агента, логи, материалы, промпт']], flags: ['directory', 'json'], run: detect },
-  import: { help: [['agent-lab import --file логи.xlsx [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]',
+  import: { help: [['agent-lab import --file логи.xlsx|.csv [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--encoding windows-1251|windows-1252|utf-8] [--yes] [--json]',
     'Как читать таблицу логов (.xlsx, .csv): с --input разметку предлагает модель задачи, Lab проверяет каждую строку; --yes — сначала на вызов модели, затем на загрузку']],
   flags: TABLE_FLAGS, run: importTable },
-  build: { help: [['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--situations N] [--connection подключение.json] [--parallel 4] [--yes] [--json]',
-    'Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --yes готовит их'],
+  build: { help: [['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--roles client=клиент,operator=агент] [--situations N] [--connection подключение.json] [--parallel 4] [--yes] [--json]',
+    'Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --roles — кто пишет под ролями логов, которых Lab не знает; --yes готовит их'],
   ['agent-lab build --input задача.json --prompts-from ПАПКА [--yes]', 'Промпты агента из его кода и JSON на выбор; с --yes модель задачи отметит те, что пишут ответ клиенту'],
   ['agent-lab build --input задача.json --prompts-from ПАПКА --prompt ФАЙЛ#ИМЯ ... | --prompts suggested [--yes]', 'Выбранные промпты (или отмеченные Lab) станут правилами поведения бота']],
   flags: BUILD_FLAGS, run: prepare },

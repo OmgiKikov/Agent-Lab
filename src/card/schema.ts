@@ -110,7 +110,7 @@ export const fillKindSchema = z.enum(['count', 'amount', 'date', 'time', 'name',
  * always read by its own (card/checks.ts filledSpan). Absent on every fill written before the table: version 1.
  */
 const filledSchema = z.strictObject({ event: eventRefSchema, span: z.number().int().nonnegative(), mark: text(60), kind: fillKindSchema, value: text(80),
-  maskVersion: z.literal(2).optional() });
+  maskVersion: z.union([z.literal(2), z.literal(3)]).optional() });
 export type Filled = z.infer<typeof filledSchema>;
 
 export const cardSchema = z.strictObject({

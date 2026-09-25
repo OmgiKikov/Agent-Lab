@@ -2,7 +2,7 @@ import type { Experiment } from './contracts.js';
 import { libraryV1Of } from './card/legacy-v1.js';
 import type { LibraryV2 } from './card/schema.js';
 import { cardCoverage, cardTrafficTopic, libraryTraffic, trafficKey } from './miner/cards.js';
-import type { TopicCoverage } from './miner/coverage.js';
+import { catchAllShare, CATCH_ALL_SHARE, type TopicCoverage } from './miner/coverage.js';
 import type { Verdict } from './run.js';
 
 /*
@@ -31,7 +31,8 @@ export interface TopicView {
   uncovered: { topics: number; share: number } | null;
   /**
    * The per-topic accuracy weighted by each measured topic's share of conversations; null without shares, with fewer
-   * than two measured topics, or when the measured topics hold less than WEIGHTED_FROM of the conversations.
+   * than two measured topics, when the measured topics hold less than WEIGHTED_FROM of the conversations, or when most
+   * conversations fit no topic of the map (CATCH_ALL_SHARE): shares like those say little about the traffic.
    */
   weighted: number | null;
   /** The share of the conversations with a known topic whose topic has a decided situation: the traffic `weighted` speaks for. */
@@ -91,7 +92,8 @@ function cardTopicView(library: LibraryV2, cards: CountedCard[]): TopicView | nu
     .sort((a, b) => b.share! - a.share! || b.situations - a.situations || order.get(a.id)! - order.get(b.id)!);
   const missing = traffic.topics.filter(topic => !used.has(topic.id));
   const uncovered = missing.length ? { topics: missing.length, share: missing.reduce((sum, topic) => sum + topic.dialogues, 0) / traffic.labeled } : null;
-  return { rows, uncovered, ...estimateOf(rows), logged: traffic.logged, labeled: traffic.labeled };
+  const estimate = estimateOf(rows);
+  return { rows, uncovered, ...estimate, ...(catchAllShare(traffic) > CATCH_ALL_SHARE ? { weighted: null } : {}), logged: traffic.logged, labeled: traffic.labeled };
 }
 
 /** The topic rows of a run made from a library with at least two topics among its counted situations; null otherwise. */

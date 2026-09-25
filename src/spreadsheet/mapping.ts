@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { identifierSchema, sha256Schema, text } from '../ids.js';
+import { leftOutCodeSchema } from '../scenario-contracts.js';
 import { DELIMITERS, ENCODINGS } from './csv.js';
 import { SHEET_COLUMNS, columnIndex, columnLetter } from './sheet.js';
 import { TABLE_FORMATS } from './workbook.js';
@@ -66,7 +67,7 @@ export const tableMappingSchema = z.strictObject({
    * The table of masking marks the conversations are read by (masking.ts): it decides which are usable, so the sample
    * of a long sheet. A mapping confirmed before the table has none and keeps reading its import the first way.
    */
-  maskVersion: z.literal(2).optional(),
+  maskVersion: z.union([z.literal(2), z.literal(3)]).optional(),
 }).superRefine((mapping, ctx) => {
   const layout = mapping.layout;
   const columns = [mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],
@@ -101,6 +102,8 @@ export const tableChoicesSchema = z.strictObject({
   order: columnChoice.nullable().optional(),
   where: z.strictObject({ column: columnChoice, values: z.array(cellValue).min(1).max(FILTER_VALUES).optional() }).optional(),
   collapseRepeats: z.boolean().optional(),
+  /** The encoding of a CSV file, when the owner named it: its text read otherwise than Lab guessed. */
+  encoding: z.enum(ENCODINGS).optional(),
 });
 export type TableChoices = z.infer<typeof tableChoicesSchema>;
 
@@ -146,7 +149,7 @@ export const tableReadingSchema = z.strictObject({
    * and taken are among them. `repeats`: with the owner's collapseRepeats, the conversations and messages copies left.
    */
   sheet: z.strictObject({ dialogues: count, selected: count.optional(), usable: count, taken: count,
-    rejected: z.array(z.strictObject({ reason: text(2000), count: z.number().int().positive() })).max(100),
+    rejected: z.array(z.strictObject({ code: leftOutCodeSchema.optional(), reason: text(2000), count: z.number().int().positive() })).max(100),
     repeats: z.strictObject({ dialogues: count, messages: count }).optional() }),
   /** Who proposed the reading the owner confirmed; absent in readings confirmed before Lab's model proposed them. */
   proposedBy: readingBasisSchema.optional(),

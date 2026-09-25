@@ -1,5 +1,5 @@
 import { countText, pluralForm } from '../plural.js';
-import { trafficSchema, type Traffic } from './schema.js';
+import { OTHER, trafficSchema, type Traffic } from './schema.js';
 import { topicDialogues, topicTitle, type TopicMap, type TopicRef } from './topic-map.js';
 
 /*
@@ -11,11 +11,16 @@ import { topicDialogues, topicTitle, type TopicMap, type TopicRef } from './topi
  *   15 ситуаций покрывают 9 из 11 тем — 94% диалогов
  *   Не покрыты: Жалоба на сотрудника (4% диалогов), Партнёрская программа (2%)
  *
+ * A map that sorted more than CATCH_ALL_SHARE of the conversations into «Другое» found no topics for most of them:
+ * then its shares say little about the traffic, and every line built on them says so.
+ *
  * Pure: the words of both lines are here, the screens only place them.
  */
 
 export interface TrafficTopic {
   id: TopicRef;
+  /** «Другое»: the conversations that fit no topic of the map. */
+  other?: true;
   title: string;
   /** Sorted conversations of this topic, and their share of all sorted conversations. */
   dialogues: number;
@@ -29,6 +34,18 @@ export interface TopicTraffic {
   logged: number;
 }
 
+/** Above this share of the sorted conversations in «Другое», the map found no topic for most of them: its shares say little about the traffic. */
+export const CATCH_ALL_SHARE = 0.3;
+
+/** The share of the sorted conversations that fit no topic («Другое»). */
+export const catchAllShare = (traffic: Pick<TopicTraffic, 'topics'>): number => traffic.topics.reduce((sum, topic) => sum + (topic.other ? topic.share : 0), 0);
+
+/** What an owner is told when most conversations fit no topic; undefined while the map sorted most of them. */
+export function untopicedText(traffic: Pick<TopicTraffic, 'topics'>): string | undefined {
+  const share = catchAllShare(traffic);
+  return share > CATCH_ALL_SHARE ? `${sharePercent(share)} разговоров не попали ни в одну тему («Другое») — доли тем мало что говорят о трафике` : undefined;
+}
+
 /** Each topic's share of the sorted conversations, from the counts; `topics` keep their order. */
 export function withShares(topics: readonly Omit<TrafficTopic, 'share'>[], logged: number): TopicTraffic {
   const labeled = topics.reduce((sum, topic) => sum + topic.dialogues, 0);
@@ -39,7 +56,7 @@ export function withShares(topics: readonly Omit<TrafficTopic, 'share'>[], logge
 export function topicTraffic(map: TopicMap): TopicTraffic {
   const groups = [...topicDialogues(map)];
   // Sorting is stable: equal shares keep the map's order.
-  const topics = groups.map(([id, dialogueIds]) => ({ id, title: topicTitle(map, id)!, dialogues: dialogueIds.length })).sort((a, b) => b.dialogues - a.dialogues);
+  const topics = groups.map(([id, dialogueIds]) => ({ id, ...(id === OTHER ? { other: true as const } : {}), title: topicTitle(map, id)!, dialogues: dialogueIds.length })).sort((a, b) => b.dialogues - a.dialogues);
   return withShares(topics, groups.reduce((sum, [, dialogueIds]) => sum + dialogueIds.length, map.excluded.length));
 }
 
@@ -62,6 +79,8 @@ export interface TopicCoverage {
   share: number;
   /** Topics without a situation, largest share first. */
   uncovered: TrafficTopic[];
+  /** Why the shares say little: most conversations fit no topic (untopicedText); absent while the map sorted most of them. */
+  untopiced?: string;
 }
 
 /**
@@ -73,10 +92,11 @@ export function topicCoverage(traffic: TopicTraffic, situationTopics: readonly (
   const covered = traffic.topics.filter(topic => used.has(topic.id));
   // Counted in conversations and divided once, so full coverage is exactly 1.
   const coveredDialogues = covered.reduce((sum, topic) => sum + topic.dialogues, 0);
+  const untopiced = untopicedText(traffic);
   return {
     situations: situationTopics.length, topics: traffic.topics.length, covered: covered.length,
     dialogues: traffic.labeled, share: traffic.labeled ? coveredDialogues / traffic.labeled : 0,
-    uncovered: traffic.topics.filter(topic => !used.has(topic.id)),
+    uncovered: traffic.topics.filter(topic => !used.has(topic.id)), ...(untopiced ? { untopiced } : {}),
   };
 }
 
@@ -96,10 +116,14 @@ const TOPICS: [string, string, string] = ['тема', 'темы', 'тем'];
 /** Uncovered topics named one by one; more are summed as «и ещё N тем». */
 const UNCOVERED_NAMED = 3;
 
-/** «15 ситуаций покрывают 9 из 11 тем — 94% диалогов»; undefined when the map sorted no conversation into a topic. */
+/**
+ * «15 ситуаций покрывают 9 из 11 тем — 94% диалогов», and — when most conversations fit no topic — that the shares say
+ * little; undefined when the map sorted no conversation into a topic.
+ */
 export function coverageLine(coverage: TopicCoverage): string | undefined {
   if (!coverage.topics) return undefined;
-  return `${countText(coverage.situations, SITUATIONS)} ${pluralForm(coverage.situations, COVER)} ${coverage.covered} из ${coverage.topics} ${pluralForm(coverage.topics, TOPICS_OF)} — ${sharePercent(coverage.share)} диалогов`;
+  return `${countText(coverage.situations, SITUATIONS)} ${pluralForm(coverage.situations, COVER)} ${coverage.covered} из ${coverage.topics} ${pluralForm(coverage.topics, TOPICS_OF)} — ${sharePercent(coverage.share)} диалогов`
+    + (coverage.untopiced ? `; но ${coverage.untopiced}` : '');
 }
 
 /** «Не покрыты: Жалоба на сотрудника (4% диалогов), Партнёрская программа (2%)»; undefined when every topic is covered. */

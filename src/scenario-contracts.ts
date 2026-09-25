@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { identifierSchema as id, sha256Schema as hash, text, uniqueIdsSchema as ids } from './ids.js';
-import { MATERIAL_CHARS, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from './limits.js';
+import { LOGGED_CONVERSATION_CHARS, LOGGED_MESSAGE_CHARS, MATERIAL_CHARS, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from './limits.js';
 
 /*
  * Stored shapes Lab reads: an import of logs, kept verbatim, and the first library format — business groups of variants —
@@ -8,22 +8,52 @@ import { MATERIAL_CHARS, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from './limi
  * card format is card/schema.ts; the materials and rules of a library keep one shape in both formats.
  */
 
-const json = z.json().refine(v => JSON.stringify(v).length <= 500_000, 'JSON exceeds 500000 characters');
+const json = z.json().refine(v => JSON.stringify(v).length <= LOGGED_CONVERSATION_CHARS, `JSON exceeds ${LOGGED_CONVERSATION_CHARS} characters`);
 const timestamp = z.iso.datetime();
+
+/**
+ * Why a logged conversation makes no situation, typed where it was found (log-issues.ts words each for the owner): a
+ * row the import could not read, or — `long`, `hidden` — a conversation it read that no situation can be made of.
+ * `value` is what shows it: an id or a role name as written, a line. Codes are only ever appended, so a stored issue stays valid.
+ */
+export const LEFT_OUT_CODES = ['line', 'large', 'shape', 'roles', 'id', 'shared', 'duplicate', 'empty', 'event', 'long_message', 'blank',
+  'observation', 'no_text', 'no_marker', 'unmapped', 'no_order', 'no_customer', 'masked', 'long', 'hidden'] as const;
+export const leftOutCodeSchema = z.enum(LEFT_OUT_CODES);
+export type LeftOutCode = z.infer<typeof leftOutCodeSchema>;
+export const leftOutIssueSchema = z.strictObject({ code: leftOutCodeSchema, value: z.string().max(200).optional() });
+export type LeftOutIssue = z.infer<typeof leftOutIssueSchema>;
+/** Conversations left out for one reason, with a few of the values that show it (every role name, for `roles`). */
+export const leftOutCountSchema = z.strictObject({ code: leftOutCodeSchema, count: z.number().int().positive(), values: z.array(z.string().max(200)).max(12) });
+export type LeftOutCount = z.infer<typeof leftOutCountSchema>;
+/** Who writes the messages of a logged role name Lab does not know, as the owner said it. */
+export const loggedRoleSchema = z.strictObject({ value: z.string().min(1).max(80), role: z.enum(['user', 'assistant', 'system']) });
 
 const sourceDialogueSchema = z.strictObject({ batchId: id, dialogueId: id });
 const importedEventSchema = z.strictObject({
   index: z.number().int().nonnegative(), type: z.enum(['message', 'tool', 'retrieval', 'state']),
-  role: z.enum(['user', 'assistant', 'tool', 'system']).optional(), content: z.string().min(1).max(8000).refine(v => !!v.trim(), 'Empty content').optional(), data: json,
+  role: z.enum(['user', 'assistant', 'tool', 'system']).optional(), content: z.string().min(1).max(LOGGED_MESSAGE_CHARS).refine(v => !!v.trim(), 'Empty content').optional(), data: json,
 });
 export const importBatchSchema = z.strictObject({
   formatVersion: z.literal(1), id, contentHash: hash, createdAt: timestamp,
   /** The table of masking marks the rows were read by (masking.ts); absent in batches read by the first, frozen readings. */
-  maskVersion: z.literal(2).optional(),
-  /** A log longer than one batch: the conversations it held and the usable ones; `dialogues` are a sample of those (scenario-library.ts logImport). */
-  sample: z.strictObject({ dialogues: z.number().int().positive(), usable: z.number().int().nonnegative() }).optional(),
-  dialogues:z.array(z.strictObject({ id, events: z.array(importedEventSchema).min(1).max(120), observation: z.enum(['complete', 'partial', 'unknown']), original: json })).max(300),
-  rejected: z.array(z.strictObject({ index: z.number().int().nonnegative(), id: z.string().max(200).optional(), reasons: z.array(text(2000)).min(1).max(20), original: json })).max(300),
+  maskVersion: z.union([z.literal(2), z.literal(3)]).optional(),
+  /**
+   * The owner's word on role names Lab does not know (`client`, `operator`): the import is read by it, and its content
+   * hash seals it with the rows (scenario-library.ts). Absent when the log names its roles as Lab reads them.
+   */
+  roles: z.array(loggedRoleSchema).min(1).max(12).optional(),
+  /**
+   * A log larger than one batch: the conversations it held and the readable ones the sample was drawn from; `dialogues`
+   * are a sample of those (scenario-library.ts logImport). `left`: every conversation of the log no situation can be
+   * made of, counted by why — absent in samples recorded before it was kept.
+   */
+  sample: z.strictObject({ dialogues: z.number().int().positive(), usable: z.number().int().nonnegative(),
+    left: z.array(leftOutCountSchema).max(LEFT_OUT_CODES.length).optional() }).optional(),
+  // A conversation is bounded by its size, never by its number of events: each event takes at least one character of its original.
+  dialogues:z.array(z.strictObject({ id, events: z.array(importedEventSchema).min(1).max(LOGGED_CONVERSATION_CHARS), observation: z.enum(['complete', 'partial', 'unknown']), original: json })).max(300),
+  /** `issues`: why the row is refused, typed; absent in batches read before — their `reasons` are then all there is. */
+  rejected: z.array(z.strictObject({ index: z.number().int().nonnegative(), id: z.string().max(200).optional(), reasons: z.array(text(2000)).min(1).max(20),
+    issues: z.array(leftOutIssueSchema).min(1).max(20).optional(), original: json })).max(300),
 });
 export type ImportBatch = z.infer<typeof importBatchSchema>;
 
