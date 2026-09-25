@@ -18,7 +18,11 @@ const importedEventSchema = z.strictObject({
 });
 export const importBatchSchema = z.strictObject({
   formatVersion: z.literal(1), id, contentHash: hash, createdAt: timestamp,
-  dialogues: z.array(z.strictObject({ id, events: z.array(importedEventSchema).min(1).max(120), observation: z.enum(['complete', 'partial', 'unknown']), original: json })).max(300),
+  /** The table of masking marks the rows were read by (masking.ts); absent in batches read by the first, frozen readings. */
+  maskVersion: z.literal(2).optional(),
+  /** A log longer than one batch: the conversations it held and the usable ones; `dialogues` are a sample of those (scenario-library.ts logImport). */
+  sample: z.strictObject({ dialogues: z.number().int().positive(), usable: z.number().int().nonnegative() }).optional(),
+  dialogues:z.array(z.strictObject({ id, events: z.array(importedEventSchema).min(1).max(120), observation: z.enum(['complete', 'partial', 'unknown']), original: json })).max(300),
   rejected: z.array(z.strictObject({ index: z.number().int().nonnegative(), id: z.string().max(200).optional(), reasons: z.array(text(2000)).min(1).max(20), original: json })).max(300),
 });
 export type ImportBatch = z.infer<typeof importBatchSchema>;

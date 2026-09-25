@@ -84,20 +84,37 @@ test('a value of the wrong kind, a mark again or a masked fact goes back to the 
   const masked = call();
   assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_0 = { kind: 'count', value: 'три' }; }), masked)!, /m0_0.*count: write digits only/);
   assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_1 = { kind: 'amount', value: 'пятьсот' }; }), masked)!, /amount: write it with digits/);
-  assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_2 = { kind: 'other', value: '*' }; }), masked)!, /m0_2.*is a masking mark again, not a value/);
+  assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_2 = { kind: 'other', value: '*' }; }), masked)!, /still holds a masking character/);
+  // The table of masks reads «xxx» and «ХХХ» as marks: written in for a mark, they are a mark again.
+  for (const value of ['xxx', 'ХХХ', 'Иван Хххх']) assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_2 = { kind: 'other', value }; }), masked)!, /still holds a masking character/, value);
   assert.match(cardProposalProblem(proposal(made => { made.knows[0]!.value = '###'; }), masked)!, /knows\[0\] "Номер терминала": the value "###" is a masking mark/);
+});
+
+test('a product, a number sign and a Roman numeral are no masks: nothing is filled in, and the situation stays in the check against production', () => {
+  const plain = importBatch([{ id: 'plain', messages: [
+    { role: 'user', content: 'Заказ # 123: пришло 5 * 3 = 15 штук, как в XXX веке. Верните деньги за лишние.' },
+    { role: 'assistant', content: 'Проверю заказ.' },
+    { role: 'user', content: 'Спасибо!' },
+  ] }]);
+  const logged = plain.dialogues[0]!;
+  const made = proposalCall({ source: { kind: 'dialogue', batchId: plain.id, dialogueId: logged.id }, messages: loggedMessages(logged), sources, maxTurns: 6 });
+  assert.deepEqual(made.masked, [], 'no slot for the model to invent a value in');
+  const unfilled = proposal(item => { delete item.masked; item.knows = []; item.coverage = { 2: { as: 'stop', reason: null } }; });
+  const card = bindProposal(unfilled, made, 1);
+  assert.equal(card.filled, undefined);
+  assert.deepEqual(unusableFindings(card, { evidence: importEvidence([plain]), maxTurns: 6 }), []);
+  assert.equal(cardExclusion(card), undefined, 'the logged situation, checked against production');
 });
 
 test('a value that reads as a mark itself — xxx, ХХХ, a tag — goes back with its reason instead of leaving the card masked', () => {
   const masked = call();
   for (const value of ['xxx', 'ХХХ', 'хххх', '<PHONE>', '[скрыто]', '###', 'ул. *']) {
-    assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_2 = { kind: 'other', value }; }), masked) ?? '', /masked\["m0_2"\]: ".*" is a masking mark again, not a value/, value);
+    assert.match(cardProposalProblem(proposal(made => { made.masked!.m0_2 = { kind: 'other', value }; }), masked) ?? '', /masked\["m0_2"\]: ".*" still holds a masking character/, value);
   }
   // What such a value would have made: an opening that reads a mark again, a card that cannot be a test.
   const marked = bindProposal(proposal(made => { made.masked!.m0_2 = { kind: 'other', value: 'ХХХ' }; }), masked, 1);
   assert.equal(marked.client.writes, 'С утра было 3 покупки, на 500 ₽ и ХХХ, терминал пишет «нет связи».');
   assert.deepEqual(unusableFindings(marked, { evidence, maxTurns: 6 }), [{ check: 'masked-opening' }]);
-  assert.equal(fillSlip('m0_2', { kind: 'other', value: '5*3' }), undefined, 'a star between digits is no mark (masking.ts)');
   assert.equal(fillSlip('m0_2', { kind: 'name', value: 'Ирина' }), undefined);
 });
 
@@ -151,8 +168,8 @@ test('an existing card is filled by one builder answer turned into one command t
   const answer = { slots: structuredClone(FILLS), facts: { f1: '4471' } };
   assert.equal(unmaskSchema(request).safeParse(answer).success, true);
   assert.match(unmaskProblem(request, { ...answer, facts: { f1: '9999' } })!, /facts\.f1: "9999" is not in message 2/, 'a fact reads as its message does with the values in');
-  assert.match(unmaskProblem(request, { ...answer, facts: { f1: 'xxxx' } })!, /facts\.f1: "xxxx" is a masking mark again, not a value/);
-  assert.match(unmaskProblem(request, { ...answer, slots: { ...answer.slots, m0_0: { kind: 'other', value: 'ХХХ' } } })!, /m0_0: "ХХХ" is a masking mark again/);
+  assert.match(unmaskProblem(request, { ...answer, facts: { f1: 'xxxx' } })!, /facts\.f1: "xxxx" still holds a masking character/);
+  assert.match(unmaskProblem(request, { ...answer, slots: { ...answer.slots, m0_0: { kind: 'other', value: 'ХХХ' } } })!, /m0_0: "ХХХ" still holds a masking character/);
   assert.equal(unmaskProblem(request, answer), undefined);
 
   const command = unmaskCommand(request, answer);

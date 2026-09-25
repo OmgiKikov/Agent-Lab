@@ -17,9 +17,15 @@ export const SELECTED_SOURCE_BYTES = 96_000;
 /** Units of a preparation worked on at once: the provider takes parallel calls, and a unit mostly waits on its model. */
 export const PREPARATION_PARALLEL = 4;
 export const MAX_PREPARATION_PARALLEL = 8;
-/** The largest dialogue file Lab reads whole; a bigger log needs a smaller sample first. */
+/** The largest dialogue file Lab reads whole: a JSON document or a spreadsheet. */
 export const IMPORT_FILE_BYTES = 4_000_000;
-/** Dialogues one import batch takes. */
+/**
+ * A JSON Lines log is read in a stream, a line at a time, so it may be far larger: Lab keeps only the sample and one
+ * id per conversation. Above these it is not a log of one agent's period but an archive to cut by date first.
+ */
+export const STREAMED_LOG_BYTES = 256_000_000;
+export const LOG_CONVERSATIONS = 100_000;
+/** Dialogues one import batch takes; a longer log gives a sample of this many (scenario-library.ts logImport). */
 export const IMPORT_DIALOGUE_LIMIT = 300;
 /**
  * The data one model request carries, in UTF-8 bytes of its JSON: the role prompt, the answer's schema and a repair's

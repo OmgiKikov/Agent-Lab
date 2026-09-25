@@ -36,6 +36,10 @@ dist/
 /test/live/judge-pilot.ts
 # exported OpenCode transcripts
 session-*.md
+# What the harnesses write holds production conversations and customer ids: never committed, wherever it lands.
+dialogues.jsonl
+*.meta.json
+.agent-lab-run/
 .cache
 __pycache__/
 .gstack/

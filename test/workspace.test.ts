@@ -296,7 +296,7 @@ test('situations can be prepared before the agent is connected; Lab finds it in 
     const ctx = (pick: (options: string[]) => string | undefined) => ({ cwd, ui: { select: async (title: string, options: string[]) => { asked.push({ title, options }); return pick(options); } } }) as unknown as ExtensionContext;
     // Nothing in the folder says how to start the agent: the owner is asked in words, nothing runs.
     await assert.rejects(launchRun(ctx(options => options[0]), lab, prepared), (error: unknown) => error instanceof NeedsOwner
-      && error.ownerText === 'Агент ещё не подключён, а в папке проекта Lab не нашёл, как его запускать. Как его запускать — команда, файл модуля или адрес?');
+      && error.ownerText === 'Агент ещё не подключён, а в папке проекта Lab не нашёл, как его запускать. Как его запускать — команда или файл модуля? Если агент отвечает по адресу, пришлите curl-запрос, которым вы к нему обращаетесь.');
     // A module that declares Lab's contract is surely the agent: it goes straight into the plan, and a declined plan connects nothing.
     await writeFile(join(cwd, 'agent.mjs'), 'export async function createSession({ initialState }) {\n  return { async respond(message) { return { reply: message, records: initialState.records }; } };\n}\n');
     assert.equal(await launchRun(ctx(options => options.includes('Запустить') ? 'Не сейчас' : options[0]), lab, prepared), undefined);

@@ -7,8 +7,8 @@ import type { Runtime } from './runtime.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
 import { sourceIdentity } from './normalize.js';
-import { preflightTarget, templateExchange, type TemplateTarget } from './targets.js';
-import { atPointer, replyStructure } from './http-template.js';
+import { agentSession, preflightTarget, templateRequest, type TemplateTarget } from './targets.js';
+import { atPointer, bubblePointer, pointerOf, pointerTokens, replyAt, replyStructure, scalarFields, stringFields, type Json, type RequestTemplate } from './http-template.js';
 import { writeFileAtomic } from './fs-atomic.js';
 import { SUITE_FORMAT } from './suite.js';
 
@@ -133,34 +133,113 @@ export async function doctor(connection: Connection, signal = new AbortControlle
 export const TOOL_PROBE_OPENING = 'Здравствуйте! Подскажите, пожалуйста, чем вы можете помочь?';
 const TEMPLATE_SECOND_MESSAGE = 'Спасибо! А что ещё вы можете подсказать?';
 
+/**
+ * How the agent keeps the conversation, as its template says, and what the second turn showed of it: `history` —
+ * the turns went whole; `conversation` — Lab's id went in both requests; `session` — the id the agent named went back
+ * to it; `none` — the request carries neither.
+ */
+export interface MemoryCheck { claim: 'history' | 'conversation' | 'session' | 'none'; shown: boolean }
+
 /** What the check of an agent in its own format saw: the reply's structure, and — once the text's path is known — both turns. */
 export interface TemplateCheck {
   /** Where the first reply's strings are and how long they are; never their values. */
   structure: { pointer: string; length: number }[];
-  /** The path the check read; undefined while the owner has not picked one. */
+  /** The path the check read — every bubble where the reply is an array of them; undefined while the owner has not picked one. */
   reply?: string;
   /** Characters of text at that path in each turn of the same conversation; null when there was none. */
   turns: (number | null)[];
+  /** The template to save: the reply path, and where the agent names its own conversation. */
+  request?: RequestTemplate;
+  memory?: MemoryCheck;
   passed: boolean;
+  /** Why the check did not pass, in the owner's words. */
+  failure?: string;
+  /** What the check could not decide: said to the owner, never a silent pass. */
+  warnings: string[];
 }
+
+/** A key as a conversation id is named in a request and in a reply alike: `session_id` and `sessionId` are one. */
+const idKey = (pointer: string) => [...(pointerTokens(pointer).at(-1) ?? '')].filter(char => char !== '_' && char !== '-').join('').toLowerCase();
+const CONVERSATION_VALUES = new Set(['{{conversation}}', '{{conversation:number}}', '{{session}}']);
 
 /**
  * The connection check of an agent in its own format: one test message shows the reply's structure; with the
- * text's path known, a second message in the same conversation must be answered too. There is no reset to check:
- * every dialogue of a run is a new conversation id, and the agent is judged on its replies. `reply` is the path, or
- * how to pick it from the first reply (the chat asks the owner there); undefined leaves it unpicked.
+ * text's path known, a second message in the same conversation must be answered too, and what the template says
+ * about the conversation is checked by structure alone: the turns really went whole, the agent's own id really went
+ * back to it and it answered in that same conversation, Lab's id came back unchanged where the agent names it.
+ * What cannot be decided so is a warning. There is no reset to check: every dialogue of a run is a new conversation.
+ * `reply` is the path, or how to pick it from the first reply (the chat asks the owner there); undefined leaves it unpicked.
  */
 export async function checkTemplate(target: TemplateTarget, reply: string | undefined | ((first: unknown) => Promise<string | undefined>),
   signal = new AbortController().signal): Promise<TemplateCheck> {
   const conversation = randomUUID();
-  const first = await templateExchange(target, { message: TOOL_PROBE_OPENING, conversation }, signal);
-  const structure = replyStructure(first);
-  if (typeof reply === 'function') reply = await reply(first);
-  if (reply === undefined) return { structure, turns: [], passed: false };
-  const length = (document: unknown) => { const text = atPointer(document, reply); return typeof text === 'string' && text.trim() ? text.length : null; };
-  const turns = [length(first)];
-  if (turns[0] !== null) turns.push(length(await templateExchange(target, { message: TEMPLATE_SECOND_MESSAGE, conversation }, signal)));
-  return { structure, reply, turns, passed: turns.length === 2 && turns.every(turn => turn !== null) };
+  const first = await templateRequest(target, { message: TOOL_PROBE_OPENING, conversation, turns: [{ role: 'user', text: TOOL_PROBE_OPENING }] }, signal);
+  const structure = replyStructure(first.reply);
+  if (typeof reply === 'function') reply = await reply(first.reply);
+  if (reply === undefined) return { structure, turns: [], passed: false, warnings: [] };
+  const pointer = bubblePointer(first.reply, reply);
+  const length = (text: string | undefined) => text?.trim() ? text.length : null;
+  const firstText = replyAt(first.reply, pointer);
+  const turns = [length(firstText)];
+  const warnings: string[] = [];
+  let request: RequestTemplate = { ...target.request, reply: pointer };
+  if (turns[0] === null) return { structure, reply: pointer, turns, request, passed: false, failure: 'В этом поле ответа нет текста.', warnings };
+
+  // Where the request names the conversation, and whether the first reply names it under the same key.
+  const fields = stringFields(request.body).filter(field => CONVERSATION_VALUES.has(field.value));
+  const replied = scalarFields(first.reply);
+  const echo = (field: { pointer: string }) => replied.find(item => idKey(item.pointer) === idKey(field.pointer) && item.value !== '');
+  const same = (a: unknown, b: unknown) => a !== undefined && b !== undefined && String(a) === String(b);
+  const agentNamed = fields.filter(field => field.value === '{{session}}' || echo(field) && !same(echo(field)!.value, atPointer(first.sent, field.pointer)));
+  if (agentNamed.length) {
+    // The agent names the conversation itself: the id its reply gave goes into the next request, Lab's own id only opens one.
+    const at = agentNamed.map(echo).find(item => item !== undefined)?.pointer;
+    const opening = agentNamed.find(field => field.value !== '{{session}}')?.value;
+    let body = request.body;
+    for (const field of agentNamed) body = replaced(body, field.pointer, '{{session}}');
+    request = { ...request, body, session: { first: request.session?.first ?? opening ?? '', ...(at !== undefined ? { reply: at } : {}) } };
+  }
+  const checked: TemplateTarget = { ...target, request };
+  const session = agentSession(checked, first.reply);
+  const second = await templateRequest(checked, { message: TEMPLATE_SECOND_MESSAGE, conversation, ...(session !== undefined ? { session } : {}),
+    turns: [{ role: 'user', text: TOOL_PROBE_OPENING }, { role: 'assistant', text: firstText! }, { role: 'user', text: TEMPLATE_SECOND_MESSAGE }] }, signal);
+  turns.push(length(replyAt(second.reply, pointer)));
+  if (turns[1] === null) return { structure, reply: pointer, turns, request, passed: false, failure: 'На второе сообщение в том же разговоре агент ответил без текста в этом поле.', warnings };
+
+  const sent = stringFields(second.sent).map(field => field.value);
+  const named = (document: unknown) => request.session?.reply === undefined ? undefined : atPointer(document, request.session.reply);
+  let memory: MemoryCheck;
+  let failure: string | undefined;
+  if (request.history) {
+    memory = { claim: 'history', shown: [TOOL_PROBE_OPENING, firstText!, TEMPLATE_SECOND_MESSAGE].every(text => sent.includes(text)) };
+    if (!memory.shown) failure = 'Во втором запросе не ушла история разговора: проверьте поле с репликами в curl.';
+  } else if (request.session) {
+    const carried = session !== undefined && agentNamed.every(field => same(atPointer(second.sent, field.pointer), session));
+    const again = named(second.reply);
+    memory = { claim: 'session', shown: carried && (again === undefined || same(again, session)) };
+    if (session === undefined) warnings.push('Агент не назвал в ответе свой идентификатор разговора: каждое сообщение уйдёт как начало нового разговора. Если агент не помнит разговор иначе, многоходовые ситуации измерятся неверно.');
+    else if (!memory.shown) failure = 'На второе сообщение агент открыл новый разговор: идентификатор из его первого ответа он не продолжил.';
+  } else if (fields.length) {
+    const echoed = fields.map(echo).find(item => item !== undefined);
+    const again = echoed ? atPointer(second.reply, echoed.pointer) : undefined;
+    memory = { claim: 'conversation', shown: echoed !== undefined && same(again, atPointer(second.sent, fields.find(field => echo(field) === echoed)!.pointer)) };
+    if (echoed === undefined) warnings.push('Агент не называет разговор в ответе: Lab не может проверить, что он помнит первое сообщение по идентификатору разговора. Если в многоходовых ситуациях агент «забывает» сказанное — причина в этом.');
+    else if (!memory.shown) failure = 'На второе сообщение агент ответил в другом разговоре: разговор по идентификатору от Lab он не держит.';
+  } else {
+    memory = { claim: 'none', shown: false };
+    warnings.push('В запросе нет ни идентификатора разговора, ни истории сообщений: Lab не может ни начать каждую ситуацию с нового разговора, ни проверить, что агент помнит первое сообщение. Если в запросе есть поле разговора, подключите заново и отметьте его.');
+  }
+  return { structure, reply: pointer, turns, request, memory, passed: !failure, ...(failure ? { failure } : {}), warnings };
+}
+
+/** A copy of a JSON value with the value at `pointer` replaced. */
+function replaced(document: Json, pointer: string, value: Json): Json {
+  const [head, ...rest] = pointerTokens(pointer);
+  if (head === undefined) return value;
+  const tail = pointerOf(rest);
+  if (Array.isArray(document)) return document.map((item, i) => String(i) === head ? replaced(item, tail, value) : item);
+  if (document && typeof document === 'object') return { ...document, [head]: replaced(document[head] ?? null, tail, value) };
+  return document;
 }
 
 /** Saves a connection file the owner named; `replace` only for an explicit change of that same file. */

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { CommandRefused } from '../errors.js';
 import { text } from '../ids.js';
 import type { TaskRunner } from '../llm/structured.js';
-import { maskedSpans } from '../masking.js';
+import { holdsMark, maskedSpans } from '../masking.js';
 import type { BuilderModel } from '../miner/topic-map.js';
 import type { CallContext } from '../runtime.js';
 import { clip } from '../text.js';
@@ -49,17 +49,12 @@ export const slotAnswersSchema = (slots: readonly MaskSlot[]) => z.strictObject(
 const DIGIT_KINDS = new Set<FillAnswer['kind']>(['count', 'amount', 'date', 'time', 'phone', 'card_number', 'account']);
 const isDigit = (char: string): boolean => char >= '0' && char <= '9';
 
-/**
- * A value that reads as a masking mark itself — «*», «###», «xxx», «ХХХ», «<PHONE>», «[скрыто]» — by the one reading of
- * marks (masking.ts): written in, it would leave the message masked, and the card unusable. A mark stands alone between
- * words, so a value holding none leaves none behind where it is written.
- */
-const markAgain = (value: string): boolean => maskedSpans(value).length > 0;
-
 /** Why a value cannot stand for its mark, in the model's words; the value's characters are read, never its meaning. */
 export function fillSlip(id: string, answer: FillAnswer): string | undefined {
   const chars = [...answer.value];
-  if (markAgain(answer.value)) return `${id}: "${answer.value}" is a masking mark again, not a value; write a concrete plausible value.`;
+  // A value that is a mark again («xxx», «ХХХ», «<PHONE>») or holds a character marks are written with is no value: written
+  // in, it would leave the message masked and the card unusable. The one check of masking.ts, for a proposal and a later fill alike.
+  if (holdsMark(answer.value)) return `${id}: "${answer.value}" still holds a masking character; write a concrete plausible value.`;
   if (answer.kind === 'count' && !chars.every(isDigit)) return `${id} is a count: write digits only, e.g. "3".`;
   if (DIGIT_KINDS.has(answer.kind) && !chars.some(isDigit)) return `${id} is a ${answer.kind}: write it with digits, e.g. "1 500 ₽", "12.03", "14:30".`;
   return undefined;
@@ -126,7 +121,7 @@ export function unmaskProblem(request: UnmaskRequest, answer: UnmaskAnswer): str
   const filled = [...request.card.filled ?? [], ...slotFills(request.slots, answer.slots)];
   for (const fact of request.facts) {
     const value = answer.facts[fact.id]!;
-    if (markAgain(value)) slips.push(`facts.${fact.id}: "${value}" is a masking mark again, not a value.`);
+    if (holdsMark(value)) slips.push(`facts.${fact.id}: "${value}" still holds a masking character.`);
     const message = fact.event && request.messages.find(item => sameEvent(item.event, fact.event!));
     if (message && !contains(filledMessage(message.content, filled, message.event), value)) {
       slips.push(`facts.${fact.id}: "${value}" is not in message ${message.event.eventIndex} with your values in place: copy it from there.`);
