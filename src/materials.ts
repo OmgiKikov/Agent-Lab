@@ -17,7 +17,7 @@ interface MaterialsReport { materials: FileMaterial[]; skipped: Array<{ file: st
 function documentText(bytes: Buffer): string {
   const encoding = textEncoding(bytes);
   let text: string;
-  try { text = new TextDecoder(encoding, { fatal: encoding !== 'windows-1251' }).decode(bytes); }
+  try { text = new TextDecoder(encoding, { fatal: encoding !== 'windows-1251' && encoding !== 'windows-1252' }).decode(bytes); }
   catch { throw new Error(`текст не читается в кодировке ${encoding === 'utf-8' ? 'UTF-8' : 'UTF-16'} — сохраните файл заново в UTF-8`); }
   if (text.includes('�')) throw new Error('в тексте испорченные знаки «�» — сохраните файл заново в UTF-8 из исходного документа');
   if (text.includes('\u0000')) throw new Error('это не текст: в файле нулевые байты — сохраните его как текст в UTF-8');

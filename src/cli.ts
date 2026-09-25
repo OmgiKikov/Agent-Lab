@@ -812,13 +812,13 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
 
 /** The flags of `import`: the owner's answers about the table, as the chat asks them one at a time. */
 const TABLE_FLAGS: readonly Flag[] = ['file', 'input', 'json', 'yes', 'sheet', 'id-column', 'text-column', 'separator', 'no-separator', 'markers', 'role-column', 'roles',
-  'order-column', 'row-order', 'where', 'collapse-repeats', 'keep-repeats'];
+  'order-column', 'row-order', 'where', 'collapse-repeats', 'keep-repeats', 'encoding'];
 const BUILD_FLAGS: readonly Flag[] = ['input', 'dialogues-file', 'roles', 'situations', 'connection', 'parallel', 'yes', 'json', 'prompts-from', 'prompt', 'prompts'];
 
 /** Every command in the order `--help` lists them: first the owner's path, then what scripts and CI use. */
 const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: [['agent-lab detect [--directory ПАПКА] [--json]', 'Что Lab нашёл в папке проекта: агента, логи, материалы, промпт']], flags: ['directory', 'json'], run: detect },
-  import: { help: [['agent-lab import --file логи.xlsx [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--yes] [--json]',
+  import: { help: [['agent-lab import --file логи.xlsx|.csv [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--collapse-repeats] [--encoding windows-1251|windows-1252|utf-8] [--yes] [--json]',
     'Как читать таблицу логов (.xlsx, .csv): с --input разметку предлагает модель задачи, Lab проверяет каждую строку; --yes — сначала на вызов модели, затем на загрузку']],
   flags: TABLE_FLAGS, run: importTable },
   build: { help: [['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--roles client=клиент,operator=агент] [--situations N] [--connection подключение.json] [--parallel 4] [--yes] [--json]',

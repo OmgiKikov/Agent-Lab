@@ -20,7 +20,7 @@ const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'ра�
 const CONVERSATIONS_IN: [string, string, string] = ['разговоре', 'разговорах', 'разговорах'];
 const VALUES: [string, string, string] = ['разное значение', 'разных значения', 'разных значений'];
 const MORE_VALUES: [string, string, string] = ['значение', 'значения', 'значений'];
-const ENCODING_NAMES = { 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16', 'windows-1251': 'Windows-1251' } as const;
+const ENCODING_NAMES = { 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16', 'windows-1251': 'Windows-1251', 'windows-1252': 'Windows-1252' } as const;
 const quoted = (text: string) => `«${text}»`;
 /** A value of a column of categories as written; an empty cell has no text to quote. */
 const shownValue = (value: string) => value ? quoted(value) : 'пусто';
@@ -29,7 +29,7 @@ const delimiterName = (delimiter: string) => delimiter === '\t' ? 'табуля�
 
 /** The first line: which file, which sheet, how big. */
 function headLine(proposal: TableProposal): string {
-  const where = proposal.csv ? `разделитель ${delimiterName(proposal.csv.delimiter)} · ${ENCODING_NAMES[proposal.csv.encoding]}` : `лист ${quoted(proposal.sheet)}`;
+  const where = proposal.csv ? `разделитель ${delimiterName(proposal.csv.delimiter)} · кодировка: ${ENCODING_NAMES[proposal.csv.encoding]}` : `лист ${quoted(proposal.sheet)}`;
   const rows = proposal.status === 'ready' ? proposal.preview.rows : undefined;
   return [`Таблица ${proposal.file.name}`, where, ...rows === undefined ? [] : [countText(rows, ROWS)]].join(' · ');
 }

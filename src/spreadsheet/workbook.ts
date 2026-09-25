@@ -45,8 +45,8 @@ export async function readTableFile(path: string): Promise<{ file: TableFile; by
   return { file: tableFileOf(path, bytes), bytes };
 }
 
-/** The sheets of a workbook; a CSV file is one sheet named after the file. A confirmed CSV dialect is used as given. */
-export function readWorkbook(bytes: Buffer, file: Pick<TableFile, 'name' | 'format'>, dialect?: CsvDialect): Workbook {
+/** The sheets of a workbook; a CSV file is one sheet named after the file. A confirmed CSV dialect — or the part the owner named — is used as given. */
+export function readWorkbook(bytes: Buffer, file: Pick<TableFile, 'name' | 'format'>, dialect?: Partial<CsvDialect>): Workbook {
   if (file.format === 'xlsx') return { format: 'xlsx', sheets: readXlsx(bytes) };
   const { rows, dialect: read } = readCsv(bytes, dialect);
   return { format: 'csv', sheets: [{ name: basename(file.name, extname(file.name)), rows }], csv: read };

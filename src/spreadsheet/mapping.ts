@@ -102,6 +102,8 @@ export const tableChoicesSchema = z.strictObject({
   order: columnChoice.nullable().optional(),
   where: z.strictObject({ column: columnChoice, values: z.array(cellValue).min(1).max(FILTER_VALUES).optional() }).optional(),
   collapseRepeats: z.boolean().optional(),
+  /** The encoding of a CSV file, when the owner named it: its text read otherwise than Lab guessed. */
+  encoding: z.enum(ENCODINGS).optional(),
 });
 export type TableChoices = z.infer<typeof tableChoicesSchema>;
 

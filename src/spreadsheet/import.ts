@@ -32,7 +32,9 @@ import { readTableFile, readWorkbook, tableFileOf, type TableFile, type Workbook
  */
 export async function proposeTableImport(path: string, choices: TableChoices = {}, proposed?: ProposedReading): Promise<TableProposal> {
   const { file, bytes } = await readTableFile(path);
-  return proposeFrom(readWorkbook(bytes, file), file, tableChoicesSchema.parse(choices), proposed);
+  const chosen = tableChoicesSchema.parse(choices);
+  if (chosen.encoding && file.format !== 'csv') throw new Error('Кодировку задают только для CSV: таблица .xlsx хранит текст в Юникоде.');
+  return proposeFrom(readWorkbook(bytes, file, chosen.encoding ? { encoding: chosen.encoding } : undefined), file, chosen, proposed);
 }
 
 function proposeFrom(workbook: Workbook, file: TableFile, chosen: TableChoices, proposed: ProposedReading | undefined): TableProposal {

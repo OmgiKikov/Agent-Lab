@@ -15,6 +15,7 @@ import { expandMaterials, promptMaterials } from '../src/materials.js';
 import type { PromptCandidate } from '../src/prompt-candidates.js';
 import { consentText, DEFAULT_SITUATIONS, loggedRolesToMap, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
 import { countText } from '../src/plural.js';
+import type { Encoding } from '../src/spreadsheet/csv.js';
 import { TABLE_EXTENSIONS } from '../src/spreadsheet/workbook.js';
 import { safeText } from '../src/text.js';
 import { preparedAnswer, STOP_HINT, type Background } from './background.ts';
@@ -67,12 +68,14 @@ export const prepareParameters = Type.Object({
     }, { ...closed, description: 'Only when the owner named the column whose values choose the conversations to evaluate. Without values the host asks the owner which to keep.' })),
     request: Type.Optional(Type.String({ minLength: 1, maxLength: 500, description: 'The owner\'s own words about which conversations to evaluate, when they did not name the column (e.g. «только те, где отвечал один агент эквайринга»): Lab\'s model finds the column and its values in the table.' })),
     collapseRepeats: Type.Optional(Type.Boolean({ description: 'Only after the owner said what to do with exchanges the export repeated: true — read each once, false — keep them as written.' })),
-  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where, or request in the owner\'s words), the repeated exchanges. A column is a header or a letter.' })),
+    encoding: Type.Optional(Type.Union([Type.Literal('utf-8'), Type.Literal('utf-16le'), Type.Literal('windows-1251'), Type.Literal('windows-1252')],
+      { description: 'Only for a CSV file, when the owner said its text reads garbled or named its encoding: windows-1251 (Russian Excel), windows-1252 (Western Excel), utf-8, utf-16le.' })),
+  }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where, or request in the owner\'s words), the repeated exchanges, the encoding of a CSV. A column is a header or a letter.' })),
   suite: Type.Optional(path('A saved set of situations (.evals/*.json) to load into a fresh draft instead of preparing: free, nothing runs.')),
   demo: Type.Optional(Type.Literal(true, { description: 'The built-in teaching example: no model, no keys, one minute.' })),
 }, closed);
 type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string;
-  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean }; suite?: string; demo?: true };
+  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean; encoding?: Encoding }; suite?: string; demo?: true };
 
 /** A path the owner or the model named: `~/…` is the owner's home, anything else is relative to the project. */
 export function projectPath(named: string, cwd: string): string {
@@ -224,9 +227,10 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   let libraryImport: Awaited<ReturnType<typeof readDialogueImport>> | undefined;
   if (logs !== 'rules') {
     if (TABLE_EXTENSIONS.has(extname(logs).toLowerCase())) {
-      const { sheet, id, text, where, request: words, collapseRepeats } = params.table ?? {};
+      const { sheet, id, text, where, request: words, collapseRepeats, encoding } = params.table ?? {};
       // The owner's corrections, said in words; which conversations to keep is asked natively when no value was named.
-      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }) };
+      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }),
+        ...(encoding ? { encoding } : {}) };
       if (Object.keys(choices).length || words || !await confirmedBefore(logs, directory)) {
         requireInteractive(ctx, 'Как читать таблицу, решаете вы в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не прочитано и не потрачено.');
         const owned = await host.open(ctx.cwd);
