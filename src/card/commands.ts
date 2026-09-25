@@ -4,11 +4,12 @@ import type { ImportBatch } from '../scenario-contracts.js';
 import { libraryHash } from '../scenario-library.js';
 import { clip } from '../text.js';
 import { logVersionCommandSchema, logVersionJournalSchema, type LogVersionCommand, type LogVersionJournal } from './calibration.js';
-import { messageAt, problemText, unusableFindings, type CardEvidence, type CheckFinding } from './checks.js';
+import { cardMessage, messageAt, problemText, unusableFindings, type CardEvidence, type CheckFinding } from './checks.js';
 import { pendingClaims } from './review.js';
 import { bindsBot, KIND_WORDS, rulebookOf, unboundCitation } from './rulebook.js';
-import { cardCommandSchema, cardSchema, libraryV2Schema, type Card, type CardCommand, type EventRef, type LibraryV2, type Rulebook } from './schema.js';
+import { cardCommandSchema, cardSchema, libraryV2Schema, type Card, type CardChange, type CardCommand, type EventRef, type LibraryV2, type Rulebook } from './schema.js';
 import { cardStatus, plausibleGroup } from './status.js';
+import { applyFill } from './unmask.js';
 import { briefChanges, cardSituation, type BriefChange } from './view.js';
 
 /*
@@ -48,10 +49,16 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
     // An answer in the owner's own words is a wording; picking an answer is a decision.
     case 'answer_question': return command.text !== undefined ? 'owner-words' : 'owner-confirm';
     // Which rules bind the bot, and whether customers know a plausible fact, are the owner's decisions about the whole set.
+    // A series needs the owner's confirmation when any of its changes does; otherwise it is all wording.
+    case 'edit_card': return command.changes.some(change => requiredAuthority(withCard(change, command.cardId)) === 'owner-confirm') ? 'owner-confirm' : 'owner-words';
+    // Lab's values over the log's masks speak for the customer: the owner confirms them as shown.
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card':
-    case 'decide_plausible': case 'set_rulebook': return 'owner-confirm';
+    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': return 'owner-confirm';
   }
 }
+
+/** A change of a series as the command of one card it stands for. */
+const withCard = (change: CardChange, cardId: string): CardCommand => ({ ...change, cardId });
 
 /** The wordings of a command: what `owner-words` asks to be the owner's own text. */
 export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
@@ -63,8 +70,9 @@ export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
     case 'add_similar': return command.change.kind === 'opening' ? [command.change.writes] : command.change.kind === 'turn' ? texts(command.change.turn?.after, command.change.turn?.says)
       : texts(command.change.writes);
     case 'answer_question': return texts(command.text);
+    case 'edit_card': return command.changes.flatMap(change => wordsOf(withCard(change, command.cardId)));
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'declare_log_version':
-    case 'decide_plausible': case 'set_rulebook': return [];
+    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': return [];
   }
 }
 
@@ -151,7 +159,9 @@ function nextFactId(library: LibraryV2, card: Card): string {
   const named = library.receipts.flatMap(receipt => {
     const { command } = receipt;
     if (command.kind === 'decide_plausible') return command.facts.flatMap(item => item.cardId === card.id ? [item.factId] : []);
-    return (command.kind === 'set_fact' || command.kind === 'remove_fact' || command.kind === 'set_fact_disclosure') && command.cardId === card.id && command.factId ? [command.factId] : [];
+    if (!('cardId' in command) || command.cardId !== card.id) return [];
+    const changes: (CardCommand | CardChange)[] = command.kind === 'edit_card' ? command.changes : [command];
+    return changes.flatMap(change => (change.kind === 'set_fact' || change.kind === 'remove_fact' || change.kind === 'set_fact_disclosure') && change.factId ? [change.factId] : []);
   });
   const numbers = [...card.client.knows.map(fact => fact.id), ...named].map(id => id.startsWith('f') ? Number(id.slice(1)) : 0).filter(Number.isInteger);
   return `f${Math.max(0, ...numbers) + 1}`;
@@ -176,20 +186,23 @@ function accountFor(card: Card, reason: string): Card['coverage'] {
   });
 }
 
-/** The card after an owner edit: a new version of it, its account kept true. */
-function revised(card: Card, reason: string, edit: (draft: Card) => void): Card {
+/** The card after an owner edit: a new version of it, its account kept true; `edit` changes the draft and says why, for the account. */
+function revised(card: Card, edit: (draft: Card) => string): Card {
   const draft = structuredClone(card);
-  edit(draft);
+  const reason = edit(draft);
   draft.coverage = accountFor(draft, reason);
   draft.revision = card.revision + 1;
   return cardSchema.parse(draft);
 }
 
-/** What the owner is told first when a change would break the card, and what fixes it. */
+/**
+ * What fixes a change that would break the card, when the fix is another field: both go together as one series
+ * (`edit_card`), checked once as they leave the card, so the owner never has to break the card on the way.
+ */
 const REMEDY: Partial<Record<CheckFinding['check'], string>> = {
-  'initial-in-opening': 'Сначала измените первую реплику.',
-  'hidden-not-in-opening': 'Сначала уберите это из первой реплики.',
-  'unknown-never-said': 'Сначала уберите это из слов клиента.',
+  'initial-in-opening': 'Передайте вместе с первой репликой, где это есть, — одной правкой.',
+  'hidden-not-in-opening': 'Передайте вместе с первой репликой без этого — одной правкой.',
+  'unknown-never-said': 'Передайте вместе с поворотом и уходом без этого — одной правкой.',
 };
 
 /** A change is refused when it gives the card a deterministic problem it did not have; a problem it already had is not the command's. */
@@ -255,10 +268,11 @@ function decidePlausible(library: LibraryV2, command: Extract<CardCommand, { kin
   let cards = library.cards;
   const scope: string[] = [];
   for (const card of new Set(group.map(item => item.card))) {
-    const after = revised(card, reason, draft => {
+    const after = revised(card, draft => {
       const mine = (fact: Card['client']['knows'][number]) => decided.has(`${card.id}/${fact.id}`);
       draft.client.knows = command.known ? draft.client.knows.map(fact => mine(fact) ? { ...fact, source: { kind: 'plausible', receiptId } } : fact)
         : draft.client.knows.filter(fact => !mine(fact));
+      return reason;
     });
     refuseNewFindings(card, after, library, context);
     cards = cards.map(item => item.id === card.id ? after : item);
@@ -267,80 +281,95 @@ function decidePlausible(library: LibraryV2, command: Extract<CardCommand, { kin
   return { cards, scope };
 }
 
+/**
+ * One change of one card, made on the draft of that card: references are read on the draft as the earlier changes of a
+ * series left it. Returns why, for the account of the later messages.
+ */
+function applyChange(draft: Card, change: CardChange, library: LibraryV2, context: CommandContext, owner: { kind: 'owner'; receiptId: string }): string {
+  switch (change.kind) {
+    case 'set_fact_disclosure': {
+      const fact = factOf(draft, change.factId);
+      if (fact.disclosure === change.disclosure && fact.source.kind === 'owner') throw new CommandRefused('Так уже записано.');
+      fact.disclosure = change.disclosure; fact.source = owner;
+      return `Когда клиент называет «${clip(fact.label, 80)}», решили вы.`;
+    }
+    case 'set_fact': {
+      const existing = change.factId === undefined ? undefined : factOf(draft, change.factId);
+      if (!existing && draft.client.knows.length >= 8) throw new CommandRefused(`У ситуации №${draft.number} уже 8 фактов: уберите лишний, прежде чем добавлять.`);
+      const fact = { id: existing?.id ?? nextFactId(library, draft), label: change.label, ...(change.value !== undefined ? { value: change.value } : {}),
+        disclosure: change.disclosure, ...(change.askedAs !== undefined ? { askedAs: change.askedAs } : {}), source: owner };
+      draft.client.knows = existing ? draft.client.knows.map(item => item.id === fact.id ? fact : item) : [...draft.client.knows, fact];
+      return `Факт «${clip(change.label, 80)}» записали вы.`;
+    }
+    case 'remove_fact': {
+      const fact = factOf(draft, change.factId);
+      draft.client.knows = draft.client.knows.filter(item => item.id !== fact.id);
+      return `Факт «${clip(fact.label, 80)}» убрали вы.`;
+    }
+    case 'edit_expectation': {
+      const target = expectationOf(draft, change.expectationId);
+      if (change.text === undefined && change.requirementIds === undefined && change.appliesWhen === undefined) throw new CommandRefused('Не сказано, что изменить в ожидании.');
+      if (change.requirementIds) { requireRequirements(library, change.requirementIds); requireBinding(library, change.requirementIds); }
+      if (change.text !== undefined) target.text = change.text;
+      if (change.requirementIds) target.requirementIds = [...new Set(change.requirementIds)];
+      if (change.appliesWhen === null) delete target.appliesWhen; else if (change.appliesWhen !== undefined) target.appliesWhen = change.appliesWhen;
+      return 'Ожидание изменили вы.';
+    }
+    case 'remove_expectation': {
+      const expectation = expectationOf(draft, change.expectationId);
+      if (draft.agentMust.length < 2) throw new CommandRefused('У ситуации должно остаться хотя бы одно ожидание: без него её нечем измерить.');
+      draft.agentMust = draft.agentMust.filter(item => item.id !== expectation.id);
+      return 'Ожидание убрали вы.';
+    }
+    case 'edit_client': {
+      if (change.wants === undefined && change.writes === undefined && change.leaves === undefined) throw new CommandRefused('Не сказано, что изменить у клиента.');
+      if (change.wants !== undefined) draft.client.wants = change.wants;
+      if (change.writes !== undefined) { draft.client.writes = change.writes; draft.client.writesSource = owner; }
+      if (change.leaves !== undefined) draft.client.leaves = change.leaves;
+      return 'Слова клиента изменили вы.';
+    }
+    case 'set_turn': {
+      const { turn } = change;
+      if (!turn) {
+        if (!draft.client.turn) throw new CommandRefused(`У ситуации №${draft.number} нет поворота.`);
+        delete draft.client.turn;
+        return 'Поворот убрали вы.';
+      }
+      const { event, ...rest } = turn;
+      if (event) {
+        if (!draft.coverage.some(entry => place(entry.event) === place(event))) throw new CommandRefused('Поворот берётся из поздней реплики клиента этого разговора.');
+        // Word for word: as the log has it, or as the card reads it with Lab's values over its masks.
+        const verbatim = [messageAt(context.evidence, event), cardMessage(draft, context.evidence, event)].some(said => said?.trim() === rest.says);
+        if (!verbatim) throw new CommandRefused('Поворот — это слова клиента из реплики дословно.');
+      }
+      draft.client.turn = { ...rest, source: event ? { kind: 'dialogue', event } : owner };
+      return 'Поворот изменили вы.';
+    }
+  }
+}
+
 /** The change one command makes to the draft's cards. */
 function edit(library: LibraryV2, command: CardCommand, receiptId: string, context: CommandContext): Edited {
   const owner = { kind: 'owner' as const, receiptId };
-  const change = (card: Card, reason: string, apply: (draft: Card) => void): Edited => {
-    const after = revised(card, reason, apply);
+  const change = (card: Card, apply: (draft: Card) => string): Edited => {
+    const after = revised(card, apply);
     refuseNewFindings(card, after, library, context);
     return replace(library, after);
   };
   switch (command.kind) {
-    case 'set_fact_disclosure': {
-      const card = cardOf(library, command.cardId);
-      const fact = factOf(card, command.factId);
-      if (fact.disclosure === command.disclosure && fact.source.kind === 'owner') throw new CommandRefused('Так уже записано.');
-      return change(card, `Когда клиент называет «${clip(fact.label, 80)}», решили вы.`, draft => {
-        const target = draft.client.knows.find(item => item.id === fact.id)!;
-        target.disclosure = command.disclosure; target.source = owner;
-      });
+    case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'edit_expectation': case 'remove_expectation': case 'edit_client': case 'set_turn': {
+      const { cardId, ...single } = command;
+      return change(cardOf(library, cardId), draft => applyChange(draft, single, library, context, owner));
     }
-    case 'set_fact': {
-      const card = cardOf(library, command.cardId);
-      const existing = command.factId === undefined ? undefined : factOf(card, command.factId);
-      if (!existing && card.client.knows.length >= 8) throw new CommandRefused(`У ситуации №${card.number} уже 8 фактов: уберите лишний, прежде чем добавлять.`);
-      const fact = { id: existing?.id ?? nextFactId(library, card), label: command.label, ...(command.value !== undefined ? { value: command.value } : {}),
-        disclosure: command.disclosure, ...(command.askedAs !== undefined ? { askedAs: command.askedAs } : {}), source: owner };
-      return change(card, `Факт «${clip(command.label, 80)}» записали вы.`, draft => {
-        draft.client.knows = existing ? draft.client.knows.map(item => item.id === fact.id ? fact : item) : [...draft.client.knows, fact];
-      });
-    }
-    case 'remove_fact': {
-      const card = cardOf(library, command.cardId);
-      const fact = factOf(card, command.factId);
-      return change(card, `Факт «${clip(fact.label, 80)}» убрали вы.`, draft => { draft.client.knows = draft.client.knows.filter(item => item.id !== fact.id); });
-    }
-    case 'edit_expectation': {
-      const card = cardOf(library, command.cardId);
-      const expectation = expectationOf(card, command.expectationId);
-      if (command.text === undefined && command.requirementIds === undefined && command.appliesWhen === undefined) throw new CommandRefused('Не сказано, что изменить в ожидании.');
-      if (command.requirementIds) { requireRequirements(library, command.requirementIds); requireBinding(library, command.requirementIds); }
-      return change(card, 'Ожидание изменили вы.', draft => {
-        const target = draft.agentMust.find(item => item.id === expectation.id)!;
-        if (command.text !== undefined) target.text = command.text;
-        if (command.requirementIds) target.requirementIds = [...new Set(command.requirementIds)];
-        if (command.appliesWhen === null) delete target.appliesWhen; else if (command.appliesWhen !== undefined) target.appliesWhen = command.appliesWhen;
-      });
-    }
-    case 'remove_expectation': {
-      const card = cardOf(library, command.cardId);
-      const expectation = expectationOf(card, command.expectationId);
-      if (card.agentMust.length < 2) throw new CommandRefused('У ситуации должно остаться хотя бы одно ожидание: без него её нечем измерить.');
-      return change(card, 'Ожидание убрали вы.', draft => { draft.agentMust = draft.agentMust.filter(item => item.id !== expectation.id); });
-    }
-    case 'edit_client': {
-      const card = cardOf(library, command.cardId);
-      if (command.wants === undefined && command.writes === undefined && command.leaves === undefined) throw new CommandRefused('Не сказано, что изменить у клиента.');
-      return change(card, 'Слова клиента изменили вы.', draft => {
-        if (command.wants !== undefined) draft.client.wants = command.wants;
-        if (command.writes !== undefined) { draft.client.writes = command.writes; draft.client.writesSource = owner; }
-        if (command.leaves !== undefined) draft.client.leaves = command.leaves;
-      });
-    }
-    case 'set_turn': {
-      const card = cardOf(library, command.cardId);
-      const { turn } = command;
-      if (!turn) {
-        if (!card.client.turn) throw new CommandRefused(`У ситуации №${card.number} нет поворота.`);
-        return change(card, 'Поворот убрали вы.', draft => { delete draft.client.turn; });
-      }
-      const { event, ...rest } = turn;
-      if (event) {
-        if (!card.coverage.some(entry => place(entry.event) === place(event))) throw new CommandRefused('Поворот берётся из поздней реплики клиента этого разговора.');
-        if (messageAt(context.evidence, event)?.trim() !== rest.says) throw new CommandRefused('Поворот — это слова клиента из реплики дословно.');
-      }
-      return change(card, 'Поворот изменили вы.', draft => { draft.client.turn = { ...rest, source: event ? { kind: 'dialogue', event } : owner }; });
-    }
+    // The whole series on one draft, checked once as it leaves the card: what is valid only together passes together.
+    case 'edit_card': return change(cardOf(library, command.cardId), draft => {
+      const reasons = command.changes.map(item => applyChange(draft, item, library, context, owner));
+      return reasons.length === 1 ? reasons[0]! : 'Ситуацию изменили вы.';
+    });
+    case 'fill_masked': return change(cardOf(library, command.cardId), draft => {
+      applyFill(draft, command, context.evidence);
+      return 'Вместо обезличенных значений Lab подставил правдоподобные — подтвердили вы.';
+    });
     case 'settle_claim': {
       const card = cardOf(library, command.cardId);
       const question = cardStatus(card, { library, evidence: context.evidence, maxTurns: context.maxTurns }).question;

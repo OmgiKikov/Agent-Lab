@@ -109,6 +109,8 @@ export function reviewedBrief(card: Card, library: LibraryV2) {
     leaves, turn: turn ? { kind: turn.kind, after: turn.after, says: turn.says, from: from(turn.source) } : null,
     agentMust: card.agentMust.map(({ id, text, requirementIds, appliesWhen, observation }) => ({ id, text, requirementIds, appliesWhen: appliesWhen ?? null, observation })),
     coverage: card.coverage.map(entry => ({ message: entry.event.eventIndex, as: entry.as, reason: entry.reason ?? null })),
+    // The values Lab wrote over the log's masking marks: the reviewer reads the marks in the dialogue and these in the card.
+    ...(card.filled ? { filled: card.filled.map(item => ({ message: item.event.eventIndex, mark: item.mark, value: item.value })) } : {}),
   };
 }
 

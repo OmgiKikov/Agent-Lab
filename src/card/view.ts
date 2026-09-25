@@ -42,6 +42,8 @@ export interface Brief {
   /** The customer's late move: «после «…»: «…»»; null when the situation has none. */
   turn: string | null;
   must: { text: string; rule: string | null }[];
+  /** The values Lab wrote over the log's masking marks, when it did: «подставлено вместо обезличенного». */
+  filled?: string[];
 }
 
 export interface SituationView {
@@ -122,6 +124,7 @@ export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumb
     knows: knows.map(fact => ({ what: factText(fact), when: saidOf(fact) })),
     leaves: oneLine(leaves), turn: turn ? turnText(turn.after, turn.says) : null,
     must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes) })),
+    ...(card.filled ? { filled: card.filled.map(item => oneLine(item.value)) } : {}),
   };
 }
 
@@ -151,6 +154,7 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
     { label: 'Клиент в прогоне', text: `не больше ${countText(policy.maxFollowUps, ['реплики', 'реплик', 'реплик'])} после первой; один вопрос повторяет не больше ${policy.repetitionLimit} раз` },
     { label: 'Первая реплика', text: writesSource.kind === 'dialogue' ? `${message(writesSource.event.eventIndex)} диалога` : writesSource.kind === 'owner' ? 'ваши слова' : 'написана Lab по вашим правилам' },
     ...knows.map(fact => ({ label: 'Откуда факт', text: `${factText(fact)} — ${vouched(fact.source)}` })),
+    ...(card.filled ?? []).map(item => ({ label: 'Подставлено', text: `«${oneLine(item.value)}» вместо «${oneLine(item.mark)}» — ${message(item.event.eventIndex)} диалога, значение придумал Lab` })),
     ...card.coverage.map(entry => ({ label: 'Поздние реплики', text: `${message(entry.event.eventIndex)} — ${ACCOUNTED[entry.as]}${entry.reason ? `: ${oneLine(entry.reason)}` : ''}` })),
     ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${OBSERVED[expectation.observation]}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
     ...rules,
@@ -332,7 +336,7 @@ export function situationData(view: SituationView) {
   return {
     number: view.number, title: view.brief.title, status: view.status, source: view.brief.source, wants: view.brief.wants, writes: view.brief.writes,
     knows: view.brief.knows.map((fact, index) => ({ ...(view.refs.knows[index] ? { id: view.refs.knows[index] } : {}), ...fact })),
-    leaves: view.brief.leaves, turn: view.brief.turn,
+    leaves: view.brief.leaves, turn: view.brief.turn, ...(view.brief.filled ? { filledOverMasks: view.brief.filled } : {}),
     must: view.brief.must.map((duty, index) => ({ ...(view.refs.must[index] ? { id: view.refs.must[index] } : {}), ...duty })),
     ...questionData(view), ...(view.problems.length ? { problems: view.problems } : {}),
   };
@@ -425,6 +429,7 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
   const fields: [string, string][] = [
     ...(same(brief.wants, brief.title) ? [] : [['Хочет', brief.wants] as [string, string]]),
     ['Пишет', `«${brief.writes}»`],
+    ...(brief.filled ? [['', `подставлено вместо обезличенного: ${brief.filled.map(value => `«${value}»`).join(', ')}`] as [string, string]] : []),
     ...brief.knows.map((fact, index): [string, string] => [index ? '' : 'Знает', `${fact.what} — ${fact.when}`]),
     ...(brief.leaves ? [['Уходит', brief.leaves] as [string, string]] : []),
     ...(brief.turn ? [['Поворот', brief.turn] as [string, string]] : []),

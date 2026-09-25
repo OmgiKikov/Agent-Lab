@@ -17,6 +17,7 @@ import {
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { cardReviewSchema } from './card/review.js';
+import { fillWithModel } from './card/unmask.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
 import { buildTopicMap } from './miner/topic-map.js';
 import { readTableWithModel } from './spreadsheet/reading-task.js';
@@ -167,6 +168,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       assess: (request, ctx) => judgeLogged(request, judgeModel, ctx, respond(ctx)) },
     // The errors a judge check plants are the builder's work too; the run's own judge then reads them.
     plantError: { builder, plant: (request, ctx) => plantError(request, { run, ctx }) },
+    // So are the values written over a card's masking marks after it was made.
+    maskFill: { builder, fill: (request, ctx) => fillWithModel(request, { run, ctx }) },
     async selectUserAction(input, ctx) {
       // The answer is an enum of exactly the moves allowed now, so a move outside the policy cannot be returned.
       return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema(input.actions) }, input, ctx);

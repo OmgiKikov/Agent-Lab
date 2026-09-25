@@ -8,10 +8,11 @@ import { convertible, libraryV1Of } from '../card/legacy-v1.js';
 import { acceptLibraryV2, requireLibraryV2 } from '../card/library.js';
 import { notContinuable, pendingReviewCalls, preparationParallel, prepareCards, resumeCards, reviewCards, storedEvidence, type CardPlan } from '../card/prepare.js';
 import type { CardCommand, LibraryV2 } from '../card/schema.js';
+import { unmaskCommand, unmaskRequest } from '../card/unmask.js';
 import { dialogueNumbers, type DialogueNumbers } from '../card/view.js';
 import { probeToolChannel, rememberedConnection, TOOL_PROBE_OPENING } from '../connection.js';
 import { createInputSchema, emptyUsage, fingerprint, isRunnable, type CardExecution, type CreateInput, type Experiment } from '../contracts.js';
-import { LibraryConflict } from '../errors.js';
+import { CommandRefused, LibraryConflict } from '../errors.js';
 import { logSample, preparationConsent, situationCount } from '../miner/plan.js';
 import { evaluatorVersion } from '../pi.js';
 import { chooseEditableDraft, draftIsBusy, recheckDecision } from '../scenario-draft.js';
@@ -180,6 +181,32 @@ export function applyCardCommand(lab: Lab, id: string, prepared: Prepared, grant
     await lab.store.publishLibrary(experiment, next, prepared.libraryHash);
     return { library: next, experiment };
   });
+}
+
+/**
+ * Lab's plausible values over the masking marks of one card of a draft (card/unmask.ts): one builder call within the
+ * draft's limit, whose answer is the `fill_masked` command the owner then confirms as shown. Nothing of the draft changes here.
+ */
+export async function proposeFill(lab: Lab, id: string, cardId: string): Promise<Extract<CardCommand, { kind: 'fill_masked' }>> {
+  let command: Extract<CardCommand, { kind: 'fill_masked' }> | undefined;
+  await lab.operations.change(async () => {
+    const { experiment, library, evidence } = await cardContext(lab, id);
+    if (experiment.phase !== 'review' || experiment.trials.length) throw new Error('Менять можно только черновик: прогон, который уже шёл, не меняется.');
+    const card = library.cards.find(item => item.id === cardId);
+    const request = card && unmaskRequest(card, evidence);
+    if (!request) throw new CommandRefused('В этой ситуации нет обезличенных значений: подставлять нечего.');
+    const filler = (await lab.runtime(experiment)).maskFill;
+    if (!filler) throw new Error('Эта среда не умеет подставлять значения.');
+    moveTo(experiment, 'preparing'); experiment.error = null;
+    await lab.operations.launch(experiment, async ctx => {
+      lab.operations.say(experiment, 'Подбираю правдоподобные значения вместо обезличенных');
+      command = unmaskCommand(request, await filler.fill(request, ctx));
+      await lab.operations.checkpoint(experiment, 'review', 'Значения вместо обезличенных подобраны: ждут вашего подтверждения.');
+    }, { ownsMutation: true });
+  });
+  await lab.operations.idle();
+  if (!command) throw new Error((await lab.get(id)).error ?? 'Значения не подобраны.');
+  return command;
 }
 
 /** After an owner command: the claims it opened are checked now within the calls left, later, or wait for a larger limit. */
