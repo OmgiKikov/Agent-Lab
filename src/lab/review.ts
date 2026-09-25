@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { calibrateRun } from '../card/calibrate.js';
+import { logReviewSchema } from '../card/calibration.js';
 import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
+import { logJudgmentComplete } from '../card/log-judge.js';
 import { awaitingVerdict } from '../agreement.js';
 import { suiteEvidence } from '../connection.js';
 import { addCaveat } from '../caveats.js';
@@ -21,7 +24,8 @@ import { nameFailureModes } from './run.js';
 
 /*
  * The results of a finished run, read again: a re-assessment of the recorded dialogues under new criteria or another
- * judge — a separate result, the original never changes — and a person's verdicts, kept apart from the judge's.
+ * judge — a separate result, the original never changes — and a person's verdicts, kept apart from the judge's: on the
+ * run's conversations, and on the judge's reading of the logged conversations its calibration compared them with.
  */
 
 /** A separate result over the same facts. No target session or simulator is opened. */
@@ -153,6 +157,48 @@ export function addHumanReview(lab: Lab, id: string, raw: HumanReviewInput): Pro
     (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
     delete record.resultsReviewedAt; delete record.resultsReviewHash;
     await lab.operations.checkpoint(record, 'results_review', 'Ваше решение записано отдельно от оценки судьи.');
+    return structuredClone(record);
+  });
+}
+
+/**
+ * What the owner says about the log judge's verdict on one expectation (card/calibration.ts LogReview): the receipt it
+ * answers, the verdict and the reason. `judgeVerdict` is the verdict the owner was shown; the one stored is read from the
+ * receipt, never taken from the caller.
+ */
+const logReviewInputSchema = logReviewSchema.pick({ key: true, verdict: true, note: true, source: true })
+  .extend({ judgeVerdict: logReviewSchema.shape.judgeVerdict.optional() });
+export type LogReviewInput = z.input<typeof logReviewInputSchema>;
+/** The most verdicts a calibration keeps (card/calibration.ts calibrationSchema). */
+const LOG_REVIEWS = 1000;
+
+/**
+ * The owner's verdict on the log judge's reading of one expectation of a logged conversation — the target `log:{key}` of
+ * the run's calibration (docs/design/card-v2-spec.md §10.3). It is kept with the calibration, beside the judge's receipt
+ * and never over it, and the latest one per receipt holds by the rule every verdict of a person follows (outcomes.ts
+ * humanOverride). Like a one-key mark on an attempt it answers a judgment: it is refused where the judge did not read the
+ * log, where a one-key mark has no decided verdict to answer, and when the verdict the owner was shown is no longer the
+ * recorded one. The number never moves; the calibration reads it, so the run's phase and its review stay as they are.
+ */
+export function addLogReview(lab: Lab, id: string, raw: LogReviewInput): Promise<Experiment> {
+  return lab.operations.change(async () => {
+    const record = await lab.store.get(id);
+    if (record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) throw new Error('Ответить о судье по разговору из логов можно только по завершённому прогону.');
+    const input = logReviewInputSchema.parse(raw);
+    const calibration = record.calibration;
+    const entry = calibration?.entries.find(item => item.key === input.key);
+    if (!calibration || !entry) throw new Error('Такой оценки судьи по разговору из логов в этом прогоне нет.');
+    if (entry.skipped) throw new Error('Судья не читал этот разговор из логов: в нём нельзя проверить ожидание — соглашаться не с чем.');
+    // What the owner saw is the judge's verdict as the calibration reads it: a receipt that does not stand decided nothing.
+    const recorded = logJudgmentComplete(entry, record) ? entry.result : 'unknown';
+    if (input.source === 'quick' && recorded !== 'pass' && recorded !== 'fail') throw new Error('Судья не вынес решения по этому разговору из логов — соглашаться не с чем.');
+    if (input.judgeVerdict !== undefined && input.judgeVerdict !== recorded) throw new Error('Оценка судьи по разговору из логов изменилась, пока вы смотрели. Откройте сверку с продом ещё раз.');
+    const reviews = calibration.reviews ?? [];
+    if (reviews.length >= LOG_REVIEWS) throw new Error(`Ответов о судье по логам в этом прогоне уже ${LOG_REVIEWS}: больше не сохранить.`);
+    calibration.reviews = [...reviews, { id: randomUUID(), createdAt: new Date().toISOString(), key: entry.key, verdict: input.verdict, note: input.note,
+      ...(input.source ? { source: input.source } : {}), judgeVerdict: recorded, judge: { protocolHash: entry.protocolHash, inputHash: entry.inputHash } }];
+    record.updatedAt = new Date().toISOString();
+    await lab.store.save(record);
     return structuredClone(record);
   });
 }

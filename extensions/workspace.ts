@@ -2,12 +2,13 @@ import type { ExtensionContext, Theme } from '@earendil-works/pi-coding-agent';
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import { MAX_WIDTH } from '../src/result-text.js';
 import type { Experiment } from '../src/contracts.js';
+import { logTargets } from '../src/card/calibration-view.js';
 import { situationActions, type SituationAction, type SituationView } from '../src/card/view.js';
 import type { DecisionChoice } from '../src/inbox.js';
 import type { AgentSpace } from '../src/workspace.js';
-import { agreementTarget, type Answer } from './judge-review.ts';
+import { agreementTarget, seenVerdicts, type Answer } from './judge-review.ts';
 import { GLYPH, type Tone } from './render/theme.ts';
-import { agentsScreen, allRunsScreen, areasOf, header, helpScreen, inboxScreen, judgedScreen, NARROW, problemScreen, problemsScreen, resultPicks, resultScreen, rulebookScreen, runActions,
+import { agentsScreen, allRunsScreen, areasOf, header, helpScreen, inboxScreen, judgedScreen, logScreen, NARROW, problemScreen, problemsScreen, resultPicks, resultScreen, rulebookScreen, runActions,
   runStepScreen, situationScreen, situationsScreen, startScreen, type Area, type Hint, type Line, type ResultPick, type Screen, type SpaceData, type Step } from './workspace-screens.ts';
 
 /*
@@ -27,6 +28,8 @@ export type Open =
   | { kind: 'situation'; id: string }
   /** A conversation the judge decided; `queue`: the owner walks the judge's decisions one after another. */
   | { kind: 'judged'; runId: string; trialId: string; queue?: string[] }
+  /** A situation of a run that disagrees with production: the judge's reading of its logged conversation is answered here. */
+  | { kind: 'log'; runId: string; cardId: string }
   | { kind: 'allRuns' }
   | { kind: 'run'; runId: string }
   | { kind: 'problem'; key: string };
@@ -69,6 +72,8 @@ export type WorkspaceAction =
   | { type: 'report'; runId: string }
   /** `seen`: the judge's decision the owner was answering; the lab refuses when the recorded one moved meanwhile. */
   | { type: 'mark'; runId: string; trialId: string; answer: Answer; readingMs: number; seen: 'pass' | 'fail' }
+  /** The same about the judge's reading of a situation's logged conversation; `seen`: its verdicts the owner was shown, by receipt. */
+  | { type: 'mark_log'; runId: string; cardId: string; answer: Answer; seen: Record<string, 'pass' | 'fail'> }
   /** A question to Lab about what is selected: the command asks for one line and hands it to the conversation. */
   | { type: 'ask'; about: string; runId?: string; situation?: { number: number; id: string }; trialId?: string };
 
@@ -221,6 +226,10 @@ export class LabWorkspace implements Component {
         return withHead(judgedScreen(run, top.trialId, mark?.answer, at >= 0 && top.queue ? { at: at + 1, of: top.queue.length } : undefined, width));
       }
     }
+    if (top?.kind === 'log') {
+      const run = this.runOf(top.runId);
+      if (run) return withHead(logScreen(data, run, top.cardId, width));
+    }
     if (top?.kind === 'allRuns') return withHead(allRunsScreen(data, this.cursor(), width));
     if (top?.kind === 'run') {
       const run = this.runOf(top.runId);
@@ -257,7 +266,7 @@ export class LabWorkspace implements Component {
     if (top?.kind === 'allRuns') return data.runs.length;
     if (top?.kind === 'run' || !top && (this.state.area === 'runs' || this.state.step === 'result')) {
       const run = this.shownRun();
-      return run ? resultPicks(run.view, data.now).length : 0;
+      return run ? resultPicks(run.view, data.now, this.state.details).length : 0;
     }
     if (top) return 0;
     if (this.state.area === 'inbox') return data.decisions.length;
@@ -334,7 +343,7 @@ export class LabWorkspace implements Component {
     if (top?.kind === 'allRuns') { const run = data.runs[cursor]; if (run) this.open({ kind: 'run', runId: run.record.id }); return; }
     if (top?.kind === 'run' || !top && (this.state.area === 'runs' || this.state.step === 'result')) {
       const run = this.shownRun();
-      const pick = run && resultPicks(run.view, data.now)[cursor];
+      const pick = run && resultPicks(run.view, data.now, this.state.details)[cursor];
       if (run && pick) this.take(run, pick);
       return;
     }
@@ -362,6 +371,7 @@ export class LabWorkspace implements Component {
   private take(run: SpaceData['runs'][number], pick: ResultPick): void {
     switch (pick.kind) {
       case 'failure': return this.open({ kind: 'judged', runId: run.record.id, trialId: pick.trialId });
+      case 'log': return this.open({ kind: 'log', runId: run.record.id, cardId: pick.cardId });
       case 'review': {
         const queue = run.view.agreement.unmarked;
         if (queue[0]) this.open({ kind: 'judged', runId: run.record.id, trialId: queue[0], queue });
@@ -386,6 +396,13 @@ export class LabWorkspace implements Component {
       // The conversation was read until this key, whether or not the screen was drawn again meanwhile.
       this.readUntil(top.trialId);
       return this.finish({ type: 'mark', runId: top.runId, trialId: top.trialId, answer: ANSWERS[digit]!, readingMs: Math.round(this.state.reading.get(top.trialId) ?? 0), seen: target.judgeVerdict });
+    }
+    if (top?.kind === 'log') {
+      const run = this.runOf(top.runId);
+      // Only verdicts the judge gave on the log can be answered; the screen says why otherwise.
+      const targets = run ? logTargets(run.record, top.cardId) : [];
+      if (!targets.length) return;
+      return this.finish({ type: 'mark_log', runId: top.runId, cardId: top.cardId, answer: ANSWERS[digit]!, seen: seenVerdicts(targets) });
     }
     if (top?.kind === 'problem') {
       const problem = data.problems.find(item => item.key === top.key);
@@ -466,6 +483,10 @@ export class LabWorkspace implements Component {
       const problem = data.problems.find(item => item.key === top.key);
       return this.finish({ type: 'ask', about: `проблему «${problem?.title ?? ''}»`, ...(problem ? { runId: problem.runId } : {}) });
     }
+    if (top?.kind === 'log') {
+      const item = this.runOf(top.runId)?.view.calibration?.disagreements.find(entry => entry.cardId === top.cardId);
+      return this.finish({ type: 'ask', about: `сверку с продом ситуации ${item?.number ?? ''} «${item?.title ?? ''}»`, runId: top.runId });
+    }
     if (!top && this.state.area === 'inbox') {
       const decision = data.decisions[cursor];
       if (decision) return this.finish({ type: 'ask', about: `решение «${decision.subject}: ${decision.text}»`, ...(data.set ? { runId: data.set.record.id } : {}) });
@@ -540,6 +561,8 @@ function stillThere(data: SpaceData, open: Open): boolean {
   switch (open.kind) {
     case 'situation': return !!data.set?.views.some(view => view.id === open.id);
     case 'judged': return !!data.runs.find(run => run.record.id === open.runId)?.record.trials.some(trial => trial.id === open.trialId);
+    // A situation the owner's answer brought into agreement with production has nothing left to open.
+    case 'log': return !!data.runs.find(run => run.record.id === open.runId)?.view.calibration?.disagreements.some(item => item.cardId === open.cardId);
     case 'allRuns': return data.runs.length > 0;
     case 'run': return data.runs.some(run => run.record.id === open.runId);
     case 'problem': return data.problems.some(problem => problem.key === open.key);

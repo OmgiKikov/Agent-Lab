@@ -1,13 +1,13 @@
-import type { Experiment, Trial } from './contracts.js';
+import type { Experiment } from './contracts.js';
 import type { EvidenceBundle } from './artifacts.js';
-import { toHtml, toMarkdown, type Block, type CardItem, type DisagreementItem, type Example, type FailureItem, type Report, type Said, type Turn } from './blocks.js';
-import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLine } from './card/calibration-view.js';
+import { toHtml, toMarkdown, type Block, type CardItem, type DisagreementItem, type Example, type FailureItem, type Report, type Said } from './blocks.js';
+import { calibrationCaveats, conversationsText, disagreementText, exclusionsLine, hintText } from './card/calibration-view.js';
 import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
 import {
-  accuracyParts, alarmRow, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, moreCausesText, noErrorsText, noRuleText, realityParts, reasonLabel, saidText,
-  toolExpectationsText, trustSegments,
+  accuracyParts, alarmRow, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, moreCausesText, noErrorsText, noRuleText, realityParts, reasonLabel,
+  saidText, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { briefFields, situationBrief, situationNumber } from './card/view.js';
@@ -18,7 +18,8 @@ import { oneLine } from './text.js';
  * The customer report: the result the owner reads in Pi, as one page for someone who never opened
  * Pi. It is built only from the ResultView of the run (plus the stored dialogues it quotes), in the
  * order a reader asks: how good is the agent, can I trust the number, where does it fail and why,
- * what was checked, and each failure with its evidence. Its reader did none of the owner's work, so
+ * what was checked, each failure with its evidence, and what the result does not prove. Its words
+ * are result-text.ts's, for this reader. Its reader did none of the owner's work, so
  * the page speaks about the owner of the agent, never to «вы», and asks its reader to do nothing: the
  * owner's next steps stay in the owner's tools. A situation made from a logged conversation opens
  * with the customer's first message verbatim, so the page quotes that message and its footer says so,
@@ -36,11 +37,22 @@ const dateText = (iso: string) => {
   return Number.isNaN(at.getTime()) ? iso : `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}, ${String(at.getUTCHours()).padStart(2, '0')}:${String(at.getUTCMinutes()).padStart(2, '0')} UTC`;
 };
 
-/** The dialogue of one attempt, client and agent only, in the order it happened. */
-function turnsOf(trial: Trial | undefined): Turn[] {
-  return (trial?.events ?? []).filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''))
-    .map(event => ({ who: event.type === 'user' ? 'Клиент' as const : 'Агент' as const, text: oneLine(event.text) }));
+/**
+ * Rows of result-text.ts as the page lays them out: a heading row names its section, a row at the margin is a paragraph
+ * (muted as its role is), and the rows indented under it are one list.
+ */
+function rowBlocks(rows: readonly ResultRow[]): Block[] {
+  const blocks: Block[] = [];
+  for (const row of rows) {
+    const last = blocks.at(-1);
+    if (row.indent && last?.kind === 'list') last.items.push(row.text);
+    else if (row.indent) blocks.push({ kind: 'list', items: [row.text] });
+    else if (row.text) blocks.push({ kind: 'paragraph', muted: row.role === 'muted', text: row.text });
+  }
+  return blocks;
 }
+/** A block of result-text.ts under its own heading as one section of the page. */
+const rowSection = (rows: readonly ResultRow[]): Block[] => rows[0]?.role === 'heading' ? [{ kind: 'section', title: rows[0].text, blocks: rowBlocks(rows.slice(1)) }] : [];
 
 /** What the agent said in a failure: the reply the judge pointed at is quoted and marked as the error; otherwise why nothing is quoted. */
 const saidOf = (failure: FailureExplanation): Said => ({ text: saidText(failure), quoted: !!failure.said });
@@ -99,7 +111,7 @@ function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
   const { agreement, breakdown, coverage, scope, stability } = view;
   const lines = [
     ...countingLines(view),
-    ...(view.bar ? [`${ruleBarText(view.bar)}.`] : []),
+    ...(view.bar ? [`${ruleBarText(view.bar, READER)}.`] : []),
     `${countText(scope.cards, SITUATIONS)} · ${countText(scope.dialogues, ['разговор', 'разговора', 'разговоров'])} · клиента играет Lab${scope.judgeModel ? ` · судья — ${scope.judgeModel}` : ''}${scope.target ? ` · версия агента ${scope.target}` : ''}${scope.costUsd ? ` · $${scope.costUsd.toFixed(2)}` : ''}`,
     ...coverageSentence(view),
     ...(toolExpectationsText(view) ? [`${toolExpectationsText(view)}.`] : []),
@@ -125,29 +137,24 @@ function basisBlock(bundle: EvidenceBundle, view: ResultView): Block {
 function calibrationBlock(bundle: EvidenceBundle): Block[] {
   const calibration = bundle.view.calibration;
   if (!calibration) return [];
-  const excluded = exclusionsLine(calibration);
+  const excluded = exclusionsLine(calibration, READER);
   const items: DisagreementItem[] = calibration.disagreements.map(item => ({ number: item.number, title: oneLine(item.title),
-    expectations: item.expectations.map(row => oneLine(disagreementText(row))), hint: item.hint, conversations: conversationsText(item),
-    dialogue: turnsOf(bundle.record.trials.find(trial => trial.id === item.trialIds[0])) }));
+    expectations: item.expectations.map(row => oneLine(disagreementText(row, READER))), hint: hintText(item.suggests, READER), conversations: conversationsText(item),
+    dialogue: trialTurns(bundle.record.trials.find(trial => trial.id === item.trialIds[0])) }));
   const body: Block[] = [
     ...(excluded ? [{ kind: 'paragraph' as const, muted: true, text: excluded }] : []),
     ...(items.length ? [{ kind: 'disagreements' as const, items }] : []),
-    ...(calibration.compared ? [{ kind: 'list' as const, items: [...CALIBRATION_CAVEATS] }] : []),
+    ...(calibration.compared ? [{ kind: 'list' as const, items: [...calibrationCaveats(READER)] }] : []),
   ];
   // Nothing beyond the line under the number (a calibration skipped for its budget): no section.
   return body.length ? [{ kind: 'section', title: 'Сверка с продом', blocks: [{ kind: 'paragraph', muted: false, text: calibration.text }, ...body] }] : [];
 }
 
+/** «Было → стало»: the comparison with the run this one repeats, in the words result-text.ts gives a page for others. */
 function comparisonBlock(bundle: EvidenceBundle): Block[] {
-  const { comparison } = bundle;
-  if (!comparison) return [];
-  const version = bundle.before?.targetVersion ?? bundle.before?.targetRelease;
-  const source = `${bundle.comparisonSource?.kind === 'selected' ? 'База выбрана вручную' : 'Сравнение с прошлым прогоном'}${version ? ` — версия ${version}` : ''}.`;
-  return [{ kind: 'section', title: 'Было → стало', blocks: [
-    { kind: 'paragraph', muted: false, text: `${source} ${comparison.headline}` },
-    ...(comparison.fixed.length + comparison.regressed.length ? [{ kind: 'list' as const, items: [
-      ...comparison.regressed.map(row => `Сломалось: ${oneLine(row.title)}`), ...comparison.fixed.map(row => `Исправлено: ${oneLine(row.title)}`)] }] : []),
-  ] }];
+  const { comparison, before } = bundle;
+  if (!comparison || !before) return [];
+  return [{ kind: 'section', title: 'Было → стало', blocks: rowBlocks(comparisonRows(comparison, before, { reader: READER, selected: bundle.comparisonSource?.kind === 'selected' })) }];
 }
 
 /**
@@ -184,12 +191,12 @@ export function runReport(bundle: EvidenceBundle): Report {
     // The same projection every surface reads the situation from (card/view.ts), its lines in the same order.
     const brief = situationBrief(record, scenario, bundle.dialogueNumbers, READER);
     return [{ number: numbers.get(card.scenarioId)!, brief, client: briefFields(brief), chip: chipOf(card, view),
-      dialogue: turnsOf(failure ? trials.get(failure.trialId) : byScenario(card.scenarioId)[0]) }];
+      dialogue: trialTurns(failure ? trials.get(failure.trialId) : byScenario(card.scenarioId)[0]) }];
   });
   const failures: FailureItem[] = view.failures.map(failure => {
     const rule = failure.violated ?? failure.rules[0];
     return { number: numbers.get(failure.scenarioId) ?? 0, title: oneLine(failure.title), expected: failure.expected ?? 'не записано в ситуации',
-      said: saidOf(failure), rule: rule ? `«${rule.quote}» — ${oneLine(rule.sourceName)}` : noRuleText(READER), dialogue: turnsOf(trials.get(failure.trialId)),
+      said: saidOf(failure), rule: rule ? `«${rule.quote}» — ${oneLine(rule.sourceName)}` : noRuleText(READER), dialogue: trialTurns(trials.get(failure.trialId)),
       ...(dunnoMark(view, failure.scenarioId) ? { customer: DUNNO_MARK } : {}) };
   });
   const unmeasured = view.notMeasured.reasons.flatMap(reason => reason.scenarioIds.map(id => `${oneLine(view.cards.find(card => card.scenarioId === id)?.title ?? id)}: ${reasonLabel(reason, READER)}`));
@@ -214,6 +221,7 @@ export function runReport(bundle: EvidenceBundle): Report {
       ...calibrationBlock(bundle),
       ...comparisonBlock(bundle),
       basisBlock(bundle, view),
+      ...rowSection(caveatRows(view, READER)),
     ],
     footer: [`Отчёт Agent Lab · ${dateText(view.createdAt)}`, 'Полные записи разговоров и оценок судьи хранятся у владельца агента.', ...logsNote(record, cards)],
   };

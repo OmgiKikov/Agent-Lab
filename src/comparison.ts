@@ -57,6 +57,11 @@ export interface RunComparison {
   unchanged: { passing: number; failing: number };
   ungraded: number; includesRubrics: boolean;
   notes: string[];
+  /**
+   * The agent's version is unknown in either run: its note says what that means for «исправлено» and «сломалось»; the
+   * owner is also told how to name it (result-text.ts comparisonRows), a page for others is not.
+   */
+  versionUnknown?: true;
 }
 
 /** Each excluded pair once, by its first reason. */
@@ -85,8 +90,11 @@ type Decided = 'pass' | 'fail';
  */
 const reconstructedSources = new WeakSet<Experiment>();
 const SOURCE_UNAVAILABLE = 'исходный прогон недоступен';
-/** Neither the owner's name for the agent's version nor anything Lab saw of its code tells the two runs apart or together. */
-export const VERSION_UNKNOWN = 'версия агента неизвестна — назовите её при запуске, и повтор сравнится с исходным прогоном';
+/**
+ * Neither the owner's name for the agent's version nor anything Lab saw of its code tells the two runs apart or together.
+ * Said where stability was not checked — the customer report —, so it names what is missing and asks nothing.
+ */
+export const VERSION_UNKNOWN = 'версия агента неизвестна';
 /** Marks a run rebuilt from embedded evidence; stability then trusts only `sourceEvidence.identity`. */
 export function markReconstructedSource(run: Experiment): Experiment {
   reconstructedSources.add(run);
@@ -175,6 +183,8 @@ export function stabilityAfterReassess(record: Experiment, source: Experiment): 
 }
 
 const JUDGE_INCOMPLETE = 'Судья не завершил оценку этой попытки.';
+/** The note of a comparison whose agent's version is unknown in either run (`versionUnknown`): what that means, for any reader. */
+export const VERSION_UNKNOWN_NOTE = 'Версия агента неизвестна хотя бы в одном прогоне: «исправлено» и «сломалось» здесь — изменения ответов, а не доказанный эффект новой версии.';
 
 const CONTROL_NOTE = 'Контрольные ситуации не сравниваются: они не входят в главное число.';
 /** Named whenever a shared card carries the prompt-rule check, so a reader knows which rule the before/after counts by (CTX-22). */
@@ -377,7 +387,9 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   const smoke = result.regressed.filter(r => r.tier === 'smoke').length;
   if (smoke) notes.push(`${pluralForm(smoke, ['Сломалась', 'Сломались', 'Сломались'])} ${countText(smoke, ['базовая ситуация', 'базовые ситуации', 'базовых ситуаций'])}: сначала верните то, что должно работать всегда.`);
   if (compared && compared < TRUSTED_SAMPLE) notes.push(`Сравнение по ${countText(compared, ['ситуации', 'ситуациям', 'ситуациям'])}: разница может быть случайной, повторы новых ситуаций не добавляют.`);
-  if (before.target.kind !== 'sandbox' && agentVersionRelation(before, after) === 'unknown') notes.push('Версия агента неизвестна хотя бы в одном прогоне: «исправлено» и «сломалось» здесь — изменения ответов, а не доказанный эффект новой версии. Назовите версию при запуске.');
-  else if (before.target.kind !== 'sandbox' && (!(before.targetVersion || before.targetRelease) || !(after.targetVersion || after.targetRelease))) notes.push('Не все версии внешнего агента названы. Локальный отпечаток не учитывает удалённые сервисы и переменные окружения.');
+  if (before.target.kind !== 'sandbox' && agentVersionRelation(before, after) === 'unknown') {
+    notes.push(VERSION_UNKNOWN_NOTE);
+    result.versionUnknown = true;
+  } else if (before.target.kind !== 'sandbox' && (!(before.targetVersion || before.targetRelease) || !(after.targetVersion || after.targetRelease))) notes.push('Не все версии внешнего агента названы. Локальный отпечаток не учитывает удалённые сервисы и переменные окружения.');
   return result;
 }

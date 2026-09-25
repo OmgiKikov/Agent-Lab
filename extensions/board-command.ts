@@ -17,7 +17,7 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { decisions, type DecisionChoice } from '../src/inbox.js';
 import { situationCoverage } from '../src/miner/cards.js';
 import { recurringProblems } from '../src/problems.js';
-import { accuracyParts } from '../src/result-text.js';
+import { accuracyParts, loggedTurns, type Turn } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { plannedTrials } from '../src/run.js';
 import { agentSpaces, type AgentSpace } from '../src/workspace.js';
@@ -25,12 +25,12 @@ import { safeLine, safeText } from '../src/text.js';
 import { launchLines, progressText, scenarioPlan } from './conversation.ts';
 import { applyRulebookChange, applySituationCommand, logsOf, settle, writer, type DecisionSurface } from './decisions.ts';
 import type { LabHost } from './host.ts';
-import { recordMark } from './judge-review.ts';
+import { recordLogMark, recordMark } from './judge-review.ts';
 import { ask, boardDiscussionContext, inputError, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun } from './launch.ts';
 import type { SessionOperation } from './operations.ts';
 import { newState, showWorkspace, type WorkspaceAction, type WorkspaceChanges, type WorkspaceState, type WorkspaceView } from './workspace.ts';
-import type { SpaceData, WorkKind } from './workspace-screens.ts';
+import { logKey, type SpaceData, type WorkKind } from './workspace-screens.ts';
 
 /*
  * /agent-lab: the loop that loads the agent's workspace from the store, shows it, takes the owner's action and does
@@ -166,14 +166,32 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
   const runs = await Promise.all(space.runs.map(async (record, index) => ({ record, view: index ? buildResultView(record) : (await evidenceBundle(record, reader.store)).view })));
   const finished = runs.filter(run => run.record.phase === 'results_review' || run.record.phase === 'complete');
   const kind = active && workKind(active, job);
+  const logged = await loggedConversations(reader, runs.find(run => run.view.calibration?.disagreements.length)?.view);
   return {
-    space, ...(set ? { set } : {}), runs, now,
+    space, ...(set ? { set } : {}), runs, now, ...(logged.size ? { logged } : {}),
     // A first-format draft is not editable, but it has one decision: to go on in the new format.
     decisions: decisions({ ...(set && (set.editable || convertible(set.record)) ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}),
       logs: finished[0] ? await logsOf(reader.store, finished[0].record) : [], now }),
     problems: recurringProblems(finished),
     ...(active && kind ? { progress: { kind, ...workProgress(active, kind, now), stoppable: job?.id === active.id } } : {}),
   };
+}
+
+/**
+ * The logged conversations a calibrated run disagrees with, read from their imports: what the board shows beside the
+ * judge's reading of them. An import that cannot be read leaves its conversations out, never the workspace.
+ */
+async function loggedConversations(reader: ExperimentLab, view: SpaceData['runs'][number]['view'] | undefined): Promise<Map<string, Turn[]>> {
+  const logged = new Map<string, Turn[]>();
+  const disagreements = view?.calibration?.disagreements ?? [];
+  for (const importId of new Set(disagreements.map(item => item.log.importId))) {
+    const batch = await reader.store.readImport(importId).catch(() => undefined);
+    for (const item of disagreements.filter(entry => entry.log.importId === importId)) {
+      const dialogue = batch?.dialogues.find(entry => entry.id === item.log.dialogueId);
+      if (dialogue) logged.set(logKey(item.log), loggedTurns(dialogue));
+    }
+  }
+  return logged;
 }
 
 /**
@@ -340,6 +358,11 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             const artifacts = await exportArtifacts(await evidenceBundle(record, reading().store), directory);
             await (options.openReport ?? openFile)(artifacts.htmlReport).then(() => inform(`Отчёт для заказчика открыт в браузере: ${artifacts.htmlReport.replace(`${ctx.cwd}/`, '')}`),
               () => inform(`Отчёт для заказчика сохранён: ${artifacts.htmlReport.replace(`${ctx.cwd}/`, '')}`));
+            continue;
+          }
+          if (action.type === 'mark_log') {
+            const notice = await writing(async lab => recordLogMark(ctx, lab, await lab.get(action.runId), action.cardId, action.answer, { seen: action.seen }));
+            if (notice) inform(notice);
             continue;
           }
           if (action.type === 'mark') {

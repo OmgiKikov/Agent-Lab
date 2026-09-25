@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import type { Brief } from './card/view.js';
 import { REPORT_CSS, REPORT_SCRIPT, REPORT_SCRIPT_HASH } from './report-style.js';
-import type { Level } from './result-text.js';
+import type { Level, Turn } from './result-text.js';
 
 /*
  * The customer report as a small tree of blocks, and its two renderings: `toHtml` (the styled,
@@ -11,7 +11,7 @@ import type { Level } from './result-text.js';
  */
 
 export type Tone = 'ok' | 'warn' | 'err' | 'accent';
-export interface Turn { who: 'Клиент' | 'Агент'; text: string }
+export type { Turn };
 /** What the agent said, as the page shows it; `quoted` when it quotes the reply the judge pointed at, which the page marks as the error. */
 export interface Said { text: string; quoted: boolean }
 export interface Example { situation: string; expected: string; said: Said; rule: string | null }

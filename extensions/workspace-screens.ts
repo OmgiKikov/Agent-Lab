@@ -1,11 +1,15 @@
 import { visibleWidth } from '@earendil-works/pi-tui';
 import type { Experiment } from '../src/contracts.js';
+import { logAnswerOf, logTargets, type CalibrationDisagreement } from '../src/card/calibration-view.js';
 import { actionRow, briefRows, countsText, detailRows, formatNote, layoutRows, listRows, situationActions, situationBrief, type LayoutRow, type SituationRow, type SituationView } from '../src/card/view.js';
 import type { Decision } from '../src/inbox.js';
 import { rulebookLines, type RulebookView } from '../src/card/rulebook.js';
 import { decisionsLine } from '../src/inbox.js';
 import { problemSize, problemsLine, type Problem } from '../src/problems.js';
-import { accuracyParts, causeRows, failureRows, fitRows, MAX_WIDTH, nextRows, resultScreen as resultRows, runLine, whenText, type ResultRow } from '../src/result-text.js';
+import {
+  accuracyParts, ANSWER_TEXT, calibrationRows, causeRows, conversationRows, failureRows, fitRows, judgeQuestionText, logDisagreementRows, logQuestionText, MAX_WIDTH, nextRows,
+  resultScreen as resultRows, runLine, trialTurns, whenText, type ResultRow, type Turn,
+} from '../src/result-text.js';
 import type { NextStep, ResultView } from '../src/result-view.js';
 import { countText, pluralForm } from '../src/plural.js';
 import { clip, oneLine, safeLine, safeText } from '../src/text.js';
@@ -54,8 +58,13 @@ export interface SpaceData {
    * got, whether this session can stop it; `frame` turns the spinner.
    */
   progress?: { kind: WorkKind; text: string; share: number | null; stoppable: boolean; frame?: number };
+  /** The logged conversations the newest calibrated run disagrees with, by `logKey`: read from their imports by the command. */
+  logged?: ReadonlyMap<string, Turn[]>;
   now: Date;
 }
+
+/** How SpaceData.logged names the logged conversation of a disagreement. */
+export const logKey = (log: Pick<CalibrationDisagreement['log'], 'importId' | 'dialogueId'>): string => `${log.importId}:${log.dialogueId}`;
 
 /** The long work a workspace follows: a preparation of situations, a check of changed ones, a run (with a re-assessment). */
 export type WorkKind = 'preparation' | 'check' | 'run';
@@ -287,11 +296,12 @@ export function runActions(data: SpaceData): string[] {
 }
 
 /**
- * A row of the result screen the cursor can stand on: a cause (or a failure by title) opens its failure; a step of
- * «Дальше» does what it says — the judge's review opens its queue, the report is saved, the situations run again, the
- * unmeasured ones are listed, the connection goes to the conversation.
+ * A row of the result screen the cursor can stand on: a cause (or a failure by title) opens its failure; under the
+ * details, a situation that disagrees with production opens that disagreement (`log`); a step of «Дальше» does what it
+ * says — the judge's review opens its queue, the report is saved, the situations run again, the unmeasured ones are
+ * listed, the connection goes to the conversation.
  */
-export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'review' } | { kind: 'report' } | { kind: 'repeat' } | { kind: 'unmeasured' } | { kind: 'connection' };
+export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'log'; cardId: string } | { kind: 'review' } | { kind: 'report' } | { kind: 'repeat' } | { kind: 'unmeasured' } | { kind: 'connection' };
 
 /** What Enter does on each step of «Дальше»; waiting for a run to end is nothing to do. */
 const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, report: { kind: 'report' }, repeat: { kind: 'repeat' },
@@ -307,7 +317,8 @@ function blockAt(rows: readonly ResultRow[], block: readonly ResultRow[]): numbe
 /**
  * The rows of the result screen — the very rows the CLI summary prints and the model reads as the board's screen
  * (result-text.ts `resultScreen`) — and, laid over them, what the cursor does on each: a cause opens its failure, a
- * step of «Дальше» does what it says. The board adds no row of its own to the result.
+ * situation of «Сверка с продом» its disagreement, a step of «Дальше» does what it says. The board adds no row of its
+ * own to the result.
  */
 export function pickedRows(view: ResultView, options: { details: boolean; now: Date }): { rows: ResultRow[]; picks: (ResultPick | null)[] } {
   const rows = resultRows(view, { surface: 'board', details: options.details, now: options.now });
@@ -321,14 +332,22 @@ export function pickedRows(view: ResultView, options: { details: boolean; now: D
     item++;
     if (trialId) picks[causesAt + offset] = { kind: 'failure', trialId };
   });
+  // Each situation of «Сверка с продом» is one row naming it, in the order of the disagreements.
+  const calibration = calibrationRows(view), calibrationAt = blockAt(rows, calibration);
+  let disagreement = 0;
+  if (calibrationAt >= 0) calibration.forEach((row, offset) => {
+    if (row.role !== 'item') return;
+    const cardId = view.calibration?.disagreements[disagreement++]?.cardId;
+    if (cardId) picks[calibrationAt + offset] = { kind: 'log', cardId };
+  });
   const nextAt = blockAt(rows, nextRows(view, 'board'));
   if (nextAt >= 0) view.next.forEach((step, offset) => { picks[nextAt + 1 + offset] = STEP_PICK[step.kind]; });
   return { rows, picks };
 }
 
-/** The rows of a result the cursor walks, in the order the screen shows them. */
-export const resultPicks = (view: ResultView, now: Date): ResultPick[] =>
-  pickedRows(view, { details: false, now }).picks.filter((pick): pick is ResultPick => pick !== null);
+/** The rows of a result the cursor walks, in the order the screen shows them — with its details or without. */
+export const resultPicks = (view: ResultView, now: Date, details = false): ResultPick[] =>
+  pickedRows(view, { details, now }).picks.filter((pick): pick is ResultPick => pick !== null);
 
 /**
  * One run's result (docs/design/ui-spec.md §4.7, §8.5): the rows of the CLI summary — the number and its trust, the topics, why
@@ -451,7 +470,8 @@ export function situationScreen(view: SituationView, options: { details: boolean
   return { head: [], body: situationLines(rows, room(width)), foot };
 }
 
-const ANSWER_WORD: Record<Answer, string> = { agree: 'да, судья прав', disagree: 'нет, судья ошибся', unsure: 'не знаю' };
+/** The keys of the answers, after the question or the owner's answer. */
+const ANSWER_KEYS = '1 да · 2 нет · 3 не знаю';
 /** Why a conversation carries no question about the judge. */
 const NOT_ASKED = { control: 'Контрольная ситуация: в проверку судьи не входит.', unmeasured: 'Ситуация не измерена: соглашаться не с чем.',
   undecided: 'Судья не вынес решения: соглашаться не с чем.' } as const;
@@ -482,17 +502,36 @@ export function judgedScreen(run: { record: Experiment; view: ResultView }, tria
       label('Агент ответил', said ? `«${oneLine(said.text)}»` : 'ответа нет'),
       ...(brief?.must[0]?.rule ? [label('Правило', `«${brief.must[0].rule}»`)] : [])];
   }
-  const turns = (trial?.events ?? []).filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''));
-  const conversation: ResultRow[] = index >= 0 || !turns.length ? [] : [{ role: 'blank', indent: 0, text: '' }, { role: 'heading', indent: 4, text: 'Разговор' },
-    ...turns.map(event => ({ role: 'quote' as const, indent: 6, text: `${(event.type === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.text)}`, hang: 9 }))];
+  // A failure's explanation holds its conversation already; a pass drawn for a double-check shows it in the same rows.
+  const conversation = index >= 0 ? [] : conversationRows(trialTurns(trial));
   // The question is about the decision the judge recorded, never about a verdict the owner already changed.
   const target = agreementTarget(record, trial);
   const question = target?.kind !== 'ready' ? NOT_ASKED[target?.kind ?? 'undecided']
-    : answer ? `Ваш ответ: ${ANSWER_WORD[answer]}. Изменить: 1 да · 2 нет · 3 не знаю`
-      : `Судья решил: ${target.judgeVerdict === 'fail' ? 'не справился' : 'справился'}. Вы согласны?   1 да · 2 нет · 3 не знаю`;
-  const body = [...resultLines([...rows, ...conversation], w), blank, ...wsLines([ws(answer || target?.kind !== 'ready' ? 'muted' : 'accent', question)], w)];
+    : answer ? `Ваш ответ: ${ANSWER_TEXT[answer]}. Изменить: ${ANSWER_KEYS}` : `${judgeQuestionText(target.judgeVerdict)}   ${ANSWER_KEYS}`;
+  const body = [...resultLines([...rows, ...(conversation.length ? [{ role: 'blank' as const, indent: 0, text: '' }, ...conversation] : [])], w), blank,
+    ...wsLines([ws(answer || target?.kind !== 'ready' ? 'muted' : 'accent', question)], w)];
   if (place) body.unshift(...wsLines([ws('muted', `Проверка судьи: ${place.at} из ${place.of}`)], w), blank);
   return { head: [], body, foot: [...(target?.kind === 'ready' ? [{ key: '1–3', text: 'ответить' }] : []), { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
+}
+
+/**
+ * One situation that disagrees with production, opened from «Сверка с продом» (docs/design/card-v2-spec.md §10.5): what the
+ * calibration says of it, the run's attempt it compared and the logged conversation, then the question about the judge's
+ * reading of the log — or the owner's answer. The answer lands on the log's side, never on the run's conversation.
+ */
+export function logScreen(data: SpaceData, run: { record: Experiment; view: ResultView }, cardId: string, width: number): Screen {
+  const w = room(width);
+  const item = run.view.calibration?.disagreements.find(entry => entry.cardId === cardId);
+  if (!item) return { head: [], body: wsLines([ws('muted', 'Эта ситуация больше не расходится с продом.')], w), foot: [{ key: 'Esc', text: 'назад' }] };
+  const logged = data.logged?.get(logKey(item.log));
+  const rows = logDisagreementRows(item, { title: true, attempt: trialTurns(run.record.trials.find(trial => trial.id === item.trialIds[0])), ...(logged ? { log: logged } : {}) });
+  const targets = logTargets(run.record, cardId);
+  const answer = logAnswerOf(run.record, targets);
+  const question = !targets.length ? 'Судья не вынес решения по разговору из логов: соглашаться не с чем.'
+    : answer ? `Ваш ответ: ${ANSWER_TEXT[answer]}. Изменить: ${ANSWER_KEYS}` : `${logQuestionText(targets)}   ${ANSWER_KEYS}`;
+  const body = [...resultLines(rows, w), ...(logged ? [] : [blank, ...wsLines([ws('muted', 'Разговор из логов показывается у последнего прогона со сверкой.', 5)], w)]), blank,
+    ...wsLines([ws(answer || !targets.length ? 'muted' : 'accent', question)], w)];
+  return { head: [], body, foot: [...(targets.length ? [{ key: '1–3', text: 'ответить' }] : []), { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
 }
 
 /** «Все прогоны» (docs/design/ui-spec.md §8.5): each run by its date, version and result, with the result before it. */
