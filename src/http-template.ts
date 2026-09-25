@@ -191,9 +191,13 @@ export interface RequestValues {
 }
 interface Rendering { template: RequestTemplate; values: RequestValues; uuid: string; now: Date }
 
-/** A dialogue's id as a positive 31-bit number, for an agent whose conversations are numbered: the same in every turn of it. */
+/**
+ * A dialogue's id as a positive whole number, for an agent whose conversations are numbered: the same in every turn of
+ * it. A stand keeps the conversations of every run, so the number is drawn from every safe JSON integer (1 … 2^53 − 1):
+ * in 31 bits, 200 000 conversations shared a number ten times over, and the agent would have mixed them.
+ */
 export const conversationNumber = (conversation: string): number =>
-  parseInt(createHash('sha256').update(conversation).digest('hex').slice(0, 8), 16) % 2_147_483_646 + 1;
+  Number(BigInt(`0x${createHash('sha256').update(conversation).digest('hex').slice(0, 16)}`) % BigInt(Number.MAX_SAFE_INTEGER)) + 1;
 
 function environment(variable: string): string {
   const value = process.env[variable];
