@@ -11,7 +11,7 @@ import { valueTokens } from './verbatim.js';
 import { hasCompleteJudgment, judgmentEvidenceEvents, judgmentFailure, observableSources, sealJudgeReceipt } from './judge.js';
 import { ProviderFailure, type ProviderFailureKind } from './llm/model-call.js';
 import { StructuredTaskError } from './llm/structured.js';
-import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure } from './errors.js';
+import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure, Stopped } from './errors.js';
 import { openExternalTarget, type AgentButton, type TurnOutcome } from './targets.js';
 import { simulatorChecks } from './simulator.js';
 import { clip } from './text.js';
@@ -433,8 +433,10 @@ export async function evaluateTrial(input: {
     if (persistenceFailed) throw persistenceError;
     // A dialogue that already broke on the agent's side (an empty or a service reply, no reply at all) keeps its own reason and cause
     // when grading then refuses its facts: the agent's silence is what happened (OD-1), not the missing observation.
-    const brokeFirst = !ctx.signal.aborted && stage === 'grading' && trial.invalidCause !== undefined;
-    trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
+    // A stop — the run's, or Lab itself ending the agent's process as it closes — cancels the conversation.
+    const halted = ctx.signal.aborted || !!carried(error, Stopped);
+    const brokeFirst = !halted && stage === 'grading' && trial.invalidCause !== undefined;
+    trial.outcome = halted ? 'cancelled' : 'invalid';
     if (trial.outcome !== 'invalid') { delete trial.invalidCause; trial.reason = 'Диалог остановлен.'; }
     else if (!brokeFirst) {
       // The cause by what broke the conversation (breakOf), and the reason says the same side: Lab's own refusal before the

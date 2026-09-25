@@ -10,7 +10,10 @@ import { fingerprint, isRunnable, scalarSchema, usageSchema, type ReleaseHook, t
 import type { CallContext, DialogueMessage, TargetSession } from './runtime.js';
 import { targetEntryPath } from './target-version.js';
 import { AGENT_TIMEOUT_MS } from './target-schema.js';
-import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure } from './errors.js';
+import { endGroup, endedByStop, trackGroup, untrackGroup } from './agent-processes.js';
+
+export { closeAllTargets } from './agent-processes.js';
+import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure, Stopped } from './errors.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { addressVariables, atPointer, renderAddress, renderRequest, replyText, templateVariables, type Json, type RequestTemplate, type RequestValues } from './http-template.js';
 import { countText } from './plural.js';
@@ -139,12 +142,15 @@ export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, s
       try { if (grouped && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL'); }
     };
+    // Kept while it runs, so a stop of Lab ends it too; once it exits, what it left running is the stand's (see above).
+    if (grouped && child.pid) trackGroup(child.pid, [release.command, ...release.args]);
     const timer = setTimeout(() => { timedOut = true; kill(); }, release.timeoutMs);
     signal.addEventListener('abort', kill, { once: true });
     const finish = (code: number | null, sig: NodeJS.Signals | null) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer); signal.removeEventListener('abort', kill);
+      if (child.pid) untrackGroup(child.pid);
       // What the hook left running keeps its end of the pipes: drained unread, never keeping Lab itself alive.
       reading = false;
       for (const stream of [child.stdout, child.stderr]) { stream?.resume(); (stream as { unref?: () => void } | null)?.unref?.(); }
@@ -154,6 +160,7 @@ export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, s
     child.once('error', error => {
       if (finished) return;
       finished = true; clearTimeout(timer); signal.removeEventListener('abort', kill);
+      if (child.pid) untrackGroup(child.pid);
       reject(new Error(`Не удалось запустить хук выпуска ${release.command}: ${spawnReason(error)}`));
     });
     child.once('exit', (code, sig) => {
@@ -441,7 +448,8 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
   let pending: { resolve: (reply: unknown) => void; reject: (error: Error) => void } | undefined;
   let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   const takePending = () => { const waiting = pending; pending = undefined; return waiting; };
-  const exited = () => new AgentFailure(`Процесс агента завершился${exit ? exit.code !== null ? ` с кодом ${exit.code}` : ` по сигналу ${exit.signal}` : ''}${diagnostics.trim() ? `: ${diagnostics.trim()}` : '.'}`);
+  // A process Lab itself ended while stopping stopped the conversation; any other end of it is the agent's side failing the turn.
+  const exited = () => child.pid && endedByStop(child.pid) ? new Stopped('closing') : new AgentFailure(`Процесс агента завершился${exit ? exit.code !== null ? ` с кодом ${exit.code}` : ` по сигналу ${exit.signal}` : ''}${diagnostics.trim() ? `: ${diagnostics.trim()}` : '.'}`);
   let bytes = 0;
   answers.on('data', chunk => {
     bytes += Buffer.byteLength(chunk);
@@ -461,8 +469,9 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
     violation ??= new ConnectionFailure('protocol', `Адаптер прислал лишнюю строку без запроса: «${clip(line, 200)}». Одна строка JSON отвечает на один запрос; строки прогресса и отладки пишите в stderr.`);
   });
   child.on('close', (code, signal) => { exit = { code, signal }; takePending()?.reject(exited()); });
+  const streamsClosed = new Promise<void>(resolve => child.once('close', () => resolve()));
   await new Promise<void>((resolve, reject) => {
-    child.once('spawn', () => resolve());
+    child.once('spawn', () => { if (grouped && child.pid) trackGroup(child.pid, [target.command, ...target.args]); resolve(); });
     child.once('error', error => reject(new ConnectionFailure('start', `Не удалось запустить агента ${target.command}: ${spawnReason(error)}.`)));
   });
   const initialState = structuredClone(state);
@@ -501,12 +510,17 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
       if (!exit) {
         if (ctx.signal.aborted) kill();
         else child.stdin.end(`${JSON.stringify({ type: 'close', sessionId })}\n`);
+        // The adapter's own exit ends the conversation; what it started (a helper with its output redirected) goes with its group.
         await new Promise<void>(resolve => {
-          if (exit) { resolve(); return; }
-          const timer = setTimeout(() => { kill(); resolve(); }, 2000);
-          child.once('close', () => { clearTimeout(timer); resolve(); });
+          if (exit || child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+          const timer = setTimeout(resolve, 2000);
+          child.once('exit', () => { clearTimeout(timer); resolve(); });
         });
       }
+      if (grouped && child.pid) await endGroup(child.pid);
+      else if (!exit) kill();
+      // Every line the adapter wrote is read before the session says how it ended.
+      await Promise.race([streamsClosed, new Promise(resolve => setTimeout(resolve, 500))]);
       lines.close();
       // A line that arrived after the last answer breaks the protocol as much as one before it.
       const unsaid = broken();
@@ -534,7 +548,7 @@ export async function readPrompt(file: string): Promise<string> {
 }
 /** A failure of a session typed, so its cause is read by its kind (evaluation.ts): what no typed failure names is the connection's. */
 function typed(error: unknown, signal: AbortSignal, kind: ConnectionFailure['kind']): unknown {
-  if (signal.aborted || error instanceof ConnectionFailure || error instanceof AgentFailure || error instanceof MeasurementFailure || error instanceof AgentRequestFailed) return error;
+  if (signal.aborted || error instanceof Stopped || error instanceof ConnectionFailure || error instanceof AgentFailure || error instanceof MeasurementFailure || error instanceof AgentRequestFailed) return error;
   return new ConnectionFailure(kind, error instanceof Error ? error.message : String(error), { cause: error });
 }
 
