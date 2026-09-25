@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { fingerprint } from '../contracts.js';
+import { fingerprint, type Requirement, type Source } from '../contracts.js';
 import { text } from '../ids.js';
 import { workInputIssue } from '../limits.js';
+import { quotedClause } from '../verbatim.js';
 import { messageAt, type CardEvidence, type LoggedMessage } from './checks.js';
 import type { Card, ClaimReceipt, EventRef, LibraryV2 } from './schema.js';
 
@@ -12,10 +13,31 @@ import type { Card, ClaimReceipt, EventRef, LibraryV2 } from './schema.js';
  * answer, and an edit asks again exactly the claims whose basis it changed. The reviewer reads the brief, the full
  * source dialogue and every rule and article read for that dialogue — not only the ones the card cites — and never
  * sees earlier answers.
+ *
+ * The reviewer reads every field of a duty the judge reads: its words, how it binds (must / must not), what else fulfils
+ * it, what breaks it, when it applies, and each rule it cites with its kind, its quote and the sentence the quote stands
+ * in. The first protocol showed only the words: its answer on a duty that also says how it binds, what else fulfils it or
+ * what breaks it was given blind, so a draft asks such a claim again (Claim.protocols); an accepted library reads as it
+ * was accepted.
+ *
+ *   card-review-v1   the duty's words, observation and rules (text and quote)
+ *   card-review-v2   and its strength, acceptable, violation; each rule's kind and the sentence of its quote
  */
 
 export type ClaimKind = ClaimReceipt['kind'];
-export interface Claim { kind: ClaimKind; subject: string; alias: string; basisHash: string; key: string }
+export type ReviewProtocol = ClaimReceipt['reviewer']['protocol'];
+/** The protocol every review is asked under now; the ones before it, oldest first, still answer what they were shown. */
+export const REVIEW_PROTOCOL = 'card-review-v2' satisfies ReviewProtocol;
+export const REVIEW_PROTOCOLS: readonly ReviewProtocol[] = ['card-review-v1', REVIEW_PROTOCOL];
+/** One question to the reviewer; `protocols` — the protocols whose receipts answer it: those that showed what it is about. */
+export interface Claim { kind: ClaimKind; subject: string; alias: string; basisHash: string; key: string; protocols: readonly ReviewProtocol[] }
+
+/** The reviewer's receipt that answers a claim: one with its key, given under a protocol that showed what the claim is about. */
+export const receiptFor = (library: Pick<LibraryV2, 'claims'>, claim: Claim): ClaimReceipt | undefined =>
+  library.claims.find(receipt => receipt.key === claim.key && claim.protocols.includes(receipt.reviewer.protocol));
+
+/** A duty that says how it binds, what else fulfils it or what breaks it: the first protocol never showed any of it. */
+const beyondWords = (duty: Card['agentMust'][number]): boolean => duty.strength !== undefined || duty.acceptable !== undefined || duty.violation !== undefined;
 
 export interface ReviewContext { library: LibraryV2; evidence: CardEvidence }
 
@@ -65,10 +87,12 @@ export function planClaims(card: Card, context: ReviewContext): Claim[] {
   const dialogue = sourceDialogue(card);
   const said = (event: EventRef) => messageAt(evidence, event) ?? null;
   const read = reading(card, library);
-  const claim = (kind: ClaimKind, subject: string, alias: string, basis: unknown): Claim => {
+  const claim = (kind: ClaimKind, subject: string, alias: string, basis: unknown, protocols = REVIEW_PROTOCOLS): Claim => {
     const basisHash = fingerprint(basis);
-    return { kind, subject, alias, basisHash, key: fingerprint({ kind, subject, basisHash }) };
+    return { kind, subject, alias, basisHash, key: fingerprint({ kind, subject, basisHash }), protocols };
   };
+  // An accepted library reads as it was accepted; a draft asks again what an earlier protocol answered without seeing it.
+  const shown = (duty: Card['agentMust'][number]): readonly ReviewProtocol[] => beyondWords(duty) && !library.acceptance ? [REVIEW_PROTOCOL] : REVIEW_PROTOCOLS;
   const logged = dialogue ? { ...dialogue, messages: evidence.messages(dialogue.batchId, dialogue.dialogueId) ?? null } : null;
   return [
     claim('goal', '', 'goal', { wants, writes, dialogue: logged }),
@@ -80,7 +104,7 @@ export function planClaims(card: Card, context: ReviewContext): Claim[] {
     ...card.agentMust.map(expectation => claim('expectation', expectation.id, `expectation_${expectation.id}`, { expectation, wants, writes,
       knows: knows.map(({ source: _source, ...fact }) => fact),
       requirements: expectation.requirementIds.map(id => library.requirements.find(requirement => requirement.id === id) ?? null),
-      articles: read.sources.map(source => ({ id: source.id, hash: source.hash })) })),
+      articles: read.sources.map(source => ({ id: source.id, hash: source.hash })) }, shown(expectation))),
     ...(card.coverage.length || turn ? [claim('coverage', '', 'coverage', { coverage: card.coverage, turn: turn ?? null, later: card.coverage.map(entry => said(entry.event)) })] : []),
     claim('leak', '', 'leak', { writes, leaves, says: turn?.says ?? null, duties: card.agentMust.map(expectation => expectation.text),
       unknown: knows.filter(fact => fact.disclosure === 'unknown').map(fact => fact.value ?? null) }),
@@ -89,7 +113,7 @@ export function planClaims(card: Card, context: ReviewContext): Claim[] {
 
 /** The claims of a card no receipt answers yet: what a review call must ask. */
 export const pendingClaims = (card: Card, context: ReviewContext): Claim[] =>
-  planClaims(card, context).filter(claim => !context.library.claims.some(receipt => receipt.key === claim.key));
+  planClaims(card, context).filter(claim => !receiptFor(context.library, claim));
 
 const verdictSchema = z.strictObject({ status: z.enum(['ready', 'needs_owner', 'blocked']), reason: text(240) });
 /**
@@ -125,12 +149,25 @@ export function reviewedBrief(card: Card, library: LibraryV2) {
         ...(fact.source.kind === 'plausible' ? { plausible: true } : {}) };
     }),
     leaves, turn: turn ? { kind: turn.kind, after: turn.after, says: turn.says, from: from(turn.source) } : null,
-    agentMust: card.agentMust.map(({ id, text, requirementIds, appliesWhen, observation, tool }) => ({ id, text, requirementIds, appliesWhen: appliesWhen ?? null, observation,
+    // Every field of a duty the judge reads (card/compile.ts expectationRubric): an absent strength is «must», as it always was.
+    agentMust: card.agentMust.map(({ id, text, strength, acceptable, violation, requirementIds, appliesWhen, observation, tool }) => ({ id, text,
+      strength: strength ?? 'must', acceptable: acceptable ?? null, violation: violation ?? null, requirementIds, appliesWhen: appliesWhen ?? null, observation,
       ...(tool !== undefined ? { tool } : {}) })),
     coverage: card.coverage.map(entry => ({ message: entry.event.eventIndex, as: entry.as, reason: entry.reason ?? null })),
     // The values Lab wrote over the log's masking marks: the reviewer reads the marks in the dialogue and these in the card.
     ...(card.filled ? { filled: card.filled.map(item => ({ message: item.event.eventIndex, mark: item.mark, value: item.value })) } : {}),
   };
+}
+
+/**
+ * A rule as the reviewer reads it: the author's label of its kind, the words quoted, the whole sentence of the source they
+ * stand in (null when the quote is no longer found there), and `rule` — what the judge reads as the rule: that sentence
+ * for every rule cited since the builder stopped wording rules, the builder's line on an older one.
+ */
+export function reviewedRule(requirement: Requirement, sources: readonly Pick<Source, 'id' | 'content'>[]) {
+  const source = sources.find(item => item.id === requirement.sourceId);
+  return { id: requirement.id, sourceId: requirement.sourceId, kind: requirement.kind ?? null, quote: requirement.quote,
+    sentence: source ? quotedClause(source.content, requirement.quote)?.sentence ?? null : null, rule: requirement.text };
 }
 
 /** One review call: the claims it answers, by alias, and what the reviewer reads. */
@@ -139,7 +176,7 @@ export interface CardReviewRequest {
   payload: {
     card: ReturnType<typeof reviewedBrief>;
     dialogue: { messages: readonly LoggedMessage[] } | null;
-    requirements: { id: string; text: string; quote: string; sourceId: string }[];
+    requirements: ReturnType<typeof reviewedRule>[];
     articles: { id: string; name: string; content: string }[];
     claims: { alias: string; kind: ClaimKind; subject: string }[];
   };
@@ -165,7 +202,7 @@ export function reviewRequests(card: Card, claims: readonly Claim[], context: Re
   const request = (part: readonly Claim[], story: boolean, duties: boolean): CardReviewRequest => ({
     aliases: part.map(claim => claim.alias),
     payload: { card: brief, dialogue: story && messages ? { messages } : null,
-      requirements: duties ? read.requirements.map(({ id, text, quote, sourceId }) => ({ id, text, quote, sourceId })) : [],
+      requirements: duties ? read.requirements.map(requirement => reviewedRule(requirement, library.sources)) : [],
       articles: duties ? read.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })) : [],
       claims: part.map(({ alias, kind, subject }) => ({ alias, kind, subject })) },
   });
@@ -180,7 +217,7 @@ export function reviewRequests(card: Card, claims: readonly Claim[], context: Re
 /** Unsupported or ambiguous generated claims, with the reviewer's reason: what a revision must resolve. */
 export function revisionClaims(card: Card, context: ReviewContext): { claim: string; reason: string }[] {
   return planClaims(card, context).flatMap(claim => {
-    const receipt = context.library.claims.find(item => item.key === claim.key);
+    const receipt = receiptFor(context.library, claim);
     return receipt && (receipt.status === 'blocked' || receipt.status === 'needs_owner') ? [{ claim: claim.alias, reason: receipt.reason }] : [];
   });
 }
@@ -192,6 +229,6 @@ export function claimReceipts(claims: readonly Claim[], review: CardReview): Cla
     if (!verdict) throw new Error(`Проверяющий не ответил на утверждение ${claim.alias}.`);
     const message = claim.kind === 'coverage' && verdict.status !== 'ready' && typeof verdict.message === 'number' ? { message: verdict.message } : {};
     return { key: claim.key, kind: claim.kind, subject: claim.subject, basisHash: claim.basisHash, status: verdict.status, reason: verdict.reason,
-      reviewer: { protocol: 'card-review-v1', model: review.model }, ...message };
+      reviewer: { protocol: REVIEW_PROTOCOL, model: review.model }, ...message };
   });
 }

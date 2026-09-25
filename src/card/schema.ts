@@ -246,12 +246,13 @@ export type CardCommand = z.infer<typeof cardCommandSchema>;
 /**
  * The reviewer's answer on one semantic claim, addressed by content: key = digest(kind, subject, basisHash). `clarity` is
  * asked only of a card marked vague. `message`: the later customer message (its index) a doubt about the account is
- * about, when the reviewer named one; absent on every receipt before it.
+ * about, when the reviewer named one; absent on every receipt before it. `protocol`: what the reviewer was shown
+ * (card/review.ts) — `card-review-v2` every field of a duty the judge reads, `card-review-v1` its words and rules alone.
  */
 const claimReceiptSchema = z.strictObject({
   key: hash, kind: z.enum(['goal', 'fact', 'expectation', 'coverage', 'leak', 'clarity']), subject: z.string().max(20),
   basisHash: hash, status: z.enum(['ready', 'needs_owner', 'blocked']), reason: text(240),
-  reviewer: z.strictObject({ protocol: z.literal('card-review-v1'), model: text(200) }),
+  reviewer: z.strictObject({ protocol: z.enum(['card-review-v1', 'card-review-v2']), model: text(200) }),
   message: z.number().int().nonnegative().optional(),
 });
 export type ClaimReceipt = z.infer<typeof claimReceiptSchema>;

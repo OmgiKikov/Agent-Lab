@@ -4,6 +4,7 @@ import type { Traffic } from '../miner/schema.js';
 import { libraryHash, snapshotDigest, verifiedAcceptance } from '../scenario-library.js';
 import { compileCard } from './compile.js';
 import { cardSchema, libraryV2Schema, type Card, type ClaimReceipt, type LibraryV2, type ScenarioLibrary, type BusinessScenario } from './schema.js';
+import { REVIEW_PROTOCOLS } from './review.js';
 import { cardStatuses, type StatusContext } from './status.js';
 import type { CustomerProfile } from '../target-schema.js';
 
@@ -76,14 +77,23 @@ export function replaceCard(library: LibraryV2, previousId: string, card: Card):
     cards: library.cards.map(item => item.id === previousId ? replaced : item) });
 }
 
-/** The reviewer's receipts, once per key: an answered key keeps its answer, so a similar card reuses it. */
+/**
+ * The reviewer's receipts, once per key: an answered key keeps its answer, so a similar card reuses it — unless the answer
+ * was given under an earlier protocol, which was shown less (card/review.ts): the later answer takes its place.
+ */
 export function recordClaims(library: LibraryV2, receipts: readonly ClaimReceipt[]): LibraryV2 {
-  const known = new Set(library.claims.map(claim => claim.key));
-  const fresh: ClaimReceipt[] = [];
-  for (const receipt of receipts) if (!known.has(receipt.key)) { known.add(receipt.key); fresh.push(receipt); }
-  if (!fresh.length) return library;
+  const rank = (receipt: ClaimReceipt) => REVIEW_PROTOCOLS.indexOf(receipt.reviewer.protocol);
+  const claims = [...library.claims];
+  let changed = false;
+  for (const receipt of receipts) {
+    const at = claims.findIndex(claim => claim.key === receipt.key);
+    if (at >= 0 && rank(claims[at]!) >= rank(receipt)) continue;
+    if (at >= 0) claims[at] = receipt; else claims.push(receipt);
+    changed = true;
+  }
+  if (!changed) return library;
   draftOnly(library);
-  return libraryV2Schema.parse({ ...library, revision: library.revision + 1, claims: [...library.claims, ...fresh] });
+  return libraryV2Schema.parse({ ...library, revision: library.revision + 1, claims });
 }
 
 /**
