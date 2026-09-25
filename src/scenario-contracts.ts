@@ -36,7 +36,7 @@ const importedEventSchema = z.strictObject({
 export const importBatchSchema = z.strictObject({
   formatVersion: z.literal(1), id, contentHash: hash, createdAt: timestamp,
   /** The table of masking marks the rows were read by (masking.ts); absent in batches read by the first, frozen readings. */
-  maskVersion: z.literal(2).optional(),
+  maskVersion: z.union([z.literal(2), z.literal(3)]).optional(),
   /**
    * The owner's word on role names Lab does not know (`client`, `operator`): the import is read by it, and its content
    * hash seals it with the rows (scenario-library.ts). Absent when the log names its roles as Lab reads them.

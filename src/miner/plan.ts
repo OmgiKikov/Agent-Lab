@@ -2,7 +2,9 @@ import { isRunnable, materialSources, type CreateInput, type Settings } from '..
 import type { CallContext, Runtime } from '../runtime.js';
 import { preparationCeiling, promptLoad, promptsOversize } from '../card/budget.js';
 import type { CardPreparation, LibraryV2 } from '../card/schema.js';
+import { roleChoices } from '../llm/models.js';
 import { countLeftOut, issueText, leftOutTotal, leftOutWords, mergeLeftOut, rolesLine, unknownRoles, wayOut } from '../log-issues.js';
+import { personalData, type PersonalData } from '../personal-data.js';
 import type { ImportBatch, LeftOutCount } from '../scenario-contracts.js';
 import type { ExperimentStore } from '../store.js';
 import { countText, pluralForm } from '../plural.js';
@@ -122,6 +124,25 @@ export interface PreparationConsent {
   asksAgent: boolean;
   /** The stored topic map of these logs found no topic for most conversations (coverage.ts untopicedText); absent otherwise, or before a map. */
   untopiced?: string;
+  /**
+   * Where the conversations' text goes: the provider and the model of each role that reads it — the builder maps the
+   * topics and writes the situations, the judge checks each situation against its conversation (llm/models.ts roleChoices).
+   */
+  readers: { provider: string; model: string; roles: ('builder' | 'judge')[] }[];
+  /** Conversations of the import holding personal data in the open, by shape (personal-data.ts): they go to the provider as they are. */
+  personal: PersonalData;
+}
+
+/** Who reads the conversations' text: each distinct provider and model of the roles that read it, the builder first. */
+function readersOf(settings: CreateInput['settings']): PreparationConsent['readers'] {
+  const { builder, judge } = roleChoices(settings);
+  const readers: PreparationConsent['readers'] = [];
+  for (const [role, choice] of [['builder', builder], ['judge', judge]] as const) {
+    if (!choice.provider || !choice.model) continue;
+    const same = readers.find(reader => reader.provider === choice.provider && reader.model === choice.model);
+    if (same) same.roles.push(role); else readers.push({ provider: choice.provider, model: choice.model, roles: [role] });
+  }
+  return readers;
 }
 
 /**
@@ -154,6 +175,7 @@ export async function preparationConsent(store: Pick<ExperimentStore, 'readTopic
     callCeiling: preparationCeiling({ task: input.task, sources, situations: promised, fromLogs: true, topicMapCalls }),
     left: left.counts, leftAsRead: left.asRead, asksAgent: isRunnable(input.target),
     ...(reused && untopicedText(topicTraffic(reused)) ? { untopiced: untopicedText(topicTraffic(reused))! } : {}),
+    readers: readersOf(input.settings), personal: personalData(batch),
   };
 }
 
@@ -166,6 +188,24 @@ const SITUATIONS_ACC: [string, string, string] = ['ситуацию', 'ситу�
 /** The ceiling holds the one revision of a situation the check rejected (card/budget.ts). */
 const REVISION_TEXT = 'Сюда входит одна переделка каждой ситуации, которую не пропустила проверка.';
 const PROMPTS: [string, string, string] = ['промпт', 'промпта', 'промптов'];
+
+/** «в 3 разговорах». */
+const CONVERSATIONS_IN: [string, string, string] = ['разговоре', 'разговорах', 'разговорах'];
+/** What a model does with the conversations' text, by the roles it plays. */
+const roleWork = (roles: readonly ('builder' | 'judge')[]): string => roles.includes('builder')
+  ? roles.includes('judge') ? 'размечает темы, пишет и проверяет ситуации' : 'размечает темы и пишет ситуации' : 'проверяет ситуации';
+
+/** Where the conversations' text goes, and what of it looks like personal data: the owner's call, never masked by Lab. */
+function providerLines(consent: PreparationConsent): string[] {
+  const { readers, personal } = consent;
+  if (!readers.length) return [];
+  const providers = new Set(readers.map(reader => reader.provider));
+  const who = readers.map(reader => `${providers.size > 1 ? `${reader.provider} — ` : ''}модель ${reader.model} ${roleWork(reader.roles)}`);
+  const lines = [`Тексты разговоров уйдут ${providers.size > 1 ? 'провайдерам' : `провайдеру ${readers[0]!.provider}`}: ${who.join('; ')}.`];
+  const kinds = [...personal.cards ? [`номера карт — ${personal.cards}`] : [], ...personal.phones ? [`телефоны — ${personal.phones}`] : [], ...personal.emails ? [`почта — ${personal.emails}`] : []];
+  if (personal.conversations) lines.push(`В ${countText(personal.conversations, CONVERSATIONS_IN)} похоже на личные данные: ${kinds.join(', ')}; они уйдут ${providers.size > 1 ? 'провайдерам' : 'провайдеру'} как есть.`);
+  return lines;
+}
 
 /** What the preparation asks of the agent: nothing, or the one probe of its tools — a call to the agent, not to a model. */
 const agentWords = (asksAgent: boolean): string => asksAgent ? 'Lab один раз спросит агента, какие инструменты он показывает' : 'агент не запускается';
@@ -189,6 +229,7 @@ export function consentText(consent: PreparationConsent, source: string): { ques
       ...(reasons.length ? [`${pluralForm(leftCount(left), ['Не войдёт', 'Не войдут', 'Не войдут'])} в ситуации ${countText(leftCount(left), CONVERSATIONS)}${sample ? ' логов' : ''}: ${reasons.join(' · ')}.`] : []),
       ...(roles ? [roles] : []),
       ...(consent.untopiced ? [`Темы этих логов уже размечены, но ${consent.untopiced}.`] : []),
+      ...providerLines(consent),
       ...(prompts.count ? [`Промпты агента — ${countText(prompts.count, PROMPTS)}, ${Math.ceil(prompts.bytes / 1000)} КБ — читаются целиком с каждым разговором.`] : []),
       `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели на всю подготовку${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. ${REVISION_TEXT} Это потолок, а не прогноз; ${agentWords(consent.asksAgent)}.`,
     ],

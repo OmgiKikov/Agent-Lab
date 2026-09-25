@@ -67,7 +67,7 @@ export const tableMappingSchema = z.strictObject({
    * The table of masking marks the conversations are read by (masking.ts): it decides which are usable, so the sample
    * of a long sheet. A mapping confirmed before the table has none and keeps reading its import the first way.
    */
-  maskVersion: z.literal(2).optional(),
+  maskVersion: z.union([z.literal(2), z.literal(3)]).optional(),
 }).superRefine((mapping, ctx) => {
   const layout = mapping.layout;
   const columns = [mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],
