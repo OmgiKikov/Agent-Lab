@@ -12,6 +12,7 @@ import type { CallContext } from '../runtime.js';
  *                                                            wait (retry-after or backoff) ◄── refused before any answer, transient
  *                                                                                                                   ▼
  *                                                             usage recorded per request ─► text | ProviderFailure (kind, delivery, retryable)
+ *                                                                                                  | ModelCallDefect (the SDK threw: Lab's own, journaled)
  */
 
 export type Model = NonNullable<ReturnType<ModelRuntime['getModel']>>;
@@ -39,7 +40,7 @@ export interface ModelRequest {
  * judge audits ('Pi provider response incomplete: rate limit', 'Pi request deadline exceeded', …), so they stay
  * word for word; callers branch on the typed fields, never on the text.
  */
-export type ProviderFailureKind = 'rate limit' | 'overloaded' | 'insufficient credit' | 'access denied' | 'context limit'
+export type ProviderFailureKind = 'rate limit' | 'overloaded' | 'insufficient credit' | 'access denied' | 'context limit' | 'bad request'
   | 'connection failure' | 'timeout' | 'deadline' | 'length' | 'empty' | 'incomplete' | 'unavailable';
 
 /**
@@ -67,6 +68,9 @@ const KIND_DEFAULTS: Readonly<Record<ProviderFailureKind, { delivery: ProviderDe
   'insufficient credit': { delivery: 'refused', retryable: false },
   'access denied': { delivery: 'refused', retryable: false },
   'context limit': { delivery: 'refused', retryable: false },
+  // The provider refused the request as it was made (a parameter, a schema, a tool the model does not take): the same
+  // request fails the same way.
+  'bad request': { delivery: 'refused', retryable: false },
   unavailable: { delivery: 'refused', retryable: false },
   timeout: { delivery: 'cut', retryable: true },
   deadline: { delivery: 'cut', retryable: true },
@@ -91,6 +95,19 @@ export class ProviderFailure extends Error {
     this.delivery = details.delivery ?? KIND_DEFAULTS[kind].delivery;
     this.retryable = details.retryable ?? KIND_DEFAULTS[kind].retryable;
     if (details.status !== undefined) this.status = details.status;
+  }
+}
+
+/**
+ * A request that broke inside Lab or the SDK it calls, not at the provider: the SDK threw instead of answering through its
+ * stream protocol, where every provider failure arrives. Nothing here says the key, the access or the provider is at fault,
+ * so the owner is told it is Lab's own defect; the original error, with its stack, is its cause and goes to the operation's
+ * journal (CallContext.onDefect). It is never sent again: a defect repeats, and whether the request left is unknown.
+ */
+export class ModelCallDefect extends Error {
+  constructor(readonly model: string, cause: unknown) {
+    super(`Внутренняя ошибка Lab при вызове модели ${model} — дело не в доступе и не в ключе. Подробности записаны в журнал работы; повторите, а если повторится — сообщите разработчикам Lab.`, { cause });
+    this.name = 'ModelCallDefect';
   }
 }
 
@@ -167,6 +184,14 @@ function kindOfStatus(status: number): ProviderFailureKind | undefined {
   if (status === 408) return 'timeout';
   return status >= 500 ? 'overloaded' : undefined;
 }
+/**
+ * The kind of a status whose own words did not name one: a request refused as it was made (400, 422 — its words may still
+ * say the context was too long, which then decides), a model or an endpoint the provider does not have (404).
+ */
+function kindAfterWords(status: number | undefined): ProviderFailureKind | undefined {
+  if (status === 400 || status === 422) return 'bad request';
+  return status === 404 ? 'unavailable' : undefined;
+}
 
 /** What a request showed of itself besides its reply: whether its answer began, and a refused response the adapter reported. */
 export interface Observed { started: boolean; status?: number; retryAfterMs?: number }
@@ -174,7 +199,8 @@ export interface Observed { started: boolean; status?: number; retryAfterMs?: nu
 /**
  * The failure of a reply that did not stop normally. The stream protocol is the structured part: an answer that began
  * emits `start` first, a request refused before generation never does. The status comes from the adapter's
- * `onResponse` where it reports a refused response, else from the error text; the kind, from the status, else the words.
+ * `fetch` or its `onResponse` where they report a refused response, else from the error text; the kind, from the status,
+ * else the words.
  */
 export function providerFailureOf(reply: ModelReply, observed: Observed): ProviderFailure {
   if (reply.stopReason === 'length') return new ProviderFailure('length', 'Pi provider response incomplete: length');
@@ -187,7 +213,7 @@ export function providerFailureOf(reply: ModelReply, observed: Observed): Provid
   const kind = CREDIT.some(phrase => contains(words, phrase)) ? 'insufficient credit'
     : (status === undefined ? undefined : kindOfStatus(status))
       ?? PHRASES.find(([candidate, phrases]) => (candidate !== 'connection failure' || status === undefined) && phrases.some(phrase => contains(words, phrase)))?.[0]
-      ?? 'incomplete';
+      ?? kindAfterWords(status) ?? 'incomplete';
   const began = observed.started || (reply.usage?.output ?? 0) > 0;
   // No stream event does not prove non-delivery: a reset can happen after the provider accepted the request.
   const uncertain = kind === 'timeout' || kind === 'connection failure' || kind === 'incomplete' && status === undefined;
@@ -196,8 +222,9 @@ export function providerFailureOf(reply: ModelReply, observed: Observed): Provid
     { delivery, ...(status === undefined ? {} : { status }) });
 }
 
-const unavailable = (model: Model, delivery: ProviderDelivery = 'refused') => new ProviderFailure('unavailable',
-  `Запрос к ${model.provider}/${model.id} не прошёл. Проверьте доступ, права на модель и доступность провайдера.`, { delivery });
+/** No credentials for the model's provider: the request is refused before it leaves, and only this says «check access». */
+const unavailable = (model: Model) => new ProviderFailure('unavailable',
+  `Запрос к ${model.provider}/${model.id} не отправлен: Pi не нашёл действующего ключа или входа для этого провайдера. Проверьте доступ к модели.`, { delivery: 'refused' });
 
 const counted = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
 /** Tokens as the provider reported them; the cost only when it reported one for a priced model, otherwise unknown, never free. */
@@ -245,23 +272,27 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
  */
 export const PROVIDER_CONCURRENCY = 16;
 /**
- * How many times a request refused for a transient cause (a rate limit or an overload) is sent again. Nothing
- * was billed and the budget was charged once, so a repeat spends neither; it only waits. Rate limits usually clear within the
- * waits below, and a provider that stays refusing fails the step after about 15 s instead of holding it.
+ * How many times a request refused for a transient cause (a rate limit or an overload) is sent again. A refusal before
+ * any answer began is not billed — true of OpenRouter and the providers behind it as far as Lab knows, which is why the
+ * budget is charged once per call, never per repeat — so a repeat spends nothing; it only waits. Every repeat is still a
+ * request: usage.attempts counts them apart from the calls. A provider that keeps refusing fails the step after the
+ * waits below, never holds it.
  */
 export const REFUSED_RETRIES = 4;
-/** The first wait before a refused request is sent again; each next one doubles, up to RETRY_MAX_MS. */
-const RETRY_BASE_MS = 1_000;
-/** The longest wait Lab chooses itself: the four waits come to 7.5–15 s with jitter. */
-const RETRY_MAX_MS = 16_000;
+/**
+ * The waits Lab chooses itself when the provider named none, doubling from the first, half fixed and half random so that
+ * requests refused together do not come back together. An overload clears in seconds: 0.5–1, 1–2, 2–4, 4–8 s, 7.5–15 s in
+ * all. A rate limit is counted per minute by most providers, so its waits reach into the next minute: 2–4, 4–8, 8–16,
+ * 16–32 s, 30–60 s in all.
+ */
+const RETRY_BASE_MS: Readonly<Record<'rate limit' | 'other', number>> = { 'rate limit': 4_000, other: 1_000 };
 /** A provider's own retry-after is honoured up to this; a longer one is not waited out, and the request stays refused. */
 const RETRY_AFTER_MAX_MS = 60_000;
 
 /** The wait before retry number `retry + 1`, or undefined when the provider asked for longer than Lab waits. */
-function retryDelay(retry: number, retryAfterMs: number | undefined): number | undefined {
+function retryDelay(kind: ProviderFailureKind, retry: number, retryAfterMs: number | undefined): number | undefined {
   if (retryAfterMs !== undefined) return retryAfterMs <= RETRY_AFTER_MAX_MS ? retryAfterMs : undefined;
-  // Half fixed, half random: requests refused together do not come back together.
-  const ceiling = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** retry);
+  const ceiling = RETRY_BASE_MS[kind === 'rate limit' ? 'rate limit' : 'other'] * 2 ** retry;
   return ceiling / 2 + Math.random() * ceiling / 2;
 }
 
@@ -324,6 +355,37 @@ async function read(stream: Stream, observed: Observed): Promise<ModelReply> {
   return stream.result();
 }
 
+/** A defect goes to the operation's journal; a call made outside any operation leaves it on the error output instead. */
+function reportDefect(ctx: CallContext, defect: ModelCallDefect): void {
+  if (ctx.onDefect) { ctx.onDefect(defect); return; }
+  const cause = defect.cause;
+  process.stderr.write(`Agent Lab: внутренняя ошибка при вызове модели ${defect.model}: ${cause instanceof Error ? cause.stack ?? `${cause.name}: ${cause.message}` : String(cause)}\n`);
+}
+
+/** Notes the status and the retry-after of a refused response; an answered one says nothing about a failure. */
+function note(observed: Observed, status: number, headers: Record<string, string>): void {
+  if (status < 400) return;
+  observed.status = status;
+  const after = retryAfterOf(headers);
+  if (after !== undefined) observed.retryAfterMs = after;
+}
+
+/*
+ * pi-ai reports a response to `onResponse` only once its SDK's request resolved, which a refused one never does: its
+ * adapters call it after a 2xx. A 429's retry-after therefore never reached Lab that way. The adapters below take the
+ * `fetch` of the request options (a documented option of pi-ai's ProviderRequestOptions, which they hand their SDK
+ * client or call themselves); through it Lab reads the status and the retry-after of a refused response on its way to
+ * the SDK, and changes nothing else. Google's adapters refuse a custom fetch and Bedrock's does not use one: there a
+ * refusal is read from the reply's error text, and Lab waits by its own schedule. The gateway (giga) reports refusals
+ * to `onResponse` itself. Review this list when pi-ai is upgraded.
+ */
+const OBSERVED_FETCH_APIS: ReadonlySet<string> = new Set(['openai-completions', 'openai-responses', 'azure-openai-responses', 'anthropic-messages', 'mistral-conversations']);
+const observingFetch = (observed: Observed): typeof globalThis.fetch => async (input, init) => {
+  const response = await globalThis.fetch(input, init);
+  note(observed, response.status, Object.fromEntries(response.headers));
+  return response;
+};
+
 /** One request under its own deadline; its usage is recorded exactly once, also when it fails. */
 async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, ctx: CallContext, onIncomplete?: (text: string) => void): Promise<Sent> {
   const deadline = new AbortController();
@@ -331,6 +393,7 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
   const signal = AbortSignal.any([ctx.signal, deadline.signal]);
   const observed: Observed = { started: false };
   let reply: ModelReply | undefined;
+  let defect: ModelCallDefect | undefined;
   try {
     const stream = runtime.streamSimple(model, { systemPrompt: request.system, messages: request.messages }, {
       signal, timeoutMs: ctx.timeoutMs, maxRetries: 0, transport: 'sse',
@@ -338,21 +401,20 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
       ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
       ...(request.reasoning ? { reasoning: 'medium' as const } : {}),
       ...(request.responseFormat ? { onPayload: (payload: unknown) => ({ ...(payload as Record<string, unknown>), response_format: request.responseFormat }) } : {}),
-      onResponse: response => {
-        if (response.status < 400) return;
-        observed.status = response.status;
-        const after = retryAfterOf(response.headers);
-        if (after !== undefined) observed.retryAfterMs = after;
-      },
+      ...(OBSERVED_FETCH_APIS.has(model.api) ? { fetch: observingFetch(observed) } : {}),
+      onResponse: response => note(observed, response.status, response.headers),
     });
     reply = await untilAborted(read(stream, observed), signal);
-  } catch {
+  } catch (error) {
     // Every provider failure reaches the stream protocol as a reply; only an abort or a defect outside it throws.
+    if (!signal.aborted) defect = new ModelCallDefect(`${model.provider}/${model.id}`, error);
   } finally { clearTimeout(timer); }
   if (signal.aborted || !reply) {
-    ctx.addUsage(usageOf(reply, model));
+    ctx.addUsage({ ...usageOf(reply, model), attempts: 1 });
     if (signal.aborted) throw signal.reason;
-    return { ok: false, failure: unavailable(model, 'cut') };
+    defect ??= new ModelCallDefect(`${model.provider}/${model.id}`, new Error('The SDK returned no reply'));
+    reportDefect(ctx, defect);
+    throw defect;
   }
   const text = reply.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
   const failure = reply.stopReason !== 'stop' ? providerFailureOf(reply, observed)
@@ -360,7 +422,7 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
   const usage = usageOf(reply, model);
   // A request refused before any answer generated nothing: its cost is known, and it is zero.
   if (failure?.delivery === 'refused' && usage.inputTokens === 0 && usage.outputTokens === 0) usage.costUsd = 0;
-  ctx.addUsage(usage);
+  ctx.addUsage({ ...usage, attempts: 1 });
   if (!failure) return { ok: true, text, message: reply };
   if (reply.stopReason !== 'stop' && text.trim()) onIncomplete?.(text);
   return { ok: false, failure, ...(observed.retryAfterMs === undefined ? {} : { retryAfterMs: observed.retryAfterMs }) };
@@ -387,7 +449,7 @@ export async function callModel(runtime: ModelRuntime, model: Model, request: Mo
       const sent = await send(runtime, model, request, ctx, onIncomplete);
       if (sent.ok) return { text: sent.text, message: sent.message };
       const { failure } = sent;
-      const wait = failure.delivery === 'refused' && failure.retryable && retry < REFUSED_RETRIES ? retryDelay(retry, sent.retryAfterMs) : undefined;
+      const wait = failure.delivery === 'refused' && failure.retryable && retry < REFUSED_RETRIES ? retryDelay(failure.kind, retry, sent.retryAfterMs) : undefined;
       if (wait === undefined) throw failure;
       // The place is kept while waiting: a provider that refuses gets fewer requests, not more.
       await pause(wait, ctx.signal);

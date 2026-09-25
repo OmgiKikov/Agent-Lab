@@ -116,6 +116,11 @@ const minutesSince = (iso: string | null | undefined, now: number): string | und
 };
 /** Spending so far, only when there is some: «$0.14». */
 const spent = (record: Experiment): string | undefined => record.mode !== 'demo' && record.usage.costUsd ? `$${record.usage.costUsd.toFixed(2)}` : undefined;
+/** Requests a provider refused and Lab sent again, only when there were some: «3 повтора после отказов провайдера». */
+const retried = (record: Experiment): string | undefined => {
+  const repeats = (record.usage.attempts ?? 0) - record.usage.calls;
+  return repeats > 0 ? `${countText(repeats, ['повтор', 'повтора', 'повторов'])} после отказов провайдера` : undefined;
+};
 
 /**
  * The one progress row of long work (docs/design/ui-spec.md §4.6), from the stored record only — finished and planned
@@ -128,12 +133,12 @@ export function progressText(record: Experiment, now = Date.now()): string {
     const total = progress ? progress.processed.length + progress.pending.length + progress.excluded.length : 0;
     const done = progress ? progress.processed.length + progress.excluded.length : 0;
     const step = total ? `разобрано ${done} из ${countText(total, CONVERSATIONS_OF)}` : oneLine(record.message);
-    return [`Готовлю ситуации: ${step}`, minutesSince(record.createdAt, now), spent(record)].filter(Boolean).join(' · ');
+    return [`Готовлю ситуации: ${step}`, minutesSince(record.createdAt, now), spent(record), retried(record)].filter(Boolean).join(' · ');
   }
   // A check of the draft's situations, or values proposed for one of them: the line its work says.
-  if (record.phase === 'checking') return [oneLine(record.message), spent(record)].filter(Boolean).join(' · ');
+  if (record.phase === 'checking') return [oneLine(record.message), spent(record), retried(record)].filter(Boolean).join(' · ');
   const planned = plannedTrials(record), done = record.trials.length;
-  return [`Прогон: ${done} из ${countText(planned, CONVERSATIONS_OF)}`, minutesSince(record.reviewedAt, now), spent(record)].filter(Boolean).join(' · ');
+  return [`Прогон: ${done} из ${countText(planned, CONVERSATIONS_OF)}`, minutesSince(record.reviewedAt, now), spent(record), retried(record)].filter(Boolean).join(' · ');
 }
 
 /** After a stop or an interruption: what is kept and what has to be run again. */

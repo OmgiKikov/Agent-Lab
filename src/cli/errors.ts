@@ -14,12 +14,13 @@ import { UsageError } from './args.js';
 
 const PROVIDER: Record<ProviderFailureKind, string> = {
   'rate limit': 'Провайдер модели ограничил частоту запросов. Подождите минуту и повторите.',
-  overloaded: 'Провайдер модели перегружен или временно недоступен. Повторите через минуту.',
+  overloaded: 'Провайдер модели перегружен или временно недоступен — повторите позже.',
   'insufficient credit': 'У провайдера модели закончились средства. Пополните счёт или выберите другую модель в задаче.',
   'access denied': 'Провайдер модели отказал в доступе. Проверьте ключ и права на модель: agent-lab status.',
   timeout: 'Модель не ответила вовремя. Повторите позже.',
   'connection failure': 'Нет связи с провайдером модели. Проверьте сеть и повторите.',
   'context limit': 'Запрос не поместился в окно модели. Выберите модель с окном больше или дайте меньше материалов.',
+  'bad request': 'Провайдер модели отверг запрос в таком виде — повтор не поможет. Выберите другую модель в задаче или сообщите разработчикам Lab.',
   incomplete: 'Модель оборвала ответ. Повторите.',
   deadline: 'Модель не ответила за отведённое время. Повторите позже.',
   unavailable: 'Модель недоступна. Проверьте ключ и модель: agent-lab status.',
@@ -96,7 +97,7 @@ function fileText(error: SystemError, context: ErrorContext): string | undefined
 /** The owner's words for why a command failed; `detail` is the original when the failure is a defect of Lab. */
 export function errorText(error: unknown, context: ErrorContext): { text: string; detail?: string } {
   if (error instanceof UsageError) return { text: error.message };
-  if (error instanceof LockedError) return { text: 'Папку данных сейчас ведёт другой процесс Agent Lab — например, открытый чат. Смотреть можно (summary, export); запуск и изменения — после его завершения.' };
+  if (error instanceof LockedError) return { text: `Папку данных ${error.directory || context.directory} сейчас ведёт другой процесс Agent Lab — например, открытый чат или команда agent-lab. Смотреть можно (summary, export); запуск и изменения — после его завершения. Если такого процесса точно нет, удалите файл ${error.lockFile} и повторите.` };
   if (error instanceof LibraryConflict || error instanceof CommandRefused || error instanceof UnknownReference) return { text: error.message };
   if (error instanceof Stopped) return { text: STOPPED[error.reason] };
   if (error instanceof ProviderFailure) return { text: error.kind === 'unavailable' && forOwner(error.message) ? error.message : PROVIDER[error.kind] };

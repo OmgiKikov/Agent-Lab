@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 /*
  * Failures a caller reacts to by kind, not by reading the message. The messages themselves stay
  * as they were: people read them, and records keep them as text.
@@ -22,9 +24,17 @@ export class UnknownReference extends Error {
   constructor(readonly what: 'card' | 'fact' | 'expectation' | 'choice' | 'requirement' | 'scenario', readonly allowed: string[], message: string) { super(message); }
 }
 
-/** Another Agent Lab process holds the writer lock of this data directory. */
+/**
+ * Another Agent Lab process holds the writer lock of the data folder `directory`, and Lab could not prove it dead
+ * (folder-lock.ts). The message names the folder and the lock file, and how a person clears a lock whose process is gone.
+ */
 export class LockedError extends Error {
-  constructor() { super('This data directory is already open in another Agent Lab instance. Просмотр и экспорт остаются доступны.'); }
+  readonly lockFile: string;
+  constructor(readonly directory = '') {
+    const lockFile = join(directory || '.agent-lab', '.lock');
+    super(`Папку данных ${directory || '.agent-lab'} сейчас ведёт другой процесс Agent Lab — например, открытый чат или команда agent-lab. Если такого процесса точно нет, удалите файл ${lockFile} и повторите.`);
+    this.lockFile = lockFile;
+  }
 }
 
 /** How work was stopped before it ended by itself: the owner asked, Lab was closing, its time or its budget ran out. */

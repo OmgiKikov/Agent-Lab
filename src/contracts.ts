@@ -359,7 +359,12 @@ const preparationSchema = z.strictObject({
 export interface Preparation { requirements: Requirement[]; questions: string[]; scenarios: Scenario[] }
 export interface Revision { id: string; parentId: string | null; spec: AgentSpec; hypothesis: string; createdAt: string }
 export type Outcome = 'pass' | 'fail' | 'ungraded' | 'invalid' | 'cancelled';
-export interface Usage { calls: number; inputTokens: number; outputTokens: number; costUsd: number | null }
+/**
+ * `calls`: the model calls charged to budgets. `attempts`: the requests those calls sent to providers — more than the calls
+ * when a provider refused one before answering and it was sent again (llm/model-call.ts); absent in records made before
+ * it was counted, and for calls that send nothing (the teaching example).
+ */
+export interface Usage { calls: number; inputTokens: number; outputTokens: number; costUsd: number | null; attempts?: number }
 export const emptyUsage = (): Usage => ({ calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });
 /** Adds `delta` into `target`. An unknown cost stays unknown: one call without a price makes the sum unknown. */
 export function addUsage(target: Usage, delta: Omit<Usage, 'calls'> & { calls?: number }): void {
@@ -367,6 +372,7 @@ export function addUsage(target: Usage, delta: Omit<Usage, 'calls'> & { calls?: 
   target.inputTokens += delta.inputTokens;
   target.outputTokens += delta.outputTokens;
   target.costUsd = target.costUsd === null || delta.costUsd === null ? null : target.costUsd + delta.costUsd;
+  if (delta.attempts) target.attempts = (target.attempts ?? 0) + delta.attempts;
 }
 export interface TraceEvent {
   seq: number; type: 'user' | 'assistant' | 'simulator' | 'observation' | 'retrieval' | 'tool_call' | 'tool_result' | 'error';
@@ -611,7 +617,8 @@ export interface Experiment {
   discovery?: unknown;
   calibration?: Calibration; // the same situations judged on their recorded conversations (card/calibration.ts); never moves the number
 }
-export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable() });
+export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable(),
+  attempts: z.number().int().nonnegative().optional() });
 const revisionSchema = z.strictObject({ id: text, parentId: text.nullable(), spec: agentSchema, hypothesis: z.string(), createdAt: text });
 const traceEventSchema = z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'observation', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() });
 const brokenConversationSchema = z.strictObject({ trialId: identifier, cause: z.enum(INVALID_CAUSES), reason: z.string(), events: z.array(traceEventSchema), elapsedMs: z.number().finite().nonnegative(), usage: usageSchema,

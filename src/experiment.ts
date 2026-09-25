@@ -1,4 +1,3 @@
-import { addCaveat } from './caveats.js';
 import type { LogVersionCommand, LogVersionJournal } from './card/calibration.js';
 import type { CardEvidence } from './card/checks.js';
 import type { HostGrant, Prepared, PreparedLogVersion, Via } from './card/commands.js';
@@ -13,7 +12,8 @@ import { captureGeneratorEvidence } from './generator-evidence.js';
 import type { Lab } from './lab/context.js';
 import * as library from './lab/library.js';
 import { OperationRunner, type Follower } from './lab/operation.js';
-import { isRunning, moveTo, restartAt } from './phases.js';
+import { isRunning } from './phases.js';
+import { markInterrupted } from './lab/interrupted.js';
 import * as review from './lab/review.js';
 import * as judgeCheck from './lab/judge-check.js';
 import type { JudgeCheck, JudgeCheckPlan } from './judge-check.js';
@@ -50,8 +50,8 @@ export class ExperimentLab {
 
   /**
    * Opens the folder as its writer. A record a previous process left running goes where its phase's restart rule says
-   * (phases.ts), its evidence kept: a draft whose check was cut short is the owner's draft again, anything else is
-   * marked interrupted.
+   * (phases.ts), its evidence kept and the calls it sent after its last checkpoint counted (lab/interrupted.ts): a draft
+   * whose check was cut short is the owner's draft again, anything else is marked interrupted.
    */
   init(): Promise<void> {
     if (this.operations.closing) return Promise.reject(new Error('Лаборатория закрывается.'));
@@ -63,13 +63,8 @@ export class ExperimentLab {
       // The agents a Lab killed outright left running end now; this Lab's own are kept in the folder it writes (agent-processes.ts).
       await adoptAgentRegistry(this.store.directory);
       for (const record of await this.store.list()) if (isRunning(record.phase)) {
-        const next = restartAt(record);
-        record.message = next === 'review' ? 'Предыдущий процесс остановился во время проверки ситуаций. Черновик сохранён; проверку можно повторить.'
-          : 'Предыдущий процесс остановился. Собранные данные сохранены.';
-        moveTo(record, next);
-        record.usage.costUsd = null;
-        addCaveat(record, { code: 'usage_incomplete' });
-        record.error = record.message; record.updatedAt = new Date().toISOString(); await this.store.save(record);
+        markInterrupted(record, await this.store.sentCalls(record.id));
+        record.updatedAt = new Date().toISOString(); await this.store.save(record);
       }
       this.operations.open();
     } catch (error) { await this.store.close(); throw error; }

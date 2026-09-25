@@ -177,7 +177,7 @@ export function buildChatRequest(modelId: string, context: GigaContext, options:
   // Pi's thinking level is always off here (the catalog models are declared without reasoning), and it is sent as an
   // explicit ban on reasoning. The owner's test environment (IFT) accepts `off`, though the published specification lists
   // only `medium`; a stricter gateway refuses such a request with 422, which the provider reports as a rejected request
-  // (GigaRequestError). The catalog does not say which models reason (see parseCatalog), so the parameter cannot be
+  // (a refusal model-call.ts reads as 'bad request'). The catalog does not say which models reason (see parseCatalog), so the parameter cannot be
   // limited to them, and dropping it would bring the spent limit back on the gateway that works today.
   modelOptions.reasoning = { effort: options.reasoning ? 'medium' : 'off' };
   const request: GigaRequest = { model: modelId, messages };

@@ -89,12 +89,13 @@ const STOP_LABELS: Readonly<Record<string, Stopped['reason']>> = {
 };
 const PROVIDER: Record<ProviderFailureKind, string> = {
   'rate limit': 'Провайдер модели ограничил частоту запросов. Подождите минуту и повторите.',
-  overloaded: 'Провайдер модели перегружен или временно недоступен. Повторите через минуту.',
+  overloaded: 'Провайдер модели перегружен или временно недоступен — повторите позже.',
   'insufficient credit': 'У провайдера модели закончились средства. Пополните счёт или выберите другую модель (/model).',
   'access denied': 'Провайдер модели отказал в доступе. Проверьте ключ и права на модель (/login).',
   timeout: 'Модель не ответила вовремя. Повторите позже.',
   'connection failure': 'Нет связи с провайдером модели. Проверьте сеть и повторите.',
   'context limit': 'Запрос не поместился в окно модели. Выберите модель с окном больше (/model) или меньше материалов.',
+  'bad request': 'Провайдер модели отверг запрос в таком виде — повтор не поможет. Выберите другую модель (/model) или сообщите разработчикам Lab.',
   incomplete: 'Модель оборвала ответ. Повторите.',
   deadline: 'Модель не ответила за отведённое время. Повторите позже.',
   unavailable: 'Модель недоступна. Проверьте ключ и права на модель (/login, /model).',
@@ -154,7 +155,7 @@ export const UNKNOWN_ERROR = 'Не получилось из-за внутрен
 /** The owner's words for an error Lab knows; undefined for anything else. */
 function knownText(error: unknown): string | undefined {
   if (error instanceof NeedsOwner) return error.ownerText;
-  if (error instanceof LockedError) return 'Другая сессия Pi сейчас ведёт работу в этой папке. Смотреть можно здесь; изменения и запуск — после её завершения.';
+  if (error instanceof LockedError) return `Папку данных ${error.directory} сейчас ведёт другой процесс Agent Lab — другая сессия Pi или команда agent-lab. Смотреть можно здесь; изменения и запуск — после его завершения. Если такого процесса точно нет, удалите файл ${error.lockFile} и повторите.`;
   if (error instanceof StaleRevisionError) return error.message;
   if (error instanceof LibraryConflict) return 'Ситуации изменились. Откройте их заново и повторите по свежему состоянию.';
   if (error instanceof CommandRefused || error instanceof UnknownReference) return error.message;
