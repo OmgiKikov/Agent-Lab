@@ -6,7 +6,7 @@ import { headlineRule, recordedExpectationResult, type Expectation } from '../sr
 import { judgedScenario } from '../src/card/legacy-v1.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
-import { accuracyParts, comparisonRows, noRuleText, saidText, situationLabel, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
+import { accuracyParts, comparisonRows, noRuleText, saidText, situationLabel, situationOutcomeText, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
 import { agentLine } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
 import { clip, oneLine } from '../src/text.js';
@@ -225,15 +225,22 @@ export function failureFeed(record: Experiment, view: ResultView, index: number)
   };
 }
 
-/** A recorded conversation: the situation and how it ended in the summary; the turns, the judge and the tools on expand. */
-export function dialogueFeed(record: Experiment, trial: Trial): Feed {
+/**
+ * A recorded conversation of a situation: the situation with its verdict as the result counts it (ResultView.cards —
+ * never this attempt's own outcome) and the agent's last reply in the summary; the turns, the judge and the tools on
+ * expand. An attempt that could not be measured says so apart, under a verdict other attempts may have decided.
+ */
+export function dialogueFeed(record: Experiment, view: ResultView, trial: Trial): Feed {
   const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
+  const card = view.cards.find(item => item.scenarioId === trial.scenarioId);
   const reply = trial.events.filter(event => event.type === 'assistant' && oneLine(event.text ?? '')).at(-1);
-  const measured = trial.outcome === 'pass' || trial.outcome === 'fail' || trial.outcome === 'ungraded';
+  const unusable = trial.outcome === 'invalid' || trial.outcome === 'cancelled';
+  const verdict = card ? situationOutcomeText(card) : 'не измерено';
   return {
-    tone: measured ? 'success' : 'warning',
-    rows: [row(`${oneLine(scenario?.title ?? 'Ситуация')} — ${OUTCOME_WORD[trial.outcome] ?? trial.outcome}${record.settings.repeats > 1 ? ` · попытка ${trial.repeat + 1}` : ''}`, trial.outcome === 'fail' ? 'error' : undefined, true),
-      ...(measured ? [] : [row(`Почему не измерено: ${oneLine(trial.reason)}`, 'warning')]),
+    tone: card?.outcome === 'pass' || card?.outcome === 'fail' ? 'success' : 'warning',
+    rows: [row(`${card ? `${situationLabel(view, card.scenarioId)}  ` : ''}${oneLine(scenario?.title ?? 'Ситуация')} — ${verdict}${record.settings.repeats > 1 ? ` · попытка ${trial.repeat + 1}` : ''}`,
+      card?.outcome === 'fail' ? 'error' : undefined, true),
+      ...(unusable ? [row(`Эта попытка не измерена: ${oneLine(trial.reason)}`, 'warning')] : []),
       ...(reply ? [row(`Последний ответ агента: «${clip(oneLine(reply.text), 200)}»`, 'muted')] : [])],
     more: [...turnRows(trial), ...judgedRows(record, trial)], expand: 'весь разговор',
   };

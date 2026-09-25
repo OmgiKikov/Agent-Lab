@@ -7,7 +7,7 @@ import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
 import {
   accuracyParts, alarmRow, causeItems, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, noRuleText, realityParts, reasonLabel,
-  operabilityText, saidText, scenarioRows, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
+  operabilityText, saidText, scenarioRows, situationOutcomeText, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { briefFields, situationBrief } from './card/view.js';
@@ -62,12 +62,10 @@ const example = (failure: FailureExplanation): Example => {
   return { situation: oneLine(failure.title), expected: failure.expected ?? 'не записано в ситуации', said: saidOf(failure), rule: rule ? `«${rule.quote}»` : null };
 };
 
-function chipOf(card: ResultCard, view: ResultView): CardItem['chip'] {
+function chipOf(card: ResultCard): CardItem['chip'] {
   if (card.control) return card.outcome === 'pass' ? { text: 'контроль ✓', tone: 'accent' } : { text: card.outcome === 'fail' ? 'контроль ✗' : 'контроль ?', tone: 'err' };
-  if (card.outcome === 'pass') return { text: '✓ справился', tone: 'ok' };
-  if (card.outcome === 'fail') return { text: '✗ не справился', tone: 'err' };
-  const reason = view.notMeasured.reasons.find(item => item.scenarioIds.includes(card.scenarioId));
-  return { text: reason ? `? не измерено — ${reasonLabel(reason, READER)}` : '? ещё проверяется', tone: 'warn' };
+  const text = situationOutcomeText(card, READER);
+  return card.outcome === 'pass' ? { text: `✓ ${text}`, tone: 'ok' } : card.outcome === 'fail' ? { text: `✗ ${text}`, tone: 'err' } : { text: `? ${text}`, tone: 'warn' };
 }
 
 /** «Почему ошибается»: the causes every surface names (causeItems), each with up to three of its failures quoted, and how many more there are. */
@@ -199,7 +197,7 @@ export function runReport(bundle: EvidenceBundle): Report {
     const failure = failed.get(card.scenarioId);
     // The same projection every surface reads the situation from (card/view.ts), its lines in the same order.
     const brief = situationBrief(record, scenario, bundle.dialogueNumbers, READER);
-    return [{ number: numbers.get(card.scenarioId)!, brief, client: briefFields(brief), chip: chipOf(card, view),
+    return [{ number: numbers.get(card.scenarioId)!, brief, client: briefFields(brief), chip: chipOf(card),
       dialogue: trialTurns(failure ? trials.get(failure.trialId) : byScenario(card.scenarioId)[0]) }];
   });
   const failures: FailureItem[] = view.failures.map(failure => {

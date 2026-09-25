@@ -9,7 +9,7 @@ import type { FailureExplanation } from './explain.js';
 import type { JudgeCheckSummary } from './judge-check.js';
 import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
-import { NOT_MEASURED_ABOUT_OWNER, type BrokenPart, type ExamWithheld, type NextStep, type ResultView, type TrustIssue } from './result-view.js';
+import { NOT_MEASURED_ABOUT_OWNER, NOT_MEASURED_TEXT, type BrokenPart, type ExamWithheld, type NextStep, type ResultCard, type ResultView, type TrustIssue } from './result-view.js';
 import type { NotMeasuredCode } from './run.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import { oneLine } from './text.js';
@@ -127,6 +127,16 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
 export function accuracyRow(view: ResultView): ResultRow {
   const { lead, value, tail, level } = accuracyParts(view);
   return { role: `accuracy:${level}`, indent: 0, text: [lead, value, tail].filter(Boolean).join(' ') };
+}
+
+/**
+ * A situation's verdict as the result counts it (deriveRun → ResultView.cards), in words: «справился», «не справился»,
+ * «не измерено — агент не ответил», «ещё проверяется». Every surface that names one situation's outcome — the report's
+ * chip, the chat's conversation of a situation — says these words, never the outcome of one of its attempts.
+ */
+export function situationOutcomeText(card: Pick<ResultCard, 'outcome' | 'reason'>, reader: Reader = 'owner'): string {
+  if (card.outcome === 'pass' || card.outcome === 'fail') return VERDICT_WORD[card.outcome];
+  return card.reason && card.reason !== 'in_progress' ? `не измерено — ${reasonLabel({ code: card.reason, label: NOT_MEASURED_TEXT[card.reason] }, reader)}` : 'ещё проверяется';
 }
 
 /** Why a situation was not measured, for its reader: the reasons that name the owner are said about the owner on a page for others. */
