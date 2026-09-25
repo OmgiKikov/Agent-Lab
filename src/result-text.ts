@@ -80,6 +80,8 @@ export const noErrorsText = (decided: number, unmeasured = 0): string => unmeasu
 const SITUATIONS_OF: [string, string, string] = ['ситуации', 'ситуаций', 'ситуаций'];
 /** Genitive after «из»: «из 1 разговора», «из 5 разговоров». */
 const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
+/** A conversation «до» and the same one «после», after «из»: «из 1 пары разговоров», «из 5 пар разговоров». */
+const PAIRS_OF: [string, string, string] = ['пары разговоров', 'пар разговоров', 'пар разговоров'];
 const ERRORS: [string, string, string] = ['ошибка', 'ошибки', 'ошибок'];
 const PASSES: [string, string, string] = ['успех', 'успеха', 'успехов'];
 const TOPICS: [string, string, string] = ['тема', 'темы', 'тем'];
@@ -874,22 +876,28 @@ export function comparisonRows(comparison: RunComparison, before: Pick<Experimen
   options: { reader?: Reader; selected?: boolean; now?: Date } = {}): ResultRow[] {
   const owner = (options.reader ?? 'owner') === 'owner';
   const version = before.targetVersion ?? before.targetRelease;
-  const base = options.selected ? 'База выбрана вручную' : owner ? `Сравнение с прогоном ${whenText(before.createdAt, options.now)}` : 'Сравнение с прошлым прогоном';
-  const { coverage, fixed, regressed, unchanged, incomparable } = comparison;
-  const counts = [`Сравнимо ${coverage.validPairs} из ${countText(coverage.plannedPairs, CONVERSATIONS_OF)}`, `исправлено ${fixed.length}`, `сломалось ${regressed.length}`,
-    `без изменений ${unchanged.passing + unchanged.failing}`];
+  const base = options.selected ? 'Сравнение с прогоном, выбранным вручную' : owner ? `Сравнение с прогоном ${whenText(before.createdAt, options.now)}` : 'Сравнение с прошлым прогоном';
+  const { coverage, fixed, regressed, incomparable } = comparison;
+  // The answer speaks in situations; how much could be compared, in pairs of conversations — each unit named where it is
+  // used. A pair measured in both runs whose verdict nobody decided is not compared either: it is listed below.
+  const compared = comparison.pairs.filter(pair => pair.change !== 'unknown').length;
+  const pairs = `Сравнимо ${compared} из ${countText(coverage.plannedPairs, PAIRS_OF)} «до» и «после»`;
   const rows: ResultRow[] = [
-    { role: comparison.comparable ? 'item' : 'trust:small', indent: 0, text: `${base}${version ? ` — версия ${version}` : ''}. ${comparison.headline}` },
-    { role: 'muted', indent: 0, text: counts.join(' · '), parts: counts },
+    // What is compared: the same situations, run again — said only where the runs can be compared at all.
+    { role: comparison.comparable ? 'item' : 'trust:small', indent: 0, text: `${base}${version ? ` (версия ${version})` : ''}${comparison.comparable ? ' на тех же ситуациях' : ''}. ${comparison.headline}` },
+    { role: 'muted', indent: 0, text: pairs },
     ...regressed.map(item => ({ role: 'failed' as const, indent: 2, text: `Сломалось: ${oneLine(item.title)}` })),
     ...fixed.map(item => ({ role: 'good' as const, indent: 2, text: `Исправлено: ${oneLine(item.title)}` })),
   ];
   if (!owner) return comparison.versionUnknown ? [...rows, { role: 'muted', indent: 0, text: VERSION_UNKNOWN_NOTE }] : rows;
-  // Runs that could not be compared at all share one reason — the notes below —, so their situations are named once, without it.
+  // A pair that could not be compared is said in pairs, with its reason; runs that could not be compared at all share
+  // one reason — the notes below —, so their situations are named once, in situations, without it.
   const repeats = incomparable.some(item => item.repeat > 0);
-  const pairs = (comparison.comparable ? incomparable.map(item => `${oneLine(item.title)}${repeats ? ` (попытка ${item.repeat + 1})` : ''} — ${oneLine(item.reason)}`)
-    : [...new Set(incomparable.map(item => oneLine(item.title)))]).map(text => ({ role: 'item:muted' as const, indent: 2, text: `Несравнимо: ${text}` }));
-  return [...rows, ...pairs,
+  const lower = (text: string) => text.charAt(0).toLocaleLowerCase('ru') + text.slice(1);
+  const unpaired = comparison.comparable
+    ? incomparable.map(item => `Не сравнить пару разговоров «${oneLine(item.title)}»${repeats ? `, попытка ${item.repeat + 1}` : ''}: ${lower(oneLine(item.reason))}`)
+    : [...new Set(incomparable.map(item => `Не сравнивалась ситуация «${oneLine(item.title)}»`))];
+  return [...rows, ...unpaired.map(text => ({ role: 'item:muted' as const, indent: 2, text })),
     ...(comparison.notes.length ? [{ role: 'heading' as const, indent: 0, text: 'Оговорки' }, ...comparison.notes.map(note => ({ role: 'muted' as const, indent: 2, text: note }))] : []),
     ...(comparison.versionUnknown ? [{ role: 'next:first' as const, indent: 0, text: 'Дальше: назовите версию агента при запуске — тогда повтор покажет, что изменила новая версия.' }] : [])];
 }
