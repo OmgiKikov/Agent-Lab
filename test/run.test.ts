@@ -3,11 +3,11 @@ import { test } from 'node:test';
 import { z } from 'zod';
 import { emptyUsage, settingsSchema, type Experiment, type HumanReview, type Trial } from '../src/contracts.js';
 import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type MetricAssessment } from '../src/assessment.js';
-import { Stopped } from '../src/errors.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
 import { humanOverride } from '../src/outcomes.js';
 import { buildResultView, exitCodeOf } from '../src/result-view.js';
-import { assessmentFailureOf, CODE_ONLY_ASSESSMENT, deriveRun, invalidCauseOf, judgeBasis, judgeFailure, NOT_MEASURED_CODES, SERVICE_REPLY_REASON } from '../src/run.js';
+import { assessmentFailureOf, CODE_ONLY_ASSESSMENT, deriveRun, invalidCauseOf, judgeBasis, NOT_MEASURED_CODES, SERVICE_REPLY_REASON } from '../src/run.js';
+import * as runModule from '../src/run.js';
 
 const world = { records: {}, writableFields: [], transientFailures: 0 };
 type Card = Experiment['scenarios'][number];
@@ -212,20 +212,6 @@ test('assessmentFailureOf: the typed failure wins; an older record’s label dec
   for (const [assessmentError, expected] of legacy) assert.equal(assessmentFailureOf({ assessmentError }), expected, assessmentError);
 });
 
-test('judgeFailure: an aborted signal or a Stopped error is a stop whatever the words; otherwise the label decides', () => {
-  const live = new AbortController().signal;
-  assert.equal(judgeFailure(new Error('Judge response rejected; original responses and errors are preserved in judgeAudit'), AbortSignal.abort()), 'stopped');
-  assert.equal(judgeFailure(new Error('Pi request deadline exceeded'), AbortSignal.abort()), 'stopped');
-  assert.equal(judgeFailure(new Stopped('budget', 'Model call budget exhausted.'), live), 'stopped');
-  assert.equal(judgeFailure(new Stopped('cancelled', 'Judge response rejected'), live), 'stopped', 'a stop is known by its type, never by its words');
-  assert.equal(judgeFailure(new Error('Metric assessment cancelled'), live), 'stopped');
-  assert.equal(judgeFailure(new Error('Pi provider response incomplete: rate limit'), live), 'unavailable');
-  assert.equal(judgeFailure(new Error('Pi request deadline exceeded'), live), 'unavailable');
-  assert.equal(judgeFailure('Запрос к openrouter/x не прошёл. …', live), 'unavailable', 'a thrown string is read like a message');
-  assert.equal(judgeFailure(new Error(ZOD_TEXT), live), 'rejected');
-  assert.equal(judgeFailure(new Error(CODE_ONLY_ASSESSMENT), live), 'code_only');
-});
-
 test('judgeBasis reads the judge’s own fixed sentences: a split vote, an unsupported goal, or a judgment', () => {
   assert.equal(judgeBasis({ metricId: GOAL, rationale: SPLIT }), 'split');
   assert.equal(judgeBasis({ metricId: 'prompt_compliance', rationale: SPLIT }), 'split');
@@ -262,6 +248,23 @@ test('several reasons on one situation: the earlier code of NOT_MEASURED_CODES i
   assert.equal(reasonOf({ assessmentError: 'Pi request deadline exceeded' }, { assessmentError: 'Judge response rejected; original responses and errors are preserved in judgeAudit' }), 'judge_error');
   assert.equal(reasonOf({ assessmentFailure: 'stopped', assessmentError: 'x' }, { assessmentFailure: 'unavailable', assessmentError: 'y' }), 'judge_unavailable');
   assert.equal(reasonOf({ outcome: 'invalid', reason: 'ответ испытуемого: HTTP 500', assessments: undefined }, { assessmentError: 'Pi request deadline exceeded' }), 'agent_error');
+});
+
+test('the reason of a situation without a verdict holds on every path: a repeat still coming, attempts that are not the plan, nothing judged', () => {
+  // A run still going: the planned second repeat is on its way — the situation waits, it is not «запись разговоров неполная».
+  const going = run([card('c')], [attempt('c')], { ...twoRepeats, phase: 'evaluating' });
+  assert.equal(deriveRun(going).situation('c')?.reason, 'in_progress');
+  const view = buildResultView(going);
+  assert.deepEqual([view.pending, view.notMeasured.total, view.notMeasured.alarm], [1, 0, false], 'a situation still coming never raises the unmeasured alarm');
+  assert.equal(deriveRun(run([card('c')], [attempt('c')], twoRepeats)).situation('c')?.reason, 'attempts_mismatch', 'a finished run keeps its reason');
+  // A strict legacy card whose attempt is not what the plan ran (another starting world) is no measurement: not «правила не дают однозначного ответа».
+  const strict = card('s', { metrics: [{ ...replyQuality }] });
+  assert.equal(deriveRun(run([strict], [attempt('s', {}, { initialState: { ...world, transientFailures: 1 } })])).situation('s')?.reason, 'attempts_mismatch');
+  // A legacy card with nothing to judge — no rubric of the agent, no exact check — was never assessed.
+  assert.equal(deriveRun(run([card('b', { metrics: [] })], [attempt('b', {}, { assessments: [] })])).situation('b')?.reason, 'not_judged');
+  // A judgment that decided nothing stays the judge's.
+  assert.equal(deriveRun(run([strict], [attempt('s', {}, { assessments: [vote('reply_quality', 'unknown')] })])).situation('s')?.reason, 'judge_unclear');
+  assert.equal('judgeFailure' in runModule, false, 'the typed failure of a judgment is judge.ts\'s: run.ts keeps no second copy');
 });
 
 test('deriveRun is remembered per snapshot: the same record gives the same object, a moved stamp recomputes', () => {

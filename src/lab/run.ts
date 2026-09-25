@@ -11,6 +11,7 @@ import { addCaveat, type CauseFailure } from '../caveats.js';
 import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, judgeFallback, runnableTarget, scriptIssue, settingsSchema, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type FailureMode, type Revision, type Scenario, type UserMode } from '../contracts.js';
 import { BudgetExhausted, Stopped } from '../errors.js';
 import { ProviderFailure } from '../llm/model-call.js';
+import { roleChoices } from '../llm/models.js';
 import { StructuredTaskError } from '../llm/structured.js';
 import type { CallContext, Runtime } from '../runtime.js';
 import { evaluateTrial } from '../evaluation.js';
@@ -216,7 +217,7 @@ async function reachJudge(lab: Lab, record: Experiment): Promise<void> {
     return !runtime.judgeReachable || runtime.judgeReachable(new AbortController().signal);
   };
   if (await reachable()) return;
-  const judge = record.settings.roles?.judge ?? record.settings.judge ?? { provider: record.settings.provider, model: record.settings.model };
+  const { judge } = roleChoices(record.settings);
   const named = `${judge.provider}/${judge.model}`;
   const fallback = judgeFallback(record.settings);
   if (fallback) {

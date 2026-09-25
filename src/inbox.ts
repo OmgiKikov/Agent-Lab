@@ -3,9 +3,8 @@ import { convertible, libraryV1Of } from './card/legacy-v1.js';
 import type { QuestionChoice } from './card/status.js';
 import type { SituationView } from './card/view.js';
 import { countText, pluralForm } from './plural.js';
-import type { ResultView } from './result-view.js';
+import { NOT_MEASURED_SIDE, type ResultView } from './result-view.js';
 import { whenText } from './result-text.js';
-import type { NotMeasuredCode } from './run.js';
 import { clip, oneLine } from './text.js';
 
 /*
@@ -78,19 +77,12 @@ const CONVERSATIONS: [string, string, string] = ['разговор', 'разго
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
 const subjectOf = (view: SituationView) => `Ситуация ${view.number} · ${clip(view.brief.title, 90)}`;
 
-/** Where a conversation was not measured, grouped by whose side it failed on: each side asks a different decision. */
-const SIDE: Partial<Record<NotMeasuredCode, 'agent' | 'client' | 'judge'>> = {
-  agent_error: 'agent', service_reply: 'agent', reset_unconfirmed: 'agent',
-  simulator_deviated: 'client', simulator_unclear: 'client', simulator_error: 'client', turn_limit: 'client',
-  judge_error: 'judge', judge_unavailable: 'judge', judge_stopped: 'judge',
-};
-
-/** The unmeasured conversations of the newest run: one decision per side, the most frequent reason named. */
+/** The unmeasured conversations of the newest run, grouped by whose side they failed on (NOT_MEASURED_SIDE): one decision per side, the most frequent reason named. */
 function unmeasured(run: NonNullable<InboxInput['run']>, when: string): Decision[] {
   const { record, view } = run;
   const bySide = new Map<'agent' | 'client' | 'judge', { count: number; label: string; scenarioIds: string[] }>();
   for (const reason of view.notMeasured.reasons) {
-    const side = SIDE[reason.code];
+    const side = NOT_MEASURED_SIDE[reason.code];
     if (!side) continue;
     const known = bySide.get(side);
     // Reasons come largest first, so the first one of a side names it.

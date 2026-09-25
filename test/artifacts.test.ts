@@ -9,7 +9,7 @@ import { draftHash } from '../src/lab/record.js';
 import { appointmentAgent, legacyDemoMetrics, legacyDemoRuntime, legacyDraft } from './helpers/demo-record.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { htmlReport, jsonReport, markdownReport } from '../src/report.js';
-import { FONT_STYLESHEET, REPORT_SCRIPT } from '../src/report-style.js';
+import { REPORT_SCRIPT } from '../src/report-style.js';
 import { buildResultView } from '../src/result-view.js';
 import { sealJudgeReceipt } from '../src/judge.js';
 import type { Experiment } from '../src/contracts.js';
@@ -87,7 +87,7 @@ test('navigation-independent snapshots export matching comparisons and the same 
   // Without attempts after, nothing is paired and the situation says why it has no verdict.
   const incomplete = await evidenceBundle({ ...after, trials: [] }, lab.store);
   for (const report of [htmlReport(incomplete), markdownReport(incomplete)]) {
-    assert.match(report, /Нет совпадающих валидных попыток/);
+    assert.match(report, /Нет попыток, измеренных в обоих прогонах: сравнивать нечего\./);
     assert.match(report, /Move an appointment: прогон остановился раньше/);
   }
 });
@@ -172,12 +172,12 @@ test('HTML is self-contained and every record string is escaped in HTML and Mark
   const html = htmlReport(record);
   const markdown = markdownReport(record);
 
-  // One inline script, allowed by its hash; the only outside reference is the optional font stylesheet.
+  // One inline script, allowed by its hash; nothing outside the file is referenced.
   assert.match(html, /default-src 'none'/);
   assert.ok(html.includes(`script-src 'sha256-${createHash('sha256').update(REPORT_SCRIPT).digest('base64')}'`), 'the CSP hash matches the script');
   assert.ok(html.includes(`<script>${REPORT_SCRIPT}</script>`));
   assert.equal(html.match(/<script\b/g)?.length, 1);
-  assert.deepEqual([...html.matchAll(/<[^>]*\b(?:href|src)="([^"]*)"/g)].map(match => match[1]), [FONT_STYLESHEET]);
+  assert.deepEqual([...html.matchAll(/<[^>]*\b(?:href|src)="([^"]*)"/g)].map(match => match[1]), []);
 
   assert.doesNotMatch(html, /<img|<iframe|<svg|<object|<u>|<form|\u001b\[/i);
   for (const text of ['&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; [ссылка](javascript:alert(1))', '&lt;img src=x onerror=alert(1)&gt;',
@@ -231,8 +231,9 @@ test('a human failure on a green dialogue reaches the result in every export and
   assert.deepEqual([bundle.view.agreement.agreed, bundle.view.agreement.checked], [0, 1]);
   for (const report of [htmlReport(bundle), markdownReport(bundle)]) {
     assert.match(report, /✗ не справился/); assert.match(report, /Разбор ошибок/);
-    assert.match(report, /с судьёй согласны 0 из 1/); assert.match(report, /вы согласились в 0 из 1/);
-    assert.doesNotMatch(report, /Ошибок нет|<script>not executable/);
+    // The page is read by someone the owner sends it to: it speaks about the owner, never to «вы».
+    assert.match(report, /с судьёй согласны 0 из 1/); assert.match(report, /Владелец агента согласился с решениями судьи в 0 из 1/);
+    assert.doesNotMatch(report, /Ошибок нет|<script>not executable|[Вв]ы согласились/);
   }
   const snapshot = JSON.parse(jsonReport(bundle));
   assert.deepEqual(snapshot.view.failures.map((failure: { trialId: string }) => failure.trialId), [trial.id]);
@@ -245,7 +246,8 @@ test('a human failure on a green dialogue reaches the result in every export and
   assert.deepEqual(fullBundle.view.reviewed, { situations: 1, contradicted: 0 });
   for (const report of [htmlReport(fullBundle), markdownReport(fullBundle)]) {
     assert.match(report, /✗ не справился/);
-    assert.match(report, /вы проверили 1 ситуацию/); assert.match(report, /Вы сами проверили 1 ситуацию\./);
+    assert.match(report, /владелец агента проверил 1 ситуацию/); assert.match(report, /Владелец агента сам проверил 1 ситуацию\./);
+    assert.doesNotMatch(report, /[Вв]ы (сами )?проверили/);
   }
 });
 
@@ -262,8 +264,9 @@ test('an owner\'s whole-dialogue «Ошибся агент» on a green dialogue
   assert.deepEqual(bundle.view.reviewed, { situations: 1, contradicted: 1 });
   assert.deepEqual([bundle.view.headline.passed, bundle.view.headline.decided], [1, 1], 'the number follows the counting rule');
   for (const report of [htmlReport(bundle), markdownReport(bundle)]) {
-    assert.match(report, /ваши отметки расходятся с итогом: 1/);
-    assert.match(report, /В 1 ситуации ваша отметка по всему разговору расходится с итогом/);
+    assert.match(report, /отметки владельца агента расходятся с итогом: 1/);
+    assert.match(report, /В 1 ситуации отметка владельца агента по всему разговору расходится с итогом/);
+    assert.doesNotMatch(report, /ваши отметки|ваша отметка/);
     assert.doesNotMatch(report, /<script>not executable/);
   }
 });

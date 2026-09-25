@@ -84,7 +84,7 @@ test('agent-lab cards over a finished run without --yes only shows the change: n
   const root = await mkdtemp(join(tmpdir(), 'agent-lab-preview-cli-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const data = join(root, 'data');
-  const demo = await agentLab(['demo', '--data-dir', data]);
+  const demo = await agentLab(['demo', '--json', '--data-dir', data]);
   const run = JSON.parse(demo.stdout) as { id: string; phase: string };
   assert.equal(run.phase, 'results_review', demo.stderr);
   const before = await records(data);

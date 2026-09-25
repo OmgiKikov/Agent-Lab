@@ -19,9 +19,9 @@ import { SANDBOX_RETIRED, createInputSchema, experimentSchema, fingerprint, runn
 import { metricApplies } from '../src/assessment.js';
 import type { Runtime } from '../src/runtime.js';
 import { assessRepeated, hasCompleteJudgment, observableSources } from '../src/judge.js';
-import { awaitingVerdict, compareRuns } from '../src/comparison.js';
+import { compareRuns } from '../src/comparison.js';
 import { COUNTING_RULES, simulatorUsable } from '../src/outcomes.js';
-import { judgeAgreement } from '../src/agreement.js';
+import { awaitingVerdict, judgeAgreement } from '../src/agreement.js';
 import { buildResultView } from '../src/result-view.js';
 import { trustParts } from '../src/result-text.js';
 import { CODE_ONLY_ASSESSMENT, deriveRun } from '../src/run.js';
@@ -925,7 +925,7 @@ test('a positive control rides on the record: hashes and card identity unchanged
   }
   const diff = compareRuns(source, ran);
   assert.equal(diff.comparable, true, diff.notes.join(' '));
-  assert.ok(diff.notes.every(note => !note.startsWith('Содержимое карточек изменилось') && !note.startsWith('Набор карточек изменился')), diff.notes.join(' '));
+  assert.ok(diff.notes.every(note => !note.startsWith('Изменились ситуации:') && !note.startsWith('Набор ситуаций изменился')), diff.notes.join(' '));
   assert.ok(diff.notes.includes('Контрольные ситуации не сравниваются: они не входят в главное число.'));
   assert.equal(diff.cards.shared, source.scenarios.length - 1);
   assert.ok([...diff.pairs, ...diff.incomparable].every(row => row.scenarioId !== a), 'the control is not a pair of the diff');

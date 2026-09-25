@@ -1,6 +1,7 @@
 import { keyHint, type AgentToolResult, type Theme, type ToolRenderResultOptions } from '@earendil-works/pi-coding-agent';
 import { wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 import { safeText } from '../../src/text.js';
+import { TOOL } from '../steps.ts';
 import { GLYPH, renderRows, type PaintTheme, type Row, type Tone } from './theme.ts';
 
 /*
@@ -16,9 +17,12 @@ import { GLYPH, renderRows, type PaintTheme, type Row, type Tone } from './theme
  * `app.tools.expand` opens the rest under the summary: the situations, the brief, the conversation — never
  * JSON, hashes or tool arguments, which stay in the model's content.
  *
- * The session file is 0644, so `details` hold a key and a neutral note only (REV-01). The rows live in
- * memory while Pi runs; a reopened session shows the note, and the same request rebuilds the rows from
- * the 0600 store.
+ * `details` hold a key and a neutral note only (REV-01). The rows live in memory while Pi runs; a reopened session
+ * shows the note, and the same request rebuilds the rows from the 0600 store. They are neither stored nor rebuilt from
+ * the result's content: the content is what the model read — ids, counts, fields per tool, not these rows —, some rows
+ * hold text the content never does (a production conversation under «Сверка с продом», every customer's words of a
+ * list), and Pi writes its session file under its process's umask, private only when `agent-lab chat` started it.
+ * A run's result is the exception: its content carries the screen's own lines (verdict-block.ts).
  */
 
 /** How an action ended: done, waiting for the owner, or failed. The colour of its sign. */
@@ -140,20 +144,20 @@ export function renderFeedResult(result: AgentToolResult<unknown>, options: Tool
 /** The text of a result when nothing better can be drawn: escaped, never parsed. */
 export const contentText = (result: AgentToolResult<unknown>): string => safeText(result.content.filter(part => part.type === 'text').map(part => part.text).join('\n'));
 
-/** The line of a tool call in the feed: what is being done, in the owner's words. No argument dump, no ids. */
+/** The line of a tool call in the feed: what is being done, in the owner's words. No argument dump, no ids. Tools by their names in TOOL. */
 export function callText(tool: string, args: Record<string, unknown> | undefined): string {
   const a = args ?? {};
   const number = typeof a.situation === 'number' ? ` ${a.situation}` : '';
   switch (tool) {
-    case 'agent_lab_status': return 'Смотрю, что уже есть';
-    case 'agent_lab_prepare': {
+    case TOOL.status: return 'Смотрю, что уже есть';
+    case TOOL.prepare: {
       if (a.demo === true) return 'Готовлю учебный пример';
       if (typeof a.suite === 'string') return 'Загружаю набор из файла';
       if (a.withoutLogs === true) return 'Готовлю ситуации по вашим правилам';
       return typeof a.logs === 'string' ? `Собираю ситуации из ${a.logs.split('/').at(-1)}` : 'Собираю ситуации из логов';
     }
-    case 'agent_lab_cards': return number ? `Открываю ситуацию${number}` : 'Показываю ситуации';
-    case 'agent_lab_edit': {
+    case TOOL.cards: return number ? `Открываю ситуацию${number}` : 'Показываю ситуации';
+    case TOOL.edit: {
       const changes = Array.isArray(a.changes) ? a.changes as { kind?: unknown }[] : [];
       const kind = changes[0]?.kind;
       if (changes.length > 1) return `Меняю ситуацию${number}: несколько правок вместе`;
@@ -161,12 +165,12 @@ export function callText(tool: string, args: Record<string, unknown> | undefined
         : kind === 'unmask' ? `Подставляю значения вместо обезличенных в ситуации${number}`
         : `Меняю ситуацию${number}: ${kind === 'fact' ? 'что знает клиент' : kind === 'duty' ? 'что должен агент' : kind === 'turn' ? 'поворот' : 'клиент'}`;
     }
-    case 'agent_lab_decide': return typeof a.decision === 'string' ? 'Записываю ваше решение' : 'Смотрю, что ждёт вашего решения';
-    case 'agent_lab_run': return a.action === 'stop' ? 'Останавливаю' : a.action === 'progress' ? 'Смотрю, как идёт работа' : a.action === 'accept' ? 'Утверждаю ситуации' : 'Запускаю прогон';
-    case 'agent_lab_results': return a.compare === true ? 'Сравниваю с прошлым прогоном' : a.report === true ? 'Сохраняю отчёт для заказчика' : typeof a.save === 'string' ? 'Сохраняю набор в файл' : 'Показываю результат';
-    case 'agent_lab_explain': return `Разбираю ситуацию${number}`;
-    case 'agent_lab_connect': return 'Подключаю агента';
-    case 'agent_lab_agree': return `Записываю вашу отметку о решении судьи${number ? ` по ситуации${number}` : ''}`;
+    case TOOL.decide: return typeof a.decision === 'string' ? 'Записываю ваше решение' : 'Смотрю, что ждёт вашего решения';
+    case TOOL.run: return a.action === 'stop' ? 'Останавливаю' : a.action === 'progress' ? 'Смотрю, как идёт работа' : a.action === 'accept' ? 'Утверждаю ситуации' : 'Запускаю прогон';
+    case TOOL.results: return a.compare === true ? 'Сравниваю с прошлым прогоном' : a.report === true ? 'Сохраняю отчёт для заказчика' : typeof a.save === 'string' ? 'Сохраняю набор в файл' : 'Показываю результат';
+    case TOOL.explain: return `Разбираю ситуацию${number}`;
+    case TOOL.connect: return 'Подключаю агента';
+    case TOOL.agree: return `Записываю вашу отметку о решении судьи${number ? ` по ситуации${number}` : ''}`;
     default: return 'Agent Lab';
   }
 }

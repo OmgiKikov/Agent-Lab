@@ -4,12 +4,17 @@ import type { AgentToolResult, ToolRenderResultOptions } from '@earendil-works/p
 import { chatBlock, fitRows, type ResultRow } from '../../src/result-text.js';
 import type { ResultView } from '../../src/result-view.js';
 import { expandHint, hintLines, lineBody } from './feed.ts';
-import { GLYPH, paint, renderRows, type PaintTheme, type Tone } from './theme.ts';
+import { GLYPH, paint, renderRows, type PaintTheme, type Row, type Tone } from './theme.ts';
 
 /*
  * The result of a run in the chat (docs/design/ui-spec.md §4.10): the same rows the workspace and the CLI lay out, under the
- * branch sign of the action that produced it. The session file (0644) holds only ids (REV-01): the view is kept in memory
- * while Pi runs; a reopened session says so in one line and the owner asks for the result again.
+ * branch sign of the action that produced it. The details a session keeps hold only ids (REV-01): the view is kept in
+ * memory while Pi runs.
+ *
+ * A reopened session (or a result message of an earlier one) has no view in memory, but its content — what the model
+ * read — carries `lines`: the result screen's own words, laid out by result-text.ts. They are already in the session
+ * file, so drawing them adds nothing to it; they are checked for shape, escaped like every row and drawn plainly: the
+ * number and its trust under the branch, everything else on ctrl+o. Without them, one honest row.
  */
 
 export const VERDICT_KIND = 'agent-lab/verdict';
@@ -81,6 +86,47 @@ export class VerdictBlock implements Component {
   }
 }
 
+/** At most this many stored lines are drawn, each at most this many characters: a result screen never comes near either. */
+const STORED_LINES = 400, STORED_CHARACTERS = 2000;
+
+/**
+ * The lines of a result as its content stored them (model-output.ts `resultOutput`): an array of short strings, else
+ * null. The content is data read back from a file: only this shape is drawn, never anything else of it.
+ */
+export function storedLines(result: Pick<AgentToolResult<unknown>, 'content'>): string[] | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(result.content.filter(part => part.type === 'text').map(part => part.text).join('')); } catch { return null; }
+  const stored = parsed && typeof parsed === 'object' ? (parsed as { lines?: unknown }).lines : undefined;
+  if (!Array.isArray(stored) || !stored.length || stored.length > STORED_LINES) return null;
+  const lines: string[] = [];
+  for (const item of stored) {
+    if (typeof item !== 'string' || item.length > STORED_CHARACTERS) return null;
+    lines.push(item);
+  }
+  return lines;
+}
+
+/**
+ * A result drawn from its stored lines: the head of the screen — the number, its trust — under the branch sign, the
+ * rest on ctrl+o. The lines keep the one-column margin they were laid out with, as the block's own rows do.
+ */
+export class StoredVerdict implements Component {
+  private readonly head: string[];
+  constructor(private readonly lines: string[], private readonly expanded: boolean, private readonly theme: PaintTheme, private readonly hint: (expanded: boolean) => string) {
+    const end = lines.findIndex(line => !line.trim());
+    this.head = end < 0 ? lines : lines.filter((_, index) => index < end);
+  }
+  invalidate(): void {}
+  render(width: number): string[] {
+    const room = Math.max(1, width - LEAD);
+    const shown = this.expanded ? this.lines : this.head;
+    const rows: Row[] = shown.map((line, index) => ({ text: line, ...(index ? { tone: 'muted' as const } : { tone: 'text' as const, bold: true }) }));
+    const lines = renderRows(rows, this.theme, room);
+    return [...lines.map((line, index) => (index ? ' '.repeat(LEAD) : `  ${paint({ text: GLYPH.branch, tone: 'muted' }, this.theme)}`) + line),
+      ...(this.lines.length > this.head.length ? hintLines(this.hint(this.expanded), width) : [])];
+  }
+}
+
 type LegacyRenderer = (result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme) => Component;
 
 /** What ctrl+o opens under a result, and what to say next when something failed. */
@@ -89,9 +135,9 @@ export const verdictHint = (view: ResultView) => (expanded: boolean): string => 
     : `${expandHint(false, 'подробнее')} · «отчёт для заказчика»`;
 
 /**
- * The tool host: verdict details with a remembered view give the block; verdict details without one give the
- * honest row; anything else goes to `legacy`. A throw anywhere ends as one muted row, never as an exception
- * inside Pi. `onTone` learns the colour of the action's sign.
+ * The tool host: verdict details with a remembered view give the block; without one, the result's stored lines give
+ * it plainly (a reopened session), and without those, the honest row; anything else goes to `legacy`. A throw anywhere
+ * ends as one muted row, never as an exception inside Pi. `onTone` learns the colour of the action's sign.
  */
 export function renderAgentLabResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme, legacy: LegacyRenderer,
   onTone: (tone: Tone) => void = () => {}): Component {
@@ -99,7 +145,11 @@ export function renderAgentLabResult(result: AgentToolResult<unknown>, options: 
     const details: unknown = result.details;
     if (isVerdictDetails(details)) {
       const view = viewFor(details);
-      if (!view) { onTone('muted'); return lineBody(MISSING_RESULT, 'warning', theme); }
+      if (!view) {
+        const stored = storedLines(result);
+        onTone('muted');
+        return stored ? new StoredVerdict(stored, options.expanded, theme, expanded => expandHint(expanded, 'подробнее')) : lineBody(MISSING_RESULT, 'warning', theme);
+      }
       onTone('success');
       return new VerdictBlock(view, options.expanded, theme, verdictHint(view));
     }

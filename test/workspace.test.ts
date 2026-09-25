@@ -162,10 +162,23 @@ test('before the first result the workspace walks Ситуации › Прог�
     assert.match(situations, /^ 2 ситуации: 1 готова · 1 ждёт вашего ответа$/m);
     assert.match(situations, /^ Готовые можно запускать уже сейчас; остальные войдут, когда ответите\.$/m);
     const plan = press(KEYS.right);
-    assert.match(plan, /^ Готово к запуску: 1 ситуация, 2 разговора$/m);
-    assert.match(plan, /^ {4}Не войдут {3}1 ждёт вашего ответа$/m);
-    assert.match(plan, /^ {4}Расход {6}без модели и оплаты — учебный пример$/m);
+    assert.match(plan, /^ Готово к запуску$/m);
+    assert.match(plan, /^ 1 ситуация · 2 разговора: клиента играет Lab, ответы агента оценивает судья\.$/m);
+    assert.match(plan, /^ Не войдут: 1 ждёт вашего ответа$/m);
+    assert.match(plan, /^ Учебный пример: без модели и оплаты\.$/m);
     assert.equal(footerOf(plan), 'Enter запустить · ← ситуации · Esc закрыть');
+    // One description of the plan: the run dialog Enter leads to says exactly these lines, word for word.
+    const lab = new ExperimentLab(demo.directory);
+    await lab.init();
+    try {
+      const asked: string[] = [];
+      const ctx = { cwd: demo.cwd, ui: { select: async (title: string) => { asked.push(title); return 'Не сейчас'; } } } as unknown as ExtensionContext;
+      assert.equal(await launchRun(ctx, lab, await lab.get(demo.id)), undefined, 'a declined dialog starts nothing');
+      const dialog = asked[0]!.split('\n');
+      const board = plan.split('\n');
+      const shown = board.slice(board.indexOf(' Готово к запуску') + 1, board.indexOf('', board.indexOf(' Готово к запуску'))).map(line => line.trim());
+      assert.deepEqual(shown, dialog.slice(2, 2 + shown.length), `the board:\n${shown.join('\n')}\nthe dialog:\n${asked[0]}`);
+    } finally { await lab.close(); }
     // There is no result yet, so → goes no further; Enter asks the command to run the ready situations.
     assert.match(press(KEYS.right), /Готово к запуску/);
     press(KEYS.enter);
@@ -179,7 +192,7 @@ test('while work goes on the workspace follows it: a reported change reads it ag
   const state = newState();
   const quiet = await workspaceView(new ExperimentLab(folder.directory), state, undefined);
   // The same folder as it looks while a run goes on: its records with the progress row of the work.
-  const going: WorkspaceView = { ...quiet, data: { ...quiet.data!, progress: { text: 'Прогон: 1 из 4 разговоров', share: 0.25, stoppable: false } } };
+  const going: WorkspaceView = { ...quiet, data: { ...quiet.data!, progress: { kind: 'run', text: 'Прогон: 1 из 4 разговоров', share: 0.25, stoppable: false } } };
   const views = [going, going, quiet];
   let reads = 0, stops = 0;
   let report: (() => void) | undefined;
