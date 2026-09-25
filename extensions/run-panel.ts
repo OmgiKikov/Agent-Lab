@@ -1,5 +1,5 @@
 import type { Line, SpaceData } from './workspace-screens.ts';
-import { row, span, wrap, box, beside } from './render/panels.ts';
+import { row, span, wrap, box, beside, metrics, action } from './render/panels.ts';
 import { WORKSPACE_WIDTH } from './preparation-panel.ts';
 
 /** A launch overview from the same saved plan as the confirmation dialog. */
@@ -9,21 +9,15 @@ export function runPanel(data: SpaceData, available: number, details = false): L
   const width = Math.max(20, Math.min(available, WORKSPACE_WIDTH));
   const active = data.progress?.kind === 'run';
   const excluded = set.views.filter(view => view.status !== 'ready');
-  const body: Line[] = [[], row(active ? '◐  Прогон идёт' : 'Готовы проверить агента', 'accent', true),
+  const body: Line[] = [row(active ? '◐  Прогон идёт' : 'Готовы проверить агента', 'text', true),
     ...wrap(active ? 'Ответы и оценки появляются в «Результате» по мере готовности.' : 'Lab разыграет обращения клиентов и проверит ответы по вашим материалам.', width, 'muted'), []];
-  const metrics = [
-    { title: 'СИТУАЦИИ', value: `${plan.situations} из ${set.views.length || plan.situations}`, note: 'войдут в этот прогон' },
-    { title: 'ПОВТОРЫ', value: String(record.settings.repeats), note: 'для каждой ситуации' },
-    { title: 'РАЗГОВОРЫ С АГЕНТОМ', value: String(plan.conversations), note: 'новые обращения от Lab' },
-  ];
-  if (width >= 84) {
-    const cell = Math.floor((width - 4) / 3);
-    const tiles = metrics.map(metric => box(metric.title, [row(metric.value, 'accent', true), [], ...wrap(metric.note, cell - 4, 'muted')], cell));
-    body.push(...tiles[0]!.map((_, i) => tiles.flatMap((tile, j) => [...(j ? [span('  ')] : []), ...tile[i]!])));
-  } else {
-    for (const metric of metrics) body.push(...wrap(`${metric.title}: ${metric.value}`, width, 'accent'));
-  }
-  body.push([]);
+  body.push(...metrics([
+    { label: 'СИТУАЦИИ', value: `${plan.situations} / ${set.views.length || plan.situations}`, note: 'войдут в проверку', tone: 'accent' },
+    { label: 'ПОВТОРЫ', value: String(record.settings.repeats), note: 'для каждой ситуации', tone: 'text' },
+    { label: 'РАЗГОВОРЫ', value: String(plan.conversations), note: 'клиента играет Lab', tone: 'text' },
+  ], width), []);
+  body.push(...action(active ? '→' : 'Enter', active ? 'Смотреть ответы и оценки' : `Перейти к запуску · ${plan.conversations} разговоров`, width),
+    ...wrap(active ? 'Прогон продолжится, если закрыть доску.' : record.mode === 'demo' ? 'Учебный пример без оплаты.' : 'Платные модели · перед запуском откроется подтверждение', width, 'muted'), []);
   if (active) {
     const share = data.progress?.share;
     if (share !== null && share !== undefined) {
@@ -49,13 +43,15 @@ export function runPanel(data: SpaceData, available: number, details = false): L
     aside.push(...wrap('Причины и действия — в «Ситуациях».', rightWidth - 4, 'muted'));
   } else aside.push(...wrap('✓ Все ситуации входят в прогон', rightWidth - 4, 'success'), [],
     ...wrap('В результате будут ответы агента, оценки и причины ошибок.', rightWidth - 4));
-  const left = box('КАК ПРОЙДЁТ ПРОВЕРКА', steps, leftWidth);
-  const right = box(excluded.length ? 'ОСТАЛОСЬ РАЗОБРАТЬ' : 'ГОТОВНОСТЬ', aside, rightWidth);
+  if (columns) {
+    const height = Math.max(steps.length, aside.length);
+    while (steps.length < height) steps.push([]);
+    while (aside.length < height) aside.push([]);
+  }
+  const left = box('Как пройдёт проверка', steps, leftWidth);
+  const right = box(excluded.length ? 'Что пока не войдёт' : 'Готовность', aside, rightWidth);
   body.push(...(columns ? beside(left, right, leftWidth) : [...left, [], ...right]), []);
-  body.push(...box(active ? 'ПРОВЕРКА В РАБОТЕ' : 'СЛЕДУЮЩИЙ ШАГ', [
-    ...wrap(active ? '→  Открыть результаты' : `Enter  Перейти к запуску · ${plan.conversations} разговоров`, width - 4, 'accent'),
-    ...wrap(active ? 'Можно закрыть доску — прогон продолжится.' : record.mode === 'demo' ? 'Учебный пример без оплаты.' : 'Используются платные модели. Расходы будут видны по ходу прогона.', width - 4, 'muted'),
-  ], width));
-  if (details) body.push([], row('ПАРАМЕТРЫ ПРОГОНА', 'accent', true), ...set.launch?.flatMap(line => wrap(line, width)) ?? []);
+  body.push(...wrap('d  Параметры и стоимость проверки', width, 'muted'));
+  if (details) body.push([], row('Параметры прогона', 'accent', true), ...set.launch?.flatMap(line => wrap(line, width)) ?? []);
   return body;
 }

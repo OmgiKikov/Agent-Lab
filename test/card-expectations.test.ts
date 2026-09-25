@@ -30,7 +30,7 @@ test('the AND matrix: every vote of 1–3 expectations over 1–2 attempts decid
   const card = briefCard();
   for (const size of [1, 2, 3]) {
     const scenario = compileCard({ ...card, agentMust: card.agentMust.slice(0, size) }, { requirements });
-    const ids = scenario.metrics!.map(metric => metric.id);
+    const ids = scenario.metrics!.filter(metric => metric.subject === 'agent').map(metric => metric.id);
     for (const repeats of [1, 2]) {
       for (const votes of combinations(size * repeats)) {
         const trials = Array.from({ length: repeats }, (_, repeat) => cardAttempt(`t${repeat}`, scenario,
@@ -237,5 +237,5 @@ test('the run plan states the judge\'s ceiling: two votes on every expectation o
   const two = compileCard({ ...card, id: `card_${'d'.repeat(64)}`, number: 4, agentMust: card.agentMust.slice(0, 2) }, { requirements });
   const record = cardRun([compiledCard(card), two], [], 2, { settings: { ...cardRun([], []).settings, repeats: 2, provider: 'openrouter', model: 'm' } });
   const plan = launchLines(record, scenarioPlan(record));
-  assert.ok(plan.includes('Судья: по 2 голоса на каждое ожидание — до 6 вызовов на попытку, всего до 20.'), plan.join('\n'));
+  assert.ok(plan.includes('Судья: по 2 голоса на каждую проверку ответа и клиента — до 8 вызовов на попытку, всего до 28.'), plan.join('\n'));
 });

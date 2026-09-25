@@ -170,7 +170,7 @@ export function trustSegments(view: ResultView, reader: Reader = 'owner'): { tex
   const parts: { text: string; warn: boolean }[] = [];
   const add = (text: string, warn = false) => { parts.push({ text, warn }); };
   const owner = reader === 'owner';
-  if (headline.range) add(`Вероятно, от ${percent(headline.range[0])} до ${percent(headline.range[1])} (95%)`);
+  if (headline.decided) add('По выбранным ситуациям; не прогноз для всего трафика');
   if (headline.smallSample) add('мало данных', true);
   const unmeasured = unmeasuredAlarm(view) ? null : unmeasuredText(view, reader, false);
   if (unmeasured) add(unmeasured, true);
@@ -247,8 +247,8 @@ export function realityParts(view: ResultView): string[] {
 
 /** Where a judge check leaves the judge untrusted: the warning after its counts. */
 const DISTRUST_TEXT: Record<NonNullable<JudgeCheckSummary['distrust']>, string> = {
-  misses: 'судье нельзя доверять: пропускает подброшенные ошибки',
-  false_alarms: 'судье нельзя доверять: находит ошибки в неизменённых контрольных ответах',
+  misses: 'судья не распознал часть изменений, которые генератор считает ошибками',
+  false_alarms: 'оценка неизменённых ответов нестабильна',
   incomplete: 'проверка судьи неполная: не все ответы получили вердикт или нет контрольных копий',
 };
 const PLANTED: [string, string, string] = ['подброшенной ошибки', 'подброшенных ошибок', 'подброшенных ошибок'];
@@ -261,10 +261,27 @@ export function judgeCheckText(view: Pick<ResultView, 'judgeCheck'>): { text: st
   const check = view.judgeCheck;
   if (!check) return null;
   const parts = [`Судья поймал ${check.detected} из ${check.planted} ${pluralForm(check.planted, PLANTED)}`,
-    ...(check.controls ? [`ложных тревог ${check.falseAlarms} из ${check.controls}`] : []),
+    ...(check.controls ? [`изменил pass на fail у ${check.falseAlarms} из ${check.controls} неизменённых копий`] : []),
     ...(check.unjudged ? [`без вердикта ${check.unjudged}`] : [])];
-  const text = `${parts.join(', ')}${check.distrust ? ` — ${DISTRUST_TEXT[check.distrust]}` : ''}`;
+  const text = `${parts.join(', ')}${check.distrust ? ` — ${DISTRUST_TEXT[check.distrust]}` : ''}. Это диагностика, а не проверка на независимых эталонах.`;
   return { text, warn: check.distrust !== null };
+}
+
+/** Three separate evidence statements. Agreement and consistency never certify correctness. */
+export function evaluationEvidenceLines(view: ResultView): string[] {
+  const { agreement, simulator, headline, notMeasured } = view;
+  const judge = agreement.checked
+    ? `Судья: человек согласился в ${agreement.agreed} из ${agreement.checked} проверенных разговоров; это сверка после показа оценки, не слепая калибровка.`
+    : 'Судья: ручной сверки оценок этого прогона пока нет.';
+  const customer = simulator?.conversations
+    ? `Клиент: соблюдение карточки подтверждено моделью в ${simulator.passed} из ${simulator.conversations} разговоров; нарушений ${simulator.failed}, без вывода ${simulator.unknown}, без проверки ${simulator.notChecked}.${simulator.heuristicFlags ? ` Отдельно эвристики отметили ${simulator.heuristicFlags} разговоров для разбора.` : ''}`
+    : 'Клиент: реактивное поведение в этом прогоне не измерено.';
+  const remaining = Math.max(0, notMeasured.of - headline.decided);
+  const metric = `Метрика: оценено ${headline.decided} из ${notMeasured.of} ситуаций. Процент относится только к оценённым ситуациям.`;
+  const bounds = notMeasured.of > 0 && remaining > 0
+    ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${remaining} оставшихся ситуаций. Это границы, не прогноз.`
+    : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';
+  return [judge, customer, metric, bounds];
 }
 
 /** The first block of every surface: alarm, number, trust line, reality line, the judge check, and how the synthetic customers compare with production. */
@@ -283,6 +300,7 @@ export function headRows(view: ResultView): ResultRow[] {
     ...(checked ? [{ role: checked.warn ? 'alarm' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
     // The answer to «can the number be trusted against production»: it stays under the number even where the reality line folds away.
     ...(view.calibration ? [{ role: 'calibration', indent: 0, text: view.calibration.text } as ResultRow] : []),
+    ...evaluationEvidenceLines(view).map(text => ({ role: 'trust' as const, indent: 0, text })),
   ];
 }
 

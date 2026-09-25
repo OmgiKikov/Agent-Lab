@@ -3,12 +3,15 @@ import { test } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assessRepeated, hasCompleteJudgment, judgeInput, judgmentFailure, observableSources, scenarioSources, sealJudgeReceipt, JUDGE_PROTOCOL, JUDGE_PROTOCOL_WITHOUT_RAG } from '../src/judge.js';
+import { assessRepeated, hasCompleteJudgment, judgeInput, judgmentFailure, observableSources, scenarioSources, sealJudgeReceipt, JUDGE_PROTOCOL, JUDGE_PROTOCOL_WITHOUT_RAG, JUDGE_PROTOCOL_WITH_ACTOR_CONDITIONS } from '../src/judge.js';
 import { emptyUsage, fingerprint, type Requirement, type Scenario, type Source, type Trial } from '../src/contracts.js';
 import { assessmentRubrics, goalAttainment, RAG_METRIC_IDS, RAG_RUBRICS, ragEvidenceComplete, replyQuality, simulatorFidelity, validateAssessments, type JudgeAudit } from '../src/assessment.js';
 import { Stopped } from '../src/errors.js';
 import { ProviderFailure } from '../src/llm/model-call.js';
 import { ExperimentStore } from '../src/store.js';
+import { compiledCard, cardAttempt } from './helpers/cards.js';
+import { customerBrief, CARD_CUSTOMER_PROTOCOL } from '../src/card-customer.js';
+import { assessTrial } from '../src/evaluation.js';
 
 const scenario: Scenario = { id: 'card', familyId: 'family', title: 'A fixed input', split: 'dev', provenance: 'synthetic', tier: 'regression', requirementIds: [],
   user: { goal: 'Receive an instruction', facts: 'Known facts', behavior: 'Stop after the instruction', opening: 'Help', maxFollowUps: 0 },
@@ -22,6 +25,80 @@ const model = { provider: 'offline', id: 'test' };
 /** The rubric rule of JUDGE_PROTOCOL: the RAG diagnostics voted on wherever the trial reports retrieval, as stored judgments were made. */
 const legacyRag = { ragDiagnostics: true };
 const row = (passCondition: string, failCondition: string, evidence = [1]) => JSON.stringify({ assessments: [{ metricId: 'goal', passCondition, failCondition, rationale: 'Explicit evidence for both conditions.', evidence, citations: evidence.map(seq => ({ seq, quote: 'Do this.' })) }] });
+
+test('assessment sealing validates quotes against the same projected event the judge received', async () => {
+  const selected = { ...scenario, metrics: [simulatorFidelity] };
+  const recorded: Trial = { ...structuredClone(trial), userMode: 'reactive', events: [...trial.events,
+    { seq: 2, type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: 'leave', conditions: { leave: 'met', turn: 'not_applicable' }, message: '' } }] };
+  const originalEvents = structuredClone(recorded.events);
+  const assessments = await assessTrial({ async assess(target, ctx) {
+    return assessRepeated(target, model, ctx, async () => JSON.stringify({ assessments: [{ metricId: 'user_fidelity', passCondition: 'met', failCondition: 'not_met',
+      rationale: 'The customer stopped after the instruction.', evidence: [2], citations: [{ seq: 2, quote: '"move":"leave","message":""' }] }] }));
+  } }, selected, [], recorded, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} }, []);
+  assert.equal(assessments[0]!.result, 'pass');
+  assert.equal(recorded.judgeReceipt?.complete, true);
+  assert.deepEqual(recorded.events, originalEvents, 'raw actor conditions are preserved');
+  assert.ok(hasCompleteJudgment({ scenario: selected, sources: [], trial: { ...recorded, assessments } }));
+});
+
+test('a fidelity judge receives the actual sealed actor brief even when a historical summary contradicts it', () => {
+  const card = compiledCard();
+  card.metrics = [simulatorFidelity];
+  const leave = card.execution!.userView.policy.transitions.find(t => t.actionId === 'leave')!;
+  leave.when = 'получил инструкцию или агент передаёт оператору';
+  card.user.behavior = 'Уходит только после инструкции. Передача оператору не разрешает уйти.';
+  const attempt = cardAttempt('historical', card, {});
+  attempt.events[2] = { seq: 2, type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: 'leave', message: '', conditions: { leave: 'met' } } };
+  const target = { scenario: card, trial: attempt, sources: [] };
+  const current = judgeInput(target);
+  const historical = judgeInput(target, true, false);
+  assert.ok('user' in current.scenario);
+  assert.ok('user' in historical.scenario);
+  assert.deepEqual(current.scenario.user, customerBrief(card.execution!.userView));
+  assert.deepEqual(historical.scenario.user, card.user, 'legacy protocol verification preserves the original, incorrect input');
+  const actorEvent = current.trial.events.find(e => e.type === 'simulator')!;
+  assert.ok(!actorEvent.content.includes('conditions'));
+  assert.ok(JSON.stringify(current.scenario.user).includes('оператору'));
+});
+
+test('new fidelity votes observe moves without actor self-assessment; historical audits and receipts still verify', async () => {
+  const targetTrial: Trial = { ...structuredClone(trial), userMode: 'reactive', events: [...trial.events,
+    { seq: 2, type: 'simulator', result: { protocol: 'card-customer-free-v2', move: 'leave', message: '', conditions: { leave: 'met', turn: 'not_applicable' } } }] };
+  const target = { ...input, scenario: { ...scenario, metrics: [simulatorFidelity] }, trial: targetTrial };
+  const original = structuredClone(target);
+  let audit: JudgeAudit | undefined;
+  const assessments = await assessRepeated(target, model, {
+    signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {}, onJudgment(_id, value) { audit = value; },
+  }, async (_prompt, data) => {
+    const observed = JSON.parse(JSON.parse(data).trial.events[2].content).result;
+    assert.deepEqual(observed, { protocol: 'card-customer-free-v2', move: 'leave', message: '' });
+    return JSON.stringify({ assessments: [{ metricId: 'user_fidelity', passCondition: 'met', failCondition: 'not_met',
+      rationale: 'The customer stopped after the instruction.', evidence: [1, 2], citations: [{ seq: 1, quote: 'Do this.' }, { seq: 2, quote: '"move":"leave"' }] }] });
+  });
+  assert.deepEqual(target, original, 'raw conditions remain in the saved trace');
+  const recorded = { ...target, trial: { ...targetTrial, assessments, judgeAudit: audit } };
+  assert.ok(hasCompleteJudgment(recorded));
+  assert.ok(hasCompleteJudgment({ ...target, trial: { ...targetTrial, assessments, judgeReceipt: sealJudgeReceipt(audit!, true) } }));
+  const changedMove = structuredClone(recorded);
+  (changedMove.trial.events[2]!.result as { move: string }).move = 'clarify';
+  assert.equal(hasCompleteJudgment(changedMove), false, 'a different observed action invalidates the vote');
+  const old = structuredClone(audit!);
+  old.protocolHash = JUDGE_PROTOCOL_WITH_ACTOR_CONDITIONS;
+  old.input = JSON.stringify(judgeInput(target, false));
+  old.inputHash = fingerprint(JSON.parse(old.input));
+  for (const attempt of old.attempts) attempt.input = old.input;
+  assert.ok(old.input.includes('conditions'));
+  assert.ok(hasCompleteJudgment({ ...target, trial: { ...targetTrial, assessments, judgeAudit: old } }));
+  assert.ok(hasCompleteJudgment({ ...target, trial: { ...targetTrial, assessments, judgeReceipt: sealJudgeReceipt(old, true) } }));
+});
+
+test('a new judge cannot cite withheld actor conditions to support a fidelity pass', async () => {
+  const target = { ...input, scenario: { ...scenario, metrics: [simulatorFidelity] }, trial: { ...trial, userMode: 'reactive' as const,
+    events: [...trial.events, { seq: 2, type: 'simulator' as const, result: { move: 'leave', message: '', conditions: { leave: 'met' } } }] } };
+  await assert.rejects(assessRepeated(target, model, { signal: new AbortController().signal, timeoutMs: 1000, beforeCall() {}, addUsage() {} },
+    async () => JSON.stringify({ assessments: [{ metricId: 'user_fidelity', passCondition: 'met', failCondition: 'not_met',
+      rationale: 'Actor claimed the condition was met.', evidence: [2], citations: [{ seq: 2, quote: '"leave":"met"' }] }] })), /Judge response rejected/);
+});
 
 test('a new judgment never votes on the RAG diagnostics: a retrieval trial carries the protocol without them and verifies, one without keeps the old protocol', async () => {
   const targetTrial = structuredClone(trial);
@@ -315,7 +392,7 @@ test('judge input withholds case labels, prior grades, unobserved state and unde
   assert.doesNotMatch(JSON.stringify(data), /EXPECTED_FAIL|PRIOR_VERDICT_SECRET|UNDELIVERED|SECRET_STATE/);
   assert.equal('finalState' in data.trial ? data.trial.finalState : 'absent', null);
   assert.match(data.evaluationScope, /action-dependent.*unclear/i);
-  assert.deepEqual('user' in data.scenario ? data.scenario.user.script : 'absent', []);
+  assert.deepEqual('user' in data.scenario && 'script' in data.scenario.user ? data.scenario.user.script : 'absent', []);
   const observed = judgeInput({ ...input, trial: { ...trial, events: [{ seq: 2, type: 'tool_result', text: 'Update succeeded',
     tool: 'update_record', result: { ok: false, error: 'Write rejected' } }] } });
   assert.deepEqual(JSON.parse(observed.trial.events[0]!.content), {

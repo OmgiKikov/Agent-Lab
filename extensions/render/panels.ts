@@ -10,9 +10,35 @@ const pad = (line: Line, width: number): Line => [...line, span(' '.repeat(Math.
 export const fit = (text: string, width: number) => safeLine(truncateToWidth(safeLine(text), Math.max(1, width), '…'));
 export const wrap = (text: string, width: number, tone: Tone = 'text'): Line[] => wrapTextWithAnsi(safeLine(text), Math.max(1, width)).map(value => row(value, tone));
 
-export function box(title: string, body: Line[], width: number): Line[] {
+/** A quoted customer message, visually distinct from instructions and reviewer comments. */
+export function quote(text: string, width: number): Line[] {
+  return wrap(text, Math.max(1, width - 3)).map(line => [span('│  ', 'accent'), ...line]);
+}
+
+/** Keep continuation lines aligned with the text, not its numbered marker. */
+export function numbered(text: string, index: number, width: number): Line[] {
+  const prefix = `${index}. `;
+  return wrap(text, Math.max(1, width - prefix.length)).map((line, i) => [span(i ? ' '.repeat(prefix.length) : prefix, 'accent'), ...line]);
+}
+
+/** Compact keyboard action: only the key gets a filled background. */
+export function action(key: string, label: string, width: number): Line[] {
+  const prefix = ` ${key} `;
+  if (visibleWidth(prefix) + 2 >= width) return wrap(`${key} ${label}`, width, 'accent');
+  return wrap(label, width - visibleWidth(prefix) - 2).map((line, i) => [
+    i ? span(' '.repeat(visibleWidth(prefix))) : { ...span(prefix, 'accent', true), background: 'selectedBg' },
+    span('  '), ...line,
+  ]);
+}
+
+/** A selection remains legible without colour thanks to its leading marker. */
+export function selection(lines: Line[], width: number): Line[] {
+  return lines.map(line => pad(line, width).map(part => ({ ...part, background: 'selectedBg' })));
+}
+
+export function box(title: string, body: Line[], width: number, tone: Tone = 'muted'): Line[] {
   const label = fit(` ${title} `, width - 4);
-  return [[span('╭─', 'borderMuted'), span(label, 'muted'), span('─'.repeat(Math.max(0, width - visibleWidth(label) - 3)) + '╮', 'borderMuted')],
+  return [[span('╭─', 'borderMuted'), span(label, tone, true), span('─'.repeat(Math.max(0, width - visibleWidth(label) - 3)) + '╮', 'borderMuted')],
     ...[[], ...body, []].map(line => [span('│ ', 'borderMuted'), ...pad(line, width - 4), span(' │', 'borderMuted')]),
     row('╰' + '─'.repeat(width - 2) + '╯', 'borderMuted')];
 }
@@ -27,8 +53,9 @@ export function metrics(values: { label: string; value: string; note: string; to
   ]).flatMap(line => line.reduce((size, part) => size + visibleWidth(part.text), 0) > width
     ? wrap(line.map(part => part.text).join(''), width) : [line]);
   const cell = Math.floor((width - (values.length - 1) * 2) / values.length);
-  const contents = values.map(value => [row(value.value, value.tone, true), ...wrap(value.note, cell - 4, 'muted')]);
+  const contents = values.map(value => [row(value.value, value.tone, true),
+    ...wrap(value.label.toLocaleLowerCase('ru'), cell), ...wrap(value.note, cell, 'muted')]);
   const height = Math.max(...contents.map(lines => lines.length));
-  const tiles = values.map((value, i) => box(value.label, [...contents[i]!, ...Array.from({ length: height - contents[i]!.length }, (): Line => [])], cell));
+  const tiles = values.map((_, i) => [row('─'.repeat(cell), 'borderMuted'), ...contents[i]!, ...Array.from({ length: height - contents[i]!.length }, (): Line => [])].map(line => pad(line, cell)));
   return tiles[0]!.map((_, i) => tiles.flatMap((tile, j) => [...(j ? [span('  ')] : []), ...tile[i]!]));
 }

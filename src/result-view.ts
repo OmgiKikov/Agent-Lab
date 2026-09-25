@@ -8,13 +8,14 @@ import { topicView, trafficCoverage, type TopicView } from './coverage.js';
 import { failureExplanation, violatedRuleNumber, type FailureExplanation } from './explain.js';
 import type { TopicCoverage } from './miner/coverage.js';
 import { deriveRun, NOT_MEASURED_CODES, type CardPart, type NotMeasuredCode, type RunDerivation, type Verdict } from './run.js';
-import { SMALL_SAMPLE, wilson } from './interval.js';
+import { SMALL_SAMPLE } from './interval.js';
 import { buildCalibration, type CalibrationView } from './card/calibration-view.js';
 import { customerMoves, type CustomerMoves } from './customer-moves.js';
 import type { DialogueNumbers } from './card/view.js';
 import { ruleBar, type RuleBar } from './card/rulebook.js';
 import { judgeCheckSummary, type JudgeCheck, type JudgeCheckSummary } from './judge-check.js';
 import { roleChoices } from './llm/models.js';
+import { simulatorEvidence, type SimulatorEvidence } from './simulator-evidence.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -127,6 +128,8 @@ export interface ResultCard {
 }
 
 export interface ResultView {
+  /** How many reactive conversations actually had a semantic customer assessment. */
+  simulator?: SimulatorEvidence;
   runId: string;
   phase: Experiment['phase'];
   mode: Experiment['mode'];
@@ -384,8 +387,11 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const unmeasured = reasons.reduce((n, reason) => n + reason.count, 0);
   const causes = causesOf(run, failures);
   const view: Omit<ResultView, 'next'> = {
+    simulator: simulatorEvidence(record),
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
-    headline: { passed, decided, accuracy, range: wilson(passed, decided), smallSample: decided > 0 && decided < SMALL_SAMPLE },
+    // This is a curated/stratified set, not independent Bernoulli sampling from production.
+    // Keep the compatibility field empty rather than attach a population confidence claim.
+    headline: { passed, decided, accuracy, range: null, smallSample: decided > 0 && decided < SMALL_SAMPLE },
     pending: notStarted ? 0 : counted.filter(card => card.reason === 'in_progress').length,
     notMeasured: { total: unmeasured, reasons, of: counted.length,
       alarm: decided > 0 && unmeasured > 0 && unmeasured >= UNMEASURED_ALARM * counted.length },

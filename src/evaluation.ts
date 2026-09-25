@@ -8,7 +8,7 @@ import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, typ
 import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, ragEvidenceComplete, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
 import { userTurnSchema, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
 import { valueTokens } from './verbatim.js';
-import { hasCompleteJudgment, judgmentFailure, observableSources, sealJudgeReceipt } from './judge.js';
+import { hasCompleteJudgment, judgmentEvidenceEvents, judgmentFailure, observableSources, sealJudgeReceipt } from './judge.js';
 import { ProviderFailure } from './llm/model-call.js';
 import { openExternalTarget } from './targets.js';
 import { simulatorChecks } from './simulator.js';
@@ -280,7 +280,7 @@ export async function evaluateTrial(input: {
         ctx.signal.throwIfAborted();
         const problem = customerReplyProblem(reply, free.brief, messages, free.turned);
         if (problem) throw new Error(`Симулятор нарушил карточку: ${problem}`);
-        emit({ type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: reply.move, message: reply.message } });
+        emit({ type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: reply.move, message: reply.message, ...(reply.conditions ? { conditions: reply.conditions } : {}) } });
         if (reply.move === 'leave') { stopped = true; break; }
         if (reply.move === 'turn') free.turned = true;
         free.said++;
@@ -395,7 +395,7 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
   let latest: JudgeAudit | undefined;
   let mapped: MetricAssessment[] | undefined;
   try {
-    const assessments = validateAssessments(metrics, trial.events, await runtime.assess({
+    const response = await runtime.assess({
       scenario: structuredClone({ ...scenario, metrics }), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
     }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit, final) => {
       // The full audit lives in the store's sidecar; the trial keeps only a sealed receipt. The receipt
@@ -405,7 +405,8 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
       try { persisted = judgeAuditSchema.parse(audit); } catch { /* the store rejects it with the original error */ }
       latest = structuredClone(persisted);
       ctx.onJudgment?.(id, persisted, final);
-    } }));
+    } });
+    const assessments = validateAssessments(metrics, judgmentEvidenceEvents(trial.events, latest), response);
     ctx.signal.throwIfAborted();
     mapped = assessments.map(assessment => !metricApplies(metrics.find(m => m.id === assessment.metricId)!, trial)
       ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: RAG_METRIC_IDS.has(assessment.metricId)

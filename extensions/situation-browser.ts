@@ -1,7 +1,7 @@
 import { situationActions, type SituationView } from '../src/card/view.js';
 import type { Line, Screen, SpaceData, Hint } from './workspace-screens.ts';
 import type { Tone } from './render/theme.ts';
-import { row, fit, wrap, box, beside, metrics } from './render/panels.ts';
+import { row, wrap, box, beside, metrics, selection, quote, numbered } from './render/panels.ts';
 import { WORKSPACE_WIDTH } from './preparation-panel.ts';
 
 const STATUS: Record<SituationView['status'], { label: string; short: string; tone: Tone }> = {
@@ -21,28 +21,30 @@ function readable(reason: string): string {
 }
 
 /** Full evidence in reading order; reasons and source quotes are never truncated. */
-export function situationExplanation(view: SituationView, width: number, editable: boolean): Line[] {
+export function situationExplanation(view: SituationView, width: number, editable: boolean, sources = true): Line[] {
   const status = STATUS[view.status];
   const body: Line[] = [...wrap(view.brief.title, width).map(line => line.map(part => ({ ...part, bold: true }))),
-    row(status.label, status.tone, true), row(view.brief.source, 'muted'), [], row('ЗАПРОС КЛИЕНТА', 'accent', true), ...wrap(`«${view.brief.writes}»`, width), []];
-  if (view.status === 'unusable') {
-    body.push(row('ПОЧЕМУ КАРТОЧКА НЕ ПРОШЛА ПРОВЕРКУ', 'error', true),
-      ...wrap('Это замечания к ситуации, которую составил Lab.', width, 'muted'), []);
-    for (const [index, problem] of view.problems.entries()) body.push(...wrap(`${index + 1}. ${readable(problem)}`, width), []);
-    if (!view.problems.length) body.push(...wrap('Причина не сохранена. Нельзя объяснить отказ по имеющимся данным.', width), []);
-  }
-  if (view.question) body.push(row('ВОПРОС К ВАМ', 'warning', true), ...wrap(readable(view.question.text), width), []);
-  body.push(row('ЧТО LAB ПРЕДЛАГАЕТ ПРОВЕРЯТЬ', 'accent', true));
-  for (const [index, must] of view.brief.must.entries()) {
-    body.push(...wrap(`${index + 1}. ${must.text}`, width));
-    if (must.rule) body.push(row('Основание в материалах:', 'muted'), ...wrap(`«${must.rule}»`, width, 'muted'));
-    body.push([]);
-  }
+    ...wrap(`${status.short}  ·  ${view.brief.source.replace(/^Из диалога/i, 'Из лога')}`, width, status.tone), []];
+  if (view.question) body.push(row('Нужно ваше решение', 'warning', true), ...wrap(readable(view.question.text), width), []);
   if (editable) {
     const actions = situationActions(view);
-    if (actions.length) body.push(row('ДЕЙСТВИЯ', 'accent', true), ...actions.flatMap((action, index) =>
-      wrap(`${index + 1}  ${action.kind === 'answer' ? action.choice.label : action.label}`, width, 'accent')), []);
+    if (actions.length) body.push(...wrap(actions.map((action, index) =>
+      `[${index + 1}] ${action.kind === 'answer' ? action.choice.label : action.label}`).join('   '), width, 'accent'), []);
   }
+  body.push(row('Запрос клиента', 'text', true), ...quote(view.brief.writes, width), []);
+  if (view.status === 'unusable') {
+    body.push(...wrap('Почему пока нельзя запустить', width, 'error'),
+      ...wrap('Lab составил карточку с ошибками. Это не оценка вашего агента.', width, 'muted'), []);
+    for (const [index, problem] of view.problems.entries()) body.push(...numbered(readable(problem), index + 1, width), []);
+    if (!view.problems.length) body.push(...wrap('Причина не сохранена. Нельзя объяснить отказ по имеющимся данным.', width), []);
+  }
+  body.push(row('Что должен сделать агент', 'text', true), []);
+  for (const [index, must] of view.brief.must.entries()) {
+    body.push(...numbered(must.text, index + 1, width));
+    if (sources && must.rule) body.push(row('Основание в материалах:', 'muted'), ...wrap(`«${must.rule}»`, width, 'muted'));
+    body.push([]);
+  }
+  if (!sources) body.push(...wrap('Enter  Открыть основания из материалов', width, 'accent'));
   body.push(...wrap('a  Обсудить эту ситуацию с Lab', width, 'muted'));
   return body;
 }
@@ -57,31 +59,42 @@ export function situationBrowser(data: SpaceData, selected: number, available: n
   const blocked = cards.filter(card => card.status === 'unusable').length;
   const questions = cards.filter(card => card.status === 'needs_owner').length;
   const checking = cards.length - ready - blocked - questions;
-  const body: Line[] = [row('Ситуации для проверки', 'accent', true),
-    ...wrap(`${cards.length} карточек из обращений клиентов · выберите любую, чтобы увидеть запрос и ожидания`, width, 'muted'), [],
+  const body: Line[] = [row('Ситуации для проверки', 'text', true),
+    ...wrap(width >= 100 ? 'Выберите обращение слева. Справа — запрос клиента и критерии ответа.' : '↑↓ Сменить ситуацию · Enter Открыть карточку', width, 'muted'), [],
     ...metrics([
       { label: 'ГОТОВЫ', value: String(ready), note: 'можно запускать', tone: 'success' },
       { label: 'НУЖЕН ВАШ ОТВЕТ', value: String(questions), note: 'уточнения по карточкам', tone: questions ? 'warning' : 'muted' },
-      { label: 'НА ДОРАБОТКЕ', value: String(blocked + checking), note: `${blocked} ошибок · ${checking} на проверке`, tone: blocked ? 'error' : 'muted' },
+      { label: 'НА ДОРАБОТКЕ', value: String(blocked + checking), note: blocked || checking ? `${blocked} ошибок Lab · ${checking} на проверке` : 'замечаний к карточкам нет', tone: blocked ? 'error' : 'muted' },
     ], width), []];
+  const items: number[] = [];
+  let anchor = body.length;
   if (width < 100) {
-    body.push(row(`Ситуация ${chosen.number} · ${selected + 1} из ${cards.length}`, 'accent', true), [], ...situationExplanation(chosen, width, set.editable));
+    items.push(anchor);
+    body.push(row(`Ситуация ${chosen.number} · ${selected + 1} из ${cards.length}`, 'accent', true), [], ...situationExplanation(chosen, width, set.editable, false));
   } else {
     const leftWidth = Math.floor(width * 0.38), rightWidth = width - leftWidth - 2;
-    const start = Math.max(0, Math.min(selected - 4, cards.length - 10));
-    const shown = cards.slice(start, start + 10);
+    const start = Math.max(0, Math.min(selected - 3, cards.length - 7));
+    const shown = cards.slice(start, start + 7);
     const list: Line[] = [];
     if (start) list.push(row(`↑ Ещё ${start}`, 'muted'), []);
     for (const card of shown) {
       const mine = card.id === chosen.id;
+      const at = body.length + 2 + list.length;
+      items.push(at);
+      if (mine) anchor = at;
       const status = STATUS[card.status];
-      list.push(row(fit(`${mine ? '›' : ' '} ${String(card.number).padStart(2, '0')}  ${card.brief.title}`, leftWidth - 4), mine ? 'accent' : 'text', mine),
-        row(`      ${status.short}`, status.tone), []);
+      const titleLines = wrap(card.brief.title, leftWidth - 11);
+      const title = titleLines.slice(0, 2).map((line, i) => row(`${i ? '      ' : `${mine ? '›' : ' '} ${String(card.number).padStart(2, '0')}  `}${line.map(part => part.text).join('')}${i === 1 && titleLines.length > 2 ? '…' : ''}`, mine ? 'accent' : 'text', mine));
+      const item = [...title, row(`      ${status.short}`, status.tone)];
+      list.push(...(mine ? selection(item, leftWidth - 4) : item), []);
     }
     const below = cards.length - start - shown.length;
     if (below) list.push(row(`↓ Ещё ${below}`, 'muted'));
-    const detail = situationExplanation(chosen, rightWidth - 4, set.editable);
-    body.push(...beside(box('СИТУАЦИИ', list, leftWidth), box(`СИТУАЦИЯ ${chosen.number}`, detail, rightWidth), leftWidth));
+    const detail = situationExplanation(chosen, rightWidth - 4, set.editable, false);
+    const height = Math.max(list.length, detail.length);
+    while (list.length < height) list.push([]);
+    while (detail.length < height) detail.push([]);
+    body.push(...beside(box(`Ситуации · ${cards.length}`, list, leftWidth), box(`Карточка ${chosen.number} из ${cards.length}`, detail, rightWidth, 'accent'), leftWidth));
   }
-  return { head: [], body, foot, anchor: 0, items: [0] };
+  return { head: [], body, foot, anchor, items };
 }

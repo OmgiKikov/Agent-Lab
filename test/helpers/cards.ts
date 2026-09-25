@@ -48,7 +48,8 @@ export const compiledCard = (card: Card = briefCard()): Scenario => compileCard(
 
 /** One attempt: the opening, the agent's reply (seq 1) and the controller closing the dialogue; a vote per expectation. */
 export function cardAttempt(id: string, scenario: Scenario, results: Record<string, 'pass' | 'fail' | 'unknown'>, repeat = 0, extra: Partial<Trial> = {}): Trial {
-  const assessments: MetricAssessment[] = Object.entries(results).map(([metricId, result]) => ({ metricId, result, rationale: 'Оценка', evidence: result === 'unknown' ? [] : [1] }));
+  const votes: Record<string, 'pass' | 'fail' | 'unknown'> = { ...(scenario.metrics?.some(m => m.id === 'user_fidelity') ? { user_fidelity: 'pass' as const } : {}), ...results };
+  const assessments: MetricAssessment[] = Object.entries(votes).map(([metricId, result]) => ({ metricId, result, rationale: 'Оценка', evidence: result === 'unknown' ? [] : [1] }));
   return { id, revisionId: 'r', scenarioId: scenario.id, familyId: scenario.familyId, userMode: 'reactive', repeat, split: 'dev', manifestHash: 'h', outcome: 'ungraded', reason: '',
     checks: [], events: [{ seq: 0, type: 'user', text: scenario.user.opening }, { seq: 1, type: 'assistant', text: 'Уточните номер терминала.' },
       { seq: 2, type: 'simulator', result: { decision: { actionId: 'leave' }, accepted: true } }],

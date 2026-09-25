@@ -115,7 +115,7 @@ export interface JudgeCheckSummary {
   planted: number; detected: number; controls: number; falseAlarms: number;
   /** Items without a pass/fail verdict (including an explicit unknown). */
   unjudged: number;
-  /** Why the judge cannot be trusted; null when it can. */
+  /** Diagnostic concern; null means no concern was detected here, not calibrated correctness. */
   distrust: 'misses' | 'false_alarms' | 'incomplete' | null;
 }
 

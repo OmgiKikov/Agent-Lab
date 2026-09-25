@@ -1,7 +1,7 @@
 import type { ResultView } from '../src/result-view.js';
-import { accuracyParts, whenText } from '../src/result-text.js';
+import { accuracyParts, evaluationEvidenceLines, whenText } from '../src/result-text.js';
 import type { Line, ResultPick, Screen, SpaceData } from './workspace-screens.ts';
-import { box, row, span, wrap, metrics } from './render/panels.ts';
+import { box, beside, row, span, wrap, metrics, selection, quote } from './render/panels.ts';
 
 /** The board's overview uses the same verdicts as the report; the complete methodology stays under d. */
 function entries(view: ResultView): { title: string; note?: string; pick: ResultPick; group: 'next' | 'failure' }[] {
@@ -37,34 +37,61 @@ export function resultDashboard(data: SpaceData, run: SpaceData['runs'][number],
       { label: 'НЕ СПРАВИЛСЯ', value: String(view.headline.decided - view.headline.passed), note: 'по оценке судьи', tone: view.headline.decided > view.headline.passed ? 'error' : 'muted' },
       { label: active ? 'ЕЩЁ БЕЗ ОЦЕНКИ' : 'НЕ ИЗМЕРЕНО', value: String(view.notMeasured.total + view.pending), note: active ? 'включая ожидающие' : 'нужен разбор причин', tone: view.notMeasured.total + view.pending ? 'warning' : 'muted' },
     ], width), []];
+  const columns = width >= 100;
+  const leftWidth = columns ? Math.floor((width - 2) * 0.48) : width;
+  const rightWidth = columns ? width - leftWidth - 2 : width;
   const summary: Line[] = [];
-  if (uncertain) summary.push(...wrap('Итоговая точность не подтверждена', width - 4, 'warning'));
+  if (uncertain) summary.push(...wrap('Итоговая точность не подтверждена', leftWidth - 4, 'warning'));
   else {
     const accuracy = accuracyParts(view);
-    summary.push(...wrap(accuracy.value ? `Точность: ${accuracy.value} · ${view.headline.passed} из ${view.headline.decided} оценённых ситуаций` : 'Нет оценённых ситуаций', width - 4, 'accent'));
+    summary.push(...wrap(accuracy.value ? `Точность: ${accuracy.value} · ${view.headline.passed} из ${view.headline.decided} оценённых ситуаций` : 'Нет оценённых ситуаций', leftWidth - 4, 'accent'));
   }
-  for (const reason of view.notMeasured.reasons.slice(0, 3)) summary.push(...wrap(`${reason.count} — ${reason.label}`, width - 4));
-  if (view.notMeasured.reasons.length > 3) summary.push(row('Остальные причины — в подробностях (d)', 'muted'));
-  if (active) summary.push(...wrap(data.progress!.text, width - 4));
-  summary.push(...wrap(`Прогон ${whenText(record.createdAt, data.now)} · ${record.trials.length} сохранённых разговоров${view.scope.costUsd === null ? '' : ` · $${view.scope.costUsd.toFixed(2)}`}`, width - 4, 'muted'));
-  body.push(...box('СОСТОЯНИЕ ПРОВЕРКИ', summary, width), []);
+  if (view.notMeasured.reasons.length) summary.push([], row('Почему нет оценки', 'text', true));
+  for (const reason of view.notMeasured.reasons.slice(0, 3)) summary.push(...wrap(`${reason.count} — ${reason.label}`, leftWidth - 4));
+  if (view.notMeasured.reasons.length > 3) summary.push(...wrap('Остальные причины — в подробностях (d)', leftWidth - 4, 'muted'));
+  if (active) summary.push(...wrap(data.progress!.text, leftWidth - 4));
+  summary.push([], ...wrap(`Прогон ${whenText(record.createdAt, data.now)} · ${record.trials.length} сохранённых разговоров${view.scope.costUsd === null ? '' : ` · $${view.scope.costUsd.toFixed(2)}`}`, leftWidth - 4, 'muted'));
   const items: number[] = [], picks: ResultPick[] = [];
-  let group: string | undefined, anchor: number | undefined;
-  for (const entry of entries(view)) {
-    if (entry.group !== group) {
-      if (group) body.push([]);
-      body.push(row(entry.group === 'next' ? 'ЧТО ДЕЛАТЬ ДАЛЬШЕ' : `РАЗГОВОРЫ С ЗАМЕЧАНИЯМИ · ${view.failures.length}`, 'muted', true), []);
-      group = entry.group;
-    }
+  let anchor: number | undefined;
+  const all = entries(view);
+  const next: Line[] = [];
+  const nextOffsets: number[] = [];
+  for (const entry of all.filter(entry => entry.group === 'next')) {
+    const mine = picks.length === selected;
+    nextOffsets.push(next.length); picks.push(entry.pick);
+    const title = wrap(`${mine ? '›' : ' '}  ${entry.title}`, rightWidth - 4, mine ? 'accent' : 'text').map(line => line.map(part => ({ ...part, bold: mine })));
+    next.push(...(mine ? selection(title, rightWidth - 4) : title));
+    if (mine) next.push(...wrap(entry.note ?? 'Enter  Открыть', rightWidth - 7, 'muted').map(line => [span('   '), ...line]));
+    next.push([]);
+  }
+  if (!next.length) next.push(...wrap(active ? 'Дождитесь завершения разговоров. Оценки появятся автоматически.' : 'Действий пока нет.', rightWidth - 4, 'muted'));
+  const nextStart = body.length + (columns ? 0 : summary.length + 5) + 2;
+  for (const [index, offset] of nextOffsets.entries()) {
+    items.push(nextStart + offset);
+    if (index === selected) anchor = nextStart + offset;
+  }
+  if (columns) {
+    const height = Math.max(summary.length, next.length);
+    while (summary.length < height) summary.push([]);
+    while (next.length < height) next.push([]);
+  }
+  const left = box('Что известно', summary, leftWidth);
+  const right = box('Следующий шаг', next, rightWidth, 'accent');
+  body.push(...(columns ? beside(left, right, leftWidth) : [...left, [], ...right]), []);
+  if (view.failures.length) body.push(row(`Замечания к ответам агента · ${view.failures.length}`, 'text', true),
+    ...wrap('↑↓ Выберите ситуацию · Enter Откройте разговор и оценку', width, 'muted'), []);
+  for (const entry of all.filter(entry => entry.group === 'failure')) {
     const mine = picks.length === selected;
     items.push(body.length); picks.push(entry.pick);
     if (mine) anchor = body.length;
-    body.push(...wrap(`${mine ? '›' : ' '}  ${entry.title}`, width, mine ? 'accent' : 'text').map(line => line.map(part => ({ ...part, bold: mine }))));
-    if (mine && entry.note) body.push(...wrap(entry.note, width - 3, 'muted').map(line => [span('   '), ...line]));
+    const title = wrap(`${mine ? '›' : ' '}  ${entry.title}`, width, mine ? 'accent' : 'text').map(line => line.map(part => ({ ...part, bold: mine })));
+    body.push(...(mine ? selection(title, width) : title));
+    if (mine && entry.note) body.push(...quote(entry.note, width - 3).map(line => [span('   '), ...line]));
     body.push([]);
   }
   if (!view.failures.length && view.headline.decided) body.push(row('✓ В оценённых ситуациях замечаний нет', 'success'), []);
-  if (actions.length) body.push(...box('ДЕЙСТВИЯ', actions.flatMap((label, i) => wrap(`${i + 1}  ${label}`, width - 4, 'accent')), width));
+  body.push(...box('Надёжность оценки', evaluationEvidenceLines(view).flatMap(text => wrap(text, width - 4)), width), []);
+  if (actions.length) body.push(...box('Прогон', actions.flatMap((label, i) => wrap(`${i + 1}  ${label}`, width - 4, 'accent')), width));
   return { head: [], body, items, picks, ...(anchor === undefined ? {} : { anchor }), foot: [
     { key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'd', text: 'вся статистика' }, { key: 'Esc', text: 'назад' }, { key: '?', text: 'клавиши' },
   ] };

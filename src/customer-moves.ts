@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Scenario, Trial } from './contracts.js';
 import type { RunDerivation } from './run.js';
 import { USER_CONTROLLER_PROTOCOL } from './user-controller.js';
-import { CARD_CUSTOMER_PROTOCOL, CUSTOMER_MOVES } from './card-customer.js';
+import { CARD_CUSTOMER_PROTOCOLS, CUSTOMER_MOVES } from './card-customer.js';
 
 /*
  * What the customer Lab plays did in a run, read from the recorded moves of the controlled customer: how often
@@ -26,7 +26,7 @@ export interface CustomerMoves {
 export const controllerEvent = z.object({ protocol: z.literal(USER_CONTROLLER_PROTOCOL), decision: z.object({ actionId: z.string() }), accepted: z.literal(true) });
 
 /** A move of the customer who speaks in their own words (card-customer.ts): its kind is the move the harness checked. */
-const freeEvent = z.object({ protocol: z.literal(CARD_CUSTOMER_PROTOCOL), move: z.enum(CUSTOMER_MOVES) });
+const freeEvent = z.object({ protocol: z.enum(CARD_CUSTOMER_PROTOCOLS), move: z.enum(CUSTOMER_MOVES) });
 const FREE_KIND: Record<typeof CUSTOMER_MOVES[number], MoveKind> = { answer: 'answer', dunno: 'missing', clarify: 'other', turn: 'turn', leave: 'finish' };
 
 /** The moves of one conversation, in order, as kinds of the actions its definition declares; an action it does not declare is skipped. */

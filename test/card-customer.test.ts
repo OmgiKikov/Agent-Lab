@@ -45,3 +45,21 @@ test('a required turn comes before leaving, happens once, and is sent in the car
   assert.equal(deliveredMessage({ move: 'turn', message: 'что угодно' }, note), 'Тогда лучше отмените покупку.');
   assert.equal(deliveredMessage({ move: 'leave', message: 'пока' }, note), '');
 });
+
+test('reported policy conditions cannot contradict the delivered move', () => {
+  const note = { ...brief(), turn: undefined };
+  assert.match(customerReplyProblem({ move: 'clarify', message: 'Что дальше?', conditions: { leave: 'met', turn: 'not_applicable' } }, note, [], false)!, /leaving condition is met/);
+  assert.equal(customerReplyProblem({ move: 'leave', message: '', conditions: { leave: 'met', turn: 'not_applicable' } }, note, [], false), undefined);
+  assert.match(customerReplyProblem({ move: 'leave', message: '', conditions: { leave: 'unclear', turn: 'not_applicable' } }, note, [], false)!, /only when/);
+});
+
+test('a triggered turn takes priority consistently, including optional turns', () => {
+  for (const required of [true, false]) {
+    const note = brief(); note.turn!.required = required;
+    const conditions = { leave: 'met', turn: 'met' } as const;
+    assert.equal(customerReplyProblem({ move: 'turn', message: '', conditions }, note, [], false), undefined);
+    assert.match(customerReplyProblem({ move: 'leave', message: '', conditions }, note, [], false)!, /choose turn/);
+    assert.match(customerReplyProblem({ move: 'turn', message: '', conditions }, note, [], true)!, /No unplayed turn/);
+    assert.equal(customerReplyProblem({ move: 'leave', message: '', conditions: { leave: 'met', turn: 'not_applicable' } }, note, [], true), undefined);
+  }
+});

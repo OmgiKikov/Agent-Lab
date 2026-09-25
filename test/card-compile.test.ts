@@ -10,12 +10,25 @@ import { headlineTrialResult } from '../src/outcomes.js';
 import { settingsSchema, targetSchema } from '../src/contracts.js';
 import type { Runtime } from '../src/runtime.js';
 import { briefCard, compiledCard, requirements } from './helpers/cards.js';
+import { customerBrief } from '../src/card-customer.js';
 
 /*
  * C4: the brief compiles into the controller's policy once, at acceptance. Every customer message is
  * harness text, the controller only picks an allowed move, and nothing the customer does not know can
  * reach the agent.
  */
+
+test('a connection profile adds facts without silently changing the accepted stopping condition', () => {
+  const card = briefCard({ turn: null });
+  card.client.leaves = 'получил понятную инструкцию по возврату';
+  const scenario = compileCard(card, { requirements, profile: [{ label: 'ИНН организации', value: '7701234567', askedAs: 'ИНН' }] });
+  const brief = customerBrief(scenario.execution!.userView);
+  assert.equal(brief.leaves, card.client.leaves);
+  assert.ok(brief.knows.includes('ИНН организации: 7701234567'));
+  assert.ok(scenario.user.behavior.includes(brief.leaves));
+  assert.ok(!brief.leaves.includes('оператору'));
+  assert.ok(!scenario.user.behavior.includes('ничего сверх первой реплики'));
+});
 
 test('each kind of fact compiles to its own move: told when asked, told together, or «не знаю»', () => {
   const { policy, facts, missing } = compilePolicy(briefCard());
@@ -93,7 +106,7 @@ test('the compiled card is a strict definition: the brief for the customer, the 
   assert.equal(scenario.id, card.id); assert.equal(scenario.provenance, 'production');
   assert.deepEqual(scenario.requirementIds, ['refund_rule', 'receipt_rule']);
   assert.deepEqual(scenario.checks, []); assert.equal(scenario.successCriteria, undefined, 'one expectation never colours another');
-  assert.deepEqual(scenario.metrics?.map(metric => metric.id), ['e1', 'e2', 'e3']);
+  assert.deepEqual(scenario.metrics?.map(metric => metric.id), ['e1', 'e2', 'e3', 'user_fidelity']);
   assert.deepEqual(scenario.metrics?.[1], expectationRubric(card.agentMust[1]!, 'Б', 'карточки №3'));
   assert.equal(scenario.metrics?.[1]?.passCriteria, 'Если клиент назвал номер терминала: выполнено — объяснить, как оформить возврат. Если этого в диалоге не было, ожидание не нарушено.');
   assert.equal(scenario.metrics?.[0]?.failCriteria, 'Не выполнено: запросить номер терминала не больше одного раза.');
@@ -136,7 +149,7 @@ test('a compiled card runs end to end: the controller answers the agent\'s quest
       target: targetSchema.parse({ kind: 'http', url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/` }),
       ctx: { signal: new AbortController().signal, timeoutMs: 5000, beforeCall() {}, addUsage() {} } });
     assert.deepEqual(sent, ['Помогите с возвратом, я Анна.', 'Номер терминала: 5678', 'Тогда лучше отмените покупку.']);
-    assert.deepEqual(trial.assessments?.map(assessment => assessment.metricId), ['e1', 'e2', 'e3'], 'one verdict per expectation');
+    assert.deepEqual(trial.assessments?.map(assessment => assessment.metricId), ['e1', 'e2', 'e3', 'user_fidelity'], 'one verdict per expectation plus customer fidelity');
     assert.deepEqual(trial.simulatorChecks, [], 'no heuristics over harness text');
     assert.equal(headlineTrialResult(scenario, trial), 'pass');
   } finally { await new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }); }

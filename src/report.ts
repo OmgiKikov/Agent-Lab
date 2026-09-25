@@ -6,7 +6,7 @@ import type { FailureExplanation } from './explain.js';
 import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText } from './plural.js';
 import {
-  accuracyParts, alarmRow, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, moreCausesText, noErrorsText, noRuleText, realityParts, reasonLabel,
+  accuracyParts, alarmRow, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, moreCausesText, noErrorsText, noRuleText, realityParts, reasonLabel,
   saidText, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
@@ -206,13 +206,14 @@ export function runReport(bundle: EvidenceBundle): Report {
     head: [
       ...(alarm ? [{ kind: 'alarm' as const, text: alarm.text }] : []),
       { kind: 'accuracy', lead: accuracy.lead, value: accuracy.value, tail: accuracy.tail, level: accuracy.level,
-        band: view.headline.range && view.headline.accuracy !== null ? { point: view.headline.accuracy, range: view.headline.range } : null },
+        band: null },
       ...(trust.length ? [{ kind: 'trust' as const, parts: trust }] : []),
       ...(reality.length ? [{ kind: 'trust' as const, parts: reality.map(text => ({ text, warn: false })) }] : []),
       ...(judgeChecked ? [{ kind: 'trust' as const, parts: [judgeChecked] }] : []),
       ...(view.calibration ? [{ kind: 'trust' as const, parts: [{ text: view.calibration.text, warn: false }] }] : []),
     ],
     blocks: [
+      { kind: 'section', title: 'Основания доверия', blocks: [{ kind: 'list', items: evaluationEvidenceLines(view) }] },
       ...topicsBlock(view),
       ...causesBlock(view),
       ...(cards.length ? [{ kind: 'section' as const, title: 'Ситуации', blocks: [{ kind: 'cards' as const, items: cards }] }] : []),

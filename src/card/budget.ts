@@ -92,18 +92,18 @@ const CAUSE_NAMING = 1;
 export const SITUATION_EXPECTATIONS = 3;
 
 /** One attempt as a run's plan counts it: whether Lab plays a customer who answers the agent, and the expectations the judge votes on. */
-export interface PlannedAttempt { customer: boolean; expectations: number }
+export interface PlannedAttempt { customer: boolean; expectations: number; customerCallsPerTurn?: 1 | 2 }
 
 /**
  * The model calls a run makes when every answer passes the first time: for each attempt the customer's moves — at most
- * one after each of the agent's replies, `maxTurns` in all — and two votes on each expectation it is judged by; then the
+ * one move after each agent reply, with a separate speech call for the free card customer — and two votes on each rubric; then the
  * one naming of the failure causes. Repairs come out of the same limit: a run whose repairs reach it stops there with
  * what it recorded. The comparison with production is not in it: it takes what the run leaves, or is skipped with the
  * reason (card/calibrate.ts).
  */
 export function runCalls(attempts: readonly PlannedAttempt[], maxTurns: number): number {
   if (!attempts.length) return 0;
-  return attempts.reduce((sum, attempt) => sum + (attempt.customer ? maxTurns : 0) + JUDGE_VOTES * attempt.expectations, 0) + CAUSE_NAMING;
+  return attempts.reduce((sum, attempt) => sum + (attempt.customer ? maxTurns * (attempt.customerCallsPerTurn ?? 1) : 0) + JUDGE_VOTES * attempt.expectations, 0) + CAUSE_NAMING;
 }
 
 /**
@@ -112,7 +112,8 @@ export function runCalls(attempts: readonly PlannedAttempt[], maxTurns: number):
  * its logged conversation, so the comparison with production is never skipped for want of calls.
  */
 export function runLimit(situations: number, settings: { maxTurns: number; repeats: number }, fromLogs: boolean): number {
-  const attempts = Array.from({ length: situations * settings.repeats }, (): PlannedAttempt => ({ customer: true, expectations: SITUATION_EXPECTATIONS }));
+  // New cards also carry the customer-fidelity rubric; it is not a logged-conversation expectation.
+  const attempts = Array.from({ length: situations * settings.repeats }, (): PlannedAttempt => ({ customer: true, customerCallsPerTurn: 2, expectations: SITUATION_EXPECTATIONS + 1 }));
   return runCalls(attempts, settings.maxTurns) + (fromLogs ? situations * SITUATION_EXPECTATIONS * JUDGE_VOTES : 0);
 }
 

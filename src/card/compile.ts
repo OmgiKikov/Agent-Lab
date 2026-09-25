@@ -1,5 +1,6 @@
 import { EXPECTATIONS_PROTOCOL, scenarioSchema, type CardExecution, type Requirement, type Scenario } from '../contracts.js';
-import type { Rubric } from '../assessment.js';
+import { simulatorFidelity, type Rubric } from '../assessment.js';
+import { customerBrief } from '../card-customer.js';
 import type { BehaviorPolicy } from '../scenario-contracts.js';
 import type { CustomerProfile } from '../target-schema.js';
 import { clip } from '../text.js';
@@ -9,9 +10,9 @@ import type { Card } from './schema.js';
 
 /*
  * A card is compiled once, at acceptance, into the runnable definition whose hash the acceptance seals.
- * The brief becomes the controller's policy: a small graph in which every customer message is harness
- * text (a fact's statement, «не знаю», the turn's recorded words), so the model that drives the customer
- * only picks a move and can never invent a value. Each expectation becomes its own rubric with its own
+ * The brief becomes the customer's policy. A controller can select fixed messages, while the free customer
+ * speaks from the same facts. Both must obey the policy semantically: valid syntax and known numbers do
+ * not establish correct behaviour. Each expectation becomes its own rubric with its own
  * verdict. Runs, repeats and reassessments read the sealed definition; nothing here runs again for them.
  *
  *   talk ──(answers, «не знаю»: loops)──► talk ──turn──► turned ──(answers: loops)──► turned
@@ -68,7 +69,8 @@ export function compilePolicy(card: Card, maxTurns?: number, profile: CustomerPr
   const { turn } = card.client;
   const own = card.client.knows.filter(fact => fact.source.kind !== 'plausible' || fact.source.receiptId !== undefined);
   const knows = [...own, ...profileFacts(own, profile)];
-  const leaves = profile.length ? `${card.client.leaves}; или агент передаёт вопрос оператору либо прямо говорит, что помочь не может` : card.client.leaves;
+  // A connection supplies account facts, never permission to change the customer's stopping rule.
+  const leaves = card.client.leaves;
   const known = knows.filter(fact => fact.disclosure !== 'unknown');
   const unknown = knows.filter(fact => fact.disclosure === 'unknown');
   const onRequest = known.filter(fact => fact.disclosure === 'on_request');
@@ -131,15 +133,12 @@ export function expectationRubric(expectation: Pick<Expectation, 'id' | 'text' |
     failCriteria: when ? `${when}, но не выполнено: ${duty}.` : `Не выполнено: ${duty}.` };
 }
 
-const DISCLOSURE_WORDS: Record<Fact['disclosure'], string> = { initial: 'сразу', on_request: 'если спросят', unknown: 'не знает' };
-
 /** The brief in one line, for people reading the definition; the controller never reads it. */
-function behaviorSummary(card: Card): string {
-  const { knows, turn, leaves } = card.client;
-  const facts = knows.map(fact => `${statement(fact)} — ${DISCLOSURE_WORDS[fact.disclosure]}`);
+function behaviorSummary(view: UserView): string {
+  const { turn, leaves } = customerBrief(view);
   return clip([
-    `Знает: ${facts.join('; ') || 'ничего сверх первой реплики'}.`,
-    ...(turn ? [`Поворот после «${turn.after}»: «${turn.says}».`] : []),
+    'Использует только заданные известные факты; сообщает их по запросу.',
+    ...(turn ? [`${turn.required ? 'Обязательный' : 'Необязательный'} однократный поворот после «${turn.when}»: «${turn.says}».`] : []),
     `Уходит: ${leaves}.`,
     'На вопрос без ответа в карточке отвечает «Этого я не знаю.»',
   ].join(' '), 2000);
@@ -166,19 +165,20 @@ export function compileCard(card: Card, context: CompileContext): Scenario {
   const requirements = cited.map(id => context.requirements.find(requirement => requirement.id === id));
   if (requirements.some(requirement => !requirement)) throw new Error(`Ситуация №${card.number}: ожидание ссылается на правило, которого нет в наборе.`);
   const { wants, writes } = card.client;
+  const userView = { goal: wants, opening: writes, facts, policy, missing };
   const parsed = scenarioSchema.parse({
     id: card.id, familyId: card.id, title: card.title, requirementIds: cited,
     provenance: card.origin.kind === 'dialogue' ? 'production' : card.origin.kind === 'similar' ? 'synthetic' : 'curated',
     tier: 'regression',
     user: { goal: wants, opening: writes, facts: facts.map(fact => fact.statement).join('\n') || 'Исходные факты не заданы.',
-      knows: facts.map(fact => fact.statement), cannotKnow: missing, behavior: behaviorSummary(card), maxFollowUps: policy.maxFollowUps },
+      knows: facts.map(fact => fact.statement), cannotKnow: missing, behavior: behaviorSummary(userView), maxFollowUps: policy.maxFollowUps },
     initialState: { records: {}, writableFields: [], transientFailures: 0 }, checks: [], goalObservation: 'reply',
     execution: { protocol: USER_CONTROLLER_PROTOCOL, evaluation: EXPECTATIONS_PROTOCOL,
-      userView: { goal: wants, opening: writes, facts, policy, missing },
+      userView,
       environmentView: context.environment ?? { mode: 'prompt' },
       evaluatorView: { expectations: card.agentMust, requirements } },
-    metrics: card.agentMust.map(expectation => expectationRubric(expectation, expectationLetter(expectation.id), `карточки №${card.number}`,
-      { toolLog: expectation.observation === 'tool' })),
+    metrics: [...card.agentMust.map(expectation => expectationRubric(expectation, expectationLetter(expectation.id), `карточки №${card.number}`,
+      { toolLog: expectation.observation === 'tool' })), simulatorFidelity],
     ...(card.references ? { references: card.references } : {}),
   });
   return { ...parsed, split: 'dev' };

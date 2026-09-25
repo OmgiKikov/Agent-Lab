@@ -203,25 +203,25 @@ test('the budget refuses only a new call: the calls under way finish, and the op
 
 test('a run spends its own limit from its start: the preparation\'s calls are not the run\'s, and a plan the limit cannot hold never starts', async () => {
   await withLab(chargedRuntime(), async lab => {
-    // Two situations of two expectations, three turns: the run plans 2 × (3 + 2 × 2) + 1 = 15 calls, and its limit is 15.
-    const draft = await prepared(lab, cardInput({ settings: { ...cardInput().settings, maxCalls: 15 } }));
+    // Two situations: two calls per customer turn, two agent expectations plus fidelity, and two judge votes.
+    const draft = await prepared(lab, cardInput({ settings: { ...cardInput().settings, maxCalls: 25 } }));
     assert.equal(draft.usage.calls, 4, 'the preparation spent four calls of its own ceiling');
     const { library } = await lab.readCards(draft.id);
     const accepted = (await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id))).experiment;
-    assert.equal(runPlan(accepted), 15);
+    assert.equal(runPlan(accepted), 25);
     await lab.start(draft.id, { approved: true, expectedHash: draftHash(accepted) });
     await lab.waitForIdle();
     const finished = await lab.get(draft.id);
-    assert.deepEqual([finished.phase, finished.error], ['results_review', null], 'the run has the number: its own 15 calls were enough');
-    assert.ok(finished.usage.calls - draft.usage.calls <= 15);
+    assert.deepEqual([finished.phase, finished.error], ['results_review', null], 'the run has the number: its own 25 calls were enough');
+    assert.ok(finished.usage.calls - draft.usage.calls <= 25);
 
     const repeat = await lab.repeat(draft.id);
-    const tight = await lab.updateDraft(repeat.id, draftHash(repeat), { settings: { maxCalls: 14 } });
+    const tight = await lab.updateDraft(repeat.id, draftHash(repeat), { settings: { maxCalls: 24 } });
     await assert.rejects(lab.start(tight.id, { approved: true, expectedHash: draftHash(tight) }),
-      /^Error: Прогону нужно до 15 вызовов модели, а лимит прогона — 14\. Поднимите лимит до 15 или запустите меньше ситуаций\. Ничего не запущено и не потрачено\.$/);
+      /^Error: Прогону нужно до 25 вызовов модели, а лимит прогона — 24\. Поднимите лимит до 25 или запустите меньше ситуаций\. Ничего не запущено и не потрачено\.$/);
     assert.deepEqual([(await lab.get(tight.id)).phase, (await lab.get(tight.id)).usage.calls], ['review', 0], 'nothing ran');
     const started = await lab.start(tight.id, { approved: true, expectedHash: draftHash(tight), raiseLimit: true });
-    assert.equal(started.settings.maxCalls, 15, 'the owner\'s confirmation raised the limit to the plan');
+    assert.equal(started.settings.maxCalls, 25, 'the owner\'s confirmation raised the limit to the plan');
     await lab.waitForIdle();
     assert.equal((await lab.get(tight.id)).phase, 'results_review');
   });

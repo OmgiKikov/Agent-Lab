@@ -17,6 +17,41 @@ import { callContext, fixture, fixtureSettings as settings } from './helpers/pi-
 import { dialogues, policy, proposals } from './helpers/card-prep.js';
 
 const lateBatch = importBatch(dialogues);
+
+test('customer speech cannot read policy conditions, goal summaries or decision-session text', async () => {
+  const f = await fixture((_request, index) => JSON.stringify(index === 0
+    ? { move: 'clarify', conditions: { leave: 'not_met', turn: 'not_met' } }
+    : { message: 'Помогите с возвратом, пожалуйста.' }));
+  try {
+    const result = await f.adapter.speakAsCustomer!({ brief: {
+      goal: 'PRIVATE_GOAL_SENTINEL', opening: 'Возврат', knows: ['Имя: Анна'], doesNotKnow: ['Номер покупки'],
+      leaves: 'PRIVATE_STOP_SENTINEL', turn: { when: 'PRIVATE_TRIGGER_SENTINEL', says: 'PRIVATE_TURN_SENTINEL', required: false }, maxFollowUps: 5,
+    }, messages: [{ role: 'user', content: 'Возврат' }, { role: 'assistant', content: 'Не понимаю.' }], turn: 0, turned: false }, callContext().ctx);
+    assert.equal(result.message, 'Помогите с возвратом, пожалуйста.');
+    assert.equal(f.requests.length, 2);
+    assert.match(JSON.stringify(f.requests[0]), /PRIVATE_STOP_SENTINEL/);
+    const speech = JSON.stringify(f.requests[1]);
+    assert.doesNotMatch(speech, /PRIVATE_.*?_SENTINEL/);
+    assert.doesNotMatch(speech, /"conditions"|not_met/);
+    assert.match(speech, /Анна/);
+    assert.match(speech, /Не понимаю/);
+  } finally { await f.close(); }
+});
+
+test('customer stop and fixed turn never start a text-writing session', async () => {
+  for (const move of ['leave', 'turn'] as const) {
+    const f = await fixture(() => JSON.stringify({ move, conditions: { leave: 'met', turn: move === 'turn' ? 'met' : 'not_applicable' } }));
+    try {
+      const result = await f.adapter.speakAsCustomer!({ brief: {
+        goal: 'Вернуть покупку', opening: 'Как вернуть покупку?', knows: [], doesNotKnow: [], leaves: 'Получил инструкцию', maxFollowUps: 5,
+        ...(move === 'turn' ? { turn: { when: 'Получил инструкцию', says: 'Теперь другой вопрос.', required: true } } : {}),
+      }, messages: [{ role: 'assistant', content: 'Откройте покупку и нажмите «Вернуть».' }], turn: 0, turned: false }, callContext().ctx);
+      assert.equal(result.move, move);
+      assert.equal(result.message, '');
+      assert.equal(f.requests.length, 1);
+    } finally { await f.close(); }
+  }
+});
 /** One proposal request over the invented refund dialogue «late», reading `sources`. */
 function proposalRequest(sources: CallSource[] = [{ id: 'source-1', name: 'Правила', content: policy }]): CardProposalRequest {
   return { task: 'Возвраты', topics: [], written: [],

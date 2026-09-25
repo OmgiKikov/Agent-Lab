@@ -1,14 +1,14 @@
 import { isCardExecution, simulatorWasUsed, type Scenario, type SimulatorCheck, type Trial } from './contracts.js';
 import { valueTokens } from './verbatim.js';
+import { CARD_CUSTOMER_PROTOCOLS } from './card-customer.js';
 
 /*
  * Heuristic checks over the simulated user's own replies. They answer three questions the judge
  * can miss: did the user say a value only the backend knows (leak), did it
  * say a value that exists nowhere in its card or the conversation (fabrication, a heuristic),
  * did it repeat itself (loop). Results describe the simulator, never the agent, and are never
- * shown to the judge so that they cannot bias its verdict. They belong to the free simulator of first-format cards
- * (SIMULATOR_PROTOCOL, part of the evaluator version) and run again when a stored run is re-assessed, so how they
- * read text is frozen; a card's customer says only harness text and is never checked.
+ * shown to the judge so that they cannot bias its verdict. They apply to free simulators, including free card
+ * customers. Fixed controller messages are harness text and remain outside these heuristic checks.
  */
 // ponytail: literal boundaries detect suspicious mentions, not their meaning; human review resolves context.
 function mentions(text: string, value: string): boolean {
@@ -34,8 +34,12 @@ export function hiddenLiterals(scenario: Scenario): string[] {
 const normalize = (text: string) => text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
 export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorCheck[] {
-  // Every word of a compiled card's customer is harness text (card/compile.ts): there is nothing to suspect.
-  if (!simulatorWasUsed(trial) || isCardExecution(scenario.execution)) return [];
+  // Fixed controller messages are harness text. Free card customers need the same retrospective
+  // checks as other reactive actors, in addition to the semantic fidelity rubric.
+  const freeCard = trial.events.some(event => event.type === 'simulator' && event.result !== null
+    && typeof event.result === 'object' && 'protocol' in event.result && typeof event.result.protocol === 'string'
+    && (CARD_CUSTOMER_PROTOCOLS as readonly string[]).includes(event.result.protocol));
+  if (!simulatorWasUsed(trial) || isCardExecution(scenario.execution) && !freeCard) return [];
   const users = trial.events.filter(e => e.type === 'user');
   const simulated = users.slice(1);
   if (!simulated.length) return [];

@@ -104,7 +104,7 @@ export class LabWorkspace implements Component {
   private viewedTrial?: string;
   private viewedAt = performance.now();
 
-  constructor(private view: WorkspaceView, private readonly state: WorkspaceState, private readonly theme: Pick<Theme, 'fg' | 'bold'>,
+  constructor(private view: WorkspaceView, private readonly state: WorkspaceState, private readonly theme: Pick<Theme, 'fg' | 'bold'> & Partial<Pick<Theme, 'bg'>>,
     private readonly done: (action: WorkspaceAction) => void, private readonly redraw: () => void, private readonly rows: () => number = () => 32,
     private readonly load?: () => Promise<WorkspaceView>, changes?: WorkspaceChanges) {
     if (view.data && state.space && !state.area && !state.step) this.land(view.data);
@@ -214,7 +214,7 @@ export class LabWorkspace implements Component {
     if (!data) return this.view.agents.length > 1 ? agentsScreen(this.view.agents, this.cursor(), width, new Date()) : startScreen(this.cursor(), width);
     const top = this.top;
     const place = this.state.step ? { step: this.state.step } : { area: this.state.area ?? 'runs' };
-    const withHead = (screen: Screen & { picks?: ResultPick[] }) => ({ ...screen, head: [...header(data, place, width), ...screen.head] });
+    const withHead = (screen: Screen & { picks?: ResultPick[] }) => ({ ...screen, head: [...header(data, place, width, this.rows() < 28), ...screen.head] });
     if (top?.kind === 'situation') {
       const view = this.situation(top.id);
       if (view) return withHead(situationScreen(view, { details: this.state.details, running: !!data.set?.running, editable: !!data.set?.editable }, width));
@@ -507,7 +507,8 @@ export class LabWorkspace implements Component {
     this.readUntil(top?.kind === 'judged' ? top.trialId : undefined);
     const paint = (line: Line) => line.map(part => {
       const text = part.bold ? this.theme.bold(part.text) : part.text;
-      return part.tone ? this.theme.fg(part.tone, text) : text;
+      const foreground = part.tone ? this.theme.fg(part.tone, text) : text;
+      return part.background && this.theme.bg ? this.theme.bg(part.background, foreground) : foreground;
     }).join('');
     const notice = this.state.notice;
     // What the last action did is said whole: it wraps under the header instead of being cut.

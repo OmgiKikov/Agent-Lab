@@ -8,7 +8,7 @@ import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
 import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type Connection } from '../connection.js';
 import { addCaveat, type CauseFailure } from '../caveats.js';
-import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isRunnable, judgeFallback, runnableTarget, scriptIssue, settingsSchema, unconfirmedReferences, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type FailureMode, type Revision, type Scenario, type UserMode } from '../contracts.js';
+import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isCardExecution, isRunnable, judgeFallback, runnableTarget, scriptIssue, settingsSchema, unconfirmedReferences, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type FailureMode, type Revision, type Scenario, type UserMode } from '../contracts.js';
 import { BudgetExhausted, Stopped } from '../errors.js';
 import { ProviderFailure } from '../llm/model-call.js';
 import { roleChoices } from '../llm/models.js';
@@ -185,6 +185,7 @@ function plannedAttempts(record: Experiment): PlannedAttempt[] {
   return record.settings.userModes.flatMap(mode => record.scenarios
     .filter(scenario => mode !== 'scripted' || scenario.user.script !== undefined)
     .flatMap(scenario => Array.from({ length: record.settings.repeats }, (): PlannedAttempt => ({ customer: mode === 'reactive' && !controls.has(scenario.id),
+      customerCallsPerTurn: scenario.execution && isCardExecution(scenario.execution) ? 2 : 1,
       expectations: assessmentRubrics(judgedScenario(scenario, {}), { events: [] }).length }))));
 }
 

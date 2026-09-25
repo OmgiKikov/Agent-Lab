@@ -34,7 +34,7 @@ import { box, beside, row as panelRow, wrap as panelWrap } from './render/panels
  * says exactly what the chat and the CLI say. Pure: no I/O, no painting; widths are the terminal's columns.
  */
 
-export interface Segment { text: string; tone?: Tone; bold?: boolean }
+export interface Segment { text: string; tone?: Tone; bold?: boolean; background?: 'selectedBg' }
 export type Line = Segment[];
 /** One key hint of the footer: the key, then what it does. */
 export interface Hint { key: string; text: string }
@@ -156,7 +156,7 @@ function fitTabs<Place extends string>(tabs: readonly Tab<Place>[], current: Pla
 /** The places in one line: the current one in accent and bold, the others in their own tone, the separators muted. */
 function tabLine<Place extends string>(shown: readonly Tab<Place>[], current: Place, gap: string): Segment[] {
   return [{ text: ' ' }, ...shown.flatMap((tab, index): Segment[] => [...(index ? [{ text: gap, tone: 'muted' as const }] : []),
-    tab.place === current ? { text: `[ ${tab.text} ]`, tone: 'accent', bold: true } : { text: tab.text, tone: tab.tone }])];
+    tab.place === current ? { text: ` ${tab.text} `, tone: 'accent', bold: true, background: 'selectedBg' } : { text: tab.text, tone: tab.tone }])];
 }
 
 function areaLine(data: SpaceData, current: Area, width: number): Line {
@@ -193,10 +193,10 @@ function stepLine(data: SpaceData, current: Step, width: number): Line {
  * The workspace's header: the agent, then its areas (or, before the first result, the steps). Narrower than 50 columns
  * only the line of places stays, so the owner still sees where they are (docs/design/ui-spec.md §6).
  */
-export function header(data: SpaceData, place: { area: Area } | { step: Step }, width: number): Line[] {
+export function header(data: SpaceData, place: { area: Area } | { step: Step }, width: number, compact = false): Line[] {
   const { space } = data;
   const places = 'step' in place ? stepLine(data, place.step, width) : areaLine(data, place.area, width);
-  if (width < NARROW) return [places];
+  if (width < NARROW || compact) return [places];
   const name = /^(?:\/|.*\bAGENT_LAB_)/.test(space.name) ? 'Проверка агента' : space.name;
   return [[{ text: ' AGENT LAB', tone: 'accent', bold: true }, { text: `  /  ${safeLine(clip(name, Math.max(10, width - 22)))}`, tone: 'text' }], [], places, [], [{ text: '─'.repeat(width), tone: 'borderMuted' }]];
 }

@@ -1,7 +1,8 @@
 import { judgedScenario } from './card/legacy-v1.js';
+import { customerBrief, CARD_CUSTOMER_PROTOCOLS } from './card-customer.js';
 import { checkpointReceiptValid } from './checkpoints.js';
 import { z } from 'zod';
-import { fingerprint, isCardExecution, observableRule, type AssessmentFailure, type Requirement, type Scenario, type Source } from './contracts.js';
+import { fingerprint, isCardExecution, observableRule, type AssessmentFailure, type Requirement, type Scenario, type Source, type TraceEvent } from './contracts.js';
 import { assessmentEventContent, assessmentRubrics, metricApplies, metricAssessmentSchema, RAG_METRIC_IDS, validateAssessments, judgeReceiptSchema, type JudgeAudit, type JudgeReceipt, type MetricAssessment, type Rubric } from './assessment.js';
 import { Stopped } from './errors.js';
 import { ProviderFailure } from './llm/model-call.js';
@@ -55,7 +56,11 @@ ${RESPONSE_SCHEMA_TEXT}`;
  * Current judge protocol with the model's full output window. It includes the RAG diagnostics wherever the trial
  * reports retrieval events; judgments that omit those diagnostics use the variant below.
  */
-export const JUDGE_PROTOCOL = fingerprint({ version: 14, promptSources: 'observable-rules', ragEvidence: 'metric-isolated-reply-context-with-stage-v1', citations: 'verbatim-decoded-chunks', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 'model-maximum' });
+export const JUDGE_PROTOCOL_WITH_ACTOR_CONDITIONS = fingerprint({ version: 14, promptSources: 'observable-rules', ragEvidence: 'metric-isolated-reply-context-with-stage-v1', citations: 'verbatim-decoded-chunks', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 'model-maximum' });
+/** Conditions claimed by the actor are retained in the trace, but withheld from new judge votes. */
+export const JUDGE_PROTOCOL_WITH_SUMMARIZED_BRIEF = fingerprint({ version: 15, previous: JUDGE_PROTOCOL_WITH_ACTOR_CONDITIONS, simulatorEvidence: 'observed-move-without-condition-self-assessment-v1' });
+/** Fidelity is judged against the exact sealed brief sent to the actor, not a separately composed summary. */
+export const JUDGE_PROTOCOL = fingerprint({ version: 16, previous: JUDGE_PROTOCOL_WITH_SUMMARIZED_BRIEF, customerBrief: 'sealed-actor-brief-v1' });
 /**
  * The mode of JUDGE_PROTOCOL without the RAG diagnostics, carried by a judgment that JUDGE_PROTOCOL would have given RAG
  * votes. No chat, board or report shows those rubrics and they never move the number, yet they cost six requests per
@@ -67,9 +72,13 @@ export const JUDGE_PROTOCOL_WITHOUT_RAG = fingerprint({ protocol: JUDGE_PROTOCOL
 export const JUDGE_PROTOCOL_16384 = '23b18c288b2345bd2a044b687ceb63f5000e71a897a44b8dbac35e7a0937ff75';
 /** The protocols a stored judgment can be verified under, each with its rubric rule: whether the RAG diagnostics were voted on. */
 const JUDGE_PROTOCOLS = [
-  { hash: JUDGE_PROTOCOL, ragDiagnostics: true }, { hash: JUDGE_PROTOCOL_WITHOUT_RAG, ragDiagnostics: false },
-  { hash: JUDGE_PROTOCOL_16384, ragDiagnostics: true },
-  { hash: fingerprint({ protocol: JUDGE_PROTOCOL_16384, ragDiagnostics: 'not-judged' }), ragDiagnostics: false },
+  { hash: JUDGE_PROTOCOL, ragDiagnostics: true, hideActorConditions: true, actualBrief: true }, { hash: JUDGE_PROTOCOL_WITHOUT_RAG, ragDiagnostics: false, hideActorConditions: true, actualBrief: true },
+  { hash: JUDGE_PROTOCOL_WITH_SUMMARIZED_BRIEF, ragDiagnostics: true, hideActorConditions: true, actualBrief: false },
+  { hash: fingerprint({ protocol: JUDGE_PROTOCOL_WITH_SUMMARIZED_BRIEF, ragDiagnostics: 'not-judged' }), ragDiagnostics: false, hideActorConditions: true, actualBrief: false },
+  { hash: JUDGE_PROTOCOL_WITH_ACTOR_CONDITIONS, ragDiagnostics: true, hideActorConditions: false, actualBrief: false },
+  { hash: fingerprint({ protocol: JUDGE_PROTOCOL_WITH_ACTOR_CONDITIONS, ragDiagnostics: 'not-judged' }), ragDiagnostics: false, hideActorConditions: false, actualBrief: false },
+  { hash: JUDGE_PROTOCOL_16384, ragDiagnostics: true, hideActorConditions: false, actualBrief: false },
+  { hash: fingerprint({ protocol: JUDGE_PROTOCOL_16384, ragDiagnostics: 'not-judged' }), ragDiagnostics: false, hideActorConditions: false, actualBrief: false },
 ] as const;
 type JudgeProtocol = typeof JUDGE_PROTOCOLS[number];
 /** The hash a judgment carries: its protocol under the judge's sampling configuration, when the judge has one. */
@@ -123,10 +132,14 @@ export function scenarioSources(record: { sources: Source[]; requirements: Requi
  * the verdict on another. Every other card keeps its frozen shape, byte for byte, or its stored judgments
  * would stop verifying.
  */
-function judgedCard(input: Input) {
+function judgedCard(input: Input, actualBrief: boolean) {
   const { scenario, trial } = input;
-  const user = trial.userMode === 'static' ? { ...scenario.user, script: [], maxFollowUps: 0 } : scenario.user;
   const execution = scenario.execution;
+  const freeCustomer = actualBrief && isCardExecution(execution) && trial.userMode === 'reactive'
+    && scenario.metrics?.some(metric => metric.subject === 'simulator')
+    && trial.events.some(event => event.type === 'simulator' && CARD_CUSTOMER_PROTOCOLS.some(protocol => protocol === (event.result as { protocol?: unknown })?.protocol));
+  const user = freeCustomer ? customerBrief(execution!.userView)
+    : trial.userMode === 'static' ? { ...scenario.user, script: [], maxFollowUps: 0 } : scenario.user;
   if (isCardExecution(execution)) {
     const judged = new Set((scenario.metrics ?? []).map(metric => metric.id));
     const expectations = execution.evaluatorView.expectations.filter(expectation => judged.has(expectation.id));
@@ -138,8 +151,23 @@ function judgedCard(input: Input) {
     user };
 }
 
-/** This is the complete, frozen judge input. Prior verdicts, usage and run identity are deliberately absent. */
-export function judgeInput(input: Input) {
+/** Preserve the observed decision, while excluding the actor's own claim that it obeyed its conditions. */
+function judgeEvents(events: TraceEvent[], hideActorConditions: boolean): TraceEvent[] {
+  if (!hideActorConditions) return events;
+  return events.map(event => {
+    if (event.type !== 'simulator' || !event.result || typeof event.result !== 'object' || Array.isArray(event.result)) return event;
+    const { conditions: _conditions, ...observed } = event.result as Record<string, unknown>;
+    return { ...event, result: observed };
+  });
+}
+
+/** Final validation uses the protocol's visible evidence, not a different raw serialization. */
+export function judgmentEvidenceEvents(events: TraceEvent[], judged?: Pick<JudgeReceipt, 'protocolHash' | 'configurationHash'>): TraceEvent[] {
+  return judgeEvents(events, judged ? protocolOf(judged)?.hideActorConditions === true : false);
+}
+
+/** The protocol freezes this projection. Historical audits use their original, unfiltered events. */
+export function judgeInput(input: Input, hideActorConditions = true, actualBrief = true) {
   const metric = input.scenario.metrics?.length === 1 ? input.scenario.metrics[0] : undefined;
   if (metric && RAG_METRIC_IDS.has(metric.id)) return ragJudgeInput(input, metric);
   const observationMissing = !input.trial.observation || input.trial.observation.state === 'missing';
@@ -147,20 +175,20 @@ export function judgeInput(input: Input) {
     ? 'Opening and first answer ONLY. Planned follow-ups were not delivered. Never penalize the agent for their absence.'
     : 'Evaluate only delivered requests, within the rubric stage.';
   return {
-    scenario: judgedCard(input),
+    scenario: judgedCard(input, actualBrief),
     evaluationScope: observationMissing
       ? `${scope} Agent prose proves only what was said. Without observed state, action-dependent pass conditions remain unclear; assess reply quality independently.`
       : scope,
     sources: input.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content, hash: fingerprint(content) })),
     trial: { userMode: input.trial.userMode,
-      events: input.trial.events.map(event => ({ seq: event.seq, type: event.type, content: assessmentEventContent(event) })),
+      events: judgeEvents(input.trial.events, hideActorConditions).map(event => ({ seq: event.seq, type: event.type, content: assessmentEventContent(event) })),
       observation: input.trial.observation ?? { state: 'missing', tools: 'partial' }, initialState: input.trial.initialState,
       finalState: observationMissing ? null : input.trial.finalState },
   };
 }
 
 /** One vote's answer as its assessments; `ragDiagnostics` is the rubric rule of the protocol it was asked under. */
-function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['scenario']['metrics']>, ragDiagnostics: boolean): MetricAssessment[] {
+function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['scenario']['metrics']>, ragDiagnostics: boolean, hideActorConditions = true): MetricAssessment[] {
   const rows = judgeResponseSchema.parse(JSON.parse(raw)).assessments;
   const ids = new Set(metrics.map(m => m.id));
   if (rows.length !== ids.size || new Set(rows.map(r => r.metricId)).size !== ids.size || rows.some(r => !ids.has(r.metricId))) {
@@ -172,7 +200,7 @@ function parseJudgment(raw: string, input: Input, metrics: NonNullable<Input['sc
       : failCondition === 'met' && passCondition === 'not_met' ? 'fail' : 'unknown';
     if (row.evidence.some(seq => !events.has(seq))) throw new Error(`Assessment ${row.metricId} cites a nonexistent trace event`);
     if (result !== 'unknown' && !row.evidence.length) throw new Error(`Assessment ${row.metricId} needs trace evidence for pass/fail`);
-    const availableEvents = RAG_METRIC_IDS.has(row.metricId) ? ragJudgeEvents(input, row.metricId) : input.trial.events;
+    const availableEvents = RAG_METRIC_IDS.has(row.metricId) ? ragJudgeEvents(input, row.metricId) : judgeEvents(input.trial.events, hideActorConditions);
     if (row.evidence.some(seq => !availableEvents.some(event => event.seq === seq))) throw new Error('Assessment cites evidence withheld from this metric');
     const citedEvents = row.evidence.map(seq => availableEvents.find(event => event.seq === seq)!);
     const replyConfirms = citedEvents.some(event => event.type === 'assistant');
@@ -245,12 +273,13 @@ export function sealJudgeReceipt(audit: JudgeAudit, complete: boolean): JudgeRec
  * A receipt is trusted only as far as the record backs it: the input hash is re-derived from the
  * current record and the votes must re-aggregate to the recorded assessments.
  */
-function hasCompleteReceipt(input: Input, receipt: JudgeReceipt, metrics: NonNullable<Input['scenario']['metrics']>, ragDiagnostics: boolean): boolean {
+function hasCompleteReceipt(input: Input, receipt: JudgeReceipt, metrics: NonNullable<Input['scenario']['metrics']>, protocol: JudgeProtocol): boolean {
+  const { ragDiagnostics, hideActorConditions } = protocol;
   if (!receipt.complete || input.trial.assessmentError) return false;
   const applicable = metrics.filter(m => metricApplies(m, input.trial, { ragDiagnostics }));
   const notApplicable = metrics.filter(m => !metricApplies(m, input.trial, { ragDiagnostics })).map(m => m.id);
   if (fingerprint(receipt.notApplicable) !== fingerprint(notApplicable)) return false;
-  if (receipt.inputHash !== fingerprint(judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } }))) return false;
+  if (receipt.inputHash !== fingerprint(judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } }, hideActorConditions, protocol.actualBrief))) return false;
   if (receipt.votes.some(v => v.error) || receipt.votes.length !== applicable.length * 2) return false;
   return applicable.every(m => recordedAggregate(input, m.id, receipt.votes.filter(v => v.metricId === m.id).map(v => v.result)));
 }
@@ -270,10 +299,10 @@ export function hasCompleteJudgment(input: Input): boolean {
   if (!metrics.length) return true;
   if (!protocol) return false;
   // A record with the full audit is always judged by it; the receipt serves records without one.
-  if (!audit) return hasCompleteReceipt(input, input.trial.judgeReceipt!, metrics, ragDiagnostics);
+  if (!audit) return hasCompleteReceipt(input, input.trial.judgeReceipt!, metrics, protocol);
   if (input.trial.assessmentError || audit.prompt !== JUDGE_PROMPT) return false;
   const applicable = metrics.filter(m => metricApplies(m, input.trial, { ragDiagnostics }));
-  const data = judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } });
+  const data = judgeInput({ ...input, scenario: { ...input.scenario, metrics: applicable } }, protocol.hideActorConditions, protocol.actualBrief);
   if (audit.inputHash !== fingerprint(data)) return false;
   try { if (fingerprint(JSON.parse(audit.input)) !== audit.inputHash) return false; } catch { return false; }
   const counted = audit.attempts.filter(a => !a.superseded);
@@ -284,8 +313,8 @@ export function hasCompleteJudgment(input: Input): boolean {
       if (attempt.error || !attempt.raw?.trim()) return false;
       const requested = isolated ? applicable.filter(m => m.id === attempt.metricId) : applicable;
       if (isolated && (requested.length !== 1 || !attempt.input
-        || fingerprint(JSON.parse(attempt.input)) !== fingerprint(judgeInput({ ...input, scenario: { ...input.scenario, metrics: requested } })))) return false;
-      if (fingerprint(parseJudgment(attempt.raw, input, requested, ragDiagnostics)) !== fingerprint(attempt.assessments)) return false;
+        || fingerprint(JSON.parse(attempt.input)) !== fingerprint(judgeInput({ ...input, scenario: { ...input.scenario, metrics: requested } }, protocol.hideActorConditions, protocol.actualBrief)))) return false;
+      if (fingerprint(parseJudgment(attempt.raw, input, requested, ragDiagnostics, protocol.hideActorConditions)) !== fingerprint(attempt.assessments)) return false;
     }
   } catch { return false; }
   return applicable.every(m => recordedAggregate(input, m.id,
