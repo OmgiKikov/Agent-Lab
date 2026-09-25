@@ -383,7 +383,7 @@ export async function evaluateTrial(input: {
           buttons: structuredClone(offered) }, userCtx));
         ctx.signal.throwIfAborted();
         const problem = customerReplyIssue(reply, free.brief, shown, free.turned, offered);
-        if (problem) throw new Error(`Клиент, которого играет Lab, отошёл от своей ситуации: ${problem.owner}.`);
+        if (problem) throw new Error(`${problem.owner}.`);
         emit({ type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: reply.move, message: reply.message, ...(reply.conditions ? { conditions: reply.conditions } : {}) } });
         if (reply.move === 'leave') { stopped = true; break; }
         if (reply.move === 'turn') free.turned = true;
