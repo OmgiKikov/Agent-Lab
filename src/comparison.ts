@@ -1,5 +1,6 @@
 import { headlineRule } from './card/expectations.js';
 import { judgedByCheckpoints } from './card/legacy-v1.js';
+import { customerProtocolsOf } from './card-customer.js';
 import { hasCompleteJudgment, observableSources, scenarioSources } from './judge.js';
 import { roleChoices } from './llm/models.js';
 import { agentIdentity, judgeSettingsIdentity, normalizeScenarioIdentity } from './normalize.js';
@@ -276,6 +277,8 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
   // A first-format run judged by its checkpoints is another judgment than one per expectation, whatever the judge model.
   if (before.trials.some(judgedByCheckpoints) !== after.trials.some(judgedByCheckpoints)) notes.push('Протокол судьи отличается: один прогон судился по контрольным точкам, другой — по отдельным ожиданиям. Переоцените старый прогон, чтобы сравнить.');
   if (before.evaluatorVersion !== after.evaluatorVersion) notes.push('Отличается версия судьи или его инструкций: сначала переоцените записанные разговоры одним и тем же судьёй.');
+  // A conversation is read by the customer that played it (card-customer.ts): another customer is another test, and judging again does not change who played.
+  if (fingerprint(customerProtocolsOf(before.trials)) !== fingerprint(customerProtocolsOf(after.trials))) notes.push('Клиента в разговорах «до» и «после» играли разные версии Lab: разницу нельзя приписать агенту.');
   if (fingerprint(before.sources) !== fingerprint(after.sources) || fingerprint(before.requirements) !== fingerprint(after.requirements)) notes.push('Изменились материалы или правила.');
   if (result.cards.onlyBefore.length || result.cards.onlyAfter.length) notes.push('Набор ситуаций изменился.');
   // External agents: a legacy card without a channel is judged on the reply, so it equals the same card with `reply`.

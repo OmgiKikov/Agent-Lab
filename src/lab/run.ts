@@ -181,7 +181,8 @@ const CALLS_UP_TO: [string, string, string] = ['вызова', 'вызовов',
 /**
  * The attempts a run of `record` plans, as its budget counts them (card/budget.ts): every user mode × situation ×
  * repeat, each with the expectations its judge votes on; a customer only in a reactive attempt, and never in a control,
- * which is its opening and one reply.
+ * which is its opening and one reply. A conversation the agent's side cut off is judged once too, up to its break
+ * (judge.ts cut-off mode), with the same votes: its judgment is in the plan like any other.
  */
 function plannedAttempts(record: Experiment): PlannedAttempt[] {
   const controls = new Set(record.positiveControlScenarioIds ?? []);
@@ -387,6 +388,8 @@ async function examine(lab: Lab, record: Experiment, ctx: CallContext): Promise<
   record.connectionExam = await examConnection(target, ctx.signal, (name, index, of) => lab.operations.say(record, `Экзамен подключения, путь ${index + 1} из ${of}: ${name}`));
   ctx.signal.throwIfAborted();
   if (record.connectionExam.status === 'failed') throw new Error(examRefusal(record.connectionExam));
+  // A too simple exam does not stop the run: it is measured, and its percent waits for an exam that checks memory.
+  if (record.connectionExam.status === 'simple') lab.operations.say(record, 'Экзамен подключения слишком простой — нет проверки памяти разговора: прогон идёт, процент не будет показан.');
 }
 
 /** The rollout of the version under test. The adapter's reported `version` remains the identity; this only performs the deployment. */
@@ -454,12 +457,16 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
         } }, userMode, target: record.target });
       };
       let trial = await dialogue();
-      // A stand that failed once (a 500, a dropped connection) says nothing about the agent: the conversation is run
-      // again, once, from the start. The failed one stays in the trace journal and the record names how many were
-      // rerun; an empty reply is the agent's own answer and is never rerun.
-      if (standFailed(trial) && !ctx.signal.aborted) {
+      // A stand that failed once (a 500, a dropped connection) is held again, once, from the start — unless the conversation
+      // had already shown the agent failing (its cut-off judgment counted a failure) or could not be judged up to the break:
+      // a retry never erases what was seen before the crash. The broken conversation stays in the record beside its
+      // retry and counts in the agent's operability; an empty reply is the agent's own answer and is never held again.
+      if (standFailed(trial) && !ctx.signal.aborted && !failureShown(scenario, trial) && !trial.assessmentError) {
         lab.operations.say(record, `${progress()} · сбой стенда, повторяю разговор`);
+        const broken = trial;
         trial = await dialogue();
+        trial.rerunAfter = { trialId: broken.id, cause: broken.invalidCause!, reason: broken.reason, events: broken.events, elapsedMs: broken.elapsedMs, usage: broken.usage,
+          ...(broken.assessments ? { assessments: broken.assessments } : {}), ...(broken.judgeReceipt ? { judgeReceipt: broken.judgeReceipt } : {}) };
         rerun++;
       }
       // Every attempt of this run is counted by the rules of today's edition; a stored run keeps its own.
@@ -487,9 +494,18 @@ async function runSuite(lab: Lab, record: Experiment, runtime: Runtime, agent: R
   if (rejected) throw rejected.reason;
 }
 
-/** The stand, not the agent, broke the conversation: the adapter or the agent's service threw (an `error` event), not an empty reply. */
+/**
+ * The stand broke the conversation: the agent's process or service threw or timed out, or the adapter could not measure
+ * a turn (an `error` event) — not an empty reply, not a stop, not Lab's connection or its model provider. A conversation
+ * judged up to the break (`cutOff`) broke so too.
+ */
 export function standFailed(trial: Experiment['trials'][number]): boolean {
-  return trial.outcome === 'invalid' && (trial.invalidCause === 'agent' || trial.invalidCause === 'measurement') && trial.events.some(event => event.type === 'error');
+  return (trial.outcome === 'invalid' || !!trial.cutOff) && (trial.invalidCause === 'agent' || trial.invalidCause === 'measurement') && trial.events.some(event => event.type === 'error');
+}
+
+/** The conversation showed the agent failing before it broke: a verdict on the agent its judge counted as failed. */
+function failureShown(scenario: Scenario, trial: Experiment['trials'][number]): boolean {
+  return !!trial.assessments?.some(assessment => assessment.result === 'fail' && scenario.metrics?.find(metric => metric.id === assessment.metricId)?.subject === 'agent');
 }
 
 /**

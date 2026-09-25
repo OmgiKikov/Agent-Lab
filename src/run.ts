@@ -33,7 +33,7 @@ export type Verdict = 'pass' | 'fail' | 'unknown';
  * leave a situation `unknown` and the tie-break when two reasons are equally frequent.
  */
 export const NOT_MEASURED_CODES = [
-  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'agent_no_reply', 'measurement_error', 'attempts_mismatch',
+  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'agent_no_reply', 'measurement_error', 'connection_error', 'provider_error', 'attempts_mismatch',
   'judge_error', 'judge_unavailable', 'judge_stopped', 'human_invalid', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
   'human_unknown', 'not_judged', 'judge_split', 'no_evidence', 'judge_unclear',
 ] as const;
@@ -271,8 +271,9 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   const codes: NotMeasuredCode[] = [];
   const latest = latestHumanReviews({ trials: [trial], humanReviews: record.humanReviews });
   if (trial.outcome === 'cancelled') codes.push('stopped');
-  else if (trial.outcome === 'invalid') codes.push(({ turn_limit: 'turn_limit', simulator: 'simulator_error', agent: 'agent_error', service_reply: 'service_reply', measurement: 'measurement_error',
-    no_reply: 'agent_no_reply' } as const)[invalidCauseOf(trial)]);
+  // A conversation judged up to its break names the break for everything its judge could not count.
+  else if (trial.outcome === 'invalid' || trial.cutOff) codes.push(({ turn_limit: 'turn_limit', simulator: 'simulator_error', agent: 'agent_error', service_reply: 'service_reply', measurement: 'measurement_error',
+    no_reply: 'agent_no_reply', connection: 'connection_error', provider: 'provider_error' } as const)[invalidCauseOf(trial)]);
   const failure = assessmentFailureOf(trial);
   if (failure) codes.push(({ code_only: 'not_judged', stopped: 'judge_stopped', unavailable: 'judge_unavailable', rejected: 'judge_error' } as const)[failure]);
   if (latest.get(`${trial.id}|dialogue`)?.verdict === 'invalid'

@@ -41,6 +41,8 @@ export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
   service_reply: 'вместо агента ответил стенд',
   agent_no_reply: 'агент не дал ответа клиенту',
   measurement_error: 'подключение не показало, что нужно для проверки',
+  connection_error: 'сбой подключения: Lab не смог запустить адаптер агента или понять его ответ',
+  provider_error: 'клиенту, которого играет Lab, не ответил провайдер модели — повторите прогон позже',
   attempts_mismatch: 'запись разговоров неполная',
   judge_error: 'судья ответил не по формату',
   judge_unavailable: 'судья не ответил — сбой связи или лимит запросов',
@@ -70,7 +72,7 @@ export const NOT_MEASURED_ABOUT_OWNER: Partial<Record<NotMeasuredCode, string>> 
  */
 export const NOT_MEASURED_SIDE: Record<NotMeasuredCode, 'agent' | 'client' | 'judge' | null> = {
   in_progress: null, not_reached: null, stopped: null, attempts_mismatch: null, human_invalid: null, human_unknown: null,
-  agent_error: 'agent', service_reply: 'agent', agent_no_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent',
+  agent_error: 'agent', service_reply: 'agent', agent_no_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent', connection_error: 'agent', provider_error: null,
   turn_limit: 'client', simulator_error: 'client', simulator_deviated: 'client', simulator_unclear: 'client',
   judge_error: 'judge', judge_unavailable: 'judge', judge_stopped: 'judge',
   not_judged: null, judge_split: null, no_evidence: null, judge_unclear: null,
@@ -137,7 +139,7 @@ export interface ResultView {
    * The connection exam the run took before its first dialogue (exam.ts): unless it passed, no percent is shown — the
    * headline's, the topics' or the bounds' — while the counts stay. Absent for runs made before the exam existed.
    */
-  connection?: 'passed' | 'failed' | 'absent';
+  connection?: 'passed' | 'failed' | 'absent' | 'simple';
   /** How many reactive conversations actually had a semantic customer assessment. */
   simulator?: SimulatorEvidence;
   runId: string;

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { calibrateRun } from '../card/calibrate.js';
+import { customerProtocolsOf } from '../card-customer.js';
 import { logReviewSchema } from '../card/calibration.js';
 import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
@@ -50,7 +51,8 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
     verifyAcceptedRun(record);
     retainAcceptedTests(record);
     if (input.judge) { record.settings.judge = input.judge; delete record.settings.roles.judge; }
-    record.evaluatorVersion = evaluatorVersion(record.settings);
+    // The conversations judged again were played by the customer that recorded them, not by today's.
+    record.evaluatorVersion = evaluatorVersion(record.settings, customerProtocolsOf(previous.trials.filter(t => !input.trialIds || input.trialIds.includes(t.id))));
     record.assessmentOf = previous.id;
     let execution = previous;
     const ancestry = new Set<string>();

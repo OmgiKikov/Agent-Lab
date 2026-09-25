@@ -3,15 +3,21 @@ import { constants } from 'node:fs';
 import { access, readFile, stat } from 'node:fs/promises';
 import { delimiter, extname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { fingerprint, isRunnable, scalarSchema, usageSchema, type ReleaseHook, type ReleaseLog, type RunnableTarget, type Target, type World } from './contracts.js';
 import type { CallContext, DialogueMessage, TargetSession } from './runtime.js';
 import { targetEntryPath } from './target-version.js';
-import { AgentRequestFailed } from './errors.js';
+import { AGENT_TIMEOUT_MS } from './target-schema.js';
+import { endGroup, endedByStop, trackGroup, untrackGroup } from './agent-processes.js';
+
+export { closeAllTargets } from './agent-processes.js';
+import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure, Stopped } from './errors.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
-import { addressVariables, atPointer, renderAddress, renderRequest, replyText, templateVariables, type Json, type RequestTemplate, type RequestValues } from './http-template.js';
+import { addressVariables, atPointer, renderAddress, renderRequest, replyAt, replyButtons, replyStatus, replyText, templateVariables, type Json, type RequestTemplate, type RequestValues } from './http-template.js';
 import { countText } from './plural.js';
+import { clip } from './text.js';
 
 type HttpTarget = Extract<Target, { kind: 'http' }>;
 
@@ -19,7 +25,7 @@ function httpHeaders(target: HttpTarget): Record<string, string> {
   const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' };
   for (const [header, variable] of Object.entries(target.headersEnv)) {
     const value = process.env[variable];
-    if (!value) throw new Error(`Не задана переменная окружения ${variable} для заголовка ${header}. Задайте её перед запуском Pi.`);
+    if (!value) throw new ConnectionFailure('start', `Не задана переменная окружения ${variable} для заголовка ${header}. Задайте её перед запуском Pi.`);
     headers[header] = value;
   }
   return headers;
@@ -136,12 +142,15 @@ export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, s
       try { if (grouped && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL'); }
     };
+    // Kept while it runs, so a stop of Lab ends it too; once it exits, what it left running is the stand's (see above).
+    if (grouped && child.pid) trackGroup(child.pid, [release.command, ...release.args]);
     const timer = setTimeout(() => { timedOut = true; kill(); }, release.timeoutMs);
     signal.addEventListener('abort', kill, { once: true });
     const finish = (code: number | null, sig: NodeJS.Signals | null) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer); signal.removeEventListener('abort', kill);
+      if (child.pid) untrackGroup(child.pid);
       // What the hook left running keeps its end of the pipes: drained unread, never keeping Lab itself alive.
       reading = false;
       for (const stream of [child.stdout, child.stderr]) { stream?.resume(); (stream as { unref?: () => void } | null)?.unref?.(); }
@@ -151,6 +160,7 @@ export async function runRelease(release: ReleaseHook, env: NodeJS.ProcessEnv, s
     child.once('error', error => {
       if (finished) return;
       finished = true; clearTimeout(timer); signal.removeEventListener('abort', kill);
+      if (child.pid) untrackGroup(child.pid);
       reject(new Error(`Не удалось запустить хук выпуска ${release.command}: ${spawnReason(error)}`));
     });
     child.once('exit', (code, sig) => {
@@ -226,9 +236,22 @@ interface ExternalTargetInput {
 }
 type SessionInput<K extends ExternalTargetInput['target']['kind']> = Omit<ExternalTargetInput, 'target'> & { target: Extract<Target, { kind: K }> };
 
+/** The types a reply's field may be expected to have, in the owner's words. */
+const TYPE_WORDS: Record<string, string> = { string: 'строка', number: 'число', boolean: 'true или false', object: 'объект', array: 'список' };
+
+/** What of a reply breaks Lab's contract, field by field: an object is read against the object's own rules, so the field is named. */
+function contractIssues(raw: unknown): string {
+  const object = externalReplySchema.options[1];
+  const result = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? object.safeParse(raw) : undefined;
+  if (!result || result.success) return 'ответ — не строка и не объект с полем reply';
+  return [...new Set(result.error.issues.flatMap(issue => issue.code === 'unrecognized_keys' ? issue.keys.map(key => `лишнее поле «${clip(key, 60)}»`)
+    : [`поле «${issue.path.join('.') || 'reply'}» — ${issue.code === 'invalid_type' ? `ожидается ${TYPE_WORDS[issue.expected] ?? issue.expected}` : 'значение не по контракту'}`]))]
+    .slice(0, 5).join('; ');
+}
+
 function applyReply(raw: unknown, state: World, ctx: CallContext, onRecords?: () => void, onReply?: ExternalTargetInput['onReply']): string {
   const parsed = externalReplySchema.safeParse(raw);
-  if (!parsed.success) throw new Error(`Ответ агента не по контракту Lab (${[...new Set(parsed.error.issues.map(i => i.path.join('.') || 'весь ответ'))].join(', ')}): ожидается строка или объект с полем reply.`);
+  if (!parsed.success) throw new ConnectionFailure('contract', `Ответ агента не по контракту Lab: ${contractIssues(raw)}. Ожидается строка или объект с полем reply и только полями контракта.`);
   onReply?.(parsed.data);
   if (typeof parsed.data === 'string') return parsed.data;
   const { reply, retrievals, events, records, measurementError } = parsed.data;
@@ -241,7 +264,7 @@ function applyReply(raw: unknown, state: World, ctx: CallContext, onRecords?: ()
   }
   if (measurementError) {
     if (reply.trim()) ctx.onTargetEvent?.({ type: 'assistant', text: reply });
-    throw new Error(`Ошибка измерения внешнего агента: ${measurementError}`);
+    throw new MeasurementFailure(`Адаптер сообщил, что не может измерить этот ход: ${measurementError}`);
   }
   return reply;
 }
@@ -300,7 +323,7 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
   try { response = await fetch(url, { method: 'POST', headers, signal, body: JSON.stringify(body) }); }
   catch (error) { throw failed(error); }
   if (!response.ok) { await response.body?.cancel(); throw new AgentRequestFailed('status', `Агент ответил ошибкой ${response.status}.`, response.status); }
-  if (Number(response.headers.get('content-length')) > REPLY_BYTES) { await response.body?.cancel(); throw new Error(REPLY_TOO_LARGE); }
+  if (Number(response.headers.get('content-length')) > REPLY_BYTES) { await response.body?.cancel(); throw new ConnectionFailure('contract', REPLY_TOO_LARGE); }
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -310,12 +333,12 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
       try { chunk = await reader.read(); } catch (error) { throw failed(error); }
       if (chunk.done) break;
       size += chunk.value.byteLength;
-      if (size > REPLY_BYTES) { await reader.cancel(); throw new Error(REPLY_TOO_LARGE); }
+      if (size > REPLY_BYTES) { await reader.cancel(); throw new ConnectionFailure('contract', REPLY_TOO_LARGE); }
       chunks.push(chunk.value);
     }
   } finally { reader.releaseLock(); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown; }
-  catch { throw new Error('Агент ответил не JSON: Lab ждёт ответ в формате JSON.'); }
+  catch { throw new ConnectionFailure('contract', 'Агент ответил не JSON: Lab ждёт ответ в формате JSON.'); }
 }
 
 export type TemplateTarget = HttpTarget & { request: RequestTemplate };
@@ -345,9 +368,24 @@ export function agentSession(target: TemplateTarget, reply: unknown): string | n
   return typeof value === 'string' && value !== '' || typeof value === 'number' ? value : undefined;
 }
 
+/**
+ * The reply of an agent in its own format as Lab's contract reads it: its text and, where the template maps them, its
+ * buttons and what the turn gave the customer — a handoff or no reply by the status values the template names. A turn
+ * that is not a reply may come without text.
+ */
+export function templateReply(target: TemplateTarget, body: unknown): ExternalReply {
+  const { buttons, outcome } = target.request;
+  const status = outcome ? replyStatus(body, outcome) : undefined;
+  const turn: TurnOutcome = status !== undefined && outcome?.handoff?.includes(status) ? 'handoff' : status !== undefined && outcome?.noReply?.includes(status) ? 'no_reply' : 'reply';
+  const text = turn === 'reply' ? replyText(body, replyPointer(target)) : replyAt(body, replyPointer(target)) ?? '';
+  if (!buttons && !outcome) return text;
+  const offered = buttons ? replyButtons(body, buttons) : [];
+  return { reply: text, events: [], ...(turn !== 'reply' ? { outcome: turn } : {}), ...(status !== undefined ? { status } : {}), ...(offered.length ? { buttons: offered } : {}) };
+}
+
 /** Where the connection says the agent's text is; unset until the owner picks it from the connection check. */
 function replyPointer(target: TemplateTarget): string {
-  if (target.request.reply === undefined) throw new Error('В подключении не выбран путь к тексту ответа агента: запустите agent-lab doctor --connection подключение.json --yes и укажите --reply.');
+  if (target.request.reply === undefined) throw new ConnectionFailure('start', 'В подключении не выбран путь к тексту ответа агента: запустите agent-lab doctor --connection подключение.json --yes и укажите --reply.');
   return target.request.reply;
 }
 
@@ -362,17 +400,19 @@ async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> 
   let session: string | number | undefined;
   return {
     async respond(message, options) {
-      if (closed) throw new Error('Сессия с внешним агентом закрыта.');
+      if (closed) throw new ConnectionFailure('protocol', 'Сессия с внешним агентом закрыта.');
       ctx.signal.throwIfAborted();
       if (templated) {
         // The agent keeps its conversation by the trial's own id, by the turns sent whole, or by the id it named itself.
         const past = history();
         const last = past.at(-1);
         const turns = (last?.role === 'user' && last.content === message ? past : [...past, { role: 'user' as const, content: message }]).map(turn => ({ role: turn.role, text: turn.content }));
-        const body = await templateExchange(templated, { message, conversation: sessionId, turns, ...(session !== undefined ? { session } : {}) }, ctx.signal);
+        const body = await templateExchange(templated, { message, conversation: sessionId, turns, ...(session !== undefined ? { session } : {}),
+          ...(options?.choice ? { choice: { text: options.choice.text, ...(options.choice.value !== undefined ? { value: options.choice.value } : {}) } } : {}) }, ctx.signal);
         session = agentSession(templated, body) ?? session;
-        // Text only: such an agent shows neither its tools nor a reset, so the dialogue is judged on its replies.
-        return applyReply(replyText(body, replyPointer(templated)), state, ctx, input.onRecords, input.onReply);
+        // Its text, buttons and status as the template maps them: such an agent shows neither its tools nor a reset, so the
+        // dialogue is judged on its replies.
+        return applyReply(templateReply(templated, body), state, ctx, input.onRecords, input.onReply);
       }
       const body = await postJson(renderAddress(target.url), headers, { sessionId, scenarioId, initialState, messages: history(), message,
         ...(options?.choice ? { choice: options.choice } : {}),
@@ -384,10 +424,11 @@ async function httpSession(input: SessionInput<'http'>): Promise<TargetSession> 
 }
 
 async function moduleSession(input: SessionInput<'module'>): Promise<TargetSession> {
-  return commandSession({ ...input, initialize: true, target: {
+  return commandSession({ ...input, initialize: true, channel: 'pipe', target: {
     kind: 'command', command: process.execPath,
     args: [fileURLToPath(new URL('./module-worker.mjs', import.meta.url)), input.target.path, input.target.exportName],
-    timeoutMs: input.target.timeoutMs ?? input.ctx.timeoutMs,
+    // A module waits for its reply exactly as long as a command does: its own time, else the connection default — never the model's.
+    timeoutMs: input.target.timeoutMs ?? AGENT_TIMEOUT_MS,
   } });
 }
 
@@ -396,14 +437,19 @@ async function moduleSession(input: SessionInput<'module'>): Promise<TargetSessi
  *   stdin  → {"type":"respond", sessionId, scenarioId, initialState, messages, message, choice?}
  *   stdout ← "reply"  |  {"reply", "outcome"?, "buttons"?, "events"?, "records"?}      one JSON line per request
  *   stdin  → {"type":"close", sessionId}, then stdin ends
- * A stdout line that is not JSON (a stray print) is diagnostics, kept with the stderr tail; it never answers a request.
+ * One JSON line answers one request. A JSON line no request waits for — a second answer to a request, a progress line
+ * in JSON — breaks the protocol: the conversation is not measured, the adapter is named, not the agent. A line that is
+ * not JSON (a stray print) is diagnostics, kept with the stderr tail; it never answers a request. The module worker
+ * answers on a pipe of its own (`channel: 'pipe'`, fd 3), so whatever the module prints is diagnostics too.
  * A reply that misses the deadline kills the process; an early exit surfaces the exit code and the diagnostics tail.
  */
-async function commandSession(input: SessionInput<'command'> & { initialize?: boolean }): Promise<TargetSession> {
+async function commandSession(input: SessionInput<'command'> & { initialize?: boolean; channel?: 'stdout' | 'pipe' }): Promise<TargetSession> {
   const { target, sessionId, scenarioId, state, history, ctx } = input;
   ctx.signal.throwIfAborted();
   const grouped = process.platform !== 'win32';
-  const child = spawn(target.command, target.args, { cwd: target.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: process.env, detached: grouped });
+  const own = input.channel === 'pipe';
+  const child = spawn(target.command, target.args, { cwd: target.cwd, stdio: own ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'], env: process.env, detached: grouped });
+  const answers = (own ? child.stdio[3] : child.stdout) as Readable;
   let killed = false;
   const kill = () => {
     if (killed) return;
@@ -414,35 +460,45 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
   let diagnostics = '';
   const note = (text: string) => { diagnostics = `${diagnostics}${text}`.slice(-4000); };
   child.stderr.on('data', chunk => note(String(chunk)));
+  if (own) child.stdout.on('data', chunk => note(String(chunk)));
   child.stdin.on('error', () => {});
   let pending: { resolve: (reply: unknown) => void; reject: (error: Error) => void } | undefined;
   let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   const takePending = () => { const waiting = pending; pending = undefined; return waiting; };
-  const exited = () => new Error(`Процесс агента завершился${exit ? exit.code !== null ? ` с кодом ${exit.code}` : ` по сигналу ${exit.signal}` : ''}${diagnostics.trim() ? `: ${diagnostics.trim()}` : '.'}`);
+  // A process Lab itself ended while stopping stopped the conversation; any other end of it is the agent's side failing the turn.
+  const exited = () => child.pid && endedByStop(child.pid) ? new Stopped('closing') : new AgentFailure(`Процесс агента завершился${exit ? exit.code !== null ? ` с кодом ${exit.code}` : ` по сигналу ${exit.signal}` : ''}${diagnostics.trim() ? `: ${diagnostics.trim()}` : '.'}`);
   let bytes = 0;
-  child.stdout.on('data', chunk => {
+  answers.on('data', chunk => {
     bytes += Buffer.byteLength(chunk);
-    if (bytes > REPLY_BYTES) { takePending()?.reject(new Error(REPLY_TOO_LARGE)); kill(); }
+    if (bytes > REPLY_BYTES) { takePending()?.reject(new ConnectionFailure('contract', REPLY_TOO_LARGE)); kill(); }
   });
-  const lines = createInterface({ input: child.stdout });
+  // The first line no request waited for: the session answers nothing more once it is there, and says so once.
+  let violation: ConnectionFailure | undefined;
+  let told = false;
+  const broken = (): ConnectionFailure | undefined => { if (violation && !told) { told = true; return violation; } return undefined; };
+  const lines = createInterface({ input: answers });
   lines.on('line', line => {
     let reply: unknown;
     try { reply = JSON.parse(line); } catch { note(`${line}\n`); return; }
     const waiting = takePending();
-    if (waiting) waiting.resolve(reply); else note(`${line}\n`);
+    if (waiting) { waiting.resolve(reply); return; }
+    note(`${line}\n`);
+    violation ??= new ConnectionFailure('protocol', `Адаптер прислал лишнюю строку без запроса: «${clip(line, 200)}». Одна строка JSON отвечает на один запрос; строки прогресса и отладки пишите в stderr.`);
   });
   child.on('close', (code, signal) => { exit = { code, signal }; takePending()?.reject(exited()); });
+  const streamsClosed = new Promise<void>(resolve => child.once('close', () => resolve()));
   await new Promise<void>((resolve, reject) => {
-    child.once('spawn', () => resolve());
-    child.once('error', error => reject(new Error(`Не удалось запустить агента ${target.command}: ${spawnReason(error)}`)));
+    child.once('spawn', () => { if (grouped && child.pid) trackGroup(child.pid, [target.command, ...target.args]); resolve(); });
+    child.once('error', error => reject(new ConnectionFailure('start', `Не удалось запустить агента ${target.command}: ${spawnReason(error)}.`)));
   });
   const initialState = structuredClone(state);
   let closed = false;
   const exchange = async (payload: unknown): Promise<unknown> => {
-    if (closed) throw new Error('Сессия с внешним агентом закрыта.');
+    if (closed) throw new ConnectionFailure('protocol', 'Сессия с внешним агентом закрыта.');
     ctx.signal.throwIfAborted();
+    if (violation) throw broken() ?? violation;
     if (exit) throw exited();
-    if (pending) throw new Error('У сессии уже есть активный запрос.');
+    if (pending) throw new ConnectionFailure('protocol', 'У сессии уже есть активный запрос.');
     bytes = 0;
     const reply = new Promise<unknown>((resolve, reject) => { pending = { resolve, reject }; });
     // A stray print instead of the reply shows here: the owner sees what the agent wrote while Lab waited.
@@ -454,6 +510,8 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
       const sent = new Promise<void>((resolve, reject) => { child.stdin.write(`${JSON.stringify(payload)}\n`, error => error ? reject(error) : resolve()); });
       const [, body] = await Promise.all([sent, reply]);
       ctx.signal.throwIfAborted();
+      // A second line in the same breath as the answer is already read: that answer is not the agent's one reply.
+      if (violation) throw broken() ?? violation;
       return body;
     } finally { clearTimeout(timer); ctx.signal.removeEventListener('abort', onAbort); }
   };
@@ -469,18 +527,31 @@ async function commandSession(input: SessionInput<'command'> & { initialize?: bo
       if (!exit) {
         if (ctx.signal.aborted) kill();
         else child.stdin.end(`${JSON.stringify({ type: 'close', sessionId })}\n`);
+        // The adapter's own exit ends the conversation; what it started (a helper with its output redirected) goes with its group.
         await new Promise<void>(resolve => {
-          if (exit) { resolve(); return; }
-          const timer = setTimeout(() => { kill(); resolve(); }, 2000);
-          child.once('close', () => { clearTimeout(timer); resolve(); });
+          if (exit || child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+          const timer = setTimeout(resolve, 2000);
+          child.once('exit', () => { clearTimeout(timer); resolve(); });
         });
       }
+      if (grouped && child.pid) await endGroup(child.pid);
+      else if (!exit) kill();
+      // Every line the adapter wrote is read before the session says how it ended.
+      await Promise.race([streamsClosed, new Promise(resolve => setTimeout(resolve, 500))]);
       lines.close();
+      // A line that arrived after the last answer breaks the protocol as much as one before it.
+      const unsaid = broken();
+      if (unsaid) throw unsaid;
     },
   };
   if (input.initialize) {
     try { await exchange({ type: 'open', sessionId, scenarioId, initialState, prompt: input.prompt, promptHash: input.prompt === undefined ? undefined : fingerprint(input.prompt) }); }
-    catch (error) { kill(); await session.close(); throw error; }
+    catch (error) {
+      kill(); await session.close().catch(() => {});
+      // Before its first message the adapter only starts: whatever stops it there is the connection's, not the agent's answer.
+      throw ctx.signal.aborted || error instanceof ConnectionFailure ? error
+        : new ConnectionFailure('start', `Адаптер агента не запустился: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
   }
   return session;
 }
@@ -492,18 +563,44 @@ export async function readPrompt(file: string): Promise<string> {
   if (!prompt.trim() || prompt.includes('\0')) throw new Error('Пустой или бинарный prompt-файл.');
   return prompt;
 }
+/** A failure of a session typed, so its cause is read by its kind (evaluation.ts): what no typed failure names is the connection's. */
+function typed(error: unknown, signal: AbortSignal, kind: ConnectionFailure['kind']): unknown {
+  if (signal.aborted || error instanceof Stopped || error instanceof ConnectionFailure || error instanceof AgentFailure || error instanceof MeasurementFailure || error instanceof AgentRequestFailed) return error;
+  return new ConnectionFailure(kind, error instanceof Error ? error.message : String(error), { cause: error });
+}
+
+/**
+ * A session with the agent under test. Every failure that leaves it is typed: the agent's side gave a turn nothing
+ * (AgentRequestFailed, AgentFailure), the adapter could not measure a turn (MeasurementFailure), or Lab could not start
+ * the adapter or read its reply (ConnectionFailure) — a stop keeps its own reason.
+ */
 export async function openExternalTarget(input: ExternalTargetInput): Promise<TargetSession> {
-  if (input.target.promptFile) {
-    const prompt = await readPrompt(input.target.promptFile);
-    const original = input.onReply;
-    input = { ...input, prompt, onReply(reply) {
-      if (typeof reply === 'string' || reply.promptHash !== fingerprint(prompt)) throw new Error('Адаптер не подтвердил применение выбранного промпта (promptHash).');
-      original?.(reply);
-    } };
-  }
-  switch (input.target.kind) {
-    case 'http': return httpSession({ ...input, target: input.target });
-    case 'module': return moduleSession({ ...input, target: input.target });
-    case 'command': return commandSession({ ...input, target: input.target });
-  }
+  const { signal } = input.ctx;
+  let session: TargetSession;
+  try {
+    if (input.target.promptFile) {
+      const file = input.target.promptFile;
+      const prompt = await readPrompt(file).catch(error => {
+        const code = (error as NodeJS.ErrnoException).code;
+        throw new ConnectionFailure('start', code === 'ENOENT' || code === 'ENOTDIR' ? `Не найден файл промпта: ${file}. Исправьте promptFile в подключении.`
+          : code === 'EACCES' || code === 'EPERM' ? `Нет доступа к файлу промпта: ${file}. Проверьте права чтения.` : `Файл промпта ${file} не читается: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      });
+      const original = input.onReply;
+      input = { ...input, prompt, onReply(reply) {
+        if (typeof reply === 'string' || reply.promptHash !== fingerprint(prompt)) throw new ConnectionFailure('contract', 'Адаптер не подтвердил применение выбранного промпта (promptHash).');
+        original?.(reply);
+      } };
+    }
+    switch (input.target.kind) {
+      case 'http': session = await httpSession({ ...input, target: input.target }); break;
+      case 'module': session = await moduleSession({ ...input, target: input.target }); break;
+      case 'command': session = await commandSession({ ...input, target: input.target }); break;
+    }
+  } catch (error) { throw typed(error, signal, 'start'); }
+  return {
+    async respond(message, options) {
+      try { return await session.respond(message, options); } catch (error) { throw typed(error, signal, 'contract'); }
+    },
+    close: () => session.close(),
+  };
 }

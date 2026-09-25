@@ -391,8 +391,16 @@ export interface Trial {
   /**
    * Why the dialogue could not be measured, typed where it broke. Records written before it carry only `reason` (run.ts
    * decodes them); records written before 'measurement' existed keep the cause they were stored with, without migration.
+   * A conversation judged up to its break (`cutOff`) keeps the cause of the break here too.
    */
   invalidCause?: InvalidCause;
+  /**
+   * The agent's side broke the conversation (`invalidCause`: agent, no_reply, service_reply) after the agent had spoken:
+   * it was judged up to the break in the cut-off mode (judge.ts), where only a failure the agent's own events before the
+   * break show counts, and every other expectation stays unmeasured for the break's cause (run.ts). The outcome is then
+   * `ungraded`. Absent on every other conversation and in older records, whose breaks stayed unmeasured.
+   */
+  cutOff?: true;
   /** Why the judge left the attempt without a judgment, typed where it failed. Records written before it carry only `assessmentError`. */
   assessmentFailure?: AssessmentFailure;
   /**
@@ -408,16 +416,33 @@ export interface Trial {
    * stored result never moves.
    */
   countingVersion?: 2 | 3;
+  /**
+   * A conversation of this attempt that the agent's side broke — a crash, a timeout, an error of its service, a turn it
+   * could not measure — before it showed the agent failing: the run held the conversation again from the start, once, and
+   * this is that second conversation (lab/run.ts). Kept as evidence and counted in the agent's operability, never in the
+   * result; a conversation that did show a failure is never held again. Absent otherwise and in older records.
+   */
+  rerunAfter?: BrokenConversation;
+}
+/** A conversation the agent's side broke and the run held again: its own id (its trace and judge files are filed under it), why it broke, what was said. */
+export interface BrokenConversation {
+  trialId: string; cause: InvalidCause; reason: string; events: TraceEvent[]; elapsedMs: number; usage: Usage;
+  /** What its judge counted up to the break, when the agent had spoken before it (evaluation.ts cut-off mode). */
+  assessments?: MetricAssessment[]; judgeReceipt?: JudgeReceipt;
 }
 /**
  * Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed
  * to answer, a service text stood in for the agent's reply, or `measurement`: the agent's side answered but the
  * measurement could not be made — the adapter reported a measurementError, or the connection did not show the
  * state, tool log, reset or observed field the checks need; `no_reply`: the adapter said the turn gave the customer
- * nothing (a service status, a failed generation) — the agent's operability, never the Lab's error nor a failed duty.
+ * nothing (a service status, a failed generation) — the agent's operability, never the Lab's error nor a failed duty;
+ * `connection`: Lab could not start the agent's adapter or talk to it (a process that did not start, a prompt file that
+ * is gone, a reply outside the contract, a line outside the protocol); `provider`: the model provider refused or failed
+ * the customer Lab plays. Neither is the agent's. The cause is chosen by the type of what broke (evaluation.ts), and
+ * records written before `connection` and `provider` existed keep the cause they were stored with.
  * Values are only ever appended, never renamed or reordered, so every stored cause stays valid.
  */
-export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement', 'no_reply'] as const;
+export const INVALID_CAUSES = ['turn_limit', 'simulator', 'agent', 'service_reply', 'measurement', 'no_reply', 'connection', 'provider'] as const;
 export type InvalidCause = typeof INVALID_CAUSES[number];
 /** Why an attempt has no judgment: only code checks were re-run, the run was stopped, the model provider did not answer, or the judge's answers were rejected. */
 export const ASSESSMENT_FAILURES = ['code_only', 'stopped', 'unavailable', 'rejected'] as const;
@@ -503,7 +528,8 @@ const toolChannelSchema = z.strictObject({ confirmed: z.boolean(), tools: z.arra
 /**
  * What the connection exam (exam.ts) saw before a run's first dialogue: each path and step, the turn the agent gave and
  * whether it was the one the path expects. `absent` — the connection has no exam: the run is measured, its percent is
- * not shown (result-view.ts). Absent in runs made before the exam existed; a re-assessment carries its run's.
+ * not shown (result-view.ts); `simple` — every path passed, but none checks the conversation's memory (exam.ts), so it
+ * counts as no exam. Absent in runs made before the exam existed; a re-assessment carries its run's.
  */
 export const EXAM_TURNS = ['reply', 'buttons', 'handoff', 'no_reply', 'empty', 'service', 'missing'] as const;
 export type ExamTurn = typeof EXAM_TURNS[number];
@@ -515,7 +541,7 @@ const realismSideSchema = z.strictObject({ messages: z.number().nonnegative(), w
 export const realismSchema = z.strictObject({ conversations: z.number().int().positive(), synthetic: realismSideSchema, logged: realismSideSchema });
 export type Realism = z.infer<typeof realismSchema>;
 export const examResultSchema = z.strictObject({
-  checkedAt: z.string(), status: z.enum(['passed', 'failed', 'absent']),
+  checkedAt: z.string(), status: z.enum(['passed', 'failed', 'absent', 'simple']),
   paths: z.array(z.strictObject({ name: z.string().max(200), passed: z.boolean(), steps: z.array(z.strictObject({
     said: z.string().max(3000), pressed: z.boolean(), expect: z.enum(['reply', 'buttons', 'handoff']), got: z.enum(EXAM_TURNS),
     passed: z.boolean(), problem: z.string().max(1000).optional(), status: z.string().max(200).optional(),
@@ -587,6 +613,9 @@ export interface Experiment {
 }
 export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable() });
 const revisionSchema = z.strictObject({ id: text, parentId: text.nullable(), spec: agentSchema, hypothesis: z.string(), createdAt: text });
+const traceEventSchema = z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'observation', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() });
+const brokenConversationSchema = z.strictObject({ trialId: identifier, cause: z.enum(INVALID_CAUSES), reason: z.string(), events: z.array(traceEventSchema), elapsedMs: z.number().finite().nonnegative(), usage: usageSchema,
+  assessments: z.array(metricAssessmentSchema).max(12).optional(), judgeReceipt: judgeReceiptSchema.optional() });
 export const trialSchema = z.strictObject({
   diagnosticReceipt: retired,
   checkpoints: z.array(checkpointResultSchema).max(12).optional(), checkpointReceipt: checkpointReceiptSchema.optional(),
@@ -595,7 +624,7 @@ export const trialSchema = z.strictObject({
   split: z.enum(['dev', 'control']), manifestHash: text, outcome: z.enum(['pass', 'fail', 'ungraded', 'invalid', 'cancelled']), reason: z.string(),
   checks: z.array(z.strictObject({ id: identifier, description: z.string(), passed: z.boolean(), evidence: z.string() })),
   simulatorChecks: z.array(z.strictObject({ id: z.enum(SIMULATOR_CHECK_IDS), description: z.string(), passed: z.boolean(), evidence: z.string(), seq: z.number().int().nonnegative().optional(), heuristic: z.boolean() })).max(12).optional(),
-  events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'observation', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
+  events: z.array(traceEventSchema),
   initialState: worldSchema, finalState: worldSchema, usage: usageSchema, elapsedMs: z.number().finite().nonnegative(),
   assessments: z.array(metricAssessmentSchema).max(12).optional(), assessmentError: z.string().max(4000).optional(),
   observation: z.strictObject({ state: z.enum(['sandbox', 'reported', 'missing']), tools: z.enum(['sandbox', 'complete', 'partial']), resetConfirmed: z.boolean().optional(), version: text.max(200).optional(), toolScope: z.array(z.string().max(200)).max(50).optional() }).optional(),
@@ -606,6 +635,8 @@ export const trialSchema = z.strictObject({
   assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
   turnLimit: z.literal(true).optional(),
   countingVersion: z.union([z.literal(2), z.literal(3)]).optional(),
+  cutOff: z.literal(true).optional(),
+  rerunAfter: brokenConversationSchema.optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),

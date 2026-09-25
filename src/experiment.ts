@@ -20,6 +20,7 @@ import type { JudgeCheck, JudgeCheckPlan } from './judge-check.js';
 import * as run from './lab/run.js';
 import { createPiRuntime } from './pi.js';
 import { ExperimentStore } from './store.js';
+import { adoptAgentRegistry } from './agent-processes.js';
 
 /*
  * Agent Lab's engine over one data folder, with one writer at a time. The surfaces — Pi's tools and workspace, the CLI —
@@ -59,6 +60,8 @@ export class ExperimentLab {
   private async initialize(): Promise<void> {
     await this.store.init();
     try {
+      // The agents a Lab killed outright left running end now; this Lab's own are kept in the folder it writes (agent-processes.ts).
+      await adoptAgentRegistry(this.store.directory);
       for (const record of await this.store.list()) if (isRunning(record.phase)) {
         const next = restartAt(record);
         record.message = next === 'review' ? 'Предыдущий процесс остановился во время проверки ситуаций. Черновик сохранён; проверку можно повторить.'

@@ -2,17 +2,18 @@ import { SERVICE_REPLY_REASON } from './run.js';
 import { judgedScenario } from './card/legacy-v1.js';
 import { directChecks } from './checkpoints.js';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from './user-controller.js';
-import { CARD_CUSTOMER_PROTOCOL, customerBrief, customerReplyProblem, customerReplySchema, deliveredMessage, type CustomerBrief } from './card-customer.js';
+import { CARD_CUSTOMER_PROTOCOL, customerBrief, customerReplyIssue, customerReplySchema, deliveredMessage, pressedButton, type CustomerBrief } from './card-customer.js';
 import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, type CheckResult, type InvalidCause, type Requirement, type Revision, type Scenario, type Settings, type Source, type Target, type TraceEvent, type Trial, type UserMode } from './contracts.js';
 import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, ragEvidenceComplete, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
 import { userTurnSchema, type ButtonChoice, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
 import { valueTokens } from './verbatim.js';
-import { hasCompleteJudgment, judgmentEvidenceEvents, judgmentFailure, observableSources, sealJudgeReceipt } from './judge.js';
-import { ProviderFailure } from './llm/model-call.js';
+import { agentEventsBeforeBreak, countedBeforeBreak, cutOffEvidenceEvents, hasCompleteCutOffJudgment, hasCompleteJudgment, judgmentEvidenceEvents, judgmentFailure, observableSources, sealJudgeReceipt, type CutOff } from './judge.js';
+import { ProviderFailure, type ProviderFailureKind } from './llm/model-call.js';
+import { StructuredTaskError } from './llm/structured.js';
+import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure, Stopped } from './errors.js';
 import { openExternalTarget, type AgentButton, type TurnOutcome } from './targets.js';
 import { simulatorChecks } from './simulator.js';
-import { normalizeText } from './card/checks.js';
 import { clip } from './text.js';
 
 /*
@@ -72,23 +73,64 @@ const PLAIN_REPLY: TurnFacts = { outcome: 'reply', buttons: [] };
 
 /** The button the customer pressed: a message that is one offered button's text, up to case and spacing. */
 function pressOf(offered: readonly AgentButton[], message: string): ButtonChoice | undefined {
-  const said = normalizeText(message);
-  const index = offered.findIndex(button => normalizeText(button.text) === said);
-  const button = offered[index];
-  return button ? { index, text: button.text, ...(button.value !== undefined ? { value: button.value } : {}) } : undefined;
+  const press = pressedButton(offered, message);
+  return press ? { index: press.index, text: press.button.text, ...(press.button.value !== undefined ? { value: press.button.value } : {}) } : undefined;
 }
 
-/** Why a turn that gave the customer nothing leaves the dialogue unmeasured; the agent's status is named as the adapter wrote it. */
-const noReplyReason = (status: string | undefined) =>
-  `Агент не дал ответа клиенту${status ? ` (статус ${clip(status, 200)})` : ''}: ход не дошёл до клиента, разговор не измерен.`;
+/** A turn that gave the customer nothing; the agent's status is named as the adapter wrote it. */
+const noReplyBreak = (status: string | undefined) => `Агент не дал ответа клиенту${status ? ` (статус ${clip(status, 200)})` : ''}: ход не дошёл до клиента.`;
+/** What became of a conversation the agent's side broke: not measured, or — once the agent had spoken — judged up to the break. */
+const UNMEASURED = ' Разговор не измерен.';
+const JUDGED_TO_BREAK = ' Разговор оценён до обрыва: засчитывается только нарушение, которое видно в словах агента до обрыва.';
 
-/** Where a failed dialogue broke, in the owner's words. */
-const stages: Record<string, string> = {
-  'target session': 'открытие сессии с испытуемым',
-  'target response': 'ответ испытуемого',
-  'user simulation': 'реплика симулированного пользователя',
-  assessment: 'оценка по рубрикам',
+/** Who broke a conversation, in the owner's words, by its cause — never by the step it was at. */
+const BROKEN_BY: Record<InvalidCause, string> = {
+  turn_limit: 'Лимит реплик прогона', simulator: 'Клиент, которого играет Lab', agent: 'Агент не дал ответа клиенту', service_reply: 'Вместо агента ответил стенд',
+  measurement: 'Измерение не удалось', no_reply: 'Агент не дал ответа клиенту', connection: 'Сбой подключения к агенту',
+  provider: 'Провайдер модели не ответил клиенту, которого играет Lab',
 };
+
+/** Why the model provider left the customer Lab plays without an answer, and what the owner does about it. */
+const PROVIDER_WHY: Record<ProviderFailureKind, string> = {
+  'rate limit': 'провайдер ограничил частоту запросов — повторите прогон позже', overloaded: 'провайдер перегружен — повторите прогон позже',
+  'connection failure': 'нет связи с провайдером — проверьте сеть и повторите прогон', timeout: 'модель не ответила вовремя — повторите прогон позже',
+  deadline: 'модель не ответила за отведённое время — повторите прогон позже', 'insufficient credit': 'у провайдера закончились средства — пополните счёт',
+  'access denied': 'провайдер отказал в доступе — проверьте ключ и права на модель', unavailable: 'модель недоступна — проверьте ключ и модель',
+  'context limit': 'запрос не поместился в окно модели', incomplete: 'модель оборвала ответ — повторите прогон', empty: 'модель вернула пустой ответ — повторите прогон',
+  length: 'ответ модели упёрся в предел длины',
+};
+
+/** The errors an error carries, itself first: a structured task wraps what it could not finish (llm/structured.ts). */
+function* causes(error: unknown): Generator<unknown> {
+  for (let cause = error, depth = 0; cause !== undefined && depth < 8; cause = cause instanceof Error ? cause.cause : undefined, depth++) yield cause;
+}
+function carried<T>(error: unknown, type: abstract new (...args: never[]) => T): T | undefined {
+  for (const cause of causes(error)) if (cause instanceof type) return cause;
+  return undefined;
+}
+
+/**
+ * Why a conversation broke, by the type of what broke it, never by its words or the step it was at: the adapter could
+ * not measure the turn; the model provider refused Lab's customer; Lab could not start the adapter or read its reply
+ * (the connection, and whatever else no type names on the agent's side — Lab's own failure is never the agent's); the
+ * agent's side gave the turn nothing; otherwise, while the customer spoke, the customer Lab plays. `refusal`: the
+ * cause of Lab's own refusal before the agent was contacted.
+ */
+function breakOf(error: unknown, speaking: 'agent' | 'customer'): { cause: InvalidCause; detail: string } {
+  const text = (value: unknown) => value instanceof Error ? value.message : 'неизвестный сбой';
+  const measurement = carried(error, MeasurementFailure);
+  if (measurement) return { cause: 'measurement', detail: measurement.message };
+  const provider = carried(error, ProviderFailure);
+  if (provider) return { cause: 'provider', detail: PROVIDER_WHY[provider.kind] };
+  const connection = carried(error, ConnectionFailure);
+  if (connection) return { cause: 'connection', detail: connection.message };
+  const request = carried(error, AgentRequestFailed);
+  if (request) return { cause: request.kind === 'tls' ? 'connection' : 'agent', detail: request.message };
+  const failure = carried(error, AgentFailure);
+  if (failure) return { cause: 'agent', detail: failure.message };
+  if (speaking === 'agent') return { cause: 'connection', detail: text(error) };
+  return { cause: 'simulator', detail: carried(error, StructuredTaskError) ? 'ответы модели клиента раз за разом не проходили проверку Lab' : text(error) };
+}
 
 export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
   if (scenario.execution) {
@@ -117,7 +159,8 @@ export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
     }
   }
   const retrieved = retrievedChunks(trial.events);
-  const answers = trial.events.filter(e => e.type === 'assistant').map(e => e.text ?? '').join('\n').toLocaleLowerCase();
+  // Case is folded without the host's locale: under tr_TR «ID» would fold to «ıd» and miss «id».
+  const answers = trial.events.filter(e => e.type === 'assistant').map(e => e.text ?? '').join('\n').toLowerCase();
   return scenario.checks.map(check => {
     let passed: boolean;
     let evidence: string;
@@ -130,7 +173,7 @@ export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
       passed = last?.text === check.value;
       evidence = `Последний ответ${last ? ` #${last.seq}` : ' отсутствует'}: ожидается ${JSON.stringify(check.value)}, получено ${JSON.stringify(last?.text)}. Регистр, пробелы и переносы строк значимы.`;
     } else if (check.kind === 'answer_contains' || check.kind === 'answer_omits') {
-      const present = answers.includes(check.value.toLocaleLowerCase());
+      const present = answers.includes(check.value.toLowerCase());
       passed = check.kind === 'answer_contains' ? present : !present;
       evidence = `Assistant transcript ${present ? 'contains' : 'does not contain'} ${JSON.stringify(check.value)}. This is an exact text check, not a semantic judgment.`;
     } else if (check.kind === 'source_retrieved') {
@@ -164,6 +207,8 @@ export async function evaluateTrial(input: {
   sources: Source[]; judgeSources?: Source[]; requirements: Requirement[]; settings: Settings; ctx: CallContext; userMode: UserMode; target: Target;
   control?: boolean;
   onStage?(stage: 'target' | 'user' | 'assessment'): void;
+  /** Awaited before each message goes to the agent: the connection exam takes turns among conversations held open together (exam.ts). */
+  beforeTurn?(turn: number): Promise<void>;
 }): Promise<Trial> {
   const { runtime, revision, scenario, repeat, manifestHash, sources, requirements, settings, ctx, userMode, control, onStage } = input;
   const target = runnableTarget(input.target);
@@ -202,12 +247,15 @@ export async function evaluateTrial(input: {
     emit({ type: role, text: content, ...(facts && Object.keys(facts).length ? { result: facts } : {}) });
   };
   let session: TargetSession | undefined;
-  let stage = 'target session';
+  // Who speaks now: Lab before the agent is contacted (its refusal names its cause), the agent, the customer Lab plays,
+  // or Lab grading what was observed. It decides nothing about a typed failure (breakOf).
+  let stage: 'lab' | 'agent' | 'customer' | 'grading' = 'lab';
   // The Lab's own refusal before the agent is contacted: its cause is set right before the throw, never read from the text.
   let refusal: InvalidCause | undefined;
-  // The adapter reported a measurementError (a typed field onReply sees before applyReply throws).
-  let measurementReported = false;
   let stopped = false;
+  let handedOff = false;
+  // How the agent's side broke the conversation, without the verdict on it (UNMEASURED or JUDGED_TO_BREAK).
+  let broke: string | undefined;
   let finalUserReply = false;
   let reportedState = false;
   let controlled: ReturnType<typeof createUserState> | undefined;
@@ -224,7 +272,6 @@ export async function evaluateTrial(input: {
   try {
     ctx.signal.throwIfAborted();
     if (scenario.execution) {
-      stage = 'контроллер симулятора';
       refusal = 'simulator';
       if (userMode !== 'reactive') throw new Error('Управляемая политика требует реактивного режима; статический и сценарный режимы её не исполняют.');
       if (isCardExecution(scenario.execution) && runtime.speakAsCustomer) free = { brief: customerBrief(scenario.execution.userView), turned: false, said: 0 };
@@ -232,15 +279,16 @@ export async function evaluateTrial(input: {
       const { policy, facts } = scenario.execution.userView;
       refusal = 'turn_limit';
       if (!control && requiredUserTurns(policy, facts) > settings.maxTurns) throw new Error('Обязательный путь пользователя не помещается в лимит реплик.');
-      refusal = undefined;
+      refusal = 'simulator';
       if (!free) controlled = createUserState(policy, facts, settings.maxTurns);
+      refusal = undefined;
     }
     if (userMode === 'scripted' && !control) {
       const issue = scriptIssue(scenario.user, settings.maxTurns);
-      if (issue) { stage = 'сценарий теста'; refusal = 'turn_limit'; throw new Error(issue); }
+      if (issue) { refusal = 'turn_limit'; throw new Error(issue); }
     }
-    // From here on a failure is the agent's side: the session is opened under its own stage, not the controller's.
-    stage = 'target session';
+    // From here on a failure is typed by what broke: the session is opened under the agent's stage, not the controller's.
+    stage = 'agent';
     onStage?.('target');
     let responseCount = 0;
     let usageComplete = true;
@@ -258,12 +306,11 @@ export async function evaluateTrial(input: {
           if (trial.externalUsage) trial.externalUsage.costUsd = null;
         }
         if (typeof reply === 'string') return;
-        if (reply.measurementError !== undefined) measurementReported = true;
         if (reply.eventScope) observation.toolScope = observation.toolScope ? observation.toolScope.filter(tool => reply.eventScope!.includes(tool)) : [...reply.eventScope];
-        if (reply.sessionId !== undefined && reply.sessionId !== trial.id || reply.turn !== undefined && reply.turn !== responseCount) throw new Error('Адаптер вернул неверный идентификатор сессии или номер хода.');
+        if (reply.sessionId !== undefined && reply.sessionId !== trial.id || reply.turn !== undefined && reply.turn !== responseCount) throw new ConnectionFailure('contract', 'Адаптер вернул неверный идентификатор сессии или номер хода.');
         if (responseCount === 1) observation.resetConfirmed = reply.resetConfirmed;
         if (reply.version) {
-          if (observation.version && observation.version !== reply.version) throw new Error('Версия внешнего агента изменилась внутри диалога.');
+          if (observation.version && observation.version !== reply.version) throw new MeasurementFailure('Версия внешнего агента изменилась внутри диалога.');
           observation.version = reply.version;
         }
         if (reply.usage) {
@@ -275,26 +322,28 @@ export async function evaluateTrial(input: {
     let userMessage = scenario.user.opening;
     let turn = 0;
     for (; turn < settings.maxTurns; turn += 1) {
+      await input.beforeTurn?.(turn);
       ctx.signal.throwIfAborted();
       // A press goes to the agent as the button's own text, whatever case or spacing the customer wrote it in.
       const choice = pressOf(offered, userMessage);
       if (choice) userMessage = choice.text;
       append('user', userMessage, choice ? { choice } : undefined);
-      stage = 'target response';
+      stage = 'agent';
       onStage?.('target');
       latest = PLAIN_REPLY;
       const response = await session.respond(userMessage, choice ? { choice } : undefined);
       const facts = latest;
       if (persistenceFailed) throw persistenceError;
       ctx.signal.throwIfAborted();
-      if (typeof response !== 'string') throw new Error('Target returned a non-text response');
+      if (typeof response !== 'string') throw new ConnectionFailure('contract', 'Адаптер вернул ответ, который не является текстом.');
       if (observesBeyondReply) {
         emit({ type: 'observation', result: structuredClone(trial.observation), ...(trial.observation?.state !== 'missing' ? { state: structuredClone(state) } : {}) });
       }
       if (facts.outcome === 'no_reply') {
         // The customer got nothing: what the adapter wrote is its diagnostic, never a message of the agent, and the customer
         // Lab plays never sees it. The agent's operability, counted apart — neither the Lab's error nor a failed duty.
-        trial.reason = noReplyReason(facts.status);
+        broke = noReplyBreak(facts.status);
+        trial.reason = broke + UNMEASURED;
         trial.invalidCause = 'no_reply';
         emit({ type: 'error', text: trial.reason, result: { outcome: 'no_reply', ...(facts.status ? { status: facts.status } : {}), ...(response.trim() ? { detail: clip(response, 2000) } : {}) } });
         break;
@@ -302,11 +351,11 @@ export async function evaluateTrial(input: {
       append('assistant', response, { ...(facts.outcome === 'handoff' ? { outcome: facts.outcome } : {}), ...(facts.status ? { status: facts.status } : {}),
         ...(facts.buttons.length ? { buttons: facts.buttons } : {}) });
       offered = facts.buttons;
-      if (!response.trim() && facts.outcome !== 'handoff') { trial.reason = 'Испытуемый вернул пустой ответ.'; trial.invalidCause = 'agent'; break; }
+      if (!response.trim() && facts.outcome !== 'handoff') { broke = 'Агент вернул пустой ответ.'; trial.reason = broke + UNMEASURED; trial.invalidCause = 'agent'; break; }
       const serviceMarker = target.serviceReplies?.find(marker => response.includes(marker));
-      if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; trial.invalidCause = 'service_reply'; break; }
+      if (serviceMarker !== undefined) { broke = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента.`; trial.reason = broke + UNMEASURED; trial.invalidCause = 'service_reply'; break; }
       // The agent passed the conversation to a person: it ends here, and it is judged as it went.
-      if (facts.outcome === 'handoff') { stopped = true; break; }
+      if (facts.outcome === 'handoff') { stopped = true; handedOff = true; break; }
       if (control || controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
       if (!controlled && !free && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
       if (userMode === 'scripted') {
@@ -316,17 +365,18 @@ export async function evaluateTrial(input: {
         userMessage = next;
         continue;
       }
-      stage = 'user simulation';
+      stage = 'customer';
       onStage?.('user');
       if (free) {
         if (turn + 1 >= settings.maxTurns) { stopped = true; trial.turnLimit = true; break; }
         // The customer leaves on their own words' budget: past the card's follow-ups they have nothing more to say.
         if (free.said >= free.brief.maxFollowUps && !(free.brief.turn?.required && !free.turned)) { stopped = true; break; }
         ctx.signal.throwIfAborted();
-        const reply = customerReplySchema.parse(await runtime.speakAsCustomer!({ brief: structuredClone(free.brief), messages: structuredClone(shown), turn, turned: free.turned }, userCtx));
+        const reply = customerReplySchema.parse(await runtime.speakAsCustomer!({ brief: structuredClone(free.brief), messages: structuredClone(shown), turn, turned: free.turned,
+          buttons: structuredClone(offered) }, userCtx));
         ctx.signal.throwIfAborted();
-        const problem = customerReplyProblem(reply, free.brief, shown, free.turned);
-        if (problem) throw new Error(`Симулятор нарушил карточку: ${problem}`);
+        const problem = customerReplyIssue(reply, free.brief, shown, free.turned, offered);
+        if (problem) throw new Error(`Клиент, которого играет Lab, отошёл от своей ситуации: ${problem.owner}.`);
         emit({ type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: reply.move, message: reply.message, ...(reply.conditions ? { conditions: reply.conditions } : {}) } });
         if (reply.move === 'leave') { stopped = true; break; }
         if (reply.move === 'turn') free.turned = true;
@@ -366,15 +416,17 @@ export async function evaluateTrial(input: {
     // The agent answered the last message the run allows the customer while the talk was still going: the conversation
     // ends here as it stands. It is an observation about the agent's conversation, never a failed measurement.
     if (turn === settings.maxTurns) { stopped = true; trial.turnLimit = true; }
-    if (!control && free?.brief.turn?.required && !free.turned && stopped) {
-      refusal = 'simulator';
-      throw new Error('Обязательный поворот клиента не был отправлен агенту: ситуация не измерена.');
-    }
+    // The card's turn never came up: the agent handed the conversation to a person first, or never gave the customer its
+    // opening before the run's messages ran out. That is the agent's conversation, judged as it went; a customer who had
+    // the opening and let it pass is what the judge of its fidelity, which reads the turn in its brief, catches.
+    const turnMissed = !control && !!free?.brief.turn?.required && !free.turned && stopped;
     trial.finalState = structuredClone(state);
     // Simulator checks describe the user side only; they are computed before grading and never touch the outcome.
     trial.simulatorChecks = simulatorChecks(scenario, trial);
-    stage = 'проверка наблюдений';
-    trial.checks = grade(scenario, trial);
+    stage = 'grading';
+    // What the checks need and the connection did not show leaves the conversation unmeasured: the measurement's, never the agent's.
+    try { trial.checks = grade(scenario, trial); }
+    catch (error) { throw new MeasurementFailure(error instanceof Error ? error.message : 'Проверки не измерены.', { cause: error }); }
     const allPassed = trial.checks.length > 0 && trial.checks.every(check => check.passed);
     // Only an empty reply, a service reply or a turn that gave the customer nothing leaves the loop unstopped, and each
     // has already named its cause.
@@ -382,6 +434,8 @@ export async function evaluateTrial(input: {
     trial.reason ||= trial.checks.length === 0
       ? 'Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно.'
       : allPassed ? 'Все объективные проверки пройдены.' : 'Часть объективных проверок провалена.';
+    if (turnMissed) trial.reason += handedOff ? ' Поворот ситуации не состоялся: агент передал разговор человеку раньше.'
+      : ' Поворот ситуации не состоялся: за отведённые реплики агент не дал клиенту к нему повода.';
     if (trial.turnLimit) trial.reason += ' Клиенту не хватило реплик: разговор оценён таким, каким успел сложиться.';
     trial.reason += reportedState
       ? ' Состояние сообщил сам агент, доверенный код его не наблюдал.'
@@ -390,28 +444,44 @@ export async function evaluateTrial(input: {
     if (persistenceFailed) throw persistenceError;
     // A dialogue that already broke on the agent's side (an empty or a service reply, no reply at all) keeps its own reason and cause
     // when grading then refuses its facts: the agent's silence is what happened (OD-1), not the missing observation.
-    const brokeFirst = !ctx.signal.aborted && stage === 'проверка наблюдений' && trial.invalidCause !== undefined;
-    trial.outcome = ctx.signal.aborted ? 'cancelled' : 'invalid';
-    if (!brokeFirst) trial.reason = ctx.signal.aborted ? 'Диалог остановлен.' : `${stages[stage] ?? stage}: ${error instanceof Error ? error.message : 'неизвестный сбой'}`;
-    // The cause, by where the dialogue broke (HN-4): the Lab's own refusal before the agent was contacted; a measurement
-    // the adapter reported it could not make, or the recorded facts refused by grading ('measurement'); the simulated
-    // customer; otherwise the agent's side failed to answer — silence stays the agent's (OD-1), never a fail.
-    if (trial.outcome !== 'invalid') delete trial.invalidCause;
-    else if (!brokeFirst) trial.invalidCause = refusal ?? (measurementReported || stage === 'проверка наблюдений' ? 'measurement'
-      : stage === 'user simulation' ? 'simulator' : 'agent');
+    // A stop — the run's, or Lab itself ending the agent's process as it closes — cancels the conversation.
+    const halted = ctx.signal.aborted || !!carried(error, Stopped);
+    const brokeFirst = !halted && stage === 'grading' && trial.invalidCause !== undefined;
+    trial.outcome = halted ? 'cancelled' : 'invalid';
+    if (trial.outcome !== 'invalid') { delete trial.invalidCause; trial.reason = 'Диалог остановлен.'; }
+    else if (!brokeFirst) {
+      // The cause by what broke the conversation (breakOf), and the reason says the same side: Lab's own refusal before the
+      // agent was contacted, the measurement, the model provider, the connection, the agent's side, the customer Lab plays.
+      const broken = refusal ? { cause: refusal, detail: error instanceof Error ? error.message : 'неизвестный сбой' } : breakOf(error, stage === 'agent' || stage === 'grading' ? 'agent' : 'customer');
+      trial.invalidCause = broken.cause;
+      trial.reason = broke = `${BROKEN_BY[broken.cause]}: ${broken.detail}`;
+    }
     emit({ type: 'error', text: trial.reason });
   } finally {
     try { await session?.close(); }
-    catch {
-      emit({ type: 'error', text: 'Target session cleanup failed' });
-      if (trial.outcome !== 'cancelled') { trial.outcome = 'invalid'; trial.reason = 'Не удалось корректно закрыть сессию испытуемого.'; trial.invalidCause = 'agent'; }
+    catch (error) {
+      // What the session found only as it closed (a line the adapter sent after its last answer) still unmeasures the conversation.
+      if (trial.outcome !== 'cancelled') {
+        const broken = breakOf(error, 'agent');
+        trial.outcome = 'invalid'; trial.invalidCause = broken.cause; trial.reason = broke = `${BROKEN_BY[broken.cause]}: ${broken.detail}`;
+      }
+      emit({ type: 'error', text: trial.reason });
     }
     if (ctx.signal.aborted) { trial.outcome = 'cancelled'; trial.reason = 'Диалог остановлен.'; delete trial.invalidCause; }
     trial.finalState = structuredClone(state);
     trial.elapsedMs = Math.round(performance.now() - started);
     if (persistenceFailed) throw persistenceError;
   }
-  if (stopped && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && assessmentRubrics(judgedScenario(scenario, trial), trial).length) {
+  // The agent's side broke the conversation after the agent had spoken: what it said up to the break is its conversation,
+  // judged in the cut-off mode — only a failure its own events before the break show counts, the rest stays unmeasured
+  // for the break's cause. Its judgment comes out of the run's limit like any conversation's: the plan counts one each.
+  if (!ctx.signal.aborted && breakPoint(scenario, trial, true)) {
+    trial.outcome = 'ungraded';
+    trial.cutOff = true;
+    trial.simulatorChecks = simulatorChecks(scenario, trial);
+    trial.reason = (broke ?? trial.reason) + JUDGED_TO_BREAK;
+  }
+  if ((stopped || trial.cutOff) && ['pass', 'fail', 'ungraded'].includes(trial.outcome) && assessmentRubrics(judgedScenario(scenario, trial), trial).length) {
     try {
       ctx.signal.throwIfAborted();
       onStage?.('assessment');
@@ -448,6 +518,22 @@ export async function evaluateTrial(input: {
 const AGENT_SIDE: ReadonlySet<InvalidCause> = new Set(['agent', 'no_reply', 'service_reply', 'measurement']);
 
 /**
+ * Where the agent's side cut a conversation off after the agent had spoken, so it is judged up to the break; undefined
+ * for any other conversation. `fresh`: the conversation just broke and is still `invalid`; otherwise one already
+ * recorded as cut off (`trial.cutOff`), judged again. Exact checks read a whole conversation — its last reply, its final
+ * state —, so a card with them keeps a broken conversation unmeasured.
+ */
+function breakPoint(scenario: Scenario, trial: Trial, fresh = false): CutOff | undefined {
+  const cause = trial.invalidCause;
+  if (fresh ? trial.outcome !== 'invalid' : !trial.cutOff) return undefined;
+  if (cause !== 'agent' && cause !== 'no_reply' && cause !== 'service_reply') return undefined;
+  if (directChecks(scenario, trial).length || !assessmentRubrics(judgedScenario(scenario, trial), trial).length) return undefined;
+  const spoken = agentEventsBeforeBreak(trial.events, cause);
+  const last = spoken.at(-1);
+  return last && spoken.some(event => event.type === 'assistant') ? { cause, afterSeq: last.seq } : undefined;
+}
+
+/**
  * Shared by live evaluation and reassessment of immutable recorded evidence. The judge sees the agent prompt
  * only as its observable rules. A new judgment never carries a checkpoint verdict: a first-format card is
  * judged through its projection, one expectation per required checkpoint (card/legacy-v1.ts).
@@ -460,9 +546,12 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
   if (!runtime.assess) throw new ProviderFailure('unavailable', 'Metric assessment is unavailable for this runtime');
   let latest: JudgeAudit | undefined;
   let mapped: MetricAssessment[] | undefined;
+  // A conversation cut off on the agent's side is judged up to its break, and of it only what countedBeforeBreak keeps counts.
+  const cutOff = breakPoint(stored, trial);
   try {
     const response = await runtime.assess({
       scenario: structuredClone({ ...scenario, metrics }), sources: structuredClone(observableSources(sources, requirements)), trial: structuredClone(trial),
+      ...(cutOff ? { cutOff } : {}),
     }, { ...ctx, onTargetEvent: undefined, onTrace: undefined, onJudgment: (id, audit, final) => {
       // The full audit lives in the store's sidecar; the trial keeps only a sealed receipt. The receipt
       // hashes exactly what the store keeps: the schema-normalized audit (trimmed texts). An audit the
@@ -472,17 +561,21 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
       latest = structuredClone(persisted);
       ctx.onJudgment?.(id, persisted, final);
     } });
-    const assessments = validateAssessments(metrics, judgmentEvidenceEvents(trial.events, latest), response);
+    const assessments = validateAssessments(metrics, cutOff ? cutOffEvidenceEvents(trial.events) : judgmentEvidenceEvents(trial.events, latest), response);
     ctx.signal.throwIfAborted();
     mapped = assessments.map(assessment => !metricApplies(metrics.find(m => m.id === assessment.metricId)!, trial)
       ? { metricId: assessment.metricId, result: 'unknown' as const, evidence: [], rationale: RAG_METRIC_IDS.has(assessment.metricId)
         ? 'Полный RAG-контекст каждого ответа не подтверждён адаптером; причина не установлена.' : 'Реактивный симулятор не участвовал в этом диалоге; его качество не измерено.' }
       : assessment);
+    if (cutOff) mapped = countedBeforeBreak(mapped, metrics, trial.events, cutOff.cause);
     return mapped;
   } finally {
     // A failed judgment keeps its receipt too, sealed incomplete, so reports still point to its sidecar.
     if (latest) {
-      const complete = !!mapped && hasCompleteJudgment({ scenario, sources: observableSources(sources, requirements), trial: { ...trial, judgeAudit: latest, assessments: mapped } });
+      const judged = { scenario, sources: observableSources(sources, requirements) };
+      const complete = !!mapped && (cutOff
+        ? hasCompleteCutOffJudgment({ ...judged, trial: { ...trial, judgeReceipt: sealJudgeReceipt(latest, true), assessments: mapped } }, cutOff)
+        : hasCompleteJudgment({ ...judged, trial: { ...trial, judgeAudit: latest, assessments: mapped } }));
       trial.judgeReceipt = sealJudgeReceipt(latest, complete);
     }
   }
