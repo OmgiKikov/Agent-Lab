@@ -61,7 +61,8 @@ export class ExperimentLab {
     await this.store.init();
     try {
       // The agents a Lab killed outright left running end now; this Lab's own are kept in the folder it writes (agent-processes.ts).
-      await adoptAgentRegistry(this.store.directory);
+      // A safety net, never a reason the folder does not open.
+      await adoptAgentRegistry(this.store.directory).catch(() => {});
       for (const record of await this.store.list()) if (isRunning(record.phase)) {
         const next = restartAt(record);
         record.message = next === 'review' ? 'Предыдущий процесс остановился во время проверки ситуаций. Черновик сохранён; проверку можно повторить.'
