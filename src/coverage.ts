@@ -8,8 +8,10 @@ import type { Verdict } from './run.js';
 /*
  * How close the number is to real traffic (E2): the counted situations grouped by the topic of the
  * logged conversations they came from, each topic's share of those conversations, and the accuracy
- * weighted by that share over the measured topics — with the share of the traffic those topics hold,
- * and none at all when they hold less than half of it. A card library carries the traffic of the logs' topic map (miner/): every
+ * weighted by that share over the measured topics — with the share of the traffic those topics hold.
+ * The weighted accuracy is a rough orientation, never a second headline: it is given only when every
+ * topic it weighs has at least WEIGHTED_MIN_DECIDED decided situations and those topics hold at least
+ * half of the traffic; otherwise only the share is. A card library carries the traffic of the logs' topic map (miner/): every
  * conversation of the import has its topic, so the shares are those of the whole import, and a card
  * stands for the topic of its conversation. A first-format library has no map: there a topic is a
  * business scenario, and a logged conversation has one only when a business scenario names it as a
@@ -30,8 +32,10 @@ export interface TopicView {
   /** Topics of logged conversations without any counted situation: their share of the conversations with a known topic. */
   uncovered: { topics: number; share: number } | null;
   /**
-   * The per-topic accuracy weighted by each measured topic's share of conversations; null without shares, with fewer
-   * than two measured topics, or when the measured topics hold less than WEIGHTED_FROM of the conversations.
+   * The per-topic accuracy weighted by each measured topic's share of conversations — a rough orientation for the logged
+   * traffic, said only under the topics, never beside the headline; null without shares, with fewer than two measured
+   * topics, with a measured topic of fewer than WEIGHTED_MIN_DECIDED decided situations, or when the measured topics hold
+   * less than WEIGHTED_FROM of the conversations.
    */
   weighted: number | null;
   /** The share of the conversations with a known topic whose topic has a decided situation: the traffic `weighted` speaks for. */
@@ -45,6 +49,11 @@ export interface TopicView {
  * «с учётом частоты тем» would say more about the unmeasured traffic than about the agent: it is not given.
  */
 export const WEIGHTED_FROM = 0.5;
+/**
+ * The fewest decided situations a topic needs before its share may weigh its accuracy: one or two situations say
+ * almost nothing about a topic, and weighting them by a large share would pass a guess off as the traffic's accuracy.
+ */
+export const WEIGHTED_MIN_DECIDED = 3;
 
 interface CountedCard { scenarioId: string; outcome: Verdict; control: boolean }
 
@@ -59,14 +68,15 @@ const measuredRows = (rows: readonly TopicRow[]) => rows.filter(row => row.decid
 const shareOf = (rows: readonly TopicRow[]) => rows.reduce((sum, row) => sum + (row.share ?? 0), 0);
 
 /**
- * The accuracy of each measured topic weighted by its share, normalised over the measured topics: what the agent
- * would score on the traffic of those topics. Null without shares, with fewer than two measured topics, or when those
- * topics hold less than WEIGHTED_FROM of the conversations (the shares are ratios of counts, hence the tolerance).
+ * The accuracy of each measured topic weighted by its share, normalised over the measured topics: roughly what the agent
+ * would score on the traffic of those topics. Null without shares, with fewer than two measured topics, when one of them
+ * has fewer than WEIGHTED_MIN_DECIDED decided situations, or when they hold less than WEIGHTED_FROM of the conversations
+ * (the shares are ratios of counts, hence the tolerance).
  */
 function weightedAccuracy(rows: readonly TopicRow[]): number | null {
   const measured = measuredRows(rows);
   const measuredShare = shareOf(measured);
-  return measured.length >= 2 && measuredShare + 1e-9 >= WEIGHTED_FROM
+  return measured.length >= 2 && measured.every(row => row.decided >= WEIGHTED_MIN_DECIDED) && measuredShare + 1e-9 >= WEIGHTED_FROM
     ? measured.reduce((sum, row) => sum + row.share! * (row.passed / row.decided), 0) / measuredShare : null;
 }
 

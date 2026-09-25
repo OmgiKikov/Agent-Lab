@@ -271,17 +271,26 @@ export function clarityParts(view: Pick<ResultView, 'clarity'>): string[] {
 }
 
 /**
- * The second trust line: how close the number is to real traffic — the topics' shares, and clear requests apart from
- * vague ones. The weighted estimate says which share of the conversations its measured topics hold (coverage.ts gives
- * none below half), and how many conversations have a known topic at all.
+ * The second trust line: clear requests apart from vague ones. The result has one number: how the topics' shares of the
+ * traffic weigh it is said under «По темам» (topicsNote), never beside the headline.
  */
 export function realityParts(view: ResultView): string[] {
+  return clarityParts(view);
+}
+
+/**
+ * Under «По темам», how far the topics reach into the logged traffic: with the weighted accuracy (coverage.ts gives one
+ * only from WEIGHTED_MIN_DECIDED decided situations in every topic it weighs), that accuracy as a rough orientation,
+ * never a second result; without it, the share of the conversations whose topics have a decided situation, and no
+ * percent of accuracy. Null without the topics' shares.
+ */
+export function topicsNote(view: Pick<ResultView, 'topics'>): string | null {
   const topics = view.topics;
-  const clarity = clarityParts(view);
-  if (!topics || topics.weighted === null) return clarity;
-  const notes = [...(topics.measuredShare < 1 ? [`измерены темы ${sharePercent(topics.measuredShare)} диалогов`] : []),
-    ...(topics.labeled < topics.logged ? [`темы известны у ${topics.labeled} из ${countText(topics.logged, CONVERSATIONS_OF)}`] : [])];
-  return [`С учётом частоты тем — около ${percent(topics.weighted)}${notes.length ? ` (${notes.join('; ')})` : ''}`, ...clarity];
+  if (!topics?.rows.some(row => row.share !== null)) return null;
+  const reach = `${sharePercent(topics.measuredShare)} разговоров${topics.labeled < topics.logged
+    ? ` с известной темой (она известна у ${topics.labeled} из ${countText(topics.logged, CONVERSATIONS_OF)})` : ' из логов'}`;
+  return topics.weighted === null ? `Темы с оценёнными ситуациями — ${reach}.`
+    : `Грубый ориентир для трафика из логов — около ${percent(topics.weighted)}: точность по темам с учётом их доли в разговорах (эти темы — ${reach}). Это ориентир, а не результат проверки: в каждой теме лишь несколько ситуаций.`;
 }
 
 /** Where a judge check leaves the judge untrusted: the warning after its counts. */
@@ -532,7 +541,8 @@ export function topicRows(view: ResultView): ResultRow[] {
       right: cells(sum('passed'), sum('decided'), shares ? rest.reduce((n, row) => n + (row.share ?? 0), 0) : null) });
   }
   if (topics.uncovered) rows.push({ role: 'item:muted', indent: 2, text: 'Не покрыто ситуациями', right: cells(0, 0, topics.uncovered.share) });
-  return rows;
+  const note = topicsNote(view);
+  return [...rows, ...(note ? [{ role: 'muted' as const, indent: 2, text: note }] : [])];
 }
 
 /**

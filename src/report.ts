@@ -7,7 +7,7 @@ import { coverageLine, sharePercent, uncoveredLine } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
 import {
   accuracyParts, alarmRow, causeItems, evaluationEvidenceLines, caveatRows, comparisonRows, countingLines, DUNNO_MARK, dunnoMark, judgeCheckText, noErrorsText, noRuleText, realityParts, reasonLabel,
-  operabilityText, saidText, scenarioRows, situationOutcomeText, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
+  operabilityText, saidText, scenarioRows, situationOutcomeText, toolExpectationsText, topicsNote, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
 import { briefFields, situationBrief } from './card/view.js';
@@ -96,7 +96,9 @@ function topicsBlock(view: ResultView): Block[] {
   const shares = topics.rows.some(row => row.share !== null);
   const rows = topics.rows.map(row => ({ muted: false, cells: [row.title, row.decided ? `${row.passed} из ${row.decided}` : '—', ...(shares ? [row.share === null ? '—' : sharePercent(row.share)] : [])] }));
   if (topics.uncovered) rows.push({ muted: true, cells: ['Не покрыто ситуациями', '—', sharePercent(topics.uncovered.share)] });
-  return [{ kind: 'section', title: 'По темам', blocks: [{ kind: 'table', head: ['Тема', 'справился', ...(shares ? ['доля диалогов'] : [])], rows }] }];
+  const note = topicsNote(view);
+  return [{ kind: 'section', title: 'По темам', blocks: [{ kind: 'table', head: ['Тема', 'справился', ...(shares ? ['доля диалогов'] : [])], rows },
+    ...(note ? [{ kind: 'paragraph' as const, muted: true, text: note }] : [])] }];
 }
 
 /** How much of the logs the situations stand for: «15 ситуаций покрывают 9 из 11 тем — 94% диалогов. Не покрыты: …». */
