@@ -22,6 +22,13 @@ import { clip } from './text.js';
 
 type Step = Exam[number]['steps'][number];
 
+/**
+ * Whether an exam can vouch for a percent: at least one path of two or more steps where a later step checks the reply
+ * with `contains` — the conversation's memory, shown through the connection. An exam without one is too weak to count.
+ */
+export const examShowsMemory = (exam: Exam | undefined): boolean =>
+  !!exam?.some(path => path.steps.length >= 2 && path.steps.slice(1).some(step => step.contains !== undefined));
+
 /** The agent's turn after one customer message, as the events recorded it. */
 function turnAfter(events: readonly TraceEvent[], from: number): { got: ExamTurn; text?: string; status?: string } {
   for (const event of events.slice(from + 1)) {

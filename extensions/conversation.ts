@@ -8,6 +8,7 @@ import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
 import { accuracyParts, comparisonRows, noRuleText, saidText, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
 import { shownAddress } from '../src/connect.js';
+import { examShowsMemory } from '../src/exam.js';
 import { commandText, folderText, releaseText, targetLabel } from '../src/detect.js';
 import { agentLine, agentOwnName, agentVersion } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
@@ -119,15 +120,30 @@ export function agentLines(record: Experiment, cwd?: string, proposed?: 'model')
   ];
 }
 
+const PATHS: [string, string, string] = ['путь', 'пути', 'путей'];
+
+/**
+ * Whether the run's number will be a percent (exam.ts): the connection's exam, else plainly that without one — or with
+ * one that never checks the conversation's memory — the result shows in how many situations the agent coped, but no
+ * percent.
+ */
+function examLine(target: RunnableTarget): string {
+  if (!target.exam) return 'Без экзамена подключения процента не будет — Lab покажет, в скольких ситуациях агент справился, но не долю: не проверено, что через это подключение агент помнит разговор.';
+  if (!examShowsMemory(target.exam)) return 'Экзамен подключения не проверяет память разговора — процента не будет: нужен путь из двух шагов и больше, где поздний шаг проверяет, что в ответе есть сказанное раньше.';
+  return `Экзамен подключения: ${countText(target.exam.length, PATHS)} — Lab пройдёт его перед прогоном, без модели; не пройден — прогон не запустится.`;
+}
+
 /**
  * The run dialog (docs/design/ui-spec.md §4.6): what runs, the agent — what exactly Lab starts, and where Lab found it —,
- * the judge's ceiling and next to it what the comparison with production costs, the time limit, what stays out.
- * `proposed`: the connection is the chat's model's, not one the owner has.
+ * whether the connection's exam lets the result show a percent, the judge's ceiling and next to it what the comparison
+ * with production costs, the time limit, what stays out. `proposed`: the connection is the chat's model's, not one the
+ * owner has.
  */
 export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string, extra: { calibration?: string | null; note?: string; proposed?: 'model' } = {}): string[] {
   return [
     `${countText(plan.situations, SITUATIONS)} · ${countText(plan.conversations, CONVERSATIONS)}: клиента играет Lab, ответы агента оценивает судья.`,
     ...agentLines(record, cwd, extra.proposed),
+    ...(isRunnable(record.target) ? [examLine(record.target)] : []),
     ...(extra.note ? [extra.note] : []),
     ...(record.mode === 'demo' ? ['Учебный пример: без модели и оплаты.'] : [`Судья: по 2 голоса на каждую проверку ответа и клиента — до ${plan.judgePerAttempt} вызовов на попытку, всего до ${plan.judgeCalls}.`,
       ...(extra.calibration ? [`${extra.calibration}.`] : []),
