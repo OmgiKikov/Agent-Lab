@@ -373,11 +373,16 @@ export function operabilityText(view: Pick<ResultView, 'operability'>): string |
   return `Работоспособность: в ${total} из ${countText(found.conversations, CONVERSATIONS_OF)} клиент не получил ответа агента (${parts.join(', ')}). Эти разговоры не считаются ошибками агента по существу и не входят в процент.`;
 }
 
-/** The first block of every surface: alarm, number, trust line, reality line, the judge check, and how the synthetic customers compare with production. */
-export function headRows(view: ResultView): ResultRow[] {
+/**
+ * The first block of every surface: alarm, number, trust line, whether the agent answered at all, reality line, the judge
+ * check, how the synthetic customers compare with production, and the evidence lines. `brief`: without the reality and
+ * the evidence lines — the board's first screen, which keeps them under its details.
+ */
+export function headRows(view: ResultView, options: { brief?: boolean } = {}): ResultRow[] {
   const segments = trustSegments(view);
   const trust = segments.map(part => part.text);
-  const reality = realityParts(view);
+  // The brief head — the board's first screen — leaves the fine print to the details: the reality line and the evidence lines.
+  const reality = options.brief ? [] : realityParts(view);
   const checked = judgeCheckText(view);
   const operability = operabilityText(view);
   return [
@@ -393,7 +398,7 @@ export function headRows(view: ResultView): ResultRow[] {
     ...(checked ? [{ role: checked.warn ? 'trust:small' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
     // The answer to «can the number be trusted against production»: it stays under the number even where the reality line folds away.
     ...(view.calibration ? [{ role: 'calibration', indent: 0, text: view.calibration.text } as ResultRow] : []),
-    ...evaluationEvidenceLines(view).map(text => ({ role: 'trust' as const, indent: 0, text })),
+    ...(options.brief ? [] : evaluationEvidenceLines(view).map(text => ({ role: 'trust' as const, indent: 0, text }))),
   ];
 }
 

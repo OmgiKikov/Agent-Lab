@@ -1,100 +1,120 @@
-import type { ResultView } from '../src/result-view.js';
-import { accuracyParts, evaluationEvidenceLines, nextStepText, whenText } from '../src/result-text.js';
+import { causeItems, causeRows, fitRows, headRows, nextRows, runLine, barRows, type ResultRow } from '../src/result-text.js';
+import type { NextStep, ResultView } from '../src/result-view.js';
+import { safeText } from '../src/text.js';
 import type { Line, ResultPick, Screen, SpaceData } from './workspace-screens.ts';
-import { box, beside, row, span, wrap, metrics, selection, quote } from './render/panels.ts';
+import { box, beside, selection, span, wrap } from './render/panels.ts';
+import { GLYPH, ROLE_TONE } from './render/theme.ts';
 
-/** The board's overview uses the same verdicts as the report; the complete methodology stays under d. */
-function entries(view: ResultView): { title: string; note?: string; pick: ResultPick; group: 'next' | 'failure' }[] {
-  const next = view.next.flatMap(step => {
-    switch (step.kind) {
-      case 'why_unmeasured': return [{ title: `Разобрать ${step.count} ситуаций без оценки`, pick: { kind: 'unmeasured' } as ResultPick }];
-      case 'exam': return [{ title: nextStepText(step), pick: { kind: 'connection' } as ResultPick }];
-      case 'check_connection': return [{ title: 'Проверить подключение и контрольные ситуации', pick: { kind: 'connection' } as ResultPick }];
-      case 'review_judge': return [{ title: 'Проверить оценки судьи', note: 'Открыть разговор и сверить вывод с ответом агента', pick: { kind: 'review' } as ResultPick }];
-      case 'blind_check': return [{ title: 'Проверить судью вслепую', note: `${step.left} ответов агента — оценить, не видя вердиктов судьи`, pick: { kind: 'blind' } as ResultPick }];
-      case 'repeat': return [{ title: 'Повторить проверку', pick: { kind: 'repeat' } as ResultPick }];
-      case 'report': return [{ title: 'Сохранить отчёт', pick: { kind: 'report' } as ResultPick }];
-      case 'wait': return [];
-    }
-  }).map(item => ({ ...item, group: 'next' as const }));
-  return [...next, ...view.failures.map(failure => ({ title: failure.title,
-    note: failure.said ? `Агент: «${failure.said.quote}»` : 'Открыть разговор, ожидания и оценку',
-    pick: { kind: 'failure' as const, trialId: failure.trialId }, group: 'failure' as const }))];
+/*
+ * The first screen of a run's result on the board (docs/design/ui-spec.md §8.5): the head of the result — the alarm,
+ * the number, the trust line, whether the agent answered —, then «Дальше» and «Почему ошибается», whose rows the cursor
+ * walks, and the run line. Every word is result-text.ts's, in its rows: the board decides nothing of its own, it lays
+ * the rows out in its panels and knows only what Enter does on each. «Дальше» comes before the causes, so the judge's
+ * blind check is offered before any of its verdicts is read. The whole result — the fine print, every error, what was
+ * not measured — is under d.
+ *
+ *   ✗ Числу пока не верить: …                      ← alarmRow, when the number is not to be trusted yet
+ *   Точность агента: 50% — справился в 1 из 2 …    ← the number, or why it is withheld
+ *   По выбранным ситуациям; … · мало данных          ← the trust line
+ *   ╭─ Дальше ───────────╮  ╭─ Почему ошибается ──╮  ← side by side from 100 columns, one under the other below
+ *   Прогон сегодня в … · 2 ситуации                  ← the run line
+ */
+
+/** What Enter does on each step of «Дальше»; waiting for a run to end is nothing to do. The exam, like the connection, is taken up in the conversation. */
+export const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, blind_check: { kind: 'blind' }, report: { kind: 'report' },
+  repeat: { kind: 'repeat' }, why_unmeasured: { kind: 'unmeasured' }, exam: { kind: 'connection' }, check_connection: { kind: 'connection' }, wait: null };
+
+/** Record text is untrusted: every row is made safe before it is laid out, so the layout measures what the terminal shows. */
+const safeRow = (row: ResultRow): ResultRow => ({ ...row, text: safeText(row.text), ...(row.right === undefined ? {} : { right: safeText(row.right) }),
+  ...(row.short === undefined ? {} : { short: safeText(row.short) }), ...(row.parts ? { parts: row.parts.map(part => safeText(part)) } : {}) });
+
+/** Result rows laid out by the one result layout (result-text.ts fitRows), each painted in its role's colour. */
+function laid(rows: readonly ResultRow[], width: number): Line[] {
+  return fitRows(rows.map(safeRow), width).map(line => line.role === 'blank' ? [] : [span(line.text, ROLE_TONE[line.role].tone, ROLE_TONE[line.role].bold)]);
 }
 
-export const dashboardPicks = (view: ResultView): ResultPick[] => entries(view).map(entry => entry.pick);
+/** A row the cursor stands on: the selection sign before it — its wrapped lines under the text, not the sign —, bold, on the selection's background. */
+function chosen(row: ResultRow, width: number): Line[] {
+  const marked: ResultRow = { ...row, indent: 0, text: `${GLYPH.selected} ${row.text}`, hang: (row.hang ?? 0) + 2 };
+  return selection(laid([marked], width).map(line => line.map(part => ({ ...part, bold: true }))), width);
+}
 
-export function resultDashboard(data: SpaceData, run: SpaceData['runs'][number], selected: number, actions: string[], width: number): Screen & { picks: ResultPick[] } {
-  const { view, record } = run;
-  const active = data.progress?.kind === 'run' && data.runs[0] === run;
-  const uncertain = view.notMeasured.alarm || !!view.control.alarm;
-  const title = active ? 'Проверка идёт' : uncertain ? 'Проверка требует разбора' : !view.headline.decided ? 'Оценки пока нет' : 'Результаты проверки';
-  const subtitle = view.control.alarm ? 'Контрольные ситуации не подтвердили надёжность проверки.'
-    : uncertain ? `${view.notMeasured.total} из ${view.notMeasured.of} ситуаций не получили оценку. Общий вывод об агенте делать рано.`
-    : active ? 'Завершённые разговоры доступны ниже. Результаты обновляются автоматически.'
-    : 'Выберите разговор, чтобы увидеть ответ агента и основания оценки.';
-  const body: Line[] = [row(title, uncertain ? 'warning' : 'accent', true), ...wrap(subtitle, width, 'muted'), [],
-    ...metrics([
-      { label: 'СПРАВИЛСЯ', value: String(view.headline.passed), note: 'ситуаций', tone: 'success' },
-      { label: 'НЕ СПРАВИЛСЯ', value: String(view.headline.decided - view.headline.passed), note: 'по оценке судьи', tone: view.headline.decided > view.headline.passed ? 'error' : 'muted' },
-      { label: active ? 'ЕЩЁ БЕЗ ОЦЕНКИ' : 'НЕ ИЗМЕРЕНО', value: String(view.notMeasured.total + view.pending), note: active ? 'включая ожидающие' : 'нужен разбор причин', tone: view.notMeasured.total + view.pending ? 'warning' : 'muted' },
-    ], width), []];
+/** A panel's rows and where each row the cursor can stand on starts, in the panel's own lines. */
+interface Panel { title: string; lines: Line[]; offsets: number[]; picks: ResultPick[] }
+
+/**
+ * Rows of result-text.ts under their heading as a panel of the board: the heading is its title, and each row `pickOf`
+ * gives a pick is one the cursor stands on — `selected` counts over the picks before it (`before`).
+ */
+function panel(rows: readonly ResultRow[], width: number, pickOf: (row: ResultRow, index: number) => ResultPick | null, selected: number, before: number): Panel {
+  const [heading, ...body] = rows;
+  const out: Panel = { title: heading?.text ?? '', lines: [], offsets: [], picks: [] };
+  body.forEach((row, index) => {
+    const pick = pickOf(row, index);
+    if (!pick) { out.lines.push(...laid([row], width)); return; }
+    out.offsets.push(out.lines.length);
+    out.lines.push(...(before + out.picks.length === selected ? chosen(row, width) : laid([row], width)));
+    out.picks.push(pick);
+  });
+  return out;
+}
+
+/** The lines before a panel's content: its top border and the blank line under it (render/panels.ts box). */
+const BOX_TOP = 2;
+
+export function dashboardPicks(view: ResultView): ResultPick[] {
+  return [...view.next.flatMap(step => STEP_PICK[step.kind] ?? []), ...(view.failures.length ? causeItems(view).items.flatMap(cause => {
+    const failure = view.failures.find(item => cause.scenarioIds.includes(item.scenarioId));
+    return failure ? [{ kind: 'failure' as const, trialId: failure.trialId }] : [];
+  }) : [])];
+}
+
+/**
+ * The board's first screen of one run's result. `back`: Esc returns to the list of runs this result was opened from;
+ * otherwise Esc closes the board, and the key hint says which.
+ */
+export function resultDashboard(data: SpaceData, run: SpaceData['runs'][number], selected: number, actions: string[], width: number, options: { back?: boolean } = {}): Screen & { picks: ResultPick[] } {
+  const { view } = run;
+  const body: Line[] = [];
+  const going = data.progress?.kind === 'run' && data.runs[0] === run ? data.progress : undefined;
+  if (going) body.push(...wrap(going.text, width, 'accent'), []);
+  body.push(...laid(headRows(view, { brief: true }), width), []);
+
   const columns = width >= 100;
-  const leftWidth = columns ? Math.floor((width - 2) * 0.48) : width;
+  const leftWidth = columns ? Math.floor((width - 2) * 0.5) : width;
   const rightWidth = columns ? width - leftWidth - 2 : width;
-  const summary: Line[] = [];
-  if (uncertain) summary.push(...wrap('Итоговая точность не подтверждена', leftWidth - 4, 'warning'));
-  else {
-    const accuracy = accuracyParts(view);
-    summary.push(...wrap(accuracy.value ? `Точность: ${accuracy.value} · ${view.headline.passed} из ${view.headline.decided} оценённых ситуаций` : 'Нет оценённых ситуаций', leftWidth - 4, 'accent'));
+  // «Дальше» first: the step the owner is advised to take, the judge's blind check before any of its verdicts.
+  const next = panel(nextRows(view, 'board'), leftWidth - 4, (_row, index) => STEP_PICK[view.next[index]!.kind], selected, 0);
+  // «Почему ошибается»: each cause opens its first failure; without a failure, the one sentence that says so.
+  const causes = causeRows(view);
+  const failed = causeItems(view).items;
+  const trialOf = (index: number) => view.failures.find(failure => failed[index]?.scenarioIds.includes(failure.scenarioId))?.trialId;
+  let cause = 0;
+  const why = view.failures.length ? panel(causes, rightWidth - 4, row => {
+    if (row.role !== 'item') return null;
+    const trialId = trialOf(cause++);
+    return trialId ? { kind: 'failure', trialId } : null;
+  }, selected, next.picks.length) : undefined;
+
+  const picks = [...next.picks, ...why?.picks ?? []];
+  const items: number[] = [];
+  const shown = [...(next.lines.length ? [{ panel: next, tone: 'accent' as const }] : []), ...(why ? [{ panel: why, tone: 'muted' as const }] : [])];
+  if (shown.length === 2 && columns) {
+    const [left, right] = shown.map((item, index) => box(item.panel.title, item.panel.lines, index ? rightWidth : leftWidth, item.tone)) as [Line[], Line[]];
+    items.push(...[...next.offsets, ...why!.offsets].map(offset => body.length + BOX_TOP + offset));
+    body.push(...beside(left, right, leftWidth), []);
+  } else for (const item of shown) {
+    // One under the other, the width of the screen: a panel's rows were laid out for the column it would have beside the other.
+    const lines = box(item.panel.title, item.panel.lines, shown.length === 2 ? width : item.panel === next ? leftWidth : rightWidth, item.tone);
+    items.push(...item.panel.offsets.map(offset => body.length + BOX_TOP + offset));
+    body.push(...lines, []);
   }
-  if (view.notMeasured.reasons.length) summary.push([], row('Почему нет оценки', 'text', true));
-  for (const reason of view.notMeasured.reasons.slice(0, 3)) summary.push(...wrap(`${reason.count} — ${reason.label}`, leftWidth - 4));
-  if (view.notMeasured.reasons.length > 3) summary.push(...wrap('Остальные причины — в подробностях (d)', leftWidth - 4, 'muted'));
-  if (active) summary.push(...wrap(data.progress!.text, leftWidth - 4));
-  summary.push([], ...wrap(`Прогон ${whenText(record.createdAt, data.now)} · ${record.trials.length} сохранённых разговоров${view.scope.costUsd === null ? '' : ` · $${view.scope.costUsd.toFixed(2)}`}`, leftWidth - 4, 'muted'));
-  const items: number[] = [], picks: ResultPick[] = [];
-  let anchor: number | undefined;
-  const all = entries(view);
-  const next: Line[] = [];
-  const nextOffsets: number[] = [];
-  for (const entry of all.filter(entry => entry.group === 'next')) {
-    const mine = picks.length === selected;
-    nextOffsets.push(next.length); picks.push(entry.pick);
-    const title = wrap(`${mine ? '›' : ' '}  ${entry.title}`, rightWidth - 4, mine ? 'accent' : 'text').map(line => line.map(part => ({ ...part, bold: mine })));
-    next.push(...(mine ? selection(title, rightWidth - 4) : title));
-    if (mine) next.push(...wrap(entry.note ?? 'Enter  Открыть', rightWidth - 7, 'muted').map(line => [span('   '), ...line]));
-    next.push([]);
-  }
-  if (!next.length) next.push(...wrap(active ? 'Дождитесь завершения разговоров. Оценки появятся автоматически.' : 'Действий пока нет.', rightWidth - 4, 'muted'));
-  const nextStart = body.length + (columns ? 0 : summary.length + 5) + 2;
-  for (const [index, offset] of nextOffsets.entries()) {
-    items.push(nextStart + offset);
-    if (index === selected) anchor = nextStart + offset;
-  }
-  if (columns) {
-    const height = Math.max(summary.length, next.length);
-    while (summary.length < height) summary.push([]);
-    while (next.length < height) next.push([]);
-  }
-  const left = box('Что известно', summary, leftWidth);
-  const right = box('Следующий шаг', next, rightWidth, 'accent');
-  body.push(...(columns ? beside(left, right, leftWidth) : [...left, [], ...right]), []);
-  if (view.failures.length) body.push(row(`Замечания к ответам агента · ${view.failures.length}`, 'text', true),
-    ...wrap('↑↓ Выберите ситуацию · Enter Откройте разговор и оценку', width, 'muted'), []);
-  for (const entry of all.filter(entry => entry.group === 'failure')) {
-    const mine = picks.length === selected;
-    items.push(body.length); picks.push(entry.pick);
-    if (mine) anchor = body.length;
-    const title = wrap(`${mine ? '›' : ' '}  ${entry.title}`, width, mine ? 'accent' : 'text').map(line => line.map(part => ({ ...part, bold: mine })));
-    body.push(...(mine ? selection(title, width) : title));
-    if (mine && entry.note) body.push(...quote(entry.note, width - 3).map(line => [span('   '), ...line]));
-    body.push([]);
-  }
-  if (!view.failures.length && view.headline.decided) body.push(row('✓ В оценённых ситуациях замечаний нет', 'success'), []);
-  body.push(...box('Надёжность оценки', evaluationEvidenceLines(view).flatMap(text => wrap(text, width - 4)), width), []);
+  // Nothing failed: the sentence about what that does not prove stands under the steps.
+  if (!view.failures.length && causes.length) body.push(...laid(causes, width), []);
+  body.push(...laid([runLine(view, data.now), ...barRows(view)], width), []);
   if (actions.length) body.push(...box('Прогон', actions.flatMap((label, i) => wrap(`${i + 1}  ${label}`, width - 4, 'accent')), width));
+  const anchor = items[selected];
   return { head: [], body, items, picks, ...(anchor === undefined ? {} : { anchor }), foot: [
-    { key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'd', text: 'вся статистика' }, { key: 'Esc', text: 'назад' }, { key: '?', text: 'клавиши' },
+    { key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'd', text: 'вся статистика' }, { key: 'Esc', text: options.back ? 'назад' : 'закрыть' }, { key: '?', text: 'клавиши' },
   ] };
 }

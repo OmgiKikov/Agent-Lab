@@ -10,7 +10,7 @@ import {
   accuracyParts, ANSWER_TEXT, calibrationRows, causeItems, causeRows, failureRows, fitRows, judgeQuestionText, logDisagreementRows, logQuestionText, nextRows,
   resultScreen as resultRows, runLine, trialTurns, whenText, type ResultRow, type Turn,
 } from '../src/result-text.js';
-import type { NextStep, ResultView } from '../src/result-view.js';
+import type { ResultView } from '../src/result-view.js';
 import { countText, pluralForm } from '../src/plural.js';
 import { clip, oneLine, safeLine, safeText } from '../src/text.js';
 import type { AgentSpace } from '../src/workspace.js';
@@ -23,7 +23,7 @@ import { preparationPanel } from './preparation-panel.ts';
 import { situationBrowser, situationExplanation } from './situation-browser.ts';
 import { runPanel } from './run-panel.ts';
 import { trialTrace } from './trial-trace.ts';
-import { dashboardPicks, resultDashboard } from './result-dashboard.ts';
+import { dashboardPicks, resultDashboard, STEP_PICK } from './result-dashboard.ts';
 import { WORKSPACE_WIDTH } from './preparation-panel.ts';
 import { box, beside, row as panelRow, wrap as panelWrap } from './render/panels.ts';
 
@@ -315,9 +315,6 @@ export function runActions(data: SpaceData): string[] {
  */
 export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'log'; cardId: string } | { kind: 'review' } | { kind: 'blind' } | { kind: 'report' } | { kind: 'repeat' } | { kind: 'unmeasured' } | { kind: 'connection' };
 
-/** What Enter does on each step of «Дальше»; waiting for a run to end is nothing to do. The exam, like the connection, is taken up in the conversation. */
-const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, blind_check: { kind: 'blind' }, report: { kind: 'report' }, repeat: { kind: 'repeat' },
-  why_unmeasured: { kind: 'unmeasured' }, exam: { kind: 'connection' }, check_connection: { kind: 'connection' }, wait: null };
 
 const sameRow = (a: ResultRow, b: ResultRow): boolean => a.role === b.role && a.indent === b.indent && a.text === b.text && a.right === b.right;
 /** Where `block` stands whole among `rows`, or -1. */
@@ -367,8 +364,8 @@ export const resultPicks = (view: ResultView, now: Date, details = false): Resul
  * the owner's disagreements and the comparison with production. The board lays over them only what a screen of its
  * own knows: the work going on above, how the run before did on the run line, the numbered actions under it all.
  */
-export function resultScreen(data: SpaceData, run: { record: Experiment; view: ResultView }, options: { selected: number; details: boolean; actions?: string[] }, width: number): Screen & { picks: ResultPick[] } {
-  if (!options.details) return resultDashboard(data, run, options.selected, options.actions ?? [], room(width));
+export function resultScreen(data: SpaceData, run: { record: Experiment; view: ResultView }, options: { selected: number; details: boolean; actions?: string[]; back?: boolean }, width: number): Screen & { picks: ResultPick[] } {
+  if (!options.details) return resultDashboard(data, run, options.selected, options.actions ?? [], room(width), { back: !!options.back });
   const { view } = run;
   const w = room(width);
   const { rows, picks: laid } = pickedRows(view, { details: options.details, now: data.now });
