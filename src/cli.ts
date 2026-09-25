@@ -8,9 +8,10 @@ import { ExperimentLab } from './experiment.js';
 import type { CreateOptions, PreparationOptions } from './lab/library.js';
 import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
-import { createInputSchema, isRunnable, materialSources, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
+import { createInputSchema, isRunnable, materialSources, runnableTarget, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
 import { compareRuns } from './comparison.js';
-import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection } from './connection.js';
+import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection, type Connection } from './connection.js';
+import { examConnection, examLines } from './exam.js';
 import { detectionLines, detectProject, promptLine } from './detect.js';
 import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials, promptMaterials } from './materials.js';
@@ -324,16 +325,32 @@ async function logs({ values, directory }: CommandInput): Promise<void> {
 async function checkConnection({ values, directory }: CommandInput): Promise<void> {
   const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
   const target = connection?.target;
+  const exam = target && isRunnable(target) ? target.exam : undefined;
   if (connection && target?.kind === 'http' && target.request) {
     await doctorTemplate({ connection, target: { ...target, request: target.request }, directory, yes: values.yes, file: values.connection && resolve(values.connection), reply: values.reply });
+    if (exam && values.yes && !process.exitCode) await examCommand(connection, directory);
     return;
   }
-  if (!connection?.probe) throw new Error('Укажите --connection с probe.write/read/reset и initialState.');
-  if (!values.yes) { process.stdout.write(JSON.stringify({ target: connection.target, probe: connection.probe, requests: 3 }, null, 2) + '\n'); throw new Error('Для трёх пробных запросов укажите --yes.'); }
-  const result = await doctor(connection);
-  if (result.passed) await rememberConnection(directory, connection);
+  if (!connection?.probe && !exam) throw new Error('Укажите --connection с разделом exam (многоходовые пути экзамена) или с probe.write/read/reset и initialState.');
+  if (!values.yes) {
+    if (exam) { process.stdout.write(`Экзамен подключения: ${countText(exam.length, ['путь', 'пути', 'путей'])}, ${countText(exam.reduce((n, path) => n + path.steps.length, 0), ['сообщение', 'сообщения', 'сообщений'])} агенту, без моделей.\n`); throw new Error('Для пробных разговоров с агентом укажите --yes.'); }
+    process.stdout.write(JSON.stringify({ target: connection!.target, probe: connection!.probe, requests: 3 }, null, 2) + '\n'); throw new Error('Для трёх пробных запросов укажите --yes.');
+  }
+  if (!connection!.probe) { await examCommand(connection!, directory); return; }
+  const result = await doctor(connection!);
+  if (result.passed && !exam) await rememberConnection(directory, connection!);
   if (values.output) await writeFile(values.output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   process.stdout.write(JSON.stringify(result, null, 2) + '\n'); process.exitCode = result.passed ? 0 : 2;
+  if (exam && result.passed) await examCommand(connection!, directory);
+}
+
+/** The connection exam from the command line: its lines, and the connection remembered only when every path passed. */
+async function examCommand(connection: Connection, directory: string): Promise<void> {
+  const result = await examConnection(runnableTarget(connection.target), new AbortController().signal,
+    (name, index, of) => process.stderr.write(`Путь ${index + 1} из ${of}: ${safeLine(name)}\n`));
+  for (const line of examLines(result)) process.stdout.write(`${safeLine(line)}\n`);
+  if (result.status === 'passed') await rememberConnection(directory, connection);
+  process.exitCode = result.status === 'passed' ? 0 : 2;
 }
 
 async function summary({ values, directory }: CommandInput): Promise<void> {

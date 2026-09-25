@@ -496,6 +496,22 @@ export interface ToolChannel { confirmed: boolean; tools: string[]; reason?: str
 const toolChannelSchema = z.strictObject({ confirmed: z.boolean(), tools: z.array(z.string().min(1).max(200)).max(50),
   reason: z.string().max(300).optional(), checkedAt: z.string() });
 
+/**
+ * What the connection exam (exam.ts) saw before a run's first dialogue: each path and step, the turn the agent gave and
+ * whether it was the one the path expects. `absent` — the connection has no exam: the run is measured, its percent is
+ * not shown (result-view.ts). Absent in runs made before the exam existed; a re-assessment carries its run's.
+ */
+export const EXAM_TURNS = ['reply', 'buttons', 'handoff', 'no_reply', 'empty', 'service', 'missing'] as const;
+export type ExamTurn = typeof EXAM_TURNS[number];
+export const examResultSchema = z.strictObject({
+  checkedAt: z.string(), status: z.enum(['passed', 'failed', 'absent']),
+  paths: z.array(z.strictObject({ name: z.string().max(200), passed: z.boolean(), steps: z.array(z.strictObject({
+    said: z.string().max(3000), pressed: z.boolean(), expect: z.enum(['reply', 'buttons', 'handoff']), got: z.enum(EXAM_TURNS),
+    passed: z.boolean(), problem: z.string().max(1000).optional(), status: z.string().max(200).optional(),
+  })).max(8) })).max(10),
+});
+export type ExamResult = z.infer<typeof examResultSchema>;
+
 export interface Experiment {
   generatorConfig?: unknown;
   generatorIdentity?: unknown;
@@ -504,6 +520,7 @@ export interface Experiment {
   originalImport?: { id: string; contentHash: string };
   preparationProgress?: PreparationProgress;
   toolChannel?: ToolChannel;
+  connectionExam?: ExamResult;
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
   sources: Source[]; settings: Settings; target: Target; requirements: Requirement[]; questions: string[];
@@ -626,6 +643,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   originalImport: z.strictObject({ id: identifier, contentHash: sha256Schema }).optional(),
   preparationProgress: preparationProgressSchema.optional(),
   toolChannel: toolChannelSchema.optional(),
+  connectionExam: examResultSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(PHASES), message: z.string(),

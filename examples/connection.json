@@ -1,6 +1,12 @@
 {
   "format": "agent-lab-connection-1",
-  "target": { "kind": "command", "command": "python3", "args": ["stateful-agent.py"], "cwd": ".", "timeoutMs": 5000 },
+  "target": { "kind": "command", "command": "python3", "args": ["stateful-agent.py"], "cwd": ".", "timeoutMs": 5000,
+    "exam": [
+      { "name": "Запись и чтение в одном разговоре", "initialState": { "records": { "A": { "time": "09:00" } }, "writableFields": ["time"] },
+        "steps": [{ "say": "Move A to 14:00", "expect": "reply", "contains": "14:00" }, { "say": "What time is it now?", "expect": "reply", "contains": "14:00" }] },
+      { "name": "Новый разговор начинается с исходного состояния", "initialState": { "records": { "A": { "time": "09:00" } }, "writableFields": ["time"] },
+        "steps": [{ "say": "What time is A?", "expect": "reply", "contains": "09:00" }] }
+    ] },
   "targetVersion": "sqlite-reference-1",
   "probe": {
     "initialState": { "records": { "A": { "time": "09:00" } }, "writableFields": ["time"] },

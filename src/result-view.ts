@@ -129,6 +129,11 @@ export interface ResultCard {
 }
 
 export interface ResultView {
+  /**
+   * The connection exam the run took before its first dialogue (exam.ts): unless it passed, no percent is shown — the
+   * headline's, the topics' or the bounds' — while the counts stay. Absent for runs made before the exam existed.
+   */
+  connection?: 'passed' | 'failed' | 'absent';
   /** How many reactive conversations actually had a semantic customer assessment. */
   simulator?: SimulatorEvidence;
   runId: string;
@@ -387,12 +392,16 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   }, 0);
   const unmeasured = reasons.reduce((n, reason) => n + reason.count, 0);
   const causes = causesOf(run, failures);
+  // A connection nobody has shown to work carries no percent: the counts stand, the number waits for the exam.
+  const examined = record.connectionExam?.status;
+  const withheld = examined !== undefined && examined !== 'passed';
   const view: Omit<ResultView, 'next'> = {
+    ...(examined ? { connection: examined } : {}),
     simulator: simulatorEvidence(record),
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
     // This is a curated/stratified set, not independent Bernoulli sampling from production.
     // Keep the compatibility field empty rather than attach a population confidence claim.
-    headline: { passed, decided, accuracy, range: null, smallSample: decided > 0 && decided < SMALL_SAMPLE },
+    headline: { passed, decided, accuracy: withheld ? null : accuracy, range: null, smallSample: decided > 0 && decided < SMALL_SAMPLE },
     pending: notStarted ? 0 : counted.filter(card => card.reason === 'in_progress').length,
     notMeasured: { total: unmeasured, reasons, of: counted.length,
       alarm: decided > 0 && unmeasured > 0 && unmeasured >= UNMEASURED_ALARM * counted.length },
@@ -417,6 +426,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     notes: { ...(record.caveats ? { caveats: structuredClone(record.caveats) } : {}), limitations: [...record.limitations] },
     ...(stability ? { stability } : {}),
   };
+  if (withheld && view.topics) view.topics = { ...view.topics, weighted: null };
   const clarity = clarityOf(record, counted);
   if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});

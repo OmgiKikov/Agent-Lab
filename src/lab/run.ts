@@ -10,6 +10,7 @@ import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type 
 import { addCaveat, type CauseFailure } from '../caveats.js';
 import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isCardExecution, isRunnable, judgeFallback, runnableTarget, scriptIssue, settingsSchema, unconfirmedReferences, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type FailureMode, type Revision, type Scenario, type UserMode } from '../contracts.js';
 import { BudgetExhausted, Stopped } from '../errors.js';
+import { examConnection, examRefusal } from '../exam.js';
 import { ProviderFailure } from '../llm/model-call.js';
 import { roleChoices } from '../llm/models.js';
 import { StructuredTaskError } from '../llm/structured.js';
@@ -290,6 +291,7 @@ async function evaluateReviewed(lab: Lab, record: Experiment, ctx: CallContext, 
   const agent = record.revisions[0];
   if (!agent || !record.manifestHash) throw new Error('В черновике нет подтверждённого агента или плана измерения — это ошибка Agent Lab.');
   await release(lab, record, ctx);
+  await examine(lab, record, ctx);
   await runSuite(lab, record, runtime, agent, ctx, operation, parallel);
   checkManifest(record, record.manifestHash, ctx);
   await nameFailureModes(record, runtime, ctx);
@@ -357,6 +359,19 @@ function dialogueContext(ctx: CallContext): { ctx: CallContext; stage: (stage: '
       } },
     stage: stage => { judging = stage === 'assessment'; },
   };
+}
+
+/**
+ * The connection exam before the first dialogue (exam.ts), right after the release put the version under test in place:
+ * a run starts only on a connection shown to keep the conversation, take buttons and answer the customer. A connection
+ * without an exam is run and its percent is not shown; a failed exam stops the run before anything is spent on it.
+ */
+async function examine(lab: Lab, record: Experiment, ctx: CallContext): Promise<void> {
+  const target = runnableTarget(record.target);
+  if (target.exam) await lab.operations.checkpoint(record, record.phase, `Проверяю подключение: ${countText(target.exam.length, ['путь', 'пути', 'путей'])} экзамена.`);
+  record.connectionExam = await examConnection(target, ctx.signal, (name, index, of) => lab.operations.say(record, `Экзамен подключения, путь ${index + 1} из ${of}: ${name}`));
+  ctx.signal.throwIfAborted();
+  if (record.connectionExam.status === 'failed') throw new Error(examRefusal(record.connectionExam));
 }
 
 /** The rollout of the version under test. The adapter's reported `version` remains the identity; this only performs the deployment. */

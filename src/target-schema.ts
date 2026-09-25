@@ -27,10 +27,30 @@ export const customerProfileSchema = z.array(z.strictObject({
 })).max(20).optional();
 export type CustomerProfile = NonNullable<z.infer<typeof customerProfileSchema>>;
 const customerProfile = customerProfileSchema;
+/**
+ * The connection exam (exam.ts): a few short multi-turn paths written for this agent — a customer who names a known
+ * terminal, one who names an unknown one, a choice between two cash desks, a service that refuses. A step is what the
+ * customer sends — words (`say`) or a press of a button the previous reply offered (`press`) — and what the agent's turn
+ * must be: a reply to the customer, a reply with buttons, or a handoff to a person; `contains` names a word or a value
+ * the reply must hold, which is how a path shows the agent remembers what was said. Every field is required or
+ * optional, never defaulted: the target is part of stored records and their hashes.
+ */
+export const EXAM_EXPECTATIONS = ['reply', 'buttons', 'handoff'] as const;
+const examStepSchema = z.strictObject({
+  say: text.max(3000).optional(), press: text.max(300).optional(),
+  expect: z.enum(EXAM_EXPECTATIONS), contains: text.max(300).optional(),
+}).refine(step => (step.say === undefined) !== (step.press === undefined), 'Шаг экзамена — это либо say (слова клиента), либо press (нажатая кнопка).');
+export const examSchema = z.array(z.strictObject({ name: text.max(200), steps: z.array(examStepSchema).min(1).max(8),
+  /** The world the path starts from, read as a card's initialState when the path runs (exam.ts); an empty one when absent. */
+  initialState: z.unknown().optional() })
+  .refine(path => path.steps[0]?.say !== undefined, 'Путь экзамена начинается со слов клиента: нажать кнопку можно только после ответа агента.'))
+  .min(1).max(10).optional();
+export type Exam = NonNullable<z.infer<typeof examSchema>>;
+const exam = examSchema;
 /** A field of a retired feature: old connections and records still parse, nothing reads it. */
 const retired = z.unknown().optional();
 const httpTargetSchema = z.strictObject({
-  kind: z.literal('http'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, url: z.string().url().max(2000),
+  kind: z.literal('http'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, exam, url: z.string().url().max(2000),
   headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), envNameSchema).default({}),
   timeoutMs: z.number().int().min(1000).max(600000).default(60000),
   release: releaseSchema,
@@ -38,14 +58,14 @@ const httpTargetSchema = z.strictObject({
   request: requestTemplateSchema.optional(),
 }).refine(target => !(target.request && target.promptFile), { message: 'Агент в своём формате запроса не получает промпт из файла: уберите promptFile или request.', path: ['promptFile'] });
 const moduleTargetSchema = z.strictObject({
-  kind: z.literal('module'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
+  kind: z.literal('module'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, exam, path: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required'),
   exportName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,99}$/).default('createSession'),
   timeoutMs: z.number().int().min(1000).max(600000).optional(),
   release: releaseSchema,
 });
 /** A local process (for example `python3 agent.py`) speaking one JSON request/reply per line over stdin/stdout. */
 const commandTargetSchema = z.strictObject({
-  kind: z.literal('command'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
+  kind: z.literal('command'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, exam, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
   cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
   timeoutMs: z.number().int().min(1000).max(600000).default(60000),
   release: releaseSchema,

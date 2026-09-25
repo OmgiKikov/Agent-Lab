@@ -98,10 +98,13 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
   const lead = 'Точность агента:';
   const value = percentOf(view);
   if (value === null) {
+    const { passed, decided } = view.headline;
+    const unexamined = view.connection === 'absent' ? 'подключение агента не проверено экзаменом' : view.connection === 'failed' ? 'подключение агента не прошло экзамен' : null;
     const tail = view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
       : view.pending ? `считается — ждут проверки ${countText(view.pending, SITUATIONS)}`
+      : unexamined && decided ? `не считается: ${unexamined}. Справился в ${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}, ошибся в ${decided - passed}`
       : 'нет данных — ни одна ситуация не измерена';
-    return { lead, value: null, tail, level: 'none' };
+    return { lead, value: null, tail, level: unexamined && decided ? 'warn' : 'none' };
   }
   const { passed, decided } = view.headline;
   const unmeasured = view.notMeasured.total;
@@ -278,7 +281,8 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
     : 'Клиент: реактивное поведение в этом прогоне не измерено.';
   const remaining = Math.max(0, notMeasured.of - headline.decided);
   const metric = `Метрика: оценено ${headline.decided} из ${notMeasured.of} ситуаций. Процент относится только к оценённым ситуациям.`;
-  const bounds = notMeasured.of > 0 && remaining > 0
+  const bounds = view.connection && view.connection !== 'passed' ? 'Процент и его границы появятся, когда подключение агента пройдёт экзамен.'
+    : notMeasured.of > 0 && remaining > 0
     ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${remaining} оставшихся ситуаций. Это границы, не прогноз.`
     : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';
   return [judge, customer, metric, bounds];

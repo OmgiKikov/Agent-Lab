@@ -21,9 +21,19 @@ const demoDialogues = [
   { id: 'late', messages: [{ role: 'user' as const, content: 'Помогите с возвратом.' }, { role: 'assistant' as const, content: 'Уточните номер терминала.' }, { role: 'user' as const, content: 'Номер терминала: 5678' }] },
 ];
 
+/**
+ * The teaching agent's connection exam (exam.ts): it answers the customer, and it keeps the conversation — the refund is
+ * explained only once the number it asked for has come. The exam proves the channel, never the agent's duties: the
+ * baseline's repeated question passes it, and the run is what finds that error.
+ */
+const DEMO_EXAM: NonNullable<RunnableTarget['exam']> = [
+  { name: 'Номер назван сразу', steps: [{ say: 'Номер терминала: 1234. Помогите с возвратом.', expect: 'reply' }] },
+  { name: 'Номер по просьбе агента', steps: [{ say: 'Помогите с возвратом.', expect: 'reply' }, { say: 'Номер терминала: 5678', expect: 'reply', contains: 'заявление' }] },
+];
+
 /** The teaching agent; `fixed` is the corrected version that no longer asks for a number it already has. Resolved from src and from dist alike. */
 export function demoTarget(fixed = false): RunnableTarget {
-  return { kind: 'module', path: fileURLToPath(new URL('../examples/scenario-lab-target.mjs', import.meta.url)), exportName: fixed ? 'createFixedSession' : 'createSession' };
+  return { kind: 'module', path: fileURLToPath(new URL('../examples/scenario-lab-target.mjs', import.meta.url)), exportName: fixed ? 'createFixedSession' : 'createSession', exam: DEMO_EXAM };
 }
 
 /** A two-dialogue library prepared by the deterministic demo runtime against the teaching agent. */
