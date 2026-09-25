@@ -157,7 +157,7 @@ function questionTable(workbook: Workbook, file: TableFile, sheet: Sheet, chosen
 /** What a column of the assessor's markup may hold: short single-word values are an article id or an answer code, anything longer an expected answer. */
 function expectedKinds(a: SheetAnalysis, column: ColumnInfo): ExpectedKind[] {
   const values = filledValues(a, column);
-  return values.length && values.every(value => value.length <= 40 && !/\s/.test(value.trim())) ? ['article', 'code'] : ['answer'];
+  return values.length && values.every(value => value.length <= 40 && !/\s/.test(value.trim())) ? ['article_or_code', 'article', 'code'] : ['answer'];
 }
 
 /** A sheet as Lab's own reading sees it: the shared analysis, and the marker structure of each column once it was looked for. */

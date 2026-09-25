@@ -34,8 +34,8 @@ const column = z.strictObject({ index: z.number().int().min(0).max(SHEET_COLUMNS
 export type Column = z.infer<typeof column>;
 /** A value of a column that chooses conversations: the cell as written, the spaces around it aside; '' is an empty cell. */
 const cellValue = z.string().trim().max(VALUE_CHARS);
-/** What a column of the assessor's markup holds: the expected answer, the id of the article it rests on, or the answer code. */
-export const EXPECTED_KINDS = ['answer', 'article', 'code'] as const;
+/** What a column of the assessor's markup holds: the expected answer, the id of the article it rests on, the answer code, or either of the two by row. */
+export const EXPECTED_KINDS = ['answer', 'article', 'code', 'article_or_code'] as const;
 export type ExpectedKind = typeof EXPECTED_KINDS[number];
 
 export const tableMappingSchema = z.strictObject({

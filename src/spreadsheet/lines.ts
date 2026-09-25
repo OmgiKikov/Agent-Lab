@@ -67,7 +67,7 @@ export const moreValuesLine = (more: number): string => `ещё ${countText(more
 
 type ReadyProposal = Extract<TableProposal, { status: 'ready' }>;
 
-const EXPECTED_WORDS = { answer: 'ожидаемый ответ (Lab найдёт его статью в базе знаний; короткий код — код ответа)', article: 'id статьи базы знаний', code: 'код ответа' } as const;
+const EXPECTED_WORDS = { answer: 'ожидаемый ответ (Lab найдёт его статью в базе знаний; короткий код — код ответа)', article: 'id статьи базы знаний', code: 'код ответа', article_or_code: 'id статьи или код ответа (что есть среди статей базы знаний — статья)' } as const;
 
 /** How the mapping reads the table, one line per choice; without a choice of conversations, the columns they could be chosen by. */
 function readingLines({ mapping, preview, selectable }: ReadyProposal): string[] {

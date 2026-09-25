@@ -1,4 +1,4 @@
-import { ROLES, ROLE_WORDS, columnLabel, tableChoicesSchema, type MarkerRole, type TableChoices } from '../spreadsheet/mapping.js';
+import { ROLES, ROLE_WORDS, columnLabel, tableChoicesSchema, type ExpectedKind, type MarkerRole, type TableChoices } from '../spreadsheet/mapping.js';
 import type { TableProposal } from '../spreadsheet/proposal.js';
 
 /*
@@ -30,9 +30,9 @@ function whereChoice(text: string): NonNullable<TableChoices['where']> {
   if (!column) throw new Error('--where: ожидается КОЛОНКА=ЗНАЧЕНИЕ, несколько значений — через |; одна КОЛОНКА покажет её значения.');
   return at < 0 ? { column } : { column, values: text.slice(at + 1).split('|').map(value => value.trim()) };
 }
-const EXPECTED_BY_WORD: Readonly<Record<string, 'answer' | 'article' | 'code'>> = { ответ: 'answer', answer: 'answer', статья: 'article', article: 'article', код: 'code', code: 'code' };
+const EXPECTED_BY_WORD: Readonly<Record<string, ExpectedKind>> = { ответ: 'answer', answer: 'answer', статья: 'article', article: 'article', код: 'code', code: 'code', 'статья-или-код': 'article_or_code' };
 /** `--expected-column "КОЛОНКА=ответ|статья|код"` → the assessor's column and what it holds; the column alone holds the expected answer. */
-function expectedChoice(text: string): { column: string; kind: 'answer' | 'article' | 'code' } {
+function expectedChoice(text: string): { column: string; kind: ExpectedKind } {
   const at = text.lastIndexOf('=');
   const column = (at < 0 ? text : text.slice(0, at)).trim(), kind = at < 0 ? 'answer' : EXPECTED_BY_WORD[text.slice(at + 1).trim().toLowerCase()];
   if (!column || !kind) throw new Error('--expected-column: ожидается КОЛОНКА=ответ|статья|код.');

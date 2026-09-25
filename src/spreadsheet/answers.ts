@@ -15,7 +15,7 @@ export interface TableAnswer { label: string; choices: TableChoices }
 const MARKER_ROLES: readonly MarkerRole[] = [...ROLES, 'text'];
 const MARKER_WORDS: Readonly<Record<MarkerRole, string>> = { ...ROLE_WORDS, text: 'не метка — слово в тексте сообщения' };
 
-const EXPECTED_WORDS: Readonly<Record<ExpectedKind, string>> = { answer: 'ожидаемый ответ', article: 'id статьи базы знаний', code: 'код ответа' };
+const EXPECTED_WORDS: Readonly<Record<ExpectedKind, string>> = { answer: 'ожидаемый ответ', article: 'id статьи базы знаний', code: 'код ответа', article_or_code: 'id статьи или код ответа' };
 
 /** The answers of `question`, in the order the dialog numbers them. */
 export function questionAnswers(question: TableQuestion): TableAnswer[] {

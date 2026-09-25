@@ -94,3 +94,8 @@ test('a text column without role marks reads as one question per row, and Lab as
   assert.deepEqual(proposal.mapping.expected, [{ column: { index: 2, header: 'Ожидалось' }, kind: 'answer' }]);
   assert.equal(ready(proposeTable(workbook, file, { text: 'Вопрос клиента', expected: [] })).mapping.expected, undefined, 'the owner said there is none');
 });
+
+test('a column of article ids and answer codes: an id the knowledge base holds is an article, anything else a code', () => {
+  assert.deepEqual(assessorReference({ expected: [{ kind: 'article_or_code', value: '24' }] }, kb), [{ id: 'assessor', origin: 'assessor', confirmed: true, source: { doc: '24' } }]);
+  assert.deepEqual(assessorReference({ expected: [{ kind: 'article_or_code', value: '202-1' }] }, kb), [{ id: 'assessor', origin: 'assessor', confirmed: true, outcome: { value: '202-1' } }]);
+});

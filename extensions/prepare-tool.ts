@@ -68,7 +68,7 @@ export const prepareParameters = Type.Object({
     request: Type.Optional(Type.String({ minLength: 1, maxLength: 500, description: 'The owner\'s own words about which conversations to evaluate, when they did not name the column (e.g. «только те, где отвечал один агент эквайринга»): Lab\'s model finds the column and its values in the table.' })),
     collapseRepeats: Type.Optional(Type.Boolean({ description: 'Only after the owner said what to do with exchanges the export repeated: true — read each once, false — keep them as written.' })),
     answer: Type.Optional(Type.String({ maxLength: 200, description: 'One case per row: the column of the agent\'s logged reply; text is then the customer\'s question.' })),
-    expected: Type.Optional(Type.Array(Type.Object({ column: Type.String({ maxLength: 200 }), kind: Type.Union([Type.Literal('answer'), Type.Literal('article'), Type.Literal('code')]) }, closed),
+    expected: Type.Optional(Type.Array(Type.Object({ column: Type.String({ maxLength: 200 }), kind: Type.Union([Type.Literal('answer'), Type.Literal('article'), Type.Literal('code'), Type.Literal('article_or_code')]) }, closed),
       { maxItems: 3, description: 'Columns of the assessor\'s expected result the owner named: answer text, article id or answer code.' })),
   }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet or chose which of its conversations to evaluate: the sheet, the column of the conversation id, the column of the text, the conversations kept (where, or request in the owner\'s words), the repeated exchanges. A column is a header or a letter.' })),
   suite: Type.Optional(path('A saved set of situations (.evals/*.json) to load into a fresh draft instead of preparing: free, nothing runs.')),
@@ -76,7 +76,7 @@ export const prepareParameters = Type.Object({
 }, closed);
 type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string;
   table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean;
-    answer?: string; expected?: { column: string; kind: 'answer' | 'article' | 'code' }[] }; suite?: string; demo?: true };
+    answer?: string; expected?: { column: string; kind: 'answer' | 'article' | 'code' | 'article_or_code' }[] }; suite?: string; demo?: true };
 
 /** A path the owner or the model named: `~/…` is the owner's home, anything else is relative to the project. */
 export function projectPath(named: string, cwd: string): string {

@@ -10,6 +10,8 @@ import { normalizeText } from './checks.js';
  * Nothing here is guessed from a model: what is not found stays text for the judge.
  *
  *   original.expected ─► article id ─────────────────► source.doc
+ *                     ─► article id or code ─┬─ an article of the base ─► source.doc
+ *                                            └─ else ─► outcome
  *                     ─► code ───────────────────────► outcome
  *                     ─► answer ─┬─ one word ────────► outcome
  *                                ├─ in an article ───► source.doc + text
@@ -20,7 +22,7 @@ import { normalizeText } from './checks.js';
 const CODE_CHARS = 40;
 const TEXT_CHARS = 1000;
 
-interface Expected { kind: 'answer' | 'article' | 'code'; value: string }
+interface Expected { kind: 'answer' | 'article' | 'code' | 'article_or_code'; value: string }
 
 /** The reference the assessor's markup gives a situation; undefined when the conversation carries none. */
 export function assessorReference(original: unknown, sources: readonly Source[]): Reference[] | undefined {
@@ -29,7 +31,7 @@ export function assessorReference(original: unknown, sources: readonly Source[])
   let doc: string | undefined, text: string | undefined, code: string | undefined;
   for (const item of expected) {
     const value = item.value.trim();
-    if (item.kind === 'article') doc ??= value.slice(0, 500);
+    if (item.kind === 'article' || item.kind === 'article_or_code' && articleIds(sources).has(value)) doc ??= value.slice(0, 500);
     else if (item.kind === 'code' || isCode(value)) code ??= value;
     else {
       doc ??= articleOf(value, sources);
@@ -45,7 +47,7 @@ export function assessorReference(original: unknown, sources: readonly Source[])
 function expectedOf(original: unknown): Expected[] {
   const list = original && typeof original === 'object' ? (original as { expected?: unknown }).expected : undefined;
   if (!Array.isArray(list)) return [];
-  return list.flatMap(item => item && typeof item === 'object' && ['answer', 'article', 'code'].includes((item as Expected).kind)
+  return list.flatMap(item => item && typeof item === 'object' && ['answer', 'article', 'code', 'article_or_code'].includes((item as Expected).kind)
     && typeof (item as Expected).value === 'string' && (item as Expected).value.trim() ? [item as Expected] : []);
 }
 
@@ -62,6 +64,10 @@ export function articleOf(answer: string, sources: readonly Source[]): string | 
     .filter(section => normalizeText(section.body) === wanted || normalizeText(section.body).includes(wanted) && wanted.length >= 80).map(section => section.id));
   return found.size === 1 ? [...found][0] : undefined;
 }
+
+/** The ids of every article of the knowledge base, as their headings name them. */
+const articleIds = (sources: readonly Source[]): Set<string> =>
+  new Set(sources.filter(source => source.kind !== 'prompt').flatMap(source => sections(source.content)).map(section => section.id));
 
 /** The sections of a Markdown text: each heading line and the text under it up to the next heading. */
 function sections(content: string): { id: string; body: string }[] {
