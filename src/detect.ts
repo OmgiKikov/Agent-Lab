@@ -90,6 +90,13 @@ interface Entry { path: string; rel: string; depth: number }
 interface Script { evidence: Extract<AgentEvidence, { kind: 'script' }>; argv: string[]; cwd: string; entry: string }
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isEnvFile = (name: string): boolean => name === '.env' || name.startsWith('.env.');
+/** A stored Lab record, whole or as its JSON report: its situations quote the owner's rules and the agent's prompt, never the agent's own. */
+const labRecord = (value: unknown): boolean => isRecord(value) && value.schemaVersion === '1' && typeof value.id === 'string' && Array.isArray(value.trials);
+/**
+ * A file Lab itself wrote — a saved set, a check's report, a record or its JSON report: never the agent's prompt, its
+ * logs or its address, whatever text it holds. A saved connection is one too, read as the agent's connection only.
+ */
+const labFile = (raw: unknown): boolean => isRecord(raw) && (typeof raw.format === 'string' && raw.format.startsWith('agent-lab-') || labRecord(raw) || labRecord(raw.experiment));
 const extOf = (entry: Entry): string => extname(entry.path).toLowerCase();
 
 /** A file named as a prompt, or in a folder of prompts: `system_prompt.md`, `prompts/answer.txt`, `agent_doc_type_prompt.json`. */
@@ -388,6 +395,7 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
         if (connection) add(`connection:${file.rel}`, connection.target, [{ kind: 'connection', file: file.rel }]);
         continue;
       }
+      if (labFile(raw)) continue;
       const count = dialogueCount(raw);
       if (count) logs.push({ file: file.rel, ...count, complete: whole !== undefined });
       else if (ext === '.json') {
