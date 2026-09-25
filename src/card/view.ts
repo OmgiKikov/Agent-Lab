@@ -42,7 +42,8 @@ export interface Brief {
   leaves: string | null;
   /** The customer's late move: «после «…»: «…»»; null when the situation has none. */
   turn: string | null;
-  must: { text: string; rule: string | null }[];
+  /** What the agent must do; `forbidden` — what it must not; `acceptable` and `violation` where the card says them. */
+  must: { text: string; rule: string | null; forbidden?: true; acceptable?: string; violation?: string }[];
   /** The values Lab wrote over the log's masking marks, when it did: «подставлено вместо обезличенного». */
   filled?: string[];
   /** What code checks besides the judge (reference.ts): «находит статью 24 — разметка асессора». */
@@ -143,7 +144,10 @@ export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumb
     title: oneLine(card.title), source: cardSource(library, card, numbers, reader), wants: oneLine(wants), writes: oneLine(writes),
     knows: knows.map(fact => ({ what: factText(fact), when: saidOf(fact) })),
     leaves: oneLine(leaves), turn: turn ? turnText(turn.after, turn.says) : null,
-    must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes) })),
+    must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes),
+      ...(expectation.strength === 'must_not' ? { forbidden: true as const } : {}),
+      ...(expectation.acceptable !== undefined ? { acceptable: oneLine(expectation.acceptable) } : {}),
+      ...(expectation.violation !== undefined ? { violation: oneLine(expectation.violation) } : {}) })),
     ...(card.filled ? { filled: card.filled.map(item => oneLine(item.value)) } : {}),
     ...(card.clarity === 'vague' ? { vague: true } : {}),
     ...(card.references ? { references: card.references.map(reference => ({ id: reference.id, text: referenceText(reference) })) } : {}),
@@ -506,7 +510,9 @@ export function briefRows(view: SituationView, options: RowOptions = {}): Situat
   const fields = briefFields(brief);
   const column = Math.max(...fields.map(([label]) => label.length)) + 3;
   const must = brief.must.flatMap((duty, index): SituationRow[] => [
-    { role: 'field', indent: 3, text: `${String(index + 1).padEnd(3)}${duty.text}`, hang: 3 },
+    { role: 'field', indent: 3, text: `${String(index + 1).padEnd(3)}${duty.forbidden ? 'нельзя: ' : ''}${duty.text}`, hang: 3 },
+    ...(duty.acceptable ? [{ role: 'rule' as const, indent: 6, text: `допустимо: ${duty.acceptable}`, hang: 16 }] : []),
+    ...(duty.violation ? [{ role: 'rule' as const, indent: 6, text: `нарушение: ${duty.violation}`, hang: 16 }] : []),
     ...(duty.rule && duty.rule !== brief.must[index - 1]?.rule ? [{ role: 'rule' as const, indent: 6, text: `правило: «${quoteText(duty.rule)}»`, hang: 10 }] : []),
   ]);
   return [

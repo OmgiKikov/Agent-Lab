@@ -54,13 +54,13 @@ const DEMO_CARDS: Record<'known' | 'late', DialogueProposal> = {
   known: { title: 'Возврат оплаты — номер назван сразу', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', clarity: 'clear', writesEvent: 0,
     knows: [{ label: 'Номер терминала', value: '1234', disclosure: 'initial', from: 0, askedAs: 'номер терминала' }], plausibleKnows: [],
     leaves: 'получил инструкцию по возврату или понял, что агент не поможет', turn: null, coverage: {},
-    agentMust: [{ text: 'не спрашивать номер терминала ещё раз, если клиент его уже назвал', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply' },
-      { text: 'объяснить, как оформить возврат', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply' }] },
+    agentMust: [{ text: 'не спрашивать номер терминала ещё раз, если клиент его уже назвал', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply', strength: 'must', acceptable: null, violation: null },
+      { text: 'объяснить, как оформить возврат', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply', strength: 'must', acceptable: null, violation: null }] },
   late: { title: 'Возврат оплаты — номер только по просьбе', topic: 'Возврат оплаты', wants: 'Получить инструкцию по возврату оплаты', clarity: 'clear', writesEvent: 0,
     knows: [{ label: 'Номер терминала', value: '5678', disclosure: 'on_request', from: 2, askedAs: 'номер терминала' }], plausibleKnows: [],
     leaves: 'получил инструкцию по возврату или понял, что агент не поможет', turn: null, coverage: { 2: { as: 'fact', reason: null } },
-    agentMust: [{ text: 'спросить номер терминала один раз, до инструкции', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply' },
-      { text: 'объяснить, как оформить возврат', basis: DEMO_BASIS, appliesWhen: 'клиент назвал номер терминала', observation: 'reply' }] },
+    agentMust: [{ text: 'спросить номер терминала один раз, до инструкции', basis: DEMO_BASIS, appliesWhen: null, observation: 'reply', strength: 'must', acceptable: null, violation: null },
+      { text: 'объяснить, как оформить возврат', basis: DEMO_BASIS, appliesWhen: 'клиент назвал номер терминала', observation: 'reply', strength: 'must', acceptable: null, violation: null }] },
 };
 /** The example's one question for the owner: the number the customer named only after the agent asked — did they know it before? */
 const DEMO_DOUBT: ReviewVerdict = { status: 'needs_owner', reason: 'В исходном разговоре клиент назвал номер только после вопроса агента.' };

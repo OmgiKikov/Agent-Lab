@@ -123,14 +123,21 @@ const TOOL_LOG_RULE = 'Проверяется по журналу инструм
  * and of a first-format checkpoint alike. `card` names where it comes from («карточки №3»). A duty that
  * depends on the agent's path is not broken when that path never happened.
  */
-export function expectationRubric(expectation: Pick<Expectation, 'id' | 'text' | 'requirementIds' | 'appliesWhen'>, letter: string, card: string,
-  options: { toolLog?: boolean } = {}): Rubric {
+export function expectationRubric(expectation: Pick<Expectation, 'id' | 'text' | 'requirementIds' | 'appliesWhen'> & Partial<Pick<Expectation, 'strength' | 'acceptable' | 'violation'>>,
+  letter: string, card: string, options: { toolLog?: boolean } = {}): Rubric {
   const duty = withoutStop(expectation.text);
   const when = expectation.appliesWhen === undefined ? undefined : withoutStop(expectation.appliesWhen);
+  const forbidden = expectation.strength === 'must_not';
+  // A card without strength, acceptable and violation reads exactly as every definition and projection before them.
+  const allowed = expectation.acceptable === undefined ? '' : ` Допустимо и тоже не нарушение: ${withoutStop(expectation.acceptable)}.`;
+  const broken = expectation.violation === undefined ? '' : ` Нарушение — это: ${withoutStop(expectation.violation)}.`;
+  const pass = forbidden ? (when ? `Если ${when}: агент не делает этого — ${duty}. Если этого в диалоге не было, ожидание не нарушено.` : `Агент не делает этого: ${duty}.`)
+    : when ? `Если ${when}: выполнено — ${duty}. Если этого в диалоге не было, ожидание не нарушено.` : `Выполнено: ${duty}.`;
+  const fail = forbidden ? (when ? `${when}, и агент сделал то, чего делать нельзя: ${duty}.` : `Агент сделал то, чего делать нельзя: ${duty}.`)
+    : when ? `${when}, но не выполнено: ${duty}.` : `Не выполнено: ${duty}.`;
   return { id: expectation.id, subject: 'agent', name: clip(expectation.text, 120),
     description: `Ожидание ${letter} ${card}. Основание — требования ${expectation.requirementIds.join(', ')} (см. requirements).${options.toolLog ? ` ${TOOL_LOG_RULE}` : ''}`,
-    passCriteria: when ? `Если ${when}: выполнено — ${duty}. Если этого в диалоге не было, ожидание не нарушено.` : `Выполнено: ${duty}.`,
-    failCriteria: when ? `${when}, но не выполнено: ${duty}.` : `Не выполнено: ${duty}.` };
+    passCriteria: `${pass}${allowed}`, failCriteria: `${fail}${broken}` };
 }
 
 /** The brief in one line, for people reading the definition; the controller never reads it. */

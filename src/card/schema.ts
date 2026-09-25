@@ -66,6 +66,12 @@ export const expectationSchema = z.strictObject({
   // A duty observed on the tools: the tool whose result proves it (card/expectations.ts). Absent — any tool's result,
   // as on every card before it.
   tool: toolNameSchema.optional(),
+  // How the rule binds: `must_not` — the agent must not do it; absent — it must, as on every card before it.
+  strength: z.literal('must_not').optional(),
+  // What else fulfils it, so a permitted way is never judged a failure («может сначала уточнить номер, если его нет в запросе»),
+  // and what exactly breaks it. Absent on every card before them: the duty's words alone decide, as they always did.
+  acceptable: text(600).optional(),
+  violation: text(600).optional(),
 }).refine(expectation => expectation.tool === undefined || expectation.observation === 'tool', 'Only a duty observed on the tools names a tool');
 
 /** The one difference of a similar card from its parent. */
@@ -156,7 +162,9 @@ const setFact = z.strictObject({ kind: z.literal('set_fact'), cardId: id, factId
   disclosure: disclosureSchema, askedAs: text(200).optional() });
 const removeFact = z.strictObject({ kind: z.literal('remove_fact'), cardId: id, factId: id });
 const editExpectation = z.strictObject({ kind: z.literal('edit_expectation'), cardId: id, expectationId: id, text: text(300).optional(),
-  requirementIds: z.array(id).min(1).max(3).optional(), appliesWhen: text(300).nullable().optional() });
+  requirementIds: z.array(id).min(1).max(3).optional(), appliesWhen: text(300).nullable().optional(),
+  // How the rule binds, what else fulfils the duty, what breaks it; null removes the words.
+  strength: z.enum(['must', 'must_not']).optional(), acceptable: text(600).nullable().optional(), violation: text(600).nullable().optional() });
 const removeExpectation = z.strictObject({ kind: z.literal('remove_expectation'), cardId: id, expectationId: id });
 // `clarity`: whether the customer states their request — the owner's decision about the customer, beside the words.
 const editClient = z.strictObject({ kind: z.literal('edit_client'), cardId: id, wants: text(300).optional(), writes: text(3000).optional(), leaves: text(300).optional(),

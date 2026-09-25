@@ -53,7 +53,8 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
     case 'edit_expectation': return strictest([
       ...(command.text !== undefined ? ['owner-words' as const] : []),
       ...(typeof command.appliesWhen === 'string' ? ['owner-words' as const] : command.appliesWhen === null ? ['owner-confirm' as const] : []),
-      ...(command.requirementIds !== undefined ? ['owner-confirm' as const] : []),
+      ...(command.requirementIds !== undefined || command.strength !== undefined ? ['owner-confirm' as const] : []),
+      ...[command.acceptable, command.violation].flatMap(value => typeof value === 'string' ? ['owner-words' as const] : value === null ? ['owner-confirm' as const] : []),
     ]);
     case 'set_turn': return command.turn && !command.turn.event ? 'owner-words' : 'owner-confirm';
     // A similar card whose customer knows something else is a claim about the customer, whatever its words.
@@ -77,7 +78,7 @@ export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
   const texts = (...items: (string | null | undefined)[]) => items.filter((item): item is string => typeof item === 'string');
   switch (command.kind) {
     case 'edit_client': return texts(command.wants, command.writes, command.leaves);
-    case 'edit_expectation': return texts(command.text, command.appliesWhen);
+    case 'edit_expectation': return texts(command.text, command.appliesWhen, command.acceptable, command.violation);
     case 'set_turn': return command.turn && !command.turn.event ? texts(command.turn.after, command.turn.says) : [];
     case 'add_similar': return command.change.kind === 'opening' ? [command.change.writes] : command.change.kind === 'turn' ? texts(command.change.turn?.after, command.change.turn?.says)
       : texts(command.change.writes);
@@ -326,11 +327,15 @@ function applyChange(draft: Card, change: CardChange, library: LibraryV2, contex
     }
     case 'edit_expectation': {
       const target = expectationOf(draft, change.expectationId);
-      if (change.text === undefined && change.requirementIds === undefined && change.appliesWhen === undefined) throw new CommandRefused('Не сказано, что изменить в ожидании.');
+      if (change.text === undefined && change.requirementIds === undefined && change.appliesWhen === undefined && change.strength === undefined
+        && change.acceptable === undefined && change.violation === undefined) throw new CommandRefused('Не сказано, что изменить в ожидании.');
       if (change.requirementIds) { requireRequirements(library, change.requirementIds); requireBinding(library, change.requirementIds); }
       if (change.text !== undefined) target.text = change.text;
       if (change.requirementIds) target.requirementIds = [...new Set(change.requirementIds)];
       if (change.appliesWhen === null) delete target.appliesWhen; else if (change.appliesWhen !== undefined) target.appliesWhen = change.appliesWhen;
+      if (change.strength === 'must') delete target.strength; else if (change.strength === 'must_not') target.strength = 'must_not';
+      if (change.acceptable === null) delete target.acceptable; else if (change.acceptable !== undefined) target.acceptable = change.acceptable;
+      if (change.violation === null) delete target.violation; else if (change.violation !== undefined) target.violation = change.violation;
       return 'Ожидание изменили вы.';
     }
     case 'remove_expectation': {

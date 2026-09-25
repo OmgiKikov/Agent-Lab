@@ -83,6 +83,7 @@ function basisProposal(call: ProposalCall) {
 export interface DutyProposal {
   text: string; basis: z.infer<ReturnType<typeof basisProposal>>[]; appliesWhen: string | null; observation: Observation;
   tool?: string | null;
+  strength: 'must' | 'must_not'; acceptable: string | null; violation: string | null;
 }
 
 /** The tool of a duty: one the connection listed — an enum of this call — or, where it listed none, a name of its own. An answer without the field names none. */
@@ -93,7 +94,9 @@ function toolProposal(call: ProposalCall): z.ZodType<string | null> {
 }
 
 function expectationProposal(call: ProposalCall): z.ZodType<DutyProposal> {
-  const duty = { text: text(300), basis: z.array(basisProposal(call)).min(1).max(3), appliesWhen: text(300).nullable(), observation: z.enum(call.observations) };
+  // An answer written before strength, acceptable and violation existed reads as a plain duty, as every card before them.
+  const duty = { text: text(300), basis: z.array(basisProposal(call)).min(1).max(3), appliesWhen: text(300).nullable(), observation: z.enum(call.observations),
+    strength: z.enum(['must', 'must_not']).default('must'), acceptable: text(600).nullable().default(null), violation: text(600).nullable().default(null) };
   return call.observations.includes('tool') ? z.strictObject({ ...duty, tool: toolProposal(call) }) : z.strictObject(duty);
 }
 
@@ -220,7 +223,9 @@ export function bindProposal(proposal: CardProposal, call: ProposalCall, number:
   const cited = dutyRequirements(proposal, call);
   const agentMust = proposal.agentMust.map((item, index) => ({ id: `e${index + 1}`, text: item.text, requirementIds: [...new Set(cited[index]!.map(requirement => requirement.id))],
     ...(item.appliesWhen !== null ? { appliesWhen: item.appliesWhen } : {}), observation: item.observation,
-    ...(item.observation === 'tool' && typeof item.tool === 'string' ? { tool: item.tool } : {}) }));
+    ...(item.observation === 'tool' && typeof item.tool === 'string' ? { tool: item.tool } : {}),
+    ...(item.strength === 'must_not' ? { strength: 'must_not' as const } : {}),
+    ...(item.acceptable !== null ? { acceptable: item.acceptable } : {}), ...(item.violation !== null ? { violation: item.violation } : {}) }));
   const common = { id: `card_${fingerprint({ source: call.source, proposal })}`, number, title: proposal.title, topic: proposal.topic, agentMust, revision: 1 };
   if ('writes' in proposal) {
     if (call.source.kind !== 'rules') throw new Error('Предложение без реплик клиента пришло на диалог.');
