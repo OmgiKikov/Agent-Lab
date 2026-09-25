@@ -64,8 +64,13 @@ export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorChec
 
   const known = valueTokens(knownText(scenario.user));
   let fabricated: { seq: number; token: string } | undefined;
+  // The values Lab itself sent for masking marks of the log (customer-values.ts) are not the customer's inventions.
+  const substituted = (message: Trial['events'][number]) => {
+    const values = message.result && typeof message.result === 'object' ? (message.result as { values?: unknown }).values : undefined;
+    return Array.isArray(values) ? values.map(item => String((item as { value?: unknown })?.value ?? '')).join('\n') : '';
+  };
   for (const message of simulated) {
-    const allowed = new Set([...known, ...valueTokens(textBefore(message.seq, ['assistant', 'user']))]);
+    const allowed = new Set([...known, ...valueTokens(textBefore(message.seq, ['assistant', 'user'])), ...valueTokens(substituted(message))]);
     const token = [...valueTokens(message.text ?? '')].find(t => !allowed.has(t));
     if (token) { fabricated = { seq: message.seq, token }; break; }
   }

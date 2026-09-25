@@ -15,6 +15,7 @@ import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure
 import { openExternalTarget, type AgentButton, type TurnOutcome } from './targets.js';
 import { simulatorChecks } from './simulator.js';
 import { clip } from './text.js';
+import { conversationValues } from './customer-values.js';
 
 /*
  * One trial = one fresh world, one target session, one user side.
@@ -265,6 +266,8 @@ export async function evaluateTrial(input: {
   let offered: AgentButton[] = [];
   // A card's customer in their own words (card-customer.ts), when the runtime can play one; otherwise the move controller.
   let free: { brief: CustomerBrief; turned: boolean; said: number } | undefined;
+  // The values the customer of a card sends where its card kept a masking mark of the log.
+  const values = scenario.execution ? conversationValues(trial.id) : undefined;
   // A card judged on tools or state needs the observed state recorded after every agent reply.
   const execution = scenario.execution;
   const observesBeyondReply = !!execution && (isCardExecution(execution) ? execution.evaluatorView.expectations : execution.evaluatorView.checkpoints)
@@ -327,7 +330,11 @@ export async function evaluateTrial(input: {
       // A press goes to the agent as the button's own text, whatever case or spacing the customer wrote it in.
       const choice = pressOf(offered, userMessage);
       if (choice) userMessage = choice.text;
-      append('user', userMessage, choice ? { choice } : undefined);
+      // A masking mark of the log the card kept goes out as a synthetic value of its kind, the same all through (customer-values.ts).
+      const delivered = choice || !values ? { text: userMessage, used: [] } : values.deliver(userMessage);
+      userMessage = delivered.text;
+      if (delivered.used.length) trial.syntheticValues = structuredClone(values!.used);
+      append('user', userMessage, choice ? { choice } : delivered.used.length ? { values: delivered.used.map(({ mark, value }) => ({ mark, value })) } : undefined);
       stage = 'agent';
       onStage?.('target');
       latest = PLAIN_REPLY;

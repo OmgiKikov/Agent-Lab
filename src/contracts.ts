@@ -10,6 +10,7 @@ import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { PHASES, type Phase } from './phases.js';
 import { STOP_REASONS, type StopReason } from './errors.js';
 import { caveatsSchema, type Caveat } from './caveats.js';
+import { VALUE_KINDS, type SyntheticValue } from './customer-values.js';
 import { valueTokens } from './verbatim.js';
 import { referencesSchema, type Reference } from './reference.js';
 export { referenceSchema, referencesSchema, type Reference } from './reference.js';
@@ -423,6 +424,12 @@ export interface Trial {
    * result; a conversation that did show a failure is never held again. Absent otherwise and in older records.
    */
   rerunAfter?: BrokenConversation;
+  /**
+   * What the customer Lab plays sent in place of the masking marks its card kept from the log ([НОМЕР_КАРТЫ] → a
+   * Luhn-valid card number): each mark once, with its kind and value, the same all through the conversation
+   * (customer-values.ts). The customer's message that carried one also names it. Absent where no mark was sent.
+   */
+  syntheticValues?: SyntheticValue[];
 }
 /** A conversation the agent's side broke and the run held again: its own id (its trace and judge files are filed under it), why it broke, what was said. */
 export interface BrokenConversation {
@@ -637,6 +644,7 @@ export const trialSchema = z.strictObject({
   countingVersion: z.union([z.literal(2), z.literal(3)]).optional(),
   cutOff: z.literal(true).optional(),
   rerunAfter: brokenConversationSchema.optional(),
+  syntheticValues: z.array(z.strictObject({ mark: z.string().max(200), kind: z.enum(VALUE_KINDS), value: z.string().max(200) })).max(40).optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),
