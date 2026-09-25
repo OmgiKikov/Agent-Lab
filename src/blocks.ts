@@ -108,7 +108,7 @@ function blockHtml(block: Block): string {
     case 'accuracy': return `<div class="acc ${block.level}"><span>${e(block.lead)}</span>${block.value ? `<span class="pct">${e(block.value)}</span>` : ''}<span>${e(block.tail)}</span></div>`;
     case 'trust': return `<div class="trust">${block.parts.map(part => `<span${part.warn ? ' class="warn"' : ''}>${e(part.text)}</span>`).join('')}</div>`;
     case 'section': return `<section><h2>${e(block.title)}</h2>${block.blocks.map(blockHtml).join('')}</section>`;
-    case 'table': return `<table><thead><tr>${block.head.map(cell => `<th>${e(cell)}</th>`).join('')}</tr></thead><tbody>${block.rows.map(row => `<tr${row.muted ? ' class="muted"' : ''}>${row.cells.map(cell => `<td>${e(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    case 'table': return `<div class="tbl"><table><thead><tr>${block.head.map(cell => `<th>${e(cell)}</th>`).join('')}</tr></thead><tbody>${block.rows.map(row => `<tr${row.muted ? ' class="muted"' : ''}>${row.cells.map(cell => `<td>${e(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
     case 'causes': return `<div class="why">${block.items.map((cause, i) => `<details class="cause"${i ? '' : ' open'}><summary><span class="i">${i + 1}.</span><span class="t">${e(cause.title)}</span><span class="n">${e(cause.count)}</span><span class="chev">›</span></summary>`
       + `<div class="exs">${cause.examples.map(example => `<div class="ex"><span class="st">${e(example.situation)}</span>${dl([['Ожидалось', example.expected],
         saidRow(example.said), ...(example.rule ? [['Правило', example.rule] as [string, string]] : [])])}</div>`).join('')}</div></details>`).join('')}</div>`;
