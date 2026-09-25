@@ -130,6 +130,11 @@ export class OperationRunner {
       beforeCall: () => {
         controller.signal.throwIfAborted();
         if (active.spent >= active.budget.calls) { exhausted = true; throw new BudgetExhausted(); }
+        // A call counts as spent when it is sent: its counts reach the record's calls journal before its request leaves,
+        // so a crash before the next checkpoint loses none of them. A call the journal cannot take is not made.
+        if (active.record && usage) {
+          this.store.appendCall(active.record.id, { calls: usage.calls + 1, ...(active.carried ? { spent: active.carried.calls + active.spent + 1 } : {}) });
+        }
         active.spent++;
         if (usage) usage.calls++;
       },

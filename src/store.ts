@@ -22,6 +22,7 @@ import { readPurposeFile, writePurposeFile, type PurposeProposal } from './promp
 import type { TableReading } from './spreadsheet/mapping.js';
 import type { TopicMap, TopicMapKey, TopicMapProgress } from './miner/topic-map.js';
 import type { LogVersionJournal } from './card/calibration.js';
+import type { SentCalls } from './lab/interrupted.js';
 
 /*
  * Storage, and only storage, of one data folder: a record per run as one atomic JSON file, the writer's lock, the
@@ -340,6 +341,33 @@ export class ExperimentStore {
     this.path(id);
     try { return await readFile(join(this.directory, `${id}.trace.jsonl`), 'utf8'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''; throw error; }
+  }
+  /**
+   * A call counts as spent when it is sent: an operation on the record `id` writes its counts here, on disk, before the
+   * call's request leaves (lab/operation.ts), so calls made after the last checkpoint survive a crash. One line per call
+   * in `{id}.calls.jsonl`; the counts only grow, so the most of each is the truth whatever launch wrote it.
+   */
+  appendCall(id: string, counts: SentCalls): void {
+    if (!this.lockToken) throw new Error('Для записи вызова откройте лабораторию как писатель.');
+    this.path(id);
+    appendFileSync(join(this.directory, `${id}.calls.jsonl`), `${JSON.stringify(counts)}\n`, { mode: 0o600, flush: true });
+  }
+  /** The most of each count the calls journal of `id` holds; undefined without a journal. A line cut by a crash is skipped. */
+  async sentCalls(id: string): Promise<SentCalls | undefined> {
+    this.path(id);
+    let text: string;
+    try { text = await readFile(join(this.directory, `${id}.calls.jsonl`), 'utf8'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+    let sent: SentCalls | undefined;
+    for (const line of text.split('\n')) {
+      let row: unknown;
+      try { row = line ? JSON.parse(line) : undefined; } catch { continue; }
+      const { calls, spent } = (row ?? {}) as Partial<SentCalls>;
+      if (!Number.isSafeInteger(calls) || calls! < 0) continue;
+      sent = { calls: Math.max(sent?.calls ?? 0, calls!),
+        ...(Number.isSafeInteger(spent) && spent! >= 0 ? { spent: Math.max(sent?.spent ?? 0, spent!) } : sent?.spent !== undefined ? { spent: sent.spent } : {}) };
+    }
+    return sent;
   }
   /**
    * Lab's own defects met by an operation on the record `id` — an SDK that threw instead of answering — each with its
