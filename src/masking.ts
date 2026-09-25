@@ -17,8 +17,10 @@
  * the miner leaves out one with any), and a value that is a mark again (holdsMark).
  *
  * Version 1 is the three readings that disagreed before the table; it stays for what was stored under it, frozen: an
- * import batch or a table's mapping without `maskVersion` was read so, and the topic map of such an import left
- * out what its exclusion left out. A new batch records version 2 only where a message reads otherwise (readAlike).
+ * import batch or a table's mapping without `maskVersion` was read so, the topic map of such an import left out what
+ * its exclusion left out, and a value Lab filled in without `maskVersion` (card/schema.ts `filled`) stands over the
+ * mark version 1 counted — every mark the pattern finds, its context unread. A new batch records version 2 only where
+ * a message reads otherwise (readAlike); a new fill always records the table it counted its marks by.
  */
 
 /** 1: the frozen readings of what was stored before the table; 2: the table. */
@@ -67,23 +69,33 @@ function masks(content: string, start: number, end: number): boolean {
   return true;
 }
 
-/** The masked values of a message, in order. */
-export function maskedSpans(content: string): MaskedSpan[] {
+/**
+ * The masked values of a message, in order, as the table of `version` reads them. Version 1 — the frozen reading the
+ * values Lab filled in before the table were counted by — takes every mark the pattern finds, its context unread.
+ */
+export function maskedSpans(content: string, version: MaskVersion = MASK_VERSION): MaskedSpan[] {
   return [...content.matchAll(MASK_MARK)].flatMap(match => {
     const start = match.index, end = match.index + match[0].length;
-    return masks(content, start, end) ? [{ start, end, mark: match[0] }] : [];
+    return version === 1 || masks(content, start, end) ? [{ start, end, mark: match[0] }] : [];
   });
 }
 
-/** The message with values written in: `values.get(n)` over the n-th mark (0-based); a mark without a value stays, the rest is kept character for character. */
-export function withValues(content: string, values: ReadonlyMap<number, string>): string {
+/** A value to write over a mark: where the mark stands in its message (a span maskedSpans found) and the value. */
+export interface MarkValue { start: number; end: number; value: string }
+
+/**
+ * The message with each value written over its mark; a mark without a value stays, the rest is kept character for
+ * character, and of two values over one mark the later is written. The places are given, not read here: a value stays
+ * where the table it was counted by found its mark (card/checks.ts filledSpan).
+ */
+export function withValues(content: string, values: readonly MarkValue[]): string {
+  const over = new Map(values.map(item => [item.start, item] as const));
   let out = '', from = 0;
-  maskedSpans(content).forEach((span, index) => {
-    const value = values.get(index);
-    if (value === undefined) return;
-    out += content.slice(from, span.start) + value;
-    from = span.end;
-  });
+  for (const { start, end, value } of [...over.values()].sort((a, b) => a.start - b.start)) {
+    if (start < from) continue; // the marks of one pattern never overlap: a place inside one already written stays written
+    out += content.slice(from, start) + value;
+    from = end;
+  }
   return out + content.slice(from);
 }
 

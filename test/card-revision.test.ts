@@ -115,7 +115,7 @@ test('a revision that died in flight is never repeated on resume: the blocked ca
     await lab.waitForIdle();
     const progress = progressOf(await lab.get(draft.id));
     assert.equal(died, 1, 'the revision is not sent again');
-    assert.deepEqual([progress.status, progress.processed, progress.excluded, progress.revised], ['complete', ['late', 'known'], [], ['late']]);
+    assert.deepEqual([progress.pending, progress.processed, progress.excluded, progress.revised], [[], ['late', 'known'], [], ['late']]);
     assert.deepEqual(await statuses(lab, draft.id), ['unusable', 'ready'], 'the blocked card keeps its place and its reason');
   });
 });

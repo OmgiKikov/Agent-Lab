@@ -1,7 +1,7 @@
 import type { Experiment } from '../contracts.js';
 import { PROPOSAL_ATTEMPTS, REVIEW_CALLS } from './budget.js';
 import type { CardEvidence } from './checks.js';
-import { CARD_PROTOCOL, pendingReviewCalls } from './prepare.js';
+import { CARD_PROTOCOL, namedByOwner, pendingReviewCalls } from './prepare.js';
 import { blockedClaims, pendingClaims, type ReviewContext } from './review.js';
 import type { Card, LibraryV2 } from './schema.js';
 
@@ -40,6 +40,5 @@ function owedRevision(record: Pick<Experiment, 'preparationProgress' | 'original
   if (unit === undefined || !spent || spent.calls >= PROPOSAL_ATTEMPTS || progress.revised?.includes(unit)) return false;
   // A card of a logged conversation is written again only beside that conversation, read from the draft's own import.
   if (card.origin.kind === 'dialogue' && !(record.originalImport && evidence.messages(record.originalImport.id, unit))) return false;
-  return !library.receipts.some(({ command }) => 'cardId' in command ? command.cardId === card.id
-    : command.kind === 'decide_plausible' && command.facts.some(fact => fact.cardId === card.id));
+  return !namedByOwner(library, card.id);
 }
