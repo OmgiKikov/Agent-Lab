@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -27,7 +29,7 @@ test('a failure is typed from the stream protocol, the reported status and whole
   const cases: [string, ModelReply, { started: boolean; status?: number }, ProviderFailureKind, ProviderDelivery, boolean, number | undefined][] = [
     // Words, not substrings: a token count holding «429» is not a rate limit, a load balancer is not a balance.
     ['token count', failed("This model's maximum context length is 8192 tokens. However, you requested 142900 tokens."), { started: false }, 'context limit', 'refused', false, undefined],
-    ['load balancer', failed('upstream load balancer reset the connection'), { started: false }, 'connection failure', 'refused', true, undefined],
+    ['load balancer', failed('upstream load balancer reset the connection'), { started: false }, 'connection failure', 'cut', true, undefined],
     ['status first', failed('429 Too Many Requests'), { started: false }, 'rate limit', 'refused', true, 429],
     ['status after http', failed('Giga gateway request failed with HTTP 503'), { started: false }, 'overloaded', 'refused', true, 503],
     ['status in a body', failed('{"error":{"message":"Slow down","code":429}}'), { started: false }, 'rate limit', 'refused', true, 429],
@@ -39,12 +41,12 @@ test('a failure is typed from the stream protocol, the reported status and whole
     ['credit', failed('Your credit balance is too low to access the API.'), { started: false }, 'insufficient credit', 'refused', false, undefined],
     ['payment', failed('402 Payment Required'), { started: false }, 'insufficient credit', 'refused', false, 402],
     ['key', failed('401 Incorrect API key provided'), { started: false }, 'access denied', 'refused', false, 401],
-    ['connection', failed('Connection error.'), { started: false }, 'connection failure', 'refused', true, undefined],
+    ['connection', failed('Connection error.'), { started: false }, 'connection failure', 'cut', true, undefined],
     // A timeout may still be answered on the provider's side; an answer that began and broke off may be billed.
     ['timeout', failed('Request timed out.'), { started: false }, 'timeout', 'cut', true, undefined],
     ['overloaded mid-answer', failed('{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'), { started: true }, 'overloaded', 'cut', true, undefined],
     ['output without start', failed('stream ended', { usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 8, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }), { started: false }, 'incomplete', 'cut', false, undefined],
-    ['unknown refusal', failed('upstream went away'), { started: false }, 'incomplete', 'refused', false, undefined],
+    ['unknown delivery', failed('upstream went away'), { started: false }, 'incomplete', 'cut', false, undefined],
     ['bad request', failed('400 Invalid parameter: temperature'), { started: false }, 'incomplete', 'refused', false, 400],
     ['length', failed('', { stopReason: 'length', errorMessage: undefined }), { started: true }, 'length', 'answered', false, undefined],
   ];
@@ -188,4 +190,30 @@ test('a re-assessment records a judge the provider did not answer as «unavailab
       assert.equal(trial.assessmentFailure, 'unavailable');
     }
   } finally { await lab.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test('a request accepted before a socket reset is not retried or declared free', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'lab-provider-delivery-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let accepted = 0;
+  const server = createServer(async request => {
+    let body = ''; for await (const chunk of request) body += chunk;
+    if (JSON.parse(body).messages.length) accepted++;
+    request.socket.destroy();
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }));
+  const runtime = await ModelRuntime.create({ authPath: join(directory, 'auth.json'), modelsPath: null,
+    modelsStorePath: join(directory, 'models.json'), allowModelNetwork: false, refreshOnCreate: false });
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  runtime.registerProvider('accepted-reset', { api: 'openai-completions', apiKey: 'local-fixture',
+    baseUrl: `http://127.0.0.1:${address.port}/v1`, models: [{ id: 'test', name: 'Local test', reasoning: false,
+      input: ['text'], cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, contextWindow: 20000, maxTokens: 1000 }] });
+  const { ctx, usage } = callContext({ limit: 1, timeoutMs: 5000 });
+  await assert.rejects(callModel(runtime, runtime.getModel('accepted-reset', 'test')!, ask, ctx),
+    error => error instanceof ProviderFailure && error.kind === 'connection failure' && error.delivery === 'cut');
+  assert.equal(accepted, 1);
+  assert.equal(usage.calls, 1);
+  assert.equal(usage.costUsd, null, 'no reply cannot establish the price of an accepted request');
 });

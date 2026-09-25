@@ -253,7 +253,7 @@ export async function evaluateTrial(input: {
       if (persistenceFailed) throw persistenceError;
       ctx.signal.throwIfAborted();
       if (typeof response !== 'string') throw new Error('Target returned a non-text response');
-      if (controlled && observesBeyondReply) {
+      if (observesBeyondReply) {
         emit({ type: 'observation', result: structuredClone(trial.observation), ...(trial.observation?.state !== 'missing' ? { state: structuredClone(state) } : {}) });
       }
       append('assistant', response);
@@ -261,7 +261,7 @@ export async function evaluateTrial(input: {
       const serviceMarker = target.serviceReplies?.find(marker => response.includes(marker));
       if (serviceMarker !== undefined) { trial.reason = `${SERVICE_REPLY_REASON} «${serviceMarker}»: это не ответ агента, ситуация не измерена.`; trial.invalidCause = 'service_reply'; break; }
       if (control || controlled && (finalUserReply || controlled.policy.terminalStates.includes(controlled.position))) { stopped = true; break; }
-      if (!controlled && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
+      if (!controlled && !free && (userMode === 'static' || finalUserReply || (scenario.user.maxFollowUps !== undefined && turn >= scenario.user.maxFollowUps))) { stopped = true; break; }
       if (userMode === 'scripted') {
         const next = scenario.user.script?.[turn];
         if (next === undefined) { stopped = true; break; }
@@ -272,6 +272,7 @@ export async function evaluateTrial(input: {
       stage = 'user simulation';
       onStage?.('user');
       if (free) {
+        if (turn + 1 >= settings.maxTurns) { stopped = true; trial.turnLimit = true; break; }
         // The customer leaves on their own words' budget: past the card's follow-ups they have nothing more to say.
         if (free.said >= free.brief.maxFollowUps && !(free.brief.turn?.required && !free.turned)) { stopped = true; break; }
         ctx.signal.throwIfAborted();
@@ -283,7 +284,6 @@ export async function evaluateTrial(input: {
         if (reply.move === 'leave') { stopped = true; break; }
         if (reply.move === 'turn') free.turned = true;
         free.said++;
-        if (turn + 1 >= settings.maxTurns) { stopped = true; break; }
         userMessage = deliveredMessage(reply, free.brief);
         continue;
       }
@@ -319,6 +319,10 @@ export async function evaluateTrial(input: {
     // The agent answered the last message the run allows the customer while the talk was still going: the conversation
     // ends here as it stands. It is an observation about the agent's conversation, never a failed measurement.
     if (turn === settings.maxTurns) { stopped = true; trial.turnLimit = true; }
+    if (!control && free?.brief.turn?.required && !free.turned && stopped) {
+      refusal = 'simulator';
+      throw new Error('Обязательный поворот клиента не был отправлен агенту: ситуация не измерена.');
+    }
     trial.finalState = structuredClone(state);
     // Simulator checks describe the user side only; they are computed before grading and never touch the outcome.
     trial.simulatorChecks = simulatorChecks(scenario, trial);

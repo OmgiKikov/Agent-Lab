@@ -823,7 +823,7 @@ function unanswered(passed: number, broken: number): Experiment {
 test('eight of ten unanswered situations raise the alarm on every surface: never a quiet «100% — ошибок нет»', () => {
   const v = view(unanswered(2, 8));
   const alarm = '✗ Числу пока не верить: не измерено 8 из 10 ситуаций — агент не ответил';
-  assert.equal(accuracyRow(v).text, 'Точность агента: 100% — справился в 2 из 2 ситуаций', 'the number says what it measured');
+  assert.equal(accuracyRow(v).text, 'Точность агента: 100% — справился в 2 из 2 ситуаций, ещё 8 не измерено', 'the number says what it measured');
   assert.deepEqual(alarmRow(v), { role: 'alarm', indent: 0, text: alarm });
   // The chat (folded and open), the board, the CLI and the lines a CI job reads all open with it.
   for (const [label, rows] of [['chat', chatBlock(v, { expanded: false })], ['chat open', chatBlock(v, { expanded: true })],

@@ -46,7 +46,7 @@ export type ProviderFailureKind = 'rate limit' | 'overloaded' | 'insufficient cr
 /**
  * What became of a request that gave no usable answer, which is what it cost:
  * - `refused`: turned away before any answer began — a rate limit, an overload, missing access or credit, a request too
- *   large, an endpoint that could not be reached. Nothing was generated, so nothing was billed.
+ *   large. Transport errors without a refusal leave delivery uncertain.
  * - `answered`: a whole answer arrived and was billed at its reported usage, but it cannot be used as it stands (cut at
  *   the output cap, empty). It is an answer: a structured task repairs it like any rejected one.
  * - `cut`: the answer began and broke off, or the request ran out of time before its fate was known. It may have been
@@ -64,7 +64,7 @@ export interface ProviderFailureDetails extends ErrorOptions {
 const KIND_DEFAULTS: Readonly<Record<ProviderFailureKind, { delivery: ProviderDelivery; retryable: boolean }>> = {
   'rate limit': { delivery: 'refused', retryable: true },
   overloaded: { delivery: 'refused', retryable: true },
-  'connection failure': { delivery: 'refused', retryable: true },
+  'connection failure': { delivery: 'cut', retryable: true },
   'insufficient credit': { delivery: 'refused', retryable: false },
   'access denied': { delivery: 'refused', retryable: false },
   'context limit': { delivery: 'refused', retryable: false },
@@ -190,8 +190,9 @@ export function providerFailureOf(reply: ModelReply, observed: Observed): Provid
       ?? PHRASES.find(([candidate, phrases]) => (candidate !== 'connection failure' || status === undefined) && phrases.some(phrase => contains(words, phrase)))?.[0]
       ?? 'incomplete';
   const began = observed.started || (reply.usage?.output ?? 0) > 0;
-  // A request that timed out may still be answered on the provider's side: its fate, and so its charge, is unknown.
-  const delivery: ProviderDelivery = began || kind === 'timeout' ? 'cut' : 'refused';
+  // No stream event does not prove non-delivery: a reset can happen after the provider accepted the request.
+  const uncertain = kind === 'timeout' || kind === 'connection failure' || kind === 'incomplete' && status === undefined;
+  const delivery: ProviderDelivery = began || uncertain ? 'cut' : 'refused';
   return new ProviderFailure(kind, `Pi provider response incomplete: ${kind === 'incomplete' ? reply.stopReason : kind}`,
     { delivery, ...(status === undefined ? {} : { status }) });
 }
@@ -245,7 +246,7 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
  */
 export const PROVIDER_CONCURRENCY = 16;
 /**
- * How many times a request refused for a transient cause (a rate limit, an overload, a lost connection) is sent again. Nothing
+ * How many times a request refused for a transient cause (a rate limit or an overload) is sent again. Nothing
  * was billed and the budget was charged once, so a repeat spends neither; it only waits. Rate limits usually clear within the
  * waits below, and a provider that stays refusing fails the step after about 15 s instead of holding it.
  */
@@ -352,7 +353,7 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
   if (signal.aborted || !reply) {
     ctx.addUsage(usageOf(reply, model));
     if (signal.aborted) throw signal.reason;
-    return { ok: false, failure: unavailable(model, observed.started ? 'cut' : 'refused') };
+    return { ok: false, failure: unavailable(model, 'cut') };
   }
   const text = reply.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
   const failure = reply.stopReason !== 'stop' ? providerFailureOf(reply, observed)

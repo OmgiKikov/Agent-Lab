@@ -46,15 +46,17 @@ test('the AND matrix: every vote of 1–3 expectations over 1–2 attempts decid
   }
 });
 
+const currentAttempt: typeof cardAttempt = (...args) => ({ ...cardAttempt(...args), countingVersion: COUNTING_VERSION });
+
 test('the parts carry the owner\'s letters and words; a missing planned attempt never undoes a usable fail, but still gates a pass', () => {
   const scenario = compiledCard();
-  const parts = headlineCardOutcome(cardRun([scenario], [cardAttempt('t', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' })]), scenario).parts;
+  const parts = headlineCardOutcome(cardRun([scenario], [currentAttempt('t', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' })]), scenario).parts;
   assert.deepEqual(parts.map(({ id, label, text, outcome }) => [id, label, text, outcome]), [
     ['e1', 'А', 'запросить номер терминала не больше одного раза', 'pass'], ['e2', 'Б', 'объяснить, как оформить возврат', 'fail'], ['e3', 'В', 'предложить возврат по выписке', 'pass']]);
-  const missing = cardRun([scenario], [cardAttempt('t', scenario, { e1: 'fail', e2: 'fail', e3: 'fail' })], 2);
+  const missing = cardRun([scenario], [currentAttempt('t', scenario, { e1: 'fail', e2: 'fail', e3: 'fail' })], 2);
   assert.deepEqual(cardVerdict(missing, scenario), { outcome: 'fail' }, 'a usable fail of the card\'s own plan decides even when the other planned attempt is missing');
   assert.deepEqual(headlineCardOutcome(missing, scenario).parts.map(part => part.outcome), ['fail', 'fail', 'fail']);
-  const passedHalf = cardRun([scenario], [cardAttempt('t', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' })], 2);
+  const passedHalf = cardRun([scenario], [currentAttempt('t', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' })], 2);
   assert.deepEqual(cardVerdict(passedHalf, scenario), { outcome: 'unknown', reason: 'attempts_mismatch' }, 'a pass needs the whole planned set');
   assert.deepEqual(headlineCardOutcome(passedHalf, scenario).parts.map(part => part.outcome), ['unknown', 'unknown', 'unknown']);
 });
@@ -67,14 +69,14 @@ const toolCard = () => {
 };
 /** The agent answered nothing: the attempt is not measured and carries no judgment. */
 const silent = (id: string, scenario: ReturnType<typeof compiledCard>, repeat: number): Trial => {
-  const trial = cardAttempt(id, scenario, {}, repeat, { outcome: 'invalid', invalidCause: 'agent', reason: 'Испытуемый вернул пустой ответ.' });
+  const trial = currentAttempt(id, scenario, {}, repeat, { outcome: 'invalid', invalidCause: 'agent', reason: 'Испытуемый вернул пустой ответ.' });
   delete trial.assessments;
   return trial;
 };
 
 test('the owner\'s case: a proven missing action in one attempt fails the card although the other attempt got no reply, down to the headline', () => {
   const scenario = toolCard();
-  const claimed = cardAttempt('t0', scenario, { e1: 'fail', e2: 'pass', e3: 'pass' }, 0, { observation: { state: 'missing', tools: 'complete' },
+  const claimed = currentAttempt('t0', scenario, { e1: 'fail', e2: 'pass', e3: 'pass' }, 0, { observation: { state: 'missing', tools: 'complete' },
     events: [{ seq: 0, type: 'user', text: scenario.user.opening }, { seq: 1, type: 'assistant', text: 'Возврат оформлен' }] });
   const run = cardRun([scenario], [claimed, silent('t1', scenario, 1)], 2);
   assert.equal(recordedExpectationResult(claimed, { id: 'e1', observation: 'tool' }), 'fail', 'the complete log proves the call was never made');
@@ -92,7 +94,7 @@ test('the owner\'s case: a proven missing action in one attempt fails the card a
 
 test('OD-1: an empty reply next to a passed attempt is not measured, never a fail', () => {
   const scenario = toolCard();
-  const passed = cardAttempt('t0', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' }, 0, { observation: { state: 'missing', tools: 'complete' },
+  const passed = currentAttempt('t0', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' }, 0, { observation: { state: 'missing', tools: 'complete' },
     events: [{ seq: 0, type: 'user', text: scenario.user.opening }, { seq: 1, type: 'tool_result', tool: 'refund', result: { ok: true } }, { seq: 2, type: 'assistant', text: 'Готово' }] });
   passed.assessments = passed.assessments!.map(a => a.metricId === 'e1' ? { ...a, evidence: [1] } : { ...a, evidence: [2] });
   assert.deepEqual(cardVerdict(cardRun([scenario], [passed, silent('t1', scenario, 1)], 2), scenario), { outcome: 'unknown', reason: 'agent_error' });
@@ -100,30 +102,30 @@ test('OD-1: an empty reply next to a passed attempt is not measured, never a fai
 
 test('a recorded fail in an unusable attempt never decides the card', () => {
   const scenario = compiledCard();
-  const run = cardRun([scenario], [cardAttempt('t0', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' }), cardAttempt('t1', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' }, 1)], 2,
+  const run = cardRun([scenario], [currentAttempt('t0', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' }), currentAttempt('t1', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' }, 1)], 2,
     { humanReviews: [{ id: 'h', createdAt: 'now', trialId: 't1', verdict: 'invalid', note: 'Проверено' }] });
   assert.deepEqual(cardVerdict(run, scenario), { outcome: 'unknown', reason: 'human_invalid' });
 });
 
-test('a duplicated attempt of the card\'s own plan can add a failure, never a pass; a foreign attempt decides nothing', () => {
+test('duplicate and foreign attempts cannot decide a versioned plan', () => {
   const scenario = compiledCard();
-  const failed = cardRun([scenario], [cardAttempt('a', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' }), cardAttempt('b', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' })]);
-  assert.deepEqual(cardVerdict(failed, scenario), { outcome: 'fail' });
-  const passed = cardRun([scenario], [cardAttempt('a', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' }), cardAttempt('b', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' })]);
+  const failed = cardRun([scenario], [currentAttempt('a', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' }), currentAttempt('b', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' })]);
+  assert.deepEqual(cardVerdict(failed, scenario), { outcome: 'unknown', reason: 'attempts_mismatch' });
+  const passed = cardRun([scenario], [currentAttempt('a', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' }), currentAttempt('b', scenario, { e1: 'pass', e2: 'pass', e3: 'pass' })]);
   assert.deepEqual(cardVerdict(passed, scenario), { outcome: 'unknown', reason: 'attempts_mismatch' });
-  const foreign = cardRun([scenario], [cardAttempt('a', scenario, { e1: 'fail', e2: 'fail', e3: 'fail' }, 0, { manifestHash: 'other' })]);
+  const foreign = cardRun([scenario], [currentAttempt('a', scenario, { e1: 'fail', e2: 'fail', e3: 'fail' }, 0, { manifestHash: 'other' })]);
   assert.deepEqual(cardVerdict(foreign, scenario), { outcome: 'unknown', reason: 'attempts_mismatch' });
   assert.equal(headlineCardOutcome(foreign, scenario, { partial: true }).outcome, 'unknown', 'not even partially');
 });
 
 test('HN-2: on a complete tool log a fail stands on the agent\'s side of the dialogue; a pass still needs a tool result', () => {
   const scenario = compiledCard();
-  const base: Trial = { ...cardAttempt('t', scenario, {}), observation: { state: 'missing', tools: 'complete' },
+  const base: Trial = { ...currentAttempt('t', scenario, {}), observation: { state: 'missing', tools: 'complete' },
     events: [{ seq: 0, type: 'user', text: 'Верните' }, { seq: 1, type: 'tool_call', tool: 'lookup' }, { seq: 2, type: 'tool_result', tool: 'lookup', result: { ok: true } }, { seq: 3, type: 'assistant', text: 'Возврат оформлен' }] };
   const read = (result: 'pass' | 'fail', evidence: number[], tools: 'complete' | 'partial' = 'complete') => recordedExpectationResult(
     { ...base, observation: { state: 'missing', tools }, assessments: [{ metricId: 'e1', result, rationale: 'r', evidence }] }, { id: 'e1', observation: 'tool' });
   assert.equal(read('fail', [3]), 'fail', 'the reply claiming the action, with no call in a complete log');
-  assert.equal(read('fail', [0]), 'unknown', 'citing only the customer proves nothing');
+  assert.equal(read('fail', [0]), 'fail', 'edition 2 can prove absence from the complete tool log itself');
   assert.equal(read('fail', [3], 'partial'), 'unknown', 'a partial log proves no absence');
   assert.equal(read('pass', [3]), 'unknown', 'the agent saying it acted is not the action');
   assert.equal(read('pass', [2]), 'pass');

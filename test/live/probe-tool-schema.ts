@@ -18,7 +18,7 @@ const model = process.argv[2];
 assert(model, 'Usage: node --import tsx test/live/probe-tool-schema.ts MODEL');
 const config = readGigaConfig();
 assert(config, 'Set AGENT_LAB_GATEWAY_URL, AGENT_LAB_GATEWAY_CERT_PATH and AGENT_LAB_GATEWAY_KEY_PATH first');
-const transport = createGigaTransport(config, 60000);
+const transport = createGigaTransport(config, { timeoutMs: 60000 });
 
 // GigaChat's functions/validate errors (a live run, quoted verbatim):
 //   "Property 'properties' does not match the schema" at #/properties/parameters

@@ -834,21 +834,23 @@ test('an unusable measurement stays unknown with its reason whatever the rules s
   assert.deepEqual(unreset.verdict, { outcome: 'unknown', reason: 'reset_unconfirmed' });
 });
 
+const currentRuledAttempt: typeof ruledAttempt = (...args) => ({ ...ruledAttempt(...args), countingVersion: 2 });
+
 test('two attempts: a rules failure in one of them fails the card; a missing attempt never undoes it, and still gates a pass', () => {
   const card = ruledCard('c');
   const two = { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }) };
-  const mixed = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass')), ruledAttempt('t1', 'c', votes('pass', 'fail'), { repeat: 1 })], two);
+  const mixed = ruledRun([card], [currentRuledAttempt('t0', 'c', votes('pass', 'pass')), currentRuledAttempt('t1', 'c', votes('pass', 'fail'), { repeat: 1 })], two);
   assert.deepEqual(halves(headlineCardOutcome(mixed, card)), { outcome: 'fail', goal: 'pass', rules: 'fail' });
-  const clean = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass')), ruledAttempt('t1', 'c', votes('pass', 'pass'), { repeat: 1 })], two);
+  const clean = ruledRun([card], [currentRuledAttempt('t0', 'c', votes('pass', 'pass')), currentRuledAttempt('t1', 'c', votes('pass', 'pass'), { repeat: 1 })], two);
   assert.deepEqual(halves(headlineCardOutcome(clean, card)), { outcome: 'pass', goal: 'pass', rules: 'pass' });
-  const missing = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'fail'))], two);
+  const missing = ruledRun([card], [currentRuledAttempt('t0', 'c', votes('pass', 'fail'))], two);
   assert.deepEqual(halves(headlineCardOutcome(missing, card)), { outcome: 'fail', goal: 'unknown', rules: 'fail' },
     'a usable fail of the card\'s own plan decides; the goal\'s pass still needs the whole planned set');
   assert.deepEqual(cardVerdict(missing, card), { outcome: 'fail' });
-  const missingPass = ruledRun([card], [ruledAttempt('t0', 'c', votes('pass', 'pass'))], two);
+  const missingPass = ruledRun([card], [currentRuledAttempt('t0', 'c', votes('pass', 'pass'))], two);
   assert.deepEqual(cardVerdict(missingPass, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
   assert.deepEqual(halves(headlineCardOutcome(missing, card, { partial: true })), { outcome: 'fail', goal: 'pass', rules: 'fail' }, 'the partial gate decides the matched attempts alone');
-  const foreign = ruledRun([card], [ruledAttempt('t', 'c', votes('pass', 'fail'), { manifestHash: 'other' })]);
+  const foreign = ruledRun([card], [currentRuledAttempt('t', 'c', votes('pass', 'fail'), { manifestHash: 'other' })]);
   assert.deepEqual(cardVerdict(foreign, card), { outcome: 'unknown', reason: 'attempts_mismatch' });
   assert.equal(headlineCardOutcome(foreign, card, { partial: true }).outcome, 'unknown', 'a foreign attempt is never decided, even partially');
 });
@@ -856,9 +858,9 @@ test('two attempts: a rules failure in one of them fails the card; a missing att
 test('OD-2: a goal failure in a usable attempt fails the card although the other attempt got no reply; the control verdict reads the same', () => {
   const card = ruledCard('c');
   const two = { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }) };
-  const silent = ruledAttempt('t1', 'c', [], { repeat: 1, outcome: 'invalid', invalidCause: 'agent', reason: 'Испытуемый вернул пустой ответ.' });
+  const silent = currentRuledAttempt('t1', 'c', [], { repeat: 1, outcome: 'invalid', invalidCause: 'agent', reason: 'Испытуемый вернул пустой ответ.' });
   delete silent.assessments;
-  const run = ruledRun([card], [ruledAttempt('t0', 'c', votes('fail', 'pass')), silent], two);
+  const run = ruledRun([card], [currentRuledAttempt('t0', 'c', votes('fail', 'pass')), silent], two);
   assert.deepEqual(halves(headlineCardOutcome(run, card)), { outcome: 'fail', goal: 'fail', rules: 'unknown' });
   assert.equal(cardVerdict(run, card, 'goal').outcome, 'fail');
   assert.equal(goalCardOutcome(run, card), 'fail');
@@ -868,7 +870,7 @@ test('the explained failure is one the number counts: an attempt the owner took 
   const card = ruledCard('c', [{ ...goalAttainment }, { ...simulatorFidelity }]);
   const two = { settings: settingsSchema.parse({ userModes: ['reactive'], repeats: 2 }) };
   const goalFail = [judged('goal_attainment', 'fail'), judged('user_fidelity', 'pass')];
-  const run = ruledRun([card], [ruledAttempt('t0', 'c', goalFail), ruledAttempt('t1', 'c', goalFail, { repeat: 1 })],
+  const run = ruledRun([card], [currentRuledAttempt('t0', 'c', goalFail), currentRuledAttempt('t1', 'c', goalFail, { repeat: 1 })],
     { ...two, humanReviews: [review('h', 't0', 'invalid')] });
   assert.deepEqual(deriveRun(run).failedAttempts.map(item => item.id), ['t1']);
   assert.deepEqual(buildResultView(run).failures.map(failure => failure.trialId), ['t1']);

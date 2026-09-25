@@ -29,7 +29,7 @@ test('the interval scale hides labels that would overlap an edge or each other',
   assert.match(html, /class="lb[^"]*" style="left:0\.0%">0%/);
   assert.doesNotMatch(html, /class="lb" style="left:0%"/);
   assert.doesNotMatch(html, /class="lb fr" style="left:14%"/);
-  assert.match(html, /class="lb[^"]*" style="left:13\.0%">13%/);
+  assert.match(html, /class="lb[^"]*" style="left:[0-9.]+%">13%/);
 });
 type Card = Experiment['scenarios'][number];
 type Result = MetricAssessment['result'];

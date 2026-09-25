@@ -19,7 +19,7 @@ const model = process.argv[2];
 assert(model, 'Usage: node --import tsx test/live/probe-conversation-tools.ts MODEL');
 const config = readGigaConfig();
 assert(config, 'Set AGENT_LAB_GATEWAY_URL, AGENT_LAB_GATEWAY_CERT_PATH and AGENT_LAB_GATEWAY_KEY_PATH first');
-const transport = createGigaTransport(config, 120000);
+const transport = createGigaTransport(config, { timeoutMs: 120000 });
 
 const tools = await conversationTools();
 const request = buildChatRequest(model, {

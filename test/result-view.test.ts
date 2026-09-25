@@ -96,7 +96,7 @@ function acquiringShape(): Experiment {
 const ACQUIRING_HEAD = [
   // Four of thirteen situations were not measured: the number stands on too few of them, so the first row says not to trust it yet.
   '✗ Числу пока не верить: не измерено 4 из 13 ситуаций — чаще всего клиент в симуляции отошёл от ситуации (2)',
-  'Точность агента: 0% — справился в 0 из 9 ситуаций',
+  'Точность агента: 0% — справился в 0 из 9 ситуаций, ещё 4 не измерено',
   // The acquiring run has 9 usable goal failures queued for review and no pass in the sample (the
   // only recorded pass, deviated1, is unusable), so the judge part is there before the first mark (F6, CR-01).
   'Вероятно, от 0% до 30% (95%) · мало данных · судью ещё не проверяли',
@@ -283,7 +283,7 @@ test('a quick «не согласен» moves the headline and is counted agains
   const { stdout, stored } = await quickMarked('pass', 'Проверка: судья не учёл уточнение клиента.');
   const view = buildResultView(stored);
   assert.equal(stdout, `${screen(view)}\n`);
-  assert.equal(accuracyRow(view).text, 'Точность агента: 11% — справился в 1 из 9 ситуаций');
+  assert.equal(accuracyRow(view).text, 'Точность агента: 11% — справился в 1 из 9 ситуаций, ещё 4 не измерено');
   assert.ok(trustParts(view).includes('с судьёй согласны 0 из 1'), trustParts(view).join(' · '));
   assert.equal(view.agreement.failures.checked, 1);
   assert.equal(view.agreement.failures.agreed, 0);
@@ -398,7 +398,7 @@ test('reason measurement_error: the connection answered but did not show what th
   const trial = attempt('c', { outcome: 'invalid', reason: 'проверка наблюдений: Состояние внешний агент не сообщил.', invalidCause: 'measurement', assessments: undefined });
   assert.equal(experimentSchema.parse(run([card('c')], [trial])).trials[0]!.invalidCause, 'measurement', 'the appended cause parses');
   const view = expectReason('measurement_error', card('c'), [trial]);
-  assert.ok(trustParts(view).includes('не измерено 1 — подключение не показало, что нужно для проверки'));
+  assert.match(alarmRow(view)!.text, /не измерено 1 из 2 ситуаций — подключение не показало, что нужно для проверки/);
   const inbox = decisions({ run: { record: run([card('c'), card('decided')], [trial, attempt('decided', { goal: 'fail' })]), view } });
   const agent = inbox.find(item => item.key.endsWith(':agent'));
   assert.equal(agent?.text, '1 ситуация не измерена: подключение не показало, что нужно для проверки — проверьте связь с агентом.');
