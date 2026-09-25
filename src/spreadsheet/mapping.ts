@@ -80,7 +80,7 @@ export const tableMappingSchema = z.strictObject({
     ...layout.kind === 'question_per_row' && layout.answer ? [layout.answer.index] : [], ...mapping.filter ? [mapping.filter.column.index] : [],
     ...(mapping.expected ?? []).map(item => item.column.index)];
   if (new Set(columns).size !== columns.length) ctx.addIssue({ code: 'custom', message: 'One column cannot play two parts' });
-  if (!mapping.id && layout.kind !== 'question_per_row') ctx.addIssue({ code: 'custom', message: 'A conversation needs its id column' });
+  if (!mapping.id && layout.kind !== 'question_per_row') ctx.addIssue({ code: 'custom', message: 'A conversation needs its id column; a table with no column that identifies conversations holds one case per row: read it with layout question_per_row' });
   if (layout.kind === 'question_per_row') return;
   const labels = layout.kind === 'dialogue_per_row' ? layout.markers.map(item => ({ label: item.token, role: item.role })) : layout.roles.map(item => ({ label: item.value, role: item.role }));
   if (new Set(labels.map(item => item.label)).size !== labels.length) ctx.addIssue({ code: 'custom', message: 'Duplicate markers or role values' });
