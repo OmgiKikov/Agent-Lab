@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { fingerprint, isRunnable, scalarSchema, usageSchema, type ReleaseHook, type ReleaseLog, type RunnableTarget, type Target, type World } from './contracts.js';
 import type { CallContext, DialogueMessage, TargetSession } from './runtime.js';
 import { targetEntryPath } from './target-version.js';
+import { AGENT_TIMEOUT_MS } from './target-schema.js';
 import { AgentFailure, AgentRequestFailed, ConnectionFailure, MeasurementFailure } from './errors.js';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { addressVariables, atPointer, renderAddress, renderRequest, replyText, templateVariables, type Json, type RequestTemplate, type RequestValues } from './http-template.js';
@@ -402,7 +403,8 @@ async function moduleSession(input: SessionInput<'module'>): Promise<TargetSessi
   return commandSession({ ...input, initialize: true, channel: 'pipe', target: {
     kind: 'command', command: process.execPath,
     args: [fileURLToPath(new URL('./module-worker.mjs', import.meta.url)), input.target.path, input.target.exportName],
-    timeoutMs: input.target.timeoutMs ?? input.ctx.timeoutMs,
+    // A module waits for its reply exactly as long as a command does: its own time, else the connection default — never the model's.
+    timeoutMs: input.target.timeoutMs ?? AGENT_TIMEOUT_MS,
   } });
 }
 

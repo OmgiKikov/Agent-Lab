@@ -49,10 +49,15 @@ export type Exam = NonNullable<z.infer<typeof examSchema>>;
 const exam = examSchema;
 /** A field of a retired feature: old connections and records still parse, nothing reads it. */
 const retired = z.unknown().optional();
+/**
+ * How long Lab waits for one reply of the agent when its connection names no time of its own: a command's and an HTTP
+ * agent's schema default, and a module's wait (its field stays without a default, so stored records keep their hashes).
+ */
+export const AGENT_TIMEOUT_MS = 60000;
 const httpTargetSchema = z.strictObject({
   kind: z.literal('http'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, exam, url: z.string().url().max(2000),
   headersEnv: z.record(z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'Invalid header name'), envNameSchema).default({}),
-  timeoutMs: z.number().int().min(1000).max(600000).default(60000),
+  timeoutMs: z.number().int().min(1000).max(600000).default(AGENT_TIMEOUT_MS),
   release: releaseSchema,
   /** The agent's own request format (http-template.ts); without it Lab speaks its own JSON contract. */
   request: requestTemplateSchema.optional(),
@@ -67,7 +72,7 @@ const moduleTargetSchema = z.strictObject({
 const commandTargetSchema = z.strictObject({
   kind: z.literal('command'), diagnosticCapabilities: retired, promptFile, serviceReplies, customerProfile, exam, command: z.string().min(1).max(4000), args: z.array(z.string().max(4000)).max(50).default([]),
   cwd: z.string().min(1).max(4000).refine(p => p.startsWith('/'), 'Absolute path required').optional(),
-  timeoutMs: z.number().int().min(1000).max(600000).default(60000),
+  timeoutMs: z.number().int().min(1000).max(600000).default(AGENT_TIMEOUT_MS),
   release: releaseSchema,
 });
 const unconnectedTargetSchema = z.strictObject({ kind: z.literal('unconnected') });
