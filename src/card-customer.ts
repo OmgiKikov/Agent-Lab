@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Trial } from './contracts.js';
 import type { DialogueMessage } from './runtime.js';
 import type { UserView } from './user-controller.js';
 import { valueTokens } from './verbatim.js';
@@ -17,8 +18,24 @@ import { valueTokens } from './verbatim.js';
  * before a required turn. The turn itself is the card's recorded words. Nothing here reads the agent's reply.
  */
 
-export const CARD_CUSTOMER_PROTOCOL = 'card-customer-free-v3';
-export const CARD_CUSTOMER_PROTOCOLS = ['card-customer-free-v1', 'card-customer-free-v2', CARD_CUSTOMER_PROTOCOL] as const;
+/**
+ * The customer's protocol: its roles (prompts.ts CARD_CUSTOMER_ROLE, CUSTOMER_DECISION_ROLE), the checks of its words
+ * below and what the harness sends in its name. Every move the customer makes is recorded with it, so a conversation is
+ * read by the customer that played it. v3 covers two sets of roles (the buttons were added to them in place); v4 is
+ * the roles with buttons and the checks that keep a press to what the customer knows.
+ */
+export const CARD_CUSTOMER_PROTOCOL = 'card-customer-free-v4';
+export const CARD_CUSTOMER_PROTOCOLS = ['card-customer-free-v1', 'card-customer-free-v2', 'card-customer-free-v3', CARD_CUSTOMER_PROTOCOL] as const;
+
+/** The protocols of the customer that played these conversations, as their moves recorded them, sorted; empty where no free customer played. */
+export function customerProtocolsOf(trials: readonly Pick<Trial, 'events'>[]): string[] {
+  const recorded = new Set<string>();
+  for (const trial of trials) for (const event of trial.events) {
+    const protocol = event.type === 'simulator' && event.result && typeof event.result === 'object' ? (event.result as { protocol?: unknown }).protocol : undefined;
+    if (typeof protocol === 'string' && (CARD_CUSTOMER_PROTOCOLS as readonly string[]).includes(protocol)) recorded.add(protocol);
+  }
+  return [...recorded].sort();
+}
 
 /** Observable policy conditions, not a free-form explanation or private reasoning. */
 export const customerConditionsSchema = z.strictObject({

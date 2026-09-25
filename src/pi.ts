@@ -38,12 +38,15 @@ import { USER_CONTROLLER_PROTOCOL, userDecisionSchema } from './user-controller.
  * Everything that decides how a run is judged besides its cards: the judge, both customer roles (the free
  * simulator of older cards and the controller of compiled ones, whose prompt is no longer inside a card's
  * definition), how card expectations are judged, and the models. Runs compare only under the same version.
+ * `recordedCustomer`: the customer protocols of conversations recorded earlier and judged again (card-customer.ts
+ * customerProtocolsOf) — a re-assessment is versioned by the customer that played its conversations, never by today's.
  */
-export const evaluatorVersion = (settings: Settings): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: { role: SIMULATOR_ROLE, protocol: SIMULATOR_PROTOCOL },
+export const evaluatorVersion = (settings: Settings, recordedCustomer: readonly string[] = []): string => fingerprint({ protocol: VERSION, judge: JUDGE_PROTOCOL, simulator: { role: SIMULATOR_ROLE, protocol: SIMULATOR_PROTOCOL },
   judgmentAcceptance: 'protocol-visible-evidence-v1',
   controller: { role: USER_CONTROLLER_ROLE, protocol: USER_CONTROLLER_PROTOCOL, decision: 'action-enum-v1' },
-  customer: { role: CARD_CUSTOMER_ROLE, decisionRole: CUSTOMER_DECISION_ROLE, protocol: CARD_CUSTOMER_PROTOCOL,
-    speechInput: 'opening-known-facts-delivered-messages-move-v1', validation: 'semantic-fidelity-and-literal-checks-v1', fidelity: simulatorFidelity }, expectations: EXPECTATIONS_PROTOCOL,
+  customer: recordedCustomer.some(protocol => protocol !== CARD_CUSTOMER_PROTOCOL) ? { recorded: [...recordedCustomer].sort() }
+    : { role: CARD_CUSTOMER_ROLE, decisionRole: CUSTOMER_DECISION_ROLE, protocol: CARD_CUSTOMER_PROTOCOL,
+      speechInput: 'opening-known-facts-delivered-messages-move-v1', validation: 'semantic-fidelity-and-literal-checks-v1', fidelity: simulatorFidelity }, expectations: EXPECTATIONS_PROTOCOL,
   provider: settings.provider, model: settings.model, roles: settings.roles ?? {}, judgeModel: settings.judge });
 
 const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, message: userTurnSchema.shape.message.optional() })
