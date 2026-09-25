@@ -416,6 +416,19 @@ export interface Trial {
    * stored result never moves.
    */
   countingVersion?: 2 | 3;
+  /**
+   * A conversation of this attempt that the agent's side broke — a crash, a timeout, an error of its service, a turn it
+   * could not measure — before it showed the agent failing: the run held the conversation again from the start, once, and
+   * this is that second conversation (lab/run.ts). Kept as evidence and counted in the agent's operability, never in the
+   * result; a conversation that did show a failure is never held again. Absent otherwise and in older records.
+   */
+  rerunAfter?: BrokenConversation;
+}
+/** A conversation the agent's side broke and the run held again: its own id (its trace and judge files are filed under it), why it broke, what was said. */
+export interface BrokenConversation {
+  trialId: string; cause: InvalidCause; reason: string; events: TraceEvent[]; elapsedMs: number; usage: Usage;
+  /** What its judge counted up to the break, when the agent had spoken before it (evaluation.ts cut-off mode). */
+  assessments?: MetricAssessment[]; judgeReceipt?: JudgeReceipt;
 }
 /**
  * Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed
@@ -600,6 +613,9 @@ export interface Experiment {
 }
 export const usageSchema = z.strictObject({ calls: z.number().int().nonnegative(), inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), costUsd: z.number().finite().nonnegative().nullable() });
 const revisionSchema = z.strictObject({ id: text, parentId: text.nullable(), spec: agentSchema, hypothesis: z.string(), createdAt: text });
+const traceEventSchema = z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'observation', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() });
+const brokenConversationSchema = z.strictObject({ trialId: identifier, cause: z.enum(INVALID_CAUSES), reason: z.string(), events: z.array(traceEventSchema), elapsedMs: z.number().finite().nonnegative(), usage: usageSchema,
+  assessments: z.array(metricAssessmentSchema).max(12).optional(), judgeReceipt: judgeReceiptSchema.optional() });
 export const trialSchema = z.strictObject({
   diagnosticReceipt: retired,
   checkpoints: z.array(checkpointResultSchema).max(12).optional(), checkpointReceipt: checkpointReceiptSchema.optional(),
@@ -608,7 +624,7 @@ export const trialSchema = z.strictObject({
   split: z.enum(['dev', 'control']), manifestHash: text, outcome: z.enum(['pass', 'fail', 'ungraded', 'invalid', 'cancelled']), reason: z.string(),
   checks: z.array(z.strictObject({ id: identifier, description: z.string(), passed: z.boolean(), evidence: z.string() })),
   simulatorChecks: z.array(z.strictObject({ id: z.enum(SIMULATOR_CHECK_IDS), description: z.string(), passed: z.boolean(), evidence: z.string(), seq: z.number().int().nonnegative().optional(), heuristic: z.boolean() })).max(12).optional(),
-  events: z.array(z.strictObject({ seq: z.number().int().nonnegative(), type: z.enum(['user', 'assistant', 'simulator', 'observation', 'retrieval', 'tool_call', 'tool_result', 'error']), text: z.string().optional(), tool: z.string().max(200).optional(), args: z.unknown().optional(), result: z.unknown().optional(), state: worldSchema.optional() })),
+  events: z.array(traceEventSchema),
   initialState: worldSchema, finalState: worldSchema, usage: usageSchema, elapsedMs: z.number().finite().nonnegative(),
   assessments: z.array(metricAssessmentSchema).max(12).optional(), assessmentError: z.string().max(4000).optional(),
   observation: z.strictObject({ state: z.enum(['sandbox', 'reported', 'missing']), tools: z.enum(['sandbox', 'complete', 'partial']), resetConfirmed: z.boolean().optional(), version: text.max(200).optional(), toolScope: z.array(z.string().max(200)).max(50).optional() }).optional(),
@@ -620,6 +636,7 @@ export const trialSchema = z.strictObject({
   turnLimit: z.literal(true).optional(),
   countingVersion: z.union([z.literal(2), z.literal(3)]).optional(),
   cutOff: z.literal(true).optional(),
+  rerunAfter: brokenConversationSchema.optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),
