@@ -123,9 +123,13 @@ function readRow(row: unknown, index: number, seen: Set<string>, known: LeftOutI
     const position = String(eventIndex + 1);
     const skip = (issue: LeftOutIssue) => { issues.push(issue); unread = true; };
     if (!record(event)) return skip({ code: 'event', value: position });
-    const type = rich ? event.type : 'message';
+    const logged = event.role;
+    // A list of messages holds the agent's tool work the way chat logs write it: a result under the role `tool`, a call
+    // as a message with no text and its `tool_calls`. Both are tool events, never a message a card could cite.
+    const type = rich ? event.type : logged === 'tool' || typeof event.content !== 'string' && Array.isArray(event.tool_calls) ? 'tool' : 'message';
     if (!EVENT_TYPES.has(type)) return skip({ code: 'event', value: position });
-    const logged = event.role, content = event.content;
+    // A tool's output of any length stays in its event's data: only a message is bounded as one.
+    const content = type !== 'message' && typeof event.content === 'string' && event.content.length > LOGGED_MESSAGE_CHARS ? undefined : event.content;
     // A message is written by a role Lab reads, or by one the owner said who it is; any other name is theirs to say.
     const role = type !== 'message' || typeof logged !== 'string' || MESSAGE_ROLES.has(logged) ? logged : roles?.get(logged);
     if (type === 'message' && typeof logged === 'string' && role === undefined) return skip({ code: 'roles', value: logged.slice(0, 80) });
