@@ -9,7 +9,7 @@ import type { FailureExplanation } from './explain.js';
 import type { JudgeCheckSummary } from './judge-check.js';
 import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
-import { NOT_MEASURED_ABOUT_OWNER, type NextStep, type ResultView } from './result-view.js';
+import { NOT_MEASURED_ABOUT_OWNER, type ExamWithheld, type NextStep, type ResultView, type TrustIssue } from './result-view.js';
 import type { NotMeasuredCode } from './run.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import { oneLine } from './text.js';
@@ -93,6 +93,10 @@ function percentOf(view: ResultView): number | null {
 }
 
 export type Level = 'good' | 'warn' | 'bad' | 'none';
+/** Why the percent waits, by how the connection's exam ended (ResultView.connection). */
+const EXAM_WITHHELD: Readonly<Record<ExamWithheld, string>> = {
+  absent: 'подключение агента не проверено экзаменом', failed: 'подключение агента не прошло экзамен',
+};
 /**
  * The answer of every result surface in three pieces, so the report can set the number large:
  * «Точность агента:» · «72%» · «— справился в 18 из 25 ситуаций». Without a decided situation the
@@ -103,7 +107,7 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
   const value = percentOf(view);
   if (value === null) {
     const { passed, decided } = view.headline;
-    const unexamined = view.connection === 'absent' ? 'подключение агента не проверено экзаменом' : view.connection === 'failed' ? 'подключение агента не прошло экзамен' : null;
+    const unexamined = view.connection !== undefined && view.connection !== 'passed' ? EXAM_WITHHELD[view.connection] : null;
     const tail = view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
       : view.pending ? `считается — ждут проверки ${countText(view.pending, SITUATIONS)}`
       : unexamined && decided ? `не считается: ${unexamined}. Справился в ${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}, ошибся в ${decided - passed}`
@@ -142,24 +146,42 @@ function unmeasuredText(view: Pick<ResultView, 'notMeasured'>, reader: Reader, s
   return `не измерено ${total} из ${of}${situations ? ` ${pluralForm(of, SITUATIONS_OF)}` : ''} — ${reasons.length === 1 ? label : `чаще всего ${label} (${main.count})`}`;
 }
 
-/** The unmeasured share stands above the number: it raised the alarm, and no failed control took the alarm's one row. */
-const unmeasuredAlarm = (view: Pick<ResultView, 'control' | 'notMeasured'>): boolean => !view.control.alarm && view.notMeasured.alarm;
+/**
+ * What the alarm above the number names: the most serious issue that leaves the number shown (ResultView.trustIssues);
+ * a withheld percent says its own reason in the number's row.
+ */
+const alarmIssue = (view: Pick<ResultView, 'trustIssues'>): Exclude<TrustIssue, 'connection'> | undefined =>
+  view.trustIssues.find((issue): issue is Exclude<TrustIssue, 'connection'> => issue !== 'connection');
+
+/** The unmeasured share stands above the number: it raised the alarm, and nothing more serious took the alarm's one row. */
+const unmeasuredAlarm = (view: Pick<ResultView, 'trustIssues'>): boolean => alarmIssue(view) === 'unmeasured';
+
+/** Where the judge failed its check, as the alarm says it; each reader is told what to do or what is to be done. */
+const JUDGE_ALARM: Readonly<Record<NonNullable<JudgeCheckSummary['distrust']>, (owner: boolean) => string>> = {
+  misses: owner => `судья пропускает подброшенные ошибки — ${owner ? 'проверьте его решения' : 'его решения нужно проверить'}`,
+  false_alarms: owner => `судья не засчитывает верные ответы — ${owner ? 'проверьте его решения' : 'его решения нужно проверить'}`,
+  incomplete: owner => `проверка судьи неполная — ${owner ? 'повторите её' : 'её нужно повторить'}`,
+};
 
 /**
- * Above the number when the number is not to be trusted yet: a positive control failed or was not measured, or too many
- * counted situations were not measured (ResultView.notMeasured.alarm). A failed control comes first: it says the
- * connection or the judge is broken; the unmeasured share then stays in the trust line.
+ * Above the number when the number is not to be trusted yet (ResultView.trustIssues): a positive control failed or was
+ * not measured, the judge failed its check, or too many counted situations were not measured — the most serious one.
+ * A failed control comes first: it says the connection or the judge is broken; the unmeasured share then stays in the
+ * trust line.
  */
 export function alarmRow(view: ResultView, reader: Reader = 'owner'): ResultRow | null {
+  const owner = reader === 'owner';
+  const issue = alarmIssue(view);
   const { alarm, cards } = view.control;
-  if (alarm) {
+  if (issue === 'control' && alarm) {
     const many = cards.length > 1;
     const what = alarm === 'failed' ? (many ? 'контрольные ситуации не прошли' : 'контрольная ситуация не прошла')
       : alarm === 'unmeasured' ? (many ? 'контрольные ситуации не измерены' : 'контрольная ситуация не измерена')
         : 'контрольные ситуации не прошли или не измерены';
-    return { role: 'alarm', indent: 0, text: `✗ Числу пока не верить: ${what} — ${reader === 'owner' ? 'проверьте' : 'нужно проверить'} связь с агентом` };
+    return { role: 'alarm', indent: 0, text: `✗ Числу пока не верить: ${what} — ${owner ? 'проверьте' : 'нужно проверить'} связь с агентом` };
   }
-  const unmeasured = unmeasuredAlarm(view) ? unmeasuredText(view, reader, true) : null;
+  if (issue === 'judge' && view.judgeCheck?.distrust) return { role: 'alarm', indent: 0, text: `✗ Числу пока не верить: ${JUDGE_ALARM[view.judgeCheck.distrust](owner)}` };
+  const unmeasured = issue === 'unmeasured' ? unmeasuredText(view, reader, true) : null;
   return unmeasured ? { role: 'alarm', indent: 0, text: `✗ Числу пока не верить: ${unmeasured}` } : null;
 }
 
@@ -366,8 +388,9 @@ export function headRows(view: ResultView): ResultRow[] {
     // Whether the agent answered at all stands apart from how well: a conversation without its reply is its working state.
     ...(operability ? [{ role: 'trust:small', indent: 0, text: operability } as ResultRow] : []),
     ...(reality.length ? [{ role: 'reality', indent: 0, text: reality.join(' · '), parts: reality } as ResultRow] : []),
-    // How far the judge itself can be trusted, measured without a person: a warning is an alarm, like a failed control.
-    ...(checked ? [{ role: checked.warn ? 'alarm' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
+    // How far the judge itself can be trusted, measured without a person: a failed check raised the alarm above the
+    // number, and here its counts say why, as a warning.
+    ...(checked ? [{ role: checked.warn ? 'trust:small' : 'calibration', indent: 0, text: checked.text } as ResultRow] : []),
     // The answer to «can the number be trusted against production»: it stays under the number even where the reality line folds away.
     ...(view.calibration ? [{ role: 'calibration', indent: 0, text: view.calibration.text } as ResultRow] : []),
     ...evaluationEvidenceLines(view).map(text => ({ role: 'trust' as const, indent: 0, text })),
@@ -621,9 +644,20 @@ export function disagreementRows(view: ResultView): ResultRow[] {
   ])];
 }
 
+/** The fix a connection's exam asks for, by how it ended: every surface says it first while the percent waits. */
+const EXAM_STEP: Readonly<Record<ExamWithheld, { board: string; chat: string; cli: string }>> = {
+  absent: { board: 'Добавить экзамен подключения — без него процент не считается',
+    chat: 'Дальше: добавьте экзамен подключения — скажите «составь экзамен подключения»: без него процент не считается.',
+    cli: 'Добавьте экзамен подключения: раздел exam в файле подключения, затем agent-lab doctor --connection подключение.json --yes' },
+  failed: { board: 'Исправить подключение: экзамен не пройден — без него процент не считается',
+    chat: 'Дальше: исправьте подключение — экзамен не пройден, процент не считается; скажите «проверь подключение».',
+    cli: 'Исправьте подключение и сдайте экзамен: agent-lab doctor --connection подключение.json --yes' },
+};
+
 /** One next step as a row of the «Дальше» list on the board and in the report. */
 export function nextStepText(step: NextStep): string {
   switch (step.kind) {
+    case 'exam': return EXAM_STEP[step.status].board;
     case 'check_connection': return 'Проверить связь с агентом и судью — пока это не сделано, числу не верить';
     case 'wait': return 'Дождаться конца прогона — результат появится сам';
     case 'review_judge': {
@@ -644,6 +678,7 @@ export function nextStepText(step: NextStep): string {
 /** The same step said in the conversation: what to ask for, in the owner's words. */
 function chatNextText(step: NextStep): string {
   switch (step.kind) {
+    case 'exam': return EXAM_STEP[step.status].chat;
     case 'check_connection': return 'Дальше: проверьте связь с агентом — скажите «проверь подключение».';
     case 'wait': return 'Дальше: дождитесь конца прогона — результат придёт сюда.';
     case 'review_judge': return 'Дальше: проверьте, прав ли судья, — скажите «покажи ошибку 1».';
@@ -657,6 +692,7 @@ function chatNextText(step: NextStep): string {
 /** The same step on the command line: the command that does it, with the full run id a command needs. */
 function cliNextText(step: NextStep, runId: string): string {
   switch (step.kind) {
+    case 'exam': return EXAM_STEP[step.status].cli;
     case 'check_connection': return 'Проверьте подключение: agent-lab doctor --yes';
     case 'wait': return 'Дождитесь конца прогона';
     case 'review_judge': return 'Проверьте, прав ли судья: откройте прогон в Pi (/agent-lab)';

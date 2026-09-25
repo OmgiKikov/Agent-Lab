@@ -315,9 +315,9 @@ export function runActions(data: SpaceData): string[] {
  */
 export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'log'; cardId: string } | { kind: 'review' } | { kind: 'blind' } | { kind: 'report' } | { kind: 'repeat' } | { kind: 'unmeasured' } | { kind: 'connection' };
 
-/** What Enter does on each step of «Дальше»; waiting for a run to end is nothing to do. */
+/** What Enter does on each step of «Дальше»; waiting for a run to end is nothing to do. The exam, like the connection, is taken up in the conversation. */
 const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, blind_check: { kind: 'blind' }, report: { kind: 'report' }, repeat: { kind: 'repeat' },
-  why_unmeasured: { kind: 'unmeasured' }, check_connection: { kind: 'connection' }, wait: null };
+  why_unmeasured: { kind: 'unmeasured' }, exam: { kind: 'connection' }, check_connection: { kind: 'connection' }, wait: null };
 
 const sameRow = (a: ResultRow, b: ResultRow): boolean => a.role === b.role && a.indent === b.indent && a.text === b.text && a.right === b.right;
 /** Where `block` stands whole among `rows`, or -1. */

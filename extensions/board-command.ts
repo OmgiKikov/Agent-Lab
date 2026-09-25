@@ -414,7 +414,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             return 'handoff';
           }
           case 'check_connection':
-            handoff = { request: 'Проверь подключение к агенту', context: { task: 'The owner asked from the workspace to check the connection to the agent: show what was not measured with agent_lab_explain and ask the owner whether the agent runs and how it is started; a new way to start it goes to agent_lab_run as agent.' } };
+            handoff = { request: 'Проверь подключение к агенту', context: { task: 'The owner asked from the workspace to check the connection to the agent. When the newest result says the connection exam is absent or failed, propose exam paths from the agent\'s code as the skill says and write them to the connection file only with the owner\'s consent. Otherwise show what was not measured with agent_lab_explain and ask the owner whether the agent runs and how it is started; a new way to start it goes to agent_lab_run as agent.' } };
             return 'handoff';
           case 'raise_limit':
             // A higher limit is spending: the key alone does not raise it, the owner confirms the number.

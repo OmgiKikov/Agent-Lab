@@ -1,5 +1,5 @@
 import { countingRuleOf, headlineRule } from './card/expectations.js';
-import type { Experiment, Realism, Scenario, Trial, ValidationExclusion } from './contracts.js';
+import type { ExamResult, Experiment, Realism, Scenario, Trial, ValidationExclusion } from './contracts.js';
 import { isRunning } from './phases.js';
 import { agentMetricResult, COUNTING_RULES, headlineMetricIds, latestHumanReviews, RULES_METRIC_ID } from './outcomes.js';
 import { judgeAgreement, type JudgeAgreement } from './agreement.js';
@@ -99,8 +99,13 @@ export function exclusionCounts(exclusions: ValidationExclusion[]): { kind: Excl
     .sort((a, b) => b.count - a.count || EXCLUSION_ORDER.indexOf(a.kind) - EXCLUSION_ORDER.indexOf(b.kind));
 }
 
+/** How a connection's exam ended, when it did not pass: without one (`absent`) or failed; the percent waits for a pass. */
+export type ExamWithheld = Exclude<ExamResult['status'], 'passed'>;
+
 /** What to do next, typed; each surface words it (chat asks in words, the board has a row, the CLI names a command). */
 export type NextStep =
+  /** The connection's exam did not pass: the percent is withheld until it does, so its fix comes before anything else. */
+  | { kind: 'exam'; status: ExamWithheld }
   /** A positive control failed or was not measured: the number cannot be trusted until the connection and the judge are checked. */
   | { kind: 'check_connection' }
   | { kind: 'wait' }
@@ -132,12 +137,27 @@ export interface ResultCard {
   provenance: Scenario['provenance'];
 }
 
+/**
+ * What stands between the owner and the number, most serious first. `connection`: the connection's exam did not pass,
+ * so the percent is withheld while the counts stay. The others leave the number shown under «✗ Числу пока не верить»:
+ * a positive control failed or was not measured (`control`), the judge failed its check with planted errors (`judge`),
+ * too many counted situations were not measured (`unmeasured`). One more reason — a record that fails its integrity
+ * check — takes its place here and every reader follows.
+ */
+export type TrustIssue = 'connection' | 'control' | 'judge' | 'unmeasured';
+
 export interface ResultView {
   /**
    * The connection exam the run took before its first dialogue (exam.ts): unless it passed, no percent is shown — the
    * headline's, the topics' or the bounds' — while the counts stay. Absent for runs made before the exam existed.
    */
-  connection?: 'passed' | 'failed' | 'absent';
+  connection?: ExamResult['status'];
+  /**
+   * Why the number is withheld or not to be trusted yet (TrustIssue), most serious first; empty when nothing stands
+   * against it. The one reading of it: the alarm above the number, «Дальше» — the fix first, the customer report only
+   * while it is empty — and the CI exit code, «untrustworthy» (2) while any stands. Never changes the counts.
+   */
+  trustIssues: TrustIssue[];
   /** How many reactive conversations actually had a semantic customer assessment. */
   simulator?: SimulatorEvidence;
   runId: string;
@@ -335,16 +355,18 @@ export function unmeasuredControl(card: Pick<ResultCard, 'outcome' | 'reason'>):
 }
 
 /**
- * The recommended step first — a control alarm, a run still going, the reasons of too many unmeasured situations,
- * the judge's review queue, then fixing the agent when it failed — followed by what a finished result always offers:
- * a repeat and, while no alarm stands (a control, the unmeasured share, a judge that failed its check), the customer
- * report. Whenever a situation was not measured, why is always among the steps: first under the alarm, last below it.
- * A draft that never ran offers nothing.
+ * The recommended step first — the connection's exam when it did not pass, a control alarm, a run still going, the
+ * reasons of too many unmeasured situations, the judge's blind check and its review queue, then fixing the agent when it
+ * failed — followed by what a finished result always offers: a repeat and, while nothing stands against the number
+ * (ResultView.trustIssues), the customer report. Whenever a situation was not measured, why is always among the steps:
+ * first under the alarm, last below it. A draft that never ran offers nothing.
  */
 function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted: boolean, reviewedTrials: Set<string>): NextStep[] {
   if (notStarted) return [];
-  if (view.control.alarm) return [{ kind: 'check_connection' }];
-  if (running) return [{ kind: 'wait' }];
+  // The percent waits for the exam: its fix leads, before anything that reads the number.
+  const exam: NextStep[] = view.connection !== undefined && view.connection !== 'passed' ? [{ kind: 'exam', status: view.connection }] : [];
+  if (view.control.alarm) return [...exam, { kind: 'check_connection' }];
+  if (running) return [...exam, { kind: 'wait' }];
   const { queueFailures, sampledPasses, marks } = view.agreement;
   // A situation the owner reviewed in full has been decided by the owner: it no longer waits for a one-key answer.
   const unmarked = view.agreement.unmarked.filter(id => !reviewedTrials.has(id));
@@ -357,13 +379,23 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   // Too many situations unmeasured: why is the first thing to read, before any verdict of the judge.
   // The judge is checked blind first, before any of its verdicts is shown: an owner who saw them would only agree.
   const blind: NextStep[] = view.blind && view.blind.labelled < view.blind.drawn ? [{ kind: 'blind_check', left: view.blind.drawn - view.blind.labelled }] : [];
-  const steps: NextStep[] = [...(alarm ? why : []), ...blind, ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
+  const steps: NextStep[] = [...exam, ...(alarm ? why : []), ...blind, ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
   const after = alarm ? [] : why;
   if (!view.headline.decided) return [...steps, ...after];
   const failed = view.headline.decided > view.headline.passed;
-  // A report is offered only for a number that can be trusted.
-  const report: NextStep[] = alarm || view.judgeCheck?.distrust ? [] : [{ kind: 'report' }];
+  // A report is offered only for a number that is shown and can be trusted.
+  const report: NextStep[] = view.trustIssues.length ? [] : [{ kind: 'report' }];
   return [...steps, ...(failed ? [{ kind: 'repeat' } as const, ...report] : [...report, { kind: 'repeat' } as const]), ...after];
+}
+
+/** Why the number is withheld or not to be trusted yet, most serious first (TrustIssue). */
+function trustIssuesOf(view: Omit<ResultView, 'next' | 'trustIssues'>): TrustIssue[] {
+  return [
+    ...(view.connection !== undefined && view.connection !== 'passed' ? ['connection' as const] : []),
+    ...(view.control.alarm ? ['control' as const] : []),
+    ...(view.judgeCheck?.distrust ? ['judge' as const] : []),
+    ...(view.notMeasured.alarm ? ['unmeasured' as const] : []),
+  ];
 }
 
 /** Clear and vague requests apart, over the counted situations whose card is in the run's library. */
@@ -427,7 +459,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   // A connection nobody has shown to work carries no percent: the counts stand, the number waits for the exam.
   const examined = record.connectionExam?.status;
   const withheld = examined !== undefined && examined !== 'passed';
-  const view: Omit<ResultView, 'next'> = {
+  const view: Omit<ResultView, 'next' | 'trustIssues'> = {
     ...(examined ? { connection: examined } : {}),
     simulator: simulatorEvidence(record),
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
@@ -474,7 +506,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const judgeCheck = judgeCheckSummary(options.judgeCheck, record);
   if (judgeCheck) view.judgeCheck = judgeCheck;
   if (judgedByBuilder(record)) view.sameModelJudge = true;
-  return { ...view, next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+  const trusted = { ...view, trustIssues: trustIssuesOf(view) };
+  return { ...trusted, next: nextSteps(trusted, isRunning(record.phase), notStarted, reviewed.trialIds) };
 }
 
 /** The conversations the agent left without its reply, by how; undefined when it answered in every one (the typed causes only). */
@@ -501,13 +534,15 @@ function judgedByBuilder(record: Experiment): boolean {
 }
 
 /**
- * The CI exit status, read from the same view the owner reads: 2 when the measurement is incomplete
- * (the run did not finish, a situation was not measured or is still pending, or a control raised the
- * alarm) — it takes precedence over an agent failure; 1 when the agent failed a counted situation;
- * 0 when every counted situation was decided and handled.
+ * The CI exit status, read from the same view the owner reads: 2 — «untrustworthy» — when the measurement is incomplete
+ * (the run did not finish, nothing was decided, a situation was not measured or is still pending) or the number cannot
+ * be trusted (ResultView.trustIssues: the connection's exam did not pass and the percent is withheld, a control raised
+ * the alarm, the judge failed its check); it takes precedence over an agent failure. 1 when the agent failed a counted
+ * situation; 0 when every counted situation was decided, handled and nothing stands against the number.
  */
 export function exitCodeOf(view: ResultView): 0 | 1 | 2 {
   const finished = view.phase === 'results_review' || view.phase === 'complete';
-  if (!finished || view.notMeasured.total > 0 || view.pending > 0 || view.control.alarm || !view.headline.decided) return 2;
+  const measured = finished && view.headline.decided > 0 && !view.notMeasured.total && !view.pending;
+  if (!measured || view.trustIssues.length) return 2;
   return view.headline.passed < view.headline.decided ? 1 : 0;
 }

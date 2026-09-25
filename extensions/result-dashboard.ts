@@ -1,5 +1,5 @@
 import type { ResultView } from '../src/result-view.js';
-import { accuracyParts, evaluationEvidenceLines, whenText } from '../src/result-text.js';
+import { accuracyParts, evaluationEvidenceLines, nextStepText, whenText } from '../src/result-text.js';
 import type { Line, ResultPick, Screen, SpaceData } from './workspace-screens.ts';
 import { box, beside, row, span, wrap, metrics, selection, quote } from './render/panels.ts';
 
@@ -8,6 +8,7 @@ function entries(view: ResultView): { title: string; note?: string; pick: Result
   const next = view.next.flatMap(step => {
     switch (step.kind) {
       case 'why_unmeasured': return [{ title: `Разобрать ${step.count} ситуаций без оценки`, pick: { kind: 'unmeasured' } as ResultPick }];
+      case 'exam': return [{ title: nextStepText(step), pick: { kind: 'connection' } as ResultPick }];
       case 'check_connection': return [{ title: 'Проверить подключение и контрольные ситуации', pick: { kind: 'connection' } as ResultPick }];
       case 'review_judge': return [{ title: 'Проверить оценки судьи', note: 'Открыть разговор и сверить вывод с ответом агента', pick: { kind: 'review' } as ResultPick }];
       case 'blind_check': return [{ title: 'Проверить судью вслепую', note: `${step.left} ответов агента — оценить, не видя вердиктов судьи`, pick: { kind: 'blind' } as ResultPick }];
