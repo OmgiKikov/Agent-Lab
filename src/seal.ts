@@ -50,14 +50,15 @@ export function sealTrial(trial: Trial, record: Sealed): string {
  * Whether the judge receipt of an attempt recorded before seals still gives the results it sealed: each assessment's result
  * is the unanimous result of its two votes (unknown when they differ, when a vote failed, or where the rubric did not
  * apply). A verdict the votes cannot tell apart — fewer than two votes, a judgment older than receipts — is not held
- * against the record.
+ * against the record. A receipt read without its schema (a copy a caller built) may lack its lists: read as empty.
  */
 function receiptHolds(trial: Trial): boolean {
   const receipt = trial.judgeReceipt;
   if (!receipt || !trial.assessments) return true;
+  const notApplicable: readonly string[] = receipt.notApplicable ?? [], cast = receipt.votes ?? [];
   return trial.assessments.every(assessment => {
-    if (receipt.notApplicable.includes(assessment.metricId)) return assessment.result === 'unknown';
-    const votes = receipt.votes.filter(vote => vote.metricId === assessment.metricId);
+    if (notApplicable.includes(assessment.metricId)) return assessment.result === 'unknown';
+    const votes = cast.filter(vote => vote.metricId === assessment.metricId);
     if (!votes.length) return assessment.result === 'unknown';
     if (votes.some(vote => vote.error)) return assessment.result === 'unknown';
     const [first, second, ...more] = votes;
