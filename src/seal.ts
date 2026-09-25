@@ -1,4 +1,4 @@
-import { fingerprint, type Experiment, type Trial } from './contracts.js';
+import { fingerprint, trialSchema, type Experiment, type Trial } from './contracts.js';
 
 /*
  * The seal of a run's evidence. Every attempt a run or a re-assessment records is sealed once, where the engine records
@@ -65,6 +65,16 @@ function receiptHolds(trial: Trial): boolean {
     if (!first?.result || !second?.result || more.length) return true;
     return assessment.result === (first.result === second.result ? first.result : 'unknown');
   });
+}
+
+/**
+ * An attempt as the record keeps it, sealed: the stored form — what every reader parses back, the defaults of the stored
+ * shape filled in — so the attempt in the running lab and the one read from disk carry the same seal.
+ */
+export function sealedTrial(trial: Trial, record: Sealed): Trial {
+  const stored = trialSchema.parse(trial) as Trial;
+  stored.seal = sealTrial(stored, record);
+  return stored;
 }
 
 /** How far a record's evidence can be believed; `altered` withholds the number on every surface. */
