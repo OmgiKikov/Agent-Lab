@@ -2,7 +2,7 @@ import { SERVICE_REPLY_REASON } from './run.js';
 import { judgedScenario } from './card/legacy-v1.js';
 import { directChecks } from './checkpoints.js';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from './user-controller.js';
-import { CARD_CUSTOMER_PROTOCOL, customerBrief, customerReplyProblem, customerReplySchema, deliveredMessage, type CustomerBrief } from './card-customer.js';
+import { CARD_CUSTOMER_PROTOCOL, customerBrief, customerReplyIssue, customerReplySchema, deliveredMessage, pressedButton, type CustomerBrief } from './card-customer.js';
 import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, type CheckResult, type InvalidCause, type Requirement, type Revision, type Scenario, type Settings, type Source, type Target, type TraceEvent, type Trial, type UserMode } from './contracts.js';
 import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, ragEvidenceComplete, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
@@ -12,7 +12,6 @@ import { hasCompleteJudgment, judgmentEvidenceEvents, judgmentFailure, observabl
 import { ProviderFailure } from './llm/model-call.js';
 import { openExternalTarget, type AgentButton, type TurnOutcome } from './targets.js';
 import { simulatorChecks } from './simulator.js';
-import { normalizeText } from './card/checks.js';
 import { clip } from './text.js';
 
 /*
@@ -72,10 +71,8 @@ const PLAIN_REPLY: TurnFacts = { outcome: 'reply', buttons: [] };
 
 /** The button the customer pressed: a message that is one offered button's text, up to case and spacing. */
 function pressOf(offered: readonly AgentButton[], message: string): ButtonChoice | undefined {
-  const said = normalizeText(message);
-  const index = offered.findIndex(button => normalizeText(button.text) === said);
-  const button = offered[index];
-  return button ? { index, text: button.text, ...(button.value !== undefined ? { value: button.value } : {}) } : undefined;
+  const press = pressedButton(offered, message);
+  return press ? { index: press.index, text: press.button.text, ...(press.button.value !== undefined ? { value: press.button.value } : {}) } : undefined;
 }
 
 /** Why a turn that gave the customer nothing leaves the dialogue unmeasured; the agent's status is named as the adapter wrote it. */
@@ -324,10 +321,11 @@ export async function evaluateTrial(input: {
         // The customer leaves on their own words' budget: past the card's follow-ups they have nothing more to say.
         if (free.said >= free.brief.maxFollowUps && !(free.brief.turn?.required && !free.turned)) { stopped = true; break; }
         ctx.signal.throwIfAborted();
-        const reply = customerReplySchema.parse(await runtime.speakAsCustomer!({ brief: structuredClone(free.brief), messages: structuredClone(shown), turn, turned: free.turned }, userCtx));
+        const reply = customerReplySchema.parse(await runtime.speakAsCustomer!({ brief: structuredClone(free.brief), messages: structuredClone(shown), turn, turned: free.turned,
+          buttons: structuredClone(offered) }, userCtx));
         ctx.signal.throwIfAborted();
-        const problem = customerReplyProblem(reply, free.brief, shown, free.turned);
-        if (problem) throw new Error(`Симулятор нарушил карточку: ${problem}`);
+        const problem = customerReplyIssue(reply, free.brief, shown, free.turned, offered);
+        if (problem) throw new Error(`Клиент, которого играет Lab, отошёл от своей ситуации: ${problem.owner}.`);
         emit({ type: 'simulator', result: { protocol: CARD_CUSTOMER_PROTOCOL, move: reply.move, message: reply.message, ...(reply.conditions ? { conditions: reply.conditions } : {}) } });
         if (reply.move === 'leave') { stopped = true; break; }
         if (reply.move === 'turn') free.turned = true;

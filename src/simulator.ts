@@ -43,13 +43,9 @@ export function simulatorChecks(scenario: Scenario, trial: Trial): SimulatorChec
   const users = trial.events.filter(e => e.type === 'user');
   const simulated = users.slice(1);
   if (!simulated.length) return [];
-  // An agent's turn is its text and the buttons it offered: a pressed button's value was said by the agent.
-  const turnText = (e: Trial['events'][number]) => {
-    const buttons = e.type === 'assistant' && e.result && typeof e.result === 'object' && Array.isArray((e.result as { buttons?: unknown }).buttons)
-      ? (e.result as { buttons: { text?: unknown }[] }).buttons.map(button => String(button.text ?? '')) : [];
-    return [e.text ?? '', ...buttons].join('\n');
-  };
-  const textBefore = (seq: number, types: string[]) => trial.events.filter(e => types.includes(e.type) && e.seq < seq).map(turnText).join('\n');
+  // What was said before: the texts of the turns. A button's label is what the agent offered, not what the customer knows,
+  // so a press of a button whose values the customer never had stays a suspicion.
+  const textBefore = (seq: number, types: string[]) => trial.events.filter(e => types.includes(e.type) && e.seq < seq).map(e => e.text ?? '').join('\n');
   const checks: SimulatorCheck[] = [];
 
   const hidden = hiddenLiterals(scenario);

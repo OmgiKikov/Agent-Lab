@@ -3,6 +3,7 @@ import type { Trial } from './contracts.js';
 import type { DialogueMessage } from './runtime.js';
 import type { UserView } from './user-controller.js';
 import { valueTokens } from './verbatim.js';
+import { normalizeText } from './card/checks.js';
 
 /*
  * The customer of a card, played in the customer's own words. The card is the same one the owner prepared and
@@ -15,7 +16,9 @@ import { valueTokens } from './verbatim.js';
  *
  * The check is exact, never a guess about meaning: every value in the message (a token with a digit: a terminal,
  * a sum, a date) must come from the brief or from what was said in the conversation, and the customer may not leave
- * before a required turn. The turn itself is the card's recorded words. Nothing here reads the agent's reply.
+ * before a required turn. A press of one of the agent's buttons says the button's values as the customer's own, so they
+ * must come from the brief or from the customer's own earlier words: what the agent offered is not what the customer
+ * knows. The turn itself is the card's recorded words. Nothing here reads the meaning of the agent's reply.
  */
 
 /**
@@ -118,16 +121,47 @@ export function customerDecisionProblem(reply: Pick<CustomerReply, 'move' | 'con
   return undefined;
 }
 
-export function customerReplyProblem(reply: CustomerReply, brief: CustomerBrief, conversation: readonly DialogueMessage[], turned: boolean): string | undefined {
+/** A button the agent offered under its last reply: the text the customer sees, and the adapter's own value for it. */
+export interface OfferedButton { text: string; value?: string }
+
+/** The button a message presses: the offered button whose text it is, up to case and spacing; undefined for the customer's own words. */
+export function pressedButton<B extends OfferedButton>(offered: readonly B[], message: string): { index: number; button: B } | undefined {
+  const said = normalizeText(message);
+  const index = offered.findIndex(button => normalizeText(button.text) === said);
+  return index < 0 ? undefined : { index, button: offered[index]! };
+}
+
+/** Why a reply cannot go to the agent: in words for the model, which repairs it, and in the owner's words, when it stands. */
+export interface CustomerProblem { model: string; owner: string }
+
+/**
+ * Why a reply cannot go to the agent, or undefined when it can. `offered`: the buttons under the agent's last reply; a
+ * message that is one of them is its press.
+ */
+export function customerReplyIssue(reply: CustomerReply, brief: CustomerBrief, conversation: readonly DialogueMessage[], turned: boolean,
+  offered: readonly OfferedButton[] = []): CustomerProblem | undefined {
   const controlProblem = customerDecisionProblem(reply, brief, turned);
-  if (controlProblem) return controlProblem;
+  if (controlProblem) return { model: controlProblem, owner: 'клиент выбрал ход, которого его ситуация сейчас не допускает' };
   if (reply.move === 'turn' || reply.move === 'leave') return undefined;
-  if (!reply.message.trim()) return 'The message is empty: write what the customer says.';
+  if (!reply.message.trim()) return { model: 'The message is empty: write what the customer says.', owner: 'клиент прислал пустую реплику' };
+  const listed = (tokens: string[]) => tokens.map(token => `«${token}»`).join(', ');
+  const press = pressedButton(offered, reply.message);
+  if (press) {
+    // What the agent offered, in its text or on its buttons, is not what the customer knows.
+    const own = new Set(valueTokens([brief.goal, brief.opening, ...brief.knows, ...conversation.filter(item => item.role === 'user').map(item => item.content)].join('\n')));
+    const unknown = [...valueTokens(press.button.text)].filter(token => !own.has(token));
+    if (unknown.length) return { model: `The button "${press.button.text}" names ${unknown.map(token => `"${token}"`).join(', ')}, which the customer does not know: press a button only when its values are among your known facts or your own earlier words; otherwise answer in your own words or say you do not know.`,
+      owner: `клиент нажал кнопку «${press.button.text}» со значением ${listed(unknown)}, которого не знает` };
+  }
   const allowed = new Set([...valueTokens([brief.goal, brief.opening, ...brief.knows].join('\n')), ...valueTokens(conversation.map(item => item.content).join('\n'))]);
   const invented = [...valueTokens(reply.message)].filter(token => !allowed.has(token));
-  if (invented.length) return `The message names ${invented.map(token => `"${token}"`).join(', ')}, which the customer does not know: use only values from knows or from the conversation, or say the customer does not know.`;
+  if (invented.length) return { model: `The message names ${invented.map(token => `"${token}"`).join(', ')}, which the customer does not know: use only values from knows or from the conversation, or say the customer does not know.`,
+    owner: `клиент назвал ${listed(invented)} — этого нет ни в его ситуации, ни в разговоре` };
   return undefined;
 }
+
+/** Why a reply cannot go to the agent, in words for the model, or undefined when it can (customerReplyIssue). */
+export const customerReplyProblem = (...args: Parameters<typeof customerReplyIssue>): string | undefined => customerReplyIssue(...args)?.model;
 
 /** The message the agent receives for a move that passed the check: the card's words for the turn, none for leaving. */
 export const deliveredMessage = (reply: CustomerReply, brief: CustomerBrief): string =>

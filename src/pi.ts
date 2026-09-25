@@ -226,7 +226,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
         { brief: input.brief, messages: input.messages.map(({ role, content }) => ({ role, content })), turn: input.turn, turned: input.turned }, ctx);
       if (decision.move === 'leave' || decision.move === 'turn') return { ...decision, message: '' };
       const spoken = await run({ id: 'card-customer-message', label: 'Реплика клиента', role: 'simulator', instructions: CARD_CUSTOMER_ROLE, output: customerMessageSchema,
-        check: reply => customerReplyProblem({ ...decision, ...reply }, input.brief, input.messages, input.turned) },
+        check: reply => customerReplyProblem({ ...decision, ...reply }, input.brief, input.messages, input.turned, input.buttons) },
         customerSpeechInput(input.brief, input.messages, decision.move), ctx);
       return { ...decision, ...spoken };
     },
