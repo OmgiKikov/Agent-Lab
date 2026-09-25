@@ -1,25 +1,31 @@
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { calibrateRun } from '../card/calibrate.js';
+import { logReviewSchema } from '../card/calibration.js';
+import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
-import { awaitingVerdict } from '../comparison.js';
+import { logJudgmentComplete } from '../card/log-judge.js';
+import { awaitingVerdict } from '../agreement.js';
 import { suiteEvidence } from '../connection.js';
+import { addCaveat } from '../caveats.js';
 import { addUsage, emptyUsage, fingerprint, humanReviewInputSchema, reassessmentSchema, validatePreparation, type Experiment, type HumanReviewInput, type ReassessmentInput } from '../contracts.js';
 import { assessmentRubrics } from '../assessment.js';
 import { assessTrial, grade } from '../evaluation.js';
-import { scenarioSources } from '../judge.js';
+import { judgmentFailure, scenarioSources } from '../judge.js';
 import { countingRuleFor, markTargets, measurementUsable } from '../outcomes.js';
 import { evaluatorVersion } from '../pi.js';
-import { CODE_ONLY_ASSESSMENT, judgeFailure } from '../run.js';
+import { CODE_ONLY_ASSESSMENT } from '../run.js';
 import { verifyAcceptedRun } from '../scenario-library.js';
 import { simulatorChecks } from '../simulator.js';
 import type { Lab } from './context.js';
 import { isRunning, moveTo } from '../phases.js';
-import { freshDraft, measurementHash, resultHash, retainAcceptedTests } from './record.js';
+import { draftBudget, freshDraft, measurementHash, resultHash, retainAcceptedTests } from './record.js';
 import { nameFailureModes } from './run.js';
 
 /*
  * The results of a finished run, read again: a re-assessment of the recorded dialogues under new criteria or another
- * judge — a separate result, the original never changes — and a person's verdicts, kept apart from the judge's.
+ * judge — a separate result, the original never changes — and a person's verdicts, kept apart from the judge's: on the
+ * run's conversations, and on the judge's reading of the logged conversations its calibration compared them with.
  */
 
 /** A separate result over the same facts. No target session or simulator is opened. */
@@ -60,14 +66,16 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
     record.targetRelease = previous.targetRelease;
     record.reviewedAt = new Date().toISOString(); record.reviewMode = 'automated';
     record.manifestHash = measurementHash(record);
-    record.limitations.push('Переоценка сохранённых фактов: агент и симулятор не запускались. Смена критериев или судьи не доказывает улучшение агента.');
-    if (input.codeOnly) record.limitations.push('Режим code-only пересчитал только точные проверки; модельные рубрики и кластеры не оценивались.');
+    addCaveat(record, { code: 'reassessment' });
+    if (input.codeOnly) addCaveat(record, { code: 'code_only' });
     moveTo(record, 'evaluating');
-    await lab.operations.launch(record, async ctx => {
+    await lab.operations.launch(record, async (ctx, operation) => {
       const runtime = input.codeOnly ? undefined : await lab.runtime(record);
       for (const original of trials) {
         ctx.signal.throwIfAborted();
         const trial = structuredClone(original);
+        // A re-assessment is a new result: its attempts are counted by today's edition of the rules, the source run by its own.
+        trial.countingVersion = COUNTING_VERSION;
         const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
         trial.usage = emptyUsage(); delete trial.externalUsage; delete trial.assessments; delete trial.assessmentError; delete trial.assessmentFailure; delete trial.judgeAudit; delete trial.judgeReceipt; delete trial.checkpoints; delete trial.checkpointReceipt;
         trial.manifestHash = record.manifestHash!;
@@ -94,7 +102,7 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
             else if (judged.metrics?.length) { trial.assessmentError = CODE_ONLY_ASSESSMENT; trial.assessmentFailure = 'code_only'; }
           } catch (error) {
             trial.assessmentError = (error instanceof Error ? error.message : String(error)).slice(0, 4000);
-            trial.assessmentFailure = judgeFailure(error, ctx.signal);
+            trial.assessmentFailure = judgmentFailure(error, ctx.signal);
             // A stop cancels the attempt. The saved facts that could not be graded again (a reset or a state the connection never
             // showed) make it invalid with the cause 'measurement' — the agent was not even called. A judge failure after grading
             // keeps the graded outcome and its typed failure, as a live run does, so the result names the judge.
@@ -107,9 +115,9 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
         await lab.operations.checkpoint(record, 'evaluating', `Переоценено ${record.trials.length}/${trials.length}. Агент не запускался.`);
       }
       if (runtime) await nameFailureModes(record, runtime, ctx);
-      if (runtime) await calibrateRun(record, { runtime, ctx, store: lab.store, checkpoint: message => lab.operations.checkpoint(record, record.phase, message) });
+      if (runtime) await calibrateRun(record, { runtime, ctx, store: lab.store, checkpoint: message => lab.operations.checkpoint(record, record.phase, message), callsLeft: () => operation.callLimit - operation.spent });
       await lab.operations.checkpoint(record, 'results_review', 'Переоценка готова. Исходные трассы, оценки и ручные решения сохранены в исходном прогоне.');
-    }, { ownsMutation: true });
+    }, { ownsMutation: true, budget: draftBudget(record) });
     return structuredClone(record);
   });
 }
@@ -153,7 +161,49 @@ export function addHumanReview(lab: Lab, id: string, raw: HumanReviewInput): Pro
     }
     (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
     delete record.resultsReviewedAt; delete record.resultsReviewHash;
-    await lab.operations.checkpoint(record, 'results_review', 'Human annotation saved separately from the original assessment.');
+    await lab.operations.checkpoint(record, 'results_review', 'Ваше решение записано отдельно от оценки судьи.');
+    return structuredClone(record);
+  });
+}
+
+/**
+ * What the owner says about the log judge's verdict on one expectation (card/calibration.ts LogReview): the receipt it
+ * answers, the verdict and the reason. `judgeVerdict` is the verdict the owner was shown; the one stored is read from the
+ * receipt, never taken from the caller.
+ */
+const logReviewInputSchema = logReviewSchema.pick({ key: true, verdict: true, note: true, source: true })
+  .extend({ judgeVerdict: logReviewSchema.shape.judgeVerdict.optional() });
+export type LogReviewInput = z.input<typeof logReviewInputSchema>;
+/** The most verdicts a calibration keeps (card/calibration.ts calibrationSchema). */
+const LOG_REVIEWS = 1000;
+
+/**
+ * The owner's verdict on the log judge's reading of one expectation of a logged conversation — the target `log:{key}` of
+ * the run's calibration (docs/design/card-v2-spec.md §10.3). It is kept with the calibration, beside the judge's receipt
+ * and never over it, and the latest one per receipt holds by the rule every verdict of a person follows (outcomes.ts
+ * humanOverride). Like a one-key mark on an attempt it answers a judgment: it is refused where the judge did not read the
+ * log, where a one-key mark has no decided verdict to answer, and when the verdict the owner was shown is no longer the
+ * recorded one. The number never moves; the calibration reads it, so the run's phase and its review stay as they are.
+ */
+export function addLogReview(lab: Lab, id: string, raw: LogReviewInput): Promise<Experiment> {
+  return lab.operations.change(async () => {
+    const record = await lab.store.get(id);
+    if (record.workflow !== 'evaluate' || !['results_review', 'complete'].includes(record.phase)) throw new Error('Ответить о судье по разговору из логов можно только по завершённому прогону.');
+    const input = logReviewInputSchema.parse(raw);
+    const calibration = record.calibration;
+    const entry = calibration?.entries.find(item => item.key === input.key);
+    if (!calibration || !entry) throw new Error('Такой оценки судьи по разговору из логов в этом прогоне нет.');
+    if (entry.skipped) throw new Error('Судья не читал этот разговор из логов: в нём нельзя проверить ожидание — соглашаться не с чем.');
+    // What the owner saw is the judge's verdict as the calibration reads it: a receipt that does not stand decided nothing.
+    const recorded = logJudgmentComplete(entry, record) ? entry.result : 'unknown';
+    if (input.source === 'quick' && recorded !== 'pass' && recorded !== 'fail') throw new Error('Судья не вынес решения по этому разговору из логов — соглашаться не с чем.');
+    if (input.judgeVerdict !== undefined && input.judgeVerdict !== recorded) throw new Error('Оценка судьи по разговору из логов изменилась, пока вы смотрели. Откройте сверку с продом ещё раз.');
+    const reviews = calibration.reviews ?? [];
+    if (reviews.length >= LOG_REVIEWS) throw new Error(`Ответов о судье по логам в этом прогоне уже ${LOG_REVIEWS}: больше не сохранить.`);
+    calibration.reviews = [...reviews, { id: randomUUID(), createdAt: new Date().toISOString(), key: entry.key, verdict: input.verdict, note: input.note,
+      ...(input.source ? { source: input.source } : {}), judgeVerdict: recorded, judge: { protocolHash: entry.protocolHash, inputHash: entry.inputHash } }];
+    record.updatedAt = new Date().toISOString();
+    await lab.store.save(record);
     return structuredClone(record);
   });
 }
@@ -167,7 +217,7 @@ export function reviewResults(lab: Lab, id: string, expectedHash: string): Promi
     const pending = awaitingVerdict(record).size;
     if (pending) throw new Error(`Нельзя завершить разбор: ${pending} диалогов без решения. Оцените проваленные критерии или весь диалог. Если ошибочен сам тест, отметьте весь диалог «Невалидный тест» с причиной; «неясно» оставляет вопрос открытым.`);
     record.resultsReviewedAt = new Date().toISOString(); record.resultsReviewHash = expectedHash;
-    await lab.operations.checkpoint(record, 'complete', 'Human review complete. Original checks, model estimates and human annotations remain separate.');
+    await lab.operations.checkpoint(record, 'complete', 'Разбор результатов завершён. Проверки, оценки судьи и ваши решения хранятся отдельно.');
     return structuredClone(record);
   });
 }

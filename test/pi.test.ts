@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { test } from 'node:test';
 import { createPiRuntime, getPiStatus } from '../src/pi.js';
-import { REPAIR_ATTEMPTS } from '../src/llm/structured.js';
+import { TASK_ATTEMPTS } from '../src/llm/structured.js';
 import { CARD_ROLE } from '../src/prompts.js';
 import { judgeInput, JUDGE_RESPONSE_FORMAT, observableSources } from '../src/judge.js';
 import { createGigaProvider, GIGA_PROVIDER_ID } from '../src/giga-provider.js';
@@ -103,8 +104,13 @@ test('a model call reads no discovered resources and the simulator receives only
     assert.doesNotMatch(payload, /PRIVATE_CONTEXT_SENTINEL|HIDDEN_RUBRIC_SENTINEL|BACKEND_FAILURE_SCHEDULE_SENTINEL|Current working directory/);
     assert.ok(f.requests.every(r => !r.tools?.length), 'a model call offers no tools');
     assert.equal(process.env.AGENT_LAB_EXTENSION_LOADED, undefined);
+    // Providers the host's environment enables (a cloud key, an AWS profile) are the host's, not discovered from the project:
+    // a clean runtime in the same process shows them too, and only what the fixture registered may come on top.
     const status = await getPiStatus(f.runtime);
-    assert.deepEqual(status.models, [{ provider: 'agent-lab-test', id: 'test-model', name: 'Offline SDK fixture' }]);
+    const host = await ModelRuntime.create({ authPath: join(f.directory, 'host-auth.json'), modelsPath: null,
+      modelsStorePath: join(f.directory, 'host-models.json'), allowModelNetwork: false, refreshOnCreate: false });
+    const hosted = new Set((await host.getAvailable()).map(model => `${model.provider}/${model.id}`));
+    assert.deepEqual(status.models.filter(model => !hosted.has(`${model.provider}/${model.id}`)), [{ provider: 'agent-lab-test', id: 'test-model', name: 'Offline SDK fixture' }]);
   } finally { process.chdir(cwd); await f.close(); }
 });
 
@@ -571,8 +577,8 @@ test('structural recovery never supplies a truncated string or a missing schema 
       ctx.onGeneratorValidation = value => rejections.push(value);
       ctx.onGeneratorOutput = value => outputs.push(value);
       await assert.rejects(f.adapter.userTurn!({ user: { goal: 'A', facts: 'A', behavior: 'A', opening: 'A' }, messages: [], turn: 0 }, ctx), /не проходит проверку/);
-      assert.equal(outputs.length, REPAIR_ATTEMPTS);
-      assert.equal(rejections.length, REPAIR_ATTEMPTS);
+      assert.equal(outputs.length, TASK_ATTEMPTS);
+      assert.equal(rejections.length, TASK_ATTEMPTS);
       assert.ok(rejections.every((r: any) => r.accepted === false && r.reason));
     } finally { await f.close(); }
   }
@@ -588,6 +594,18 @@ test('the card reviewer runs on the configured judge, named by its role or by th
       assert.deepEqual((await adapter.reviewCard!({ aliases: ['goal'], payload: payload as never }, callContext().ctx)).verdicts, { goal: verdict });
     }
     assert.deepEqual(f.modelsUsed, ['role-model', 'role-model']);
+  } finally { await f.close(); }
+});
+
+test('the reviewer\'s doubt about the account names a later message of the card, an enum of this call', async () => {
+  const verdict = { status: 'needs_owner', reason: 'После «Спасибо!» клиент ждал ответа о сроке.', message: 4 };
+  const f = await fixture((_request, index) => JSON.stringify({ claims: { coverage: index === 0 ? { ...verdict, message: 3 } : verdict } }));
+  try {
+    const payload = { card: { coverage: [{ message: 2, as: 'fact', reason: null }, { message: 4, as: 'stop', reason: null }] }, dialogue: null, requirements: [], articles: [],
+      claims: [{ alias: 'coverage', kind: 'coverage', subject: '' }] };
+    assert.deepEqual((await f.adapter.reviewCard!({ aliases: ['coverage'], payload: payload as never }, callContext().ctx)).verdicts, { coverage: verdict });
+    assert.match(f.requests[0]!.systemPrompt!, /"message":\{"default":null,"anyOf":\[\{"type":"number","enum":\[2,4\]\},\{"type":"null"\}\]\}/);
+    assert.equal(f.requests.length, 2, 'a message the card does not account for is refused and asked again');
   } finally { await f.close(); }
 });
 
@@ -622,7 +640,7 @@ test('a card proposal that does not bind goes back with its exact reason, and th
     assert.match(system, /"kind":\{"type":"string","enum":\["behavior","knowledge","operator_procedure"\]\}/, 'and names the kind of its rule');
     assert.doesNotMatch(system, /"id":|"number":|"requirementIds"/, 'ids, numbers and the rules\' ids belong to the harness');
     const repair = JSON.parse(String(f.requests[1]!.messages[0]!.content)) as { repair: string; previousReply: string };
-    assert.match(repair.repair, /knows\[0\] "Номер терминала": the value "5679" is not in customer message 2\./);
+    assert.match(repair.repair, /knows\[0\] "Номер терминала": the value "5679" is not in customer message 2 as whole words\./);
     assert.match(repair.previousReply, /"5679"/, 'the repair starts afresh from the evidence and the latest draft only');
     assert.match(JSON.stringify(f.requests[0]!.messages), /Помогите с возвратом\./, 'the model reads the dialogue');
   } finally { await f.close(); }

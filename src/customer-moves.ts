@@ -22,8 +22,8 @@ export interface CustomerMoves {
   blocked: string[];
 }
 
-/** The part of a controller event this reads; anything else in the event is not needed and not checked here. */
-const controllerEvent = z.object({ protocol: z.literal(USER_CONTROLLER_PROTOCOL), decision: z.object({ actionId: z.string() }), accepted: z.literal(true) });
+/** The part of a controller event its readers need (here and card/calibration-view.ts); anything else in the event is not needed and not checked. */
+export const controllerEvent = z.object({ protocol: z.literal(USER_CONTROLLER_PROTOCOL), decision: z.object({ actionId: z.string() }), accepted: z.literal(true) });
 
 /** A move of the customer who speaks in their own words (card-customer.ts): its kind is the move the harness checked. */
 const freeEvent = z.object({ protocol: z.literal(CARD_CUSTOMER_PROTOCOL), move: z.enum(CUSTOMER_MOVES) });
@@ -52,7 +52,11 @@ export function trialMoves(scenario: Scenario, trial: Trial): MoveKind[] {
  */
 export const dunnoThenLeft = (moves: readonly MoveKind[]): boolean => moves.includes('missing') && moves.at(-1) === 'finish';
 
-/** The customer's moves over a run's counted situations; null when no conversation recorded a controlled move. */
+/**
+ * The customer's moves over a run's counted situations; null when no conversation recorded a controlled move. A
+ * conversation that ran into the run's limit on the customer's messages (`trial.turnLimit`) ended because the talk ran
+ * out, not because the customer gave up, so its last move never marks the situation as blocked by «не знаю».
+ */
 export function customerMoves(run: RunDerivation): CustomerMoves | null {
   const counts: Record<MoveKind, number> = { answer: 0, missing: 0, turn: 0, finish: 0, other: 0 };
   let recorded = false;
@@ -65,7 +69,7 @@ export function customerMoves(run: RunDerivation): CustomerMoves | null {
       if (!moves.length) continue;
       recorded = true;
       for (const move of moves) counts[move]++;
-      if (failed.has(trial.id) && dunnoThenLeft(moves)) blocked.add(situation.scenario.id);
+      if (failed.has(trial.id) && !trial.turnLimit && dunnoThenLeft(moves)) blocked.add(situation.scenario.id);
     }
   }
   return recorded ? { ...counts, blocked: [...blocked] } : null;

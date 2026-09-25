@@ -9,30 +9,58 @@ import { judgedByCheckpoints, projectedExpectations, projectedLetter } from './l
  * one whose attempts carry the checkpoint judge's verdicts keeps that frozen rule, like every other legacy
  * card without the goal rubric (`strict`). Old generated cards keep goal and prompt rules (`goal_rules`).
  * Pure: human verdicts are applied by the callers (outcomes.ts).
+ *
+ * The rules have editions. An attempt carries the edition it was recorded under (`Trial.countingVersion`), so a
+ * stored run is read exactly as it was counted and every new run or re-assessment by the current edition:
+ *
+ *   edition 1 (no stamp)   every attempt must be a usable measurement before any verdict is read: one unmeasured
+ *                          attempt leaves the situation «не измерено» even when another one failed; a tool
+ *                          expectation stands only on a cited tool result.
+ *   edition 2 (current)    a usable failure in any attempt fails the situation before usability is asked, and
+ *                          usability guards only «справился». With a complete tool log a failed tool expectation
+ *                          stands without a cited tool result — the log shows the call was never made — while a
+ *                          pass still needs one.
+ *
+ * Edition 2 decides every situation edition 1 decides, the same way; it only stops hiding failures.
  */
 
 export type Expectation = CardExecution['evaluatorView']['expectations'][number];
 /** An expectation of the rule with the letter the owner reads it by (А, Б, В…). */
 export type CountedExpectation = Expectation & { letter: string };
 
+/** The edition of the counting rules every attempt is recorded under now; the stored attempt field accepts exactly it. */
+export const COUNTING_VERSION = 2;
+export type CountingVersion = 1 | typeof COUNTING_VERSION;
+
+/**
+ * The edition these attempts are counted by: the current one only when every attempt was recorded under it, as with a
+ * checkpoint verdict one older attempt keeps the whole card on the older rule. A situation with no attempt yet waits
+ * for attempts of the current edition.
+ */
+export function countingVersionOf(trials: readonly Pick<Trial, 'countingVersion'>[]): CountingVersion {
+  return trials.every(trial => trial.countingVersion === COUNTING_VERSION) ? COUNTING_VERSION : 1;
+}
+
 export type HeadlineRule =
   /** A card, or a first-format card judged through its projection: every expectation, in every attempt. */
-  | { kind: 'expectations'; ids: string[]; labels: Record<string, string>; expectations: CountedExpectation[] }
+  | { kind: 'expectations'; version: CountingVersion; ids: string[]; labels: Record<string, string>; expectations: CountedExpectation[] }
   /** An old generated card: its goal and, where it has them, its prompt rules. */
-  | { kind: 'goal_rules'; ids: string[] }
+  | { kind: 'goal_rules'; version: CountingVersion; ids: string[] }
   /** A legacy card without the goal rubric, including first-format attempts with checkpoint verdicts: the strict automatic result. */
-  | { kind: 'strict' };
+  | { kind: 'strict'; version: CountingVersion };
 
 /** The agent metric the headline reads first on an old generated card: whether the client's request was carried out. */
 export const GOAL_METRIC_ID = 'goal_attainment';
 /** The agent metric that says whether the agent kept the observable rules of its own prompt. */
 export const RULES_METRIC_ID = 'prompt_compliance';
 
+type CountedTrial = Pick<Trial, 'checkpoints' | 'checkpointReceipt' | 'countingVersion'>;
+
 /**
  * The expectations these attempts of a card are judged by, with their letters; undefined when the card is
  * not judged by expectations. One attempt with a checkpoint verdict keeps the whole card on its frozen rule.
  */
-function judgedExpectations(scenario: Scenario | undefined, trials: readonly Pick<Trial, 'checkpoints' | 'checkpointReceipt'>[]): CountedExpectation[] | undefined {
+function judgedExpectations(scenario: Scenario | undefined, trials: readonly CountedTrial[]): CountedExpectation[] | undefined {
   const execution = scenario?.execution;
   if (!execution) return undefined;
   if (isCardExecution(execution)) return execution.evaluatorView.expectations.map(expectation => ({ ...expectation, letter: expectationLetter(expectation.id) }));
@@ -40,52 +68,75 @@ function judgedExpectations(scenario: Scenario | undefined, trials: readonly Pic
   return projectedExpectations(execution).map((expectation, index) => ({ ...expectation, letter: projectedLetter(index) }));
 }
 
-/** The counting rule of a card over these attempts. */
-export function headlineRule(scenario: Scenario | undefined, trials: readonly Pick<Trial, 'checkpoints' | 'checkpointReceipt'>[]): HeadlineRule {
+/** The counting rule of a card over these attempts, in the edition they were recorded under. */
+export function headlineRule(scenario: Scenario | undefined, trials: readonly CountedTrial[]): HeadlineRule {
+  const version = countingVersionOf(trials);
   const expectations = judgedExpectations(scenario, trials);
-  if (expectations) return { kind: 'expectations', ids: expectations.map(expectation => expectation.id),
+  if (expectations) return { kind: 'expectations', version, ids: expectations.map(expectation => expectation.id),
     labels: Object.fromEntries(expectations.map(expectation => [expectation.id, expectation.letter])), expectations };
   const agent = (scenario?.metrics ?? []).filter(metric => metric.subject === 'agent').map(metric => metric.id);
-  if (!agent.includes(GOAL_METRIC_ID)) return { kind: 'strict' };
-  return { kind: 'goal_rules', ids: agent.includes(RULES_METRIC_ID) ? [GOAL_METRIC_ID, RULES_METRIC_ID] : [GOAL_METRIC_ID] };
+  if (!agent.includes(GOAL_METRIC_ID)) return { kind: 'strict', version };
+  return { kind: 'goal_rules', version, ids: agent.includes(RULES_METRIC_ID) ? [GOAL_METRIC_ID, RULES_METRIC_ID] : [GOAL_METRIC_ID] };
 }
 
 /**
- * The name of the counting rule a quick mark is stamped with, so a mark given under another rule is never
- * counted silently. `goal-and-rules-v2` is the name every mark was stamped with before cards; a first-format
- * card with checkpoint verdicts is counted by its frozen `library-v1` rule.
+ * The name of the counting rule a quick mark is stamped with and a result is counted by, so a mark given under
+ * another rule is never counted silently. `goal-and-rules-v2` is the name every mark was stamped with before cards;
+ * a first-format card with checkpoint verdicts is counted by its frozen `library-v1` rule, which has no later edition.
+ * A card counted by its expectations is `all-expectations-v1` in edition 1 and `all-expectations-v2` in edition 2,
+ * every other card `goal-and-rules-v2` and `goal-and-rules-v3`.
  */
-export type CountingRule = 'all-expectations-v1' | 'goal-and-rules-v2' | 'library-v1';
+export type CountingRule = 'all-expectations-v1' | 'all-expectations-v2' | 'goal-and-rules-v2' | 'goal-and-rules-v3' | 'library-v1';
 export function countingRuleOf(scenario: Scenario | undefined, rule: HeadlineRule): CountingRule {
-  return rule.kind === 'expectations' ? 'all-expectations-v1' : rule.kind === 'strict' && scenario?.execution ? 'library-v1' : 'goal-and-rules-v2';
+  if (rule.kind === 'expectations') return rule.version === COUNTING_VERSION ? 'all-expectations-v2' : 'all-expectations-v1';
+  if (rule.kind === 'strict' && scenario?.execution) return 'library-v1';
+  return rule.version === COUNTING_VERSION ? 'goal-and-rules-v3' : 'goal-and-rules-v2';
 }
+
+/** How a situation is counted under each rule, in the owner's words: the one line «Как считали» shows for it. */
+export const COUNTING_RULE_TEXT: Record<CountingRule, string> = {
+  'all-expectations-v2': 'Агент справился с ситуацией, если выполнил все её ожидания в каждой попытке. Ошибка в любой измеренной попытке — провал, даже если другую попытку измерить не удалось; при полном журнале инструментов пропущенный вызов — тоже ошибка.',
+  'all-expectations-v1': 'Агент справился с ситуацией, если выполнил все её ожидания в каждой попытке, и провалил её при ошибке в любой попытке — но только когда измерены все попытки; иначе ситуация не измерена.',
+  'goal-and-rules-v3': 'Агент справился с ситуацией, если в каждой попытке выполнил запрос клиента и не нарушил правила промпта. Ошибка в любой измеренной попытке — провал, даже если другую попытку измерить не удалось.',
+  'goal-and-rules-v2': 'Агент справился с ситуацией, если в каждой попытке выполнил запрос клиента и не нарушил правила промпта, и провалил её при ошибке в любой попытке — но только когда измерены все попытки; иначе ситуация не измерена.',
+  'library-v1': 'Ситуация первого формата: агент справился, если прошёл все обязательные контрольные точки так, как их оценил судья при прогоне; провал любой точки — провал ситуации.',
+};
+
+/** The owner's line for a rule a result names (`ResultView.countingRules` lists them joined by «, »); undefined for a name it does not know. */
+export const countingRuleText = (rule: string): string | undefined =>
+  Object.hasOwn(COUNTING_RULE_TEXT, rule) ? COUNTING_RULE_TEXT[rule as CountingRule] : undefined;
 
 /** The state was observed and its reset confirmed, so a state event proves something. */
 const stateObserved = (trial: Trial): boolean => !!trial.observation && trial.observation.state !== 'missing'
   && (trial.observation.state === 'sandbox' || trial.observation.resetConfirmed === true);
 
 /** The events of the agent's side of a dialogue: what it said and what its tool log shows. */
-const AGENT_SIDE: ReadonlySet<Trial['events'][number]['type']> = new Set(['assistant', 'tool_call', 'tool_result']);
 
 /**
- * The judge's own verdict on one expectation, read through the channel the expectation is observed on:
- * - reply: a pass or a fail stands only when the judge cited an agent reply;
- * - tool: only on a tool log the connection confirmed complete. A pass stands only when the judge cited a
- *   tool result: the agent saying it acted is not the action. A fail stands when the judge cited any event
- *   of the agent's side (a reply, a tool call or a tool result): on a complete log the missing call is proven
- *   by the log itself, and a reply claiming the action is evidence of that failure. Citing only the customer
- *   proves nothing; a partial log proves no absence.
- * - state: a pass or a fail stands only on a cited observed state whose reset was confirmed.
- * Otherwise it is unknown (`no_evidence`). The raw judgment stays stored as it was; only its reading is gated
- * here. The compiled rubric's TOOL_LOG_RULE is unchanged: it is sealed into accepted definition hashes.
+ * A verdict on the agent's tools stands only on a complete tool log. A pass needs a cited tool result — of the tool the
+ * expectation names, when it names one: another tool's call proves nothing about it, and the agent's words never prove
+ * an action. From edition 2 a failure stands without one — a complete log holds every call the agent made, so the call
+ * the expectation asks for was never made.
  */
-export function recordedExpectationResult(trial: Trial, expectation: Pick<Expectation, 'id' | 'observation'>): 'pass' | 'fail' | 'unknown' | undefined {
+function toolEvidence(trial: Trial, expectation: Pick<Expectation, 'tool'>, result: 'pass' | 'fail', cited: readonly Trial['events'][number][]): boolean {
+  if (trial.observation?.tools !== 'complete') return false;
+  const proves = (event: Trial['events'][number]) => event.type === 'tool_result' && (expectation.tool === undefined || event.tool === expectation.tool);
+  return cited.some(proves) || result === 'fail' && trial.countingVersion === COUNTING_VERSION;
+}
+
+/**
+ * The judge's own verdict on one expectation, read through the channel the expectation is observed on: a
+ * pass or a fail stands only when the judge cited an event of that channel — an agent reply, a tool result
+ * of a complete tool log (of the named tool, when the expectation names one; or, for a failure from edition 2,
+ * the complete log itself), or an observed state. Otherwise it is unknown (`no_evidence`). The raw judgment stays
+ * stored as it was; only its reading is gated here.
+ */
+export function recordedExpectationResult(trial: Trial, expectation: Pick<Expectation, 'id' | 'observation' | 'tool'>): 'pass' | 'fail' | 'unknown' | undefined {
   const assessment = trial.assessments?.find(item => item.metricId === expectation.id);
   if (!assessment || assessment.result === 'unknown') return assessment?.result;
   const cited = trial.events.filter(event => assessment.evidence.includes(event.seq));
   const channel = expectation.observation === 'reply' ? cited.some(event => event.type === 'assistant')
-    : expectation.observation === 'tool' ? trial.observation?.tools === 'complete'
-      && cited.some(event => assessment.result === 'pass' ? event.type === 'tool_result' : AGENT_SIDE.has(event.type))
+    : expectation.observation === 'tool' ? toolEvidence(trial, expectation, assessment.result, cited)
     : stateObserved(trial) && cited.some(event => event.state !== undefined);
   return channel ? assessment.result : 'unknown';
 }

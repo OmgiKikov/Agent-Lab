@@ -1,9 +1,9 @@
-import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { describeCheck, isCardExecution, type Experiment, type Scenario } from '../contracts.js';
 import { countText } from '../plural.js';
-import { MAX_WIDTH } from '../result-text.js';
+import { MAX_WIDTH, type Reader } from '../result-text.js';
 import type { ImportBatch, LibraryV1, ScenarioVariant } from '../scenario-contracts.js';
-import { oneLine } from '../text.js';
+import { oneLine, wrapHanging } from '../text.js';
 import { contains, quotable, type CardEvidence } from './checks.js';
 import { compilePolicy, expectationLetter } from './compile.js';
 import { behaviorLines, convertible, libraryV1Of, orderedVariants, ownerQuestions, ownerRemarks, plainIssue } from './legacy-v1.js';
@@ -47,6 +47,8 @@ export interface Brief {
   filled?: string[];
   /** What code checks besides the judge (reference.ts): «находит статью 24 — разметка асессора». */
   references?: { id: string; text: string }[];
+  /** The customer never says clearly what they want («невнятный запрос»): the result counts such situations apart. */
+  vague?: true;
 }
 
 export interface SituationView {
@@ -58,6 +60,12 @@ export interface SituationView {
   brief: Brief;
   /** The ids a command names, parallel to `brief.knows` and `brief.must` (f1, e2); null where there is none to name. */
   refs: { knows: (string | null)[]; must: (string | null)[] };
+  /**
+   * A card's terms the brief does not print but a change can move, parallel to `refs`: every rule of a duty, when it
+   * applies and how it is observed; the agent's question a fact answers (its label unless the card names another); what
+   * the customer's late turn does. «Было → стало» compares them, so a change the owner confirms is never shown as none.
+   */
+  terms?: { must: DutyTerms[]; knows: { askedAs: string }[]; turn: string | null };
   status: CardStatusKind;
   /** The one open question. A card's answers carry their ready-made commands; an older format's question has no answers here. */
   question?: { id: string | null; text: string; choices: QuestionChoice[] };
@@ -69,6 +77,9 @@ export interface SituationView {
   /** «d — как это проверяется»: key and value lines for whoever wants to see how the brief is run and judged. */
   details: { label: string; text: string }[];
 }
+
+/** A duty's terms: every rule it rests on (id and quote), the condition it applies under (null: always), how it is observed. */
+export interface DutyTerms { rules: { id: string; quote: string }[]; when: string | null; observed: string }
 
 /** Where each logged dialogue stands in its import: «из диалога №17». */
 export type DialogueNumbers = (batchId: string, dialogueId: string) => number | undefined;
@@ -94,7 +105,13 @@ function factText(fact: Fact): string {
   return oneLine(`${fact.label}: ${quotable(fact.value) ? fact.value : fact.value ? 'да' : 'нет'}`);
 }
 
-function cardSource(library: LibraryV2, card: Card, numbers?: DialogueNumbers): string {
+/** A situation the owner made, as the owner reads its source and as a page for others says it about the owner. */
+const OWNER_MADE: Record<Reader, { added: string; rules: string }> = {
+  owner: { added: 'добавлена вами', rules: 'по вашим правилам' },
+  others: { added: 'добавлена владельцем агента', rules: 'по правилам владельца агента' },
+};
+
+function cardSource(library: LibraryV2, card: Card, numbers?: DialogueNumbers, reader: Reader = 'owner'): string {
   const { origin } = card;
   switch (origin.kind) {
     case 'dialogue': {
@@ -105,8 +122,8 @@ function cardSource(library: LibraryV2, card: Card, numbers?: DialogueNumbers): 
       const parent = library.cards.find(item => item.id === origin.parentId);
       return parent ? `похожая на №${parent.number}` : 'похожая на другую ситуацию';
     }
-    case 'owner': return 'добавлена вами';
-    case 'rules': return 'по вашим правилам';
+    case 'owner': return OWNER_MADE[reader].added;
+    case 'rules': return OWNER_MADE[reader].rules;
   }
 }
 
@@ -119,15 +136,16 @@ function saidOf(fact: Fact): Said {
 }
 
 /** A card read as it stands: its brief is the card itself. A fact no message vouches for is «?» until the owner says. */
-export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumbers): Brief {
+export function cardBrief(library: LibraryV2, card: Card, numbers?: DialogueNumbers, reader: Reader = 'owner'): Brief {
   const quotes = new Map(library.requirements.map(item => [item.id, item.quote]));
   const { wants, writes, knows, leaves, turn } = card.client;
   return {
-    title: oneLine(card.title), source: cardSource(library, card, numbers), wants: oneLine(wants), writes: oneLine(writes),
+    title: oneLine(card.title), source: cardSource(library, card, numbers, reader), wants: oneLine(wants), writes: oneLine(writes),
     knows: knows.map(fact => ({ what: factText(fact), when: saidOf(fact) })),
     leaves: oneLine(leaves), turn: turn ? turnText(turn.after, turn.says) : null,
     must: card.agentMust.map(expectation => ({ text: oneLine(expectation.text), rule: firstQuote(expectation.requirementIds, quotes) })),
     ...(card.filled ? { filled: card.filled.map(item => oneLine(item.value)) } : {}),
+    ...(card.clarity === 'vague' ? { vague: true } : {}),
     ...(card.references ? { references: card.references.map(reference => ({ id: reference.id, text: referenceText(reference) })) } : {}),
   };
 }
@@ -143,9 +161,27 @@ export function referenceText(reference: Reference): string {
   const vouched = reference.origin === 'proposed' ? reference.confirmed ? 'предложил Lab, вы подтвердили' : 'предложил Lab — ждёт вашего решения' : VOUCHED[reference.origin];
   return `${checks} — ${vouched}`;
 }
+/** The customer's request as the brief and a change name it: the mark of a vague one, and the word for a clear one. */
+const VAGUE_REQUEST = 'невнятный: клиент не говорит прямо, чего хочет';
+const CLEAR_REQUEST = 'внятный';
 
 const OBSERVED = { reply: 'по ответу агента', tool: 'по вызовам инструментов', state: 'по состоянию системы' } as const;
+/** How a duty is observed; a duty on the tools names the tool whose call proves it, when it names one. */
+const observedText = (expectation: Card['agentMust'][number]): string =>
+  expectation.observation === 'tool' && expectation.tool !== undefined ? `по вызову инструмента «${oneLine(expectation.tool)}»` : OBSERVED[expectation.observation];
 const ACCOUNTED = { fact: 'факт', turn: 'поворот', stop: 'здесь клиент уходит', ignored: 'не влияет на проверку', changed: 'изменено' } as const;
+const TURN_KIND = { change_intent: 'меняет намерение', report: 'сообщает, что видит' } as const;
+
+/** The terms of a card a change can move while its brief reads the same (SituationView.terms). */
+function cardTerms(library: LibraryV2, card: Card): NonNullable<SituationView['terms']> {
+  const quotes = new Map(library.requirements.map(item => [item.id, oneLine(item.quote)]));
+  return {
+    must: card.agentMust.map(expectation => ({ rules: expectation.requirementIds.map(id => ({ id, quote: quotes.get(id) ?? '' })),
+      when: expectation.appliesWhen === undefined ? null : oneLine(expectation.appliesWhen), observed: observedText(expectation) })),
+    knows: card.client.knows.map(fact => ({ askedAs: oneLine(fact.askedAs ?? fact.label) })),
+    turn: card.client.turn ? TURN_KIND[card.client.turn.kind] : null,
+  };
+}
 
 /** How a card is run and judged: the customer's program, where each fact comes from, the account of later messages, the duties. */
 function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefined): SituationView['details'] {
@@ -177,7 +213,7 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
       ...(reference.outcome ? [{ label: 'Эталон', text: `код ${reference.outcome.value} — код сверяет с состоянием, которое сообщил адаптер${reference.outcome.field ? ` (поле ${reference.outcome.field})` : ''}; не сообщил — не измерено` }] : []),
       ...(reference.text ? [{ label: 'Эталон', text: `«${quoteText(oneLine(reference.text))}» — значения (суммы, сроки, коды) сверяет код, смысл — судья` }] : []),
     ]),
-    ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${OBSERVED[expectation.observation]}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
+    ...card.agentMust.map(expectation => ({ label: 'Ожидание', text: `${expectationLetter(expectation.id)} — ${oneLine(expectation.text)}; ${observedText(expectation)}${expectation.appliesWhen ? `, если ${oneLine(expectation.appliesWhen)}` : ''}` })),
     ...rules,
     { label: 'Запись', text: `ситуация ${card.id} · версия ${card.revision} · набор ${library.id}, ревизия ${library.revision}` },
   ];
@@ -187,7 +223,7 @@ function cardDetails(library: LibraryV2, card: Card, maxTurns: number | undefine
 export function cardSituation(library: LibraryV2, card: Card, status?: CardStatus, numbers?: DialogueNumbers, maxTurns?: number): SituationView {
   return {
     format: 'card', id: card.id, number: card.number, brief: cardBrief(library, card, numbers),
-    refs: { knows: card.client.knows.map(fact => fact.id), must: card.agentMust.map(expectation => expectation.id) },
+    refs: { knows: card.client.knows.map(fact => fact.id), must: card.agentMust.map(expectation => expectation.id) }, terms: cardTerms(library, card),
     // Without the imports at hand the status is not known; a card is read then as it was accepted: ready.
     status: status?.status ?? 'ready',
     ...(status?.question ? { question: { id: status.question.id, text: status.question.text, choices: status.question.choices } } : {}),
@@ -198,12 +234,12 @@ export function cardSituation(library: LibraryV2, card: Card, status?: CardStatu
 /* ───────────────────────────── the first library format ───────────────────────────── */
 
 /** Where a first-format variant came from. A variant made from another is named by that one's title: its number differs between lists. */
-function variantSource(library: LibraryV1, variant: ScenarioVariant): string {
+function variantSource(library: LibraryV1, variant: ScenarioVariant, reader: Reader = 'owner'): string {
   const origin = variant.sourceDialogues[0];
   const number = origin && dialogueNumbers(library.imports)(origin.batchId, origin.dialogueId);
   if (number !== undefined) return `из диалога №${number}`;
   const parent = variant.parentVariantId && library.variants.find(item => item.id === variant.parentVariantId);
-  return parent ? `похожая на «${oneLine(parent.title)}»` : variant.provenance === 'production' ? 'из разговора в логах' : 'по вашим правилам';
+  return parent ? `похожая на «${oneLine(parent.title)}»` : variant.provenance === 'production' ? 'из разговора в логах' : OWNER_MADE[reader].rules;
 }
 
 /**
@@ -212,7 +248,7 @@ function variantSource(library: LibraryV1, variant: ScenarioVariant): string {
  * the old conversation was never theirs at the start of a run, so it is not listed. The duties are the
  * required checkpoints — of the compiled definition when the variant ran.
  */
-function variantBrief(library: LibraryV1, variant: ScenarioVariant, scenario?: Scenario): Brief {
+function variantBrief(library: LibraryV1, variant: ScenarioVariant, scenario?: Scenario, reader: Reader = 'owner'): Brief {
   const { userState, behaviorPolicy, evaluationSpec } = variant;
   const terminal = new Set(behaviorPolicy.terminalStates);
   const leaves = [...new Set(behaviorPolicy.transitions.filter(item => terminal.has(item.to)).map(item => oneLine(item.when)))];
@@ -223,7 +259,7 @@ function variantBrief(library: LibraryV1, variant: ScenarioVariant, scenario?: S
     .map(checkpoint => ({ text: oneLine(checkpoint.rule), rule: oneLine(checkpoint.quote) || null }));
   return {
     // A run names the situation by its accepted definition, like every other section of the result.
-    title: oneLine(scenario?.title ?? variant.title), source: variantSource(library, variant), wants: oneLine(userState.goal), writes: oneLine(userState.opening),
+    title: oneLine(scenario?.title ?? variant.title), source: variantSource(library, variant, reader), wants: oneLine(userState.goal), writes: oneLine(userState.opening),
     knows: [
       ...userState.facts.filter(fact => fact.availability !== 'learned_in_source').map(fact => {
         const shown = fact.value === undefined || contains(fact.statement, String(fact.value)) ? fact.statement : `${fact.statement}: ${fact.value}`;
@@ -271,12 +307,13 @@ export function projectV1Variant(library: LibraryV1, variant: ScenarioVariant, n
 
 /* ───────────────────────────── records made before libraries ───────────────────────────── */
 
-const SCENARIO_SOURCE = { production: 'из разговора в логах', curated: 'добавлена вами', synthetic: 'по вашим правилам' } as const;
+const scenarioSource = (provenance: Scenario['provenance'], reader: Reader): string =>
+  provenance === 'production' ? 'из разговора в логах' : provenance === 'curated' ? OWNER_MADE[reader].added : OWNER_MADE[reader].rules;
 
-function scenarioBrief(record: Pick<Experiment, 'requirements'>, scenario: Scenario): Brief {
+function scenarioBrief(record: Pick<Experiment, 'requirements'>, scenario: Scenario, reader: Reader = 'owner'): Brief {
   const rule = scenario.requirementIds.map(id => record.requirements.find(item => item.id === id)).find(item => !!item);
   return {
-    title: oneLine(scenario.title), source: SCENARIO_SOURCE[scenario.provenance],
+    title: oneLine(scenario.title), source: scenarioSource(scenario.provenance, reader),
     wants: oneLine(scenario.user.goal), writes: oneLine(scenario.user.opening),
     knows: [
       ...(scenario.user.knows ?? []).map(item => ({ what: oneLine(item), when: 'сразу' as const })),
@@ -325,16 +362,19 @@ export function situationViews(record: Experiment, context: ViewContext): Situat
   return record.scenarios.map((scenario, index) => scenarioView(record, scenario, index + 1));
 }
 
-/** The brief of one situation of a run, whatever format it was accepted in: the customer report reads the same projection. */
-export function situationBrief(record: Experiment, scenario: Scenario, numbers?: DialogueNumbers): Brief {
+/**
+ * The brief of one situation of a run, whatever format it was accepted in: the customer report reads the same
+ * projection, `reader` 'others' saying where a situation the owner made came from about the owner.
+ */
+export function situationBrief(record: Experiment, scenario: Scenario, numbers?: DialogueNumbers, reader: Reader = 'owner'): Brief {
   const library = record.librarySnapshot;
   if (library?.formatVersion === 2) {
     const card = library.cards.find(item => item.id === scenario.id);
-    if (card) return cardBrief(library, card, numbers);
+    if (card) return cardBrief(library, card, numbers, reader);
   }
   const first = libraryV1Of(record);
   const variant = first?.variants.find(item => item.id === scenario.id);
-  return first && variant ? variantBrief(first, variant, scenario) : scenarioBrief(record, scenario);
+  return first && variant ? variantBrief(first, variant, scenario, reader) : scenarioBrief(record, scenario, reader);
 }
 
 /** The number a situation of a run is known by: a card's own number; its place in the run for older formats. */
@@ -355,7 +395,8 @@ const questionData = (view: SituationView) => view.question
 /** A situation for a machine reader (the chat's model, `--json`): the brief with the ids a command names, the status and the question with numbered answers. */
 export function situationData(view: SituationView) {
   return {
-    number: view.number, title: view.brief.title, status: view.status, source: view.brief.source, wants: view.brief.wants, writes: view.brief.writes,
+    number: view.number, title: view.brief.title, status: view.status, source: view.brief.source, wants: view.brief.wants,
+    ...(view.brief.vague ? { clarity: 'vague' as const } : {}), writes: view.brief.writes,
     knows: view.brief.knows.map((fact, index) => ({ ...(view.refs.knows[index] ? { id: view.refs.knows[index] } : {}), ...fact })),
     leaves: view.brief.leaves, turn: view.brief.turn, ...(view.brief.filled ? { filledOverMasks: view.brief.filled } : {}),
     must: view.brief.must.map((duty, index) => ({ ...(view.refs.must[index] ? { id: view.refs.must[index] } : {}), ...duty })),
@@ -379,8 +420,8 @@ export function countsText(views: readonly SituationView[]): string {
   const parts = [
     countText(count('ready'), ['готова', 'готовы', 'готовы']),
     ...(count('needs_owner') ? [countText(count('needs_owner'), ['ждёт вашего ответа', 'ждут вашего ответа', 'ждут вашего ответа'])] : []),
-    ...(count('unusable') ? [`${count('unusable')} не подходит для теста`] : []),
-    ...(count('checking') ? [`${count('checking')} ещё не проверены`] : []),
+    ...(count('unusable') ? [countText(count('unusable'), ['не подходит для теста', 'не подходят для теста', 'не подходят для теста'])] : []),
+    ...(count('checking') ? [countText(count('checking'), ['ещё не проверена', 'ещё не проверены', 'ещё не проверены'])] : []),
   ];
   return `${countText(views.length, ['ситуация', 'ситуации', 'ситуаций'])}: ${parts.join(' · ')}`;
 }
@@ -441,21 +482,31 @@ export function listRows(view: SituationView, options: RowOptions & { selected?:
 }
 
 /**
- * One open situation (docs/design/ui-spec.md §4.3–4.5): the title with its chip and source; the customer, labels in one column;
- * what the agent must do, each duty with its rule (a rule shared with the duty above is not repeated); then why
- * it cannot be a test, and the one open question with its numbered answers.
+ * The customer's part of a brief as label and text, the way every surface lists it — the open situation and the
+ * customer report alike: an empty label continues the line above; the values Lab wrote over masking marks follow
+ * what the customer writes, so a filled value never reads as the customer's own.
  */
-export function briefRows(view: SituationView, options: RowOptions = {}): SituationRow[] {
-  const { brief } = view;
+export function briefFields(brief: Brief): [label: string, text: string][] {
   const same = (a: string, b: string) => a.toLocaleLowerCase('ru') === b.toLocaleLowerCase('ru');
-  const fields: [string, string][] = [
+  return [
     ...(same(brief.wants, brief.title) ? [] : [['Хочет', brief.wants] as [string, string]]),
+    ...(brief.vague ? [['Запрос', VAGUE_REQUEST] as [string, string]] : []),
     ['Пишет', `«${brief.writes}»`],
     ...(brief.filled ? [['', `подставлено вместо обезличенного: ${brief.filled.map(value => `«${value}»`).join(', ')}`] as [string, string]] : []),
     ...brief.knows.map((fact, index): [string, string] => [index ? '' : 'Знает', `${fact.what} — ${fact.when}`]),
     ...(brief.leaves ? [['Уходит', brief.leaves] as [string, string]] : []),
     ...(brief.turn ? [['Поворот', brief.turn] as [string, string]] : []),
   ];
+}
+
+/**
+ * One open situation (docs/design/ui-spec.md §4.3–4.5): the title with its chip and source; the customer, labels in one column;
+ * what the agent must do, each duty with its rule (a rule shared with the duty above is not repeated); then why
+ * it cannot be a test, and the one open question with its numbered answers.
+ */
+export function briefRows(view: SituationView, options: RowOptions = {}): SituationRow[] {
+  const { brief } = view;
+  const fields = briefFields(brief);
   const column = Math.max(...fields.map(([label]) => label.length)) + 3;
   const must = brief.must.flatMap((duty, index): SituationRow[] => [
     { role: 'field', indent: 3, text: `${String(index + 1).padEnd(3)}${duty.text}`, hang: 3 },
@@ -517,7 +568,9 @@ export interface BriefChange { field: string; before: string | null; after: stri
 
 /**
  * What changed between two states of one situation, line by line of the brief: a fact and a duty are matched
- * by their id, so a changed disclosure reads «было «?», стало «если спросят»» on the same fact.
+ * by their id, so a changed disclosure reads «было «?», стало «если спросят»» on the same fact. A card's terms the
+ * brief does not print — a duty's rules, its condition and how it is observed, the agent's question a fact answers,
+ * what the late turn does — get lines of their own: whatever the owner confirms is shown.
  */
 export function briefChanges(before: SituationView | undefined, after: SituationView | undefined): BriefChange[] {
   if (!before || !after) return [{ field: 'Ситуация', before: before ? `№${before.number} ${before.brief.title}` : null, after: after ? `№${after.number} ${after.brief.title}` : null }];
@@ -525,21 +578,47 @@ export function briefChanges(before: SituationView | undefined, after: Situation
   const text = (field: string, a: string | null, b: string | null) => { if (a !== b) changes.push({ field, before: a, after: b }); };
   text('Название', before.brief.title, after.brief.title);
   text('Хочет', before.brief.wants, after.brief.wants);
+  text('Запрос', requestLine(before), requestLine(after));
   text('Пишет', `«${before.brief.writes}»`, `«${after.brief.writes}»`);
+  const byId = <T>(items: readonly T[], ids: readonly (string | null)[]) => new Map(items.flatMap((item, index) => ids[index] ? [[ids[index]!, item] as const] : []));
   const paired = <T>(field: string, a: T[], b: T[], idsA: (string | null)[], idsB: (string | null)[], show: (item: T) => string) => {
-    const byId = (items: T[], ids: (string | null)[]) => new Map(items.flatMap((item, index) => ids[index] ? [[ids[index]!, item] as const] : []));
     const was = byId(a, idsA), now = byId(b, idsB);
     for (const [id, item] of was) text(field, show(item), now.has(id) ? show(now.get(id)!) : null);
     for (const [id, item] of now) if (!was.has(id)) text(field, null, show(item));
   };
   paired('Знает', before.brief.knows, after.brief.knows, before.refs.knows, after.refs.knows, fact => `${fact.what} — ${fact.when}`);
+  if (before.terms && after.terms) {
+    const was = byId(before.terms.knows, before.refs.knows);
+    for (const [index, id] of after.refs.knows.entries()) {
+      const a = id ? was.get(id) : undefined, b = after.terms.knows[index];
+      if (a && b) text(`Знает: ${after.brief.knows[index]!.what} — если спросят`, a.askedAs, b.askedAs);
+    }
+  }
   text('Уходит', before.brief.leaves, after.brief.leaves);
-  text('Поворот', before.brief.turn, after.brief.turn);
+  text('Поворот', turnLine(before), turnLine(after));
   paired('Агент должен', before.brief.must, after.brief.must, before.refs.must, after.refs.must, duty => duty.text);
   const references = (brief: Brief) => brief.references ?? [];
   paired('Проверяется кодом', references(before.brief), references(after.brief), references(before.brief).map(item => item.id), references(after.brief).map(item => item.id), item => item.text);
+  if (before.terms && after.terms) {
+    const was = byId(before.terms.must, before.refs.must);
+    for (const [index, id] of after.refs.must.entries()) {
+      const a = id ? was.get(id) : undefined, b = after.terms.must[index];
+      if (!a || !b) continue;
+      const duty = `Агент должен: ${after.brief.must[index]!.text}`;
+      if (a.rules.map(rule => rule.id).join(' ') !== b.rules.map(rule => rule.id).join(' ')) changes.push({ field: `${duty} — правило`, before: rulesText(a), after: rulesText(b) });
+      text(`${duty} — когда`, a.when ?? 'всегда', b.when ?? 'всегда');
+      text(`${duty} — проверяется`, a.observed, b.observed);
+    }
+  }
   return changes;
 }
+
+/** Whether a card's customer can say what they want, as a change shows it; the older formats have no such mark. */
+const requestLine = (view: SituationView): string | null => view.format !== 'card' ? null : view.brief.vague ? VAGUE_REQUEST : CLEAR_REQUEST;
+/** The late turn as a change shows it: what the customer does, after what and with which words — «меняет намерение после «…»: «…»». */
+const turnLine = (view: SituationView): string | null => view.brief.turn === null ? null : view.terms?.turn ? `${view.terms.turn} ${view.brief.turn}` : view.brief.turn;
+/** A duty's rules in one line, each quote kept to its beginning and end. */
+const rulesText = (terms: DutyTerms): string => terms.rules.map(rule => quoteText(rule.quote, 120)).join(' · ') || 'нет правила';
 
 /** A change in one line: «Знает: номер терминала: 5678 — было «?», стало «если спросят»». */
 export function changeText(change: BriefChange): string {
@@ -558,7 +637,6 @@ export type LayoutRow<Role extends string> = Omit<SituationRow, 'role' | 'right'
 export interface LaidOut<Role extends string> { role: Role; text: string; right?: { role: Role; text: string } }
 export type SituationLine = LaidOut<SituationRole>;
 
-const wrap = (text: string, width: number): string[] => wrapTextWithAnsi(text, Math.max(1, width));
 // truncateToWidth closes its ellipsis with style resets for a live terminal; these lines are plain text, painted later by role.
 const clipTo = (text: string, width: number) => stripTerminalSequences(truncateToWidth(text, Math.max(1, width), '…'));
 
@@ -581,9 +659,9 @@ export function layoutRows<Role extends string = SituationRole>(rows: readonly L
     }
     if (!row.text) return [{ role: row.role, text: '' }];
     const hang = row.hang ?? 0;
-    const [first = '', ...rest] = wrap(row.text, room);
-    const tail = rest.join(' ');
-    return [{ role: row.role, text: pad + first }, ...(tail ? wrap(tail, room - hang).map(piece => ({ role: row.role, text: pad + ' '.repeat(hang) + piece })) : [])];
+    // The text never changes on its way into lines: its line breaks stay, and a long word breaks with nothing inserted.
+    const [first = '', ...rest] = wrapHanging(row.text, room, room - hang);
+    return [{ role: row.role, text: pad + first }, ...rest.map(piece => ({ role: row.role, text: pad + ' '.repeat(hang) + piece }))];
   });
 }
 

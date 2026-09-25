@@ -29,8 +29,10 @@ const inDialogue = (event: EventRef, origin: { batchId: string; dialogueId: stri
  * message, turn and every fact come from that dialogue, and whose account of the later messages holds no change.
  * A similar card, one added by the owner or written from the rules has no log of its own; a card of a dialogue
  * that the owner changed stands for another situation now — and so does one whose customer holds a plausible fact,
- * confirmed or not: it is in no message of the log, so the synthetic customer knows more than the logged one did —
- * and so does one whose masked values Lab filled in.
+ * confirmed or not: it is in no message of the log, so the synthetic customer knows more than the logged one did.
+ * Values Lab wrote over the log's masking marks change none of that: the logged customer typed real values the
+ * export hid, the synthetic one says plausible values in their place, and every message and fact still comes from
+ * the log — the same customer, whose log the judge reads with its marks (`masked` on the situation).
  */
 export function cardExclusion(card: Card): Exclusion | undefined {
   const { origin } = card;
@@ -39,9 +41,7 @@ export function cardExclusion(card: Card): Exclusion | undefined {
   const fromLog = writesSource.kind === 'dialogue' && inDialogue(writesSource.event, origin)
     && (!turn || turn.source.kind === 'dialogue' && inDialogue(turn.source.event, origin))
     && knows.every(fact => fact.source.kind === 'dialogue' && inDialogue(fact.source.event, origin))
-    && !card.coverage.some(entry => entry.as === 'changed')
-    // Values Lab wrote over the log's masking marks: the synthetic customer says what the logged one's words hid.
-    && !card.filled;
+    && !card.coverage.some(entry => entry.as === 'changed');
   return fromLog ? undefined : 'situation_edited';
 }
 
@@ -67,6 +67,8 @@ export interface LogSituation {
   /** The number the owner knows it by, and its title. */
   number: number; title: string;
   exclusion?: Exclusion;
+  /** Its customer says values Lab wrote over the log's masking marks; the log itself shows the marks. */
+  masked?: true;
   expectations: { expectation: Expectation; letter: string }[];
   /** How a rubric names the situation («карточки №3»), exactly as its synthetic rubric does. */
   card: string;
@@ -79,7 +81,7 @@ export function cardLogSituation(library: LibraryV2, card: Card, expectations: r
   const { origin, client } = card;
   const exclusion = cardExclusion(card);
   return {
-    id: card.id, number: card.number, title: card.title, ...(exclusion ? { exclusion } : {}),
+    id: card.id, number: card.number, title: card.title, ...(exclusion ? { exclusion } : {}), ...(card.filled ? { masked: true as const } : {}),
     expectations: expectations.map(expectation => ({ expectation, letter: expectationLetter(expectation.id) })),
     card: `карточки №${card.number}`,
     ...(origin.kind === 'dialogue' ? { log: { importId: origin.batchId, importContentHash: library.imports.find(item => item.id === origin.batchId)?.contentHash,

@@ -10,7 +10,6 @@ import { goalAttainment, promptCompliance, replyQuality, simulatorFidelity, type
 import { buildResultView, exclusionCounts, exitCodeOf, NOT_MEASURED_TEXT, SMALL_SAMPLE, unmeasuredControl, wilson, type ResultView } from '../src/result-view.js';
 import { accuracyRow, alarmRow, causeRows, disagreementRows, errorListRows, headRows, MAX_WIDTH, nextRows, nextStepText, plainText, resultScreen, runLine, trustParts, trustSegments, unmeasuredRows } from '../src/result-text.js';
 import { assertPlainCopy } from './helpers/copy-check.js';
-import { rowsToLines } from '../src/explain.js';
 import { compareRuns, stabilityBetweenRuns } from '../src/comparison.js';
 import { NOT_MEASURED_CODES, type NotMeasuredCode } from '../src/run.js';
 import { AGREED_RATIONALE_PREFIX, GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
@@ -25,6 +24,8 @@ import { decisions } from '../src/inbox.js';
 const world = { records: {}, writableFields: [], transientFailures: 0 };
 type Card = Experiment['scenarios'][number];
 type Result = MetricAssessment['result'];
+/** Rows as lines of their indents and texts, before any layout. */
+const rowsToLines = (rows: { indent: number; text: string }[]): string[] => rows.map(row => ' '.repeat(row.indent) + row.text);
 
 function card(id: string, overrides: Partial<Card> = {}): Card {
   return {
@@ -91,13 +92,14 @@ function acquiringShape(): Experiment {
   const dialogues = cards.map(item => ({ id: item.id, messages: [{ role: 'user' as const, content: 'реплика' }], outcome: 'unknown' as const }));
   return run(cards, trials, { dialogues, validationExclusions: exclusions });
 }
-/** The first block of the acquiring run: the number and the one trust line under it. */
+/** The first block of the acquiring run: the alarm, the number and the one trust line under it. */
 const ACQUIRING_HEAD = [
-  // 4 of the 13 counted situations are not measured (31%, above NOT_MEASURED_WARN_ABOVE): the headline names them (HN-3).
+  // Four of thirteen situations were not measured: the number stands on too few of them, so the first row says not to trust it yet.
+  '✗ Числу пока не верить: не измерено 4 из 13 ситуаций — чаще всего клиент в симуляции отошёл от ситуации (2)',
   'Точность агента: 0% — справился в 0 из 9 ситуаций, ещё 4 не измерено',
   // The acquiring run has 9 usable goal failures queued for review and no pass in the sample (the
   // only recorded pass, deviated1, is unusable), so the judge part is there before the first mark (F6, CR-01).
-  'Вероятно, от 0% до 30% (95%) · мало данных · не измерено 4 — чаще всего клиент в симуляции отошёл от ситуации (2) · судью ещё не проверяли',
+  'Вероятно, от 0% до 30% (95%) · мало данных · судью ещё не проверяли',
 ];
 
 const SPLIT = `${SPLIT_RATIONALE_PREFIX} pass / fail. Основания каждой оценки сохранены в judgeAudit.`;
@@ -162,7 +164,7 @@ test('no decided situation shows no percent, and the reason opens the trust line
   const view = buildResultView(scored(0, 0, 2));
   assert.equal(view.headline.accuracy, null);
   assert.equal(view.headline.range, null);
-  assert.deepEqual(head(view), ['Точность агента: нет данных — ни одна ситуация не измерена', 'Не измерено 2 — судья не уверен — его оценки разошлись']);
+  assert.deepEqual(head(view), ['Точность агента: нет данных — ни одна ситуация не измерена', 'Не измерено 2 из 2 — судья не уверен — его оценки разошлись']);
   assert.equal(accuracyRow(view).role, 'accuracy:none');
   assert.deepEqual(rowsToLines(unmeasuredRows(view)), ['Не измерено',
     '  Ситуация u0: судья не уверен — его оценки разошлись', '  Ситуация u1: судья не уверен — его оценки разошлись']);
@@ -224,7 +226,9 @@ test('CLI summary prints the result screen of the same view, and --json the view
     const text = await summary(directory, record.id);
     assert.equal(text.code, 0, text.stderr);
     assert.equal(text.stdout, `${screen(view)}\n`);
-    assert.equal(text.stdout.split('\n')[0], ` ${ACQUIRING_HEAD[0]}`);
+    // The alarm opens the screen (wrapped at the edge), then the number.
+    assert.ok(text.stdout.startsWith(' ✗ Числу пока не верить: не измерено 4 из 13 ситуаций'), text.stdout);
+    assert.ok(text.stdout.split('\n').includes(` ${ACQUIRING_HEAD[1]}`), text.stdout);
     assert.ok(!text.stdout.includes('Бизнес-цель достигнута'), 'the old headline with another denominator is gone');
     const json = await summary(directory, record.id, '--json');
     assert.equal(json.code, 0, json.stderr);
@@ -267,7 +271,7 @@ test('a quick mark saved by the lab is counted as agreement in the CLI summary',
   const { stdout, stored } = await quickMarked('fail', 'Быстрая отметка: согласен с судьёй.');
   const view = buildResultView(stored);
   assert.equal(stdout, `${screen(view)}\n`);
-  assert.equal(head(view)[0], ACQUIRING_HEAD[0], 'agreeing with the judge leaves the number where it was');
+  assert.equal(accuracyRow(view).text, ACQUIRING_HEAD[1], 'agreeing with the judge leaves the number where it was');
   // CR-01: the only recorded pass (deviated1) is unusable, so there is no pass to double-check.
   assert.ok(trustParts(view).includes('с судьёй согласны 1 из 1'), trustParts(view).join(' · '));
   assert.equal(view.agreement.queueFailures.length, 9, '9 failed goals; the unmeasured deviated0 and unclear0 are not queued (CR-01)');
@@ -279,7 +283,7 @@ test('a quick «не согласен» moves the headline and is counted agains
   const { stdout, stored } = await quickMarked('pass', 'Проверка: судья не учёл уточнение клиента.');
   const view = buildResultView(stored);
   assert.equal(stdout, `${screen(view)}\n`);
-  assert.equal(head(view)[0], 'Точность агента: 11% — справился в 1 из 9 ситуаций, ещё 4 не измерено');
+  assert.equal(accuracyRow(view).text, 'Точность агента: 11% — справился в 1 из 9 ситуаций, ещё 4 не измерено');
   assert.ok(trustParts(view).includes('с судьёй согласны 0 из 1'), trustParts(view).join(' · '));
   assert.equal(view.agreement.failures.checked, 1);
   assert.equal(view.agreement.failures.agreed, 0);
@@ -297,8 +301,9 @@ test('a quick «не могу сказать» leaves the judge failure in the n
   assert.equal(view.agreement.unsure, 1);
   assert.equal(view.agreement.checked, 0, 'doubt is not a check');
   assert.deepEqual(view.agreement.disagreements, []);
-  assert.deepEqual(view.next[0], { kind: 'review_judge', failures: 8, passes: 0, unsure: 1 });
-  assert.equal(nextStepText(view.next[0]!), 'Проверить, прав ли судья — 8 ошибок ждут вашего «да» или «нет», 1 с ответом «не знаю»');
+  // Four of thirteen unmeasured: why comes first, then the judge's queue; no customer report is offered.
+  assert.deepEqual(view.next, [{ kind: 'why_unmeasured', count: 4 }, { kind: 'review_judge', failures: 8, passes: 0, unsure: 1 }, { kind: 'repeat' }]);
+  assert.equal(nextStepText(view.next[1]!), 'Проверить, прав ли судья — 8 ошибок ждут вашего «да» или «нет», 1 с ответом «не знаю»');
 });
 
 // ---- One test per not-measured reason: a minimal card that yields exactly that code. ----
@@ -316,7 +321,8 @@ function expectReason(code: NotMeasuredCode, subject: Card, trials: Trial[], ove
   assert.equal(view.headline.decided, 1, 'the unmeasured card never enters the denominator');
   if (code !== 'in_progress') {
     assert.deepEqual(view.notMeasured.reasons, [{ code, label: NOT_MEASURED_TEXT[code], count: 1, scenarioIds: [subject.id] }]);
-    assert.ok(trustParts(view).includes(`не измерено 1 — ${NOT_MEASURED_TEXT[code]}`), trustParts(view).join(' · '));
+    // One of two situations unmeasured: the reason stands above the number, as its alarm.
+    assert.equal(alarmRow(view)?.text, `✗ Числу пока не верить: не измерено 1 из 2 ситуаций — ${NOT_MEASURED_TEXT[code]}`);
     assert.deepEqual(rowsToLines(unmeasuredRows(view)), ['Не измерено', `  ${subject.title}: ${NOT_MEASURED_TEXT[code]}`]);
     assert.equal(exitCodeOf(view), 2, 'an unmeasured situation leaves the CI result incomplete');
   }
@@ -392,7 +398,7 @@ test('reason measurement_error: the connection answered but did not show what th
   const trial = attempt('c', { outcome: 'invalid', reason: 'проверка наблюдений: Состояние внешний агент не сообщил.', invalidCause: 'measurement', assessments: undefined });
   assert.equal(experimentSchema.parse(run([card('c')], [trial])).trials[0]!.invalidCause, 'measurement', 'the appended cause parses');
   const view = expectReason('measurement_error', card('c'), [trial]);
-  assert.ok(trustParts(view).includes('не измерено 1 — подключение не показало, что нужно для проверки'));
+  assert.match(alarmRow(view)!.text, /не измерено 1 из 2 ситуаций — подключение не показало, что нужно для проверки/);
   const inbox = decisions({ run: { record: run([card('c'), card('decided')], [trial, attempt('decided', { goal: 'fail' })]), view } });
   const agent = inbox.find(item => item.key.endsWith(':agent'));
   assert.equal(agent?.text, '1 ситуация не измерена: подключение не показало, что нужно для проверки — проверьте связь с агентом.');
@@ -471,7 +477,7 @@ test('reasons with equal counts keep the fixed order and the trust line names th
   ]);
   const view = buildResultView(record);
   assert.deepEqual(view.notMeasured.reasons.map(reason => reason.code), ['simulator_unclear', 'judge_split']);
-  assert.ok(trustParts(view).includes('не измерено 2 — чаще всего судья не уверен, что клиент держался ситуации (1)'), trustParts(view).join(' · '));
+  assert.equal(alarmRow(view)?.text, '✗ Числу пока не верить: не измерено 2 из 3 ситуаций — чаще всего судья не уверен, что клиент держался ситуации (1)');
 });
 
 test('repeats that disagree make a situation flaky: it still counts as failed and the trust line says so', () => {
@@ -582,7 +588,7 @@ test('a card edited after load-suite is neither unstable nor fixed/regressed aga
   assert.ok(view.cards.every(item => !item.unstable), JSON.stringify(view.stability));
   assert.deepEqual(view.stability, buildResultView(edited, { before: same.source }).stability, 'the same answer as with the stored source');
   const diff = compareRuns(rebuilt, edited);
-  assert.ok(diff.notes.some(note => note.startsWith('Содержимое карточек изменилось')), JSON.stringify(diff.notes));
+  assert.ok(diff.notes.some(note => note.startsWith('Изменились ситуации:')), JSON.stringify(diff.notes));
   assert.deepEqual([diff.fixed, diff.regressed], [[], []]);
   // Against the stored source the edited card is not counted either.
   assert.equal(stabilityBetweenRuns({ ...same.source }, edited).unstable.length, 0);
@@ -1008,7 +1014,10 @@ test('top causes count distinct failed situations, drop clusters without one, an
     ['item', 2, '3  Отвечает вне инструкций', '1 ситуация'],
     ['muted', 5, 'Ситуация f2', null],
     ['quote', 5, NO_RULE_EXAMPLE, null],
+    // «Путает тарифы» is a fourth cause of a failed situation: counted as a cause, not named.
+    ['muted', 2, 'и ещё 1 причина', null],
   ]);
+  assert.equal(view.moreCauses, 1);
   assert.deepEqual(causeRows(view).filter(row => row.role === 'item').map(row => row.short), ['3', '1', '1'], 'a narrow screen keeps the count');
 });
 
@@ -1129,7 +1138,7 @@ test('a carried mark alone is stale, and a run with nothing to check says nothin
   assert.equal(judgePart(forgotten), undefined);
   const empty = buildResultView(scored(0, 0, 2));
   assert.equal(judgePart(scored(0, 0, 2)), undefined, 'nothing to check, no judge part');
-  assert.deepEqual(head(empty), ['Точность агента: нет данных — ни одна ситуация не измерена', 'Не измерено 2 — судья не уверен — его оценки разошлись']);
+  assert.deepEqual(head(empty), ['Точность агента: нет данных — ни одна ситуация не измерена', 'Не измерено 2 из 2 — судья не уверен — его оценки разошлись']);
 });
 
 // ---- F7 and F8: whose judgment the owner overturned, and what is still to be marked. ----

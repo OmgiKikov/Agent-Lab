@@ -4,9 +4,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hostGrant } from '../src/card/commands.js';
-import type { LogJudgeRequest, LogJudgmentReceipt } from '../src/card/calibration.js';
+import { calibrateRun, type CalibrationWork } from '../src/card/calibrate.js';
+import type { LogJudge, LogJudgeRequest, LogJudgmentReceipt } from '../src/card/calibration.js';
 import { acceptLibraryV2 } from '../src/card/library.js';
-import { calibrationKey, logJudgeInputV1, logJudgmentComplete, logProtocolHash, logRubric, notExercised } from '../src/card/log-judge.js';
+import { calibrationKey, judgeLogged, logJudgeInputV1, logJudgmentComplete, logProtocolHash, logRubric, logUndecided, notExercised } from '../src/card/log-judge.js';
 import { fingerprint, type Experiment, type Scenario } from '../src/contracts.js';
 import type { JudgeAudit } from '../src/assessment.js';
 import type { CallContext, Runtime } from '../src/runtime.js';
@@ -16,10 +17,11 @@ import { draftHash } from '../src/lab/record.js';
 import { assessRepeated, hasCompleteJudgment, judgeInput, JUDGE_PROTOCOL, observableSources } from '../src/judge.js';
 import { buildResultView } from '../src/result-view.js';
 import { importBatch, libraryHash } from '../src/scenario-library.js';
+import type { ImportBatch } from '../src/scenario-contracts.js';
 import { cardDraft, cardNumbered } from './helpers/card-library.js';
 import { cardInput, cardRuntime, dialogues } from './helpers/card-prep.js';
 import { cardAttempt } from './helpers/cards.js';
-import { logAnswer, refundReading, scriptedLogJudge, type LogVoteInput } from './helpers/calibration.js';
+import { logAnswer, loggedRun, refundReading, scriptedLogJudge, type LogVoteInput } from './helpers/calibration.js';
 import { libraryV1Run, libraryV1Runtime } from './helpers/library-v1.js';
 
 /*
@@ -160,6 +162,46 @@ test('both votes find the conversation never got there: the log does not measure
   assert.deepEqual([broken.result, broken.complete, broken.votes.length], ['unknown', false, 4], 'asked once more per vote, and no more');
 });
 
+test('why a log judgment decided nothing is read from what its receipt recorded, never from the judge\'s words', async () => {
+  const fixture = accepted();
+  const request = requestFor(fixture, 1, 'e2');
+  const undecided = async (judge: LogJudge, on = request) => logUndecided(await judge.assess(on, ctx()));
+  assert.equal(await undecided(scriptedLogJudge(refundReading)), undefined, 'decided');
+  assert.equal(await undecided(scriptedLogJudge((_data, vote) => vote ? 'fail' : 'pass')), 'judge_split');
+  assert.equal(await undecided(scriptedLogJudge(() => 'unclear')), 'judge_unclear');
+  const cut = importBatch(dialogues.map(item => item.id === 'late' ? { ...item, messages: item.messages.slice(0, 3) } : item)).dialogues.find(item => item.id === 'late')!;
+  assert.equal(await undecided(scriptedLogJudge(refundReading), requestFor(fixture, 1, 'e2', cut)), 'not_exercised_in_log');
+  // Judged on the agent's tools, decided on its words: both votes cite no event of the channel.
+  const onTools: LogJudgeRequest = { ...request, expectation: { ...request.expectation, observation: 'tool' },
+    dialogue: { observation: 'complete', events: [...request.dialogue.events, { index: 5, type: 'tool', content: 'lookup_refund', data: {} }] } };
+  assert.equal(await undecided(scriptedLogJudge(() => 'pass'), onTools), 'no_evidence');
+  // A request that failed, or answers that could not be read twice: the receipt is incomplete, and that is the judge's failure, not a split.
+  const failing: LogJudge = { ...scriptedLogJudge(refundReading),
+    assess: (on, context) => judgeLogged(on, { provider: 'fixture', id: 'log-judge' }, context, async () => { throw new Error('Запрос к fixture/log-judge не прошёл.'); }) };
+  for (const judge of [failing, scriptedLogJudge(() => 'malformed')]) {
+    const judgment = await judge.assess(request, ctx());
+    assert.deepEqual([judgment.complete, logUndecided(judgment)], [false, 'judge_failed']);
+  }
+  assert.equal(logUndecided({ skipped: 'channel_unobserved', complete: true, votes: [], result: 'unknown' }), 'channel_unobserved');
+});
+
+test('logs that cannot be read, or are no longer the ones the situations were made from, skip the calibration with that reason — not «the run was stopped»', async () => {
+  const run = loggedRun(2, () => ({ e1: 'pass', e2: 'pass' }));
+  const calibrate = async (readImport: () => Promise<ImportBatch>): Promise<Experiment> => {
+    const record = structuredClone(run.record);
+    const store = { get: () => Promise.reject(new Error('Нет такого прогона.')), readImport, readLogVersions: async () => undefined, readCalibrationAudit: async () => null, writeCalibrationAudit() {} };
+    await calibrateRun(record, { runtime: { logJudge: scriptedLogJudge(refundReading) } as unknown as Runtime, ctx: ctx(), store: store as unknown as CalibrationWork['store'], checkpoint: async () => {} });
+    return record;
+  };
+  for (const readImport of [() => Promise.reject(new Error('Импорт не найден.')), async () => ({ ...run.batch, contentHash: 'f'.repeat(64) })]) {
+    const record = await calibrate(readImport);
+    assert.deepEqual([record.calibration!.unfinished, record.calibration!.entries.length], ['logs', 0]);
+    assert.equal(buildResultView(record).calibration!.text, 'Сверка с продом пропущена: логи недоступны или изменились после подготовки ситуаций.');
+  }
+  const read = await calibrate(async () => run.batch);
+  assert.deepEqual([read.calibration!.unfinished, read.calibration!.entries.length], [undefined, 4], 'the same logs, read: judged as always');
+});
+
 async function withLab(runtime: Runtime, work: (lab: ExperimentLab) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-calibration-'));
   const lab = new ExperimentLab(directory, runtime);
@@ -231,22 +273,30 @@ test('what the log cannot show costs nothing: an unanswered customer is skipped 
 
 test('a calibration the run\'s limit cannot cover is skipped whole with the reason; the synthetic result is complete', async () => {
   const calls = { count: 0 };
-  await withLab({ ...cardRuntime(), logJudge: scriptedLogJudge(refundReading, calls) }, async lab => {
-    const run = await finishedRun(lab, cardInput(), async id => { await lab.updateDraft(id, draftHash(await lab.get(id)), { settings: { maxCalls: 10 } }); });
+  const base = cardRuntime();
+  // The customer and the judge charge their calls as models do: the run spends its own limit, the plan of 15 calls.
+  const charged: Runtime = { ...base, logJudge: scriptedLogJudge(refundReading, calls),
+    selectUserAction: async (input, ctx) => { ctx.beforeCall(); return base.selectUserAction!(input, ctx); },
+    assess: async (input, ctx) => { for (const _vote of (input.scenario.metrics ?? []).flatMap(metric => [metric, metric])) ctx.beforeCall(); return base.assess!(input, ctx); } };
+  await withLab(charged, async lab => {
+    const run = await finishedRun(lab, cardInput(), async id => { await lab.updateDraft(id, draftHash(await lab.get(id)), { settings: { maxCalls: 15 } }); });
     assert.equal(run.phase, 'results_review', run.error ?? '');
-    assert.deepEqual([run.calibration!.unfinished, run.calibration!.entries.length, calls.count], ['budget', 0, 0], '8 judge calls do not fit in the 5 left: none is made');
+    assert.ok(run.settings.maxCalls - (run.usage.calls - 4) < 8, 'the run left fewer calls than the comparison needs (the preparation\'s 4 are not the run\'s)');
+    assert.deepEqual([run.calibration!.unfinished, run.calibration!.entries.length, calls.count], ['budget', 0, 0], '8 judge calls do not fit in what the run left: none is made');
     assert.deepEqual([buildResultView(run).headline.passed, buildResultView(run).headline.decided], [1, 2]);
   });
 });
 
-test('whatever stops the calibration, the run keeps its result: a stop, or a judge that breaks', async () => {
+test('whatever stops the calibration, the run keeps its result, and the calibration says why: a stop, or a judge that breaks', async () => {
   const stopping = { ...scriptedLogJudge(refundReading), assess: async () => { throw new Stopped('time', 'Experiment time limit reached.'); } };
   const breaking = { ...scriptedLogJudge(refundReading), assess: async () => { throw new Error('провайдер сломался'); } };
-  for (const [logJudge, reason] of [[stopping, 'stopped'], [breaking, 'stopped']] as const) {
+  for (const [logJudge, reason, line] of [[stopping, 'stopped', 'Сверку с продом остановили раньше, чем удалось что-то сравнить.'],
+    [breaking, 'failed', 'Сверка с продом прервалась из-за сбоя раньше, чем удалось что-то сравнить.']] as const) {
     await withLab({ ...cardRuntime(), logJudge }, async lab => {
       const run = await finishedRun(lab);
       assert.equal(run.phase, 'results_review', run.error ?? '');
       assert.deepEqual([run.calibration!.unfinished, run.calibration!.entries.length], [reason, 0]);
+      assert.equal(buildResultView(run).calibration!.text, line, 'a judge that broke did not stop the run');
       assert.deepEqual([buildResultView(run).headline.passed, buildResultView(run).headline.decided], [1, 2]);
     });
   }

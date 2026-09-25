@@ -13,7 +13,7 @@ import { libraryHash } from '../src/scenario-library.js';
 import { sameTargetVersion } from '../src/target-version.js';
 import { safeText } from '../src/text.js';
 import { agentLine } from '../src/workspace.js';
-import { ProgressRow, RUN_MESSAGE, STOP_HINT, type Background } from './background.ts';
+import { ProgressRow, RUN_MESSAGE, runAnswer, STOP_HINT, type Background, type VerdictOutput } from './background.ts';
 import { progressText, row, runStamp, runWhen, stoppedLines } from './conversation.ts';
 import { ask, displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun, type LaunchAgent } from './launch.ts';
@@ -38,7 +38,7 @@ export interface RunHost {
   background: Background;
   feedResult: (callId: string, output: unknown, feed: Feed, note: string) => AgentToolResult<unknown>;
   askOwner: (callId: string, error: unknown) => AgentToolResult<unknown>;
-  verdictOutput: (record: Experiment, lab: ExperimentLab) => Promise<{ output: unknown; details: unknown }>;
+  verdictOutput: VerdictOutput;
 }
 
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
@@ -94,8 +94,8 @@ export function registerRunTool(pi: Pick<ExtensionAPI, 'registerTool'>, host: Ru
         const action = params.action ?? 'start';
         if (action === 'progress') return await progress(host, callId, ctx, params.run);
         if (action === 'stop') return await stop(host, callId, ctx, params.run);
-        requireInteractive(ctx, action === 'accept' ? 'Утвердить ситуации можно в интерактивном терминале Pi. В CLI: agent-lab cards --id RUN --accept --yes.'
-          : 'Запуск подтверждается в интерактивном терминале Pi. В CI: agent-lab evaluate --input suite.json --yes.');
+        requireInteractive(ctx, action === 'accept' ? 'Ситуации утверждаете вы — в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не утверждено.'
+          : 'Запуск подтверждаете вы — в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Агент не запускался, ничего не потрачено.');
         const found = recordFor(await host.reading(directory).list(), params.run, 'situations');
         if (action === 'accept') return await accept(host, callId, ctx, found);
         const signal = AbortSignal.any([toolSignal, ctx.signal].filter((item): item is AbortSignal => !!item));
@@ -153,17 +153,20 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
   try {
     await owned.lab.init();
     let draft = await owned.lab.get(found.id);
-    if (isRunning(draft.phase)) throw new Error(draft.phase === 'preparing' ? 'Ситуации ещё готовятся: запуск — после подготовки.' : 'Этот прогон уже идёт.');
+    if (isRunning(draft.phase)) throw new Error(draft.phase === 'preparing' ? 'Ситуации ещё готовятся: запуск — после подготовки.'
+      : draft.phase === 'checking' ? 'Ситуации сейчас проверяются: запуск — после проверки.' : 'Этот прогон уже идёт.');
     let note = `Запуск · ${runStamp(draft)}`;
-    // A run that started is never run again in place: its accepted set goes into a fresh draft, the agent as it is now.
+    // A run that started is never run again in place: its accepted set goes into a fresh draft, the agent as it is now —
+    // previewed, and written only when the owner says «Запустить».
     if (draft.reviewedAt || draft.trials.length) {
       const ids = numbers?.map(number => {
         const scenario = draft.scenarios.find((item, index) => situationNumber(draft, item.id, index + 1) === number);
-        if (!scenario) throw new NeedsOwner('unknown_reference', `Ситуации №${number} в этом прогоне нет. Есть: ${draft.scenarios.map((item, index) => situationNumber(draft, item.id, index + 1)).join(', ')}.`, []);
+        if (!scenario) throw new NeedsOwner('unknown_reference', `Ситуации №${number} в этом прогоне нет. Есть: ${draft.scenarios.map((item, index) => situationNumber(draft, item.id, index + 1)).join(', ')}.`, [],
+          `Ситуации ${number} в этом прогоне нет — какие повторить?`);
         return scenario.id;
       });
       const source = draft;
-      draft = await owned.lab.repeat(source.id, ids);
+      draft = await owned.lab.repeat(source.id, ids, undefined, { preview: true });
       note = `Повтор · ${runStamp(draft)}`;
       const moved = !!source.targetFingerprint && !!draft.targetFingerprint && !sameTargetVersion(source.targetFingerprint, draft.targetFingerprint);
       if (moved) agent = { ...agent, note: agent.note ?? 'Код агента изменился с прошлого прогона — проверяется новая версия.' };
@@ -174,7 +177,7 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
     // Nothing has started yet: an Esc before the dialog ends the action.
     signal.throwIfAborted();
     const started = await launchRun(ctx, owned.lab, draft, agent, agent.folder ?? ctx.cwd);
-    if (!started) return host.feedResult(callId, { run: draft.id, cancelled: true, instruction: 'The owner did not start the run. The situations are kept; do not ask to start again unless the owner does.' },
+    if (!started) return host.feedResult(callId, { run: found.id, cancelled: true, instruction: 'The owner did not start the run. Nothing was written: the situations are kept as they were; do not ask to start again unless the owner does.' },
       { tone: 'warning', rows: [row('Не запускаю: вы отказались. Ситуации сохранены, агент не запускался.')] }, note);
     // The run has started: from here an Esc, even one pressed while it was starting, hands it to the session.
     // Its row and the row above the input are redrawn from the live record at each change the run reports.
@@ -201,8 +204,9 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
         { rows: [row(`Прогон идёт: ${countText(plannedTrials(record), CONVERSATIONS)} с агентом ${agentLine(record, ctx.cwd)}. Результат придёт сюда сообщением.`, 'text', true),
           row(`Разговор свободен; ${STOP_HINT}.`, 'muted')] }, `Прогон · ${runStamp(record)}`);
     }
-    // The session holds ids only (REV-01): the block is drawn from the remembered view.
-    const { output, details } = await host.verdictOutput(await owned.lab.get(draft.id), owned.lab);
+    // The same answer as a run that ends in the background: its result — drawn from the remembered view, the session
+    // holds ids only (REV-01) — or what cut it short and what was saved.
+    const { output, details } = await runAnswer(await owned.lab.get(draft.id), owned.lab, host.verdictOutput);
     return { content: [{ type: 'text' as const, text: JSON.stringify(output, null, 2) }], details };
   } finally {
     unfollow?.();
@@ -222,9 +226,11 @@ async function progress(host: RunHost, callId: string, ctx: ExtensionContext, id
     { rows: [row('Проверяю изменённые ситуации в фоне; итог придёт сообщением.', 'text', true)] }, note);
   const feed: Feed = { rows: running ? [row(progressText(record), 'text', true), row(`Идёт в фоне; ${STOP_HINT}.`, 'muted')]
     : [row(`Сейчас ничего не идёт: ${runWhen(record)} — ${record.trials.length ? 'прогон завершён' : 'черновик'}.`, 'muted')] };
-  return host.feedResult(callId, { run: record.id, running, working: record.phase === 'preparing' ? 'preparation' : running ? 'run' : null, inThisSession: !!job && job.id === record.id,
+  // A check of situations has a phase of its own (phases.ts): it is neither a preparation nor a run.
+  const working = record.phase === 'preparing' ? 'preparation' : record.phase === 'checking' ? 'check' : running ? 'run' : null;
+  return host.feedResult(callId, { run: record.id, running, working, inThisSession: !!job && job.id === record.id,
     // A preparation stops at the ceiling its consent stated; the draft's limit is the run's budget, so only a run names it.
-    ...(record.phase === 'preparing' ? {} : { finished: record.trials.length, planned: plannedTrials(record), callLimit: record.settings.maxCalls }), calls: record.usage.calls }, feed, note);
+    ...(working === 'preparation' || working === 'check' ? {} : { finished: record.trials.length, planned: plannedTrials(record), callLimit: record.settings.maxCalls }), calls: record.usage.calls }, feed, note);
 }
 
 /** Stops the work of this session — only the work that is going on — and says what was kept. */

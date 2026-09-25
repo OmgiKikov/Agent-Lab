@@ -7,8 +7,9 @@ import { sourceSelectionSchema, userTurnSchema, type CallContext, type Runtime }
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
 import { MODEL_REQUEST_BYTES, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
-import { AUTH_HELP, resolveModels } from './llm/models.js';
-import { GIGA_PROVIDER_ID, registerGigaProvider } from './giga-provider.js';
+import { AUTH_HELP, resolveModels, roleChoices } from './llm/models.js';
+import { endpointAnswers } from './llm/reach.js';
+import { gatewayFailureText, gatewayUnavailableText, GIGA_PROVIDER_ID, processGateway, type GatewayFailure } from './giga-provider.js';
 import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import { plantError } from './judge-check-task.js';
@@ -16,7 +17,7 @@ import {
   CARD_CUSTOMER_ROLE, CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
-import { cardReviewSchema } from './card/review.js';
+import { cardReviewSchema, laterMessages } from './card/review.js';
 import { fillWithModel } from './card/unmask.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
 import { buildTopicMap } from './miner/topic-map.js';
@@ -67,24 +68,46 @@ const judgeConfiguration = (judge: Model) => fingerprint({ api: judge.api, baseU
   temperature: judge.reasoning ? 'default' : 0, thinking: judge.reasoning ? 'medium' : 'off' });
 
 /**
- * The models Pi sees, and what the personal model gateway (provider giga) lacks when it is missing: without its
- * variables or readable files the provider simply does not appear, which from outside looks like a refused login.
+ * The personal model gateway in the status: what its setup lacks (without its variables or readable files the provider
+ * simply does not appear, which from outside looks like a refused login), whether Pi lists its models and, when it is
+ * set up but did not connect, why — by kind and in the owner's words.
+ */
+export type GatewayView = GatewayStatus & { registered?: boolean; failure?: GatewayFailure; reason?: string };
+
+/**
+ * The models Pi sees, and the gateway's own block. The gateway connects beside the listing under its own deadline, so a
+ * gateway that does not answer neither delays the other providers' models nor hides them.
  */
 export async function getPiStatus(injectedRuntime?: ModelRuntime): Promise<{
-  models: Array<{ provider: string; id: string; name: string }>; giga: GatewayStatus & { registered?: boolean }; error?: string;
+  models: Array<{ provider: string; id: string; name: string }>; giga: GatewayView; error?: string;
 }> {
-  const giga = gatewayStatus();
+  const setup = gatewayStatus();
+  const gateway = injectedRuntime ? undefined : processGateway();
+  let runtime: ModelRuntime | undefined;
+  let available: readonly Model[] = [];
+  let listed = true;
   try {
     const signal = AbortSignal.timeout(10000);
-    const runtime = injectedRuntime ?? await ModelRuntime.create({ allowModelNetwork: false, signal });
-    if (!injectedRuntime) await registerGigaProvider(runtime, undefined, undefined, signal);
-    const available = await runtime.getAvailable(undefined, { signal });
-    return {
-      models: available.map(m => ({ provider: m.provider, id: m.id, name: m.name })),
-      giga: { ...giga, registered: available.some(m => m.provider === GIGA_PROVIDER_ID) },
-      ...(available.length ? {} : { error: AUTH_HELP }),
-    };
-  } catch { return { models: [], giga, error: `Не удалось прочитать список доступных моделей. ${AUTH_HELP}` }; }
+    runtime = injectedRuntime ?? await ModelRuntime.create({ allowModelNetwork: false, signal });
+    available = await runtime.getAvailable(undefined, { signal });
+  } catch { listed = false; }
+  const connection = await gateway;
+  if (runtime && connection && 'provider' in connection) {
+    runtime.registerProvider(GIGA_PROVIDER_ID, connection.provider);
+    try { available = [...available, ...await runtime.getAvailable(GIGA_PROVIDER_ID)]; } catch { /* its block still says why not */ }
+  }
+  const failure = connection && 'failure' in connection && connection.failure.kind !== 'not configured' ? connection.failure : undefined;
+  return {
+    models: available.map(m => ({ provider: m.provider, id: m.id, name: m.name })),
+    giga: { ...setup, registered: available.some(m => m.provider === GIGA_PROVIDER_ID), ...(failure ? { failure, reason: gatewayFailureText(failure) } : {}) },
+    ...(!listed ? { error: `Не удалось прочитать список доступных моделей. ${AUTH_HELP}` } : available.length ? {} : { error: AUTH_HELP }),
+  };
+}
+
+/** Whether the run's model or a role's comes from the gateway, by the rule resolveModels resolves the roles with (roleChoices). */
+function usesGateway(settings: Settings): boolean {
+  const { builder, simulator, judge } = roleChoices(settings);
+  return [settings.provider, builder.provider, simulator.provider, judge.provider].includes(GIGA_PROVIDER_ID);
 }
 
 /** The optional SDK runtime is the integration seam for custom providers and offline SDK checks. */
@@ -94,9 +117,14 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   let runtime: ModelRuntime;
   try { runtime = injectedRuntime ?? await ModelRuntime.create({ allowModelNetwork: false, signal }); }
   catch { throw new Error(`Не удалось инициализировать Pi. ${AUTH_HELP}`); }
-  // The internal gateway cannot be declared in models.json (it authenticates by a client certificate), so a runtime
-  // Lab creates itself registers it; an injected runtime carries the providers its creator registered.
-  if (!injectedRuntime) await registerGigaProvider(runtime, undefined, undefined, signal);
+  // The internal gateway cannot be declared in models.json (it authenticates by a client certificate), so a runtime Lab
+  // creates itself registers it — only when a role uses it, and from the process's one connection, so no operation
+  // waits on the gateway for nothing and none asks it twice. An injected runtime carries its creator's providers.
+  if (!injectedRuntime && usesGateway(settings)) {
+    const connection = await processGateway(signal);
+    if ('failure' in connection) throw new Error(gatewayUnavailableText(connection.failure));
+    runtime.registerProvider(GIGA_PROVIDER_ID, connection.provider);
+  }
   const models = await resolveModels(runtime, settings, signal);
   const run = <O>(task: StructuredTask<O>, input: unknown, ctx: CallContext): Promise<O> => runStructured(runtime, models, task, input, ctx);
   const builder = { provider: models.builder.provider, id: models.builder.id };
@@ -147,7 +175,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const oversize = workInputIssue(input.payload);
       if (oversize) throw new Error(oversize);
       const reviewed = await run({ id: 'card-review', label: 'Проверка ситуации', role: 'judge', instructions: CARD_REVIEW_ROLE,
-        output: cardReviewSchema(input.aliases), bounded: reviewBounds(input.aliases.length) }, input.payload, ctx);
+        output: cardReviewSchema(input.aliases, laterMessages(input)), bounded: reviewBounds(input.aliases.length) }, input.payload, ctx);
       return { verdicts: reviewed.claims, model: `${models.judge.provider}/${models.judge.id}` };
     },
     async failureModes(input, ctx) {
@@ -170,6 +198,9 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     plantError: { builder, plant: (request, ctx) => plantError(request, { run, ctx }) },
     // So are the values written over a card's masking marks after it was made.
     maskFill: { builder, fill: (request, ctx) => fillWithModel(request, { run, ctx }) },
+    // A key says the judge may be used, not that this network reaches it: its endpoint answers, or the run does not rely
+    // on it (lab/run.ts start). The gateway's own connection was checked when this runtime was made.
+    judgeReachable: signal => judge.provider === GIGA_PROVIDER_ID ? Promise.resolve(true) : endpointAnswers(judge.baseUrl, signal),
     async selectUserAction(input, ctx) {
       // The answer is an enum of exactly the moves allowed now, so a move outside the policy cannot be returned.
       return run({ id: 'user-action', label: 'Действие пользователя', role: 'simulator', instructions: USER_CONTROLLER_ROLE, output: userDecisionSchema(input.actions) }, input, ctx);

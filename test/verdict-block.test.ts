@@ -15,7 +15,7 @@ import { goalAttainment, replyQuality, simulatorFidelity, type MetricAssessment 
 import { resultHash } from '../src/lab/record.js';
 import { ExperimentStore } from '../src/store.js';
 import { SPLIT_RATIONALE_PREFIX } from '../src/judge.js';
-import { accuracyRow, chatBlock, fitRows, nextRows } from '../src/result-text.js';
+import { accuracyRow, alarmRow, chatBlock, fitRows, nextRows } from '../src/result-text.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
 
 /*
@@ -122,18 +122,35 @@ test('ни текст ситуаций, ни их названия не попа
   assert.ok(view && scenarios.every(card => view.cards.some(shown => shown.title === card.title)));
 });
 
-test('без запомненного вида строка инструмента честно говорит, что блок нельзя показать', async t => {
+test('в открытой заново сессии результат рисуется из его сохранённых строк; без них строка честно говорит, что блок нельзя показать', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-verdict-missing-'));
   const { tools, shutdown } = registered();
   t.after(async () => { await shutdown(); await rm(directory, { recursive: true, force: true }); });
   const { result, run } = await demoRun(directory, tools);
   initTheme('dark', false);
+  const view = viewFor(result.details as VerdictDetails)!;
   forgetViews();
   assert.equal(viewFor(result.details as VerdictDetails), null);
+  // What the session file holds of the result — the model's content — carries the screen's own lines: the number comes back.
   const { raw, lines } = toolRow(tools.get('agent_lab_run')!, result, 80);
-  assert.deepEqual(lines, ['● Запускаю прогон', `└ ${MISSING_RESULT}`], 'no id on screen: the owner asks for the result again');
-  assert.ok(!lines.join(' ').includes(run.run.slice(0, 8)));
+  assert.equal(lines[0], '● Запускаю прогон');
+  assert.equal(lines[1], `└ ${accuracyRow(view).text}`, 'the number the owner saw, in the same words');
+  assert.ok(lines.some(line => line.startsWith('Вероятно, от')), 'and its trust line under it');
+  assert.ok(!lines.join(' ').includes(run.run.slice(0, 8)), 'no id on screen');
+  assert.ok(!lines.some(line => line.includes('"lines"') || line.includes(SHOWN_TO_OWNER)), 'never the JSON or what only the model reads');
   for (const line of raw) assert.ok(visibleWidth(line) <= 80);
+  // Expanded, every stored line is there, the causes too.
+  const expanded = strip(renderAgentLabResult(result as never, { expanded: true, isPartial: false }, realTheme(), () => new Text('legacy', 0, 0)).render(100));
+  for (const line of run.lines as string[]) if (line.trim()) assert.ok(expanded.some(shown => shown.includes(line.trim())), `«${line.trim()}» is missing`);
+  // A result whose content holds no such lines, or holds something else under that name, keeps the honest row.
+  for (const content of ['{}', '{"lines":"Точность агента: 100%"}', '{"lines":[1,2]}', 'не JSON']) {
+    const drawn = strip(renderAgentLabResult({ content: [{ type: 'text', text: content }], details: result.details } as never, { expanded: false, isPartial: false }, realTheme(), () => new Text('legacy', 0, 0)).render(80));
+    assert.deepEqual(drawn, [`└ ${MISSING_RESULT}`], content);
+  }
+  // An escape sequence in a stored line never reaches the terminal.
+  const tampered = strip(renderAgentLabResult({ content: [{ type: 'text', text: JSON.stringify({ lines: [' Точность агента: \u001b[2J50%'] }) }], details: result.details } as never,
+    { expanded: false, isPartial: false }, realTheme(), () => new Text('legacy', 0, 0)).render(80));
+  assert.deepEqual(tampered, ['└ Точность агента: 50%']);
 });
 
 // ---- Task 3: both Pi themes at every width, old sessions untouched, a failing view never reaches Pi. ----
@@ -164,7 +181,10 @@ function attempt(scenarioId: string, goal: Result, rationale?: string): Trial {
     assessments: [vote('goal_attainment', goal, rationale), vote('reply_quality', 'pass'), vote('user_fidelity', 'pass')],
   };
 }
-/** Two passed, three failed and two unmeasured situations with long titles: «?» rows, «✗» rows and long quotes to wrap. */
+/**
+ * Two passed, three failed and two unmeasured situations with long titles: «?» rows, «✗» rows and long quotes to wrap.
+ * Two of seven unmeasured raise the alarm above the number.
+ */
 function fixtureView(): ResultView {
   const cards: Card[] = [];
   const trials: Trial[] = [];
@@ -264,12 +284,13 @@ test('through Pi\'s real tool row in the dark and light themes, at 40–160 colu
         for (const line of raw) assert.ok(visibleWidth(line) <= width, `${label}: «${stripTerminalSequences(line)}» is wider than ${width}`);
         assert.ok(!lines.some(line => line.includes('…')), `${label}: an ellipsis was produced`);
         assert.equal(lines[0], '● Запускаю прогон', label);
-        if (width >= 80) assert.equal(lines[1], `└ ${accuracyRow(view).text}`, label);
+        assert.ok(lines[1]!.startsWith('└ ✗ Числу пока не верить'), `${label}: the alarm opens the block`);
+        if (width >= 100) assert.equal(lines[1], `└ ${alarmRow(view)!.text}`, label);
         assert.ok(lines.join(' ').includes('Точность агента: 40% — справился в 2 из 5 ситуаций'), `${label}: the number is drawn`);
         assert.ok(!lines.some(line => line.includes('shownToOwner') || line.includes('скрытый текст')), `${label}: the model text stays hidden`);
         assert.ok(!raw.join('').includes('\x1b[31m'), `${label}: the escape sequence of the quote is gone`);
         const text = lines.join(' ');
-        assert.ok(text.includes('не измерено 2 — судья не уверен — его оценки разошлись'), `${label}: the trust line is drawn in both forms`);
+        assert.ok(text.includes('не измерено 2 из 7 ситуаций — судья не уверен — его оценки разошлись'), `${label}: the unmeasured share is drawn in both forms`);
         assert.equal(text.includes('Чаще всего: '), !expanded, `${label}: the causes in one row only when collapsed`);
         assert.equal(text.includes('Дальше: '), expanded, `${label}: «Дальше» only when expanded`);
         assert.equal(text.includes('Тариф эквайринга: судья не уверен — его оценки разошлись'), expanded, `${label}: the unmeasured situations only when expanded`);
@@ -300,8 +321,9 @@ test('VerdictBlock takes the hint as a function and paints the rows with the the
       const lines = new VerdictBlock(view, expanded, fake, hint).render(width);
       for (const line of lines) assert.ok(visibleWidth(plain(line)) <= width, `${width}: «${plain(line)}»`);
       assert.equal(lines.at(-1)!.trim(), expanded ? 'ПОДСКАЗКА-СВЕРНУТЬ' : 'ПОДСКАЗКА-ПОДРОБНЕЕ', 'the injected hint closes the block, unpainted and unescaped');
-      assert.ok(lines[0]!.startsWith('  <muted>└</muted>') && lines[0]!.includes('<error><b>'), `${width}: the number is bold error under the branch sign`);
-      assert.ok(plain(lines[0]!).trim().startsWith('└ Точность агента: 40%'), `${width}: «${plain(lines[0]!)}»`);
+      assert.ok(lines[0]!.startsWith('  <muted>└</muted>') && lines[0]!.includes('<error><b>'), `${width}: the alarm is bold error under the branch sign`);
+      assert.ok(plain(lines[0]!).trim().startsWith('└ ✗ Числу пока не верить'), `${width}: «${plain(lines[0]!)}»`);
+      assert.ok(lines.some(line => plain(line).trim().startsWith('Точность агента: 40%') && line.includes('<error><b>')), `${width}: the number is bold error too`);
       // The painted lines are exactly the laid-out rows under the branch: fitRows decides the layout, the theme only paints.
       const laid = fitRows(chatBlock(view, { expanded }).map(row => row.indent >= 2 ? { ...row, indent: row.indent - 2 } : row), width - 3).map(line => stripTerminalSequences(line.text));
       assert.deepEqual(lines.slice(0, -1).map(plain), laid.map((line, index) => `${index ? '   ' : '  └'}${line}`), `${width}: painting changed the layout`);
@@ -330,7 +352,7 @@ test('the host hint: the causes and the phrases to say when something failed, «
       assert.ok(rendered instanceof VerdictBlock, `${name}: the block is drawn`);
       const lines = strip(rendered.render(200));
       assert.equal(lines.at(-1), expanded ? key('свернуть') : collapsed, `${name} ${expanded ? 'развёрнуто' : 'свёрнуто'}`);
-      assert.equal(lines[0], `└ ${accuracyRow(view).text}`, `${name}: the number comes first`);
+      assert.equal(lines[0], `└ ${(alarmRow(view) ?? accuracyRow(view)).text}`, `${name}: the alarm, else the number, comes first`);
     }
   }
   assert.equal(accuracyRow(cleanView()).text, 'Точность агента: 100% — справился в 2 из 2 ситуаций');

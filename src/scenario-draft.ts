@@ -55,10 +55,9 @@ export function recheckDecision(input: {
   defer: boolean;
   askedHash?: string;
   libraryHash: string;
-  needsFinalization?: boolean;
 }): Recheck {
   const debt = { pendingJobs: input.pendingJobs, remainingCalls: input.remainingCalls };
-  if (!input.pendingJobs && !input.needsFinalization) return { action: 'not_needed' };
+  if (!input.pendingJobs) return { action: 'not_needed' };
   if (input.defer && !input.askedHash) return { action: 'skipped', ...debt };
   if (!input.askedHash && input.pendingJobs > input.remainingCalls) return { action: 'needs_budget', ...debt };
   return { action: 'run', startHash: input.askedHash ?? input.libraryHash, ...debt };

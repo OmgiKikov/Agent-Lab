@@ -1,10 +1,12 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { runCalls } from '../src/card/budget.js';
 import { calibrationConsent } from '../src/card/calibrate.js';
 import { describeCheck, type Experiment, type RunnableTarget } from '../src/contracts.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
 import { detectProject, evidenceText, targetLabel, type AgentCandidate } from '../src/detect.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
+import { runPlan } from '../src/lab/run.js';
 import { countText } from '../src/plural.js';
 import { expectationSheet } from '../src/quality.js';
 import { libraryHash } from '../src/scenario-library.js';
@@ -19,8 +21,10 @@ import { NeedsOwner } from './lab-ui.ts';
  * acceptance and the start stay two facts in the record. Questions never block the ready situations.
  *
  * Situations may be prepared before the agent is connected. The agent is then the one the owner named, or the one Lab
- * finds in the project folder — one sure candidate goes straight into the plan, several are the owner's pick — and it
- * is connected only when the owner says «Запустить»: a declined dialog writes nothing.
+ * finds in the project folder — one sure candidate goes straight into the plan, several or unsure ones are the owner's
+ * pick — and it is connected only when the owner says «Запустить»: a declined dialog writes nothing. An address alone
+ * never becomes a connection here: Lab does not know the request the agent there expects, so the owner's curl goes
+ * through agent_lab_connect (its fields read, two test messages, the owner's confirmation) first.
  */
 
 /** The two answers of every run dialog. */
@@ -52,6 +56,22 @@ function runScope(record: Experiment): string[] {
     `  Ожидается: ${safeText(s.successCriteria)}`, ...s.checks.map(c => `  Проверка: ${safeText(describeCheck(c))}`)].join('\n'));
 }
 
+/**
+ * The dialog's line when the draft's call limit cannot hold its run's plan (card/budget.ts): the owner reads both
+ * numbers, and «Запустить» raises the limit to the plan. None when the plan fits, or for the teaching example.
+ */
+function limitLine(record: Experiment, calls: number): string | undefined {
+  if (record.mode === 'demo' || calls <= record.settings.maxCalls) return undefined;
+  return `Лимит вызовов модели — ${record.settings.maxCalls}, а прогону нужно до ${calls}: запуск поднимет лимит до ${calls}.`;
+}
+
+/** The model calls a card draft's run of its `ready` situations plans (card/budget.ts runCalls), every answer passing the first time. */
+function cardCalls(record: Experiment, ready: readonly SituationView[]): number {
+  const modes = record.settings.userModes.filter(mode => mode !== 'scripted');
+  return runCalls(ready.flatMap(view => modes.flatMap(mode => Array.from({ length: record.settings.repeats }, () => ({ customer: mode === 'reactive', expectations: view.brief.must.length })))),
+    record.settings.maxTurns);
+}
+
 /** The plan of a card draft's run: its ready situations; the ones waiting for the owner, unusable or unchecked stay out. */
 export function cardPlan(record: Experiment, views: readonly SituationView[]): LaunchPlan {
   const ready = views.filter(view => view.status === 'ready');
@@ -59,7 +79,7 @@ export function cardPlan(record: Experiment, views: readonly SituationView[]): L
   const count = (status: SituationView['status']) => views.filter(view => view.status === status).length;
   const outside = [
     ...(count('needs_owner') ? [countText(count('needs_owner'), ['ждёт вашего ответа', 'ждут вашего ответа', 'ждут вашего ответа'])] : []),
-    ...(count('unusable') ? [`${count('unusable')} не подходит для теста`] : []),
+    ...(count('unusable') ? [countText(count('unusable'), ['не подходит для теста', 'не подходят для теста', 'не подходят для теста'])] : []),
     ...(count('checking') ? [countText(count('checking'), ['ещё не проверена', 'ещё не проверены', 'ещё не проверены'])] : []),
   ].join(' · ');
   return { situations: ready.length, conversations: ready.length * attempts, judgePerAttempt: 2 * Math.max(0, ...ready.map(view => view.brief.must.length)),
@@ -70,6 +90,17 @@ const SITUATIONS: [string, string, string] = ['ситуацию', 'ситуац�
 /** How many ways to start the agent the connection question offers. */
 const OFFERED = 3;
 const NO_AGENT = 'Агент ещё не подключён, а в папке проекта Lab не нашёл, как его запускать.';
+
+/** An address without its request format: an agent there is connected from the owner's curl, never in Lab's own contract by guess. */
+const needsCurl = (target: RunnableTarget, evidence: readonly AgentCandidate['evidence'][number][] = []) =>
+  target.kind === 'http' && !target.request && !evidence.some(item => item.kind === 'connection');
+/** The question for an address: the owner's working curl to it, read by agent_lab_connect. */
+function curlQuestion(url: string): NeedsOwner {
+  const address = URL.parse(url);
+  const shown = address ? `${address.origin}${address.pathname}` : url;
+  return new NeedsOwner('needs_owner_input', `Агента по адресу ${shown} Lab подключает по curl-запросу владельца: так Lab узнаёт, в каком виде агент принимает сообщение и где в ответе его текст, и проверяет это двумя тестовыми сообщениями. Попросите у владельца команду curl, которой он обращается к агенту (с телом запроса), и передайте её целиком в agent_lab_connect; после подключения запустите снова.`, [],
+    `Агента по адресу ${shown} Lab подключает по вашему curl-запросу: пришлите команду curl, которой вы обращаетесь к нему (с телом запроса), — Lab разберёт её и проверит двумя тестовыми сообщениями.`);
+}
 
 /** A way to start the agent as the owner picks it: how it starts, and what in the folder says so. */
 function candidateLabel(candidate: AgentCandidate, root: string): string {
@@ -87,15 +118,17 @@ export interface FoundAgent { target: RunnableTarget; note: string }
 export async function findAgent(ctx: Pick<ExtensionContext, 'ui'>, cwd: string): Promise<FoundAgent | undefined> {
   const detection = await detectProject(cwd).catch(() => undefined);
   const found = detection?.agents.slice(0, OFFERED) ?? [];
-  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать (команда, файл модуля или адрес), и вызовите agent_lab_run с agent.`, [],
-    `${NO_AGENT} Как его запускать — команда, файл модуля или адрес?`);
+  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать — команда или файл модуля (вызовите agent_lab_run с agent), а если агент отвечает по адресу — его curl-запрос к агенту (передайте его в agent_lab_connect).`, [],
+    `${NO_AGENT} Как его запускать — команда или файл модуля? Если агент отвечает по адресу, пришлите curl-запрос, которым вы к нему обращаетесь.`);
   const root = detection!.root;
   const note = (candidate: AgentCandidate) => safeText(`Lab нашёл его в папке проекта: ${candidate.evidence.map(evidenceText).join('; ')}.`);
-  if (found.length === 1 && found[0]!.confidence === 'high') return { target: found[0]!.target, note: note(found[0]!) };
-  const labels = found.map(candidate => candidateLabel(candidate, root));
+  // Only a candidate Lab is sure of goes straight into the plan; an address never does.
+  if (found.length === 1 && found[0]!.confidence === 'high' && !needsCurl(found[0]!.target, found[0]!.evidence)) return { target: found[0]!.target, note: note(found[0]!) };
+  const labels = found.map(candidate => `${candidateLabel(candidate, root)}${needsCurl(candidate.target, candidate.evidence) ? ' — подключу по вашему curl' : ''}`);
   const picked = await ctx.ui.select(safeText(['Как запустить агента?', '', 'Ситуации готовы, а агент ещё не подключён. Lab нашёл в папке проекта — ничего не запускал и не менял:'].join('\n')),
     [...labels, NOT_NOW]);
   const chosen = found[labels.indexOf(picked ?? '')];
+  if (chosen && chosen.target.kind === 'http' && needsCurl(chosen.target, chosen.evidence)) throw curlQuestion(chosen.target.url);
   return chosen ? { target: chosen.target, note: note(chosen) } : undefined;
 }
 
@@ -109,6 +142,8 @@ export interface LaunchAgent { target?: RunnableTarget; version?: string; note?:
  * The connection is written only with «Запустить», and becomes part of what the owner confirmed.
  */
 export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: ExperimentLab, start: Experiment, agent: LaunchAgent = {}, cwd = ctx.cwd): Promise<Experiment | undefined> {
+  // An address the owner named is connected from their curl first: Lab's own contract is not the agent's.
+  if (agent.target?.kind === 'http' && needsCurl(agent.target)) throw curlQuestion(agent.target.url);
   const found = !agent.target && start.target.kind === 'unconnected' ? await findAgent(ctx, cwd) : undefined;
   if (!agent.target && start.target.kind === 'unconnected' && !found) return undefined;
   const target = agent.target ?? found?.target;
@@ -126,26 +161,28 @@ export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: 
     if (!ready.length) throw new NeedsOwner('needs_owner_input', 'Запускать нечего: ни одна ситуация не готова. Покажите владельцу вопросы по ситуациям (agent_lab_decide) — ответ делает ситуацию готовой.', [],
       'Запускать нечего: ни одна ситуация ещё не готова — ответьте на их вопросы.');
     const calibration = await calibrationConsent(lab.store, context.experiment, ready.map(view => view.id));
+    const limit = limitLine(context.experiment, cardCalls(context.experiment, ready));
     const lines = launchLines(shown(context.experiment), cardPlan(context.experiment, views), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) });
-    const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...lines,
+    const picked = await ctx.ui.select(safeText([`Принять ${countText(ready.length, SITUATIONS)} и запустить?`, '', ...lines, ...(limit ? [limit] : []),
       'Вместе с запуском Lab утвердит эти ситуации — повтор пойдёт по ним же.'].join('\n')), [LAUNCH, NOT_NOW]);
     if (picked !== LAUNCH) return undefined;
     const draft = await connected();
     const { experiment } = await lab.acceptCards(draft.id, libraryHash(context.library), ready.map(view => view.id));
-    return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: draftHash(experiment), parallel: runParallel(experiment), requireAccepted: true });
+    return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: draftHash(experiment), parallel: runParallel(experiment), requireAccepted: true, raiseLimit: !!limit });
   }
   if (library && !library.acceptance) throw new NeedsOwner('needs_owner_input', 'Это черновик старого формата: его ситуации можно посмотреть, но не утвердить. Предложите владельцу продолжить их в новом формате (решение в agent_lab_decide).', [],
     'Это черновик старого формата: его ситуации нельзя утвердить. Их можно продолжить в новом формате — старый черновик останется как есть.');
   const confirmed = start.acceptedDraftHash === draftHash(start);
   const calibration = await calibrationConsent(lab.store, start);
   const scope = library ? [] : runScope(start);
+  const limit = limitLine(start, runPlan(start));
   const plan = [...scope, ...(scope.length ? [''] : []), ...launchLines(shown(start), scenarioPlan(start), cwd, { calibration: calibration?.line ?? null, ...(note ? { note } : {}) }),
-    ...(library || confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'])];
+    ...(limit ? [limit] : []), ...(library || confirmed ? [] : ['Запуск подтверждает ожидания ситуаций выше. Оценки судьи вы не проверяли.'])];
   const picked = await ctx.ui.select(safeText([library || confirmed ? 'Запустить прогон?' : 'Подтвердить ожидания и запустить?', '', ...plan].join('\n')), [LAUNCH, NOT_NOW]);
   if (picked !== LAUNCH) return undefined;
   const draft = await connected();
   const hash = draftHash(draft);
   // A new connection is a new version of the draft: the expectations the owner confirmed in this dialog are confirmed on it.
   if (draft.acceptedDraftHash !== hash) await lab.acceptDraft(draft.id, hash);
-  return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(draft), requireAccepted: true });
+  return lab.start(draft.id, { approved: true, reviewer: 'expectations', expectedHash: hash, parallel: runParallel(draft), requireAccepted: true, raiseLimit: !!limit });
 }

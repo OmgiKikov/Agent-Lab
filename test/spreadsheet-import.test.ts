@@ -47,7 +47,7 @@ test('one conversation per row: Lab proposes the text column, its separator and 
   const proposal = ready(propose(exportRows(40)));
   assert.deepEqual(proposal.mapping, { version: 1, source: { format: 'xlsx', sheet: 'Данные' }, headerRow: 1,
     id: { index: 0, header: 'Id диалога' }, text: { index: 2, header: 'Текст' },
-    layout: { kind: 'dialogue_per_row', separator: '`', markers: [{ token: 'AGENT', role: 'assistant' }, { token: 'CLIENT', role: 'user' }] } });
+    layout: { kind: 'dialogue_per_row', separator: '`', markers: [{ token: 'AGENT', role: 'assistant' }, { token: 'CLIENT', role: 'user' }] }, maskVersion: 2 });
   assert.deepEqual(proposal.preview, { rows: 40, dialogues: 40, usable: 40, taken: 40, rejected: [],
     messages: [{ label: 'AGENT', role: 'assistant', count: 80 }, { label: 'CLIENT', role: 'user', count: 80 }], kept: ['Дата', 'agentCode', 'Оператор'] });
   const { batch } = batchOf(exportRows(40));
@@ -131,7 +131,7 @@ test('one message per row: the role column, the id that groups messages, the tex
   assert.deepEqual(proposal.csv, { delimiter: ';', encoding: 'utf-8' });
   assert.deepEqual(proposal.mapping, { version: 1, source: { format: 'csv', delimiter: ';', encoding: 'utf-8' }, headerRow: 1,
     id: { index: 0, header: 'session' }, text: { index: 2, header: 'message' },
-    layout: { kind: 'message_per_row', role: { index: 1, header: 'author' }, roles: [{ value: 'bot', role: 'assistant' }, { value: 'client', role: 'user' }], order: { index: 3, header: 'ts' } } });
+    layout: { kind: 'message_per_row', role: { index: 1, header: 'author' }, roles: [{ value: 'bot', role: 'assistant' }, { value: 'client', role: 'user' }], order: { index: 3, header: 'ts' } }, maskVersion: 2 });
   const bytes = Buffer.from(CHATS), { batch, preview } = importTable(readWorkbook(bytes, tableFileOf('chats.csv', bytes)).sheets[0]!, proposal.mapping);
   assert.deepEqual([preview.dialogues, preview.usable, preview.kept], [3, 3, ['channel']]);
   assert.deepEqual(batch.dialogues.map(item => item.id), ['s1', 's2', 's3']);
@@ -200,6 +200,20 @@ test('a wrong choice is refused with its reason, and Lab puts nothing in its pla
   assert.deepEqual(refusal(proposeCsv(CHATS, { text: 'ts' })), ['text', 'В колонке «ts» числа или даты, а не текст сообщений.']);
   assert.deepEqual(refusal(proposeCsv(CHATS, { roles: [{ value: 'admin', role: 'system' }] })), ['roles', 'В колонке «author» нет значения «admin».']);
   assert.deepEqual(refusal(proposeCsv(CHATS, { role: 'author', markers: [{ token: 'CLIENT', role: 'user' }] })), ['role', 'Выберите одно: метки ролей в тексте разговора или колонку с ролью того, кто пишет.']);
+});
+
+test('markers the owner names are read as named, not only uppercase words: «Клиент:» and «Оператор:» open the messages', () => {
+  const said = (k: number) => `Клиент: Здравствуйте, вопрос ${k}\nОператор: Добрый день!\nКлиент: Нужен возврат по заказу ${k}\nОператор: Оформил возврат`;
+  const rows: CellSpec[][] = [['id', 'Диалог'], ...Array.from({ length: 12 }, (_, k): CellSpec[] => [`d${k + 1}`, said(k + 1)])];
+  const markers = [{ token: 'Клиент:', role: 'user' as const }, { token: 'Оператор:', role: 'assistant' as const }];
+  assert.ok(propose(rows).status !== 'ready', 'Lab alone sees no uppercase markers here');
+  const proposal = ready(propose(rows, { markers }));
+  assert.deepEqual(proposal.mapping.layout, { kind: 'dialogue_per_row', separator: '\n', markers });
+  assert.deepEqual([proposal.preview.usable, proposal.preview.messages.map(item => [item.label, item.count])], [12, [['Клиент:', 24], ['Оператор:', 24]]]);
+  assert.deepEqual(messagesOf(batchOf(rows, { markers }).batch, 'd3'), [['user', 'Здравствуйте, вопрос 3'], ['assistant', 'Добрый день!'], ['user', 'Нужен возврат по заказу 3'], ['assistant', 'Оформил возврат']]);
+  assert.equal(ready(propose(rows, { markers, text: 'Диалог', separator: null })).mapping.layout.kind, 'dialogue_per_row', 'with the owner\'s word that nothing separates the messages');
+  assert.deepEqual(refusal(propose(rows, { text: 'Диалог', markers: [{ token: 'Покупатель:', role: 'user' }, { token: 'Продавец:', role: 'assistant' }] })),
+    ['markers', 'Метки «Покупатель:», «Продавец:» не открывают разговоры в колонке «Диалог»: строки начинаются не с них.']);
 });
 
 test('a sheet without conversations asks where their text is, with the columns that may hold it', () => {

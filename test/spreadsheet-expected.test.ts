@@ -21,7 +21,7 @@ const rows: CellSpec[][] = [HEADER,
   ['Как узнать код клиента для инкассации', 'Полномочия: 0', ARTICLE, 'Код в памятке.', 'Старая'],
   ['Закажи инкассацию на завтра', 'Полномочия: 3', '202-2', 'Готово, заказал.', 'Новая'],
 ];
-const choices: TableChoices = { perRow: 'question', text: 'Вопрос клиента', answer: 'Получилось', expected: [{ column: 'Ожидалось', kind: 'answer' }] };
+const choices: TableChoices = { perRow: 'question', text: 'Вопрос клиента', answer: 'Получилось', expected: [{ column: 'Ожидалось', kind: 'answer' }], expectedDone: true };
 
 function ready(proposal: TableProposal): Extract<TableProposal, { status: 'ready' }> {
   assert.equal(proposal.status, 'ready', JSON.stringify(proposal.status === 'refused' ? proposal.reason : proposal));
@@ -90,9 +90,13 @@ test('a text column without role marks reads as one question per row, and Lab as
   assert.ok(answers.some(answer => answer.label === 'колонка «Ожидалось» — ожидаемый ответ'));
   assert.equal(answers.at(-1)!.label, 'такой колонки нет');
   const chosen = answers.find(answer => answer.label === 'колонка «Ожидалось» — ожидаемый ответ')!;
-  const proposal = ready(proposeTable(workbook, file, withAnswer({ text: 'Вопрос клиента' }, chosen.choices)));
+  const more = proposeTable(workbook, file, withAnswer({ text: 'Вопрос клиента' }, chosen.choices));
+  assert.equal(more.status, 'question', 'after one column Lab asks for another');
+  const done = questionAnswers((more as Extract<TableProposal, { status: 'question' }>).question).at(-1)!;
+  assert.equal(done.label, 'больше нет');
+  const proposal = ready(proposeTable(workbook, file, withAnswer(withAnswer({ text: 'Вопрос клиента' }, chosen.choices), done.choices)));
   assert.deepEqual(proposal.mapping.expected, [{ column: { index: 2, header: 'Ожидалось' }, kind: 'answer' }]);
-  assert.equal(ready(proposeTable(workbook, file, { text: 'Вопрос клиента', expected: [] })).mapping.expected, undefined, 'the owner said there is none');
+  assert.equal(ready(proposeTable(workbook, file, { text: 'Вопрос клиента', expected: [], expectedDone: true })).mapping.expected, undefined, 'the owner said there is none');
 });
 
 test('a column of article ids and answer codes: an id the knowledge base holds is an article, anything else a code', () => {

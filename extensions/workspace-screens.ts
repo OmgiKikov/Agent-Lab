@@ -1,14 +1,18 @@
 import { visibleWidth } from '@earendil-works/pi-tui';
 import type { Experiment } from '../src/contracts.js';
+import { logAnswerOf, logTargets, type CalibrationDisagreement } from '../src/card/calibration-view.js';
 import { actionRow, briefRows, countsText, detailRows, formatNote, layoutRows, listRows, situationActions, situationBrief, type LayoutRow, type SituationRow, type SituationView } from '../src/card/view.js';
 import type { Decision } from '../src/inbox.js';
 import { rulebookLines, type RulebookView } from '../src/card/rulebook.js';
 import { decisionsLine } from '../src/inbox.js';
 import { problemSize, problemsLine, type Problem } from '../src/problems.js';
-import { accuracyParts, causeRows, disagreementRows, errorListRows, failureRows, fitRows, headRows, MAX_WIDTH, nextStepText, runLine, topicRows, unmeasuredRows, whenText, type ResultRow } from '../src/result-text.js';
-import type { ResultView } from '../src/result-view.js';
+import {
+  accuracyParts, ANSWER_TEXT, calibrationRows, causeRows, conversationRows, failureRows, fitRows, judgeQuestionText, logDisagreementRows, logQuestionText, MAX_WIDTH, nextRows,
+  resultScreen as resultRows, runLine, trialTurns, whenText, type ResultRow, type Turn,
+} from '../src/result-text.js';
+import type { NextStep, ResultView } from '../src/result-view.js';
 import { countText, pluralForm } from '../src/plural.js';
-import { clip, oneLine, safeText } from '../src/text.js';
+import { clip, oneLine, safeLine, safeText } from '../src/text.js';
 import type { AgentSpace } from '../src/workspace.js';
 import type { LaunchPlan } from './conversation.ts';
 import { SITUATION_TONE } from './render/situation.ts';
@@ -42,15 +46,28 @@ export interface SpaceData {
   /** The situations being worked on: the draft, else those of the newest run. */
   set?: { record: Experiment; views: SituationView[]; editable: boolean; coverage?: { line: string; uncovered: string | undefined }; plan: LaunchPlan; running: boolean;
     /** «Свод правил» of a card set whose rules were typed; absent for rules grounded before kinds. */
-    rulebook?: RulebookView };
+    rulebook?: RulebookView;
+    /** What a run of the ready situations would be, in the words of the run dialog itself (conversation.ts `launchLines`). */
+    launch?: string[] };
   /** Finished runs with their result, newest first. */
   runs: { record: Experiment; view: ResultView }[];
   decisions: Decision[];
   problems: Problem[];
-  /** Work going on now: its one progress line, how far it got, whether this session can stop it; `frame` turns the spinner. */
-  progress?: { text: string; share: number; stoppable: boolean; frame?: number };
+  /**
+   * Work going on now: what it is — situations prepared, situations checked, a run —, its one progress line, how far it
+   * got, whether this session can stop it; `frame` turns the spinner.
+   */
+  progress?: { kind: WorkKind; text: string; share: number | null; stoppable: boolean; frame?: number };
+  /** The logged conversations the newest calibrated run disagrees with, by `logKey`: read from their imports by the command. */
+  logged?: ReadonlyMap<string, Turn[]>;
   now: Date;
 }
+
+/** How SpaceData.logged names the logged conversation of a disagreement. */
+export const logKey = (log: Pick<CalibrationDisagreement['log'], 'importId' | 'dialogueId'>): string => `${log.importId}:${log.dialogueId}`;
+
+/** The long work a workspace follows: a preparation of situations, a check of changed ones, a run (with a re-assessment). */
+export type WorkKind = 'preparation' | 'check' | 'run';
 
 export type Area = 'inbox' | 'situations' | 'rules' | 'runs' | 'problems';
 export type Step = 'situations' | 'run' | 'result';
@@ -96,6 +113,8 @@ const room = (width: number) => Math.max(20, Math.min(width, MAX_WIDTH));
 /* ───────────────────────────── the header ───────────────────────────── */
 
 const AREA_LABEL: Record<Exclude<Area, 'inbox' | 'rules'>, string> = { situations: 'Ситуации', runs: 'Прогоны', problems: 'Проблемы' };
+/** Narrower than this, a screen keeps only its place, its answer, its list and the way to the keys (docs/design/ui-spec.md §6). */
+export const NARROW = 50;
 
 /** «Агент: агент поддержки» with the version on the right from 100 columns up (docs/design/ui-spec.md §6: narrower, the label goes). */
 function titleLine(title: string, right: string | null, width: number): Line[] {
@@ -107,41 +126,74 @@ export function areasOf(data: SpaceData): Area[] {
   return [...(data.decisions.length ? ['inbox' as const] : []), 'situations', ...(data.set?.rulebook ? ['rules' as const] : []), 'runs', 'problems'];
 }
 
+/** One place of the header's line — an area or a step — with its label, and the shorter label it may take while the owner is elsewhere. */
+interface Tab<Place extends string> { place: Place; text: string; short?: string; tone: Tone }
+
+/**
+ * The places as the room allows (docs/design/ui-spec.md §6): every label with wide separators, then with narrow ones, then
+ * the counters of the places the owner is not on dropped, then only the places that fit — the current one always, then
+ * those `first` names, then the rest in order. A label is never cut: a place that does not fit is left out whole.
+ */
+function fitTabs<Place extends string>(tabs: readonly Tab<Place>[], current: Place, first: readonly Place[], wide: string, budget: number): { shown: Tab<Place>[]; gap: string } {
+  const width = (shown: readonly Tab<Place>[], gap: string) => visibleWidth(shown.map(tab => tab.text).join(gap));
+  if (width(tabs, wide) <= budget) return { shown: [...tabs], gap: wide };
+  const gap = ` ${wide.trim()} `;
+  if (width(tabs, gap) <= budget) return { shown: [...tabs], gap };
+  const brief = tabs.map(tab => tab.place === current || tab.short === undefined ? tab : { ...tab, text: tab.short });
+  if (width(brief, gap) <= budget) return { shown: brief, gap };
+  const kept = new Set<Place>([current]);
+  for (const place of [...first, ...tabs.map(tab => tab.place)]) {
+    if (kept.has(place) || !tabs.some(tab => tab.place === place)) continue;
+    if (width(tabs.filter(tab => kept.has(tab.place) || tab.place === place), gap) <= budget) kept.add(place);
+  }
+  return { shown: tabs.filter(tab => kept.has(tab.place)), gap };
+}
+
+/** The places in one line: the current one in accent and bold, the others in their own tone, the separators muted. */
+function tabLine<Place extends string>(shown: readonly Tab<Place>[], current: Place, gap: string): Segment[] {
+  return [{ text: ' ' }, ...shown.flatMap((tab, index): Segment[] => [...(index ? [{ text: gap, tone: 'muted' as const }] : []),
+    tab.place === current ? { text: tab.text, tone: 'accent', bold: true } : { text: tab.text, tone: tab.tone }])];
+}
+
 function areaLine(data: SpaceData, current: Area, width: number): Line {
   const counts: Record<Exclude<Area, 'inbox' | 'rules'>, number> = { situations: data.set?.views.length ?? 0, runs: data.runs.length, problems: data.problems.length };
-  const parts: Segment[] = [{ text: ' ' }];
-  const add = (text: string, area: Area, tone: Tone) => {
-    if (parts.length > 1) parts.push({ text: '  ·  ', tone: 'muted' });
-    parts.push(area === current ? { text, tone: 'accent', bold: true } : { text, tone });
-  };
-  if (data.decisions.length) add(`Нужно ваше решение: ${data.decisions.length}`, 'inbox', 'warning');
-  for (const area of ['situations', 'runs', 'problems'] as const) {
-    add(`${AREA_LABEL[area]} ${counts[area]}`, area, 'muted');
-    if (area === 'situations' && data.set?.rulebook) add('Свод правил', 'rules', 'muted');
-  }
+  const tabs: Tab<Area>[] = [...(data.decisions.length ? [{ place: 'inbox' as const, text: `Нужно ваше решение: ${data.decisions.length}`, tone: 'warning' as const }] : []),
+    ...(['situations', 'runs', 'problems'] as const).flatMap((area): Tab<Area>[] => [{ place: area, text: `${AREA_LABEL[area]} ${counts[area]}`, tone: 'muted' },
+      ...(area === 'situations' && data.set?.rulebook ? [{ place: 'rules' as const, text: 'Свод правил', tone: 'muted' as const }] : [])])];
+  const wide = '  ·  ';
+  const { shown, gap } = fitTabs(tabs, current, ['inbox'], wide, room(width) - 1);
+  const parts = tabLine(shown, current, gap);
   const used = parts.reduce((sum, part) => sum + visibleWidth(part.text), 0);
-  // No decision waits: a calm mark on the right instead of the queue.
+  // No decision waits: a calm mark on the right instead of the queue, while every area fits beside it.
   const calm = `${GLYPH.pass} решений не ждёт`;
-  if (!data.decisions.length && used + visibleWidth(calm) + 2 <= room(width)) parts.push({ text: `${' '.repeat(room(width) - used - visibleWidth(calm))}${calm}`, tone: 'success' });
+  if (!data.decisions.length && gap === wide && used + visibleWidth(calm) + 2 <= room(width)) parts.push({ text: `${' '.repeat(room(width) - used - visibleWidth(calm))}${calm}`, tone: 'success' });
   return parts;
 }
 
-function stepLine(data: SpaceData, current: Step): Line {
+/** The steps before the first result; the work going on names its own step: the situations are prepared or checked, the run goes (docs/design/ui-spec.md §4.6). */
+function stepLine(data: SpaceData, current: Step, width: number): Line {
   const views = data.set?.views ?? [];
   const ready = views.filter(view => view.status === 'ready').length;
   const result = data.runs[0] ? accuracyParts(data.runs[0].view).value : null;
-  const steps: [Step, string][] = [['situations', `Ситуации ${views.length ? `${ready}/${views.length}` : ''}`.trim()],
-    ['run', data.progress ? 'Прогон идёт' : 'Прогон'], ['result', `Результат${result ? ` ${result}` : ''}`]];
-  return [{ text: ' ' }, ...steps.flatMap(([step, label], index): Segment[] => [...(index ? [{ text: '  ›  ', tone: 'muted' as const }] : []),
-    step === current ? { text: label, tone: 'accent', bold: true } : { text: label, tone: 'muted' }])];
+  const work = data.progress?.kind;
+  const situations = work === 'preparation' ? 'Ситуации готовятся' : work === 'check' ? 'Ситуации проверяются' : `Ситуации ${views.length ? `${ready}/${views.length}` : ''}`.trim();
+  const tabs: Tab<Step>[] = [{ place: 'situations', text: situations, short: 'Ситуации', tone: 'muted' },
+    { place: 'run', text: work === 'run' ? 'Прогон идёт' : 'Прогон', short: 'Прогон', tone: 'muted' },
+    { place: 'result', text: `Результат${result ? ` ${result}` : ''}`, short: 'Результат', tone: 'muted' }];
+  const { shown, gap } = fitTabs(tabs, current, [], '  ›  ', room(width) - 1);
+  return tabLine(shown, current, gap);
 }
 
-/** The workspace's two header lines: the agent, then its areas (or, before the first result, the steps). */
+/**
+ * The workspace's header: the agent, then its areas (or, before the first result, the steps). Narrower than 50 columns
+ * only the line of places stays, so the owner still sees where they are (docs/design/ui-spec.md §6).
+ */
 export function header(data: SpaceData, place: { area: Area } | { step: Step }, width: number): Line[] {
   const { space } = data;
   const version = space.demo ? 'учебный пример' : space.version ? `версия ${space.version}` : null;
-  return 'step' in place ? [...titleLine(`Agent Lab · ${space.name}`, version, width), stepLine(data, place.step)]
-    : [...titleLine(`Агент: ${space.name}`, version, width), areaLine(data, place.area, width)];
+  const places = 'step' in place ? stepLine(data, place.step, width) : areaLine(data, place.area, width);
+  if (width < NARROW) return [places];
+  return [...titleLine('step' in place ? `Agent Lab · ${space.name}` : `Агент: ${space.name}`, version, width), places];
 }
 
 /* ───────────────────────────── the areas ───────────────────────────── */
@@ -183,14 +235,20 @@ const lowerFirst = (text: string) => text.charAt(0).toLocaleLowerCase('ru') + te
 export function situationsScreen(data: SpaceData, selected: number, width: number, options: { firstRun?: boolean } = {}): Screen {
   const set = data.set;
   const areas: Hint = options.firstRun ? { key: '→', text: 'прогон' } : { key: '←→', text: 'области' };
-  if (!set?.views.length) return { head: [], body: wsLines([ws('answer', 'Ситуаций пока нет.'),
-    ws('muted', 'Скажите в чате, какого агента проверить и где лежат логи, — Lab соберёт ситуации сам.')], room(width)), foot: [{ key: 'a', text: 'спросить Lab' }, areas, { key: 'Esc', text: 'закрыть' }] };
+  // Situations being prepared or checked: the work's own row leads, and it says where its situations appear.
+  const progress = data.progress;
+  const hint = progress && progress.kind !== 'run' ? HERE_HINT[progress.kind] : undefined;
+  const work = hint ? progress : undefined;
+  const going = work && hint ? [...progressLines(work, room(width)), ...wsLines([ws('muted', hint, 3)], room(width))] : [];
+  if (!set?.views.length) return { head: [], body: work ? going : wsLines([ws('answer', 'Ситуаций пока нет.'),
+    ws('muted', 'Скажите в чате, какого агента проверить и где лежат логи, — Lab соберёт ситуации сам.')], room(width)),
+  foot: [...(work ? [] : [{ key: 'a', text: 'спросить Lab' }]), areas, { key: 'Esc', text: 'закрыть' }] };
   const waiting = set.views.some(view => view.status === 'needs_owner');
   const note = !set.editable ? [ws('muted', formatNote(set.record) ?? 'Старый формат: эти ситуации можно посмотреть, но не изменить.')]
     : set.record.trials.length ? [ws('muted', `Ситуации прогона ${whenText(set.record.createdAt, data.now)}; изменения пойдут в новый черновик, прогон не меняется.`)] : [];
   const lead = set.coverage && !options.firstRun ? [ws('answer', set.coverage.line), ...(set.coverage.uncovered ? [ws('muted', set.coverage.uncovered, 3)] : []), ...note]
     : [ws('answer', countsText(set.views)), ...(waiting ? [ws('muted', 'Готовые можно запускать уже сейчас; остальные войдут, когда ответите.')] : note)];
-  const body: Line[] = [...wsLines(lead, room(width)), blank];
+  const body: Line[] = [...(going.length ? [...going, blank] : []), ...wsLines(lead, room(width)), blank];
   const items: number[] = [];
   let anchor: number | undefined;
   const narrow = width < 70;
@@ -237,55 +295,92 @@ export function runActions(data: SpaceData): string[] {
   return ['Отчёт для заказчика', ready ? `Запустить снова — ${countText(ready, ['готовая', 'готовых', 'готовых'])}` : 'Запустить снова', 'Все прогоны'];
 }
 
-/** A row of the result screen the cursor can stand on: a cause (or a failure by title) opens its failure; the judge's review opens its queue. */
-export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'review' };
+/**
+ * A row of the result screen the cursor can stand on: a cause (or a failure by title) opens its failure; under the
+ * details, a situation that disagrees with production opens that disagreement (`log`); a step of «Дальше» does what it
+ * says — the judge's review opens its queue, the report is saved, the situations run again, the unmeasured ones are
+ * listed, the connection goes to the conversation.
+ */
+export type ResultPick = { kind: 'failure'; trialId: string } | { kind: 'log'; cardId: string } | { kind: 'review' } | { kind: 'report' } | { kind: 'repeat' } | { kind: 'unmeasured' } | { kind: 'connection' };
+
+/** What Enter does on each step of «Дальше»; waiting for a run to end is nothing to do. */
+const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, report: { kind: 'report' }, repeat: { kind: 'repeat' },
+  why_unmeasured: { kind: 'unmeasured' }, check_connection: { kind: 'connection' }, wait: null };
+
+const sameRow = (a: ResultRow, b: ResultRow): boolean => a.role === b.role && a.indent === b.indent && a.text === b.text && a.right === b.right;
+/** Where `block` stands whole among `rows`, or -1. */
+function blockAt(rows: readonly ResultRow[], block: readonly ResultRow[]): number {
+  if (!block.length) return -1;
+  return rows.findIndex((_, at) => block.every((row, offset) => { const shown = rows[at + offset]; return shown !== undefined && sameRow(shown, row); }));
+}
 
 /**
- * One run's result (docs/design/ui-spec.md §4.7, §8.5): the number and its trust, the topics, why it errs — each cause a row the
- * cursor can open —, whether the judge still waits for the owner, then the run and its actions. `details`: every
- * error, what was not measured and the owner's disagreements too.
+ * The rows of the result screen — the very rows the CLI summary prints and the model reads as the board's screen
+ * (result-text.ts `resultScreen`) — and, laid over them, what the cursor does on each: a cause opens its failure, a
+ * situation of «Сверка с продом» its disagreement, a step of «Дальше» does what it says. The board adds no row of its
+ * own to the result.
+ */
+export function pickedRows(view: ResultView, options: { details: boolean; now: Date }): { rows: ResultRow[]; picks: (ResultPick | null)[] } {
+  const rows = resultRows(view, { surface: 'board', details: options.details, now: options.now });
+  const picks: (ResultPick | null)[] = rows.map(() => null);
+  const causes = causeRows(view), causesAt = blockAt(rows, causes);
+  const trialOf = (scenarioId: string | undefined) => view.failures.find(failure => failure.scenarioId === scenarioId)?.trialId;
+  let item = 0;
+  if (causesAt >= 0) causes.forEach((row, offset) => {
+    if (row.role !== 'item') return;
+    const trialId = trialOf(view.topCauses.length ? view.topCauses[item]?.scenarioIds[0] : view.failures[item]?.scenarioId);
+    item++;
+    if (trialId) picks[causesAt + offset] = { kind: 'failure', trialId };
+  });
+  // Each situation of «Сверка с продом» is one row naming it, in the order of the disagreements.
+  const calibration = calibrationRows(view), calibrationAt = blockAt(rows, calibration);
+  let disagreement = 0;
+  if (calibrationAt >= 0) calibration.forEach((row, offset) => {
+    if (row.role !== 'item') return;
+    const cardId = view.calibration?.disagreements[disagreement++]?.cardId;
+    if (cardId) picks[calibrationAt + offset] = { kind: 'log', cardId };
+  });
+  const nextAt = blockAt(rows, nextRows(view, 'board'));
+  if (nextAt >= 0) view.next.forEach((step, offset) => { picks[nextAt + 1 + offset] = STEP_PICK[step.kind]; });
+  return { rows, picks };
+}
+
+/** The rows of a result the cursor walks, in the order the screen shows them — with its details or without. */
+export const resultPicks = (view: ResultView, now: Date, details = false): ResultPick[] =>
+  pickedRows(view, { details, now }).picks.filter((pick): pick is ResultPick => pick !== null);
+
+/**
+ * One run's result (docs/design/ui-spec.md §4.7, §8.5): the rows of the CLI summary — the number and its trust, the topics, why
+ * it errs, «Дальше» — with the cursor on the causes and the steps; `details` adds every error, what was not measured,
+ * the owner's disagreements and the comparison with production. The board lays over them only what a screen of its
+ * own knows: the work going on above, how the run before did on the run line, the numbered actions under it all.
  */
 export function resultScreen(data: SpaceData, run: { record: Experiment; view: ResultView }, options: { selected: number; details: boolean; actions?: string[] }, width: number): Screen & { picks: ResultPick[] } {
   const { view } = run;
   const w = room(width);
+  const { rows, picks: laid } = pickedRows(view, { details: options.details, now: data.now });
+  const previous = data.runs[data.runs.indexOf(run) + 1];
+  const was = previous ? accuracyParts(previous.view).value : null;
+  const before = was && previous ? `было ${was} (${whenText(previous.record.createdAt, data.now)})` : null;
+  const line = runLine(view, data.now);
   const body: Line[] = [];
-  if (data.progress && run === data.runs[0]) body.push(...progressLines(data.progress, w), blank);
-  body.push(...resultLines(headRows(view), w));
-  const topics = topicRows(view);
-  if (topics.length) body.push(blank, ...resultLines(topics, w));
+  const going = data.progress?.kind === 'run' && run === data.runs[0] ? data.progress : undefined;
+  if (going) body.push(...progressLines(going, w), blank);
   const picks: ResultPick[] = [];
   const items: number[] = [];
   let anchor: number | undefined;
-  const pick = (target: ResultPick, row: ResultRow) => {
+  rows.forEach((row, index) => {
+    const shown = before && sameRow(row, line) ? { ...row, text: `${row.text} · ${before}`, parts: [...row.parts ?? [], before] } : row;
+    const pick = laid[index];
+    if (!pick) { body.push(...resultLines([shown], w)); return; }
     const mine = picks.length === options.selected;
-    picks.push(target);
+    picks.push(pick);
     items.push(body.length);
     if (mine) anchor = body.length;
-    body.push(...resultLines([mine ? { ...row, indent: 0, text: `${GLYPH.selected} ${row.text}` } : row], w).map(line => mine ? line.map(part => ({ ...part, bold: true })) : line));
-  };
-  const causes = causeRows(view);
-  if (causes.length) {
-    body.push(blank);
-    const trialOf = (scenarioId: string | undefined) => view.failures.find(failure => failure.scenarioId === scenarioId)?.trialId;
-    let item = 0;
-    for (const row of causes) {
-      if (row.role !== 'item') { body.push(...resultLines([row], w)); continue; }
-      const scenarioId = view.topCauses.length ? view.topCauses[item]?.scenarioIds[0] : view.failures[item]?.scenarioId;
-      const trialId = trialOf(scenarioId);
-      item++;
-      if (trialId) pick({ kind: 'failure', trialId }, row); else body.push(...resultLines([row], w));
-    }
-  }
-  const review = view.next.find(step => step.kind === 'review_judge');
-  if (review) { body.push(blank, ...resultLines([{ role: 'heading', indent: 0, text: 'Дальше' }], w)); pick({ kind: 'review' }, { role: 'next:first', indent: 2, text: nextStepText(review) }); }
-  if (options.details) for (const block of [errorListRows(view), unmeasuredRows(view), disagreementRows(view)]) if (block.length) body.push(blank, ...resultLines(block, w));
-  const previous = data.runs[data.runs.indexOf(run) + 1];
-  const was = previous ? accuracyParts(previous.view).value : null;
-  const line = runLine(view, data.now);
-  body.push(blank, ...resultLines([{ ...line, parts: [...line.parts ?? [], ...(was && previous ? [`было ${was} (${whenText(previous.record.createdAt, data.now)})`] : [])],
-    text: `${line.text}${was && previous ? ` · было ${was} (${whenText(previous.record.createdAt, data.now)})` : ''}` }], w));
+    body.push(...resultLines([mine ? { ...shown, indent: 0, text: `${GLYPH.selected} ${shown.text}` } : shown], w).map(laidOut => mine ? laidOut.map(part => ({ ...part, bold: true })) : laidOut));
+  });
   const actions = options.actions ?? [];
-  if (actions.length) body.push(...wsLines([ws('actions', actions.map((label, index) => `${index + 1} ${label}`).join('  ·  '), 1, { clip: true })], w));
+  if (actions.length) body.push(blank, ...wsLines([ws('actions', actions.map((label, index) => `${index + 1} ${label}`).join('  ·  '), 1, { clip: true })], w));
   return { head: [], body, picks, items, ...(anchor !== undefined ? { anchor } : {}), foot: FOOT.area };
 }
 
@@ -295,9 +390,10 @@ export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', 
 /** The progress row of work going on (docs/design/ui-spec.md §4.6): the line and the bar come from the record; a bar only when there is room for one. */
 export function progressLines(progress: NonNullable<SpaceData['progress']>, width: number): Line[] {
   const frame = progress.frame ?? 0;
-  const text = ` ${progress.text}`;
-  const bar = Math.min(40, width - visibleWidth(text) - 6);
-  const filled = Math.round(Math.max(0, bar) * Math.max(0, Math.min(1, progress.share)));
+  // The line is made of the record's own words (its message, a stop's reason): escaped like every other record text.
+  const text = ` ${safeLine(progress.text)}`;
+  const bar = progress.share === null ? 0 : Math.min(40, width - visibleWidth(text) - 6);
+  const filled = Math.round(Math.max(0, bar) * Math.max(0, Math.min(1, progress.share ?? 0)));
   return [[{ text: ' ' }, { text: SPINNER[frame % SPINNER.length]!, tone: 'accent' }, { text, tone: 'text', bold: true },
     ...(bar >= 10 ? [{ text: '  ' }, { text: GLYPH.barFill.repeat(filled), tone: 'accent' as const }, { text: GLYPH.barTrack.repeat(bar - filled), tone: 'muted' as const }] : [])]];
 }
@@ -328,31 +424,36 @@ export function problemsScreen(data: SpaceData, selected: number, width: number)
 
 /* ───────────────────────────── the first run ───────────────────────────── */
 
-/** «Прогон» before the first result (docs/design/ui-spec.md §4.6): what will run, the agent, the time and the spending, what stays out; or how it goes. */
+/** Where what the work makes appears, said on the step of the run, and that closing the board does not stop it. */
+const WORK_HINT: Record<WorkKind, string> = {
+  preparation: 'Готовые ситуации появляются в «Ситуациях» по ходу подготовки. Доску можно закрыть — подготовка продолжится.',
+  check: 'Статус изменённых ситуаций в «Ситуациях» обновится сам. Доску можно закрыть — проверка продолжится.',
+  run: 'Первые ответы уже видны в «Результате». Доску можно закрыть — прогон продолжится.',
+};
+/** The same, said among the situations themselves. */
+const HERE_HINT: Record<Exclude<WorkKind, 'run'>, string> = {
+  preparation: 'Готовые ситуации появляются здесь по ходу подготовки. Доску можно закрыть — подготовка продолжится.',
+  check: 'Статус изменённых ситуаций обновится сам. Доску можно закрыть — проверка продолжится.',
+};
+
+/**
+ * «Прогон» before the first result (docs/design/ui-spec.md §4.6): what a run of the ready situations will be, in the very words
+ * of the run dialog Enter opens — one description of the plan, never two —; or the work going on, which Enter stops.
+ */
 export function runStepScreen(data: SpaceData, width: number): Screen {
   const w = room(width);
-  if (data.progress) return { head: [], body: [...progressLines(data.progress, w), ...wsLines([ws('muted', 'Первые ответы уже видны в «Результате». Доску можно закрыть — прогон продолжится.', 3)], w)],
-    foot: [...(data.progress.stoppable ? [{ key: 'Enter', text: 'остановить' }] : []), { key: '→', text: 'результат' }, { key: 'Esc', text: 'закрыть' }] };
+  const work = data.progress;
+  if (work) return { head: [], body: [...(work.kind === 'run' ? [] : [...wsLines([ws('answer', work.kind === 'preparation' ? 'Запустить можно, когда подготовка закончится.' : 'Запустить можно, когда проверка закончится.')], w), blank]),
+    ...progressLines(work, w), ...wsLines([ws('muted', WORK_HINT[work.kind], 3)], w)],
+  foot: [...(work.stoppable ? [{ key: 'Enter', text: 'остановить' }] : []), work.kind === 'run' ? { key: '→', text: 'результат' } : { key: '←', text: 'ситуации' }, { key: 'Esc', text: 'закрыть' }] };
   const set = data.set;
-  const plan = set?.plan;
-  if (!set || !plan?.situations) {
+  if (!set?.plan.situations || !set.launch) {
     const waiting = set?.views.filter(view => view.status === 'needs_owner').length ?? 0;
     return { head: [], body: wsLines([ws('answer', waiting ? `Нечего запускать: ответьте на ${countText(waiting, ['вопрос', 'вопроса', 'вопросов'])} в «Ситуациях».` : 'Нечего запускать: готовых ситуаций пока нет.')], w),
       foot: [{ key: '←', text: 'ситуации' }, { key: 'Esc', text: 'закрыть' }] };
   }
-  const record = set.record;
-  const attempts = plan.situations ? plan.conversations / plan.situations : 0;
-  const field = (label: string, value: string) => ws('text', `${label.padEnd(12)}${value}`, 4, { hang: 12 });
-  return { head: [], body: wsLines([
-    ws('answer', `Готово к запуску: ${countText(plan.situations, ['ситуация', 'ситуации', 'ситуаций'])}, ${countText(plan.conversations, ['разговор', 'разговора', 'разговоров'])}`),
-    ws('muted', attempts > 1 ? `Каждая ситуация — ${countText(attempts, ['разговор', 'разговора', 'разговоров'])}: клиента играет Lab, ответы агента оценивает судья.`
-      : 'Клиента играет Lab, ответы агента оценивает судья.'),
-    ws('blank', ''),
-    field('Агент', record.target.kind === 'unconnected' ? 'ещё не подключён — Lab спросит при запуске' : data.space.name + (data.space.version ? ` · версия ${data.space.version}` : '')),
-    field('Займёт', `до ${Math.max(1, Math.round(record.settings.maxDurationMs / 60_000))} мин`),
-    field('Расход', record.mode === 'demo' ? 'без модели и оплаты — учебный пример' : `до ${countText(plan.judgeCalls, ['вызова', 'вызовов', 'вызовов'])} судьи — платите только за потраченное`),
-    ...(plan.outside ? [field('Не войдут', plan.outside)] : []),
-  ], w), foot: [{ key: 'Enter', text: 'запустить' }, { key: '←', text: 'ситуации' }, { key: 'Esc', text: 'закрыть' }] };
+  return { head: [], body: wsLines([ws('answer', 'Готово к запуску'), ...set.launch.map(line => ws('text', line, 1, { hang: 2 }))], w),
+    foot: [{ key: 'Enter', text: 'запустить' }, { key: '←', text: 'ситуации' }, { key: 'Esc', text: 'закрыть' }] };
 }
 
 /* ───────────────────────────── open objects ───────────────────────────── */
@@ -369,7 +470,8 @@ export function situationScreen(view: SituationView, options: { details: boolean
   return { head: [], body: situationLines(rows, room(width)), foot };
 }
 
-const ANSWER_WORD: Record<Answer, string> = { agree: 'да, судья прав', disagree: 'нет, судья ошибся', unsure: 'не знаю' };
+/** The keys of the answers, after the question or the owner's answer. */
+const ANSWER_KEYS = '1 да · 2 нет · 3 не знаю';
 /** Why a conversation carries no question about the judge. */
 const NOT_ASKED = { control: 'Контрольная ситуация: в проверку судьи не входит.', unmeasured: 'Ситуация не измерена: соглашаться не с чем.',
   undecided: 'Судья не вынес решения: соглашаться не с чем.' } as const;
@@ -385,8 +487,13 @@ export function judgedScreen(run: { record: Experiment; view: ResultView }, tria
   const trial = record.trials.find(item => item.id === trialId);
   const scenario = trial && record.scenarios.find(item => item.id === trial.scenarioId);
   let rows: ResultRow[];
-  if (index >= 0) rows = failureRows(view, record, index).filter(row => row.role !== 'next:first');
-  else {
+  if (index >= 0) {
+    // The explanation of result-text.ts, whole; its closing question — and the blank row before it — make way for the
+    // board's own, which carries the keys of the answers and the owner's answer once given.
+    rows = failureRows(view, record, index);
+    const asked = rows.findIndex(row => row.role === 'next:first');
+    if (asked >= 0) rows = rows.slice(0, rows[asked - 1]?.role === 'blank' ? asked - 1 : asked);
+  } else {
     const brief = scenario ? situationBrief(record, scenario) : undefined;
     const said = trial?.events.filter(event => event.type === 'assistant' && oneLine(event.text ?? '')).at(-1);
     const label = (name: string, text: string): ResultRow => ({ role: 'item', indent: 4, text: `${name.padEnd(16)}${text}`, hang: 16 });
@@ -395,17 +502,36 @@ export function judgedScreen(run: { record: Experiment; view: ResultView }, tria
       label('Агент ответил', said ? `«${oneLine(said.text)}»` : 'ответа нет'),
       ...(brief?.must[0]?.rule ? [label('Правило', `«${brief.must[0].rule}»`)] : [])];
   }
-  const turns = (trial?.events ?? []).filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''));
-  const conversation: ResultRow[] = index >= 0 || !turns.length ? [] : [{ role: 'blank', indent: 0, text: '' }, { role: 'heading', indent: 4, text: 'Разговор' },
-    ...turns.map(event => ({ role: 'quote' as const, indent: 6, text: `${(event.type === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.text)}`, hang: 9 }))];
+  // A failure's explanation holds its conversation already; a pass drawn for a double-check shows it in the same rows.
+  const conversation = index >= 0 ? [] : conversationRows(trialTurns(trial));
   // The question is about the decision the judge recorded, never about a verdict the owner already changed.
   const target = agreementTarget(record, trial);
   const question = target?.kind !== 'ready' ? NOT_ASKED[target?.kind ?? 'undecided']
-    : answer ? `Ваш ответ: ${ANSWER_WORD[answer]}. Изменить: 1 да · 2 нет · 3 не знаю`
-      : `Судья решил: ${target.judgeVerdict === 'fail' ? 'не справился' : 'справился'}. Вы согласны?   1 да · 2 нет · 3 не знаю`;
-  const body = [...resultLines([...rows, ...conversation], w), blank, ...wsLines([ws(answer || target?.kind !== 'ready' ? 'muted' : 'accent', question)], w)];
+    : answer ? `Ваш ответ: ${ANSWER_TEXT[answer]}. Изменить: ${ANSWER_KEYS}` : `${judgeQuestionText(target.judgeVerdict)}   ${ANSWER_KEYS}`;
+  const body = [...resultLines([...rows, ...(conversation.length ? [{ role: 'blank' as const, indent: 0, text: '' }, ...conversation] : [])], w), blank,
+    ...wsLines([ws(answer || target?.kind !== 'ready' ? 'muted' : 'accent', question)], w)];
   if (place) body.unshift(...wsLines([ws('muted', `Проверка судьи: ${place.at} из ${place.of}`)], w), blank);
   return { head: [], body, foot: [...(target?.kind === 'ready' ? [{ key: '1–3', text: 'ответить' }] : []), { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
+}
+
+/**
+ * One situation that disagrees with production, opened from «Сверка с продом» (docs/design/card-v2-spec.md §10.5): what the
+ * calibration says of it, the run's attempt it compared and the logged conversation, then the question about the judge's
+ * reading of the log — or the owner's answer. The answer lands on the log's side, never on the run's conversation.
+ */
+export function logScreen(data: SpaceData, run: { record: Experiment; view: ResultView }, cardId: string, width: number): Screen {
+  const w = room(width);
+  const item = run.view.calibration?.disagreements.find(entry => entry.cardId === cardId);
+  if (!item) return { head: [], body: wsLines([ws('muted', 'Эта ситуация больше не расходится с продом.')], w), foot: [{ key: 'Esc', text: 'назад' }] };
+  const logged = data.logged?.get(logKey(item.log));
+  const rows = logDisagreementRows(item, { title: true, attempt: trialTurns(run.record.trials.find(trial => trial.id === item.trialIds[0])), ...(logged ? { log: logged } : {}) });
+  const targets = logTargets(run.record, cardId);
+  const answer = logAnswerOf(run.record, targets);
+  const question = !targets.length ? 'Судья не вынес решения по разговору из логов: соглашаться не с чем.'
+    : answer ? `Ваш ответ: ${ANSWER_TEXT[answer]}. Изменить: ${ANSWER_KEYS}` : `${logQuestionText(targets)}   ${ANSWER_KEYS}`;
+  const body = [...resultLines(rows, w), ...(logged ? [] : [blank, ...wsLines([ws('muted', 'Разговор из логов показывается у последнего прогона со сверкой.', 5)], w)]), blank,
+    ...wsLines([ws(answer || !targets.length ? 'muted' : 'accent', question)], w)];
+  return { head: [], body, foot: [...(targets.length ? [{ key: '1–3', text: 'ответить' }] : []), { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
 }
 
 /** «Все прогоны» (docs/design/ui-spec.md §8.5): each run by its date, version and result, with the result before it. */

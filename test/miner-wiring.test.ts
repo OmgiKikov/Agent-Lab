@@ -12,6 +12,7 @@ import { addCard } from '../src/card/library.js';
 import { cardSchema, libraryV2Schema, type Card, type CardPreparation } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { createDemoRuntime, demoInput, demoTarget } from '../src/demo.js';
+import { STOP_LABEL } from '../src/errors.js';
 import { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
 import { importDialogues } from '../src/imports.js';
@@ -144,7 +145,7 @@ test('a preparation stops at the ceiling its consent stated, not at the draft\'s
     const draft = await lab.create(createInput(batch), { situations: 2 });
     await lab.waitForIdle();
     const stopped = await lab.get(draft.id);
-    assert.match(stopped.error ?? '', /budget exhausted/);
+    assert.deepEqual([stopped.stop, stopped.error], ['budget', STOP_LABEL.budget]);
     assert.deepEqual([stopped.usage.calls, stopped.settings.maxCalls], [consent.callCeiling, 150], 'the promise and the stop are one number');
   });
 });
@@ -172,7 +173,7 @@ test('the promise is what is prepared: the representative sample of every topic,
       topics: [{ id: 't1', title: 'Возврат оплаты', dialogues: 5 }, { id: 't2', title: 'Статус заявки', dialogues: 3 }, { id: 't3', title: 'Смена тарифа', dialogues: 2 }],
       labeled: 10, logged: 10 }]);
     const progress = experiment.preparationProgress as CardPreparation;
-    assert.deepEqual([progress.status, progress.requestedCount, progress.pending, progress.excluded], ['complete', 5, [], []]);
+    assert.deepEqual([progress.requestedCount, progress.pending, progress.excluded], [5, [], []]);
     assert.deepEqual(progress.sample!.map(stratum => [stratum.topicId, stratum.dialogueIds.length]), [['t1', 5], ['t2', 3], ['t3', 2]]);
 
     const files = await readdir(join(directory, 'imports'));
@@ -210,7 +211,7 @@ test('a pick that makes no situation gives its seat to the next conversation of 
     assert.deepEqual(seen.proposals.map(unitOf), [refunds[0], statuses[0], tariffs[0], refunds[1], refunds[2], refunds[3], tariffs[1]],
       'one round over the topics, then each refused pick\'s replacement');
     assert.deepEqual(library.cards.map(conversationOf), [statuses[0], refunds[1], refunds[2], refunds[3]]);
-    assert.deepEqual([progress.status, progress.pending, progress.excluded.map(item => item.dialogueId)], ['complete', [], [refunds[0], tariffs[0], tariffs[1]]]);
+    assert.deepEqual([progress.pending, progress.excluded.map(item => item.dialogueId)], [[], [refunds[0], tariffs[0], tariffs[1]]]);
     assert.match(progress.excluded[0]!.reason, /не прошёл проверку/);
     assert.ok(library.cards.length < progress.requestedCount!, 'never more than promised: both tariffs failed, and no other topic takes their seat');
   });
@@ -241,7 +242,7 @@ test('a pick whose paid call died in flight is never asked again: after the resu
     assert.ok(!seen.proposals.some(request => unitOf(request) === died), 'the dead call is not repeated');
     assert.deepEqual(library.cards.map(card => [conversationOf(card), card.trafficTopic!.id]).sort(),
       [[refunds[1], 't1'], [progress.sample![1]!.dialogueIds[0], 't2'], [progress.sample![2]!.dialogueIds[0], 't3']].sort());
-    assert.deepEqual([progress.status, progress.pending], ['complete', []]);
+    assert.deepEqual(progress.pending, []);
   });
 });
 
@@ -333,7 +334,8 @@ test('a card run reads its topics from the record alone: rows by traffic share, 
     // (5/11 · 1 + 3/11 · 0 + 2/11 · 1) / (10/11) = 0.7: the uncovered «Другое» weighs nothing.
     assert.ok(Math.abs(view.topics!.weighted! - 0.7) < 1e-9, String(view.topics!.weighted));
     assert.deepEqual([view.topics!.uncovered, view.topics!.labeled, view.topics!.logged], [{ topics: 1, share: 1 / 11 }, 11, 12]);
-    assert.deepEqual(realityParts(view), ['С учётом частоты тем — около 70% (темы известны у 11 из 12 разговоров)'], 'the masked conversation has no topic');
+    // The estimate names the share of the conversations its measured topics hold; the masked conversation has no topic.
+    assert.deepEqual(realityParts(view), ['С учётом частоты тем — около 70% (измерены темы 91% диалогов; темы известны у 11 из 12 разговоров)']);
     assert.deepEqual([coverageLine(view.topicCoverage!), uncoveredLine(view.topicCoverage!)], ['3 ситуации покрывают 3 из 4 тем — 91% диалогов', 'Не покрыта: Другое (9% диалогов)']);
     assert.deepEqual(topicRows(view).map(row => [row.text, row.right?.trim().split(/\s{3,}/)]), [
       ['По темам', ['справился', 'доля диалогов']], ['Возврат оплаты', ['1 из 1', '45%']], ['Статус заявки', ['0 из 1', '27%']], ['Смена тарифа', ['1 из 1', '18%']],

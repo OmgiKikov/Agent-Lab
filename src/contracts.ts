@@ -8,6 +8,8 @@ import { MATERIAL_CHARS, MATERIAL_LIMIT, MATERIALS_TOTAL_CHARS, RECORD_REQUIREME
 import { z } from 'zod';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { PHASES, type Phase } from './phases.js';
+import { STOP_REASONS, type StopReason } from './errors.js';
+import { caveatsSchema, type Caveat } from './caveats.js';
 import { valueTokens } from './verbatim.js';
 import { referencesSchema, type Reference } from './reference.js';
 export { referenceSchema, referencesSchema, type Reference } from './reference.js';
@@ -39,6 +41,18 @@ export function judgeFor(available: readonly { provider: string; id: string }[],
   { provider: string; model: string; upstream?: string } {
   const reachable = available.some(model => model.provider === DEFAULT_JUDGE.provider && model.id === DEFAULT_JUDGE.model);
   return reachable || !session ? { ...DEFAULT_JUDGE } : { provider: session.provider, model: session.id };
+}
+/**
+ * The judge a run takes instead when this network does not reach the draft's one (lab/run.ts start): for the
+ * independent default judge, the draft's own model — the fallback judgeFor makes — and nothing for a judge named in a
+ * role, or when the draft has no other model. The result then says the judge is the model that built the situations.
+ */
+export function judgeFallback(settings: { provider: string; model: string; judge?: { provider: string; model: string }; roles?: { judge?: unknown } }):
+  { provider: string; model: string } | undefined {
+  const { judge } = settings;
+  if (settings.roles?.judge || !judge || judge.provider !== DEFAULT_JUDGE.provider || judge.model !== DEFAULT_JUDGE.model) return undefined;
+  if (!settings.provider || !settings.model || (settings.provider === judge.provider && settings.model === judge.model)) return undefined;
+  return { provider: settings.provider, model: settings.model };
 }
 const TOOL_NAMES = ['search_materials', 'lookup_record', 'update_record'] as const;
 const text = z.string().trim().min(1);
@@ -387,6 +401,19 @@ export interface Trial {
   invalidCause?: InvalidCause;
   /** Why the judge left the attempt without a judgment, typed where it failed. Records written before it carry only `assessmentError`. */
   assessmentFailure?: AssessmentFailure;
+  /**
+   * The customer had written every message the run allows, so the conversation ended at that limit and not by the
+   * customer's own choice: an observation, judged as it went, never a failed measurement (evaluation.ts). What the
+   * judge could not decide in it is «не измерено» for this reason (run.ts). Absent on every other conversation and in
+   * older records.
+   */
+  turnLimit?: true;
+  /**
+   * The edition of the counting rules this attempt is read by (card/expectations.ts COUNTING_VERSION), written when a
+   * run or a re-assessment records it. Absent in attempts recorded before editions existed: they keep edition 1, so a
+   * stored result never moves.
+   */
+  countingVersion?: 2;
 }
 /**
  * Where a dialogue broke: the turn budget ran out, the simulated client failed, the agent or its connection failed
@@ -499,7 +526,16 @@ export interface Experiment {
   /** Portable identity of explicitly accepted scenario definitions. Optional only for legacy in-memory fixtures. */
   acceptedTests?: AcceptedTest[];
   trials: Trial[]; comparisons: Comparison[]; iterations: { revisionId: string; accepted: boolean; reason: string }[];
+  /** Notes of what this record's result does not prove, as records wrote them before notes were typed; new records keep `caveats`. */
   usage: Usage; error: string | null; limitations: string[];
+  /** What this record's result does not prove, typed and each once (caveats.ts): the owner reads them through caveatLines. Absent in older records. */
+  caveats?: Caveat[];
+  /**
+   * How the last operation on this record was stopped before it ended by itself — the owner, the closing application,
+   * its time or its budget — beside `error`, which keeps the line the owner reads. Absent when it ended by itself or
+   * failed, and in records written before it existed (their `error` keeps the English label of the stop).
+   */
+  stop?: StopReason;
   humanReviews: HumanReview[]; resultsReviewedAt?: string; resultsReviewHash?: string;
   /** Named clusters over the failed dialogues of this run; the bridge from evaluation to fixing. */
   failureModes?: FailureMode[];
@@ -544,6 +580,8 @@ export const trialSchema = z.strictObject({
   judgeReceipt: judgeReceiptSchema.optional(),
   invalidCause: z.enum(INVALID_CAUSES).optional(),
   assessmentFailure: z.enum(ASSESSMENT_FAILURES).optional(),
+  turnLimit: z.literal(true).optional(),
+  countingVersion: z.literal(2).optional(),
 });
 const comparisonSchema = z.strictObject({
   baselineId: text, candidateId: text, manifestHash: text, split: z.enum(['dev', 'control']),
@@ -606,7 +644,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   acceptedTests: z.array(acceptedTestSchema).max(200)
     .refine(tests => unique(tests.map(test => test.testId)) && unique(tests.map(test => test.scenarioId)), 'Accepted test identities must be unique').default([]),
   trials: z.array(trialSchema), comparisons: z.array(comparisonSchema), iterations: z.array(z.strictObject({ revisionId: text, accepted: z.boolean(), reason: z.string() })),
-  usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()),
+  usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()), caveats: caveatsSchema.optional(), stop: z.enum(STOP_REASONS).optional(),
   humanReviews: z.array(humanReviewSchema).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),

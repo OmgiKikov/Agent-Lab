@@ -1,5 +1,6 @@
 import { countText } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
+import { sampleWords } from '../scenario-library.js';
 import { ROLE_WORDS, columnLabel, type ReadingBasis } from './mapping.js';
 import type { TableProposal, TableQuestion } from './proposal.js';
 
@@ -113,7 +114,7 @@ function outcomeLines({ mapping, preview, basis }: ReadyProposal): string[] {
   const verdict = basis?.kind === 'model' ? basis.repeats : undefined;
   if (repeats && verdict && verdict !== 'none') lines.push(verdict === 'export_copies' ? '  Так решила модель Lab: это копии, которые сделала выгрузка.' : '  Так решила модель Lab: клиенты и правда повторялись.');
   lines.push(`  ${countText(considered, CONVERSATIONS)}: подходят ${preview.usable}${rejected ? `, не подошли ${rejected} (${reasons.join(' · ')}${preview.rejected.length > 4 ? ' · …' : ''})` : ''}.`);
-  if (preview.taken < preview.usable) lines.push(`  В одну загрузку входит ${countText(preview.taken, CONVERSATIONS)}: Lab возьмёт ${preview.taken} из ${preview.usable} подходящих — по хешу содержимого, без отбора по исходу.`);
+  if (preview.taken < preview.usable) lines.push(`  В одну загрузку входит ${countText(preview.taken, CONVERSATIONS)}: ${sampleWords(preview.taken, preview.usable)}.`);
   return lines;
 }
 

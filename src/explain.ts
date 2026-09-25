@@ -4,28 +4,22 @@ import { verbatimSpanAt } from './verbatim.js';
 import { headlineRule, type CountedExpectation } from './card/expectations.js';
 import { agentMetricResult, automaticTrialResult, expectationResult, measurementUsable } from './outcomes.js';
 import { AGREED_RATIONALE_PREFIX } from './judge.js';
-import { pluralForm } from './plural.js';
 import { oneLine } from './text.js';
 
 /*
- * Why a situation failed, in the owner's words: what the agent had to do, what it said, and
- * which of the owner's rules the situation rests on. Built from the stored record only: no
- * model call, so old runs are explained as soon as they are opened. Every part is checked
- * against the record (the reply against its event, a rule quote against its source); a part
- * that fails its check is replaced by a named «не подтверждено» row, never guessed.
+ * Why a situation failed, as data the surfaces word (result-text.ts, report.ts): what the agent had to
+ * do, the reply the judge pointed at, and which of the owner's rules the situation rests on. Built from
+ * the stored record only: no model call, so old runs are explained as soon as they are opened. Every part
+ * is checked against the record (the reply against its event, a rule quote against its source); a part
+ * that fails its check is left out with its reason kept, never guessed.
  * Pure: no I/O, no escaping, raw text; every surface escapes at its own boundary. Imports only
- * contracts.js, assessment.js, verbatim.js, card/expectations.js, outcomes.js, judge.js, plural.js
- * and text.js; it must not import the engine (experiment.ts, lab/), quality.ts or result-view.ts.
+ * contracts.js, assessment.js, verbatim.js, card/expectations.js, outcomes.js, judge.js and text.js;
+ * it must not import the engine (experiment.ts, lab/), quality.ts or result-view.ts.
  */
-export const UNVERIFIED = 'объяснение не подтверждено цитатой';
-/**
- * The status line that stands where an agent reply would be quoted. It is never wrapped in «…»:
- * a surface that quoted it would state that the agent said these words.
- */
-export const UNVERIFIED_REPLY = 'реплика агента не подтверждена цитатой';
 
-export type ExplanationRole = 'title' | 'example' | 'expected' | 'said' | 'rule' | 'more' | 'violated' | 'unverified';
-interface ExplanationRow { role: ExplanationRole; indent: number; text: string }
+/** Stands where a rule quote that fails its check would be (quality.ts). */
+export const UNVERIFIED = 'объяснение не подтверждено цитатой';
+
 /** One owner rule: its number in the owner's materials and where to find it. */
 interface RuleRef {
   number: number; requirementId: string; sourceId: string; sourceName: string;
@@ -44,16 +38,21 @@ export interface FailureExplanation {
   kind: 'goal' | 'rules' | 'both';
   /** What the agent had to do, in the situation's or the rule's own words; null when the record does not say it. */
   expected: string | null;
-  /** The verified agent reply; null when it could not be shown verbatim. */
-  said: { seq: number; quote: string; judgeCited: boolean } | null;
-  /** Verified rules shown or counted, knowledge first; unverified ones are only counted. */
+  /**
+   * The agent reply the judge pointed at — its citation, else the reply its evidence names — verified against the
+   * stored event; null when there is none to show. A reply the judge did not point at is never put here: it would
+   * read as the evidence of the failure.
+   */
+  said: { seq: number; quote: string } | null;
+  /**
+   * Why `said` is null: the judge pointed at no reply of the agent (a tool call, the state, or nothing at all), the
+   * words it quotes are not in the reply it names, or the attempt holds no reply.
+   */
+  unsaid?: 'not_cited' | 'unverified' | 'no_reply';
+  /** The verified owner rules the situation rests on, knowledge first; the first one is shown when no violated rule is named. */
   rules: RuleRef[];
-  unverifiedRules: number;
-  moreRules: number;
   /** The one registered prompt rule the failed prompt-rule check quotes; absent when it cannot be named uniquely. */
   violated?: RuleRef;
-  rows: ExplanationRow[];
-  lines: string[];
 }
 
 const GOAL = 'goal_attainment';
@@ -66,13 +65,12 @@ const COMPLIANCE = 'prompt_compliance';
 const QUOTED_SPAN = /«([^«»]{12,})»/g;
 /**
  * How close a span must be before it may name a rule. Twelve characters is a coincidence in Russian
- * rule text («оплата картой» is 13), and the row asserts the rule flatly, so a near-miss must stay
+ * rule text («оплата картой» is 13), and a surface asserts the rule flatly, so a near-miss must stay
  * unnamed: a span inside a rule has to cover most of it, and a rule inside a long judge span has to
  * be long enough to be that rule and not a common phrase.
  */
 const MIN_SPAN_RATIO = 0.6;
 const MIN_CONTAINED_QUOTE = 24;
-const RULE_FORMS: [string, string, string] = ['правило', 'правила', 'правил'];
 /**
  * A line number helps only in a long source. Knowledge files of a few lines are found by name,
  * so `, строка L` is added only from this many non-blank lines up.
@@ -114,37 +112,27 @@ export function ruleText(rule: RuleRef, word = 'Правило'): string {
   return `${word} ${rule.number} · ${oneLine(rule.sourceName)}${rule.line === null ? '' : `, строка ${rule.line}`}: «${rule.quote}»`;
 }
 
-export function rowsToLines(rows: { indent: number; text: string }[]): string[] {
-  return rows.map(row => ' '.repeat(row.indent) + row.text);
-}
-
 function assessment(trial: Trial, metricId: string): MetricAssessment | undefined {
   return trial.assessments?.find(item => item.metricId === metricId);
 }
 
 /**
- * The agent reply behind the verdict, checked against the stored event: the first cited
- * agent reply; a reply named only by evidence is shown whole; otherwise the last reply,
- * marked as not chosen by the judge.
+ * The agent reply behind the verdict, checked against the stored event: the first cited agent reply, else a
+ * reply the judge's evidence names, shown whole. Nothing else stands in for it: the last reply of a conversation
+ * the judge did not point at proves nothing about the failure.
  */
-function saidRow(trial: Trial, cited: MetricAssessment | undefined): { row: ExplanationRow; said: FailureExplanation['said'] } {
+function saidOf(trial: Trial, cited: MetricAssessment | undefined): Pick<FailureExplanation, 'said' | 'unsaid'> {
   const replies = trial.events.filter(event => event.type === 'assistant' && typeof event.text === 'string' && oneLine(event.text));
   const reply = (seq: number) => replies.find(event => event.seq === seq);
-  const shown = (seq: number, quote: string, judgeCited: boolean): ReturnType<typeof saidRow> => ({
-    row: { role: 'said', indent: 2, text: `Сказал (реплика #${seq}${judgeCited ? '' : ', судья не указал реплику'}): «${quote}»` },
-    said: { seq, quote, judgeCited },
-  });
   const citation = cited?.citations?.find(item => reply(item.seq));
   if (citation) {
     return reply(citation.seq)?.text?.includes(citation.quote)
-      ? shown(citation.seq, oneLine(citation.quote), true)
-      : { row: { role: 'unverified', indent: 2, text: `Сказал (реплика #${citation.seq}): ${UNVERIFIED}` }, said: null };
+      ? { said: { seq: citation.seq, quote: oneLine(citation.quote) } }
+      : { said: null, unsaid: 'unverified' };
   }
   const evidence = cited && !cited.citations ? cited.evidence.map(reply).find(Boolean) : undefined;
-  if (evidence) return shown(evidence.seq, oneLine(evidence.text ?? ''), true);
-  const last = replies.at(-1);
-  if (last) return shown(last.seq, oneLine(last.text ?? ''), false);
-  return { row: { role: 'unverified', indent: 2, text: 'Сказал: в записи нет ответа агента.' }, said: null };
+  if (evidence) return { said: { seq: evidence.seq, quote: oneLine(evidence.text ?? '') } };
+  return { said: null, unsaid: replies.length ? 'not_cited' : 'no_reply' };
 }
 
 /**
@@ -198,15 +186,15 @@ export function failureExplanation(record: Experiment, scenario: Scenario, trial
   const failed = rule.kind === 'expectations' ? rule.expectations.filter(expectation => expectationResult(chosen, expectation, reviews) === 'fail') : [];
   const cited = failed[0] ? assessment(chosen, failed[0].id) : kind === 'rules' ? assessment(chosen, COMPLIANCE)
     : assessment(chosen, GOAL) ?? chosen.assessments?.find(item => item.result === 'fail' && agentMetrics.includes(item.metricId));
+  const register = ruleRegister(record);
   // A card may fail on code alone — the article its reference names was not retrieved: then that check is what it owed.
   const failedChecks = chosen.checks.filter(check => !check.passed && isReferenceCheck(check.id));
   const owedScenario = !failed.length && failedChecks.length ? { ...scenario, successCriteria: failedChecks.map(check => oneLine(check.description)).join('; ') } : owed(scenario, failed);
-  const details = detailRows(record, owedScenario, chosen, kind, cited);
-  const rows: ExplanationRow[] = [{ role: 'title', indent: 0, text: `✗ ${oneLine(scenario.title)}` }, ...details.rows];
+  const violated = violatedRule(record, chosen, register);
   return {
-    scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind, expected: details.expected, said: details.said,
-    rules: details.rules, unverifiedRules: details.unverifiedRules, moreRules: details.moreRules,
-    ...(details.violated ? { violated: details.violated } : {}), rows, lines: rowsToLines(rows),
+    scenarioId: scenario.id, trialId: chosen.id, title: scenario.title, kind,
+    expected: expectedOf(record, owedScenario, kind, violated, register), ...saidOf(chosen, cited),
+    rules: rulesOf(record, owedScenario, register), ...(violated ? { violated } : {}),
   };
 }
 
@@ -220,92 +208,25 @@ function owed(scenario: Scenario, expectations: CountedExpectation[]): Scenario 
     requirementIds: [...new Set(expectations.flatMap(expectation => expectation.requirementIds))] };
 }
 
-type DetailKind = FailureExplanation['kind'] | 'pass';
-interface Details extends Pick<FailureExplanation, 'expected' | 'said' | 'rules' | 'unverifiedRules' | 'moreRules' | 'violated'> { rows: ExplanationRow[] }
-
-/**
- * The F1 detail rows of one attempt, without its title: what the agent had to do, what it said
- * (the reply `cited` points at), the owner rules and, for a failed goal, the violated prompt rule.
- * A double failure («оба») takes the goal rows and always says its second half: the named rule,
- * or a row that the rules were broken but the rule cannot be named. A pass never names a violated rule.
- */
-function detailRows(record: Experiment, scenario: Scenario, chosen: Trial, kind: DetailKind, cited: MetricAssessment | undefined): Details {
-  const register = ruleRegister(record);
+/** The verified owner rules a situation rests on, knowledge first. Internal prompt rules (a machine output format) are never shown. */
+function rulesOf(record: Experiment, scenario: Scenario, register: Map<string, RuleRef>): RuleRef[] {
   const requirements = new Map(record.requirements.map(item => [item.id, item]));
-  // Internal prompt rules (a machine output format) are never shown or counted; their register numbers stay.
-  const ids = [...new Set(scenario.requirementIds)].filter(id => { const item = requirements.get(id); return !item || !internalPromptRule(record.sources, item); });
-  const rules = ids.flatMap(id => requirements.has(id) ? register.get(id) ?? [] : [])
-    .sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
-  const unverifiedRules = ids.length - rules.length;
-  const listed: (RuleRef | null)[] = [...rules, ...Array<null>(unverifiedRules).fill(null)];
-  // Two requirements drawn from one sentence quote the same words: the owner reads that sentence once, the rest is counted.
-  const shownRules: (RuleRef | null)[] = [];
-  for (const rule of listed) {
-    if (shownRules.length === 2) break;
-    if (rule && shownRules.some(shown => shown?.sourceId === rule.sourceId && shown.quote === rule.quote)) continue;
-    shownRules.push(rule);
-  }
-  const moreRules = listed.length - shownRules.length;
-  const violated = kind === 'pass' ? undefined : violatedRule(record, chosen, register);
-
-  const rows: ExplanationRow[] = [];
-  const criteria = oneLine(scenario.successCriteria ?? '');
-  const firstRule = shownRules.find((rule): rule is RuleRef => rule !== null);
-  let expected: string | null = null;
-  if (kind === 'rules') {
-    if (violated) expected = `соблюдать правило «${violated.quote}»`;
-    rows.push(violated
-      ? { role: 'expected', indent: 2, text: `Должен был: соблюдать ${ruleText(violated, 'правило')}` }
-      : { role: 'unverified', indent: 2, text: `Должен был: соблюдать правила из ваших материалов — ${UNVERIFIED}` });
-  } else if (criteria) {
-    expected = criteria;
-    rows.push({ role: 'expected', indent: 2, text: `Должен был: ${criteria}` });
-  } else if (firstRule) {
-    expected = oneLine(requirements.get(firstRule.requirementId)?.text ?? '') || null;
-    rows.push({ role: 'expected', indent: 2, text: `Должен был (из правила): ${oneLine(requirements.get(firstRule.requirementId)?.text ?? '')}` });
-  } else {
-    rows.push({ role: 'unverified', indent: 2, text: 'Должен был: ожидание не записано в ситуации.' });
-  }
-
-  for (const check of chosen.checks.filter(item => !item.passed && isReferenceCheck(item.id))) rows.push({ role: 'expected', indent: 2, text: `Проверка кода: ${oneLine(check.evidence)}` });
-  const { row, said } = saidRow(chosen, cited);
-  rows.push(row);
-
-  if (!listed.length) rows.push({ role: 'unverified', indent: 2, text: 'Правило: у ситуации нет правила из ваших материалов.' });
-  for (const rule of shownRules) {
-    rows.push(rule ? { role: 'rule', indent: 2, text: ruleText(rule) } : { role: 'unverified', indent: 2, text: `Правило: ${UNVERIFIED}` });
-  }
-  if (moreRules) rows.push({ role: 'more', indent: 2, text: `и ещё ${moreRules} ${pluralForm(moreRules, RULE_FORMS)}` });
-  if (kind !== 'rules' && kind !== 'pass' && violated && !shownRules.some(rule => rule?.number === violated.number)) {
-    rows.push({ role: 'violated', indent: 2, text: ruleText(violated, 'Нарушено правило') });
-  } else if (kind === 'both' && !violated) {
-    rows.push({ role: 'unverified', indent: 2, text: `Нарушены правила промпта — ${UNVERIFIED}` });
-  }
-  return { rows, expected, said, rules, unverifiedRules, moreRules, ...(violated ? { violated } : {}) };
+  return [...new Set(scenario.requirementIds)].flatMap(id => {
+    const requirement = requirements.get(id);
+    return requirement && !internalPromptRule(record.sources, requirement) ? register.get(id) ?? [] : [];
+  }).sort((a, b) => Number(a.prompt) - Number(b.prompt) || a.number - b.number);
 }
 
 /**
- * The evidence of the agreement block (UI-SPEC F10): the F1 detail rows of one attempt, read on
- * the judge's recorded judgment only. A failure is explained exactly as phase 2 explains it; a pass
- * quotes the reply the judge cited (else the last reply) and never names a violated rule. Every human review is removed first, so the owner's own mark
- * can neither hide nor rewrite the evidence the owner is asked to judge.
+ * What the agent had to do: for a failed prompt-rule check alone, the one violated rule; otherwise the
+ * situation's own criteria, else the words of its first rule. Null when the record says none of it.
  */
-export function situationEvidence(record: Experiment, scenario: Scenario, trial: Trial, metricId: string): ExplanationRow[] {
-  const judged: Experiment = { ...record, humanReviews: [] };
-  const cited = assessment(trial, metricId);
-  const rule = headlineRule(scenario, [trial]);
-  if (cited?.result === 'pass') return detailRows(judged, owed(scenario, rule.kind === 'expectations' ? rule.expectations : []), trial, 'pass', cited).rows;
-  if (cited?.result !== 'fail') return [];
-  const explanation = failureExplanation(judged, scenario, trial);
-  if (explanation) return explanation.rows.filter(row => row.role !== 'title');
-  return detailRows(judged, scenario, trial, 'goal', cited).rows;
-}
-
-/** The same block as a cause example: titled `Пример:` and indented three more columns. */
-export function exampleRows(explanation: FailureExplanation): ExplanationRow[] {
-  return explanation.rows.map(row => row.role === 'title'
-    ? { role: 'example', indent: row.indent + 3, text: `Пример: ${oneLine(explanation.title)}` }
-    : { ...row, indent: row.indent + 3 });
+function expectedOf(record: Experiment, scenario: Scenario, kind: FailureExplanation['kind'], violated: RuleRef | undefined, register: Map<string, RuleRef>): string | null {
+  if (kind === 'rules') return violated ? `соблюдать правило «${violated.quote}»` : null;
+  const criteria = oneLine(scenario.successCriteria ?? '');
+  if (criteria) return criteria;
+  const first = rulesOf(record, scenario, register)[0];
+  return first ? oneLine(record.requirements.find(item => item.id === first.requirementId)?.text ?? '') || null : null;
 }
 
 /** A check derived from a card's reference (contracts.ts referenceChecks): the only code check a card of the library carries. */

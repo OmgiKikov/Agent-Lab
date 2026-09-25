@@ -49,6 +49,8 @@ VERSION = "agent-oc-command-adapter-1"
 # Какие инструменты агента адаптер вообще умеет наблюдать. Без этой границы проверка
 # «инструмент не вызывался» опиралась бы на молчание, а не на полный перечень.
 EVENT_SCOPE = ["read", "execute_action"]
+# Столько событий одного хода уходит в Lab; если действий больше, перечень уже неполный.
+MAX_EVENTS = 50
 
 
 class Turn:
@@ -151,7 +153,7 @@ def as_events(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             })
         else:
             events.append({"tool": tool, "args": action.get("args")})
-    return events[:50]
+    return events
 
 
 def scalar(value: Any) -> Any:
@@ -169,11 +171,13 @@ def respond(turn: Turn, request: Dict[str, Any], index: int) -> Dict[str, Any]:
         "produced_by": scalar(result["produced_by"]),
         "seconds": scalar(result["seconds"]),
     }
+    events = as_events(result["actions"])
     return {
         "reply": result["answer"],
-        "events": as_events(result["actions"]),
+        "events": events[:MAX_EVENTS],
         "records": records,
-        "eventsComplete": True,
+        # Обрезанный перечень не доказывает, что инструмент не вызывался: полнота только без обрезки.
+        "eventsComplete": len(events) <= MAX_EVENTS,
         "eventScope": EVENT_SCOPE,
         "resetConfirmed": True,
         "version": VERSION,

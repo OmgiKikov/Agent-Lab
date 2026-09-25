@@ -21,7 +21,7 @@ export const DEFAULT_PLANTED = 10;
 export const DEFAULT_CONTROLS = 10;
 /** Most of each kind one check may ask for: the ceiling stays a number the owner can read at once. */
 export const MAX_SAMPLE = 50;
-/** Caught at least this share of planted errors, and false alarms at most 1 − this share of controls: the judge can be trusted. */
+/** Diagnostic threshold for the model-generated copies; independent human labels are still needed to validate the judge. */
 export const TRUSTED_SHARE = 0.8;
 /** The builder writes one planted error in one request: its ceiling is exact. */
 export const BUILDER_CALLS = 1;
@@ -113,15 +113,15 @@ export function judgeCheckPlan(record: Experiment, options: { planted?: number; 
 /** What a check says, read from its items: only verdicts count, an item without one is named apart. */
 export interface JudgeCheckSummary {
   planted: number; detected: number; controls: number; falseAlarms: number;
-  /** Items the judge gave no verdict on (the builder failed, the judge failed, the check stopped). */
+  /** Items without a pass/fail verdict (including an explicit unknown). */
   unjudged: number;
   /** Why the judge cannot be trusted; null when it can. */
-  distrust: 'misses' | 'false_alarms' | null;
+  distrust: 'misses' | 'false_alarms' | 'incomplete' | null;
 }
 
 /** Counts of a check as stored: the same numbers every surface reads through `judgeCheckSummary`. */
 export function judgeCheckCounts(items: readonly JudgeCheckItem[]): Pick<JudgeCheck, 'planted' | 'detected' | 'controls' | 'falseAlarms'> {
-  const judged = (kind: JudgeCheckItem['kind']) => items.filter(item => item.kind === kind && item.result !== null);
+  const judged = (kind: JudgeCheckItem['kind']) => items.filter(item => item.kind === kind && (item.result === 'pass' || item.result === 'fail'));
   return { planted: judged('planted').length, detected: judged('planted').filter(item => item.result === 'fail').length,
     controls: judged('control').length, falseAlarms: judged('control').filter(item => item.result === 'fail').length };
 }
@@ -130,7 +130,8 @@ export function judgeCheckCounts(items: readonly JudgeCheckItem[]): Pick<JudgeCh
 export function judgeCheckSummary(check: JudgeCheck | null | undefined, record: Pick<Experiment, 'id'>): JudgeCheckSummary | null {
   if (!check || check.runId !== record.id) return null;
   const counts = judgeCheckCounts(check.items);
-  const misses = !counts.planted || counts.detected < TRUSTED_SHARE * counts.planted;
+  const misses = counts.planted > 0 && counts.detected < TRUSTED_SHARE * counts.planted;
   const falseAlarms = counts.controls > 0 && counts.falseAlarms > (1 - TRUSTED_SHARE) * counts.controls;
-  return { ...counts, unjudged: check.items.filter(item => item.result === null).length, distrust: misses ? 'misses' : falseAlarms ? 'false_alarms' : null };
+  const unjudged = check.items.filter(item => item.result === null || item.result === 'unknown').length;
+  return { ...counts, unjudged, distrust: misses ? 'misses' : falseAlarms ? 'false_alarms' : (!counts.planted || !counts.controls || unjudged) ? 'incomplete' : null };
 }

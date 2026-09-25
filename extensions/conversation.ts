@@ -2,10 +2,11 @@ import type { Experiment, Trial } from '../src/contracts.js';
 import { assessmentRubrics } from '../src/assessment.js';
 import type { RunComparison } from '../src/comparison.js';
 import { plannedTrials } from '../src/run.js';
+import { headlineRule, recordedExpectationResult, type Expectation } from '../src/card/expectations.js';
 import { judgedScenario } from '../src/card/legacy-v1.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
-import { accuracyParts, whenText } from '../src/result-text.js';
+import { accuracyParts, comparisonRows, noRuleText, saidText, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
 import { agentLine } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
 import { clip, oneLine } from '../src/text.js';
@@ -50,6 +51,19 @@ export function ownerMessages(ctx: BranchReader): string[] {
 
 export const row = (text: string, tone?: Row['tone'], bold = false, indent = 0): Row => ({ text, ...(tone ? { tone } : {}), ...(bold ? { bold } : {}), ...(indent ? { indent } : {}) });
 const blank = (): Row => row('');
+
+/**
+ * Rows of result-text.ts as rows of the chat: the same words, painted by their role, `shift` columns further left (the
+ * chat's summary stands under its action, not at a screen's margin); a wrapped line keeps its hanging column.
+ */
+export function feedRows(rows: readonly ResultRow[], shift = 0): Row[] {
+  return rows.map(item => {
+    if (item.role === 'blank' || !item.text) return blank();
+    const indent = Math.max(0, item.indent - shift);
+    return { text: item.text, role: item.role, ...(indent ? { indent } : {}), ...(item.hang ? { hang: indent + item.hang } : {}) };
+  });
+}
+
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
 const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
 const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
@@ -116,6 +130,8 @@ export function progressText(record: Experiment, now = Date.now()): string {
     const step = total ? `разобрано ${done} из ${countText(total, CONVERSATIONS_OF)}` : oneLine(record.message);
     return [`Готовлю ситуации: ${step}`, minutesSince(record.createdAt, now), spent(record)].filter(Boolean).join(' · ');
   }
+  // A check of the draft's situations, or values proposed for one of them: the line its work says.
+  if (record.phase === 'checking') return [oneLine(record.message), spent(record)].filter(Boolean).join(' · ');
   const planned = plannedTrials(record), done = record.trials.length;
   return [`Прогон: ${done} из ${countText(planned, CONVERSATIONS_OF)}`, minutesSince(record.reviewedAt, now), spent(record)].filter(Boolean).join(' · ');
 }
@@ -153,17 +169,30 @@ const judgeReason = (rationale: string): string => oneLine(rationale.startsWith(
 
 /** The turns of a recorded conversation, signed «Клиент» and «Агент» in one column; never the event numbers (docs/design/ui-spec.md §2). */
 export function turnRows(trial: Trial, indent = 0): Row[] {
-  return trial.events.filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''))
-    .map(event => ({ text: `${(event.type === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.text)}`, indent, hang: indent + 9 }));
+  return trialTurns(trial).map(turn => ({ text: turnText(turn), indent, hang: indent + TURN_HANG }));
 }
 
-/** How a conversation was judged, the tools it called and the owner's marks: what ctrl+o opens under a conversation. */
+/** Why a verdict the judge gave does not stand: its evidence channel does not support it, in the owner's words. */
+const CHANNEL_GAP: Record<Expectation['observation'], string> = {
+  reply: 'нет подтверждения в ответе агента', tool: 'нет подтверждения в журнале инструментов', state: 'нет подтверждения в состоянии системы',
+};
+
+/**
+ * How a conversation was judged, the tools it called and the owner's marks: what ctrl+o opens under a conversation.
+ * An expectation shows its verdict read through its evidence channel — the one the result counts — and says so
+ * when that reading undid the judge's own word; the judge's reason stays beneath it.
+ */
 function judgedRows(record: Experiment, trial: Trial): Row[] {
   const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
   const metrics = scenario ? judgedScenario(scenario, trial).metrics ?? [] : [];
+  const rule = headlineRule(scenario, [trial]);
+  const counted = new Map(rule.kind === 'expectations' ? rule.expectations.map(expectation => [expectation.id, expectation]) : []);
   const judged = metrics.flatMap(metric => {
     const assessment = trial.assessments?.find(item => item.metricId === metric.id);
-    return [row(`${metric.name}: ${assessment ? OUTCOME_WORD[assessment.result] ?? assessment.result : 'оценки нет'}`, assessment?.result === 'fail' ? 'error' : assessment?.result === 'pass' ? 'success' : 'warning'),
+    const expectation = counted.get(metric.id);
+    const result = expectation ? recordedExpectationResult(trial, expectation) : assessment?.result;
+    const gap = assessment && expectation && assessment.result !== 'unknown' && result === 'unknown' ? ` — ${CHANNEL_GAP[expectation.observation]}` : '';
+    return [row(`${metric.name}: ${result ? `${OUTCOME_WORD[result] ?? result}${gap}` : 'оценки нет'}`, result === 'fail' ? 'error' : result === 'pass' ? 'success' : 'warning'),
       ...(assessment && judgeReason(assessment.rationale) ? [{ ...row(judgeReason(assessment.rationale), 'muted', false, 2) }] : [])];
   });
   const checks = trial.checks.map(check => row(`${check.passed ? 'выполнено' : 'не выполнено'}: ${check.description}`, check.passed ? 'success' : 'error'));
@@ -188,9 +217,10 @@ export function failureFeed(record: Experiment, view: ResultView, index: number)
   const trial = record.trials.find(item => item.id === failure.trialId);
   return {
     tone: 'warning',
+    // The agent's words are the reply the judge pointed at, else why none is quoted: a reply the judge never named is no evidence of the failure.
     rows: [row(`${GLYPH.fail} ${index + 1}  ${oneLine(failure.title)}`, 'error', true),
-      row(`Ожидалось: ${failure.expected ?? 'не записано в ситуации'} · Агент: ${failure.said ? `«${failure.said.quote}»` : 'ответ не подтверждён цитатой'}`),
-      row(`${rule ? `Правило: «${rule.quote}»` : 'У ситуации нет правила из ваших материалов'}${unmarked ? ' · судья прав? да или нет' : ''}`, 'muted')],
+      row(`Ожидалось: ${failure.expected ?? 'не записано в ситуации'} · Агент: ${saidText(failure)}`),
+      row(`Правило: ${rule ? `«${rule.quote}»` : noRuleText()}${unmarked ? ' · судья прав? да или нет' : ''}`, 'muted')],
     ...(trial ? { more: [row('Разговор', 'accent', true), ...turnRows(trial, 2), ...judgedRows(record, trial)], expand: 'весь разговор' } : {}),
   };
 }
@@ -209,19 +239,15 @@ export function dialogueFeed(record: Experiment, trial: Trial): Feed {
   };
 }
 
-/** Before/after of a repeat: what was fixed, what broke, and how much of the set could be compared at all. */
-export function comparisonFeed(comparison: RunComparison, before: Pick<Experiment, 'createdAt'>, now?: Date): Feed {
-  const coverage = comparison.coverage;
-  const more = [
-    ...comparison.fixed.map(item => row(`исправлено: ${oneLine(item.title)}`, 'success')),
-    ...comparison.regressed.map(item => row(`сломалось: ${oneLine(item.title)}`, 'error')),
-    ...comparison.incomparable.map(item => row(`несравнимо: ${oneLine(item.title)} — ${oneLine(item.reason)}`, 'warning')),
-    ...comparison.notes.map(note => row(note, 'muted')),
-  ];
+/**
+ * Before/after of a repeat, in the words of result-text.ts comparisonRows: the answer and how much of the set could be
+ * compared in the summary; what broke, what was fixed, what could not be compared, the notes and the next step on expand.
+ */
+export function comparisonFeed(comparison: RunComparison, before: Pick<Experiment, 'createdAt' | 'targetVersion' | 'targetRelease'>, options: { now?: Date; selected?: boolean } = {}): Feed {
+  const [lead, counts, ...rest] = feedRows(comparisonRows(comparison, before, { ...(options.now ? { now: options.now } : {}), ...(options.selected ? { selected: true } : {}) }));
   return {
     tone: comparison.comparable ? 'success' : 'warning',
-    rows: [row(`Сравнение с прогоном ${runWhen(before, now)}: ${comparison.headline}`, comparison.comparable ? 'text' : 'warning', true),
-      row(`Сравнимо ${coverage.validPairs} из ${countText(coverage.plannedPairs, CONVERSATIONS_OF)} · исправлено ${comparison.fixed.length} · сломалось ${comparison.regressed.length} · без изменений ${comparison.unchanged.passing + comparison.unchanged.failing}`, 'muted')],
-    ...(more.length ? { more, expand: 'что изменилось' } : {}),
+    rows: [{ ...lead!, bold: true }, counts!],
+    ...(rest.length ? { more: rest, expand: 'что изменилось' } : {}),
   };
 }

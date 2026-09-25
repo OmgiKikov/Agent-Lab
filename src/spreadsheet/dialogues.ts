@@ -1,7 +1,6 @@
 import { fingerprint } from '../contracts.js';
-import { IMPORT_DIALOGUE_LIMIT } from '../limits.js';
 import type { ImportBatch } from '../scenario-contracts.js';
-import { importBatch } from '../scenario-library.js';
+import { logImport } from '../scenario-library.js';
 import { columnLabel, type Column, type Role, type TableMapping } from './mapping.js';
 import { splitMessages } from './markers.js';
 import { withoutRepeats } from './repeats.js';
@@ -17,9 +16,9 @@ import { cellOf, columnLetter, type Sheet } from './sheet.js';
  * owner chose to drop copied exchanges (repeats.ts), a conversation's row says how many messages went.
  *
  * The owner's filter (selection.ts) comes first: the conversations it leaves out are not read at all.
- * One import holds IMPORT_DIALOGUE_LIMIT conversations. A longer log gives a sample of its usable
- * conversations taken in the order of a hash of each one's id and messages: blind to outcomes and to
- * where a row stands in the sheet, and the same for the same logs.
+ * One import holds IMPORT_DIALOGUE_LIMIT conversations. A longer log gives the sample every log gives
+ * (scenario-library.ts logImport), ordered by a hash of each conversation's id and messages as the sheet
+ * labels them: blind to outcomes and to where a row stands in the sheet, and the same for the same logs.
  */
 
 /** Why a conversation of the sheet is not usable, when the spreadsheet itself shows it; fixed wording, so the preview can count them. */
@@ -79,17 +78,9 @@ export function importTable(sheet: Sheet, mapping: TableMapping): { batch: Impor
   const read = mapping.layout.kind === 'dialogue_per_row' ? rowDialogues(sheet, mapping, chosen, kept)
     : mapping.layout.kind === 'question_per_row' ? questionDialogues(sheet, mapping, chosen, kept) : messageDialogues(sheet, mapping, chosen, kept);
   const dialogues = mapping.expected ? read.map((item, i) => withExpected(item, sheet, mapping.expected!, chosen[i]!)) : read;
-  const verdicts: (string[] | undefined)[] = [];
-  let whole: ImportBatch | undefined;
-  for (let start = 0; start < dialogues.length; start += IMPORT_DIALOGUE_LIMIT) {
-    const chunk = dialogues.slice(start, start + IMPORT_DIALOGUE_LIMIT);
-    const batch = importBatch(chunk.map(item => item.raw), new Map(chunk.flatMap((item, i) => item.issue ? [[i, item.issue] as const] : [])));
-    const reasons = new Map(batch.rejected.map(item => [item.index, item.reasons]));
-    chunk.forEach((_, i) => verdicts.push(reasons.get(i)));
-    if (dialogues.length <= IMPORT_DIALOGUE_LIMIT) whole = batch;
-  }
+  const { batch, verdicts } = logImport(dialogues.map(item => item.raw), { known: new Map(dialogues.flatMap((item, i) => item.issue ? [[i, item.issue] as const] : [])),
+    maskVersion: mapping.maskVersion ?? 1, key: (_, i) => dialogues[i]!.key() });
   const usable = dialogues.flatMap((item, i) => verdicts[i] ? [] : [{ item, i }]);
-  const batch = whole ?? importBatch(sample(usable).map(entry => entry.item.raw));
   const reasons = new Map<string, number>();
   for (const verdict of verdicts) if (verdict?.[0]) reasons.set(verdict[0], (reasons.get(verdict[0]) ?? 0) + 1);
   const messages = new Map<string, { label: string; role: Role; count: number }>();
@@ -105,12 +96,6 @@ export function importTable(sheet: Sheet, mapping: TableMapping): { batch: Impor
     messages: [...messages.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
     kept: kept.map(item => item.key), ...repeats.dialogues ? { repeats } : {},
   } };
-}
-
-/** IMPORT_DIALOGUE_LIMIT of the usable conversations, first by content hash, kept in the order of the sheet. */
-function sample<T extends { item: SheetDialogue; i: number }>(usable: readonly T[]): T[] {
-  return usable.map(entry => ({ entry, key: entry.item.key() })).sort((a, b) => a.key.localeCompare(b.key))
-    .slice(0, IMPORT_DIALOGUE_LIMIT).map(({ entry }) => entry).sort((a, b) => a.i - b.i);
 }
 
 interface KeptColumn { index: number; key: string }

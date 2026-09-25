@@ -175,7 +175,8 @@ test('agent-lab build --prompts-from: without --yes the cost is named and nothin
   const data = join(root, '.agent-lab');
   const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
   const call = async (args: string[]) => {
-    const child = spawn(process.execPath, ['--import', 'tsx', cli, 'build', '--data-dir', data, '--input', task, '--prompts-from', root, ...args], { env: { ...process.env, AGENT_LAB_SESSION: '' } });
+    const { AGENT_LAB_SESSION: _chat, ...outside } = process.env;
+    const child = spawn(process.execPath, ['--import', 'tsx', cli, 'build', '--data-dir', data, '--input', task, '--prompts-from', root, ...args], { env: outside });
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
     const code = await new Promise<number | null>(resolve => child.on('close', resolve));

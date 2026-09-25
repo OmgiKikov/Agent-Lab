@@ -2,15 +2,15 @@ import { isIdentifier } from '../ids.js';
 import { countText } from '../plural.js';
 import { analyzeSheet, filledValues, isNumeric, type SheetAnalysis } from './analysis.js';
 import type { CsvDialect } from './csv.js';
-import { importTable, parseOrder, type TablePreview } from './dialogues.js';
-import { readExactly } from './exact.js';
+import { parseOrder, type TablePreview } from './dialogues.js';
+import { applyReading, proposalBase, readExactly, sheetMapping } from './exact.js';
 import {
-  LABEL_LIMIT, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
+  LABEL_LIMIT, ROLE_CHARS, columnLabel, findColumn, tableChoicesSchema, tableMappingSchema, toColumn,
   type ColumnInfo, type ExpectedKind, type ReadingBasis, type Role, type TableChoices, type TableLayout, type TableMapping,
 } from './mapping.js';
-import { boundaryCounts, detectMarkers, type MarkerStructure } from './markers.js';
+import { boundaryCounts, detectMarkers, namedStructure, type MarkerStructure } from './markers.js';
 import { frequentCopies } from './repeats.js';
-import { conversationRows, selectableColumns, whereOutcome, type ValueCount } from './selection.js';
+import type { ValueCount } from './selection.js';
 import type { Sheet } from './sheet.js';
 import type { TableFile, Workbook } from './workbook.js';
 
@@ -80,8 +80,6 @@ const ID_SHAPE = 0.9;
 const UNIQUE = 0.9;
 /** An order column Lab proposes itself agrees with the order of the rows in nearly every conversation. */
 const ORDER_AGREES = 0.9;
-/** A role value longer than this is text, not a role. */
-const ROLE_CHARS = 40;
 /** Role words exports use. Lab proposes them; the owner confirms. Anything else is asked. */
 const KNOWN_ROLES: ReadonlyMap<string, Role> = new Map([
   ...['client', 'customer', 'user', 'human', 'клиент', 'пользователь', 'абонент'].map(word => [word, 'user'] as const),
@@ -104,7 +102,7 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   const sheet = named ?? workbook.sheets.map(item => ({ sheet: item, structure: hasStructure(analysisOf(item)), rows: analysisOf(item).rows.length }))
     .sort((x, y) => Number(y.structure) - Number(x.structure) || y.rows - x.rows)[0]!.sheet;
   const analysis = analysisOf(sheet);
-  const base: ProposalBase = { file, sheets: workbook.sheets.map(item => item.name), sheet: sheet.name, ...workbook.csv ? { csv: workbook.csv } : {}, headerRow: analysis.header + 1, columns: analysis.columns };
+  const base: ProposalBase = proposalBase(workbook, file, sheet, analysis);
   if (wanted !== undefined && !named) return { ...base, status: 'refused', choice: 'sheet', reason: `Листа ${quoted(wanted)} нет. Есть: ${base.sheets.map(quoted).join(', ')}.` };
   if (!analysis.rows.length) return { ...base, status: 'refused', choice: 'sheet', reason: `В листе ${quoted(sheet.name)} нет строк под заголовком.` };
   if (chosen.perRow === 'question' || chosen.answer !== undefined) return questionTable(workbook, file, sheet, chosen, base);
@@ -116,24 +114,18 @@ export function proposeTable(workbook: Workbook, file: TableFile, choices: Table
   }
   if ('refused' in outcome) return { ...base, status: 'refused', choice: outcome.refused, reason: outcome.reason };
   if ('question' in outcome) return { ...base, status: 'question', question: outcome.question, found: outcome.found };
-  const reading = tableMappingSchema.parse({ version: 1, source: workbook.csv ? { format: 'csv', ...workbook.csv } : { format: 'xlsx', sheet: sheet.name },
-    headerRow: analysis.header + 1, ...outcome.mapping });
-  const conversations = conversationRows(sheet, reading, analysis.rows);
+  const reading = tableMappingSchema.parse(sheetMapping(workbook, sheet, analysis, outcome.mapping));
   // decide() refused a column that is not there.
   const where = chosen.where && { column: findColumn(chosen.where.column, analysis.columns)!, ...chosen.where.values ? { values: chosen.where.values } : {} };
-  const selection = whereOutcome(sheet, reading, conversations, where);
-  if ('issue' in selection) return { ...base, status: 'refused', choice: 'where', reason: selection.issue };
-  if ('ask' in selection) return { ...base, status: 'question', question: { kind: 'where', ...selection.ask }, found: conversations.length };
-  const asWritten = selection.filter ? tableMappingSchema.parse({ ...reading, filter: selection.filter }) : reading;
-  const preview = importTable(sheet, asWritten).preview;
+  const applied = applyReading(sheet, analysis, reading, where, chosen.collapseRepeats);
+  if ('issue' in applied) return { ...base, status: 'refused', choice: 'where', reason: applied.issue };
+  if ('ask' in applied) return { ...base, status: 'question', question: { kind: 'where', ...applied.ask }, found: applied.found };
   // Copies are counted over the conversations the owner chose; frequent ones become the question, and only the owner's yes drops them.
-  const considered = preview.selected ?? preview.dialogues;
+  const { preview } = applied, considered = preview.selected ?? preview.dialogues;
   if (chosen.collapseRepeats === undefined && preview.repeats && frequentCopies(preview.repeats.dialogues, considered)) {
     return { ...base, status: 'question', question: { kind: 'repeats', ...preview.repeats, of: considered }, found: considered };
   }
-  const mapping = chosen.collapseRepeats ? tableMappingSchema.parse({ ...asWritten, collapseRepeats: true }) : asWritten;
-  return { ...base, status: 'ready', mapping, preview: mapping === asWritten ? preview : importTable(sheet, mapping).preview,
-    selectable: selectableColumns(sheet, reading, conversations, analysis.columns) };
+  return { ...base, status: 'ready', mapping: applied.mapping, preview, selectable: applied.selectable };
 }
 
 /**
@@ -233,22 +225,46 @@ const textColumns = (a: Analysis) => a.columns.filter(column => column.filled &&
   .map(column => ({ column, length: filledValues(a, column).reduce((sum, value) => sum + value.length, 0) / column.filled }))
   .sort((x, y) => y.length - x.length).slice(0, 10).map(item => item.column);
 
-/** One conversation per row: the text column and its markers, then the id column. */
+/** The structure the markers the owner named give a column's texts, when they lead them (markers.ts namedStructure). */
+function namedOf(a: Analysis, column: ColumnInfo, named: readonly string[], separator?: string | null): MarkerStructure | undefined {
+  const texts = filledValues(a, column);
+  return named.length && texts.length >= a.rows.length * TEXT_FILLED ? namedStructure(texts, named, separator) : undefined;
+}
+
+/** The column whose texts the owner's markers lead most. */
+function namedColumn(a: Analysis, named: readonly string[], separator?: string | null): { column: ColumnInfo; structure: MarkerStructure } | undefined {
+  let best: { column: ColumnInfo; structure: MarkerStructure } | undefined;
+  for (const column of a.columns) {
+    const structure = namedOf(a, column, named, separator);
+    if (structure && structure.led > (best?.structure.led ?? 0)) best = { column, structure };
+  }
+  return best;
+}
+
+const notLed = (named: readonly string[], column: ColumnInfo) => `${named.length === 1 ? 'Метка' : 'Метки'} ${named.map(quoted).join(', ')} не ${named.length === 1 ? 'открывает' : 'открывают'} разговоры в колонке ${label(column)}: строки начинаются не с ${named.length === 1 ? 'неё' : 'них'}.`;
+
+/**
+ * One conversation per row: the text column and its markers, then the id column. Lab's detection proposes uppercase
+ * markers only; markers the owner named («Клиент:», «Оператор:») are read as named when it finds none.
+ */
 function rowLayout(a: Analysis, c: TableChoices): Outcome {
+  const decided = new Map(c.markers?.map(item => [item.token, item.role]));
+  const named = [...decided.keys()].filter(token => decided.get(token) !== 'text');
   let text: ColumnInfo, structure: MarkerStructure | undefined;
   if (c.text) {
     text = findColumn(c.text, a.columns)!;
-    structure = structureOf(a, text, c.separator);
-    if (!structure) return { refused: c.separator === undefined ? 'text' : 'separator', reason: c.separator === undefined ? noMarkers(text) : noSeparated(c.separator, text) };
+    structure = structureOf(a, text, c.separator) ?? namedOf(a, text, named, c.separator);
+    if (!structure) return c.separator !== undefined ? { refused: 'separator', reason: noSeparated(c.separator, text) }
+      : named.length ? { refused: 'markers', reason: notLed(named, text) } : { refused: 'text', reason: noMarkers(text) };
   } else {
-    const found = markerColumn(a, c.separator);
+    const found = markerColumn(a, c.separator) ?? namedColumn(a, named, c.separator);
     if (!found) return c.separator === undefined ? { question: { kind: 'text', columns: textColumns(a) }, found: 0 } : { refused: 'separator', reason: noSeparated(c.separator) };
     ({ column: text, structure } = found);
   }
   const texts = filledValues(a, text);
-  const decided = new Map(c.markers?.map(item => [item.token, item.role]));
-  const named = [...decided.keys()].filter(token => decided.get(token) !== 'text');
-  const counts = boundaryCounts(texts, structure.separator, [...structure.markers.map(item => item.token), ...named]);
+  // The structure counted its own markers' messages; the owner's are counted beside them.
+  const counts = named.length ? boundaryCounts(texts, structure.separator, [...structure.markers.map(item => item.token), ...named])
+    : new Map(structure.markers.map(item => [item.token, item.messages]));
   const missing = named.find(token => !counts.get(token));
   if (missing) return { refused: 'markers', reason: `Метка ${quoted(missing)} не встречается в начале сообщений колонки ${label(text)}.` };
   const tokens = [...new Set([...structure.markers.map(item => item.token), ...named])].filter(token => decided.get(token) !== 'text');

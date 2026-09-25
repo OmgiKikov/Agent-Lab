@@ -1,16 +1,21 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
-import { DEFAULT_JUDGE, emptyUsage, experimentSchema, settingsSchema, type Experiment } from '../src/contracts.js';
+import { DEFAULT_JUDGE, emptyUsage, experimentSchema, fingerprint, settingsSchema, type Experiment, type Usage } from '../src/contracts.js';
+import type { JudgeAudit } from '../src/assessment.js';
 import { ExperimentLab } from '../src/experiment.js';
-import { hasCompleteJudgment, observableSources, scenarioSources } from '../src/judge.js';
-import { callModel, ProviderFailure, type ProviderFailureKind } from '../src/llm/model-call.js';
+import { hasCompleteJudgment, JUDGE_PROMPT, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, judgeResponseSchema, observableSources, scenarioSources } from '../src/judge.js';
+import { PLANT_ERROR_ROLE } from '../src/judge-check-task.js';
+import { MASK_FILL_ROLE } from '../src/card/unmask.js';
+import { callModel, ProviderFailure, type ProviderDelivery, type ProviderFailureKind } from '../src/llm/model-call.js';
 import { resolveModels } from '../src/llm/models.js';
-import { REPAIR_ATTEMPTS, runStructured, StructuredTaskError } from '../src/llm/structured.js';
+import { runStructured, StructuredTaskError, TASK_ATTEMPTS } from '../src/llm/structured.js';
+import { countText } from '../src/plural.js';
+import * as prompts from '../src/prompts.js';
 import { createPiRuntime, evaluatorVersion } from '../src/pi.js';
 import { callContext, fixture, fixtureSettings, type Reply } from './helpers/pi-fixture.js';
 import { cardDraft } from './helpers/card-library.js';
@@ -92,24 +97,66 @@ test('judgments written before the harness still verify, and the harness writes 
   } finally { wire.restore(); }
 });
 
-test('a provider that did not answer fails with its stored label, typed by kind, and the request is charged exactly once', async () => {
-  const cases: [Reply, ProviderFailureKind, string][] = [
-    [{ content: [], stopReason: 'error', errorMessage: '429 Too Many Requests' }, 'rate limit', 'Pi provider response incomplete: rate limit'],
-    [{ content: [], stopReason: 'error', errorMessage: 'Insufficient credits on the account' }, 'insufficient credit', 'Pi provider response incomplete: insufficient credit'],
-    [{ content: [], stopReason: 'error', errorMessage: 'This model maximum context length is 8192 tokens' }, 'context limit', 'Pi provider response incomplete: context limit'],
-    [{ content: [], stopReason: 'error', errorMessage: 'upstream went away' }, 'incomplete', 'Pi provider response incomplete: error'],
-    [{ content: [{ type: 'text', text: '{"partial":' }], stopReason: 'length' }, 'incomplete', 'Pi provider response incomplete: length'],
-    ['   ', 'empty', 'Модель вернула пустой ответ.'],
+/** A judgment's protocol hash as it is sealed: the protocol alone, or under the judge's sampling configuration. */
+const sealedProtocol = (judged: { configurationHash?: string }) => judged.configurationHash
+  ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: judged.configurationHash }) : JUDGE_PROTOCOL;
+
+test('the judge prompt, its answer schema and its protocol are the frozen text the stored audits and receipts were made with', async () => {
+  // The sidecar audits of a stored run keep the prompt the judge was given, word for word.
+  const directory = new URL('./fixtures/library-v1/run.judge/', import.meta.url);
+  const audits = await Promise.all((await readdir(directory)).map(async name => JSON.parse(await readFile(new URL(name, directory), 'utf8')) as JudgeAudit));
+  assert.ok(audits.length > 0);
+  for (const audit of audits) {
+    assert.equal(audit.prompt, JUDGE_PROMPT, 'the frozen prompt is the stored one');
+    assert.equal(audit.protocolHash, sealedProtocol(audit));
+  }
+  // Every stored receipt is sealed by the protocol that hashes the frozen prompt and response format.
+  const judged = await storedFixture('pre-harness-judgments.json') as Record<string, unknown>;
+  const stored = Object.values(judged).flatMap(value => experimentSchema.parse(value).trials.map(trial => trial.judgeReceipt!));
+  assert.ok(stored.length > 0);
+  for (const receipt of stored) assert.equal(receipt.protocolHash, sealedProtocol(receipt));
+  assert.equal(JUDGE_PROTOCOL, '23b18c288b2345bd2a044b687ceb63f5000e71a897a44b8dbac35e7a0937ff75', 'the protocol of every stored judgment');
+  // The prompt shows the answer's schema as frozen text. When a zod upgrade writes the parse schema differently this fails:
+  // check that it still accepts the same answers, and change this expectation — never the prompt.
+  const shown = JUDGE_PROMPT.slice(JUDGE_PROMPT.lastIndexOf('\n') + 1);
+  assert.equal(shown, JSON.stringify(z.toJSONSchema(judgeResponseSchema)));
+  assert.doesNotMatch(JSON.stringify(JUDGE_RESPONSE_FORMAT), /"(minimum|maximum|minLength|maxLength|maxItems)"/, 'the wire format drops the bounds the grammar lacks');
+});
+
+test('every structured task is told the data boundary exactly once', async () => {
+  // runStructured puts it after every role; a role that carried it too told the model twice.
+  for (const [name, role] of Object.entries({ ...prompts, PLANT_ERROR_ROLE, MASK_FILL_ROLE })) {
+    if (name !== 'DATA_BOUNDARY' && typeof role === 'string') assert.ok(!role.includes(prompts.DATA_BOUNDARY), `${name} carries the data boundary itself`);
+  }
+  const f = await fixture(() => JSON.stringify({ replyIndex: 0, newReply: 'Обратитесь в поддержку.', whatWasBroken: 'Агент отправил клиента в поддержку.' }));
+  try {
+    await f.adapter.plantError!.plant({ expectation: 'Не отправлять в поддержку', rules: ['Никогда не направляй в поддержку'], replies: [{ index: 0, text: 'Сделайте возврат в приложении.' }] }, callContext().ctx);
+    assert.equal(f.requests[0]!.systemPrompt!.split(prompts.DATA_BOUNDARY).length - 1, 1);
+  } finally { await f.close(); }
+});
+
+test('a provider that did not answer fails with its stored label, typed by kind and by what the request cost, and is charged exactly once', async () => {
+  // Refused before any answer: nothing was generated, the cost is known and zero. Answered or cut: the provider's usage.
+  const free: Usage = { calls: 1, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+  const billed: Usage = { calls: 1, inputTokens: 13, outputTokens: 5, costUsd: 0.032 };
+  const cases: [Reply, ProviderFailureKind, ProviderDelivery, string, Usage][] = [
+    [{ content: [], stopReason: 'error', errorMessage: 'Insufficient credits on the account' }, 'insufficient credit', 'refused', 'Pi provider response incomplete: insufficient credit', free],
+    [{ content: [], stopReason: 'error', errorMessage: 'This model maximum context length is 8192 tokens' }, 'context limit', 'refused', 'Pi provider response incomplete: context limit', free],
+    [{ content: [], stopReason: 'error', errorMessage: 'upstream went away' }, 'incomplete', 'cut', 'Pi provider response incomplete: error', { ...free, costUsd: null }],
+    [{ content: [], stopReason: 'error', errorMessage: 'upstream went away', started: true }, 'incomplete', 'cut', 'Pi provider response incomplete: error', billed],
+    [{ content: [{ type: 'text', text: '{"partial":' }], stopReason: 'length' }, 'length', 'answered', 'Pi provider response incomplete: length', billed],
+    ['   ', 'empty', 'answered', 'Модель вернула пустой ответ.', billed],
   ];
-  for (const [reply, kind, message] of cases) {
+  for (const [reply, kind, delivery, message, charged] of cases) {
     const f = await fixture(() => reply);
     try {
       const { ctx, usage } = callContext(), partial: string[] = [];
       const model = f.runtime.getModel(fixtureSettings.provider, fixtureSettings.model)!;
       await assert.rejects(callModel(f.runtime, model, { system: 's', messages: [{ role: 'user', content: 'q', timestamp: 0 }], maxTokens: 100 }, ctx, value => partial.push(value)),
-        error => error instanceof ProviderFailure && error.kind === kind && error.message === message);
-      assert.deepEqual(usage, { calls: 1, inputTokens: 13, outputTokens: 5, costUsd: 0.032 }, message);
-      assert.deepEqual(partial, kind === 'incomplete' && message.endsWith('length') ? ['{"partial":'] : [], 'a partial text is evidence, never an answer');
+        error => error instanceof ProviderFailure && error.kind === kind && error.delivery === delivery && error.message === message);
+      assert.equal(f.requests.length, 1, `${message}: a refusal waiting cannot fix, and anything that may have been billed, is not sent again`);
+      assert.deepEqual(usage, charged, message);
+      assert.deepEqual(partial, kind === 'length' ? ['{"partial":'] : [], 'a partial text is evidence, never an answer');
     } finally { await f.close(); }
   }
 });
@@ -145,18 +192,20 @@ test('a structured task repairs within one conversation, names its step in every
   try {
     const models = await resolveModels(never.runtime, fixtureSettings, AbortSignal.timeout(1000));
     await assert.rejects(runStructured(never.runtime, models, task, { question: 'x' }, callContext().ctx),
-      error => error instanceof StructuredTaskError && error.message.startsWith(`Проба: модель ${REPAIR_ATTEMPTS} раза подряд`) && /These fields do not match the schema: answer \(/.test(error.message));
-    assert.equal(never.requests.length, REPAIR_ATTEMPTS);
+      error => error instanceof StructuredTaskError && error.message.startsWith(`Проба: модель ${countText(TASK_ATTEMPTS, ['раз', 'раза', 'раз'])} подряд вернула`)
+        && /These fields do not match the schema: answer \(/.test(error.message));
+    assert.equal(never.requests.length, TASK_ATTEMPTS);
     assert.deepEqual(never.requests[1]!.messages.map(message => message.role), ['user', 'assistant', 'user'], 'a repair continues the same message list');
     assert.match(text(never.requests[1]!.messages[2]!.content), /Your previous answer was rejected/);
   } finally { await never.close(); }
-  const limited = await fixture(() => ({ content: [], stopReason: 'error', errorMessage: 'rate limit reached' }));
+  const denied = await fixture(() => ({ content: [], stopReason: 'error', status: 401, errorMessage: '401 Incorrect API key provided' }));
   try {
-    const models = await resolveModels(limited.runtime, fixtureSettings, AbortSignal.timeout(1000));
-    await assert.rejects(runStructured(limited.runtime, models, task, {}, callContext().ctx),
-      error => error instanceof ProviderFailure && error.kind === 'rate limit' && error.message === 'Проба: Pi provider response incomplete: rate limit');
-    assert.equal(limited.requests.length, 1, 'a provider failure is not repaired');
-  } finally { await limited.close(); }
+    const models = await resolveModels(denied.runtime, fixtureSettings, AbortSignal.timeout(1000));
+    await assert.rejects(runStructured(denied.runtime, models, task, {}, callContext().ctx),
+      error => error instanceof ProviderFailure && error.kind === 'access denied' && error.message === 'Проба: Pi provider response incomplete: access denied'
+        && error.delivery === 'refused' && !error.retryable && error.status === 401);
+    assert.equal(denied.requests.length, 1, 'a provider failure is not repaired');
+  } finally { await denied.close(); }
 });
 
 test('the catalog is an enum of the source selection schema up to 500 articles; a larger catalog is checked id by id', async () => {

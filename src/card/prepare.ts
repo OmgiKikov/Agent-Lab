@@ -1,6 +1,8 @@
 import { fingerprint, type AgentSpec, type Experiment, type Source } from '../contracts.js';
+import { Stopped } from '../errors.js';
 import type { CallContext, Runtime } from '../runtime.js';
 import { MAX_PREPARATION_PARALLEL, PREPARATION_PARALLEL, RECORD_REQUIREMENT_LIMIT, SOURCES_PER_DIALOGUE, workInputIssue } from '../limits.js';
+import { ProviderFailure, type ProviderFailureKind } from '../llm/model-call.js';
 import { StructuredTaskError } from '../llm/structured.js';
 import { withTrafficTopic } from '../miner/cards.js';
 import { replacementFor, unitTopic, type LogSample } from '../miner/plan.js';
@@ -36,6 +38,15 @@ import { assessorReference } from './assessor.js';
  * and a resume never repeats it, because its cost is unknown. Each unit has one allowance of proposal calls, repairs
  * included, that survives a resume.
  *
+ * How a step's failure ends, by what is known of its cost (llm/model-call.ts ProviderDelivery):
+ *
+ *   the answers never passed Lab's checks, or the request is over the model's window ─► the unit is left out with why;
+ *                                                                     its seat goes to the next conversation of its topic
+ *   turned away before any answer began — by the call budget or by the provider ─► no charge in doubt: the unit waits in
+ *                                     the queue, no new unit is taken, the units at work finish and are saved
+ *   cut off after its answer began, or by a stop ─► its cost is unknown: the preparation stops, and the resume leaves
+ *                                                   the unit out, never asking again
+ *
  * Several units are worked on at once (`parallel`), taken in plan order. The draft does not depend on which unit
  * finishes first: each unit's card step — its card with the rules it cites, or why it makes none, with the replacement
  * it calls in — lands in the order the units were taken, so the cards are numbered in plan order.
@@ -49,8 +60,6 @@ import { assessorReference } from './assessor.js';
 export const CARD_PROTOCOL = 'cards-v2';
 const PREVIOUS_PROTOCOL = 'cards-v1';
 const PREVIOUS_PREPARATION = 'Эта подготовка сделана прежней версией Lab — подготовьте заново.';
-/** Later customer messages one card can account for. */
-const LATER_MESSAGES = 60;
 const CARD_LIMIT = 200;
 
 /** The agent a run evaluates when the owner names none: it runs outside Lab with its own instructions and tools. Surfaces name it by how it is started. */
@@ -78,8 +87,69 @@ export type CardPlan =
   /** Situations from the owner's rules alone, when there are no logs. */
   | { kind: 'rules'; count: number };
 
-/** Where a preparation saves its draft after every step: the store's publication, told to whoever follows the work (lab/operation.ts). */
+/**
+ * Where a preparation saves its draft after every step: the store's publication, told to whoever follows the work
+ * (lab/operation.ts). It takes the record as it is at the call (store.ts snapshot): the units at work go on changing the
+ * live record while the save waits its turn, and the saved progress must name only cards of the saved library.
+ */
 export type DraftPublisher = Pick<ExperimentStore, 'publishLibrary'>;
+
+/** Why a unit makes no situation, in the owner's words; the model-facing reasons of its rejected answers are not the owner's. */
+const UNUSABLE_SELECTION = 'Ни один ответ модели не прошёл проверку Lab: статьи под этот разговор не выбраны.';
+const UNUSABLE_PROPOSAL = 'Ни один ответ модели не прошёл проверку Lab: ситуация не составлена.';
+const ALLOWANCE_SPENT = `Для этой ситуации исчерпаны ${PROPOSAL_ATTEMPTS} попыток предложить вариант, который проходит проверку Lab.`;
+const UNBOUND_PROPOSAL = 'Предложенная ситуация не прошла проверку Lab и не сохранена.';
+const OVER_WINDOW = 'Разговор вместе с материалами не поместился в окно модели.';
+const INTERRUPTED = 'Подготовка прервалась во время платного вызова: его стоимость неизвестна, поэтому этот источник не разбирается повторно.';
+/** Why a preparation stopped on an answer cut off after it began: the one failure whose cost nobody knows. */
+const CUT = 'Ответ модели оборвался на середине: стоимость этого вызова неизвестна, поэтому его разговор не будет разобран повторно. Готовые ситуации сохранены; продолжите подготовку, когда связь с моделью наладится.';
+/** What the provider said when it turned a request away before any answer began: nothing was billed. */
+const REFUSED: Partial<Record<ProviderFailureKind, string>> = {
+  'rate limit': 'Провайдер модели ограничил частоту запросов.',
+  overloaded: 'Провайдер модели перегружен или временно недоступен.',
+  'connection failure': 'Нет связи с провайдером модели.',
+  'insufficient credit': 'У провайдера модели закончились средства: пополните счёт.',
+  'access denied': 'Провайдер модели отказал в доступе: проверьте ключ и права на модель.',
+  unavailable: 'Модель недоступна: проверьте ключ и права на модель.',
+};
+
+/** A unit's proposal allowance ran out: its own reason, whichever step wrapped it. */
+class AllowanceSpent extends StructuredTaskError {}
+
+/** The causes an error carries, itself first: a structured task wraps what it could not finish (llm/structured.ts). */
+function* causes(error: unknown): Generator<unknown> {
+  for (let cause = error, depth = 0; cause !== undefined && depth < 8; cause = cause instanceof Error ? cause.cause : undefined, depth++) yield cause;
+}
+/**
+ * The call budget's refusal of a new call (lab/operation.ts): the calls already under way go on. A stop that aborts
+ * the work — a cancel, the time limit, a budget that cuts the calls at work — reaches the preparation through its signal.
+ */
+function budgetStop(error: unknown): Stopped | undefined {
+  for (const cause of causes(error)) if (cause instanceof Stopped) return cause.reason === 'budget' ? cause : undefined;
+  return undefined;
+}
+/** The provider turned the request away before any answer began: nothing was billed. */
+const providerRefusal = (error: unknown): ProviderFailure | undefined => error instanceof ProviderFailure && error.delivery === 'refused' ? error : undefined;
+/** A request too large for the model's window: the same request is refused again, so its unit is left out. */
+const overWindow = (error: unknown): boolean => providerRefusal(error)?.kind === 'context limit';
+/** Why a preparation or a check stopped on the provider's refusal, and the way on: what was made is kept, nothing is lost. */
+function refusalText(failure: ProviderFailure, work: 'preparation' | 'check'): string {
+  const why = REFUSED[failure.kind] ?? 'Провайдер модели отклонил запрос.';
+  const when = failure.retryable ? ' через несколько минут' : ', когда причина устранена';
+  return work === 'preparation' ? `${why} Готовые ситуации сохранены, и ни один разговор не потерян: продолжите подготовку${when}.`
+    : `${why} Проверенное сохранено: повторите проверку${when}.`;
+}
+/**
+ * Whether one of the owner's commands names the card: an edit, an answer, a settled doubt, a filled mark. Such a card is
+ * the owner's, and no model writes it over — neither a revision here nor the one the owner's check counts (check-calls.ts).
+ */
+export const namedByOwner = (library: LibraryV2, cardId: string): boolean => library.receipts.some(({ command }) =>
+  'cardId' in command ? command.cardId === cardId : command.kind === 'decide_plausible' && command.facts.some(fact => fact.cardId === cardId));
+/** Why a step's answers never passed, in the owner's words. */
+function unusableText(stage: 'select' | 'propose', error: StructuredTaskError): string {
+  if ([...causes(error)].some(cause => cause instanceof AllowanceSpent)) return ALLOWANCE_SPENT;
+  return stage === 'select' ? UNUSABLE_SELECTION : UNUSABLE_PROPOSAL;
+}
 
 /** The messages the store holds for a library's imports: what its cards cite. */
 export async function storedEvidence(store: Pick<ExperimentStore, 'readImport'>, library: LibraryV2): Promise<CardEvidence> {
@@ -112,6 +182,8 @@ class Preparation {
   private readonly evidence: CardEvidence;
   /** Units whose step failed before any call was sent: they stay pending for a resume. */
   private readonly unsent: { unit: string; message: string }[] = [];
+  /** Why no new unit is taken: the budget or the provider turned a request away. The units at work finish first. */
+  private halt: Error | undefined;
   /** The units taken, in plan order, each with the moment its card step has landed. */
   private readonly turns: { unit: string; landed: Promise<void> }[] = [];
   /** The last save asked for: units at work never write the draft at the same time. */
@@ -163,17 +235,24 @@ class Preparation {
     return !(dialogue && this.batch && unitTopic(this.progress, this.library, this.batch.id, unit));
   }
 
+  /** A unit made its card, or its card was removed by the owner: processed. */
   private finish(unit: string): void {
     this.progress.pending = this.progress.pending.filter(id => id !== unit);
     if (!this.progress.processed.includes(unit)) this.progress.processed.push(unit);
   }
 
-  /** `replace`: the unit's own reason, so a sampled conversation gives its seat to the next one of its topic. */
+  /**
+   * A unit that makes no situation is left out with its reason — counted once, as left out, never also as processed.
+   * `replace`: the unit's own reason, so a sampled conversation gives its seat to the next one of its topic.
+   */
   private exclude(unit: string, reason: string, replace = true): void {
-    this.progress.excluded.push({ dialogueId: unit, reason: clip(reason, 2000) });
-    this.finish(unit);
-    const next = replace ? replacementFor(this.progress, unit) : undefined;
-    if (next) this.progress.pending.push(next);
+    const { progress } = this;
+    progress.excluded.push({ dialogueId: unit, reason: clip(reason, 2000) });
+    progress.pending = progress.pending.filter(id => id !== unit);
+    // Every unit tried so far — made, waiting or left out — is not a replacement.
+    const tried = { sample: progress.sample, pending: progress.pending, processed: [...progress.processed, ...progress.excluded.map(item => item.dialogueId)] };
+    const next = replace ? replacementFor(tried, unit) : undefined;
+    if (next) progress.pending.push(next);
   }
 
   /** A proposal step spends the unit's own allowance first, then the run's budget. */
@@ -182,12 +261,15 @@ class Preparation {
     return { ...this.ctx, beforeCall: () => {
       let spent = attempts.find(item => item.dialogueId === unit);
       if (!spent) { spent = { dialogueId: unit, calls: 0 }; attempts.push(spent); }
-      if (spent.calls >= PROPOSAL_ATTEMPTS) throw new StructuredTaskError(`исчерпаны ${PROPOSAL_ATTEMPTS} попыток предложить ситуацию, которая проходит проверку`);
+      if (spent.calls >= PROPOSAL_ATTEMPTS) throw new AllowanceSpent(ALLOWANCE_SPENT);
       this.ctx.beforeCall(); spent.calls++;
     } };
   }
 
-  /** One paid step. Its unit and stage are saved before the call and cleared when it returns, or when it failed with no charge in doubt. */
+  /**
+   * One paid step. Its unit and stage are saved before the call and cleared when it returns, or when it failed with no
+   * charge in doubt. Answers that never passed are told in the owner's words, whatever the model was told.
+   */
   private async call<T>(unit: string | undefined, stage: Stage, work: (ctx: CallContext) => Promise<T>): Promise<T> {
     // A review of a card no unit names (an owner's copy, a converted draft) is a step of the explicit check alone.
     const entry: InFlight = unit === undefined ? { stage } : { dialogueId: unit, stage };
@@ -212,10 +294,20 @@ class Preparation {
       clear();
       return result;
     } catch (error) {
-      // No call sent: nothing was charged. Complete replies that failed the contract were charged and counted, and a step
-      // the budget refused had its earlier requests answered: nothing is unknown in any of these. A request cut off in
-      // flight — by a cancel, or by the budget another unit ran out — stays named.
-      if (!sent || refused || error instanceof StructuredTaskError) clear();
+      // No call sent: nothing was charged. Complete replies that failed the contract were charged and counted; a step the
+      // budget refused had its earlier requests answered; a last request the provider turned away before any answer
+      // began was not billed, and one it answered whole was billed at the usage it reported: nothing is unknown in any of
+      // these. A request cut off after its answer began, or in flight by a cancel or the time limit, stays named.
+      const accounted = error instanceof ProviderFailure && error.delivery !== 'cut';
+      if (!sent || refused || error instanceof StructuredTaskError || accounted) clear();
+      // A proposal the provider turned away generated nothing: it gives the unit back the allowance it took, so refusals
+      // never use up a conversation's attempts. (Missing credentials refuse before any charge: that kind takes nothing.)
+      const refusal = providerRefusal(error);
+      if (refusal && refusal.kind !== 'unavailable' && sent && stage === 'propose' && unit !== undefined) {
+        const spent = this.progress.generationAttempts?.find(item => item.dialogueId === unit);
+        if (spent?.calls) spent.calls--;
+      }
+      if (error instanceof StructuredTaskError && (stage === 'select' || stage === 'propose')) throw new StructuredTaskError(unusableText(stage, error), { cause: error });
       throw error;
     }
   }
@@ -263,7 +355,6 @@ class Preparation {
       // The tool channel the probe before the preparation confirmed: its tools may be what a duty is observed on.
       ...(record.toolChannel?.confirmed ? { confirmedObservations: ['tool' as const], tools: record.toolChannel.tools } : {}) });
     if (!read.length) return { excluded: 'Для этой ситуации нет материалов владельца.' };
-    if (call(read).laterEvents.length > LATER_MESSAGES) return { excluded: `После первой реплики клиент пишет ещё больше ${LATER_MESSAGES} раз — для одной ситуации это слишком много.` };
     // A sampled conversation's topic is the map's: the model is offered it alone, and the card takes it as the map words it.
     const topic = dialogue && batch ? unitTopic(progress, this.library, batch.id, unit) : undefined;
     const request = (sources: readonly Source[]): CardProposalRequest => ({ task: record.task, call: call(sources),
@@ -285,9 +376,9 @@ class Preparation {
     if (!this.runtime.proposeCard) throw new Error('Эта среда не умеет готовить ситуации.');
     const answer = await this.call(unit, 'propose', ctx => this.runtime.proposeCard!(asked, ctx));
     // The runtime's own check is not taken on trust: the harness parses, finds every quote, holds every kind to the rulebook, binds and checks.
+    // Its reasons are the model's, in English: the owner reads that the situation did not pass.
     const parsed = cardProposalSchema(asked.call).safeParse(answer);
-    const problem = parsed.success ? cardProposalProblem(parsed.data, asked.call) : parsed.error.message;
-    if (!parsed.success || problem) return { excluded: `Предложенная ситуация не прошла проверку: ${problem}` };
+    if (!parsed.success || cardProposalProblem(parsed.data, asked.call)) return { excluded: UNBOUND_PROPOSAL };
     const bound = withTrafficTopic(bindProposal(parsed.data, asked.call, revision ? revision.card.number : this.library.nextNumber), topic);
     // The assessor's markup of this conversation, carried by the import, is the situation's reference from the start.
     const references = dialogue ? assessorReference(dialogue.original, record.sources) : undefined;
@@ -318,17 +409,20 @@ class Preparation {
    */
   private async revise(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, card: Card, whole: boolean): Promise<void> {
     if (this.progress.revised?.includes(unit)) return;
+    // A card of a logged conversation is written again only beside that conversation; a card the owner changed or
+    // decided on is theirs, and no model writes it over.
+    if (card.origin.kind === 'dialogue' && !dialogue || namedByOwner(this.library, card.id)) return;
     const blocked = blockedClaims(card, { library: this.library, evidence: this.evidence });
     if (!blocked.length) return;
     const spent = async () => { this.progress.revised = [...this.progress.revised ?? [], unit]; await this.publish(); };
-    // The unit's reading is saved with the draft: reading it again sends no call.
-    const read = await this.readFor(unit, dialogue, whole);
-    if ('excluded' in read) { await spent(); return; }
     let revised: Card | { excluded: string };
-    try { revised = await this.propose(unit, dialogue, read, { card, blocked }); }
-    catch (error) {
+    try {
+      // The unit's reading is saved with the draft: reading it again sends no call.
+      const read = await this.readFor(unit, dialogue, whole);
+      revised = 'excluded' in read ? read : await this.propose(unit, dialogue, read, { card, blocked });
+    } catch (error) {
       this.ctx.signal.throwIfAborted();
-      if (error instanceof StructuredTaskError) { await spent(); return; }
+      if (error instanceof StructuredTaskError || overWindow(error)) { await spent(); return; }
       throw error;
     }
     if ('excluded' in revised) { await spent(); return; }
@@ -346,7 +440,7 @@ class Preparation {
       catch (error) {
         this.ctx.signal.throwIfAborted();
         // The card keeps what was made and waits for an explicit check; its status says it is not checked.
-        if (error instanceof StructuredTaskError) return;
+        if (error instanceof StructuredTaskError || overWindow(error)) return;
         throw error;
       }
       this.library = recordClaims(this.library, claimReceipts(claims.filter(claim => request.aliases.includes(claim.alias)), review));
@@ -354,13 +448,40 @@ class Preparation {
     }
   }
 
+  /**
+   * The owner's explicit check of one card: the reviewer's claims, then the one revision a blocked card is owed — the
+   * one the consent of its preparation promised (miner/plan.ts), when its review did not happen inside the preparation.
+   * Only a unit this preparation proposed is owed one (it has an allowance); a card converted from the first format is not.
+   */
+  async check(card: Card, unit: string | undefined, whole: boolean): Promise<void> {
+    await this.review(card, unit);
+    if (unit === undefined || this.progress.protocol !== CARD_PROTOCOL || !this.progress.generationAttempts?.some(item => item.dialogueId === unit)) return;
+    const reviewed = this.library.cards.find(item => item.id === card.id);
+    if (reviewed) await this.revise(unit, this.batch?.dialogues.find(item => item.id === unit), reviewed, whole);
+  }
+
+  /**
+   * The card a unit made: undefined while it has none, null when the owner removed it. A checkpoint an earlier Lab
+   * saved while another unit's step was landing can name a card its library does not hold: such a unit is not finished.
+   * It goes on with the card its conversation made, if the draft holds one, or makes its card again.
+   */
+  private cardOf(unit: string): Card | null | undefined {
+    const made = this.progress.cards?.find(item => item.dialogueId === unit);
+    if (!made) return undefined;
+    const card = this.library.cards.find(item => item.id === made.cardId);
+    if (card) return card;
+    if (this.library.receipts.some(receipt => receipt.command.kind === 'remove_card' && receipt.command.cardId === made.cardId)) return null;
+    const own = this.library.cards.find(item => item.origin.kind === 'dialogue' && item.origin.dialogueId === unit && item.origin.batchId === this.batch?.id);
+    this.progress.cards = [...(this.progress.cards ?? []).filter(item => item.dialogueId !== unit), ...own ? [{ dialogueId: unit, cardId: own.id }] : []];
+    return own;
+  }
+
   /** `landed`: the unit's card step is done, and the units after it may land theirs. */
   private async prepareUnit(unit: string, whole: boolean, landed: () => void): Promise<void> {
     const dialogue = this.batch?.dialogues.find(item => item.id === unit);
-    const made = this.progress.cards?.find(item => item.dialogueId === unit);
-    let card = made && this.library.cards.find(item => item.id === made.cardId);
+    let card = this.cardOf(unit);
     // The owner removed the card of an unfinished unit: nothing is made again.
-    if (made && !card) { this.finish(unit); await this.publish(); return; }
+    if (card === null) { this.finish(unit); await this.publish(); return; }
     if (!card) {
       const read = await this.readFor(unit, dialogue, whole);
       if (!('excluded' in read) && this.readsEarlierCards(unit, dialogue)) await this.inTurn(unit);
@@ -386,13 +507,17 @@ class Preparation {
     // A checkpoint written before units were worked on at once names its one call in the two single fields.
     const calls: InFlight[] = [...active, ...activeStage ? [activeDialogueId === undefined ? { stage: activeStage } : { dialogueId: activeDialogueId, stage: activeStage }] : []];
     if (calls.some(call => call.stage === 'ground' && call.dialogueId === undefined)) throw new Error('Подготовка остановилась во время чтения правил владельца. Стоимость этого вызова неизвестна, и он не повторяется молча: подготовьте новый черновик.');
+    // An earlier Lab counted a unit it left out among the processed ones too: it counts once, as left out.
+    const left = new Set(this.progress.excluded.map(item => item.dialogueId));
+    if (this.progress.processed.some(id => left.has(id))) this.progress.processed = this.progress.processed.filter(id => !left.has(id));
     for (const { dialogueId: unit, stage } of calls) {
       if (unit === undefined) continue;
-      // A proposal in flight for a unit that has its card was that card's revision: the blocked card stays, the revision is spent.
-      const revising = stage === 'propose' && !!this.progress.cards?.some(item => item.dialogueId === unit);
-      if (revising) this.progress.revised = [...this.progress.revised ?? [], unit];
-      if (stage === 'review' || revising) this.finish(unit);
-      else this.exclude(unit, 'Подготовка прервалась во время платного вызова: его стоимость неизвестна, поэтому этот источник не разбирается повторно.');
+      // A call in flight for a unit that has its card was its review, or its revision (the reading or the proposal of
+      // it): the card stays, and a revision in flight is spent.
+      if (this.progress.cards?.some(item => item.dialogueId === unit)) {
+        if (stage !== 'review' && !this.progress.revised?.includes(unit)) this.progress.revised = [...this.progress.revised ?? [], unit];
+        this.finish(unit);
+      } else this.exclude(unit, INTERRUPTED);
     }
     delete this.progress.activeDialogueId; delete this.progress.activeStage; delete this.progress.active;
   }
@@ -400,7 +525,8 @@ class Preparation {
   async run(): Promise<void> {
     const { record, progress, ctx } = this;
     this.settleInterrupted();
-    progress.status = 'preparing';
+    // The word an earlier Lab wrote for how its launch ended is retired (schema.ts): it would outlive this launch untrue.
+    delete progress.status;
     await this.publish();
     try {
       ctx.signal.throwIfAborted();
@@ -416,7 +542,7 @@ class Preparation {
       const next = () => progress.pending.find(id => !tried.has(id));
       const failures: unknown[] = [];
       const worker = async (): Promise<void> => {
-        for (let unit = next(); unit !== undefined && !failures.length; unit = next()) {
+        for (let unit = next(); unit !== undefined && !failures.length && !this.halt; unit = next()) {
           tried.add(unit);
           const landed = this.take(unit);
           try {
@@ -424,22 +550,27 @@ class Preparation {
             await this.prepareUnit(unit, whole, landed);
           } catch (error) {
             ctx.signal.throwIfAborted();
-            // One source's unusable answer never hides the others. A call that died in flight stops the preparation.
-            if (error instanceof StructuredTaskError) { await this.inTurn(unit); this.exclude(unit, error.message); landed(); await this.publish(); continue; }
-            if (this.inFlight(unit)) throw error;
+            // One source's unusable answer never hides the others: it is left out with why.
+            const unusable = error instanceof StructuredTaskError ? error.message : overWindow(error) ? OVER_WINDOW : undefined;
+            if (unusable !== undefined) { await this.inTurn(unit); this.exclude(unit, unusable); landed(); await this.publish(); continue; }
+            // A call whose cost is unknown stops the preparation; the resume leaves its unit out.
+            if (this.inFlight(unit)) throw error instanceof ProviderFailure ? new Error(CUT, { cause: error }) : error;
+            // Turned away before anything began: the unit waits for the resume, and no new unit is taken.
+            const refusal = providerRefusal(error);
+            const stop = budgetStop(error) ?? (refusal && new Error(refusalText(refusal, 'preparation'), { cause: error }));
+            if (stop) { this.halt ??= stop; continue; }
             this.unsent.push({ unit, message: error instanceof Error ? error.message : String(error) });
           } finally { landed(); }
         }
       };
-      // A failure stops the taking of new units; the preparation ends once the units at work have landed what they can.
+      // A failure or a refusal stops the taking of new units; the preparation ends once the units at work have landed what they can.
       await Promise.all(Array.from({ length: this.parallel }, () => worker().catch(error => { failures.push(error); })));
       if (failures.length) throw failures[0];
-      progress.status = progress.pending.length ? 'partial' : 'complete';
       await this.publish();
+      if (this.halt) throw this.halt;
       const [first] = this.unsent;
       if (first) throw new Error(`Не удалось разобрать ${countText(this.unsent.length, ['источник', 'источника', 'источников'])} — вызов модели не состоялся: ${first.message} Продолжите подготовку, когда причина устранена.`);
     } catch (error) {
-      if (progress.status === 'preparing') progress.status = ctx.signal.aborted ? 'cancelled' : 'partial';
       await this.publish();
       throw error;
     }
@@ -459,7 +590,7 @@ export async function prepareCards(record: Experiment, plan: CardPlan, agent: Ag
   }
   const prompts = promptsOversize(record.task, record.sources);
   if (prompts) throw new Error(prompts);
-  const progress: CardPreparation = { protocol: CARD_PROTOCOL, inputHash: preparationInputHash(record, CARD_PROTOCOL), status: 'preparing',
+  const progress: CardPreparation = { protocol: CARD_PROTOCOL, inputHash: preparationInputHash(record, CARD_PROTOCOL),
     pending: [...units], processed: [], requestedCount: sample ? sample.count : units.length,
     ...(sample ? { sample: sample.strata } : {}), excluded: (sample?.excluded ?? []).map(({ dialogueId, reason }) => ({ dialogueId, reason })) };
   record.preparationProgress = progress;
@@ -489,8 +620,9 @@ export async function resumeCards(record: Experiment, batch: ImportBatch | undef
 }
 
 /**
- * The owner's explicit check: every claim of every card no receipt answers yet, in card order. A `cards-v1` draft is
- * checked as well: its cards cite stored rules, however they were written out.
+ * The owner's explicit check: every claim of every card no receipt answers yet, in card order, and the one revision a
+ * blocked card of this Lab's preparation is owed (Preparation.check). A `cards-v1` draft is checked as well: its cards
+ * cite stored rules, however they were written out; it is never revised.
  */
 export async function reviewCards(record: Experiment, batch: ImportBatch | undefined, runtime: Runtime, ctx: CallContext, publisher: DraftPublisher): Promise<void> {
   const progress = record.preparationProgress;
@@ -499,8 +631,16 @@ export async function reviewCards(record: Experiment, batch: ImportBatch | undef
   if (library.acceptance) throw new Error('Утверждённые ситуации не меняются: подготовьте новый черновик.');
   const preparation = new Preparation(record, progress, batch, structuredClone(library), runtime, ctx, publisher, libraryHash(library));
   preparation.settleInterrupted();
-  for (const card of [...library.cards].sort((a, b) => a.number - b.number)) {
+  const whole = !workInputIssue({ task: record.task, sources: record.sources });
+  try {
+    for (const card of [...library.cards].sort((a, b) => a.number - b.number)) {
+      ctx.signal.throwIfAborted();
+      await preparation.check(card, progress.cards?.find(item => item.cardId === card.id)?.dialogueId, whole);
+    }
+  } catch (error) {
+    // The check ends where the budget or the provider refused; what it checked is saved.
     ctx.signal.throwIfAborted();
-    await preparation.review(card, progress.cards?.find(item => item.cardId === card.id)?.dialogueId);
+    const refusal = providerRefusal(error);
+    throw budgetStop(error) ?? (refusal ? new Error(refusalText(refusal, 'check'), { cause: error }) : error);
   }
 }

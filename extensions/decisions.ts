@@ -4,12 +4,14 @@ import { hostGrant, type Via } from '../src/card/commands.js';
 import { logImports } from '../src/card/calibration-scope.js';
 import { conversionText } from '../src/card/convert.js';
 import { convertible } from '../src/card/legacy-v1.js';
-import { pendingReviewCalls } from '../src/card/prepare.js';
+import { checkCalls } from '../src/card/check-calls.js';
 import type { CardCommand } from '../src/card/schema.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
 import { rulebookChangeLines, rulebookOf, withKind } from '../src/card/rulebook.js';
-import { ask } from './lab-ui.ts';
-import type { Experiment } from '../src/contracts.js';
+import { LONGEST_OPERATION_MS, preparationBudget } from '../src/card/budget.js';
+import { ask, stopOf } from './lab-ui.ts';
+import type { Experiment, Settings } from '../src/contracts.js';
+import { countText } from '../src/plural.js';
 import { isRunning } from '../src/phases.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { draftHash } from '../src/lab/record.js';
@@ -30,14 +32,30 @@ import type { LabLease, SessionOperations } from './operations.ts';
 /** Writes under the writer's lease; long work is handed to the session (`handOver`), which releases the lease when the work ends. */
 export type Writing = <T>(work: (lab: ExperimentLab, handOver: (start: (lease: LabLease) => void) => void) => Promise<T>, pendingCheck?: 'cancel' | 'wait') => Promise<T>;
 
+/** Long work of this session that has ended and is still handing over its result: a write waits for it instead of failing. */
+async function finishing(operations: SessionOperations, directory: string): Promise<{ done: Promise<void> } | undefined> {
+  const job = operations.current(directory);
+  return job && job.kind !== 'assessment' && !isRunning((await job.lab.get(job.id)).phase) ? job : undefined;
+}
+
+/**
+ * Why nothing can be written from this session now, asked before the owner is asked anything, so an answer is never
+ * lost to work that is going on; undefined when a write can go ahead — the lease is free, held by a check a write
+ * cancels, or by work that has just ended (the write waits for it).
+ */
+export async function busyFor(operations: SessionOperations, directory: string): Promise<string | undefined> {
+  const busy = operations.busy(directory);
+  return busy && !await finishing(operations, directory) ? busy : undefined;
+}
+
 /**
  * A surface's writes: the lease for one piece of work, given back at once unless long work took it over. A run that
  * has just ended is still handing over its result: a write waits for that instead of failing.
  */
 export function writer(operations: SessionOperations, open: (cwd: string, pendingCheck?: 'cancel' | 'wait') => Promise<LabLease>, cwd: string, directory: string): Writing {
   return async (work, pendingCheck = 'cancel') => {
-    const finishing = operations.current(directory);
-    if (finishing && finishing.kind !== 'assessment' && !isRunning((await finishing.lab.get(finishing.id)).phase)) await finishing.done;
+    const ended = await finishing(operations, directory);
+    if (ended) await ended.done;
     const lease = await open(cwd, pendingCheck);
     let kept = false;
     try {
@@ -68,7 +86,7 @@ export async function queueDraft(reader: ExperimentLab, record: Experiment): Pro
   if (isRunning(record.phase)) return undefined;
   const context = await reader.cardContext(record.id);
   const views = situationViews(context.experiment, { evidence: context.evidence, numbers: context.numbers, maxTurns: context.experiment.settings.maxTurns });
-  const pendingCalls = record.phase === 'review' && !record.trials.length ? pendingReviewCalls(context.library, context.evidence) : 0;
+  const pendingCalls = record.phase === 'review' && !record.trials.length ? checkCalls(context.experiment, context.library, context.evidence) : 0;
   return { record: context.experiment, views, pendingCalls };
 }
 
@@ -93,7 +111,8 @@ export async function applySituationCommand(surface: DecisionSurface, record: Ex
     const target = await lab.editableCards(record.id);
     const copied = target.copiedFrom && target.copiedFrom !== target.id ? ' Правка — в новом черновике того же набора; прошлый прогон не меняется.' : '';
     const prepared = await lab.prepareCardCommand(target.id, decided.command, { via: viaOf(surface), ...(decided.words ? { ownerWords: decided.words } : {}) });
-    await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, decided.words ? 'words' : 'confirmed'));
+    // The owner picked the answer natively, so the grant is theirs either way; words mark it as their wording only where no decision rides along.
+    await lab.applyCardCommand(target.id, prepared, hostGrant(prepared, decided.words && prepared.authority === 'owner-words' ? 'words' : 'confirmed'));
     if (decided.command.kind === 'remove_card') return `Ситуация ${situation.number} убрана из черновика.${copied}`;
     const check = await lab.recheckCards(target.id);
     const where = surface.origin === 'board' ? 'здесь и в чате' : 'сюда отдельным сообщением';
@@ -124,6 +143,32 @@ export async function applyRulebookChange(surface: DecisionSurface, record: Expe
   });
 }
 
+/** «потрачено 21 вызов», and after «до»: «до 21 вызова». */
+const CALLS: [string, string, string] = ['вызов', 'вызова', 'вызовов'];
+const CALLS_UP_TO: [string, string, string] = ['вызова', 'вызовов', 'вызовов'];
+
+/**
+ * The owner's «поднять лимит» raises what actually stopped the draft's last work: its calls to `calls`, and its time
+ * too when the time cut it short — doubled, at most the longest an operation may take.
+ */
+export function raisedLimits(draft: Pick<Experiment, 'settings' | 'stop' | 'error'>, calls: number): Pick<Settings, 'maxCalls'> & Partial<Pick<Settings, 'maxDurationMs'>> {
+  const time = stopOf(draft) === 'time' ? Math.min(LONGEST_OPERATION_MS, 2 * draft.settings.maxDurationMs) : draft.settings.maxDurationMs;
+  return { maxCalls: Math.max(draft.settings.maxCalls, calls), ...(time > draft.settings.maxDurationMs ? { maxDurationMs: time } : {}) };
+}
+
+/**
+ * The owner's word to continue a preparation: nothing more to ask while the ceiling they agreed to covers what is left;
+ * otherwise the numbers and the new ceiling, natively. The new ceiling when they agreed to one; null when they did not.
+ */
+async function resumeCeiling(ctx: ExtensionContext, draft: Experiment): Promise<number | undefined | null> {
+  const budget = preparationBudget(draft);
+  if (!budget || budget.resume <= budget.ceiling) return undefined;
+  const agreed = await ask(ctx, 'Продолжить подготовку?', [`Подготовка потратила ${countText(budget.spent, CALLS)} модели из ${budget.ceiling} согласованных.`,
+    `На то, что осталось разобрать (${budget.pending}), нужно до ${countText(budget.resume - budget.spent, CALLS_UP_TO)}: потолок всей подготовки станет ${budget.resume}.`,
+    'Это потолок, а не прогноз; агент не запускается.'], 'Продолжить');
+  return agreed ? budget.resume : null;
+}
+
 /**
  * What a settling choice that is not about one situation does, once the surface has the owner's pick; the notice in
  * the owner's words. `runs` are the finished runs a re-assessment may name. Undefined for a choice this layer does not
@@ -135,10 +180,12 @@ export async function settle(surface: DecisionSurface, action: DecisionAction, r
     case 'raise_limit':
       return surface.writing(async (lab, handOver) => {
         const draft = await lab.get(action.runId);
-        await lab.updateDraft(draft.id, draftHash(draft), { settings: { maxCalls: action.to } });
+        const raised = raisedLimits(draft, action.to);
+        await lab.updateDraft(draft.id, draftHash(draft), { settings: raised });
         const check = await lab.recheckCards(draft.id, { explicit: true });
         if (check.decision.action === 'run') handOver(lease => surface.background.check(surface.ctx, lease, draft.id, undefined));
-        return `Решено: лимит поднят до ${action.to}. Проверяю ситуации — итог придёт ${where}.`;
+        const time = raised.maxDurationMs ? ` и время — до ${Math.round(raised.maxDurationMs / 60_000)} мин` : '';
+        return `Решено: лимит поднят до ${countText(raised.maxCalls, CALLS_UP_TO)}${time}. Проверяю ситуации — итог придёт ${where}.`;
       });
     case 'check_situations':
       return surface.writing(async (lab, handOver) => {
@@ -151,7 +198,11 @@ export async function settle(surface: DecisionSurface, action: DecisionAction, r
       return surface.writing(async (lab, handOver) => {
         const draft = await lab.get(action.runId);
         if (!draft.librarySnapshot) throw new Error('Нет сохранённой подготовки, которую можно продолжить.');
-        await lab.resumePreparation(draft.id, libraryHash(draft.librarySnapshot));
+        const callCeiling = await resumeCeiling(surface.ctx, draft);
+        if (callCeiling === null) return undefined;
+        const resumed = await lab.resumePreparation(draft.id, libraryHash(draft.librarySnapshot), callCeiling === undefined ? {} : { callCeiling });
+        // A preparation with nothing left to prepare is its draft again at once: there is no work to hand over.
+        if (resumed.phase !== 'preparing') return 'Подготовка успела разобрать всё: черновик снова открыт.';
         handOver(lease => surface.background.preparation(surface.ctx, lease, draft.id));
         return 'Продолжаю подготовку с сохранённого места — ситуации придут в чат.';
       });

@@ -118,11 +118,15 @@ function plausibleQuestion(library: LibraryV2, fact: Fact): Question {
   ]);
 }
 
-/** The later message a doubt about the account can mean: the first one left out, else the one the customer stops on. */
-function doubtedMessage(card: Card, evidence: CardEvidence) {
-  const entry = card.coverage.find(item => item.as === 'ignored') ?? card.coverage.find(item => item.as === 'stop');
+/**
+ * The later message a doubt about the account is about: the one the reviewer named (bound by an enum of the card's later
+ * messages, review.ts), while the account still holds it; undefined when the reviewer named none — the question then
+ * names none either, never a message of its own guess.
+ */
+function doubtedMessage(card: Card, receipt: ClaimReceipt, evidence: CardEvidence) {
+  const entry = receipt.message === undefined ? undefined : card.coverage.find(item => item.event.eventIndex === receipt.message);
   const said = entry && messageAt(evidence, entry.event);
-  return entry && said !== undefined ? { event: entry.event, said } : undefined;
+  return entry && said !== undefined ? { event: entry.event, as: entry.as, said } : undefined;
 }
 
 /** The reviewer doubted a claim the owner can decide: its question, in the reviewer's own reason. */
@@ -134,6 +138,10 @@ function doubtQuestion(card: Card, claim: Claim, receipt: ClaimReceipt, evidence
   switch (claim.kind) {
     case 'goal': return ask(`Клиент хочет именно «${clip(card.client.wants, 120)}»? ${reason}`, [settle,
       { label: 'Сказать иначе', command: { kind: 'edit_client', cardId: card.id, wants: card.client.wants }, needsText: true }]);
+    // The mark «невнятный запрос» is the owner's to keep or to lift: lifted, the owner may say what the customer wants.
+    case 'clarity': return ask(`Клиент так и не говорит прямо, чего хочет? Проверяющий сомневается: ${reason}`, [{ ...settle, label: 'Да, запрос невнятный' },
+      { label: 'Нет, запрос понятен', command: { kind: 'edit_client', cardId: card.id, clarity: 'clear' } },
+      { label: 'Нет, сказать, чего хочет клиент', command: { kind: 'edit_client', cardId: card.id, wants: card.client.wants, clarity: 'clear' }, needsText: true }]);
     case 'expectation': {
       const expectation = card.agentMust.find(item => item.id === claim.subject)!;
       return ask(`Агент должен «${clip(expectation.text, 100)}»? Проверяющий сомневается: ${reason}`, [{ ...settle, label: 'Да, это правило' },
@@ -147,14 +155,15 @@ function doubtQuestion(card: Card, claim: Claim, receipt: ClaimReceipt, evidence
         { label: 'Убрать', command: { kind: 'remove_fact', cardId: card.id, factId: fact.id } }]);
     }
     case 'coverage': {
-      const doubted = doubtedMessage(card, evidence);
-      if (!doubted) return ask(`Поздние реплики клиента учтены неверно? ${reason}`, [{ ...settle, label: 'Нет, всё верно' }, removeCard]);
-      // One turn per card: a card that has one can only be left out when another late message matters.
-      const turn = !card.client.turn && doubted.said.trim().length <= 1000
+      // Either answer settles exactly what was asked: the one message the reviewer named, or, when it named none, the account as a whole.
+      const doubted = doubtedMessage(card, receipt, evidence);
+      if (!doubted) return ask(`Поздние реплики клиента учтены неверно? Проверяющий сомневается: ${reason}`, [{ ...settle, label: 'Нет, всё верно' }, removeCard]);
+      // One turn per card, from a message nothing else of the card stands on: otherwise a message that matters leaves the card out.
+      const turn = !card.client.turn && (doubted.as === 'ignored' || doubted.as === 'stop') && doubted.said.trim().length <= 1000
         ? { label: 'Да, это поворот', command: { kind: 'set_turn', cardId: card.id,
           turn: { kind: 'report', after: 'агент ответил на предыдущую реплику', says: doubted.said.trim(), event: doubted.event } } } as const
         : { ...removeCard, label: 'Да, ситуация не подходит' };
-      return ask(`В диалоге клиент ещё писал: «${clip(doubted.said, 150)}». Это важно для проверки?`, [{ ...settle, label: 'Нет' }, turn]);
+      return ask(`В диалоге клиент ещё писал: «${clip(doubted.said, 90)}». Это важно для проверки? Проверяющий сомневается: ${reason}`, [{ ...settle, label: 'Нет' }, turn]);
     }
     case 'leak': return ask(`Слова клиента подсказывают агенту ответ? ${reason}`, [{ ...settle, label: 'Нет' },
       { label: 'Изменить первую реплику', command: { kind: 'edit_client', cardId: card.id, writes: card.client.writes }, needsText: true }]);
@@ -187,8 +196,8 @@ function rulebookQuestion(card: Card, library: LibraryV2, unbound: NonNullable<R
   ]);
 }
 
-/** The order doubts are asked in: what the customer wants, what the agent must do, what they know, the account, the leak. */
-const DOUBT_ORDER: readonly ClaimKind[] = ['goal', 'expectation', 'fact', 'coverage', 'leak'];
+/** The order doubts are asked in: what the customer wants and whether they can say it, what the agent must do, what they know, the account, the leak. */
+const DOUBT_ORDER: readonly ClaimKind[] = ['goal', 'clarity', 'expectation', 'fact', 'coverage', 'leak'];
 
 function statusOf(card: Card, context: StatusContext, twin: Card | undefined): CardStatus {
   const { library, evidence, maxTurns } = context;
