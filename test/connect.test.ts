@@ -61,11 +61,11 @@ async function project(t: TestContext): Promise<string> {
   return cwd;
 }
 
-/** The secret the curl's Authorization header names, set as the owner would before starting Pi. */
+/** The owner's own variable the curl's Authorization header names ($AGENT_TOKEN), set as it is in the owner's shell. */
 function secret(t: TestContext): void {
-  const previous = process.env.AGENT_LAB_AUTHORIZATION;
-  process.env.AGENT_LAB_AUTHORIZATION = 'Bearer fixture-token';
-  t.after(() => { if (previous === undefined) delete process.env.AGENT_LAB_AUTHORIZATION; else process.env.AGENT_LAB_AUTHORIZATION = previous; });
+  const previous = process.env.AGENT_TOKEN;
+  process.env.AGENT_TOKEN = 'fixture-token';
+  t.after(() => { if (previous === undefined) delete process.env.AGENT_TOKEN; else process.env.AGENT_TOKEN = previous; });
 }
 
 /** A scripted owner in Pi's terminal: `answer` picks from each native list; every list is kept. */
@@ -83,7 +83,7 @@ test('the builder reads the request: the message is an enum of the fields that c
   const fields = requestFields(asked);
   assert.ok(fields.some(field => field.pointer === MESSAGE));
   assert.ok(!fields.some(field => field.pointer === '/message/conversation_id' || field.pointer === '/metadata/dialog/dialog_id'), 'the key names already show the conversation');
-  const task = requestTask(asked.fields.map(field => ({ pointer: field.pointer, keys: [], value: field.value })), fields.map(field => field.pointer));
+  const task = requestTask(asked.fields.map(field => ({ pointer: field.pointer, keys: [], value: String(field.value) })), fields.map(field => field.pointer));
   assert.equal(task.role, 'builder');
   assert.equal(task.output.safeParse({ message: MESSAGE, conversation: [], reason: 'Текст клиента.' }).success, true);
   assert.equal(task.output.safeParse({ message: '/message/conversation_id', conversation: [], reason: 'x' }).success, false, 'not a field that can carry words');
@@ -94,9 +94,11 @@ test('the builder reads the request: the message is an enum of the fields that c
   const lines = connectionLines(made, 'поле с текстом клиента');
   assert.deepEqual(lines.slice(0, 3), ['Адрес: https://agent.example.test/api/v1/chat', 'Сообщение клиента → message.content.user_input (поле с текстом клиента)',
     'Разговор → message.conversation_id, metadata.dialog.dialog_id (новый в каждой ситуации)']);
-  assert.ok(lines.includes('Время и идентификатор запроса → Request-Id, Request-Time: подставляются сами'), lines.join('\n'));
-  assert.ok(lines.some(line => line.includes('Authorization') && line.includes('AGENT_LAB_AUTHORIZATION')), 'the secret goes to a named variable');
-  assert.ok(!lines.join('\n').includes('AGENT_TOKEN'));
+  // Every saved header, and how it is kept: its value, or the variable it is read from — the owner's own $AGENT_TOKEN as it is.
+  for (const line of ['Заголовок Content-Type: application/json', 'Заголовок Request-Id: новый id — подставляется при каждом запросе',
+    'Заголовок Request-Time: текущее время — подставляется при каждом запросе',
+    'Заголовок Authorization: Bearer $AGENT_TOKEN — из переменной окружения AGENT_TOKEN, в файле только её имя']) assert.ok(lines.includes(line), `${line}\n---\n${lines.join('\n')}`);
+  assert.ok(!made.warnings.some(warning => warning.includes('Request-Time')), 'the date command keeps its own format, nothing to warn about');
 });
 
 test('one text field left is the message without a model call; no text field is refused in plain words', async () => {
@@ -137,21 +139,24 @@ test('a pasted curl in the chat: the builder picks the fields, the owner confirm
   assert.ok(read.messageCandidates.includes(MESSAGE) && !read.messageCandidates.includes('/message/conversation_id'));
   assert.ok(read.fields.some(field => field.value === 'Здравствуйте, как вернуть оплату?'));
 
-  // Two messages of one conversation, the secret read from the environment, the ids fresh.
+  // Two messages of one conversation, the owner's own variable read from the environment, the ids fresh.
   assert.equal(agent.requests.length, 2);
   const [first, second] = agent.requests;
   assert.equal(first!.body.message.conversation_id, second!.body.message.conversation_id);
   assert.equal(first!.body.metadata.dialog.dialog_id, first!.body.message.conversation_id);
   assert.notEqual(first!.body.message.conversation_id, 'c-1');
   assert.equal(first!.authorization, 'Bearer fixture-token');
+  // The agent does not name the conversation in its reply: Lab cannot see it keep the first message, and says so.
+  assert.match(String(result.warnings?.[0]), /не называет разговор в ответе/);
 
   const file = join(cwd, 'connection.json');
   assert.equal((await stat(file)).mode & 0o777, 0o600);
   const text = await readFile(file, 'utf8');
-  assert.ok(!text.includes('fixture-token') && !text.includes('AGENT_TOKEN'), 'no secret in the file');
+  assert.ok(!text.includes('fixture-token'), 'no secret in the file');
   const connection = await readConnection(file);
   assert.ok(connection.target.kind === 'http' && connection.target.request?.reply === REPLY);
-  assert.deepEqual(connection.target.headersEnv, { Authorization: 'AGENT_LAB_AUTHORIZATION' });
+  assert.deepEqual(connection.target.headersEnv, {});
+  assert.equal(connection.target.request?.headers.Authorization, 'Bearer {{env:AGENT_TOKEN}}', 'the owner\'s variable is read as it is: no new variable, no restart');
   const remembered = await rememberedConnection(join(cwd, '.agent-lab'));
   assert.ok(remembered?.target.kind === 'http' && remembered.target.url === agent.url);
 
@@ -208,11 +213,11 @@ test('a failed test call, a step back, a missing secret or text that is not curl
   assert.equal(notCurl.connected, false);
   assert.match(notCurl.reason, /Ожидается команда curl/);
 
-  // The secret header's variable is not set: nothing is sent.
+  // The variable the curl names is not set: nothing is sent.
   const missing = await envelopeAgent(t);
-  delete process.env.AGENT_LAB_AUTHORIZATION;
+  delete process.env.AGENT_TOKEN;
   const unset = await connect(missing.curl);
-  assert.match(unset.reason, /AGENT_LAB_AUTHORIZATION \(значение заголовка Authorization из вашего curl\)/);
+  assert.match(unset.reason, /AGENT_TOKEN \(её называет ваш curl\)/);
   assert.equal(missing.requests.length, 0);
 
   secret(t);

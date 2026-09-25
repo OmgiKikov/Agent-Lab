@@ -111,27 +111,30 @@ const stateObserved = (trial: Trial): boolean => !!trial.observation && trial.ob
   && (trial.observation.state === 'sandbox' || trial.observation.resetConfirmed === true);
 
 /**
- * A verdict on the agent's tools stands only on a complete tool log. A pass needs a cited tool result: the agent's
- * words never prove an action. From edition 2 a failure stands without one — a complete log holds every call the
- * agent made, so the call the expectation asks for was never made.
+ * A verdict on the agent's tools stands only on a complete tool log. A pass needs a cited tool result — of the tool the
+ * expectation names, when it names one: another tool's call proves nothing about it, and the agent's words never prove
+ * an action. From edition 2 a failure stands without one — a complete log holds every call the agent made, so the call
+ * the expectation asks for was never made.
  */
-function toolEvidence(trial: Trial, result: 'pass' | 'fail', cited: readonly Trial['events'][number][]): boolean {
+function toolEvidence(trial: Trial, expectation: Pick<Expectation, 'tool'>, result: 'pass' | 'fail', cited: readonly Trial['events'][number][]): boolean {
   if (trial.observation?.tools !== 'complete') return false;
-  return cited.some(event => event.type === 'tool_result') || result === 'fail' && trial.countingVersion === COUNTING_VERSION;
+  const proves = (event: Trial['events'][number]) => event.type === 'tool_result' && (expectation.tool === undefined || event.tool === expectation.tool);
+  return cited.some(proves) || result === 'fail' && trial.countingVersion === COUNTING_VERSION;
 }
 
 /**
  * The judge's own verdict on one expectation, read through the channel the expectation is observed on: a
  * pass or a fail stands only when the judge cited an event of that channel — an agent reply, a tool result
- * of a complete tool log (or, for a failure from edition 2, the complete log itself), or an observed state.
- * Otherwise it is unknown (`no_evidence`). The raw judgment stays stored as it was; only its reading is gated here.
+ * of a complete tool log (of the named tool, when the expectation names one; or, for a failure from edition 2,
+ * the complete log itself), or an observed state. Otherwise it is unknown (`no_evidence`). The raw judgment stays
+ * stored as it was; only its reading is gated here.
  */
-export function recordedExpectationResult(trial: Trial, expectation: Pick<Expectation, 'id' | 'observation'>): 'pass' | 'fail' | 'unknown' | undefined {
+export function recordedExpectationResult(trial: Trial, expectation: Pick<Expectation, 'id' | 'observation' | 'tool'>): 'pass' | 'fail' | 'unknown' | undefined {
   const assessment = trial.assessments?.find(item => item.metricId === expectation.id);
   if (!assessment || assessment.result === 'unknown') return assessment?.result;
   const cited = trial.events.filter(event => assessment.evidence.includes(event.seq));
   const channel = expectation.observation === 'reply' ? cited.some(event => event.type === 'assistant')
-    : expectation.observation === 'tool' ? toolEvidence(trial, assessment.result, cited)
+    : expectation.observation === 'tool' ? toolEvidence(trial, expectation, assessment.result, cited)
     : stateObserved(trial) && cited.some(event => event.state !== undefined);
   return channel ? assessment.result : 'unknown';
 }

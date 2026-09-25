@@ -64,7 +64,10 @@ export class BudgetExhausted extends Stopped {
  */
 export class NotADraft extends CommandRefused {}
 
-/** An HTTP agent's request did not come back: it was not reached, it took too long, or it answered with an error status. */
+/**
+ * An HTTP agent's request did not come back: it was not reached, its certificate was not trusted, it took too long, or
+ * it answered with an error status. `code` is the network's own code of the cause (ECONNREFUSED, SELF_SIGNED_CERT_IN_CHAIN).
+ */
 export class AgentRequestFailed extends Error {
-  constructor(readonly kind: 'unreachable' | 'timeout' | 'status', message: string, readonly status?: number) { super(message); }
+  constructor(readonly kind: 'unreachable' | 'tls' | 'timeout' | 'status', message: string, readonly status?: number, readonly code?: string) { super(message); }
 }

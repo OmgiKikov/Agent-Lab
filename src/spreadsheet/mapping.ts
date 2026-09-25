@@ -24,6 +24,8 @@ export const ROLE_WORDS: Readonly<Record<MarkerRole, string>> = { user: 'кли�
 export const HEADER_SCAN = 20;
 /** More distinct markers or role values than this is not a way of telling who speaks. */
 export const LABEL_LIMIT = 12;
+/** A role value longer than this is text, not a role. */
+export const ROLE_CHARS = 40;
 /** «Какие разговоры оценивать?» lists at most this many values of a column, the most frequent, each a numbered answer; the owner names at most this many to keep. */
 export const FILTER_VALUES = 30;
 /** A category is a code or a short label; a longer value is text: a column with one is never listed, and no named value is longer. */
@@ -60,6 +62,11 @@ export const tableMappingSchema = z.strictObject({
   filter: z.strictObject({ column, values: z.array(cellValue).min(1).max(FILTER_VALUES) }).optional(),
   /** Only when the owner chose it: a block of messages written again right after itself is read once (repeats.ts). */
   collapseRepeats: z.literal(true).optional(),
+  /**
+   * The table of masking marks the conversations are read by (masking.ts): it decides which are usable, so the sample
+   * of a long sheet. A mapping confirmed before the table has none and keeps reading its import the first way.
+   */
+  maskVersion: z.literal(2).optional(),
 }).superRefine((mapping, ctx) => {
   const layout = mapping.layout;
   const columns = [mapping.id.index, mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],

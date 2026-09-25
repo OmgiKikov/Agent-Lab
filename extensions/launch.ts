@@ -21,8 +21,10 @@ import { NeedsOwner } from './lab-ui.ts';
  * acceptance and the start stay two facts in the record. Questions never block the ready situations.
  *
  * Situations may be prepared before the agent is connected. The agent is then the one the owner named, or the one Lab
- * finds in the project folder — one sure candidate goes straight into the plan, several are the owner's pick — and it
- * is connected only when the owner says «Запустить»: a declined dialog writes nothing.
+ * finds in the project folder — one sure candidate goes straight into the plan, several or unsure ones are the owner's
+ * pick — and it is connected only when the owner says «Запустить»: a declined dialog writes nothing. An address alone
+ * never becomes a connection here: Lab does not know the request the agent there expects, so the owner's curl goes
+ * through agent_lab_connect (its fields read, two test messages, the owner's confirmation) first.
  */
 
 /** The two answers of every run dialog. */
@@ -89,6 +91,17 @@ const SITUATIONS: [string, string, string] = ['ситуацию', 'ситуац�
 const OFFERED = 3;
 const NO_AGENT = 'Агент ещё не подключён, а в папке проекта Lab не нашёл, как его запускать.';
 
+/** An address without its request format: an agent there is connected from the owner's curl, never in Lab's own contract by guess. */
+const needsCurl = (target: RunnableTarget, evidence: readonly AgentCandidate['evidence'][number][] = []) =>
+  target.kind === 'http' && !target.request && !evidence.some(item => item.kind === 'connection');
+/** The question for an address: the owner's working curl to it, read by agent_lab_connect. */
+function curlQuestion(url: string): NeedsOwner {
+  const address = URL.parse(url);
+  const shown = address ? `${address.origin}${address.pathname}` : url;
+  return new NeedsOwner('needs_owner_input', `Агента по адресу ${shown} Lab подключает по curl-запросу владельца: так Lab узнаёт, в каком виде агент принимает сообщение и где в ответе его текст, и проверяет это двумя тестовыми сообщениями. Попросите у владельца команду curl, которой он обращается к агенту (с телом запроса), и передайте её целиком в agent_lab_connect; после подключения запустите снова.`, [],
+    `Агента по адресу ${shown} Lab подключает по вашему curl-запросу: пришлите команду curl, которой вы обращаетесь к нему (с телом запроса), — Lab разберёт её и проверит двумя тестовыми сообщениями.`);
+}
+
 /** A way to start the agent as the owner picks it: how it starts, and what in the folder says so. */
 function candidateLabel(candidate: AgentCandidate, root: string): string {
   return safeText(`${targetLabel(candidate.target, root)}${candidate.evidence[0] ? ` — ${evidenceText(candidate.evidence[0])}` : ''}`);
@@ -105,15 +118,17 @@ export interface FoundAgent { target: RunnableTarget; note: string }
 export async function findAgent(ctx: Pick<ExtensionContext, 'ui'>, cwd: string): Promise<FoundAgent | undefined> {
   const detection = await detectProject(cwd).catch(() => undefined);
   const found = detection?.agents.slice(0, OFFERED) ?? [];
-  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать (команда, файл модуля или адрес), и вызовите agent_lab_run с agent.`, [],
-    `${NO_AGENT} Как его запускать — команда, файл модуля или адрес?`);
+  if (!found.length) throw new NeedsOwner('needs_owner_input', `${NO_AGENT} Спросите владельца, как его запускать — команда или файл модуля (вызовите agent_lab_run с agent), а если агент отвечает по адресу — его curl-запрос к агенту (передайте его в agent_lab_connect).`, [],
+    `${NO_AGENT} Как его запускать — команда или файл модуля? Если агент отвечает по адресу, пришлите curl-запрос, которым вы к нему обращаетесь.`);
   const root = detection!.root;
   const note = (candidate: AgentCandidate) => safeText(`Lab нашёл его в папке проекта: ${candidate.evidence.map(evidenceText).join('; ')}.`);
-  if (found.length === 1 && found[0]!.confidence === 'high') return { target: found[0]!.target, note: note(found[0]!) };
-  const labels = found.map(candidate => candidateLabel(candidate, root));
+  // Only a candidate Lab is sure of goes straight into the plan; an address never does.
+  if (found.length === 1 && found[0]!.confidence === 'high' && !needsCurl(found[0]!.target, found[0]!.evidence)) return { target: found[0]!.target, note: note(found[0]!) };
+  const labels = found.map(candidate => `${candidateLabel(candidate, root)}${needsCurl(candidate.target, candidate.evidence) ? ' — подключу по вашему curl' : ''}`);
   const picked = await ctx.ui.select(safeText(['Как запустить агента?', '', 'Ситуации готовы, а агент ещё не подключён. Lab нашёл в папке проекта — ничего не запускал и не менял:'].join('\n')),
     [...labels, NOT_NOW]);
   const chosen = found[labels.indexOf(picked ?? '')];
+  if (chosen && chosen.target.kind === 'http' && needsCurl(chosen.target, chosen.evidence)) throw curlQuestion(chosen.target.url);
   return chosen ? { target: chosen.target, note: note(chosen) } : undefined;
 }
 
@@ -127,6 +142,8 @@ export interface LaunchAgent { target?: RunnableTarget; version?: string; note?:
  * The connection is written only with «Запустить», and becomes part of what the owner confirmed.
  */
 export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: ExperimentLab, start: Experiment, agent: LaunchAgent = {}, cwd = ctx.cwd): Promise<Experiment | undefined> {
+  // An address the owner named is connected from their curl first: Lab's own contract is not the agent's.
+  if (agent.target?.kind === 'http' && needsCurl(agent.target)) throw curlQuestion(agent.target.url);
   const found = !agent.target && start.target.kind === 'unconnected' ? await findAgent(ctx, cwd) : undefined;
   if (!agent.target && start.target.kind === 'unconnected' && !found) return undefined;
   const target = agent.target ?? found?.target;

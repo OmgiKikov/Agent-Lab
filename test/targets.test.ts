@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer as createTlsServer } from 'node:https';
 import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { externalReplySchema, openExternalTarget, preflightTarget, runRelease } from '../src/targets.js';
-import type { TraceEvent, World } from '../src/contracts.js';
+import { fingerprint, settingsSchema, type Scenario, type TraceEvent, type World } from '../src/contracts.js';
+import { testCallFailure } from '../src/connect.js';
+import { AgentRequestFailed } from '../src/errors.js';
+import { evaluateTrial } from '../src/evaluation.js';
 import type { CallContext } from '../src/runtime.js';
 
 function context(signal = new AbortController().signal) {
@@ -162,7 +167,7 @@ test('http adapter enforces its own deadline and the trial abort signal', async 
   const state = world();
   const started = performance.now();
   const timed = await openExternalTarget({ target: slow, sessionId: 't', scenarioId: 's', state, history: () => [], ctx: context().ctx });
-  await assert.rejects(timed.respond('hi'), /exceeded|timeout/i);
+  await assert.rejects(timed.respond('hi'), /Агент не ответил за 1 секунду/);
   assert.ok(performance.now() - started < 4000);
   const controller = new AbortController();
   const aborted = await openExternalTarget({ target: { ...slow, timeoutMs: 30000 }, sessionId: 't', scenarioId: 's', state, history: () => [], ctx: context(controller.signal).ctx });
@@ -233,10 +238,10 @@ test('command adapter speaks JSON lines to a local process, applies reported rec
 
 test('command adapter reports a crashed process with its stderr and kills a hanging one at the deadline', async () => {
   const crashed = await openExternalTarget({ target: { kind: 'command', command: process.execPath, args: [stdioFixture, 'crash'], timeoutMs: 5000 }, sessionId: 't', scenarioId: 's', state: world(), history: () => [], ctx: context().ctx });
-  await assert.rejects(crashed.respond('hi'), /exited.*3.*crashed on purpose/s);
+  await assert.rejects(crashed.respond('hi'), /Процесс агента завершился с кодом 3.*crashed on purpose/s);
   const started = performance.now();
   const hanging = await openExternalTarget({ target: { kind: 'command', command: process.execPath, args: [stdioFixture, 'hang'], timeoutMs: 1000 }, sessionId: 't', scenarioId: 's', state: world(), history: () => [], ctx: context().ctx });
-  await assert.rejects(hanging.respond('hi'), /exceeded/);
+  await assert.rejects(hanging.respond('hi'), /Агент не ответил за 1 секунду/);
   assert.ok(performance.now() - started < 4000);
   await hanging.close();
   await assert.rejects(hanging.respond('again'), /закрыта/);
@@ -270,10 +275,10 @@ test('module sessions isolate state, bound initialization and synchronous hangs,
   await writeFile(path, 'let n = 0; export function createSession() { return { respond() { console.log("debug"); return String(++n); } }; }');
   for (let i = 0; i < 2; i++) { const session = await open(); assert.equal(await session.respond('hi'), '1'); await session.close(); }
   await writeFile(path, 'export function createSession() { while (true) {} }');
-  await assert.rejects(open(), /exceeded/);
+  await assert.rejects(open(), /Агент не ответил за 1 секунду/);
   await writeFile(path, 'export function createSession() { return { respond() { while (true) {} } }; }');
   const session = await open();
-  await assert.rejects(session.respond('hi'), /exceeded/); await session.close();
+  await assert.rejects(session.respond('hi'), /Агент не ответил за 1 секунду/); await session.close();
   const controller = new AbortController();
   const cancelled = await open(controller.signal);
   const pending = cancelled.respond('hi');
@@ -295,7 +300,7 @@ test('preflight checks the release hook executable without running it, and runRe
   const started = performance.now();
   const slow = await runRelease({ command: process.execPath, args: ['-e', 'setTimeout(() => {}, 10000)'], timeoutMs: 1000 }, process.env, signal);
   assert.equal(slow.exitCode, null); assert.match(slow.stderr, /exceeded 1000 ms/); assert.ok(performance.now() - started < 4000);
-  await assert.rejects(runRelease({ command: '/nonexistent/release.sh', args: [], timeoutMs: 1000 }, process.env, signal), /Cannot start release hook/);
+  await assert.rejects(runRelease({ command: '/nonexistent/release.sh', args: [], timeoutMs: 1000 }, process.env, signal), /Не удалось запустить хук выпуска \/nonexistent\/release\.sh: команда не найдена/);
 });
 
 test('command adapters receive the external world and the fixture confirms the reset', async () => {
@@ -311,8 +316,114 @@ test('command adapters receive the external world and the fixture confirms the r
 test('release cancellation cannot start work and a grandchild cannot hold the hook open past its deadline', async () => {
   await assert.rejects(runRelease({ command: process.execPath, args: ['-e', 'throw Error("must not start")'], timeoutMs: 1000 }, process.env, AbortSignal.abort()), /abort/i);
   const start = performance.now();
-  const result = await runRelease({ command: process.execPath, args: ['-e', `require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], {stdio: 'inherit'}).unref()`], timeoutMs: 1000 }, process.env, new AbortController().signal);
+  // The hook itself hangs while its grandchild holds the pipe: at the deadline the whole group is killed.
+  const result = await runRelease({ command: process.execPath, args: ['-e', `require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], {stdio: 'inherit'}).unref(); setTimeout(()=>{},10000)`], timeoutMs: 1000 }, process.env, new AbortController().signal);
   assert.equal(result.exitCode, null);
   assert.match(result.stderr, /exceeded/);
   assert.ok(performance.now() - start < 4000);
+});
+
+test('a deploy hook that leaves its server running is done when it exits: its exit code counts, and the server is not killed', async t => {
+  const started = performance.now();
+  // `deploy; server &`: the server holds the hook's output pipe after the hook exits.
+  const hook = `const server = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => console.log("serving"), 50)'], { stdio: 'inherit' });
+    server.unref(); console.log('deployed ' + server.pid);`;
+  const log = await runRelease({ command: process.execPath, args: ['-e', hook], timeoutMs: 5000 }, process.env, new AbortController().signal);
+  const pid = Number(log.stdout.split('deployed ')[1]?.split('\n')[0]);
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } });
+  assert.equal(log.exitCode, 0, log.stderr);
+  assert.ok(Number.isInteger(pid) && pid > 0, log.stdout);
+  assert.ok(performance.now() - started < 2500, `the hook took ${Math.round(performance.now() - started)} ms`);
+  await new Promise(settle => setTimeout(settle, 300));
+  assert.doesNotThrow(() => process.kill(pid, 0), 'the server the hook started keeps running after the hook exited normally');
+});
+
+test('a certificate Node does not trust is named with the next step — NODE_EXTRA_CA_CERTS — in Russian and typed; a refused connection is named as such', async t => {
+  const fixtures = resolve('test/fixtures');
+  const srv = createTlsServer({ cert: readFileSync(join(fixtures, 'tls-loopback-cert.pem')), key: readFileSync(join(fixtures, 'tls-loopback-key.pem')) }, (_req, res) => res.end('"ok"'));
+  srv.listen(0, '127.0.0.1');
+  await once(srv, 'listening');
+  t.after(() => new Promise<void>(r => { srv.closeAllConnections(); srv.close(() => r()); }));
+  const url = `https://127.0.0.1:${(srv.address() as { port: number }).port}/agent`;
+  const target = { kind: 'http' as const, url, headersEnv: {}, timeoutMs: 5000 };
+  const session = await openExternalTarget({ target, sessionId: 't', scenarioId: 's', state: world(), history: () => [], ctx: context().ctx });
+  let failure: unknown;
+  await assert.rejects(session.respond('hi'), (error: unknown) => { failure = error; return true; });
+  assert.ok(failure instanceof AgentRequestFailed);
+  assert.equal(failure.kind, 'tls');
+  assert.equal(failure.code, 'DEPTH_ZERO_SELF_SIGNED_CERT');
+  assert.match(failure.message, /^Агент по адресу https:\/\/127\.0\.0\.1:\d+ не прошёл проверку сертификата: сертификат самоподписанный\. Укажите путь к корневому сертификату \(CA\) в переменной окружения NODE_EXTRA_CA_CERTS/);
+  assert.doesNotMatch(failure.message, /VPN|fetch failed/);
+  assert.equal(testCallFailure(failure), failure.message, 'the connection check says the same');
+  // A dialogue that met it is not measured, and its reason is the same sentence.
+  const scenario: Scenario = { id: 'one', familyId: 'one', split: 'dev', title: 'Одно сообщение', tier: 'smoke', provenance: 'curated', requirementIds: [],
+    user: { goal: 'Спросить', facts: 'Нет', behavior: 'Одно сообщение', opening: 'Здравствуйте', maxFollowUps: 0 }, initialState: world(), checks: [] };
+  const spec = { name: 'fixture', instructions: 'External.', tools: [] };
+  const trial = await evaluateTrial({ runtime: {}, revision: { id: fingerprint(spec), spec, parentId: null, hypothesis: 'fixture', createdAt: new Date().toISOString() },
+    scenario, sources: [], requirements: [], repeat: 0, manifestHash: fingerprint(scenario), userMode: 'static', target,
+    settings: settingsSchema.parse({ repeats: 1, maxTurns: 2, maxCalls: 5, userModes: ['static'], maxDurationMs: 60000 }), ctx: context().ctx });
+  assert.equal(trial.outcome, 'invalid');
+  assert.match(trial.reason, /NODE_EXTRA_CA_CERTS/);
+
+  const closed = createServer();
+  closed.listen(0, '127.0.0.1');
+  await once(closed, 'listening');
+  const port = (closed.address() as { port: number }).port;
+  await new Promise<void>(r => closed.close(() => r()));
+  const refused = await openExternalTarget({ target: { ...target, url: `http://127.0.0.1:${port}/agent` }, sessionId: 't', scenarioId: 's', state: world(), history: () => [], ctx: context().ctx });
+  await assert.rejects(refused.respond('hi'), (error: unknown) => error instanceof AgentRequestFailed && error.kind === 'unreachable' && error.code === 'ECONNREFUSED'
+    && error.message === `Агент по адресу http://127.0.0.1:${port} недоступен: соединение отклонено — агент не запущен или слушает другой порт.`);
+});
+
+test('a stray print on stdout is diagnostics, never the reply: the dialogue goes on, and the line shows when the agent then fails', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-lab-stdout-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'agent.mjs');
+  await writeFile(path, [
+    "import readline from 'node:readline';",
+    "console.log('loading model...');",
+    'readline.createInterface({ input: process.stdin }).on(\'line\', line => {',
+    '  const request = JSON.parse(line);',
+    "  if (request.type === 'close') process.exit(0);",
+    "  console.log('debug: got ' + request.message);",
+    "  if (request.message === 'die') { console.log('about to fail'); process.exit(4); }",
+    "  process.stdout.write(JSON.stringify({ reply: 'Ответ на ' + request.message }) + '\\n');",
+    '});',
+  ].join('\n'));
+  const session = await openExternalTarget({ target: { kind: 'command', command: process.execPath, args: [path], timeoutMs: 5000 }, sessionId: 't', scenarioId: 's',
+    state: world(), history: () => [], ctx: context().ctx });
+  t.after(() => session.close());
+  assert.equal(await session.respond('hi'), 'Ответ на hi');
+  assert.equal(await session.respond('ещё'), 'Ответ на ещё');
+  await assert.rejects(session.respond('die'), /Процесс агента завершился с кодом 4: .*debug: got die.*about to fail/s);
+});
+
+test('a long reply in escaped Cyrillic is read whole; only one over 2 MB is refused, with its reason', async t => {
+  // Python's json.dumps escapes every Cyrillic letter: six bytes a character.
+  const escape = (text: string) => [...text].map(char => char.charCodeAt(0) < 128 ? char : `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
+  const reply = `Ответ: ${'ж'.repeat(19000)}`;
+  const retrievals = Array.from({ length: 5 }, (_, i) => ({ source: `kb-${i}`, content: 'к'.repeat(11000) }));
+  let huge = false;
+  const api = await server((_body, _req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(huge ? JSON.stringify({ reply: 'x'.repeat(2_100_000) }) : escape(JSON.stringify({ reply, retrievals, retrievalsComplete: true })));
+  });
+  t.after(api.close);
+  const session = await openExternalTarget({ target: { kind: 'http', url: api.url, headersEnv: {}, timeoutMs: 5000 }, sessionId: 't', scenarioId: 's', state: world(), history: () => [], ctx: context().ctx });
+  assert.equal(await session.respond('hi'), reply);
+  huge = true;
+  await assert.rejects(session.respond('hi'), /^Error: Ответ агента больше 2 МБ — Lab читает ответы до 2 МБ/);
+  await session.close();
+});
+
+test('the check before a run names every variable the connection reads that is not set, the template\'s and the address\'s too, and refuses a login in the address', async () => {
+  const request = { body: { q: '{{message}}', tenant: '{{env:AGENT_LAB_TEST_TENANT}}' }, headers: {}, reply: '/text' };
+  delete process.env.AGENT_LAB_TEST_TENANT; delete process.env.AGENT_LAB_TEST_QUERY;
+  await assert.rejects(preflightTarget({ kind: 'http', url: 'https://agent.example.test/x?key={{env:AGENT_LAB_TEST_QUERY}}', headersEnv: {}, timeoutMs: 1000, request }),
+    { message: 'Не заданы переменные окружения AGENT_LAB_TEST_TENANT, AGENT_LAB_TEST_QUERY: их читает подключение агента. Задайте их и перезапустите Pi.' });
+  process.env.AGENT_LAB_TEST_TENANT = 'tenant'; process.env.AGENT_LAB_TEST_QUERY = 'query';
+  try { await preflightTarget({ kind: 'http', url: 'https://agent.example.test/x?key={{env:AGENT_LAB_TEST_QUERY}}', headersEnv: {}, timeoutMs: 1000, request }); }
+  finally { delete process.env.AGENT_LAB_TEST_TENANT; delete process.env.AGENT_LAB_TEST_QUERY; }
+  await assert.rejects(preflightTarget({ kind: 'http', url: 'https://user:pass@agent.example.test/x', headersEnv: {}, timeoutMs: 1000 }), /логин и пароль/);
+  await assert.rejects(preflightTarget({ kind: 'http', url: 'localhost:8080/chat', headersEnv: {}, timeoutMs: 1000 }), /не похож на адрес вида https/);
 });

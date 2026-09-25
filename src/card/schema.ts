@@ -53,13 +53,19 @@ export const turnSchema = z.strictObject({
   source: z.discriminatedUnion('kind', [dialogueSource, ownerSource]),
 });
 
+/** An agent's tool as its connection names it: the probe's tool list (contracts.ts ToolChannel) and a trace event's `tool`. */
+export const toolNameSchema = z.string().min(1).max(200);
+
 export const expectationSchema = z.strictObject({
   id,                                                     // e1…e3
   text: text(300),                                        // an infinitive: «объяснить, где найти номер терминала»
   requirementIds: z.array(id).min(1).max(3),              // the quote is requirement.quote, drawn by the harness
   appliesWhen: text(300).optional(),                      // only for a duty that depends on the agent's path
   observation: z.enum(['reply', 'tool', 'state']),        // tool/state only where the connection confirmed it
-});
+  // A duty observed on the tools: the tool whose result proves it (card/expectations.ts). Absent — any tool's result,
+  // as on every card before it.
+  tool: toolNameSchema.optional(),
+}).refine(expectation => expectation.tool === undefined || expectation.observation === 'tool', 'Only a duty observed on the tools names a tool');
 
 /** The one difference of a similar card from its parent. */
 const similarChangeSchema = z.discriminatedUnion('kind', [
@@ -116,6 +122,7 @@ export const cardSchema = z.strictObject({
   revision: z.number().int().positive(),
   // The customer cannot say what is wrong («не работает»): the card tests that the agent clarifies instead of guessing, and
   // the result counts such situations apart. Absent on a card whose customer states the request, as on every card before it.
+  // The reviewer checks the mark as a claim of its own (card/review.ts); the owner sees it and changes it (`edit_client`).
   clarity: z.literal('vague').optional(),
   // Values Lab wrote over the log's masking marks; absent on a card whose messages had none, as on every card before it.
   filled: z.array(filledSchema).min(1).max(40).optional(),
@@ -144,7 +151,9 @@ const removeFact = z.strictObject({ kind: z.literal('remove_fact'), cardId: id, 
 const editExpectation = z.strictObject({ kind: z.literal('edit_expectation'), cardId: id, expectationId: id, text: text(300).optional(),
   requirementIds: z.array(id).min(1).max(3).optional(), appliesWhen: text(300).nullable().optional() });
 const removeExpectation = z.strictObject({ kind: z.literal('remove_expectation'), cardId: id, expectationId: id });
-const editClient = z.strictObject({ kind: z.literal('edit_client'), cardId: id, wants: text(300).optional(), writes: text(3000).optional(), leaves: text(300).optional() });
+// `clarity`: whether the customer states their request — the owner's decision about the customer, beside the words.
+const editClient = z.strictObject({ kind: z.literal('edit_client'), cardId: id, wants: text(300).optional(), writes: text(3000).optional(), leaves: text(300).optional(),
+  clarity: z.enum(['clear', 'vague']).optional() });
 // `event` present: the turn is that later message of the source dialogue, `says` its exact text; absent: the owner's words. null removes it.
 const setTurn = z.strictObject({ kind: z.literal('set_turn'), cardId: id, turn: turnSchema.omit({ source: true }).extend({ event: eventRefSchema.optional() }).nullable() });
 
@@ -180,11 +189,16 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
 ]);
 export type CardCommand = z.infer<typeof cardCommandSchema>;
 
-/** The reviewer's answer on one semantic claim, addressed by content: key = digest(kind, subject, basisHash). */
+/**
+ * The reviewer's answer on one semantic claim, addressed by content: key = digest(kind, subject, basisHash). `clarity` is
+ * asked only of a card marked vague. `message`: the later customer message (its index) a doubt about the account is
+ * about, when the reviewer named one; absent on every receipt before it.
+ */
 const claimReceiptSchema = z.strictObject({
-  key: hash, kind: z.enum(['goal', 'fact', 'expectation', 'coverage', 'leak']), subject: z.string().max(20),
+  key: hash, kind: z.enum(['goal', 'fact', 'expectation', 'coverage', 'leak', 'clarity']), subject: z.string().max(20),
   basisHash: hash, status: z.enum(['ready', 'needs_owner', 'blocked']), reason: text(240),
   reviewer: z.strictObject({ protocol: z.literal('card-review-v1'), model: text(200) }),
+  message: z.number().int().nonnegative().optional(),
 });
 export type ClaimReceipt = z.infer<typeof claimReceiptSchema>;
 
