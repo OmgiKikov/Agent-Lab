@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { identifierSchema as identifier, sha256Schema } from './ids.js';
 import { PHASES, type Phase } from './phases.js';
 import { valueTokens } from './verbatim.js';
+import { referencesSchema, type Reference } from './reference.js';
+export { referenceSchema, referencesSchema, type Reference } from './reference.js';
 
 /*
  * The stored record: a run of situations against an agent — its sources and rules, its situations, every dialogue
@@ -149,19 +151,6 @@ export const worldSchema = z.strictObject({
 export type World = z.infer<typeof worldSchema>;
 const checkBase = { id: identifier, description: text.max(1000), ...stage };
 const toolIdentifier = z.string().regex(/^[A-Za-z_][A-Za-z0-9_.:/-]{0,199}$/);
-/**
- * The expected result of a card: the knowledge-base article the agent must retrieve and/or the fact
- * it must convey. The origin says who vouches for it; a model proposal counts only once a person confirms it.
- */
-export const referenceSchema = z.strictObject({
-  id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/),
-  origin: z.enum(['assessor', 'log', 'proposed', 'owner']),
-  source: z.strictObject({ doc: text.max(500), chunk: text.max(500).optional() }).optional(),
-  text: text.max(400).optional(),
-  confirmed: z.boolean(),
-}).refine(r => r.source !== undefined || r.text !== undefined, 'Эталон должен содержать source или text.')
-  .refine(r => r.origin === 'proposed' || r.confirmed, 'Неподтверждённым может быть только эталон, предложенный моделью.');
-export type Reference = z.infer<typeof referenceSchema>;
 export const checkSchema = z.discriminatedUnion('kind', [
   z.strictObject({ ...checkBase, kind: z.literal('state_equals'), recordId: identifier, field: identifier, value: scalarSchema }),
   z.strictObject({ ...checkBase, kind: z.literal('tool_called'), tool: toolIdentifier }),
@@ -301,7 +290,7 @@ export const scenarioSchema = z.strictObject({
   goalObservation: goalObservationSchema.optional(),
   successCriteria: text.max(3000).optional(), assumptions: z.array(text.max(1000)).max(12).optional(),
   metrics: z.array(rubricSchema).max(8).optional(),
-  references: z.array(referenceSchema).max(4).refine(v => unique(v.map(r => r.id)), 'Повторяются идентификаторы эталонов.').optional(),
+  references: referencesSchema.optional(),
 });
 export type Scenario = z.infer<typeof scenarioSchema> & { split: 'dev' | 'control' };
 
@@ -445,7 +434,7 @@ export const draftPatchSchema = z.strictObject({
 export const reassessmentSchema = z.strictObject({
   criteria: z.array(z.strictObject({ scenarioId: identifier, successCriteria: text.max(3000).optional(),
     checks: z.array(checkSchema).max(12).optional(), metrics: z.array(rubricSchema).max(8).optional(),
-    references: z.array(referenceSchema).max(4).optional(),
+    references: referencesSchema.optional(),
   })).max(200).refine(v => unique(v.map(c => c.scenarioId)), 'Duplicate scenario criteria').default([]),
   trialIds: z.array(identifier).min(1).max(3000).refine(unique, 'Duplicate trial IDs').optional(),
   judge: settingsSchema.shape.judge, codeOnly: z.boolean().default(false),

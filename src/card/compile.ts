@@ -175,6 +175,7 @@ export function compileCard(card: Card, context: CompileContext): Scenario {
       evaluatorView: { expectations: card.agentMust, requirements } },
     metrics: card.agentMust.map(expectation => expectationRubric(expectation, expectationLetter(expectation.id), `карточки №${card.number}`,
       { toolLog: expectation.observation === 'tool' })),
+    ...(card.references ? { references: card.references } : {}),
   });
   return { ...parsed, split: 'dev' };
 }

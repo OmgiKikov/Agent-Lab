@@ -53,7 +53,7 @@ export function requiredAuthority(command: CardCommand | LogVersionCommand): Aut
     case 'edit_card': return command.changes.some(change => requiredAuthority(withCard(change, command.cardId)) === 'owner-confirm') ? 'owner-confirm' : 'owner-words';
     // Lab's values over the log's masks speak for the customer: the owner confirms them as shown.
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card':
-    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': return 'owner-confirm';
+    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': case 'set_references': return 'owner-confirm';
   }
 }
 
@@ -72,7 +72,7 @@ export function wordsOf(command: CardCommand | LogVersionCommand): string[] {
     case 'answer_question': return texts(command.text);
     case 'edit_card': return command.changes.flatMap(change => wordsOf(withCard(change, command.cardId)));
     case 'set_fact_disclosure': case 'set_fact': case 'remove_fact': case 'remove_expectation': case 'settle_claim': case 'remove_card': case 'declare_log_version':
-    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': return [];
+    case 'decide_plausible': case 'set_rulebook': case 'fill_masked': case 'set_references': return [];
   }
 }
 
@@ -365,6 +365,10 @@ function edit(library: LibraryV2, command: CardCommand, receiptId: string, conte
     case 'edit_card': return change(cardOf(library, command.cardId), draft => {
       const reasons = command.changes.map(item => applyChange(draft, item, library, context, owner));
       return reasons.length === 1 ? reasons[0]! : 'Ситуацию изменили вы.';
+    });
+    case 'set_references': return change(cardOf(library, command.cardId), draft => {
+      if (command.references.length) draft.references = command.references; else delete draft.references;
+      return command.references.length ? 'Эталон ситуации задали вы.' : 'Эталон ситуации убрали вы.';
     });
     case 'fill_masked': return change(cardOf(library, command.cardId), draft => {
       applyFill(draft, command, context.evidence);
