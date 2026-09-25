@@ -10,7 +10,7 @@ import {
   operabilityText, saidText, scenarioRows, toolExpectationsText, trialTurns, trustSegments, type ResultRow,
 } from './result-text.js';
 import { buildResultView, type ResultCard, type ResultView } from './result-view.js';
-import { briefFields, situationBrief, situationNumber } from './card/view.js';
+import { briefFields, situationBrief } from './card/view.js';
 import { ruleBarText } from './card/rulebook.js';
 import { oneLine } from './text.js';
 
@@ -192,7 +192,7 @@ export function runReport(bundle: EvidenceBundle): Report {
   const byScenario = (id: string) => record.trials.filter(trial => trial.scenarioId === id);
   const failed = new Map(view.failures.map(failure => [failure.scenarioId, failure]));
   // A situation keeps the number the owner knows it by in Pi: a card's own, the place in the run for older formats.
-  const numbers = new Map(view.cards.map((card, index) => [card.scenarioId, situationNumber(record, card.scenarioId, index + 1)]));
+  const numbers = new Map(view.cards.map(card => [card.scenarioId, card.number]));
   const cards: CardItem[] = view.cards.flatMap(card => {
     const scenario = record.scenarios.find(item => item.id === card.scenarioId);
     if (!scenario) return [];

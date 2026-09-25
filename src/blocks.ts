@@ -65,13 +65,13 @@ function cardHtml(item: CardItem): string {
 }
 
 function failureHtml(item: FailureItem): string {
-  return `<article class="failure"><div class="ttl"><span class="mark">✗ ${item.number}</span>${e(item.title)}</div>`
+  return `<article class="failure"><div class="ttl"><span class="mark">✗ №${item.number}</span>${e(item.title)}</div>`
     + dl([['Ожидалось', item.expected], saidRow(item.said), ['Правило', item.rule], ...(item.customer ? [['Клиент', item.customer] as [string, string]] : [])])
     + (item.dialogue.length ? `<details class="fold"><summary>Разговор</summary>${turnsHtml(item.dialogue)}</details>` : '') + `</article>`;
 }
 
 function disagreementHtml(item: DisagreementItem): string {
-  return `<article class="failure"><div class="ttl"><span class="mark">≠ ${item.number}</span>${e(item.title)}</div>`
+  return `<article class="failure"><div class="ttl"><span class="mark">≠ №${item.number}</span>${e(item.title)}</div>`
     + dl([...item.expectations.map(text => ['Ожидание', text] as [string, string]), ['Подсказка', item.hint], ['Где смотреть', item.conversations]])
     + (item.dialogue.length ? `<details class="fold"><summary>Разговор в прогоне</summary>${turnsHtml(item.dialogue)}</details>` : '') + `</article>`;
 }
@@ -130,10 +130,10 @@ function blockMarkdown(block: Block): string[] {
       ...mdDl(item.client), '', '**Агент должен**', '',
       ...item.brief.must.map((must, i) => `${i + 1}. ${md(must.text)}${must.rule ? ` — правило: «${md(must.rule)}»` : ''}`), '',
       ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
-    case 'failures': return block.items.flatMap(item => [`### ✗ ${item.number}. ${md(item.title)}`, '',
+    case 'failures': return block.items.flatMap(item => [`### ✗ №${item.number} ${md(item.title)}`, '',
       ...mdDl([['Ожидалось', item.expected], ['Агент ответил', item.said.text], ['Правило', item.rule], ...(item.customer ? [['Клиент', item.customer] as [string, string]] : [])]), '',
       ...(item.dialogue.length ? [...mdTurns(item.dialogue), ''] : [])]);
-    case 'disagreements': return block.items.flatMap(item => [`### ≠ ${item.number}. ${md(item.title)}`, '',
+    case 'disagreements': return block.items.flatMap(item => [`### ≠ №${item.number} ${md(item.title)}`, '',
       ...mdDl([...item.expectations.map(text => ['Ожидание', text] as [string, string]), ['Подсказка', item.hint], ['Где смотреть', item.conversations]]), '',
       ...(item.dialogue.length ? ['**Разговор в прогоне**', '', ...mdTurns(item.dialogue), ''] : [])]);
     case 'list': return [...block.items.map(item => `- ${md(item)}`), ''];

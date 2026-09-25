@@ -131,8 +131,10 @@ type LegacyRenderer = (result: AgentToolResult<unknown>, options: ToolRenderResu
 
 /** What ctrl+o opens under a result, and what to say next when something failed. */
 export const verdictHint = (view: ResultView) => (expanded: boolean): string => expanded ? expandHint(true, '')
-  : view.failures.length ? `${expandHint(false, 'причины с примерами')} · «покажи ошибку 1» · «отчёт для заказчика»`
-    : `${expandHint(false, 'подробнее')} · «отчёт для заказчика»`;
+  : view.failures.length ? `${expandHint(false, 'причины с примерами')} · «разбери ситуацию ${view.cards.find(card => card.scenarioId === view.failures[0]!.scenarioId)?.number ?? 1}»${report(view)}`
+    : `${expandHint(false, 'подробнее')}${report(view)}`;
+/** The customer report is suggested only where «Дальше» offers it: never for a number withheld or not to be trusted. */
+const report = (view: ResultView): string => view.next.some(step => step.kind === 'report') ? ' · «отчёт для заказчика»' : '';
 
 /**
  * The tool host: verdict details with a remembered view give the block; without one, the result's stored lines give

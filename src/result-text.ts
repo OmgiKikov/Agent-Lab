@@ -618,13 +618,19 @@ export function unmeasuredRows(view: ResultView): ResultRow[] {
     ...view.notMeasured.reasons.flatMap(reason => reason.scenarioIds.map(id => ({ role: 'item:muted' as const, indent: 2, text: `${titles.get(id) ?? id}: ${reason.label}` })))];
 }
 
+/** «№2»: a situation as every surface names it, by the number the owner knows it by (ResultCard.number). */
+export const situationLabel = (view: Pick<ResultView, 'cards'>, scenarioId: string): string => {
+  const number = view.cards.find(card => card.scenarioId === scenarioId)?.number;
+  return number === undefined ? '' : `№${number}`;
+};
+
 /** Every failed situation once, in record order, with what was expected, the agent's words and the rule (E7). */
 export function errorListRows(view: ResultView): ResultRow[] {
   if (!view.failures.length) return [];
   return [{ role: 'heading', indent: 0, text: 'Все ошибки' }, ...view.failures.flatMap((failure, i) => {
     const mark = dunnoMark(view, failure.scenarioId);
     return [
-      { role: 'failed' as const, indent: 2, text: `✗ ${i + 1}  ${oneLine(failure.title)}` },
+      { role: 'failed' as const, indent: 2, text: `✗ ${situationLabel(view, failure.scenarioId)}  ${oneLine(failure.title)}` },
       ...exampleRows(failure, 5).slice(1),
       ...(mark ? [{ role: 'muted' as const, indent: 5, text: mark }] : []),
     ];
@@ -708,7 +714,7 @@ function chatNextText(step: NextStep): string {
     case 'exam': return EXAM_STEP[step.status].chat;
     case 'check_connection': return 'Дальше: проверьте связь с агентом — скажите «проверь подключение».';
     case 'wait': return 'Дальше: дождитесь конца прогона — результат придёт сюда.';
-    case 'review_judge': return 'Дальше: проверьте, прав ли судья, — скажите «покажи ошибку 1».';
+    case 'review_judge': return `Дальше: проверьте, прав ли судья, — скажите ${step.situation === null ? '«покажи ошибки»' : `«разбери ситуацию ${step.situation}»`}.`;
     case 'blind_check': return 'Дальше: проверьте судью вслепую — скажите «проверь судью вслепую»: вы оцените ответы агента, не видя его вердиктов.';
     case 'why_unmeasured': return 'Дальше: спросите, почему ситуации не измерены.';
     case 'repeat': return 'Дальше: исправьте агента и скажите «повтори прогон».';
@@ -841,7 +847,7 @@ export function failureRows(view: ResultView, record: Pick<Experiment, 'trials'>
   const unmarked = view.agreement.unmarked.includes(failure.trialId);
   const mark = dunnoMark(view, failure.scenarioId);
   return [
-    { role: 'failed', indent: 0, text: `✗ ${index + 1}  ${oneLine(failure.title)}`, right: `ошибка ${index + 1} из ${view.failures.length}` },
+    { role: 'failed', indent: 0, text: `✗ ${situationLabel(view, failure.scenarioId)}  ${oneLine(failure.title)}`, right: `ошибка ${index + 1} из ${view.failures.length}` },
     blank,
     label('Ожидалось', failure.expected ?? 'не записано в ситуации'),
     label('Агент ответил', saidText(failure)),

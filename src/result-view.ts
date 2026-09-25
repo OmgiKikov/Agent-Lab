@@ -117,7 +117,9 @@ export type NextStep =
   | { kind: 'check_connection' }
   | { kind: 'wait' }
   /** The judge's failures and sampled passes still wait for the owner's «да» or «нет». */
-  | { kind: 'review_judge'; failures: number; passes: number; unsure: number }
+  | { kind: 'review_judge'; failures: number; passes: number; unsure: number;
+    /** The number of the situation the queue starts with — a failure first —, as the owner names it in the chat; null when none is known. */
+    situation: number | null }
   /** The judge was never checked blind: `left` expectations wait for the owner's labels, given without its verdicts (blind.ts). */
   | { kind: 'blind_check'; left: number }
   /** Nothing was decided: the reasons of the unmeasured situations are the next thing to read. */
@@ -127,6 +129,11 @@ export type NextStep =
 
 export interface ResultCard {
   scenarioId: string; title: string;
+  /**
+   * The number the owner knows the situation by on every surface — a card's own number, its place among the record's
+   * situations for older formats (card/view.ts situationNumber) —, so a failure is named by it everywhere.
+   */
+  number: number;
   /** The headline verdict; a control is decided by its goal alone. */
   outcome: Verdict; reason?: NotMeasuredCode;
   /** The goal and the prompt-rule halves of an old generated card's verdict; 'none' when the card has no such check. */
@@ -398,7 +405,7 @@ export function unmeasuredControl(card: Pick<ResultCard, 'outcome' | 'reason'>):
  * (ResultView.trustIssues), the customer report. Whenever a situation was not measured, why is always among the steps:
  * first under the alarm, last below it. A draft that never ran offers nothing.
  */
-function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted: boolean, reviewedTrials: Set<string>): NextStep[] {
+function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted: boolean, reviewedTrials: Set<string>, numberOf: (trialId: string) => number | undefined): NextStep[] {
   if (notStarted) return [];
   // The percent waits for the exam: its fix leads, before anything that reads the number.
   const exam: NextStep[] = view.connection !== undefined && view.connection !== 'passed' ? [{ kind: 'exam', status: view.connection }] : [];
@@ -416,7 +423,9 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   // Too many situations unmeasured: why is the first thing to read, before any verdict of the judge.
   // The judge is checked blind first, before any of its verdicts is shown: an owner who saw them would only agree.
   const blind: NextStep[] = view.blind && view.blind.labelled < view.blind.drawn ? [{ kind: 'blind_check', left: view.blind.drawn - view.blind.labelled }] : [];
-  const steps: NextStep[] = [...exam, ...(alarm ? why : []), ...blind, ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
+  const first = unmarked.find(id => queueFailures.includes(id)) ?? unmarked[0];
+  const review: NextStep[] = failures + passes + unsure > 0 ? [{ kind: 'review_judge', failures, passes, unsure, situation: first === undefined ? null : numberOf(first) ?? null }] : [];
+  const steps: NextStep[] = [...exam, ...(alarm ? why : []), ...blind, ...review];
   const after = alarm ? [] : why;
   if (!view.headline.decided) return [...steps, ...after];
   const failed = view.headline.decided > view.headline.passed;
@@ -433,6 +442,16 @@ function trustIssuesOf(view: Omit<ResultView, 'next' | 'trustIssues'>): TrustIss
     ...(view.judgeCheck?.distrust ? ['judge' as const] : []),
     ...(view.notMeasured.alarm ? ['unmeasured' as const] : []),
   ];
+}
+
+/**
+ * The number a situation is known by, the rule of card/view.ts situationNumber: a card's own number, else its place
+ * among the stored record's situations — every split of a comparison run, the way the chat's tools look it up.
+ */
+function situationNumberOf(record: Experiment, scenarioId: string): number {
+  const position = record.scenarios.findIndex(scenario => scenario.id === scenarioId) + 1;
+  const library = record.librarySnapshot;
+  return library?.formatVersion === 2 ? library.cards.find(card => card.id === scenarioId)?.number ?? position : position;
 }
 
 /** Clear and vague requests apart, over the counted situations whose card is in the run's library. */
@@ -459,7 +478,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const unstableIds = new Set(found?.unstable.map(row => row.scenarioId) ?? []);
   const stability = found && { ...found, unstable: found.unstable.filter(row => !run.situation(row.scenarioId)?.control) };
   const cards: ResultCard[] = run.situations.map(item => ({
-    scenarioId: item.scenario.id, title: item.scenario.title, outcome: item.outcome, ...(item.reason ? { reason: item.reason } : {}),
+    scenarioId: item.scenario.id, title: item.scenario.title, number: situationNumberOf(input, item.scenario.id), outcome: item.outcome, ...(item.reason ? { reason: item.reason } : {}),
     goal: item.goal, rules: item.rules, parts: item.parts, control: item.control, flaky: item.flaky, unstable: unstableIds.has(item.scenario.id), provenance: item.scenario.provenance,
   }));
   const counted = cards.filter(card => !card.control);
@@ -544,7 +563,8 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   if (judgeCheck) view.judgeCheck = judgeCheck;
   if (judgedByBuilder(record)) view.sameModelJudge = true;
   const trusted = { ...view, trustIssues: trustIssuesOf(view) };
-  return { ...trusted, next: nextSteps(trusted, isRunning(record.phase), notStarted, reviewed.trialIds) };
+  const numberOf = (trialId: string) => cards.find(card => card.scenarioId === run.attempt(trialId)?.trial.scenarioId)?.number;
+  return { ...trusted, next: nextSteps(trusted, isRunning(record.phase), notStarted, reviewed.trialIds, numberOf) };
 }
 
 /** The conversations the agent left without its reply, by how; undefined when it answered in every one (the typed causes only). */

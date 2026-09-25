@@ -6,7 +6,7 @@ import { headlineRule, recordedExpectationResult, type Expectation } from '../sr
 import { judgedScenario } from '../src/card/legacy-v1.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
-import { accuracyParts, comparisonRows, noRuleText, saidText, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
+import { accuracyParts, comparisonRows, noRuleText, saidText, situationLabel, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
 import { agentLine } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
 import { clip, oneLine } from '../src/text.js';
@@ -218,7 +218,7 @@ export function failureFeed(record: Experiment, view: ResultView, index: number)
   return {
     tone: 'warning',
     // The agent's words are the reply the judge pointed at, else why none is quoted: a reply the judge never named is no evidence of the failure.
-    rows: [row(`${GLYPH.fail} ${index + 1}  ${oneLine(failure.title)}`, 'error', true),
+    rows: [row(`${GLYPH.fail} ${situationLabel(view, failure.scenarioId)}  ${oneLine(failure.title)}`, 'error', true),
       row(`Ожидалось: ${failure.expected ?? 'не записано в ситуации'} · Агент: ${saidText(failure)}`),
       row(`Правило: ${rule ? `«${rule.quote}»` : noRuleText()}${unmarked ? ' · судья прав? да или нет' : ''}`, 'muted')],
     ...(trial ? { more: [row('Разговор', 'accent', true), ...turnRows(trial, 2), ...judgedRows(record, trial)], expand: 'весь разговор' } : {}),
