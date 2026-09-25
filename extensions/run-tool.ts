@@ -1,7 +1,8 @@
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type, type Static } from 'typebox';
-import { runnableTarget, type Experiment, type RunnableTarget } from '../src/contracts.js';
+import { runnableTarget, worldSchema, type Experiment, type RunnableTarget } from '../src/contracts.js';
 import { isRunning } from '../src/phases.js';
 import { resolveTarget } from '../src/connection.js';
 import { situationNumber, situationViews } from '../src/card/view.js';
@@ -10,13 +11,14 @@ import { countText } from '../src/plural.js';
 import { expectationSheet, testPlanLines } from '../src/quality.js';
 import { plannedTrials } from '../src/run.js';
 import { libraryHash } from '../src/scenario-library.js';
+import { EXAM_EXPECTATIONS, examSchema, type Exam } from '../src/target-schema.js';
 import { sameTargetVersion } from '../src/target-version.js';
 import { safeText } from '../src/text.js';
 import { agentLine } from '../src/workspace.js';
 import { ProgressRow, RUN_MESSAGE, runAnswer, STOP_HINT, type Background, type VerdictOutput } from './background.ts';
 import { progressText, row, runStamp, runWhen, stoppedLines } from './conversation.ts';
 import { ask, displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
-import { cardPlan, launchRun, type LaunchAgent } from './launch.ts';
+import { cardPlan, EXAM_FIRST, launchRun, runTarget, writeExam, type LaunchAgent } from './launch.ts';
 import { followRecord, type LabLease, type SessionOperations } from './operations.ts';
 import { projectPath } from './prepare-tool.ts';
 import { recordFor } from './records.ts';
@@ -44,6 +46,23 @@ export interface RunHost {
 const SITUATIONS: [string, string, string] = ['ситуация', 'ситуации', 'ситуаций'];
 const CONVERSATIONS: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
 const closed = { additionalProperties: false } as const;
+/** The adapter contract that ships with the package: the exam's rules the model composes paths by. */
+const ADAPTER_CONTRACT = fileURLToPath(new URL('../skills/agent-builder/adapter-contract.md', import.meta.url));
+
+const examStep = Type.Object({
+  say: Type.Optional(Type.String({ minLength: 1, maxLength: 3000, description: 'What the customer writes. A path starts with words.' })),
+  press: Type.Optional(Type.String({ minLength: 1, maxLength: 300, description: 'Instead of say: the text of a button the previous reply offered.' })),
+  expect: Type.Enum([...EXAM_EXPECTATIONS], { description: 'The agent\'s turn: reply — a reply to the customer, buttons — a reply with buttons, handoff — passed to a person.' }),
+  contains: Type.Optional(Type.String({ minLength: 1, maxLength: 300, description: 'A word or value the reply must hold: one the customer said earlier in the path, so the agent knows it only from the conversation.' })),
+}, closed);
+const examPath = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: 200, description: 'What the path checks, in the owner\'s words.' }),
+  steps: Type.Array(examStep, { minItems: 1, maxItems: 8 }),
+  initialState: Type.Optional(Type.Object({
+    records: Type.Record(Type.String(), Type.Record(Type.String(), Type.Union([Type.String(), Type.Number(), Type.Boolean()]))),
+    writableFields: Type.Array(Type.String(), { maxItems: 16 }),
+  }, { ...closed, description: 'Only for an adapter that takes Lab\'s initialState: the records the path starts from.' })),
+}, closed);
 
 const runParameters = Type.Object({
   action: Type.Optional(Type.Enum(['start', 'accept', 'progress', 'stop'], { description: 'start (default), accept without running, progress, stop.' })),
@@ -60,10 +79,15 @@ const runParameters = Type.Object({
     timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 600, description: 'How long one reply of the agent may take, when the owner said.' })),
     version: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'The owner\'s name for this version of the agent.' })),
   }, { ...closed, description: 'How the owner said to start the agent: command (with args, cwd), module, url, or folder to look in. Only when the owner said it.' })),
+  exam: Type.Optional(Type.Array(examPath, { minItems: 1, maxItems: 10,
+    description: `The connection exam, only when the owner asked for one: 2–4 short paths you composed from the agent's code by the rules in ${ADAPTER_CONTRACT} — at least one of two or more steps whose later step checks with contains what the customer said earlier. Lab shows them to the owner and writes them into connection.json only at their word; the run dialog follows.` })),
 }, closed);
 type AgentRequest = NonNullable<Static<typeof runParameters>['agent']>;
 
-/** The connection the owner described, in the form a run takes; paths are the project's or the owner's home. */
+/**
+ * The connection described in the chat, in the form a run takes; paths are the project's or the owner's home. The
+ * model wrote it, whatever the owner said: the run dialog shows the command and says the model proposed it.
+ */
 function agentOf(request: AgentRequest | undefined, cwd: string): LaunchAgent & { folder?: string } {
   if (!request) return {};
   const ways = [request.command, request.module, request.url, request.folder].filter(item => item !== undefined).length;
@@ -79,13 +103,13 @@ function agentOf(request: AgentRequest | undefined, cwd: string): LaunchAgent & 
   let target: RunnableTarget;
   try { target = runnableTarget(resolveTarget(raw, cwd)); }
   catch (error) { throw new NeedsOwner('needs_owner_input', `Так агента не запустить: ${error instanceof Error ? error.message : String(error)} Уточните у владельца.`, [], 'Так агента не запустить — как его запускать?'); }
-  return { target, ...version };
+  return { target, ...version, proposed: 'model' };
 }
 
 export function registerRunTool(pi: Pick<ExtensionAPI, 'registerTool'>, host: RunHost): void {
   pi.registerTool({
     ...displayFor(TOOL.run), name: TOOL.run, label: 'Run the situations',
-    description: 'start (default): runs the ready situations of the draft — or runs a finished run\'s set again (situations: some of them) — after one native dialog with the plan: situations and conversations, the agent, the judge\'s ceiling, the comparison with production logs and its cost, the time limit; the ready situations are accepted in that same dialog. When the agent is not connected, Lab proposes what it found in the project folder; agent: only how the owner said to start it (a command, a module, an address, or a folder to look in). accept: accept the ready situations without running, only when the owner asks. progress / stop: the work going on in this session; stop only when the owner asks. A long run continues in the background and its result arrives as a message: say so in one sentence and do not poll.',
+    description: 'start (default): runs the ready situations of the draft — or runs a finished run\'s set again (situations: some of them) — after one native dialog with the plan: situations and conversations, the agent and exactly what Lab starts, whether the connection exam lets the result show a percent, the judge\'s ceiling, the comparison with production logs and its cost, the time limit; the ready situations are accepted in that same dialog. When the agent is not connected, Lab proposes what it found in the project folder; agent: only how the owner said to start it (a command, a module, an address, or a folder to look in). exam: only when the owner asked for the connection exam — the paths you composed from the agent\'s code; Lab shows them to the owner and writes them before the run dialog. accept: accept the ready situations without running, only when the owner asks. progress / stop: the work going on in this session; stop only when the owner asks. A long run continues in the background and its result arrives as a message: say so in one sentence and do not poll.',
     parameters: runParameters,
     executionMode: 'sequential',
     async execute(callId, params, toolSignal, onUpdate, ctx) {
@@ -100,7 +124,7 @@ export function registerRunTool(pi: Pick<ExtensionAPI, 'registerTool'>, host: Ru
         if (action === 'accept') return await accept(host, callId, ctx, found);
         const signal = AbortSignal.any([toolSignal, ctx.signal].filter((item): item is AbortSignal => !!item));
         signal.throwIfAborted();
-        return await start(host, callId, ctx, signal, onUpdate, found, params.situations, agentOf(params.agent, ctx.cwd));
+        return await start(host, callId, ctx, signal, onUpdate, found, params.situations, agentOf(params.agent, ctx.cwd), params.exam && examOf(params.exam));
       } catch (error) { return host.askOwner(callId, error); }
     },
   });
@@ -143,9 +167,23 @@ async function accept(host: RunHost, callId: string, ctx: ExtensionContext, foun
   } finally { await close(); }
 }
 
-/** One dialog, then the run: a short one ends in this row, a long one continues in the session and reports as a message. */
+const EXAM_FORMAT = 'исходное состояние не по формату — records: записи с простыми полями, writableFields: поля, которые агент может менять';
+/** The exam the model proposed, as a connection keeps it; what is wrong with it is said in plain words, never as an issue dump. */
+function examOf(raw: unknown): Exam {
+  const parsed = examSchema.unwrap().safeParse(raw);
+  const problems = parsed.success ? parsed.data.flatMap((path, index) => path.initialState === undefined || worldSchema.safeParse(path.initialState).success ? [] : [`путь ${index + 1}: ${EXAM_FORMAT}`])
+    : parsed.error.issues.map(issue => issue.code === 'custom' ? issue.message : `путь ${Number(issue.path[0] ?? 0) + 1}: ${issue.path.includes('initialState') ? EXAM_FORMAT : 'не по формату экзамена'}`);
+  if (problems.length || !parsed.success) throw new Error(`Экзамен не записан: ${[...new Set(problems)].join('; ')}. Ничего не записано.`);
+  return parsed.data;
+}
+
+/**
+ * One dialog, then the run: a short one ends in this row, a long one continues in the session and reports as a message.
+ * With `exam` — the paths the model composed at the owner's request — the exam's own dialog comes first: written into the
+ * project's connection only at the owner's word, then the run dialog takes it.
+ */
 async function start(host: RunHost, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
-  found: Experiment, numbers: number[] | undefined, agent: LaunchAgent & { folder?: string }): Promise<AgentToolResult<unknown>> {
+  found: Experiment, numbers: number[] | undefined, agent: LaunchAgent & { folder?: string }, exam?: Exam): Promise<AgentToolResult<unknown>> {
   const owned = await host.open(ctx.cwd, 'wait');
   let detached = false;
   let unfollow: (() => void) | undefined;
@@ -176,7 +214,21 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
     } else if (numbers) throw new NeedsOwner('needs_owner_input', 'Номера ситуаций нужны только для повтора прогона; черновик запускается готовыми ситуациями.', [], 'Запускаются все готовые ситуации черновика.');
     // Nothing has started yet: an Esc before the dialog ends the action.
     signal.throwIfAborted();
-    const started = await launchRun(ctx, owned.lab, draft, agent, agent.folder ?? ctx.cwd);
+    let launching = agent;
+    if (exam) {
+      const reached = await runTarget(ctx, draft, agent, agent.folder ?? ctx.cwd);
+      // A retired sandbox is refused in its own words; a pick the owner stepped back from writes nothing.
+      if (!reached && draft.target.kind !== 'unconnected') runnableTarget(draft.target);
+      if (!reached || !await writeExam(ctx, draft, reached.target, exam)) return host.feedResult(callId, { run: found.id, exam: 'declined',
+        instruction: 'The owner did not write the exam: nothing was written and nothing ran. Ask what to change in the paths only if the owner says so.' },
+      { tone: 'warning', rows: [row('Экзамен не записан: вы отказались. Агент не запускался.')] }, note);
+      // The run reaches the agent the exam was written for: one Lab found is passed on, so the owner is not asked again.
+      launching = { ...agent, ...(reached.found ? { target: reached.target, ...(reached.note ? { note: reached.note } : {}) } : {}), exam };
+    }
+    const started = await launchRun(ctx, owned.lab, draft, launching, agent.folder ?? ctx.cwd, { offerExam: true });
+    if (started === EXAM_FIRST) return host.feedResult(callId, { run: found.id, examFirst: true, adapterContract: ADAPTER_CONTRACT,
+      instruction: `The owner wants the connection exam before the run; nothing was written and nothing ran. Read the agent's code in the project and compose 2–4 short paths by the section «Экзамен подключения» of ${ADAPTER_CONTRACT}: at least one path of two or more steps whose later step checks with contains a value the customer said earlier (a number, a name, a choice). Then call agent_lab_run again with exam: Lab shows the paths to the owner and writes them only at their word.` },
+    { rows: [row('Сначала экзамен подключения: модель составит пути по коду агента, вы их увидите и решите, записать ли.', 'text', true)] }, note);
     if (!started) return host.feedResult(callId, { run: found.id, cancelled: true, instruction: 'The owner did not start the run. Nothing was written: the situations are kept as they were; do not ask to start again unless the owner does.' },
       { tone: 'warning', rows: [row('Не запускаю: вы отказались. Ситуации сохранены, агент не запускался.')] }, note);
     // The run has started: from here an Esc, even one pressed while it was starting, hands it to the session.

@@ -1,4 +1,4 @@
-import type { Experiment, Trial } from '../src/contracts.js';
+import { isRunnable, type Experiment, type RunnableTarget, type Trial } from '../src/contracts.js';
 import { assessmentRubrics } from '../src/assessment.js';
 import type { RunComparison } from '../src/comparison.js';
 import { plannedTrials } from '../src/run.js';
@@ -7,7 +7,10 @@ import { judgedScenario } from '../src/card/legacy-v1.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
 import { accuracyParts, comparisonRows, noRuleText, saidText, situationLabel, situationOutcomeText, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
-import { agentLine } from '../src/workspace.js';
+import { CONNECTION_FILE, shownAddress } from '../src/connect.js';
+import { examShowsMemory } from '../src/exam.js';
+import { commandText, folderText, releaseText, targetLabel } from '../src/detect.js';
+import { agentLine, agentOwnName, agentVersion } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
 import { clip, oneLine } from '../src/text.js';
 import { standing } from './records.ts';
@@ -93,14 +96,57 @@ export function scenarioPlan(record: Experiment): LaunchPlan {
     judgeCalls: record.scenarios.reduce((sum, scenario) => sum + votes(scenario) * attempts(scenario), 0), outside: null };
 }
 
+/** What of a run's connection the chat's model, not the owner, wrote: said next to it in the run dialog. */
+const PROPOSED: Record<RunnableTarget['kind'], string> = { command: 'команду предложила модель', module: 'модуль предложила модель', http: 'адрес предложила модель' };
+
 /**
- * The run dialog (docs/design/ui-spec.md §4.6): what runs, the agent and where Lab found it, the judge's ceiling and next to it what the
- * comparison with production costs, the time limit, what stays out.
+ * The agent of the run dialog: its name and, never hidden behind the name, what Lab will actually start — the command
+ * with every argument word for word and its folder, the module and its function, the address — marked when the chat's
+ * model proposed it rather than a connection the owner has; then the release hook the connection runs before every
+ * run, word for word. An agent without a name of its own is named by exactly that.
  */
-export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string, extra: { calibration?: string | null; note?: string } = {}): string[] {
+export function agentLines(record: Experiment, cwd?: string, proposed?: 'model'): string[] {
+  const target = record.target;
+  if (!isRunnable(target)) return [`Агент: ${agentLine(record, cwd)}`];
+  const root = cwd ?? (target.kind === 'command' && target.cwd || '/');
+  const how = target.kind === 'command' ? `${commandText(target.command, target.args, target.cwd ?? root)} ${folderText(target.cwd ?? root, root)}`
+    : target.kind === 'module' ? `${targetLabel(target, root)}, функция ${target.exportName}` : shownAddress(target);
+  const origin = proposed ? ` — ${PROPOSED[target.kind]}` : '';
+  const own = agentOwnName(record), version = agentVersion(record);
+  const versioned = version ? ` · версия ${version}` : '';
+  return [
+    ...own ? [`Агент: ${own}${versioned}`, `${target.kind === 'http' ? 'Адрес' : 'Запуск'}: ${how}${origin}`] : [`Агент: ${how}${versioned}${origin}`],
+    ...target.release ? [`Перед прогоном Lab выполнит: ${releaseText(target.release, root)}`] : [],
+  ];
+}
+
+const PATHS: [string, string, string] = ['путь', 'пути', 'путей'];
+
+/**
+ * Whether the run's number will be a percent (exam.ts): the connection's exam — `connection` when the project's
+ * connection file brought it —, else plainly that without one, or with one that never checks the conversation's
+ * memory, the result shows how many situations the agent passed but no percent. `offered`: the dialog offers to
+ * compose it first.
+ */
+function examLine(target: RunnableTarget, from: 'connection' | undefined, offered: boolean): string {
+  const offer = offered ? ' Его можно сначала составить по коду агента.' : '';
+  if (!target.exam) return `Без экзамена подключения процента не будет — Lab покажет, в скольких ситуациях агент справился, но не долю: не проверено, что через это подключение агент помнит разговор.${offer}`;
+  if (!examShowsMemory(target.exam)) return `Экзамен подключения не проверяет память разговора — процента не будет: нужен путь из двух шагов и больше, где поздний шаг проверяет, что в ответе есть сказанное раньше.${offer}`;
+  return `Экзамен подключения: ${countText(target.exam.length, PATHS)}${from === 'connection' ? ` из ${CONNECTION_FILE}` : ''} — Lab пройдёт его перед прогоном, без модели; не пройден — прогон не запустится.`;
+}
+
+/**
+ * The run dialog (docs/design/ui-spec.md §4.6): what runs, the agent — what exactly Lab starts, and where Lab found it —,
+ * whether the connection's exam lets the result show a percent, the judge's ceiling and next to it what the comparison
+ * with production costs, the time limit, what stays out. `proposed`: the connection is the chat's model's, not one the
+ * owner has; `exam`: where the connection's exam came from; `offerExam`: the dialog offers to compose one first.
+ */
+export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string,
+  extra: { calibration?: string | null; note?: string; proposed?: 'model'; exam?: 'connection'; offerExam?: boolean } = {}): string[] {
   return [
     `${countText(plan.situations, SITUATIONS)} · ${countText(plan.conversations, CONVERSATIONS)}: клиента играет Lab, ответы агента оценивает судья.`,
-    `Агент: ${agentLine(record, cwd)}`,
+    ...agentLines(record, cwd, extra.proposed),
+    ...(isRunnable(record.target) ? [examLine(record.target, extra.exam, !!extra.offerExam)] : []),
     ...(extra.note ? [extra.note] : []),
     ...(record.mode === 'demo' ? ['Учебный пример: без модели и оплаты.'] : [`Судья: по 2 голоса на каждую проверку ответа и клиента — до ${plan.judgePerAttempt} вызовов на попытку, всего до ${plan.judgeCalls}.`,
       ...(extra.calibration ? [`${extra.calibration}.`] : []),

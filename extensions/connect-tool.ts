@@ -5,7 +5,7 @@ import { Type } from 'typebox';
 import { settingsSchema } from '../src/contracts.js';
 import { checkTemplate, TOOL_PROBE_OPENING } from '../src/connection.js';
 import {
-  CONNECTION_FILE, connectionLines, defaultConversation, fieldLabel, fieldValue, literalFields, missingVariables, proposeReply, proposeRequest, replyFields, replyLabel,
+  CONNECTION_FILE, connectionLines, defaultConversation, fieldLabel, fieldValue, literalFields, missingVariables, proposeReply, proposeRequest, READING_ATTEMPTS, replyFields, replyLabel,
   saveProjectConnection, shownAddress, testCallFailure, variableUse, type ConnectionReader, type ReplyField, type RequestChoice,
 } from '../src/connect.js';
 import { connectionFromCurl, type CurlFields, type CurlReady } from '../src/curl.js';
@@ -22,10 +22,12 @@ import { TOOL } from './steps.ts';
  * «Вот ручка агента» with a curl pasted into the chat: Lab connects the agent in its own request format, and the owner
  * types no path and no flag. Two confirmations, both native: how the request is read (the address, the customer's
  * message, the conversation, what Lab fills in itself, the secrets), then — after the owner agrees to two test
- * messages — where the agent's text is in its reply. The readings are the builder model's proposals (connect.ts) or,
- * without a model, the owner's pick from the same lists. Only a connection whose two test messages were answered is
- * saved: the project's connection.json and Lab's remembered connection, which the preparation and the run pick up.
- * Nothing is saved on any failure or step back, and the agent under test is only ever sent Lab's fixed test phrases.
+ * messages — where the agent's text is in its reply. What the structure of the request shows needs no model; where it
+ * does not, the owner picks the field, or lets the builder model propose it (connect.ts) — the model reads the curl's
+ * fields only at that word, their secrets already names of variables. The consent to the test messages says the model
+ * may read the agent's replies to them. Only a connection whose two test messages were answered is saved: the project's
+ * connection.json and Lab's remembered connection, which the preparation and the run pick up. Nothing is saved on any
+ * failure or step back, and the agent under test is only ever sent Lab's fixed test phrases.
  */
 
 export interface ConnectHost {
@@ -48,11 +50,23 @@ async function choose(ctx: Pick<ExtensionContext, 'ui'>, question: string, body:
 
 const valueText = (value: string) => value ? `«${clip(oneLine(value), 40)}»` : 'пусто';
 
-/** The owner's own reading of the request: the message field, then the conversation fields ticked through one list. */
-async function pickRequest(ctx: Pick<ExtensionContext, 'ui'>, asked: CurlFields, conversation: readonly string[]): Promise<RequestChoice | undefined> {
+/** The offer to let the builder model read the request, with what it reads and what it costs. */
+const PROPOSE_REQUEST = `Пусть предложит модель Lab — прочтёт поля запроса: до ${READING_ATTEMPTS} вызовов модели`;
+
+/**
+ * The owner's own reading of the request: the message field, then the conversation fields ticked through one list.
+ * With `propose`, the same list offers to let the builder model read the request instead: nothing of the curl reaches
+ * a model before the owner picks that offer. A model that could not answer leaves the pick to the owner.
+ */
+async function pickRequest(ctx: Pick<ExtensionContext, 'ui'>, asked: CurlFields, conversation: readonly string[],
+  propose?: () => Promise<RequestChoice | undefined>): Promise<RequestChoice | undefined> {
   const fields = literalFields(asked);
   const labels = fields.map(field => `${fieldLabel(field.pointer)} · ${valueText(field.value)}`);
-  const picked = await choose(ctx, 'Какое поле запроса — сообщение клиента?', ['Сюда Lab подставит слова клиента в каждой реплике.'], [...labels, NOT_NOW]);
+  const offer = propose ? [PROPOSE_REQUEST] : [];
+  const picked = await choose(ctx, 'Какое поле запроса — сообщение клиента?', ['Сюда Lab подставит слова клиента в каждой реплике.',
+    ...(propose ? ['Выберите поле сами или поручите модели Lab: она прочтёт имена и значения полей запроса из вашего curl — секреты в них уже заменены именами переменных окружения.'] : [])],
+  [...labels, ...offer, NOT_NOW]);
+  if (propose && picked === PROPOSE_REQUEST) return await propose() ?? pickRequest(ctx, asked, conversation);
   const message = fields[labels.indexOf(picked ?? '')]?.pointer;
   if (message === undefined) return undefined;
   // A conversation id is a value of the request: not a turn's role, not a secret read from the environment.
@@ -136,8 +150,9 @@ async function connect(host: ConnectHost, callId: string, ctx: ExtensionContext,
   const { reader, timeoutMs } = await readerOf(ctx, host.reading(directory));
   let made: CurlReady;
   try {
-    // 1. How the request is read: Lab's reading, confirmed or corrected by the owner.
-    let choice = await proposeRequest(asked, { ...(reader ? { reader } : {}), timeoutMs, signal }) ?? await pickRequest(ctx, asked, defaultConversation(asked));
+    // 1. How the request is read: what its structure shows, else the owner's pick — or, at their word, the model's reading; confirmed or corrected by the owner.
+    let choice = await proposeRequest(asked, { timeoutMs, signal })
+      ?? await pickRequest(ctx, asked, defaultConversation(asked), reader && (() => proposeRequest(asked, { reader, timeoutMs, signal })));
     while (true) {
       if (!choice) return declined('Агента не подключаю: вы не выбрали поля запроса. Ничего не отправлено.');
       made = connectionFromCurl(source, { message: choice.message, conversation: choice.conversation });
@@ -154,7 +169,9 @@ async function connect(host: ConnectHost, callId: string, ctx: ExtensionContext,
   if (missing.length) return refused(`Перед проверкой задайте в окружении ${missing.map(variable => variableUse(made, variable)).join(', ')} и перезапустите Pi, затем пришлите curl ещё раз. Ничего не отправлено и не сохранено.`);
 
   // 2. The owner's consent to the test messages, then where the agent's text is.
-  if (await choose(ctx, 'Отправить агенту 2 тестовых сообщения?', [`Адрес: ${shownAddress(target)}`, `Lab напишет «${TOOL_PROBE_OPENING}» и ещё одно сообщение в том же разговоре и прочтёт ответы агента.`], ['Отправить', NOT_NOW]) !== 'Отправить')
+  if (await choose(ctx, 'Отправить агенту 2 тестовых сообщения?', [`Адрес: ${shownAddress(target)}`, `Lab напишет «${TOOL_PROBE_OPENING}» и ещё одно сообщение в том же разговоре и прочтёт ответы агента.`,
+    ...(reader ? [`Если в ответе несколько текстовых полей, какое из них ответ клиенту, предложит модель Lab: она прочтёт ответ агента на первое сообщение — до ${READING_ATTEMPTS} вызовов модели.`] : [])],
+  ['Отправить', NOT_NOW]) !== 'Отправить')
     return declined('Тестовые сообщения не отправляю: вы отказались. Ничего не сохранено.');
   let empty = false;
   let check: Awaited<ReturnType<typeof checkTemplate>>;

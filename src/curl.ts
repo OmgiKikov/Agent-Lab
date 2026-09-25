@@ -248,9 +248,18 @@ function nameWords(name: string): string[] {
 }
 const timeLike = (name: string) => ['time', 'date'].some(word => name.toLowerCase().includes(word));
 const idLike = (name: string) => { const lower = name.toLowerCase(); return lower.endsWith('id') || lower.endsWith('uuid'); };
-/** Last words that name a credential: `api_key`, `access_token`, `client_secret` hold one; `token_type` and `max_tokens` do not. */
-const CREDENTIAL = new Set(['key', 'apikey', 'token', 'secret', 'password', 'passwd', 'pwd', 'credential', 'credentials', 'auth', 'authorization', 'signature', 'cookie']);
-const credentialName = (name: string): boolean => CREDENTIAL.has(nameWords(name).at(-1) ?? '');
+/**
+ * Last words of a key that name a credential: `api_key`, `access_token`, `client_secret`, `jwt`, `auth.pass`, `pin` hold
+ * one; `token_type` and `max_tokens` do not.
+ */
+const CREDENTIAL = new Set(['key', 'apikey', 'token', 'secret', 'password', 'passwd', 'pwd', 'pass', 'passphrase', 'passcode', 'jwt', 'bearer', 'pin', 'otp',
+  'cvv', 'cvc', 'credential', 'credentials', 'auth', 'authorization', 'signature', 'cookie']);
+/** The same words at the end of a key written without separators: `accesstoken`, `clientsecret`, `userpassword`. */
+const CREDENTIAL_ENDINGS = ['token', 'secret', 'password', 'passwd', 'apikey', 'jwt'];
+const credentialName = (name: string): boolean => {
+  const last = nameWords(name).at(-1) ?? '';
+  return CREDENTIAL.has(last) || CREDENTIAL_ENDINGS.some(ending => last.endsWith(ending));
+};
 /** Headers that never carry a secret; every other header is read from the environment unless the curl names a variable for it. */
 const HARMLESS = new Set(['accept', 'accept-language', 'content-type', 'content-language', 'user-agent', 'origin', 'referer', 'cache-control', 'pragma', 'priority', 'dnt', 'upgrade-insecure-requests', 'x-requested-with']);
 const harmless = (name: string) => { const lower = name.toLowerCase(); return HARMLESS.has(lower) || lower.startsWith('sec-ch-') || lower.startsWith('sec-fetch-'); };
@@ -363,10 +372,11 @@ function setAt(document: Json, pointer: string, value: Json): void {
   current[key] = value;
 }
 
-function mapStrings(value: Json, fn: (pointer: string, text: string) => Json, pointer = ''): Json {
-  if (typeof value === 'string') return fn(pointer, value);
-  if (Array.isArray(value)) return value.map((item, i) => mapStrings(item, fn, `${pointer}/${i}`));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapStrings(item, fn, pointer + pointerOf([key]))]));
+/** Every string and number of a JSON value replaced by `fn`, which knows where it stands. */
+function mapScalars(value: Json, fn: (pointer: string, scalar: string | number) => Json, pointer = ''): Json {
+  if (typeof value === 'string' || typeof value === 'number') return fn(pointer, value);
+  if (Array.isArray(value)) return value.map((item, i) => mapScalars(item, fn, `${pointer}/${i}`));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapScalars(item, fn, pointer + pointerOf([key]))]));
   return value;
 }
 
@@ -462,8 +472,15 @@ export function connectionFromCurl(source: string, choices: CurlChoices = {}): C
   let body: Json;
   try { body = JSON.parse(raw) as Json; } catch { throw new Error('Тело запроса curl не является JSON: Lab отправляет агенту JSON.'); }
   if (!body || typeof body !== 'object') throw new Error('Тело запроса curl должно быть JSON-объектом.');
-  body = mapStrings(body, (pointer, text) => {
+  body = mapScalars(body, (pointer, value) => {
     const key = pointerTokens(pointer).at(-1) ?? '';
+    if (typeof value === 'number') {
+      // A PIN or a code written as a number is a secret too: it is sent as the text of its variable.
+      if (!credentialName(key)) return value;
+      warnings.push(`${where({ pointer })}: число из curl — секрет; Lab прочтёт его из переменной окружения и отправит строкой.`);
+      return `{{env:${secret({ pointer }, key, String(value))}}}`;
+    }
+    const text = value;
     if (!text.includes(OPEN)) return credentialName(key) && text ? `{{env:${secret({ pointer }, key, text)}}}` : text;
     let out = '';
     for (const piece of text.split(OPEN)) {

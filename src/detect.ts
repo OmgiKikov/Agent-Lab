@@ -11,7 +11,7 @@ import { codePrompts, jsonPrompts, MIN_PROMPT_CHARS, type PromptCandidate } from
 import { countText, pluralForm } from './plural.js';
 import { logImport, sampleWords, type Verdict } from './scenario-library.js';
 import type { LeftOutIssue } from './scenario-contracts.js';
-import { codeFacts, codeHasWord, FACTORY, languageOf } from './source-facts.js';
+import { codeFacts, codeHasWord, FACTORY, languageOf, type CodeFacts, type Language } from './source-facts.js';
 import { proposeTableBytes } from './spreadsheet/import.js';
 import { TABLE_EXTENSIONS } from './spreadsheet/workbook.js';
 
@@ -33,6 +33,8 @@ export type AgentEvidence =
   | { kind: 'script'; file: string; name: string; command: string }  // package.json: scripts.start = python agent.py
   | { kind: 'factory'; file: string }                                 // exports createSession returning a session with respond
   | { kind: 'json_lines'; file: string }                              // reads requests from stdin line by line, answers JSON
+  | { kind: 'runs'; file: string; helper: string }                    // a program that runs the JSON-lines loop a helper module defines
+  | { kind: 'no_entry'; file: string }                                // defines its loop, but started it runs nothing
   | { kind: 'protocol_fields'; file: string }                         // names the fields of an Agent Lab request
   | { kind: 'url'; file: string; url: string }                        // a local address under a key that names the agent
   | { kind: 'interpreter'; file: string };                            // the project's own Python environment: .venv/bin/python
@@ -248,26 +250,57 @@ async function projectPython(root: string): Promise<string | undefined> {
   return undefined;
 }
 
+const envNameStart = (char: string | undefined): boolean => char === '_' || !!char && (char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z');
+const envNameChar = (char: string | undefined): boolean => envNameStart(char) || !!char && char >= '0' && char <= '9';
+const base64Char = (char: string): boolean => envNameChar(char) || char === '+' || char === '/' || char === '-';
+/** The longest name a connection reads from the environment (http-template.ts envNameSchema). */
+const ENV_NAME_CHARS = 100;
+/** An unquoted value this long, all of base64, may be a key wrapped over several lines. */
+const WRAPPED_BASE64 = 16;
 /**
- * The variable names of a .env file, read the way dotenv reads it: `[export] NAME=value`, a value quoted with ', " or `
- * running over several lines, an unquoted PEM block (-----BEGIN … -----END) as one value, # comments. Every value is
- * skipped as it is read, so neither a secret nor a line inside one (the tail of a key) ever reaches the result; a
- * name is only a valid variable name.
+ * A line of nothing but base64 (standard or url-safe), `=` padding only at its end: `open` when more of it may follow,
+ * `closed` when padding ended it; undefined for anything else.
+ */
+function base64Run(line: string): 'open' | 'closed' | undefined {
+  let end = line.length;
+  while (end > 0 && line[end - 1] === '=') end--;
+  if (!end || line.length - end > 2 || ![...line.slice(0, end)].every(base64Char)) return undefined;
+  return end < line.length ? 'closed' : 'open';
+}
+
+/**
+ * The variable names of a .env file: only well-formed assignments, `NAME=value` from the very start of a line (`export `
+ * before it allowed), the way a shell and dotenv take them. A value quoted with ', " or ` may run over several lines,
+ * an unquoted PEM block (-----BEGIN … -----END) is one value, and a long unquoted base64 value may be wrapped over the
+ * lines after it, its last one ending in `=` padding: every such line belongs to the value, never to a name. Every value
+ * is skipped as it is read, so neither a secret nor a piece of one (the tail of a key) ever reaches the result.
  */
 export function envFileNames(text: string): string[] {
   const names = new Set<string>();
   const lineEnd = (from: number) => { const end = text.indexOf('\n', from); return end < 0 ? text.length : end; };
+  const blank = (at: number) => text[at] === ' ' || text[at] === '\t';
+  /** The line before continued an unquoted base64 value: a line of base64 now is more of it. */
+  let wrapped = false;
   let i = 0;
   while (i < text.length) {
     const end = lineEnd(i);
-    const line = text.slice(i, end).trim();
-    const statement = line.startsWith('export ') ? line.slice('export '.length).trimStart() : line;
-    const at = statement.indexOf('=');
-    const name = at < 0 ? '' : statement.slice(0, at).trim();
-    if (!line || line.startsWith('#') || at < 0 || !/^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(name)) { i = end + 1; continue; }
+    const line = text.slice(i, text[end - 1] === '\r' ? end - 1 : end);
+    if (wrapped) {
+      const run = base64Run(line);
+      wrapped = run === 'open';
+      if (run) { i = end + 1; continue; }
+    }
+    let j = i;
+    if (text.startsWith('export', j) && blank(j + 'export'.length)) { j += 'export'.length; while (blank(j)) j++; }
+    const start = j;
+    if (envNameStart(text[j])) { j++; while (envNameChar(text[j])) j++; }
+    const name = text.slice(start, j);
+    while (blank(j)) j++;
+    // `NAME==…`: a «value» of padding is the tail of a base64 value wrapped over lines, not an assignment.
+    if (!name || name.length > ENV_NAME_CHARS || text[j] !== '=' || text[j + 1] === '=') { i = end + 1; continue; }
     names.add(name);
-    let j = text.indexOf('=', i) + 1;
-    while (text[j] === ' ' || text[j] === '\t') j++;
+    j++;
+    while (blank(j)) j++;
     const quote = text[j];
     if (quote === '"' || quote === "'" || quote === '`') {
       // A quoted value may run over lines; inside double quotes a backslash escapes the next character.
@@ -277,7 +310,11 @@ export function envFileNames(text: string): string[] {
     } else if (text.startsWith('-----BEGIN', j)) {
       const close = text.indexOf('-----END', j);
       i = close < 0 ? text.length : lineEnd(close) + 1;
-    } else i = end + 1;
+    } else {
+      const value = text.slice(j, i + line.length);
+      wrapped = value.length >= WRAPPED_BASE64 && base64Run(value) === 'open';
+      i = end + 1;
+    }
   }
   return [...names];
 }
@@ -293,14 +330,35 @@ async function envNames(files: Entry[], reader: Reader): Promise<ProjectDetectio
 const entryFiles = (target: RunnableTarget, root: string): string[] =>
   target.kind === 'module' ? [target.path] : target.kind === 'command' ? target.args.map(arg => resolve(target.cwd ?? root, arg)) : [];
 /**
+ * A saved connection in the project folder itself — the one Lab or the owner put there. One deeper in the tree (a
+ * vendored tool, a cloned example) is someone else's: it may start anything and run any release hook, so it is only
+ * ever the owner's pick.
+ */
+const ownConnection = (item: AgentEvidence): boolean => item.kind === 'connection' && !item.file.includes(sep);
+/**
  * Sure only when a file speaks Lab's contract whole: a module's createSession with its respond, or a JSON-lines loop,
- * and the fields of a Lab request besides; either alone may expect other fields. A script or an address alone shows
- * nothing of the protocol. Whatever is not sure is the owner's pick.
+ * and the fields of a Lab request besides; either alone may expect other fields — or when it is the project's own saved
+ * connection. A script or an address alone shows nothing of the protocol. Whatever is not sure is the owner's pick.
  */
 function confidence(evidence: AgentEvidence[]): Confidence {
   const kinds = new Set(evidence.map(item => item.kind));
+  if (evidence.some(ownConnection)) return 'high';
+  // A loop nothing starts is no program: whatever its file shows, it is at most a guess.
+  if (kinds.has('no_entry')) return 'low';
   const contract = kinds.has('factory') || kinds.has('json_lines');
-  return kinds.has('connection') || contract && kinds.has('protocol_fields') ? 'high' : contract ? 'medium' : 'low';
+  return contract && kinds.has('protocol_fields') ? 'high' : contract ? 'medium' : 'low';
+}
+
+/**
+ * The files a Python import names, nearest first: `lab.protocol` → lab/protocol.py or lab/protocol/__init__.py beside
+ * the importing file, then at the project root; a relative `.protocol` only from the importing file's package.
+ */
+function pythonModule(module: string, dir: string, root: string): string[] {
+  let dots = 0;
+  while (module[dots] === '.') dots++;
+  const parts = module.slice(dots).split('.').filter(Boolean);
+  const bases = dots ? [resolve(dir, ...Array<string>(dots - 1).fill('..'))] : [dir, root];
+  return bases.flatMap(base => parts.length ? [`${join(base, ...parts)}.py`, join(base, ...parts, '__init__.py')] : [join(base, '__init__.py')]);
 }
 
 /** Looks through the project folder and proposes the agent connection, the logs, the materials and the prompt. Read-only. */
@@ -359,6 +417,8 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     ? { command: join(root, python), evidence: [{ kind: 'interpreter', file: python }] } : { command, evidence: [] };
   // Constants of every source file, so a system message naming a constant of another module finds it there.
   const constants: { file: string; names: Map<string, string> }[] = [], systemNames = new Set<string>();
+  // Every source file is read first: which program runs the loop a helper module defines shows only once both are.
+  const sources: { file: Entry; language: Language; facts: CodeFacts; factory: boolean }[] = [];
   for (const file of walked.files) {
     const language = languageOf(file.path), name = basename(file.path);
     if (!language || name.includes('.test.') || name.includes('.spec.')) continue;
@@ -367,13 +427,32 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     const found = codePrompts(source, language, file.rel);
     prompts.push(...found.candidates); constants.push({ file: file.rel, names: found.constants });
     for (const system of found.systemNames) systemNames.add(system);
-    const facts = codeFacts(source, language), script = scripts.find(item => item.entry === file.path);
+    const facts = codeFacts(source, language);
     // A module is the agent by its contract, not by a name: Next.js keeps a createSession for its logins, with no respond.
-    const factory = facts.factory && codeHasWord(source, language, 'respond');
-    if (!factory && !facts.jsonLines) continue;
+    sources.push({ file, language, facts, factory: facts.factory && codeHasWord(source, language, 'respond') });
+  }
+  // A program that imports a helper's JSON-lines loop and runs it is the agent; the helper alone runs nothing.
+  const loops = new Map(sources.filter(item => item.facts.jsonLines).map(item => [item.file.path, item]));
+  const helpersOf = new Map<Entry, (typeof sources)[number][]>(), run = new Set<string>();
+  for (const item of sources) if (item.facts.entry) for (const module of item.facts.runs) {
+    const helper = pythonModule(module, dirname(item.file.path), root).map(path => loops.get(path)).find(found => found !== undefined);
+    if (!helper || helper === item) continue;
+    helpersOf.set(item.file, [...helpersOf.get(item.file) ?? [], helper]);
+    run.add(helper.file.path);
+  }
+  for (const { file, language, facts, factory } of sources) {
+    const script = scripts.find(item => item.entry === file.path), helpers = helpersOf.get(file) ?? [];
+    if (!factory && !facts.jsonLines && !helpers.length) continue;
+    // A helper whose loop a program of the project runs is proposed as that program, unless a package script starts it itself.
+    if (!factory && run.has(file.path) && !script) continue;
     const started = interpreter(script ? script.argv[0]! : language === 'python' ? 'python3' : 'node');
-    const evidence: AgentEvidence[] = [...(script ? [script.evidence] : []), { kind: factory ? 'factory' : 'json_lines', file: file.rel },
-      ...(facts.protocol ? [{ kind: 'protocol_fields' as const, file: file.rel }] : []), ...(factory ? [] : started.evidence)];
+    const evidence: AgentEvidence[] = [...(script ? [script.evidence] : []),
+      ...(factory || facts.jsonLines ? [{ kind: factory ? 'factory' as const : 'json_lines' as const, file: file.rel }, ...(facts.protocol ? [{ kind: 'protocol_fields' as const, file: file.rel }] : [])] : []),
+      ...helpers.flatMap((helper): AgentEvidence[] => [{ kind: 'runs', file: file.rel, helper: helper.file.rel }, { kind: 'json_lines', file: helper.file.rel },
+        ...(helper.facts.protocol ? [{ kind: 'protocol_fields' as const, file: helper.file.rel }] : [])]),
+      // Started as it is, a file that only defines its loop — no `__main__` guard, no call, no package script — runs nothing.
+      ...(!factory && !facts.entry && !script ? [{ kind: 'no_entry' as const, file: file.rel }] : []),
+      ...(factory ? [] : started.evidence)];
     add(`file:${file.path}`, factory ? { kind: 'module', path: file.path }
       : script ? { kind: 'command', command: started.command, args: script.argv.slice(1), cwd: script.cwd }
       : { kind: 'command', command: started.command, args: [file.rel], cwd: root }, evidence);
@@ -383,16 +462,18 @@ export async function detectProject(cwd: string): Promise<ProjectDetection> {
     const started = interpreter(script.argv[0]!);
     add(`file:${script.entry}`, { kind: 'command', command: started.command, args: script.argv.slice(1), cwd: script.cwd }, [script.evidence, ...started.evidence]);
   }
-  // A saved connection absorbs what the files it starts showed, so one agent is proposed once.
-  for (const [key, draft] of drafts) if (key.startsWith('connection:')) for (const entry of entryFiles(draft.target, root)) {
+  // The project's own saved connection absorbs what the files it starts showed, so one agent is proposed once; a
+  // connection from deeper in the tree does not, so the project's own file stays a choice without it.
+  for (const [key, draft] of drafts) if (key.startsWith('connection:') && draft.evidence.some(ownConnection)) for (const entry of entryFiles(draft.target, root)) {
     const same = drafts.get(`file:${entry}`);
     if (same) { draft.evidence.push(...same.evidence); drafts.delete(`file:${entry}`); }
   }
 
   const has = (agent: AgentCandidate, kind: AgentEvidence['kind']) => agent.evidence.some(item => item.kind === kind) ? 0 : 1;
+  const own = (agent: AgentCandidate) => agent.evidence.some(ownConnection) ? 0 : 1;
   const depth = (agent: AgentCandidate) => agent.evidence[0]!.file.split(sep).length;
   const agents = [...drafts.values()].map(draft => ({ ...draft, confidence: confidence(draft.evidence) }))
-    .sort((a, b) => RANK[a.confidence] - RANK[b.confidence] || has(a, 'connection') - has(b, 'connection') || has(a, 'script') - has(b, 'script')
+    .sort((a, b) => RANK[a.confidence] - RANK[b.confidence] || own(a) - own(b) || has(a, 'script') - has(b, 'script')
       || depth(a) - depth(b) || a.evidence[0]!.file.localeCompare(b.evidence[0]!.file));
 
   for (const name of systemNames) for (const { file, names } of constants) {
@@ -436,6 +517,8 @@ export function evidenceText(evidence: AgentEvidence): string {
     case 'script': return `${evidence.file}: scripts.${evidence.name} = ${evidence.command}`;
     case 'factory': return `${evidence.file}: объявляет ${FACTORY} — Lab подключит модуль напрямую`;
     case 'json_lines': return `${evidence.file}: читает запросы из stdin построчно и отвечает JSON`;
+    case 'runs': return `${evidence.file}: запускает цикл запросов из ${evidence.helper}`;
+    case 'no_entry': return `${evidence.file}: только объявляет цикл запросов — запущенный сам по себе, файл ничего не делает`;
     case 'protocol_fields': return `${evidence.file}: знает поля запроса Agent Lab (sessionId, initialState)`;
     case 'url': return `${evidence.file}: адрес ${evidence.url}`;
     case 'interpreter': return `${evidence.file}: окружение Python проекта — агент запустится с его пакетами`;
@@ -451,10 +534,45 @@ function shownFile(file: string, root: string): string {
   return file.startsWith(`${home}${sep}`) ? `~${file.slice(home.length)}` : file;
 }
 
+/** Characters a word of a command needs no quotes for; with any other — a space, a quote, `;`, `$`, a letter beyond Latin — it is quoted. */
+const PLAIN_WORD = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_@%+=:,./-~');
+/** A word of a command as a shell would take it: single-quoted wherever its bounds would not show otherwise. A command line is structure. */
+export const shellWord = (word: string): string => word && [...word].every(char => PLAIN_WORD.has(char)) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * A command exactly as Lab starts it — the program and every argument word for word, quoted where a shell would need
+ * it, so `bash -c 'touch x; …'` never reads as several arguments. Only an absolute path is shortened: from `cwd` when
+ * it lies inside it (a program as `./deploy.sh`, never to be taken for one found on PATH), from ~ otherwise.
+ */
+export function commandText(command: string, args: readonly string[], cwd: string): string {
+  const shown = (part: string) => isAbsolute(part) ? shownFile(part, cwd) : part;
+  const program = shown(command);
+  const local = isAbsolute(command) && !program.startsWith('~') && !isAbsolute(program);
+  return [local ? `./${program}` : program, ...args.map(shown)].map(shellWord).join(' ');
+}
+
+/** The folder a command runs in, as the owner finds it: the project folder itself, a folder inside it, a path from ~. */
+export const folderText = (folder: string, root: string): string => relative(root, folder) ? `в папке ${shownFile(folder, root)}` : 'в папке проекта';
+
+/** A connection's release hook as the run dialog and the owner's pick say it: the command word for word and its folder. */
+export const releaseText = (release: NonNullable<RunnableTarget['release']>, root: string): string =>
+  `${commandText(release.command, release.args, release.cwd ?? root)} ${folderText(release.cwd ?? root, root)}`;
+
 /** How the owner recognises the agent: its start command, its module or its address; files are shown from where the agent starts. */
 export function targetLabel(target: RunnableTarget, root: string): string {
-  if (target.kind === 'command') return [target.command, ...target.args].map(part => isAbsolute(part) ? shownFile(part, target.cwd ?? root) : part).join(' ');
+  if (target.kind === 'command') return commandText(target.command, target.args, target.cwd ?? root);
   return target.kind === 'module' ? `модуль ${shownFile(target.path, root)}` : target.url;
+}
+
+/**
+ * What the owner must know of a candidate before taking it, beyond how it starts: that it is a connection saved deeper
+ * in the tree, which nothing shows to be theirs, and the release hook it would run before every run.
+ */
+export function candidateWarnings(agent: AgentCandidate, root: string): string[] {
+  return [
+    ...agent.evidence.some(item => item.kind === 'connection') && !agent.evidence.some(ownConnection) ? ['подключение из вложенной папки — Lab возьмёт его, только если вы выберете'] : [],
+    ...agent.target.release ? [`перед прогоном выполнит: ${releaseText(agent.target.release, root)}`] : [],
+  ];
 }
 
 /**
@@ -490,8 +608,11 @@ export function detectionLines(detection: ProjectDetection): string[] {
   return [
     `Agent Lab посмотрел папку «${basename(root)}» — ничего не запускал и не менял.`, '',
     'Агент',
-    ...agents.length ? agents.slice(0, SHOWN).flatMap(agent => [`  ${agent.confidence === 'high' ? '✓' : '?'} ${targetLabel(agent.target, root)}${agent.target.kind === 'http' && !agent.evidence.some(item => item.kind === 'connection') ? ADDRESS_NOTE : CONFIDENCE_NOTE[agent.confidence]}`,
-      ...agent.evidence.map(item => `      ${evidenceText(item)}`)]) : ['  не нашёл — Lab спросит, как запускать агента'],
+    ...agents.length ? agents.slice(0, SHOWN).flatMap(agent => {
+      const warnings = candidateWarnings(agent, root);
+      const note = warnings.length ? ` — ${warnings.join('; ')}` : agent.target.kind === 'http' && !agent.evidence.some(item => item.kind === 'connection') ? ADDRESS_NOTE : CONFIDENCE_NOTE[agent.confidence];
+      return [`  ${agent.confidence === 'high' ? '✓' : '?'} ${targetLabel(agent.target, root)}${note}`, ...agent.evidence.map(item => `      ${evidenceText(item)}`)];
+    }) : ['  не нашёл — Lab спросит, как запускать агента'],
     ...more(agents.length), '',
     'Логи с разговорами',
     ...logs.length ? logs.slice(0, SHOWN).map(logLine) : ['  не нашёл файлов с разговорами (JSON, JSONL, XLSX, CSV)'],
