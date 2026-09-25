@@ -597,6 +597,18 @@ test('the card reviewer runs on the configured judge, named by its role or by th
   } finally { await f.close(); }
 });
 
+test('the reviewer\'s doubt about the account names a later message of the card, an enum of this call', async () => {
+  const verdict = { status: 'needs_owner', reason: 'После «Спасибо!» клиент ждал ответа о сроке.', message: 4 };
+  const f = await fixture((_request, index) => JSON.stringify({ claims: { coverage: index === 0 ? { ...verdict, message: 3 } : verdict } }));
+  try {
+    const payload = { card: { coverage: [{ message: 2, as: 'fact', reason: null }, { message: 4, as: 'stop', reason: null }] }, dialogue: null, requirements: [], articles: [],
+      claims: [{ alias: 'coverage', kind: 'coverage', subject: '' }] };
+    assert.deepEqual((await f.adapter.reviewCard!({ aliases: ['coverage'], payload: payload as never }, callContext().ctx)).verdicts, { coverage: verdict });
+    assert.match(f.requests[0]!.systemPrompt!, /"message":\{"default":null,"anyOf":\[\{"type":"number","enum":\[2,4\]\},\{"type":"null"\}\]\}/);
+    assert.equal(f.requests.length, 2, 'a message the card does not account for is refused and asked again');
+  } finally { await f.close(); }
+});
+
 test('bounded schema retries retain the evidence and latest rejected draft without accumulating prior drafts', async () => {
   // The card reviewer is bounded: its request carries a whole dialogue, so a repair starts afresh from the evidence.
   const verdict = { status: 'ready', reason: 'Подтверждено разговором.' };
@@ -628,7 +640,7 @@ test('a card proposal that does not bind goes back with its exact reason, and th
     assert.match(system, /"kind":\{"type":"string","enum":\["behavior","knowledge","operator_procedure"\]\}/, 'and names the kind of its rule');
     assert.doesNotMatch(system, /"id":|"number":|"requirementIds"/, 'ids, numbers and the rules\' ids belong to the harness');
     const repair = JSON.parse(String(f.requests[1]!.messages[0]!.content)) as { repair: string; previousReply: string };
-    assert.match(repair.repair, /knows\[0\] "Номер терминала": the value "5679" is not in customer message 2\./);
+    assert.match(repair.repair, /knows\[0\] "Номер терминала": the value "5679" is not in customer message 2 as whole words\./);
     assert.match(repair.previousReply, /"5679"/, 'the repair starts afresh from the evidence and the latest draft only');
     assert.match(JSON.stringify(f.requests[0]!.messages), /Помогите с возвратом\./, 'the model reads the dialogue');
   } finally { await f.close(); }

@@ -5,6 +5,7 @@ import type { TaskRunner } from '../llm/structured.js';
 import { holdsMark, maskedSpans } from '../masking.js';
 import type { BuilderModel } from '../miner/topic-map.js';
 import type { CallContext } from '../runtime.js';
+import { clip } from '../text.js';
 import { contains, filledMessage, messageAt, sameEvent, type CardEvidence } from './checks.js';
 import { fillKindSchema, type Card, type CardCommand, type EventRef, type Filled } from './schema.js';
 
@@ -51,18 +52,23 @@ const isDigit = (char: string): boolean => char >= '0' && char <= '9';
 /** Why a value cannot stand for its mark, in the model's words; the value's characters are read, never its meaning. */
 export function fillSlip(id: string, answer: FillAnswer): string | undefined {
   const chars = [...answer.value];
-  // A value that is a mark again («xxx», «ХХХ») or holds a character marks are written with (masking.ts) is no value.
+  // A value that is a mark again («xxx», «ХХХ», «<PHONE>») or holds a character marks are written with is no value: written
+  // in, it would leave the message masked and the card unusable. The one check of masking.ts, for a proposal and a later fill alike.
   if (holdsMark(answer.value)) return `${id}: "${answer.value}" still holds a masking character; write a concrete plausible value.`;
   if (answer.kind === 'count' && !chars.every(isDigit)) return `${id} is a count: write digits only, e.g. "3".`;
   if (DIGIT_KINDS.has(answer.kind) && !chars.some(isDigit)) return `${id} is a ${answer.kind}: write it with digits, e.g. "1 500 ₽", "12.03", "14:30".`;
   return undefined;
 }
 
+/** The characters of a mark a card keeps (schema.ts `filled.mark`): only shown beside its value, never matched, so a longer run of `*` is cut. */
+const KEPT_MARK_CHARS = 60;
+const keptMark = (mark: string): string => clip(mark, KEPT_MARK_CHARS);
+
 /** The values of the slots as the card records them. */
 export const slotFills = (slots: readonly MaskSlot[], answers: Readonly<Record<string, FillAnswer>>): Filled[] =>
   slots.flatMap(slot => {
     const answer = answers[slot.id];
-    return answer ? [{ event: slot.event, span: slot.span, mark: slot.mark, kind: answer.kind, value: answer.value }] : [];
+    return answer ? [{ event: slot.event, span: slot.span, mark: keptMark(slot.mark), kind: answer.kind, value: answer.value }] : [];
   });
 
 /** The customer's messages a card reads: its opening, its turn and every fact's message, once each. */
@@ -144,7 +150,7 @@ export function applyFill(draft: Card, command: Extract<CardCommand, { kind: 'fi
     const content = messageAt(evidence, item.event);
     const span = content === undefined ? undefined : maskedSpans(content)[item.span];
     if (!span) throw new CommandRefused('В этой реплике клиента нет такого обезличенного значения.');
-    filled = [...filled.filter(other => !(sameEvent(other.event, item.event) && other.span === item.span)), { ...item, mark: span.mark }];
+    filled = [...filled.filter(other => !(sameEvent(other.event, item.event) && other.span === item.span)), { ...item, mark: keptMark(span.mark) }];
   }
   filled.sort((a, b) => a.event.eventIndex - b.event.eventIndex || a.span - b.span);
   if (filled.length) draft.filled = filled;
