@@ -3,6 +3,7 @@ import { directChecks } from './checkpoints.js';
 import { fingerprint, type AssessmentFailure, type Experiment, type InvalidCause, type Scenario, type Trial } from './contracts.js';
 import type { MetricAssessment } from './assessment.js';
 import { isRunning } from './phases.js';
+import { recordIntegrity, type Integrity } from './seal.js';
 import { GOAL_UNSUPPORTED_RATIONALE, SPLIT_RATIONALE_PREFIX } from './judge.js';
 import { agentMetricResult, automaticTrialResult, expectationResult, GOAL_METRIC_ID, headlineMetricIds, headlineTrialResult, latestHumanReviews, measured, measurementUsable, observedRecord, RULES_METRIC_ID, simulatorVerdicts } from './outcomes.js';
 
@@ -33,8 +34,8 @@ export type Verdict = 'pass' | 'fail' | 'unknown';
  * leave a situation `unknown` and the tie-break when two reasons are equally frequent.
  */
 export const NOT_MEASURED_CODES = [
-  'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'agent_no_reply', 'measurement_error', 'connection_error', 'provider_error', 'attempts_mismatch',
-  'judge_error', 'judge_unavailable', 'judge_stopped', 'human_invalid', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
+  'record_altered', 'in_progress', 'not_reached', 'stopped', 'turn_limit', 'simulator_error', 'agent_error', 'service_reply', 'agent_no_reply', 'measurement_error', 'connection_error', 'provider_error', 'attempts_mismatch',
+  'judge_error', 'judge_unavailable', 'judge_stopped', 'human_invalid', 'expectations_wrong', 'reset_unconfirmed', 'simulator_deviated', 'simulator_unclear',
   'human_unknown', 'not_judged', 'judge_split', 'no_evidence', 'judge_unclear',
 ] as const;
 export type NotMeasuredCode = typeof NOT_MEASURED_CODES[number];
@@ -286,11 +287,14 @@ function trialReasons(record: Experiment, scenario: Scenario, trial: Trial, ids:
   // A conversation cut at the run's limit on the customer's messages was judged as it went: what the judge could not
   // decide in it is undecided because the conversation did not fit the limit.
   const unsure = (code: NotMeasuredCode): NotMeasuredCode => trial.turnLimit && (code === 'judge_split' || code === 'judge_unclear') ? 'turn_limit' : code;
-  for (const expectation of expectations) {
+  // An expectation found wrong itself left the agent's count (outcomes.ts allExpectations): it is a reason only when none is left.
+  const counted = expectations.filter(expectation => latest.get(`${trial.id}|metric:${expectation.id}`)?.verdict !== 'invalid');
+  if (expectations.length && !counted.length) codes.push('expectations_wrong');
+  for (const expectation of counted) {
     const result = expectationResult(trial, expectation, record.humanReviews);
     if (result === 'pass' || result === 'fail') continue;
     const review = latest.get(`${trial.id}|metric:${expectation.id}`);
-    codes.push(review?.verdict === 'invalid' ? 'human_invalid' : review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : unsure(undecidedExpectation(trial, expectation)));
+    codes.push(review?.verdict === 'unknown' && review.source !== 'quick' ? 'human_unknown' : unsure(undecidedExpectation(trial, expectation)));
   }
   for (const id of ids) {
     const result = agentMetricResult(trial, id, record.humanReviews);
@@ -373,6 +377,8 @@ export interface RunDerivation {
   attempt(trialId: string): AttemptDerivation | undefined;
   /** Attempts whose headline verdict failed in counted situations, in record order: exactly what the number calls a failure. */
   failedAttempts: Trial[];
+  /** Whether the record's evidence still holds (seal.ts): `altered` — changed after the run — and no number may be shown. */
+  integrity: Integrity;
 }
 
 /*
@@ -392,6 +398,9 @@ export function deriveRun(input: Experiment): RunDerivation {
   const known = memo.get(input);
   if (known?.stamp === stamp) return known.run;
   const record = observedRecord(input);
+  // Evidence changed after the run decides nothing (seal.ts): every situation is «не измерено — запись изменена после прогона».
+  const integrity = recordIntegrity(input);
+  const altered = integrity === 'altered';
   const controls = new Set((record.positiveControlScenarioIds ?? []).filter(id => record.scenarios.some(scenario => scenario.id === id)));
   const attempts = new Map<string, AttemptDerivation>();
   const situations = record.scenarios.map((scenario): SituationDerivation => {
@@ -399,11 +408,14 @@ export function deriveRun(input: Experiment): RunDerivation {
     const verdict = cardVerdict(record, scenario, control ? 'goal' : 'headline');
     const parts = headlineCardOutcome(record, scenario);
     const own = record.trials.filter(trial => trial.scenarioId === scenario.id).map(trial => {
-      const attempt = { trial, usable: measurementUsable(scenario, trial, record.humanReviews), verdict: headlineTrialResult(scenario, trial, record.humanReviews) };
+      const attempt = { trial, usable: measurementUsable(scenario, trial, record.humanReviews), verdict: altered ? 'unknown' as const : headlineTrialResult(scenario, trial, record.humanReviews) };
       attempts.set(trial.id, attempt);
       return attempt;
     });
     const decided = new Set(own.map(attempt => attempt.verdict).filter(v => v !== 'unknown'));
+    const undecided = (part: Verdict | 'none'): Verdict | 'none' => part === 'none' ? 'none' : 'unknown';
+    if (altered) return { scenario, control, outcome: 'unknown', reason: 'record_altered', goal: undecided(parts.goal), rules: undecided(parts.rules),
+      parts: parts.parts.map(part => ({ ...part, outcome: 'unknown' })), attempts: own, flaky: false };
     return { scenario, control, outcome: verdict.outcome, ...(verdict.reason ? { reason: verdict.reason } : {}), goal: parts.goal, rules: parts.rules,
       parts: parts.parts, attempts: own, flaky: decided.size > 1 };
   });
@@ -412,7 +424,7 @@ export function deriveRun(input: Experiment): RunDerivation {
     const situation = byScenario.get(trial.scenarioId);
     return !!situation && !situation.control && situation.outcome === 'fail' && attempts.get(trial.id)?.verdict === 'fail';
   });
-  const run: RunDerivation = { record, situations, situation: id => byScenario.get(id), attempt: id => attempts.get(id), failedAttempts };
+  const run: RunDerivation = { record, situations, situation: id => byScenario.get(id), attempt: id => attempts.get(id), failedAttempts, integrity };
   memo.set(input, { stamp, run });
   return run;
 }

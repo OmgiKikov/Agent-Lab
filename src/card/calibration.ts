@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Rubric } from '../assessment.js';
 import type { Requirement, Source } from '../contracts.js';
 import type { CallContext } from '../runtime.js';
 import { identifierSchema as id, sha256Schema as hash, text } from '../ids.js';
@@ -18,8 +19,13 @@ import type { Expectation } from './expectations.js';
  */
 
 export const CALIBRATION_PROTOCOL = 'sim-to-real-v1';
-/** The judge's mode on a recorded conversation; a change of its input builder is a new mode, never an edit of this one. */
-export const LOGGED_MODE = 'logged-v1';
+/**
+ * The judge's mode on a recorded conversation; a change of its input builder is a new mode, never an edit of one. `logged-v1`
+ * judged the log by a rubric of its own; `logged-v2` judges it by the very rubric of the synthetic attempt and reads its
+ * verdict through the same channel rule (log-judge.ts). Receipts of both stay readable.
+ */
+export const LOGGED_MODE_V1 = 'logged-v1';
+export const LOGGED_MODE = 'logged-v2';
 
 /**
  * The owner's word on which version of the agent wrote an import's logs; `null` — «неизвестно». A command of
@@ -55,7 +61,7 @@ const verdict = z.enum(['pass', 'fail', 'unknown']);
  * theirs when they agree. `skipped`: the log could not show the expectation, and the judge was not asked.
  */
 export const logJudgmentReceiptSchema = z.strictObject({
-  mode: z.literal(LOGGED_MODE),
+  mode: z.enum([LOGGED_MODE_V1, LOGGED_MODE]),
   key: hash,
   cardId: id, expectationId: id, definitionHash: hash,
   importId: id, importContentHash: hash, dialogueId: id,
@@ -115,6 +121,8 @@ export interface LogJudgeRequest {
   key: string;
   /** The expectation as the accepted definition holds it, with the letter and the situation it is read by («карточки №3»). */
   expectation: Expectation; letter: string; card: string;
+  /** The expectation's rubric exactly as the synthetic attempt is judged by it: the accepted definition's own. */
+  rubric: Rubric;
   /** The owner rules the expectation cites, as the accepted definition holds them. */
   requirements: Requirement[];
   /** The owner's materials, prompt sources as their observable rules — what the synthetic judgment reads. */

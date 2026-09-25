@@ -7,6 +7,7 @@ import { COUNTING_VERSION } from '../card/expectations.js';
 import { judgedScenario } from '../card/legacy-v1.js';
 import { logJudgmentComplete } from '../card/log-judge.js';
 import { awaitingVerdict } from '../agreement.js';
+import { blindQueue } from '../blind.js';
 import { suiteEvidence } from '../connection.js';
 import { addCaveat } from '../caveats.js';
 import { addUsage, emptyUsage, fingerprint, humanReviewInputSchema, reassessmentSchema, validatePreparation, type Experiment, type HumanReviewInput, type ReassessmentInput } from '../contracts.js';
@@ -17,6 +18,7 @@ import { countingRuleFor, markTargets, measurementUsable } from '../outcomes.js'
 import { evaluatorVersion } from '../pi.js';
 import { CODE_ONLY_ASSESSMENT } from '../run.js';
 import { verifyAcceptedRun } from '../scenario-library.js';
+import { sealTrial } from '../seal.js';
 import { simulatorChecks } from '../simulator.js';
 import type { Lab } from './context.js';
 import { isRunning, moveTo } from '../phases.js';
@@ -117,6 +119,8 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
           }
         }
         trial.elapsedMs = Math.round(performance.now() - started);
+        // The re-assessed attempt is final: sealed afresh, as a run's attempt is (seal.ts).
+        trial.seal = sealTrial(trial, record);
         record.trials.push(trial);
         await lab.operations.checkpoint(record, 'evaluating', `Переоценено ${record.trials.length}/${trials.length}. Агент не запускался.`);
       }
@@ -128,7 +132,11 @@ export function reassess(lab: Lab, id: string, raw: ReassessmentInput = {}, opti
   });
 }
 
-/** A person's verdict on a finished dialogue: kept beside the judge's, never over it. */
+/**
+ * A person's verdict on a finished dialogue: kept beside the judge's, never over it. A blind label (blind.ts) lands only on
+ * an expectation the blind check still waits for, and is kept apart until the last one is given: then every label of the
+ * check joins the owner's verdicts at once, so none of them tells the owner how the judge compares before the check is done.
+ */
 export function addHumanReview(lab: Lab, id: string, raw: HumanReviewInput): Promise<Experiment> {
   return lab.operations.change(async () => {
     const record = await lab.store.get(id);
@@ -165,7 +173,20 @@ export function addHumanReview(lab: Lab, id: string, raw: HumanReviewInput): Pro
       if (recorded) input.judgeVerdict = recorded; else delete input.judgeVerdict;
       if (judged) input.judge = { protocolHash: judged.protocolHash, inputHash: judged.inputHash }; else delete input.judge;
     }
-    (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
+    if (input.source === 'blind') {
+      const item = blindQueue(record).find(entry => entry.trialId === input.trialId && entry.metricId === input.metricId);
+      if (!item) throw new Error('Этого ожидания нет среди ещё не размеченных в слепой проверке.');
+      // The verdict the label is compared with is the judge's as the number reads it (through its channel).
+      input.judgeVerdict = item.judge;
+      record.blindLabels = [...record.blindLabels ?? [], { ...input, id: randomUUID(), createdAt: new Date().toISOString() }];
+      if (blindQueue(record).length) {
+        record.updatedAt = new Date().toISOString();
+        await lab.store.save(record);
+        return structuredClone(record);
+      }
+      (record.humanReviews ??= []).push(...record.blindLabels);
+      delete record.blindLabels;
+    } else (record.humanReviews ??= []).push({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
     delete record.resultsReviewedAt; delete record.resultsReviewHash;
     await lab.operations.checkpoint(record, 'results_review', 'Ваше решение записано отдельно от оценки судьи.');
     return structuredClone(record);

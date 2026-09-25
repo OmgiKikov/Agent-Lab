@@ -8,7 +8,7 @@ import type { AttemptDerivation, RunDerivation, SituationDerivation, Verdict } f
 import type { BehaviorPolicy } from '../scenario-contracts.js';
 import type { Calibration, LogJudgmentReceipt, LogReview } from './calibration.js';
 import { calibrationMode, runLogSituations, type LogSituation } from './calibration-scope.js';
-import { headlineRule, type CountedExpectation } from './expectations.js';
+import { headlineRule, recordedExpectationResult, type CountedExpectation } from './expectations.js';
 import { logJudgmentComplete, logUndecided } from './log-judge.js';
 import type { DialogueNumbers } from './view.js';
 
@@ -261,8 +261,12 @@ function comparePaths(synthetic: readonly Step[], sources: PathSources): Compare
 interface Row { id: string; letter: string; text: string; synthetic: Verdict; log: Verdict | undefined; decidedBy: { synthetic: Decider; log: Decider }; reason?: CalibrationExclusion }
 type Compared = Row & { synthetic: Decided; log: Decided };
 const decided = (verdict: Verdict | undefined): verdict is Decided => verdict === 'pass' || verdict === 'fail';
-/** The owner's when their latest verdict replaces the judge's (outcomes.ts humanOverride: a one-key «не знаю» does not); otherwise the judge's. */
-const deciderOf = (review: Pick<HumanReview, 'verdict' | 'source'> | undefined): Decider => humanOverride(review, undefined).result === undefined ? 'judge' : 'owner';
+/**
+ * The owner's when their latest verdict replaces the judge's `recorded` one; the judge's where there is none, or where the
+ * owner's doubt leaves the judge's verdict standing (outcomes.ts humanOverride: «не знаю» never takes a failure away).
+ */
+const deciderOf = (review: Pick<HumanReview, 'verdict' | 'source'> | undefined, recorded: Verdict | undefined): Decider =>
+  !review || review.verdict === 'unknown' && humanOverride(review, recorded).result === recorded ? 'judge' : 'owner';
 
 /** The customer a calibration compares, by preference: the one that plays the card, then scripted lines, then the bare opening. */
 const MODE_ORDER: readonly Trial['userMode'][] = ['reactive', 'scripted', 'static'];
@@ -286,8 +290,9 @@ function logSide(entry: LogJudgmentReceipt | undefined, record: Experiment, mark
   // A receipt that does not stand — altered, of another definition, or an incomplete judgment — decides nothing.
   const stands = logJudgmentComplete(entry, record);
   const mark = marks.get(entry.key);
-  const verdict = humanOverride(mark, stands ? entry.result : 'unknown').result ?? 'unknown';
-  const by = deciderOf(mark);
+  const recorded = stands ? entry.result : 'unknown';
+  const verdict = humanOverride(mark, recorded).result ?? 'unknown';
+  const by = deciderOf(mark, recorded);
   if (decided(verdict)) return { verdict, by };
   const reason: CalibrationExclusion = by === 'owner' ? 'owner_unknown' : !stands ? entry.complete ? 'receipt_invalid' : 'judge_failed' : logUndecided(entry) ?? 'judge_unclear';
   return { verdict, by, reason };
@@ -303,7 +308,7 @@ function expectationRows(record: Experiment, calibration: Calibration, situation
   return situation.expectations.map(({ expectation, letter }) => {
     const judged = counted.find(item => item.id === expectation.id);
     const synthetic = attempt && judged ? expectationResult(attempt.trial, judged, record.humanReviews) ?? 'unknown' : 'unknown';
-    const syntheticBy = attempt && judged ? deciderOf(reviews.get(`${attempt.trial.id}|metric:${expectation.id}`)) : 'judge';
+    const syntheticBy = attempt && judged ? deciderOf(reviews.get(`${attempt.trial.id}|metric:${expectation.id}`), recordedExpectationResult(attempt.trial, judged)) : 'judge';
     const log = logSide(calibration.entries.find(item => item.cardId === situation.id && item.expectationId === expectation.id), record, marks);
     const reason = log.reason ?? (synthetic === 'unknown' ? 'synthetic_unmeasured' : undefined);
     return { id: expectation.id, letter, text: expectation.text, synthetic, log: log.verdict, decidedBy: { synthetic: syntheticBy, log: log.by }, ...(reason ? { reason } : {}) };

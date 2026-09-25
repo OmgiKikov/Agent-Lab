@@ -1,4 +1,5 @@
 import { addUsage, emptyUsage, isCardExecution, type Experiment, type Trial } from '../contracts.js';
+import { recordedExpectationResult } from '../card/expectations.js';
 import { judgeModel } from '../comparison.js';
 import { assessTrial } from '../evaluation.js';
 import { scenarioSources } from '../judge.js';
@@ -33,18 +34,23 @@ interface Work { record: Experiment; runtime: Runtime & { assess: NonNullable<Ru
 /** The dialogue as the judge will read it again: the same facts, none of the earlier judgment. */
 function freshCopy(trial: Trial): Trial {
   const copy = structuredClone(trial);
-  delete copy.assessments; delete copy.assessmentError; delete copy.assessmentFailure; delete copy.judgeAudit; delete copy.judgeReceipt; delete copy.checkpoints; delete copy.checkpointReceipt;
+  delete copy.assessments; delete copy.assessmentError; delete copy.assessmentFailure; delete copy.judgeAudit; delete copy.judgeReceipt; delete copy.checkpoints; delete copy.checkpointReceipt; delete copy.seal;
   copy.usage = emptyUsage();
   return copy;
 }
 
-/** The run's judge on one copy, for one expectation: the verdict, and the receipt sealed as a run's is. */
+/**
+ * The run's judge on one copy, for one expectation: the verdict as the number would read it — through the
+ * expectation's channel, so a «fail» that cites no agent reply catches nothing — and the receipt sealed as a run's is.
+ */
 async function judgeCopy(work: Work, candidate: JudgeCheckCandidate, copy: Trial, name: string): Promise<Pick<JudgeCheckItem, 'result' | 'failure' | 'receipt'>> {
   const { record } = work;
   const scenario = { ...candidate.scenario, metrics: (candidate.scenario.metrics ?? []).filter(metric => metric.id === candidate.expectationId) };
+  const execution = candidate.scenario.execution;
+  const expectation = isCardExecution(execution) ? execution.evaluatorView.expectations.find(item => item.id === candidate.expectationId) : undefined;
   try {
-    const assessments = await assessTrial(work.runtime, scenario, scenarioSources(record, candidate.scenario), copy, work.ctx(name), record.requirements);
-    return { result: assessments.find(assessment => assessment.metricId === candidate.expectationId)?.result ?? 'unknown', ...(copy.judgeReceipt ? { receipt: copy.judgeReceipt } : {}) };
+    copy.assessments = await assessTrial(work.runtime, scenario, scenarioSources(record, candidate.scenario), copy, work.ctx(name), record.requirements);
+    return { result: (expectation && recordedExpectationResult(copy, expectation)) ?? 'unknown', ...(copy.judgeReceipt ? { receipt: copy.judgeReceipt } : {}) };
   } catch {
     return { result: null, failure: work.spent() ? 'stopped' : 'judge', ...(copy.judgeReceipt ? { receipt: copy.judgeReceipt } : {}) };
   }
@@ -58,8 +64,11 @@ async function plantedItem(work: Work, candidate: JudgeCheckCandidate, name: str
   if (!isCardExecution(execution) || !expectation) return { ...base, result: null, failure: 'builder' };
   const rules = execution.evaluatorView.requirements.filter(requirement => expectation.requirementIds.includes(requirement.id)).map(requirement => requirement.quote);
   const replies = agentReplies(candidate.trial).map((event, index) => ({ index, text: event.text! }));
+  // The builder reads the expectation whole, as the judge's rubric does: a duty it must not do is broken by doing it, never by its acceptable path.
+  const { text, strength, appliesWhen, acceptable, violation } = expectation;
+  const request = { text, ...(strength ? { strength } : {}), ...(appliesWhen ? { appliesWhen } : {}), ...(acceptable ? { acceptable } : {}), ...(violation ? { violation } : {}) };
   let planted;
-  try { planted = await work.runtime.plantError.plant({ expectation: expectation.text, rules, replies }, work.ctx(name)); }
+  try { planted = await work.runtime.plantError.plant({ expectation: request, rules, replies }, work.ctx(name)); }
   catch { return { ...base, result: null, failure: work.spent() ? 'stopped' : 'builder' }; }
   const copy = freshCopy(candidate.trial);
   const reply = agentReplies(copy)[planted.replyIndex];

@@ -6,6 +6,7 @@ import { ruleBarText } from './card/rulebook.js';
 import { VERSION_UNKNOWN_NOTE, type RunComparison } from './comparison.js';
 import type { Experiment, Trial } from './contracts.js';
 import type { FailureExplanation } from './explain.js';
+import { realismDifference } from './realism.js';
 import type { JudgeCheckSummary } from './judge-check.js';
 import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
@@ -101,11 +102,12 @@ export function accuracyParts(view: ResultView): { lead: string; value: string |
     const { passed, decided } = view.headline;
     const unexamined = view.connection === 'absent' ? 'подключение агента не проверено экзаменом' : view.connection === 'failed' ? 'подключение агента не прошло экзамен'
       : view.connection === 'simple' ? 'экзамен подключения слишком простой — нет проверки памяти разговора' : null;
-    const tail = view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
+    const tail = view.integrity === 'altered' ? 'не считается: запись изменена после прогона'
+      : view.phase === 'review' || (view.phase === 'preparing' || view.phase === 'checking') && !view.pending ? 'прогон ещё не запускался'
       : view.pending ? `считается — ждут проверки ${countText(view.pending, SITUATIONS)}`
       : unexamined && decided ? `не считается: ${unexamined}. Справился в ${passed} из ${decided} ${pluralForm(decided, SITUATIONS_OF)}, ошибся в ${decided - passed}`
       : 'нет данных — ни одна ситуация не измерена';
-    return { lead, value: null, tail, level: unexamined && decided ? 'warn' : 'none' };
+    return { lead, value: null, tail, level: view.integrity === 'altered' ? 'bad' : unexamined && decided ? 'warn' : 'none' };
   }
   const { passed, decided } = view.headline;
   const unmeasured = view.notMeasured.total;
@@ -148,6 +150,8 @@ const unmeasuredAlarm = (view: Pick<ResultView, 'control' | 'notMeasured'>): boo
  * connection or the judge is broken; the unmeasured share then stays in the trust line.
  */
 export function alarmRow(view: ResultView, reader: Reader = 'owner'): ResultRow | null {
+  // A record changed after its run says so before anything else: nothing it holds is the run's own evidence.
+  if (view.integrity === 'altered') return { role: 'alarm', indent: 0, text: '✗ Числу не верить: запись изменена после прогона' };
   const { alarm, cards } = view.control;
   if (alarm) {
     const many = cards.length > 1;
@@ -183,6 +187,7 @@ export function trustSegments(view: ResultView, reader: Reader = 'owner'): { tex
   if (agreement.checked) add(`с судьёй согласны ${agreement.agreed} из ${agreement.checked}`);
   else if (view.reviewed.situations) add(owner ? `вы проверили ${reviewed}` : `владелец агента проверил ${reviewed}`);
   else if (agreement.queueFailures.length + agreement.sampledPasses.length) add('судью ещё не проверяли');
+  if (view.wrongExpectations) add(`ожиданий признано неверными: ${view.wrongExpectations} — это ошибки ситуаций, в процент они не входят`);
   if (view.sameModelJudge) add('судья — та же модель, что готовила ситуации', true);
   if (view.reviewed.contradicted) add(`${owner ? 'ваши отметки' : 'отметки владельца агента'} расходятся с итогом: ${view.reviewed.contradicted}`, true);
   const unstable = unstableCount(view);
@@ -282,7 +287,8 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
     : 'Клиент: реактивное поведение в этом прогоне не измерено.';
   const remaining = Math.max(0, notMeasured.of - headline.decided);
   const metric = `Метрика: оценено ${headline.decided} из ${notMeasured.of} ситуаций. Процент относится только к оценённым ситуациям.`;
-  const bounds = view.connection && view.connection !== 'passed' ? 'Процент и его границы появятся, когда подключение агента пройдёт экзамен.'
+  const bounds = view.integrity === 'altered' ? 'Процент и его границы не считаются: запись изменена после прогона.'
+    : view.connection && view.connection !== 'passed' ? 'Процент и его границы появятся, когда подключение агента пройдёт экзамен.'
     : notMeasured.of > 0 && remaining > 0
     ? `По полному набору возможны ${percent(headline.passed / notMeasured.of)}–${percent((headline.passed + remaining) / notMeasured.of)} успеха, в зависимости от ${remaining} оставшихся ситуаций. Это границы, не прогноз.`
     : 'Повторы одной ситуации не являются независимыми клиентами; этот набор не доказывает качество на всём трафике.';
@@ -292,36 +298,42 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
 
 /**
  * The judge against the owner's blind labels (blind.ts): how often they agree, and each kind of disagreement — the false
- * «справился» first: an error of the agent the number hides. Null before the first label.
+ * «справился» first: an error of the agent the number hides. Before the last label only how far the check got: the owner
+ * would label the rest knowing how the judge compares. Null before the first label.
  */
 export function blindText(view: Pick<ResultView, 'blind'>): string | null {
   const blind = view.blind;
   if (!blind?.labelled) return null;
+  if (!blind.complete) return `Слепая проверка судьи: размечено ${blind.labelled} из ${blind.drawn}. Сравнение с судьёй появится, когда будут размечены все.`;
   const decided = blind.agreed + blind.falsePasses.length + blind.falseFails.length;
   const parts = [`ложных «справился» — ${blind.falsePasses.length}`, `ложных «не справился» — ${blind.falseFails.length}`,
     ...(blind.judgeUndecided ? [`судья не решил, где решили вы, — ${blind.judgeUndecided}`] : []), ...(blind.ownerUnsure ? [`вы не смогли решить — ${blind.ownerUnsure}`] : []),
     ...(blind.wrongExpectations ? [`ожидание неверно — ${blind.wrongExpectations}`] : [])];
   const tail = blind.falsePasses.length ? ' Судья пропускал ошибки агента: где оценивал только он, процент может быть завышен.' : '';
-  return `Судья, слепая проверка: совпал с вами в ${blind.agreed} из ${countText(decided, ['оценки', 'оценок', 'оценок'])}; ${parts.join(', ')}${blind.labelled < blind.drawn ? ` (размечено ${blind.labelled} из ${blind.drawn})` : ''}.${tail}`;
+  return `Судья, слепая проверка: совпал с вами в ${blind.agreed} из ${countText(decided, ['оценки', 'оценок', 'оценок'])}; ${parts.join(', ')}.${tail}`;
 }
 
 /** A mean as a person reads it: «1,5», «3». */
 const decimal = (value: number): string => value.toLocaleString('ru-RU', { maximumFractionDigits: 1 });
 
+/** What a marked difference of the played customer says, in each measure (realism.ts realismDifference). */
+const REALISM_MESSAGES = { more: 'Клиент Lab пишет после обращения заметно больше реплик, чем реальные: разговор с ним идёт дольше, чем в проде.',
+  fewer: 'Клиент Lab пишет после обращения заметно меньше реплик, чем реальные: разговор с ним короче, чем в проде.' } as const;
+const REALISM_WORDS = { more: 'Клиент Lab заметно многословнее реальных: с ним агенту может быть легче, чем в проде.', fewer: 'Клиент Lab заметно немногословнее реальных.' } as const;
+
 /**
  * The second assessment of the customer, apart from whether it kept to its situation: how the customers Lab played
- * compare with the logged ones of the same situations (realism.ts) — how many messages after the opening, how many words
- * in one. A customer much wordier than the real ones makes the agent's task easier than in production: that is a
- * warning. Null for a run with no situation from a log.
+ * compare with the logged ones of the same situations (realism.ts) — how many messages after the request, how many words
+ * in one. A customer who differs markedly in either, more or less, played another conversation than production's: that
+ * is a warning. Null for a run with no situation from a log.
  */
 export function realismText(view: Pick<ResultView, 'realism'>): { text: string; warn: boolean } | null {
   const found = view.realism;
   if (!found) return null;
-  const ratio = found.logged.words ? found.synthetic.words / found.logged.words : null;
-  const wordy = ratio !== null && ratio >= 1.5, terse = ratio !== null && ratio <= 2 / 3;
-  return { warn: wordy || terse,
-    text: `Похожесть клиента на реальных (${countText(found.conversations, ['разговор', 'разговора', 'разговоров'])} по ситуациям из логов): реплик после первой — в среднем ${decimal(found.synthetic.messages)} у клиента Lab и ${decimal(found.logged.messages)} у реального; слов в реплике — ${decimal(found.synthetic.words)} и ${decimal(found.logged.words)}.${
-      wordy ? ' Клиент Lab заметно многословнее реальных: с ним агенту может быть легче, чем в проде.' : terse ? ' Клиент Lab заметно немногословнее реальных.' : ''} Это сравнение длины и числа реплик, а не оценка того, похож ли клиент на человека.` };
+  const differs = realismDifference(found);
+  const notes = [...(differs.messages ? [REALISM_MESSAGES[differs.messages]] : []), ...(differs.words ? [REALISM_WORDS[differs.words]] : [])];
+  return { warn: notes.length > 0,
+    text: `Похожесть клиента на реальных (${countText(found.conversations, ['разговор', 'разговора', 'разговоров'])} по ситуациям из логов): реплик после обращения — в среднем ${decimal(found.synthetic.messages)} у клиента Lab и ${decimal(found.logged.messages)} у реального; слов в реплике — ${decimal(found.synthetic.words)} и ${decimal(found.logged.words)}.${notes.map(note => ` ${note}`).join('')} Это сравнение длины и числа реплик, а не оценка того, похож ли клиент на человека.` };
 }
 
 /**

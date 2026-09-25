@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { assessmentRubrics, judgeReceiptSchema } from './assessment.js';
+import { recordedExpectationResult } from './card/expectations.js';
+import { measurementUsable } from './outcomes.js';
 import { fingerprint, isCardExecution, usageSchema, type Experiment, type Scenario, type Trial } from './contracts.js';
 import { identifierSchema as identifier, text } from './ids.js';
 
@@ -61,19 +63,21 @@ export interface JudgeCheckCandidate { trial: Trial; scenario: Scenario; expecta
 export const agentReplies = (trial: Pick<Trial, 'events'>) => trial.events.filter(event => event.type === 'assistant' && !!event.text?.trim());
 
 /**
- * Every verdict of the run a check can use: an expectation of a card-format situation that the judge passed on a
- * measured dialogue with at least one agent reply, judged on the reply itself — altering a reply cannot break a
- * duty observed in a tool call or in the agent's state. Positive controls are left out: they measure the connection.
+ * Every verdict of the run a check can use: an expectation of a card-format situation that the judge passed — as the
+ * number reads it, through its channel (card/expectations.ts recordedExpectationResult) — on a dialogue the number
+ * counts (outcomes.ts measurementUsable) with at least one agent reply, judged on the reply itself: altering a reply
+ * cannot break a duty observed in a tool call or in the agent's state. Positive controls are left out: they measure the
+ * connection.
  */
 export function judgeCheckCandidates(record: Experiment): JudgeCheckCandidate[] {
   const controls = new Set(record.positiveControlScenarioIds ?? []);
   return record.trials.flatMap(trial => {
     const scenario = record.scenarios.find(item => item.id === trial.scenarioId);
     const execution = scenario?.execution;
-    if (!scenario || !isCardExecution(execution) || controls.has(scenario.id) || ['invalid', 'cancelled'].includes(trial.outcome) || !agentReplies(trial).length) return [];
-    const onReply = new Set(execution.evaluatorView.expectations.filter(expectation => expectation.observation === 'reply').map(expectation => expectation.id));
-    return (trial.assessments ?? []).filter(assessment => assessment.result === 'pass' && onReply.has(assessment.metricId)).flatMap(assessment => {
-      const metric = scenario.metrics?.find(item => item.id === assessment.metricId);
+    if (!scenario || !isCardExecution(execution) || controls.has(scenario.id) || !measurementUsable(scenario, trial, record.humanReviews) || !agentReplies(trial).length) return [];
+    const passed = execution.evaluatorView.expectations.filter(expectation => expectation.observation === 'reply' && recordedExpectationResult(trial, expectation) === 'pass');
+    return passed.flatMap(expectation => {
+      const metric = scenario.metrics?.find(item => item.id === expectation.id);
       // Two votes on every rubric the judge reads for this one expectation (a retrieval trace adds its own).
       return metric ? [{ trial, scenario, expectationId: metric.id, judgeCalls: 2 * assessmentRubrics({ metrics: [metric] }, trial).length }] : [];
     });
