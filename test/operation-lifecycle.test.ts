@@ -202,3 +202,26 @@ test('a run spends its own limit from its start: the preparation\'s calls are no
     assert.equal((await lab.get(tight.id)).phase, 'results_review');
   });
 });
+
+test('a run whose measurement drifts stops: a setting or a changed part at the next dialogue, a part edited in place once the suite ends', async () => {
+  // A follower never changes the record it is shown: here one does, as a defect would, once the first dialogue is saved.
+  const drifts: Array<[string, (record: Experiment) => void, Phase, number]> = [
+    ['a setting', record => { record.settings.maxTurns = 2; }, 'error', 1],
+    ['a situation put in place of another', record => { record.scenarios = record.scenarios.map((scenario, index) => index ? scenario : { ...scenario, title: 'Другая ситуация' }); }, 'error', 1],
+    // Around a dialogue the materials and the situations are compared by identity; the whole check after the suite reads them.
+    ['a situation edited in place', record => { record.scenarios[0]!.title = 'Другая ситуация'; }, 'error', 2],
+    ['the same situations put in place of themselves', record => { record.scenarios = structuredClone(record.scenarios); }, 'results_review', 2],
+  ];
+  for (const [what, drift, phase, dialogues] of drifts) await withLab(chargedRuntime(), async lab => {
+    const draft = await prepared(lab);
+    const { library } = await lab.readCards(draft.id);
+    const accepted = (await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id))).experiment;
+    let drifted = false;
+    const unfollow = lab.follow(record => { if (!drifted && record.trials.length === 1) { drifted = true; drift(record); } });
+    await lab.start(draft.id, { approved: true, expectedHash: draftHash(accepted), parallel: 1 });
+    await lab.waitForIdle();
+    unfollow();
+    const run = await lab.get(draft.id);
+    assert.deepEqual([run.phase, run.error, run.trials.length], [phase, phase === 'error' ? 'Условия измерения изменились во время прогона. Запустите повтор заново.' : null, dialogues], what);
+  });
+});

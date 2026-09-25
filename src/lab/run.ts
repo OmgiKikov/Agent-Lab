@@ -25,7 +25,7 @@ import { sameTargetVersion, targetFingerprint } from '../target-version.js';
 import type { Lab } from './context.js';
 import type { Operation } from './operation.js';
 import { isRunning, moveTo } from '../phases.js';
-import { draftBudget, draftHash, freshDraft, measurementHash, retainAcceptedTests, revision } from './record.js';
+import { draftBudget, draftHash, freshDraft, measurementFields, measurementHash, retainAcceptedTests, revision } from './record.js';
 
 /*
  * A run: the draft it starts from — its settings and connection, a repeat of an accepted set, a set saved to or
@@ -285,7 +285,7 @@ async function evaluateReviewed(lab: Lab, record: Experiment, ctx: CallContext, 
   if (!agent || !record.manifestHash) throw new Error('В черновике нет подтверждённого агента или плана измерения — это ошибка Agent Lab.');
   await release(lab, record, ctx);
   await runSuite(lab, record, runtime, agent, ctx, operation, parallel);
-  frozenGuard(record, record.manifestHash, ctx)();
+  checkManifest(record, record.manifestHash, ctx);
   await nameFailureModes(record, runtime, ctx);
   if (record.trials.some(t => !['invalid', 'cancelled'].includes(t.outcome))) {
     await rememberConnection(lab.store.directory, { format: 'agent-lab-connection-1', target: runnableTarget(record.target), targetVersion: record.targetVersion });
@@ -296,11 +296,40 @@ async function evaluateReviewed(lab: Lab, record: Experiment, ctx: CallContext, 
   await lab.operations.checkpoint(record, 'results_review', 'Диалоги и оценки готовы. Разберите провалы и проверьте поведение симулятора, прежде чем принимать результат.');
 }
 
-/** Re-checks the frozen manifest before and after every trial; a drifted suite stops the run instead of grading it. */
+const MANIFEST_DRIFTED = 'Условия измерения изменились во время прогона. Запустите повтор заново.';
+
+/** The run's frozen manifest checked whole: every field measurementHash seals, the materials in full. */
+function checkManifest(record: Experiment, hash: string, ctx: CallContext): void {
+  ctx.signal.throwIfAborted();
+  if (measurementHash(record) !== hash) throw new Error(MANIFEST_DRIFTED);
+}
+
+/**
+ * The manifest's large parts: the materials — hashed twice in it, as the sources and inside the library that holds
+ * them — the rules and the situations. A run reads them and never replaces them.
+ */
+const MANIFEST_MATERIALS: readonly string[] = ['sources', 'requirements', 'scenarios', 'librarySnapshot', 'goldenCases', 'dialogues', 'profiles'];
+
+/**
+ * The check before and after every trial: a drifted suite stops the run instead of grading it. The manifest is checked
+ * whole once, when the guard is made, and again after the suite (checkManifest). Around a dialogue only the rest is
+ * hashed again and the large parts are compared by identity, so a dialogue does not pay for hashing the materials twice
+ * over: a large part put in place of another is weighed whole, by its content, as before; one edited in place, which
+ * identity does not see, is caught by the whole check after the suite, before any result is named.
+ */
 function frozenGuard(record: Experiment, hash: string, ctx: CallContext): () => void {
+  checkManifest(record, hash, ctx);
+  const parts = () => {
+    const fields = measurementFields(record);
+    return { materials: MANIFEST_MATERIALS.map(key => fields[key]),
+      rest: fingerprint(Object.fromEntries(Object.entries(fields).filter(([key]) => !MANIFEST_MATERIALS.includes(key)))) };
+  };
+  let frozen = parts();
   return () => {
     ctx.signal.throwIfAborted();
-    if (measurementHash(record) !== hash) throw new Error('Условия измерения изменились во время прогона. Запустите повтор заново.');
+    const now = parts();
+    if (now.rest !== frozen.rest) throw new Error(MANIFEST_DRIFTED);
+    if (now.materials.some((part, index) => part !== frozen.materials[index])) { checkManifest(record, hash, ctx); frozen = now; }
   };
 }
 

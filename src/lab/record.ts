@@ -34,11 +34,15 @@ export function resultHash(record: Experiment): string {
  * old hash.
  */
 export function measurementHash(record: Experiment): string {
-  return fingerprint({ version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
+  return fingerprint(measurementFields(record));
+}
+/** What measurementHash seals, field by field: a run's guard checks its large parts apart from the rest (lab/run.ts). */
+export function measurementFields(record: Experiment): Record<string, unknown> {
+  return { version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
     target: record.target, goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
     positiveControlScenarioIds: record.positiveControlScenarioIds,
     librarySnapshot: record.librarySnapshot, originalImport: record.originalImport, generatorConfig:record.generatorConfig,generatorIdentity:record.generatorIdentity,
-    targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
+    targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion };
 }
 
 /**
