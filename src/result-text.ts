@@ -292,17 +292,19 @@ export function evaluationEvidenceLines(view: ResultView): string[] {
 
 /**
  * The judge against the owner's blind labels (blind.ts): how often they agree, and each kind of disagreement — the false
- * «справился» first: an error of the agent the number hides. Null before the first label.
+ * «справился» first: an error of the agent the number hides. Before the last label only how far the check got: the owner
+ * would label the rest knowing how the judge compares. Null before the first label.
  */
 export function blindText(view: Pick<ResultView, 'blind'>): string | null {
   const blind = view.blind;
   if (!blind?.labelled) return null;
+  if (!blind.complete) return `Слепая проверка судьи: размечено ${blind.labelled} из ${blind.drawn}. Сравнение с судьёй появится, когда будут размечены все.`;
   const decided = blind.agreed + blind.falsePasses.length + blind.falseFails.length;
   const parts = [`ложных «справился» — ${blind.falsePasses.length}`, `ложных «не справился» — ${blind.falseFails.length}`,
     ...(blind.judgeUndecided ? [`судья не решил, где решили вы, — ${blind.judgeUndecided}`] : []), ...(blind.ownerUnsure ? [`вы не смогли решить — ${blind.ownerUnsure}`] : []),
     ...(blind.wrongExpectations ? [`ожидание неверно — ${blind.wrongExpectations}`] : [])];
   const tail = blind.falsePasses.length ? ' Судья пропускал ошибки агента: где оценивал только он, процент может быть завышен.' : '';
-  return `Судья, слепая проверка: совпал с вами в ${blind.agreed} из ${countText(decided, ['оценки', 'оценок', 'оценок'])}; ${parts.join(', ')}${blind.labelled < blind.drawn ? ` (размечено ${blind.labelled} из ${blind.drawn})` : ''}.${tail}`;
+  return `Судья, слепая проверка: совпал с вами в ${blind.agreed} из ${countText(decided, ['оценки', 'оценок', 'оценок'])}; ${parts.join(', ')}.${tail}`;
 }
 
 /** A mean as a person reads it: «1,5», «3». */

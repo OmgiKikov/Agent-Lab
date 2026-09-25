@@ -111,7 +111,7 @@ export function freshDraft(previous: Experiment, scenarioIds?: string[]): Experi
     trials: [], comparisons: [], iterations: [], humanReviews: [], usage: emptyUsage(),
     reviewedAt: null, reviewMode: null, manifestHash: null, controlConsumedAt: null, error: null });
   delete record.executionRunId;
-  delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes;
+  delete record.resultsReviewedAt; delete record.resultsReviewHash; delete record.failureModes; delete record.blindLabels;
   delete record.acceptedDraftHash;
   delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog; delete record.calibration;
   // A new run takes the connection exam anew; the earlier one belongs to the earlier run's conversations.

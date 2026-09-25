@@ -561,6 +561,12 @@ export interface Experiment {
    */
   stop?: StopReason;
   humanReviews: HumanReview[]; resultsReviewedAt?: string; resultsReviewHash?: string;
+  /**
+   * The owner's labels of a blind check still under way (blind.ts): kept apart from `humanReviews` until the last one is
+   * given, so neither the number nor anything else tells the owner how their labels compare with the judge before the
+   * check is done; then they join `humanReviews` together. Absent in records without a check under way.
+   */
+  blindLabels?: HumanReview[];
   /** Named clusters over the failed dialogues of this run; the bridge from evaluation to fixing. */
   failureModes?: FailureMode[];
   releaseLog?: ReleaseLog;
@@ -672,6 +678,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   trials: z.array(trialSchema), comparisons: z.array(comparisonSchema), iterations: z.array(z.strictObject({ revisionId: text, accepted: z.boolean(), reason: z.string() })),
   usage: usageSchema, error: z.string().nullable(), limitations: z.array(z.string()), caveats: caveatsSchema.optional(), stop: z.enum(STOP_REASONS).optional(),
   humanReviews: z.array(humanReviewSchema).default([]), resultsReviewedAt: text.optional(), resultsReviewHash: text.optional(),
+  blindLabels: z.array(humanReviewSchema).max(200).optional(),
   failureModes: z.array(failureModeSchema).max(30).optional(),
   releaseLog: releaseLogSchema.optional(),
   validationExclusions: z.array(validationExclusionSchema).max(300).optional(),

@@ -1,5 +1,5 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { Experiment, Trial } from '../src/contracts.js';
+import { isCardExecution, type Experiment, type Trial } from '../src/contracts.js';
 import { agreementSample, awaitingVerdict, judgeAgreement } from '../src/agreement.js';
 import { logAnswerOf, logAnswerReviews, logMarks, logRefusal, logTargets, type CalibrationView, type LogTarget } from '../src/card/calibration-view.js';
 import { runLogSituations } from '../src/card/calibration-scope.js';
@@ -8,7 +8,7 @@ import { resultHash } from '../src/lab/record.js';
 import { markTargets, measurementUsable } from '../src/outcomes.js';
 import { buildResultView } from '../src/result-view.js';
 import { blindText, trialTurns, type JudgeAnswer } from '../src/result-text.js';
-import { blindQueue, blindSample, type BlindItem } from '../src/blind.js';
+import { blindPlace, blindQueue, blindSample, type BlindItem } from '../src/blind.js';
 import { situationNumber } from '../src/card/view.js';
 import { countText } from '../src/plural.js';
 import { cardVerdict, headlineCardOutcome } from '../src/run.js';
@@ -239,18 +239,18 @@ const BLIND_ANSWERS = [
 ];
 const BLIND_PAUSE = 'Хватит на сейчас';
 
-/** One expectation as the owner reads it blind: the situation, what the customer wanted, the expectation with its ways, the whole conversation — never the judge's verdict. */
-function blindQuestion(record: Experiment, item: BlindItem, place: number, of: number): string {
+/**
+ * One expectation as the owner reads it blind: a neutral place («Разговор 3 из 12»), the expectation in its own words —
+ * what it forbids, what else fulfils it, what breaks it — and the whole conversation. Nothing that would give the judge's
+ * verdict away: no verdict, no situation number or title the result screen names beside its failures, no letter.
+ */
+function blindQuestion(record: Experiment, item: BlindItem, place: ReturnType<typeof blindPlace>): string {
   const trial = record.trials.find(entry => entry.id === item.trialId);
-  const scenario = record.scenarios.find(entry => entry.id === item.scenarioId);
-  const library = record.librarySnapshot?.formatVersion === 2 ? record.librarySnapshot : undefined;
-  const card = library?.cards.find(entry => entry.id === item.scenarioId);
-  const duty = card?.agentMust.find(entry => entry.id === item.metricId);
-  const number = situationNumber(record, item.scenarioId, record.scenarios.findIndex(entry => entry.id === item.scenarioId) + 1);
-  return [`Слепая проверка судьи · ${place} из ${of}. Вердикт судьи не показывается.`, '',
-    `Ситуация ${number} «${oneLine(scenario?.title ?? '')}»`,
-    ...(card ? [`Клиент хотел: ${oneLine(card.client.wants)}`] : []),
-    `Ожидание ${item.letter}: ${duty?.strength === 'must_not' ? 'нельзя — ' : ''}${oneLine(item.text)}`,
+  const execution = record.scenarios.find(entry => entry.id === item.scenarioId)?.execution;
+  const duty = isCardExecution(execution) ? execution.evaluatorView.expectations.find(entry => entry.id === item.metricId) : undefined;
+  const question = place.questions > 1 ? ` · вопрос ${place.question} из ${place.questions} по нему` : '';
+  return [`Слепая проверка судьи · Разговор ${place.conversation} из ${place.conversations}${question}. Вердикт судьи не показывается.`, '',
+    `Ожидание: ${duty?.strength === 'must_not' ? 'нельзя — ' : ''}${oneLine(item.text)}`,
     ...(duty?.acceptable ? [`  допустимо: ${oneLine(duty.acceptable)}`] : []), ...(duty?.violation ? [`  нарушение: ${oneLine(duty.violation)}`] : []),
     '', 'Разговор:', ...trialTurns(trial).map(turn => `  ${turn.who}: ${clip(turn.text, 600)}`), '',
     'Выполнил ли агент это ожидание?'].join('\n');
@@ -265,13 +265,13 @@ function blindQuestion(record: Experiment, item: BlindItem, place: number, of: n
 export async function blindCheck(ctx: Pick<ExtensionContext, 'ui'>, write: <T>(work: (lab: ExperimentLab) => Promise<T>) => Promise<T>,
   read: () => Promise<Experiment>, options: { limit?: number } = {}): Promise<{ notice: string; labelled: number }> {
   let record = await read();
-  const total = blindSample(record).length;
+  const sample = blindSample(record);
+  const total = sample.length;
   if (!total) return { notice: 'Проверять вслепую нечего: в прогоне нет оценок судьи по ожиданиям ситуаций.', labelled: 0 };
   let labelled = 0;
   for (let item = blindQueue(record)[0]; item && labelled < (options.limit ?? total); item = blindQueue(record)[0]) {
-    const place = total - blindQueue(record).length + 1;
     const started = performance.now();
-    const picked = await ctx.ui.select(safeText(blindQuestion(record, item, place, total)), [...BLIND_ANSWERS.map(answer => answer.label), BLIND_PAUSE]);
+    const picked = await ctx.ui.select(safeText(blindQuestion(record, item, blindPlace(sample, item))), [...BLIND_ANSWERS.map(answer => answer.label), BLIND_PAUSE]);
     const answer = BLIND_ANSWERS.find(entry => entry.label === picked);
     if (!answer) break;
     const current = item;
@@ -283,7 +283,9 @@ export async function blindCheck(ctx: Pick<ExtensionContext, 'ui'>, write: <T>(w
   const blind = buildResultView(record).blind;
   const left = blindQueue(record).length;
   const verdict = blindText({ blind }) ?? 'Слепых оценок пока нет.';
-  const misses = blind?.falsePasses.slice(0, 3).map(diff => `ситуация ${situationNumber(record, diff.scenarioId, 0)}, ожидание ${diff.letter} — «${clip(oneLine(diff.text), 80)}»`) ?? [];
+  // Only a finished check names where the judge differs: then its situation and letter no longer steer a label.
+  const misses = blind?.complete ? blind.falsePasses.slice(0, 3).map(diff => `ситуация ${situationNumber(record, diff.scenarioId, 0)}, ожидание ${diff.letter} — «${clip(oneLine(diff.text), 80)}»`) : [];
   return { labelled, notice: [verdict, ...(misses.length ? [`Судья сказал «справился», а вы — нет: ${misses.join('; ')}.`] : []),
-    left ? `Осталось ${countText(left, ['оценка', 'оценки', 'оценок'])}: проверку можно продолжить.` : 'Слепая проверка закончена.'].join(' ') };
+    left ? `Осталось ${countText(left, ['оценка', 'оценки', 'оценок'])}: проверку можно продолжить. Ваши оценки войдут в итог, когда будет дана последняя.`
+      : 'Слепая проверка закончена: ваши оценки вошли в итог.'].join(' ') };
 }
