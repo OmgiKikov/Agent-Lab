@@ -47,7 +47,7 @@ const simulatorReplySchema = z.strictObject({ done: userTurnSchema.shape.done, m
   .describe('To stop immediately, return done:true and omit message. A nonempty message is always delivered to the target. done:true with a nonempty message means deliver this final user message, receive the target response, then end. done:true with an empty message means stop now without another target response.');
 
 /** A review answer is one short verdict per claim; its repair starts afresh, like every task that carries a whole dialogue. */
-const reviewBounds = (claims: number) => ({ outputBytes: 1_000 + 700 * claims, requestBytes: MODEL_REQUEST_BYTES + 700 * claims });
+const reviewBounds = (claims: number) => ({ requestBytes: MODEL_REQUEST_BYTES + 700 * claims });
 
 /** A catalog up to this many articles is an enum of the answer's schema; a larger one would outweigh the request, so its ids are checked instead. */
 const CATALOG_ENUM_LIMIT = 500;
@@ -65,7 +65,7 @@ function promptQuoteProblem(modes: readonly FailureMode[], prompt: string | unde
  * the provider's default temperature and medium thinking for a reasoning one.
  */
 const judgeConfiguration = (judge: Model) => fingerprint({ api: judge.api, baseUrl: judge.baseUrl, compat: judge.compat,
-  temperature: judge.reasoning ? 'default' : 0, thinking: judge.reasoning ? 'medium' : 'off' });
+  temperature: judge.reasoning ? 'default' : 0, thinking: judge.reasoning ? 'medium' : 'off', maxTokens: judge.maxTokens });
 
 /**
  * The personal model gateway in the status: what its setup lacks (without its variables or readable files the provider
@@ -132,7 +132,7 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
   // One judge for the synthetic attempts and for the recorded conversations: the same model, sampling and transport.
   const judgeModel = { provider: judge.provider, id: judge.id, configurationHash: judgeConfiguration(judge), transport: models.judgeTransport };
   const respond = (ctx: CallContext): Respond => async (prompt, data, recordPartial) => (await callModel(runtime, judge, {
-    system: prompt, messages: [{ role: 'user', content: data, timestamp: Date.now() }], maxTokens: 16384,
+    system: prompt, messages: [{ role: 'user', content: data, timestamp: Date.now() }],
     ...(judge.reasoning ? { reasoning: true } : { temperature: 0 }),
     ...(models.judgeTransport.structured ? { responseFormat: JUDGE_RESPONSE_FORMAT } : {}),
   }, ctx, recordPartial)).text;

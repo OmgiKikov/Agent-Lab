@@ -134,11 +134,10 @@ export function cardProposalSchema(call: ProposalCall): z.ZodType<CardProposal> 
   return call.source.kind === 'rules' ? rulesProposalSchema(call) : dialogueProposalSchema(call) as z.ZodType<DialogueProposal>;
 }
 
-/** The answer and the whole request of one proposal call, in UTF-8 bytes: each later message adds one bounded coverage answer. */
-export const proposalBounds = (call: ProposalCall) => {
-  const outputBytes = 16_000 + 500 * call.laterEvents.length + 150 * call.masked.length;
-  return { outputBytes, requestBytes: MODEL_REQUEST_BYTES + outputBytes };
-};
+/** Room for the whole evidence and the latest rejected proposal in a repair request. */
+export const proposalBounds = (call: ProposalCall) => ({
+  requestBytes: MODEL_REQUEST_BYTES + 16_000 + 500 * call.laterEvents.length + 150 * call.masked.length,
+});
 
 const said = (call: ProposalCall, index: number): string => call.messages.find(message => message.index === index)?.content ?? '';
 

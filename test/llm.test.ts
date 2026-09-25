@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { DEFAULT_JUDGE, emptyUsage, experimentSchema, fingerprint, settingsSchema, type Experiment, type Usage } from '../src/contracts.js';
 import type { JudgeAudit } from '../src/assessment.js';
 import { ExperimentLab } from '../src/experiment.js';
-import { hasCompleteJudgment, JUDGE_PROMPT, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, judgeResponseSchema, observableSources, scenarioSources } from '../src/judge.js';
+import { hasCompleteJudgment, JUDGE_PROMPT, JUDGE_PROTOCOL, JUDGE_PROTOCOL_16384, JUDGE_RESPONSE_FORMAT, judgeResponseSchema, observableSources, scenarioSources } from '../src/judge.js';
 import { PLANT_ERROR_ROLE } from '../src/judge-check-task.js';
 import { MASK_FILL_ROLE } from '../src/card/unmask.js';
 import { callModel, ProviderFailure, type ProviderDelivery, type ProviderFailureKind } from '../src/llm/model-call.js';
@@ -22,6 +22,28 @@ import { cardDraft } from './helpers/card-library.js';
 import { pendingClaims, reviewRequests } from '../src/card/review.js';
 
 const storedFixture = async (name: string) => JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
+
+test('long valid structured replies use the model output window without byte-based rejection or repairs', async () => {
+  const answer = { text: 'Подробное объяснение. '.repeat(1500) };
+  const limits: Array<number | undefined> = [];
+  const f = await fixture((_request, _index, options) => {
+    limits.push(options?.maxTokens);
+    return JSON.stringify(answer);
+  }, false, true, 65_536);
+  try {
+    const models = await resolveModels(f.runtime, fixtureSettings, new AbortController().signal);
+    const { ctx, usage } = callContext();
+    for (const bounded of [undefined, { requestBytes: 200_000 }]) {
+      const result = await runStructured(f.runtime, models, {
+        id: 'long-reply', label: 'Long reply', role: 'builder', instructions: 'Explain fully.',
+        output: z.strictObject({ text: z.string() }), ...(bounded ? { bounded } : {}),
+      }, {}, ctx);
+      assert.deepEqual(result, answer);
+    }
+    assert.deepEqual(limits, [65_536, 65_536]);
+    assert.equal(usage.calls, 2, 'one call per task, with no repairs for response size');
+  } finally { await f.close(); }
+});
 const text = (content: unknown): string => typeof content === 'string' ? content : (content as { text?: string }[]).map(part => part.text ?? '').join('');
 
 /** Agrees with every rubric, citing the last agent reply verbatim: the deterministic judge the stored judgments were made with. */
@@ -51,9 +73,9 @@ const verifies = (record: Experiment) => record.trials.map(trial => {
   const scenario = record.scenarios.find(s => s.id === trial.scenarioId)!;
   return hasCompleteJudgment({ scenario, sources: observableSources(scenarioSources(record, scenario), record.requirements), trial });
 });
-/** A receipt without its audit hash: the audit also keeps request times; protocol, input, configuration, transport and votes are the judgment. */
+/** Compare the actual evidence and votes across the old and current output-window configurations. */
 const receipts = (record: Experiment) => record.trials.map(trial => {
-  const { auditHash: _, ...receipt } = trial.judgeReceipt!;
+  const { auditHash: _, protocolHash: _protocol, configurationHash: _configuration, ...receipt } = trial.judgeReceipt!;
   return receipt;
 });
 
@@ -62,7 +84,7 @@ const receipts = (record: Experiment) => record.trials.map(trial => {
  * the default OpenRouter judge) and legacy-demo-run.json, reassessed at 85f0fa7 through the Pi runtime that still opened a
  * coding-agent session per request, with the judge above. They are how the tests hold the harness to the receipts already on disk.
  */
-test('judgments written before the harness still verify, and the harness writes the same receipts for the same stored runs', async () => {
+test('old judgments still verify and new judgments preserve evidence and votes under the updated configuration', async () => {
   const judged = await storedFixture('pre-harness-judgments.json') as Record<string, unknown>;
   const local = { provider: fixtureSettings.provider, model: fixtureSettings.model };
   const wire = openRouter(data => agreeingJudgment(data));
@@ -71,8 +93,7 @@ test('judgments written before the harness still verify, and the harness writes 
       const before = experimentSchema.parse(judged[name]);
       assert.ok(before.trials.every(trial => trial.judgeReceipt?.complete && !trial.judgeAudit), `${name} carries receipts only`);
       assert.deepEqual(verifies(before), before.trials.map(() => true), `${name}: a receipt made before the harness verifies`);
-      // Today's evaluator also names the controller of compiled cards (its prompt left the card definitions), so it is a
-      // new evaluator version; a stored run keeps its own, and only its judge receipts must stay identical.
+      // Stored runs retain their evaluator; new judgments name the current output-window policy.
       assert.notEqual(evaluatorVersion(before.settings), before.evaluatorVersion, `${name}: the controller prompt is part of today's evaluator version`);
       const f = await fixture(request => agreeingJudgment(text(request.messages.at(-1)!.content)));
       const directory = await mkdtemp(join(tmpdir(), 'agent-lab-llm-'));
@@ -89,7 +110,11 @@ test('judgments written before the harness still verify, and the harness writes 
           assert.equal(after.phase, 'results_review', after.error ?? '');
           assert.deepEqual(verifies(after), after.trials.map(() => true));
           assert.equal(after.evaluatorVersion, evaluatorVersion(after.settings), 'the reassessment is judged by today\'s evaluator');
-          assert.deepEqual(receipts(after), receipts(before), `${name}: the same judge protocol, input, configuration, transport and votes`);
+          assert.deepEqual(receipts(after), receipts(before), `${name}: the same input, transport and votes`);
+          for (const [index, trial] of after.trials.entries()) {
+            assert.notEqual(trial.judgeReceipt!.protocolHash, before.trials[index]!.judgeReceipt!.protocolHash);
+            assert.notEqual(trial.judgeReceipt!.configurationHash, before.trials[index]!.judgeReceipt!.configurationHash);
+          }
         } finally { await lab.close(); }
       } finally { await f.close(); await rm(directory, { recursive: true, force: true }); }
     }
@@ -99,9 +124,9 @@ test('judgments written before the harness still verify, and the harness writes 
 
 /** A judgment's protocol hash as it is sealed: the protocol alone, or under the judge's sampling configuration. */
 const sealedProtocol = (judged: { configurationHash?: string }) => judged.configurationHash
-  ? fingerprint({ protocol: JUDGE_PROTOCOL, configuration: judged.configurationHash }) : JUDGE_PROTOCOL;
+  ? fingerprint({ protocol: JUDGE_PROTOCOL_16384, configuration: judged.configurationHash }) : JUDGE_PROTOCOL_16384;
 
-test('the judge prompt, its answer schema and its protocol are the frozen text the stored audits and receipts were made with', async () => {
+test('stored audits retain the frozen prompt and old protocol while new judgments use a distinct protocol', async () => {
   // The sidecar audits of a stored run keep the prompt the judge was given, word for word.
   const directory = new URL('./fixtures/library-v1/run.judge/', import.meta.url);
   const audits = await Promise.all((await readdir(directory)).map(async name => JSON.parse(await readFile(new URL(name, directory), 'utf8')) as JudgeAudit));
@@ -115,7 +140,8 @@ test('the judge prompt, its answer schema and its protocol are the frozen text t
   const stored = Object.values(judged).flatMap(value => experimentSchema.parse(value).trials.map(trial => trial.judgeReceipt!));
   assert.ok(stored.length > 0);
   for (const receipt of stored) assert.equal(receipt.protocolHash, sealedProtocol(receipt));
-  assert.equal(JUDGE_PROTOCOL, '23b18c288b2345bd2a044b687ceb63f5000e71a897a44b8dbac35e7a0937ff75', 'the protocol of every stored judgment');
+  assert.equal(JUDGE_PROTOCOL_16384, '23b18c288b2345bd2a044b687ceb63f5000e71a897a44b8dbac35e7a0937ff75', 'the protocol of every stored judgment');
+  assert.notEqual(JUDGE_PROTOCOL, JUDGE_PROTOCOL_16384);
   // The prompt shows the answer's schema as frozen text. When a zod upgrade writes the parse schema differently this fails:
   // check that it still accepts the same answers, and change this expectation — never the prompt.
   const shown = JUDGE_PROMPT.slice(JUDGE_PROMPT.lastIndexOf('\n') + 1);
@@ -152,7 +178,7 @@ test('a provider that did not answer fails with its stored label, typed by kind 
     try {
       const { ctx, usage } = callContext(), partial: string[] = [];
       const model = f.runtime.getModel(fixtureSettings.provider, fixtureSettings.model)!;
-      await assert.rejects(callModel(f.runtime, model, { system: 's', messages: [{ role: 'user', content: 'q', timestamp: 0 }], maxTokens: 100 }, ctx, value => partial.push(value)),
+      await assert.rejects(callModel(f.runtime, model, { system: 's', messages: [{ role: 'user', content: 'q', timestamp: 0 }] }, ctx, value => partial.push(value)),
         error => error instanceof ProviderFailure && error.kind === kind && error.delivery === delivery && error.message === message);
       assert.equal(f.requests.length, 1, `${message}: a refusal waiting cannot fix, and anything that may have been billed, is not sent again`);
       assert.deepEqual(usage, charged, message);
@@ -166,7 +192,7 @@ test('the deadline ends a request whose provider ignores cancellation, and an un
   try {
     const { ctx, usage } = callContext({ timeoutMs: 30 });
     const model = f.runtime.getModel(fixtureSettings.provider, fixtureSettings.model)!;
-    await assert.rejects(callModel(f.runtime, model, { system: 's', messages: [{ role: 'user', content: 'q', timestamp: 0 }], maxTokens: 100 }, ctx),
+    await assert.rejects(callModel(f.runtime, model, { system: 's', messages: [{ role: 'user', content: 'q', timestamp: 0 }] }, ctx),
       error => error instanceof ProviderFailure && error.kind === 'deadline' && error.message === 'Pi request deadline exceeded');
     assert.deepEqual(usage, { calls: 1, inputTokens: 0, outputTokens: 0, costUsd: null });
   } finally { await f.close(); }
@@ -180,7 +206,7 @@ test('a provider without credentials is refused before the budget is charged, as
       models: [{ id: 'm', name: 'Keyless fixture', reasoning: false, input: ['text'], cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 }],
       streamSimple() { throw new Error('A request without credentials must not be sent.'); } });
     const { ctx, usage } = callContext();
-    await assert.rejects(callModel(runtime, runtime.getModel('keyless', 'm')!, { system: 's', messages: [{ role: 'user', content: 'q', timestamp: 0 }], maxTokens: 100 }, ctx),
+    await assert.rejects(callModel(runtime, runtime.getModel('keyless', 'm')!, { system: 's', messages: [{ role: 'user', content: 'q', timestamp: 0 }] }, ctx),
       error => error instanceof ProviderFailure && error.kind === 'unavailable' && /Запрос к keyless\/m не прошёл/.test(error.message));
     assert.deepEqual(usage, emptyUsage());
   } finally { await rm(directory, { recursive: true, force: true }); }

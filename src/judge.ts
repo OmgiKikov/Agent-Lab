@@ -52,20 +52,25 @@ For rag_context_recall, compare each supplied context with applicable reference 
 Return exactly one compact JSON object, without markdown fences, matching this schema:
 ${RESPONSE_SCHEMA_TEXT}`;
 /**
- * The judge protocol of every stored judgment. It voted on the RAG diagnostics (assessment.ts RAG_RUBRICS) wherever the
- * trial reported retrieval events; a judgment made since that votes on exactly the rubrics this protocol would have voted
- * on — every trial without retrieval events — still carries it, so its receipt is the one this protocol always wrote.
+ * Current judge protocol with the model's full output window. It includes the RAG diagnostics wherever the trial
+ * reports retrieval events; judgments that omit those diagnostics use the variant below.
  */
-export const JUDGE_PROTOCOL = fingerprint({ version: 13, promptSources: 'observable-rules', ragEvidence: 'metric-isolated-reply-context-with-stage-v1', citations: 'verbatim-decoded-chunks', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 16384 });
+export const JUDGE_PROTOCOL = fingerprint({ version: 14, promptSources: 'observable-rules', ragEvidence: 'metric-isolated-reply-context-with-stage-v1', citations: 'verbatim-decoded-chunks', goalObservation: 'owner-selected-cited-channel', unobservedActions: 'deterministic-unknown', prompt: JUDGE_PROMPT, responseFormat: JUDGE_RESPONSE_FORMAT, applicability: 'reactive-actor-was-called', repeatsPerMetric: 2, aggregation: 'per-metric-unanimous-exclusive-conditions', repair: false, temperature: '0 for non-reasoning models; otherwise default', thinking: 'medium for reasoning models; otherwise off', maxTokens: 'model-maximum' });
 /**
  * The mode of JUDGE_PROTOCOL without the RAG diagnostics, carried by a judgment that JUDGE_PROTOCOL would have given RAG
  * votes. No chat, board or report shows those rubrics and they never move the number, yet they cost six requests per
  * dialogue and their failures left judgments incomplete: a new judgment never votes on them. The evaluator version
- * (pi.ts) stays JUDGE_PROTOCOL's: runs without retrieval are judged exactly as before and still compare.
+ * (pi.ts) stays JUDGE_PROTOCOL's: omitting absent retrieval diagnostics does not change the evaluation policy.
  */
 export const JUDGE_PROTOCOL_WITHOUT_RAG = fingerprint({ protocol: JUDGE_PROTOCOL, ragDiagnostics: 'not-judged' });
+/** Same rubric and evidence rules, written before requests used the model's full output window. Read only. */
+export const JUDGE_PROTOCOL_16384 = '23b18c288b2345bd2a044b687ceb63f5000e71a897a44b8dbac35e7a0937ff75';
 /** The protocols a stored judgment can be verified under, each with its rubric rule: whether the RAG diagnostics were voted on. */
-const JUDGE_PROTOCOLS = [{ hash: JUDGE_PROTOCOL, ragDiagnostics: true }, { hash: JUDGE_PROTOCOL_WITHOUT_RAG, ragDiagnostics: false }] as const;
+const JUDGE_PROTOCOLS = [
+  { hash: JUDGE_PROTOCOL, ragDiagnostics: true }, { hash: JUDGE_PROTOCOL_WITHOUT_RAG, ragDiagnostics: false },
+  { hash: JUDGE_PROTOCOL_16384, ragDiagnostics: true },
+  { hash: fingerprint({ protocol: JUDGE_PROTOCOL_16384, ragDiagnostics: 'not-judged' }), ragDiagnostics: false },
+] as const;
 type JudgeProtocol = typeof JUDGE_PROTOCOLS[number];
 /** The hash a judgment carries: its protocol under the judge's sampling configuration, when the judge has one. */
 const underConfiguration = (protocol: string, configurationHash: string | undefined) => configurationHash

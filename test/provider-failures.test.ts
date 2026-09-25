@@ -20,7 +20,7 @@ import { callContext, fixture, fixtureSettings, type Reply } from './helpers/pi-
  * Pi fixture: every reply goes through the SDK's stream protocol; a refused one never emits `start`.
  */
 
-const ask = { system: 's', messages: [{ role: 'user' as const, content: 'q', timestamp: 0 }], maxTokens: 100 };
+const ask = { system: 's', messages: [{ role: 'user' as const, content: 'q', timestamp: 0 }] };
 const failed = (errorMessage: string, rest: Partial<ModelReply> = {}): ModelReply => ({ role: 'assistant', content: [], api: 'openai-completions', provider: 'p', model: 'm',
   usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
   stopReason: 'error', errorMessage, timestamp: 0, ...rest });

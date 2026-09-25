@@ -24,7 +24,6 @@ export type ModelReply = Awaited<ReturnType<Stream['result']>>;
 export interface ModelRequest {
   system: string;
   messages: ChatMessage[];
-  maxTokens: number;
   /** Omitted: the provider's default. */
   temperature?: number;
   /** Medium thinking for a reasoning model; off otherwise. */
@@ -335,7 +334,7 @@ async function send(runtime: ModelRuntime, model: Model, request: ModelRequest, 
   try {
     const stream = runtime.streamSimple(model, { systemPrompt: request.system, messages: request.messages }, {
       signal, timeoutMs: ctx.timeoutMs, maxRetries: 0, transport: 'sse',
-      maxTokens: Math.min(request.maxTokens, model.maxTokens),
+      maxTokens: model.maxTokens,
       ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
       ...(request.reasoning ? { reasoning: 'medium' as const } : {}),
       ...(request.responseFormat ? { onPayload: (payload: unknown) => ({ ...(payload as Record<string, unknown>), response_format: request.responseFormat }) } : {}),

@@ -27,10 +27,10 @@ export interface StructuredTask<O> {
   /** A domain rule the schema cannot express; its message goes back to the model verbatim. Pure. */
   readonly check?: (value: O) => string | undefined;
   /**
-   * A large evidence task: the answer and the request are capped in bytes, and a repair starts a fresh request
+   * A large evidence task: the request is capped in bytes, and a repair starts a fresh request
    * carrying the original input and only the latest rejected draft, so failed drafts never pile up in context.
    */
-  readonly bounded?: { outputBytes: number; requestBytes: number };
+  readonly bounded?: { requestBytes: number };
   /** Fewer requests than TASK_ATTEMPTS: a small step whose owner agreed to exactly that many calls. */
   readonly attempts?: number;
 }
@@ -46,16 +46,6 @@ export type TaskRunner = <O>(task: StructuredTask<O>, input: unknown, ctx: CallC
  */
 export const TASK_ATTEMPTS = 5;
 
-/**
- * The output cap of a bounded task, in tokens, for an answer admitted up to `outputBytes` UTF-8 bytes. The one sure
- * relation between the two units: every token a model writes is at least one byte of text, so `outputBytes` tokens
- * always fit an admissible answer. A runaway answer stops at a few times the admissible size (an average token is
- * several bytes), not at the model's own maximum; that margin is also what a reasoning model's thinking may use first.
- */
-const MIN_BYTES_PER_TOKEN = 1;
-/** The output cap of a task without a byte bound. */
-const DEFAULT_OUTPUT_TOKENS = 16_384;
-
 /** Complete replies were received and charged, but none of them passed the output contract. */
 export class StructuredTaskError extends Error {}
 
@@ -67,9 +57,6 @@ const repairOf = (rejection: string) => `Your previous answer was rejected. ${re
 type Admission<O> = { ok: true; value: O } | { ok: false; outcome: 'syntax' | 'schema' | 'domain'; reason: string };
 /** The text is parsed as written: broken quotes, raw line breaks and a missing brace are a failed attempt, never a local rewrite. */
 function admit<O>(task: StructuredTask<O>, text: string): Admission<O> {
-  if (task.bounded && Buffer.byteLength(text, 'utf8') > task.bounded.outputBytes) {
-    return { ok: false, outcome: 'schema', reason: `The reply exceeds ${task.bounded.outputBytes} UTF-8 bytes. Shorten it without dropping required fields. ${NOT_JSON}` };
-  }
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim()); }
   catch (error) {
@@ -114,7 +101,6 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
   const format = jsonMode(model);
   const request = {
     system: `${task.instructions}\n${DATA_BOUNDARY}\n${outputContract(task.output)}`,
-    maxTokens: task.bounded ? Math.ceil(task.bounded.outputBytes / MIN_BYTES_PER_TOKEN) : DEFAULT_OUTPUT_TOKENS,
     ...(format ? { responseFormat: format } : {}),
     ...(task.bounded ? { maxRequestBytes: task.bounded.requestBytes } : {}),
   };
@@ -147,8 +133,7 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
       const repair = repairOf(rejection);
       // A bounded task keeps the original evidence and only the latest failure: accumulated full drafts can exhaust the context.
       messages = task.bounded
-        ? [userMessage(JSON.stringify({ input, repair, ...(Buffer.byteLength(reply.text, 'utf8') <= task.bounded.outputBytes
-          ? { previousReply: reply.text } : { previousReplyOmitted: 'Rejected reply exceeds the output limit; regenerate compactly from the original evidence.' }) }))]
+        ? [userMessage(JSON.stringify({ input, repair, previousReply: reply.text }))]
         : [...messages, reply.message, userMessage(repair)];
     }
     throw new StructuredTaskError(`${repeatedRejection(attempts)}. Последняя причина: ${rejection}`);

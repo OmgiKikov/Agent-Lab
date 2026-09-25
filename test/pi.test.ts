@@ -309,7 +309,7 @@ test(`OpenRouter ${judge.model} sends the pinned provider and isolated rubric on
       assert.deepEqual(body.provider, { only: [judge.upstream], allow_fallbacks: false });
       if (judge.model === DEFAULT_JUDGE.model) assert.deepEqual(body.reasoning, { effort: 'medium' });
       assert.equal(body.temperature, f.runtime.getModel(judge.provider, judge.model)!.reasoning ? undefined : 0);
-      assert.equal(body.max_tokens, 16384); assert.equal(body.max_completion_tokens, undefined);
+      assert.equal(body.max_tokens, f.runtime.getModel(judge.provider, judge.model)!.maxTokens); assert.equal(body.max_completion_tokens, undefined);
       assert.equal(body.messages[0].role, 'system');
       assert.equal(body.response_format.type, 'json_schema'); assert.equal(body.response_format.json_schema.strict, true);
       assert.equal(body.response_format.json_schema.schema.properties.assessments.maxItems, undefined);

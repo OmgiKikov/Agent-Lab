@@ -41,7 +41,7 @@ export function callContext(options: { timeoutMs?: number; signal?: AbortSignal;
   return { ctx, usage };
 }
 
-export async function fixture(reply: (request: Request, index: number, options?: Options) => Reply | Promise<Reply>, roleModel = false, reasoning = false) {
+export async function fixture(reply: (request: Request, index: number, options?: Options) => Reply | Promise<Reply>, roleModel = false, reasoning = false, maxTokens = 16384) {
   const directory = await mkdtemp(join(tmpdir(), 'agent-lab-pi-'));
   const requests: Request[] = [];
   const modelsUsed: string[] = [];
@@ -53,7 +53,7 @@ export async function fixture(reply: (request: Request, index: number, options?:
     api: 'openai-completions', apiKey: 'fixture-only-not-a-real-key', baseUrl: 'http://127.0.0.1:1',
     models: (roleModel ? ['test-model', 'role-model'] : ['test-model']).map(id => ({
       id, name: 'Offline SDK fixture', reasoning, input: ['text'],
-      cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, contextWindow: 200000, maxTokens: 16384,
+      cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, contextWindow: 200000, maxTokens,
     })),
     streamSimple(model, request, options) {
       modelsUsed.push(model.id);

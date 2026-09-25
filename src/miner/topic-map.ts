@@ -50,8 +50,8 @@ const EXCERPT_BYTES = 1_000;
  * a repair carrying the rejected draft — the proposal is ≈60 KB and a batch ≈65 KB (tested). The 120 KB cap
  * (≈35K tokens) leaves room for a rejected draft of any shape.
  */
-const PROPOSAL_BOUNDS = { outputBytes: 12_000, requestBytes: 120_000 };
-const CLASSIFY_BOUNDS = { outputBytes: 8_000, requestBytes: 120_000 };
+const PROPOSAL_BOUNDS = { requestBytes: 120_000 };
+const CLASSIFY_BOUNDS = { requestBytes: 120_000 };
 
 const TOPIC_PROPOSAL_ROLE = `You name the topics customers contact a business about. conversations holds a sample of logged conversations with the business's support agent: each entry is one customer's first messages, in order. Propose at most ${TOPIC_LIMIT} topics that together cover the requests in the sample. A topic is one kind of customer need, named the way the business owner would name it in a report, in the customers' language: a short noun phrase of two to six plain words, at most ${TITLE_CHARS} characters, without numbering, ids or quotes. Its description says in one sentence which requests belong to it, so that any conversation can be sorted into exactly one topic. Topics must not overlap. Prefer fewer, clearly distinct topics to fine splits, and merge rare requests into the closest topic. Do not propose a catch-all topic: conversations that fit no topic are sorted into «${OTHER_TITLE}», which the harness adds itself. Greetings and small talk are not topics. List the topics from the most to the least frequent in the sample.`;
 const TOPIC_CLASSIFICATION_ROLE = `You sort logged customer conversations into topics. topics lists the topics of one import, each with a description of the requests that belong to it; conversations holds conversations of that import, each with its dialogueId and only the customer's own messages. Return exactly one assignment for every supplied conversation: its dialogueId and the topicId of the topic its main request belongs to, judged by the descriptions. Use "${OTHER}" when no topic fits. Never skip a conversation or assign one twice, and use only the supplied ids.`;
