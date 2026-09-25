@@ -147,3 +147,19 @@ test('observability level is read from what the probe actually returned', () => 
   assert.equal(observabilityLevel([full, rag]).level, 2, 'every probe dialogue must show the channel');
   assert.equal(observabilityLevel([full]).level, 3);
 });
+
+test('a code reference becomes a check of the state the adapter reported', () => {
+  const { checks } = withReferenceCriteria(card([{ id: 'r1', origin: 'assessor', confirmed: true, outcome: { value: '202-2' } }]));
+  assert.deepEqual(checks.map(c => [c.id, c.kind]), [['ref_r1_code', 'state_reported']]);
+});
+
+test('the code passes when the adapter reported it, fails on another code, and is not measured without state', () => {
+  const check: Check = { id: 'c', kind: 'state_reported', description: 'd', value: '202-2' };
+  const withState = (value: string, state: 'reported' | 'missing' = 'reported'): Trial => ({ ...trialWith(dialogue({ seq: 2, type: 'observation' })),
+    finalState: { ...world, records: { result: { status_code: value, produced_by: 'llm' } } }, observation: { state, tools: 'complete' } });
+  assert.equal(grade(gradedCard([check]), withState('202-2'))[0]!.passed, true);
+  assert.equal(grade(gradedCard([check]), withState('200'))[0]!.passed, false);
+  assert.throws(() => grade(gradedCard([check]), withState('202-2', 'missing')), /не сообщил состояние/);
+  const narrowed: Check = { ...check, field: 'result.produced_by' };
+  assert.equal(grade(gradedCard([narrowed]), withState('202-2'))[0]!.passed, false, 'a named field is the only place looked at');
+});

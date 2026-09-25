@@ -117,6 +117,11 @@ export function grade(scenario: Scenario, trial: Trial): CheckResult[] {
       if (!found && !ragEvidenceComplete(trial, 'retrieval')) throw new Error('Адаптер не подтвердил полноту найденных фрагментов (retrievalsComplete). Проверка статьи не измерена.');
       passed = found;
       evidence = `${check.doc}${check.chunk ? `#${check.chunk}` : ''} ${found ? 'есть' : 'нет'} среди найденных фрагментов: ${[...new Set(retrieved.map(c => c.source))].join(', ') || 'ничего не найдено'}.`;
+    } else if (check.kind === 'state_reported') {
+      if (trial.observation?.state === 'missing') throw new Error('Адаптер не сообщил состояние: код ответа агента не измерен.');
+      const reported = reportedValues(trial.finalState.records, check.field);
+      passed = reported.includes(check.value);
+      evidence = `Ожидался код ${check.value}; адаптер сообщил: ${reported.join(', ') || 'ничего'}.`;
     } else if (check.kind === 'answer_reference_tokens') {
       const said = valueTokens(answers);
       const missing = [...valueTokens(check.value)].filter(token => !said.has(token));
@@ -412,4 +417,14 @@ function retrievedChunks(events: TraceEvent[]): { source: string; chunkId?: stri
     const chunks = event.type === 'retrieval' ? (event.result as { chunks?: unknown } | undefined)?.chunks : undefined;
     return Array.isArray(chunks) ? chunks.filter((c): c is { source: string; chunkId?: string } => typeof c?.source === 'string') : [];
   });
+}
+
+/** What the adapter reported in the state, as text: one field («result.status_code»), or every scalar when none is named. */
+function reportedValues(records: Trial['finalState']['records'], field: string | undefined): string[] {
+  const shown = (value: unknown) => value === null || value === undefined ? [] : [String(value)];
+  if (field) {
+    const [record, name] = field.split('.') as [string, string];
+    return shown(records[record]?.[name]);
+  }
+  return Object.values(records).flatMap(record => Object.values(record).flatMap(shown));
 }
