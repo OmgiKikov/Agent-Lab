@@ -4,7 +4,7 @@ import { GIGA_PROVIDER_ID } from '../giga-provider.js';
 import type { Model } from './model-call.js';
 
 /*
- * Which model answers each role, resolved and checked once, before the first paid call:
+ * Which model answers each role, by the one rule every reader applies (roleChoices), checked once before the first paid call:
  *
  *   builder   = roles.builder   ?? the run's model
  *   simulator = roles.simulator ?? the run's model
@@ -26,7 +26,27 @@ export type ModelTable = Readonly<Record<ModelRole, Model>> & {
   readonly judgeTransport: { api: string; upstream?: string; structured: boolean };
 };
 
-type Choice = { provider: string; model: string };
+/** A model as settings and judge receipts name it: the provider key and the model id within it. */
+export type ModelChoice = { provider: string; model: string };
+type Choice = ModelChoice;
+
+/**
+ * Which model answers each role — the rule every reader applies: the runtime before its first call, the judge
+ * identity a comparison seals (normalize.ts), the gateway a runtime registers (pi.ts), the judge a result names and
+ * whether it is the model that built the situations (result-view.ts). An explicit role wins; the judge then falls
+ * back to the configured judge, every role to the run's own model. The judge's upstream is a routing preference of
+ * the configured judge only: a judge chosen by role override names none. A record made before a field existed reads
+ * it as absent.
+ */
+export function roleChoices(settings: Pick<Settings, 'provider' | 'model' | 'judge'> & { roles?: Partial<Settings['roles']> }):
+  Readonly<Record<ModelRole, ModelChoice>> & { readonly judgeUpstream?: string } {
+  const main = { provider: settings.provider ?? '', model: settings.model ?? '' };
+  const roles = settings.roles ?? {};
+  const judge = roles.judge ?? settings.judge;
+  const upstream = roles.judge ? undefined : settings.judge?.upstream;
+  return { builder: roles.builder ?? main, simulator: roles.simulator ?? main,
+    judge: judge ? { provider: judge.provider, model: judge.model } : main, ...(upstream ? { judgeUpstream: upstream } : {}) };
+}
 
 function configured(runtime: ModelRuntime, choice: Choice): Model {
   const model = runtime.getModel(choice.provider, choice.model);
@@ -67,14 +87,14 @@ export async function resolveModels(runtime: ModelRuntime, settings: Settings, s
     return model;
   };
   const main = await available({ provider: settings.provider, model: settings.model }, `Не удалось проверить доступ к моделям. ${AUTH_HELP}`, AUTH_HELP);
-  const role = (choice: Choice | undefined) => choice
-    ? available(choice, `Не удалось проверить доступ к модели роли ${choice.provider}/${choice.model}. ${AUTH_HELP}`, `Модель роли недоступна: ${choice.provider}/${choice.model}. ${AUTH_HELP}`)
-    : main;
-  const builder = await role(settings.roles?.builder);
-  const simulator = await role(settings.roles?.simulator);
-  const judge = await role(settings.roles?.judge ?? settings.judge);
-  // An upstream is a routing preference of the configured judge; a judge chosen by role override names none.
-  const upstream = settings.roles?.judge ? undefined : settings.judge?.upstream;
+  const choices = roleChoices(settings);
+  // A role that resolves to the run's own model is that model, checked once above; any other is named in its own error.
+  const role = (choice: Choice) => choice.provider === settings.provider && choice.model === settings.model ? main
+    : available(choice, `Не удалось проверить доступ к модели роли ${choice.provider}/${choice.model}. ${AUTH_HELP}`, `Модель роли недоступна: ${choice.provider}/${choice.model}. ${AUTH_HELP}`);
+  const builder = await role(choices.builder);
+  const simulator = await role(choices.simulator);
+  const judge = await role(choices.judge);
+  const upstream = choices.judgeUpstream;
   const openRouter = judge.provider === 'openrouter';
   const judgeModel = openRouter ? openRouterChat(judge, upstream) : judge;
   return {

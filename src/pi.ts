@@ -6,7 +6,7 @@ import { sourceSelectionSchema, userTurnSchema, type CallContext, type Runtime }
 import { assessRepeated, JUDGE_PROTOCOL, JUDGE_RESPONSE_FORMAT, type Respond } from './judge.js';
 import { MODEL_REQUEST_BYTES, workInputIssue } from './limits.js';
 import { callModel, type Model } from './llm/model-call.js';
-import { AUTH_HELP, resolveModels } from './llm/models.js';
+import { AUTH_HELP, resolveModels, roleChoices } from './llm/models.js';
 import { gatewayFailureText, gatewayUnavailableText, GIGA_PROVIDER_ID, processGateway, type GatewayFailure } from './giga-provider.js';
 import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
@@ -101,10 +101,10 @@ export async function getPiStatus(injectedRuntime?: ModelRuntime): Promise<{
   };
 }
 
-/** Whether a role's model comes from the gateway, by the rule resolveModels resolves the roles with (src/llm/models.ts). */
+/** Whether the run's model or a role's comes from the gateway, by the rule resolveModels resolves the roles with (roleChoices). */
 function usesGateway(settings: Settings): boolean {
-  const roles = settings.roles ?? {};
-  return [settings.provider, roles.builder?.provider, roles.simulator?.provider, (roles.judge ?? settings.judge)?.provider].includes(GIGA_PROVIDER_ID);
+  const { builder, simulator, judge } = roleChoices(settings);
+  return [settings.provider, builder.provider, simulator.provider, judge.provider].includes(GIGA_PROVIDER_ID);
 }
 
 /** The optional SDK runtime is the integration seam for custom providers and offline SDK checks. */

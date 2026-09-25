@@ -1,5 +1,6 @@
 import { libraryHash } from './scenario-library.js';
 import { DEFAULT_GOAL_OBSERVATION, fingerprint, type Experiment, type GoalObservation, type Scenario, type Settings, type SourceIdentity, type Target } from './contracts.js';
+import { roleChoices } from './llm/models.js';
 
 /*
  * Defaults that decide whether two records describe the same thing. Nothing here performs I/O
@@ -24,11 +25,10 @@ export function normalizeScenarioIdentity(scenario: Scenario, targetKind: Target
   return withDefaultGoalObservation(scenario, targetKind);
 }
 
-/** The judge a run is configured with, as the runtime resolves it: an explicit role wins over `settings.judge`. */
+/** The judge a run is configured with, as the runtime resolves it (roleChoices). The fingerprint is stored in derived records: its fields never change. */
 export function judgeSettingsIdentity(settings: Settings): string {
-  const judge = settings.roles?.judge ?? settings.judge ?? { provider: settings.provider, model: settings.model };
-  const upstream = settings.roles?.judge ? undefined : settings.judge?.upstream;
-  return fingerprint({ provider: judge.provider, model: judge.model, upstream: upstream ?? null });
+  const { judge, judgeUpstream } = roleChoices(settings);
+  return fingerprint({ provider: judge.provider, model: judge.model, upstream: judgeUpstream ?? null });
 }
 
 /** The agent definition a run evaluated: the label of an external agent, or the built-in agent of a stored sandbox run, which `target` does not name. */
