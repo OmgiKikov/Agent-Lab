@@ -9,20 +9,20 @@ import { GLYPH, ROLE_TONE } from './render/theme.ts';
  * The first screen of a run's result on the board (docs/design/ui-spec.md §8.5): the head of the result — the alarm,
  * the number, the trust line, whether the agent answered —, then «Дальше» and «Почему ошибается», whose rows the cursor
  * walks, and the run line. Every word is result-text.ts's, in its rows: the board decides nothing of its own, it lays
- * the rows out in its panels and knows only what Enter does on each. «Дальше» comes before the causes, so the judge's
- * blind check is offered before any of its verdicts is read. The whole result — the fine print, every error, what was
- * not measured — is under d.
+ * the rows out in its panels and knows only what Enter does on each. «Дальше» comes before the causes: a fix the
+ * number waits for — the connection's exam, a control — is the first thing to see. The whole result — the fine print,
+ * every error, what was not measured — is under d.
  *
  *   ✗ Числу пока не верить: …                      ← alarmRow, when the number is not to be trusted yet
  *   Точность агента: 50% — справился в 1 из 2 …    ← the number, or why it is withheld
  *   По выбранным ситуациям; … · мало данных          ← the trust line
- *   ╭─ Дальше ─────────────────────────────────╮   ← the steps, the blind check before any verdict
+ *   ╭─ Дальше ─────────────────────────────────╮   ← the steps, the recommended one first
  *   ╭─ Почему ошибается ───────────────────────╮   ← the causes, each opening its first failure
  *   Прогон сегодня в … · 2 ситуации                  ← the run line
  */
 
 /** What Enter does on each step of «Дальше»; waiting for a run to end is nothing to do. The exam, like the connection, is taken up in the conversation. */
-export const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, blind_check: { kind: 'blind' }, report: { kind: 'report' },
+export const STEP_PICK: Record<NextStep['kind'], ResultPick | null> = { review_judge: { kind: 'review' }, report: { kind: 'report' },
   repeat: { kind: 'repeat' }, why_unmeasured: { kind: 'unmeasured' }, exam: { kind: 'connection' }, check_connection: { kind: 'connection' }, wait: null };
 
 /** Record text is untrusted: every row is made safe before it is laid out, so the layout measures what the terminal shows. */
@@ -81,8 +81,8 @@ export function resultDashboard(data: SpaceData, run: SpaceData['runs'][number],
   if (going) body.push(...wrap(going.text, width, 'accent'), []);
   body.push(...laid(headRows(view, { brief: true }), width), []);
 
-  // «Дальше» above the causes at every width: the step the owner is advised to take, the judge's blind check before any
-  // of its verdicts is read.
+  // «Дальше» above the causes at every width: the step the owner is advised to take — the connection's fix first — before
+  // why the agent errs.
   const next = panel(nextRows(view, 'board'), width - 4, (_row, index) => STEP_PICK[view.next[index]!.kind], selected, 0);
   // «Почему ошибается»: each cause opens its first failure; without a failure, the one sentence that says so.
   const causes = causeRows(view);

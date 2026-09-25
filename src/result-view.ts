@@ -120,8 +120,6 @@ export type NextStep =
   | { kind: 'review_judge'; failures: number; passes: number; unsure: number;
     /** The number of the situation the queue starts with — a failure first —, as the owner names it in the chat; null when none is known. */
     situation: number | null }
-  /** The judge was never checked blind: `left` expectations wait for the owner's labels, given without its verdicts (blind.ts). */
-  | { kind: 'blind_check'; left: number }
   /** Nothing was decided: the reasons of the unmeasured situations are the next thing to read. */
   | { kind: 'why_unmeasured'; count: number }
   | { kind: 'repeat' }
@@ -407,9 +405,10 @@ export function unmeasuredControl(card: Pick<ResultCard, 'outcome' | 'reason'>):
 
 /**
  * The recommended step first — the connection's exam when it did not pass, a control alarm, a run still going, the
- * reasons of too many unmeasured situations, the judge's blind check and its review queue, then fixing the agent when it
- * failed — followed by what a finished result always offers: a repeat and, while nothing stands against the number
- * (ResultView.trustIssues), the customer report. Whenever a situation was not measured, why is always among the steps:
+ * reasons of too many unmeasured situations, the judge's review queue, then fixing the agent when it failed — followed by
+ * what a finished result always offers: a repeat and, while nothing stands against the number (ResultView.trustIssues),
+ * the customer report. The judge's blind check is an optional audit off the main path: «Дальше» never offers it (the
+ * owner's decision). Whenever a situation was not measured, why is always among the steps:
  * first under the alarm, last below it. A draft that never ran offers nothing.
  */
 function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted: boolean, reviewedTrials: Set<string>, numberOf: (trialId: string) => number | undefined): NextStep[] {
@@ -428,11 +427,9 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   const { alarm, total } = view.notMeasured;
   const why: NextStep[] = total ? [{ kind: 'why_unmeasured', count: total }] : [];
   // Too many situations unmeasured: why is the first thing to read, before any verdict of the judge.
-  // The judge is checked blind first, before any of its verdicts is shown: an owner who saw them would only agree.
-  const blind: NextStep[] = view.blind && view.blind.labelled < view.blind.drawn ? [{ kind: 'blind_check', left: view.blind.drawn - view.blind.labelled }] : [];
   const first = unmarked.find(id => queueFailures.includes(id)) ?? unmarked[0];
   const review: NextStep[] = failures + passes + unsure > 0 ? [{ kind: 'review_judge', failures, passes, unsure, situation: first === undefined ? null : numberOf(first) ?? null }] : [];
-  const steps: NextStep[] = [...exam, ...(alarm ? why : []), ...blind, ...review];
+  const steps: NextStep[] = [...exam, ...(alarm ? why : []), ...review];
   const after = alarm ? [] : why;
   if (!view.headline.decided) return [...steps, ...after];
   const failed = view.headline.decided > view.headline.passed;

@@ -752,7 +752,6 @@ export function nextStepText(step: NextStep): string {
       ];
       return `Проверить, прав ли судья — ${parts.join(', ')}`;
     }
-    case 'blind_check': return `Проверить судью вслепую — ${countText(step.left, ['оценка', 'оценки', 'оценок'])} без его вердиктов`;
     case 'why_unmeasured': return `Посмотреть, почему ${pluralForm(step.count, ['не измерена', 'не измерены', 'не измерено'])} ${countText(step.count, SITUATIONS)}`;
     case 'repeat': return 'Повторить прогон на новой версии агента';
     case 'report': return 'Отчёт для заказчика';
@@ -766,7 +765,6 @@ function chatNextText(step: NextStep): string {
     case 'check_connection': return 'Дальше: проверьте связь с агентом — скажите «проверь подключение».';
     case 'wait': return 'Дальше: дождитесь конца прогона — результат придёт сюда.';
     case 'review_judge': return `Дальше: проверьте, прав ли судья, — скажите ${step.situation === null ? '«покажи ошибки»' : `«разбери ситуацию ${step.situation}»`}.`;
-    case 'blind_check': return 'Дальше: скажите «проверь судью вслепую» — вы оцените ответы агента, не видя его оценок.';
     case 'why_unmeasured': return 'Дальше: спросите, почему ситуации не измерены.';
     case 'repeat': return 'Дальше: исправьте агента и скажите «повтори прогон».';
     case 'report': return 'Дальше: скажите «отчёт для заказчика».';
@@ -780,7 +778,6 @@ function cliNextText(step: NextStep, runId: string): string {
     case 'check_connection': return 'Проверьте подключение: agent-lab doctor --yes';
     case 'wait': return 'Дождитесь конца прогона';
     case 'review_judge': return 'Проверьте, прав ли судья: откройте прогон в Pi (/agent-lab)';
-    case 'blind_check': return 'Проверьте судью вслепую: откройте прогон в Pi (/agent-lab)';
     case 'why_unmeasured': return 'Причины — в списке «Не измерено» выше';
     case 'repeat': return `Повторите прогон: agent-lab repeat --id ${runId}`;
     case 'report': return `Отчёт для заказчика: agent-lab export --id ${runId} --format html`;
@@ -859,8 +856,7 @@ function operabilityShort(view: Pick<ResultView, 'operability'>): string | null 
 /**
  * The chat block (docs/design/ui-spec.md §4.10). Collapsed, a few lines at 80 columns and no fine print: the number (with
  * the alarm above it when there is one), whether to believe it, the main cause of failure — the cause, never a
- * situation's title — and what to do next; when the next step is the judge's blind check it comes before the cause, so
- * the owner checks the judge before reading its verdicts. Expanded: the whole head with its evidence, the scenarios,
+ * situation's title — and what to do next. Expanded: the whole head with its evidence, the scenarios,
  * every cause with its example, the unmeasured situations, what the result does not prove and «Дальше». The host adds
  * the ctrl+o hint under the last row.
  */
@@ -871,17 +867,13 @@ export function chatBlock(view: ResultView, options: { expanded: boolean }): Res
     const cause: ResultRow[] = top ? [{ role: 'muted', indent: 2, text: `Чаще всего — ${top.text}`, right: countText(top.count, SITUATIONS), short: String(top.count) }]
       : causeRows(view).map(row => ({ ...row, indent: 2 }));
     const next = nextRows(view, 'chat').map(row => ({ ...row, indent: 2 }));
-    const blindFirst = view.next[0]?.kind === 'blind_check';
     // The alarm stands above the number, as on every surface; it then says whether to believe it.
     const head = believe?.role === 'alarm' ? [believe, accuracyRow(view)] : [accuracyRow(view), ...(believe ? [believe] : [])];
-    return [...head, ...(blindFirst ? [...next, ...cause] : [...cause, ...next])];
+    return [...head, ...cause, ...next];
   }
   const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
   const indent = (rows: ResultRow[]) => rows.map(row => ({ ...row, indent: row.indent + 2 }));
-  // The judge's blind check, when it is the step to take, is offered before the failures are shown with their verdicts.
-  const next = indent(nextRows(view, 'chat')), blindFirst = view.next[0]?.kind === 'blind_check';
-  const blocks = [head, ...(blindFirst ? [next] : []), indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)),
-    ...(blindFirst ? [] : [next])];
+  const blocks = [head, indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
 
