@@ -1,14 +1,17 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
-import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLine } from './card/calibration-view.js';
+import { caveatLines } from './caveats.js';
+import { CALIBRATION_CAVEATS, conversationsText, disagreementText, exclusionsLine, logVerdictsText, type CalibrationDisagreement, type LogTarget } from './card/calibration-view.js';
 import { countingRuleText } from './card/expectations.js';
 import { ruleBarText } from './card/rulebook.js';
-import type { Experiment } from './contracts.js';
+import { VERSION_UNKNOWN_NOTE, type RunComparison } from './comparison.js';
+import type { Experiment, Trial } from './contracts.js';
 import type { FailureExplanation } from './explain.js';
 import type { JudgeCheckSummary } from './judge-check.js';
 import { sharePercent } from './miner/coverage.js';
 import { countText, pluralForm } from './plural.js';
 import { NOT_MEASURED_ABOUT_OWNER, type NextStep, type ResultView } from './result-view.js';
 import type { NotMeasuredCode } from './run.js';
+import type { ImportBatch } from './scenario-contracts.js';
 import { oneLine } from './text.js';
 
 /*
@@ -24,7 +27,9 @@ import { oneLine } from './text.js';
  * Rows are semantic (a role, an indent, a text, an optional right-hand counter or « · » parts);
  * `fitRows` lays them out as plain lines of a given width, so every surface wraps identically and
  * Pi only paints. The owner is spoken to («вы»); a page the owner sends on speaks about the owner
- * (`Reader`). Pure: no I/O, no escaping — each surface escapes at its own boundary.
+ * (`Reader`). Here too: a conversation's turns, the question about the judge, the comparison of two
+ * runs and what a result does not prove (its caveats). Pure: no I/O, no escaping — each surface
+ * escapes at its own boundary.
  */
 
 export type ResultRole =
@@ -275,23 +280,76 @@ export function headRows(view: ResultView): ResultRow[] {
  * customer and the logged one led to different verdicts — the expectation, both verdicts, what the customers'
  * paths suggest and where both conversations are — and what the agreement does not prove.
  */
-export function calibrationRows(view: ResultView): ResultRow[] {
+export function calibrationRows(view: Pick<ResultView, 'calibration'>): ResultRow[] {
   const calibration = view.calibration;
   if (!calibration) return [];
   const excluded = exclusionsLine(calibration);
   const body: ResultRow[] = [
     ...(excluded ? [{ role: 'muted' as const, indent: 2, text: excluded }] : []),
-    ...calibration.disagreements.flatMap(item => [
-      { role: 'item' as const, indent: 2, text: `№${item.number}  ${oneLine(item.title)}` },
-      ...item.expectations.map(row => ({ role: 'quote' as const, indent: 5, text: oneLine(disagreementText(row)) })),
-      { role: 'muted' as const, indent: 5, text: item.hint },
-      { role: 'muted' as const, indent: 5, text: conversationsText(item) },
-    ]),
+    ...calibration.disagreements.flatMap(item => [{ role: 'item' as const, indent: 2, text: `№${item.number}  ${oneLine(item.title)}` }, ...disagreementDetails(item, 5)]),
     ...(calibration.compared ? CALIBRATION_CAVEATS.map(text => ({ role: 'muted' as const, indent: 2, text })) : []),
   ];
   // Nothing beyond the line under the number (a calibration skipped for its budget): no block.
   return body.length ? [{ role: 'heading', indent: 0, text: 'Сверка с продом' }, ...body] : [];
 }
+
+/** Under a disagreement: each expectation decided differently with both verdicts and whose they are, the hint, where both conversations are. */
+function disagreementDetails(item: CalibrationDisagreement, indent: number): ResultRow[] {
+  return [...item.expectations.map(row => ({ role: 'quote' as const, indent, text: oneLine(disagreementText(row)) })),
+    { role: 'muted', indent, text: item.hint }, { role: 'muted', indent, text: conversationsText(item) }];
+}
+
+/**
+ * One disagreement of the calibration opened — its own screen on the board, the explanation of its situation in the
+ * chat: what «Сверка с продом» says of it, then the run's attempt the calibration compared and the logged conversation,
+ * whichever is at hand. `title`: the row naming the situation, for a screen of its own.
+ */
+export function logDisagreementRows(item: CalibrationDisagreement, options: { title?: boolean; attempt?: readonly Turn[]; log?: readonly Turn[] } = {}): ResultRow[] {
+  const attempt = conversationRows(options.attempt ?? [], { heading: `Разговор в прогоне${item.attempt === undefined ? '' : ` · попытка ${item.attempt}`}` });
+  const log = conversationRows(options.log ?? [], { heading: 'Разговор из логов' });
+  return [...(options.title ? [{ role: 'failed' as const, indent: 0, text: `≠ №${item.number}  ${oneLine(item.title)}`, right: 'сверка с продом' }, blank] : []),
+    ...disagreementDetails(item, 4), ...[attempt, log].filter(rows => rows.length).flatMap(rows => [blank, ...rows])];
+}
+
+/* ───────────────────────────── conversations and the question about the judge ───────────────────────────── */
+
+/** One turn of a conversation as every surface signs it: «Клиент» or «Агент», never an event number (docs/design/ui-spec.md §2). */
+export interface Turn { who: 'Клиент' | 'Агент'; text: string }
+
+/** The customer's and the agent's turns of an attempt, in the order they happened; a turn without words is left out. */
+export function trialTurns(trial: Pick<Trial, 'events'> | undefined): Turn[] {
+  return (trial?.events ?? []).filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''))
+    .map(event => ({ who: event.type === 'user' ? 'Клиент' as const : 'Агент' as const, text: oneLine(event.text) }));
+}
+
+/** The same turns of a logged conversation: the customer's and the agent's messages. */
+export function loggedTurns(dialogue: Pick<ImportBatch['dialogues'][number], 'events'> | undefined): Turn[] {
+  return (dialogue?.events ?? []).flatMap(event => event.type === 'message' && (event.role === 'user' || event.role === 'assistant') && oneLine(event.content)
+    ? [{ who: event.role === 'user' ? 'Клиент' as const : 'Агент' as const, text: oneLine(event.content) }] : []);
+}
+
+/** The column the words of a turn start at, after «Клиент» or «Агент». */
+export const TURN_HANG = 9;
+/** «Клиент   Номер терминала: 1234.»: one turn, the words in their column. */
+export const turnText = (turn: Turn): string => `${turn.who.padEnd(TURN_HANG)}${turn.text}`;
+
+/** A conversation under its heading — «Разговор» by default —, each turn hanging in its column; nothing for a conversation without turns. */
+export function conversationRows(turns: readonly Turn[], options: { heading?: string; indent?: number } = {}): ResultRow[] {
+  const indent = options.indent ?? 4;
+  return turns.length ? [{ role: 'heading', indent, text: options.heading ?? 'Разговор' },
+    ...turns.map(turn => ({ role: 'quote' as const, indent: indent + 2, text: turnText(turn), hang: TURN_HANG }))] : [];
+}
+
+/** The owner's answer to the question about the judge: it is right, it is wrong (with the owner's reason), or the owner cannot tell. */
+export type JudgeAnswer = 'agree' | 'disagree' | 'unsure';
+/** The owner's answer as it is shown back: «Ваш ответ: нет, судья ошибся». */
+export const ANSWER_TEXT: Readonly<Record<JudgeAnswer, string>> = { agree: 'да, судья прав', disagree: 'нет, судья ошибся', unsure: 'не знаю' };
+
+/** The question to the owner about one decision of the judge: «Судья решил: не справился. Вы согласны?». */
+export const judgeQuestionText = (verdict: 'pass' | 'fail'): string => `Судья решил: ${VERDICT_WORD[verdict]}. Вы согласны?`;
+
+/** The same about the judge's reading of a logged conversation, expectation by expectation. */
+export const logQuestionText = (targets: readonly Pick<LogTarget, 'letter' | 'judge'>[]): string => `Судья по логу решил: ${logVerdictsText(targets)}. Вы согласны?`;
 
 const MAX_TOPICS = 5;
 /** «По темам»: at most five topics by share, the rest in one row, then the share no situation covers. */
@@ -370,6 +428,15 @@ export function causeRows(view: ResultView, options: { examples?: boolean } = {}
   });
   if (view.failures.length > 3) rows.push({ role: 'muted', indent: 2, text: `и ещё ${countText(view.failures.length - 3, ERRORS)}` });
   return rows;
+}
+
+/**
+ * «Оговорки»: what this record's result does not prove (caveats.ts) — why its causes were not named, a re-assessment, a
+ * judge that stood in for another… —, one short row each, in the words caveats.ts gives its reader; nothing without any.
+ */
+export function caveatRows(view: Pick<ResultView, 'notes'>, reader: Reader = 'owner'): ResultRow[] {
+  const lines = caveatLines(view.notes, reader);
+  return lines.length ? [{ role: 'heading', indent: 0, text: 'Оговорки' }, ...lines.map(text => ({ role: 'muted' as const, indent: 2, text }))] : [];
 }
 
 /** «Не измерено»: every unmeasured situation with its reason, grouped in the order of the reasons. */
@@ -511,13 +578,14 @@ export function barRows(view: ResultView): ResultRow[] {
 /**
  * The result screen of the board and the CLI (docs/design/ui-spec.md §4.7, §8.5): the head, the topics, the causes,
  * then — on the CLI and under the board's details — every error, the unmeasured situations, the
- * owner's disagreements and the calibration against production; the run line and «Дальше» last.
- * Blocks are separated by one blank row, never two.
+ * owner's disagreements, the calibration against production and what the result does not prove;
+ * the run line and «Дальше» last. Blocks are separated by one blank row, never two.
  */
 export function resultScreen(view: ResultView, options: { surface: 'board' | 'cli'; details?: boolean; now?: Date }): ResultRow[] {
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
-  const blocks = [headRows(view), topicRows(view), causeRows(view), ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view), calibrationRows(view)] : []),
+  const blocks = [headRows(view), topicRows(view), causeRows(view),
+    ...(full ? [errorListRows(view), unmeasuredRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
     [runLine(view, options.now), ...barRows(view)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
@@ -525,7 +593,7 @@ export function resultScreen(view: ResultView, options: { surface: 'board' | 'cl
 /**
  * The chat block (docs/design/ui-spec.md §4.10). Collapsed: the number, the trust line, the calibration line and the causes in one row.
  * Expanded: the number, the trust and reality lines, every cause with its example, the unmeasured
- * situations and «Дальше». The host adds the ctrl+o hint under the last row.
+ * situations, what the result does not prove and «Дальше». The host adds the ctrl+o hint under the last row.
  */
 export function chatBlock(view: ResultView, options: { expanded: boolean }): ResultRow[] {
   const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
@@ -541,8 +609,46 @@ export function chatBlock(view: ResultView, options: { expanded: boolean }): Res
       ...(causeParts.length ? [{ role: 'muted' as const, indent: 2, text: `Чаще всего: ${causeParts.join(' · ')}`, parts: [`Чаще всего: ${causeParts[0]}`, ...causeParts.slice(1)] }] : [])];
   }
   const indent = (rows: ResultRow[]) => rows.map(row => ({ ...row, indent: row.indent + 2 }));
-  const blocks = [head, indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(nextRows(view, 'chat'))];
+  const blocks = [head, indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
+}
+
+/* ───────────────────────────── two runs compared ───────────────────────────── */
+
+/** Genitive after «из»: «из 1 разговора», «из 5 разговоров». */
+const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
+
+/**
+ * Two runs compared (comparison.ts), the only copy of its words: the run compared with and the answer, how much could be
+ * compared, what broke and what was fixed; then, for the owner, what could not be compared and why, the notes, and the
+ * step an unknown version of the agent calls for. The chat, the CLI `diff` and the customer report lay these rows out.
+ * A page for others names the run compared with by its version, never by a date that is relative to today, says what
+ * changed and on what that stands — the unknown version said, not asked for — and asks nothing: what could not be
+ * compared and the other notes tell the owner what to do, and stay in the owner's tools. `selected`: the owner chose
+ * the run compared with.
+ */
+export function comparisonRows(comparison: RunComparison, before: Pick<Experiment, 'createdAt' | 'targetVersion' | 'targetRelease'>,
+  options: { reader?: Reader; selected?: boolean; now?: Date } = {}): ResultRow[] {
+  const owner = (options.reader ?? 'owner') === 'owner';
+  const version = before.targetVersion ?? before.targetRelease;
+  const base = options.selected ? 'База выбрана вручную' : owner ? `Сравнение с прогоном ${whenText(before.createdAt, options.now)}` : 'Сравнение с прошлым прогоном';
+  const { coverage, fixed, regressed, unchanged, incomparable } = comparison;
+  const counts = [`Сравнимо ${coverage.validPairs} из ${countText(coverage.plannedPairs, CONVERSATIONS_OF)}`, `исправлено ${fixed.length}`, `сломалось ${regressed.length}`,
+    `без изменений ${unchanged.passing + unchanged.failing}`];
+  const rows: ResultRow[] = [
+    { role: comparison.comparable ? 'item' : 'trust:small', indent: 0, text: `${base}${version ? ` — версия ${version}` : ''}. ${comparison.headline}` },
+    { role: 'muted', indent: 0, text: counts.join(' · '), parts: counts },
+    ...regressed.map(item => ({ role: 'failed' as const, indent: 2, text: `Сломалось: ${oneLine(item.title)}` })),
+    ...fixed.map(item => ({ role: 'good' as const, indent: 2, text: `Исправлено: ${oneLine(item.title)}` })),
+  ];
+  if (!owner) return comparison.versionUnknown ? [...rows, { role: 'muted', indent: 0, text: VERSION_UNKNOWN_NOTE }] : rows;
+  // Runs that could not be compared at all share one reason — the notes below —, so their situations are named once, without it.
+  const repeats = incomparable.some(item => item.repeat > 0);
+  const pairs = (comparison.comparable ? incomparable.map(item => `${oneLine(item.title)}${repeats ? ` (попытка ${item.repeat + 1})` : ''} — ${oneLine(item.reason)}`)
+    : [...new Set(incomparable.map(item => oneLine(item.title)))]).map(text => ({ role: 'item:muted' as const, indent: 2, text: `Несравнимо: ${text}` }));
+  return [...rows, ...pairs,
+    ...(comparison.notes.length ? [{ role: 'heading' as const, indent: 0, text: 'Оговорки' }, ...comparison.notes.map(note => ({ role: 'muted' as const, indent: 2, text: note }))] : []),
+    ...(comparison.versionUnknown ? [{ role: 'next:first' as const, indent: 0, text: 'Дальше: назовите версию агента при запуске — тогда повтор покажет, что изменила новая версия.' }] : [])];
 }
 
 /** One failure explained on one screen (E7): expected → the agent's words → the owner's rule → the conversation. */
@@ -551,8 +657,7 @@ export function failureRows(view: ResultView, record: Pick<Experiment, 'trials'>
   if (!failure) return [];
   const label = (name: string, text: string): ResultRow => ({ role: 'item', indent: 4, text: `${name.padEnd(16)}${text}`, hang: 16 });
   const rule = failure.violated ?? failure.rules[0];
-  const trial = record.trials.find(item => item.id === failure.trialId);
-  const turns = (trial?.events ?? []).filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? ''));
+  const conversation = conversationRows(trialTurns(record.trials.find(item => item.id === failure.trialId)));
   const unmarked = view.agreement.unmarked.includes(failure.trialId);
   const mark = dunnoMark(view, failure.scenarioId);
   return [
@@ -562,9 +667,8 @@ export function failureRows(view: ResultView, record: Pick<Experiment, 'trials'>
     label('Агент ответил', saidText(failure)),
     ...(rule ? [label('Правило', `«${rule.quote}»`), { role: 'muted' as const, indent: 20, text: oneLine(rule.sourceName) }] : [label('Правило', noRuleText())]),
     ...(mark ? [label('Клиент', mark)] : []),
-    ...(turns.length ? [blank, { role: 'heading' as const, indent: 4, text: 'Разговор' },
-      ...turns.map(event => ({ role: 'quote' as const, indent: 6, text: `${(event.type === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.text)}`, hang: 9 }))] : []),
-    ...(unmarked ? [blank, { role: 'next:first' as const, indent: 0, text: 'Судья решил: не справился. Вы согласны?' }] : []),
+    ...(conversation.length ? [blank, ...conversation] : []),
+    ...(unmarked ? [blank, { role: 'next:first' as const, indent: 0, text: judgeQuestionText('fail') }] : []),
   ];
 }
 

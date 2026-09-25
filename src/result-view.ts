@@ -200,6 +200,11 @@ export interface ResultView {
   scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string | null;
     /** Expectations of the counted situations observed on the agent's tool calls; absent when there are none. */
     toolExpectations?: number };
+  /**
+   * What this record's result does not prove (caveats.ts): its typed notes, and the notes a record written before they were
+   * typed keeps; result-text.ts words them for their reader. Never changes the headline.
+   */
+  notes: Pick<Experiment, 'caveats' | 'limitations'>;
   /** Ordered: the recommended step first, then what can always be done with a finished result. */
   next: NextStep[];
 }
@@ -401,6 +406,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
       target: record.targetVersion ?? record.targetRelease ?? null,
       ...(toolExpectations ? { toolExpectations } : {}),
     },
+    notes: { ...(record.caveats ? { caveats: structuredClone(record.caveats) } : {}), limitations: [...record.limitations] },
     ...(stability ? { stability } : {}),
   };
   const clarity = clarityOf(record, counted);

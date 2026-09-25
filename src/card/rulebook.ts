@@ -1,5 +1,6 @@
 import type { Requirement, Scenario, Source } from '../contracts.js';
 import { countText, pluralForm } from '../plural.js';
+import type { Reader } from '../result-text.js';
 import type { RequirementKind } from '../scenario-contracts.js';
 import { clip } from '../text.js';
 import type { Card, LibraryV2, Rulebook } from './schema.js';
@@ -135,9 +136,12 @@ export function ruleBar(scenarios: readonly Scenario[], sources: readonly Pick<S
   return { prompt, knowledge: rules.length - prompt, operators: book.kinds.includes('operator_procedure') ? 'included' : chosen ? 'chosen' : 'excluded', chosen };
 }
 
-/** «Оценка по правилам: 3 из промпта агента, 12 из базы знаний (инструкции для операторов не входят)». */
-export function ruleBarText(bar: RuleBar): string {
+/**
+ * «Оценка по правилам: 3 из промпта агента, 12 из базы знаний (инструкции для операторов не входят)», for its reader: the
+ * single rules the owner chose are «отмеченные вами» in Pi and the owner's on a page the owner sends on.
+ */
+export function ruleBarText(bar: RuleBar, reader: Reader = 'owner'): string {
   const operators = bar.operators === 'included' ? 'инструкции для операторов входят' : bar.operators === 'chosen'
-    ? `из инструкций для операторов — только отмеченные вами (${bar.chosen})` : 'инструкции для операторов не входят';
+    ? `из инструкций для операторов — только отмеченные ${reader === 'owner' ? 'вами' : 'владельцем агента'} (${bar.chosen})` : 'инструкции для операторов не входят';
   return `Оценка по правилам: ${bar.prompt} из промпта агента, ${bar.knowledge} из базы знаний (${operators})`;
 }

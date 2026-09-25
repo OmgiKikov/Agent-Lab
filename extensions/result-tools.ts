@@ -1,9 +1,9 @@
 import { resolve } from 'node:path';
-import type { AgentToolResult, ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { judgeAgreement } from '../src/agreement.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
-import { conversationsText, disagreementText } from '../src/card/calibration-view.js';
+import { disagreementText, logRefusal, logTargets } from '../src/card/calibration-view.js';
 import { situationNumber } from '../src/card/view.js';
 import type { Experiment, Trial } from '../src/contracts.js';
 import { isRunning } from '../src/phases.js';
@@ -12,12 +12,12 @@ import type { ExperimentLab } from '../src/experiment.js';
 import { resultHash } from '../src/lab/record.js';
 import { countText } from '../src/plural.js';
 import { suiteHoldsLogs, suiteSavedText } from '../src/suite.js';
-import { accuracyRow } from '../src/result-text.js';
+import { accuracyRow, loggedTurns, logDisagreementRows, logQuestionText, saidText, trialTurns } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { clip, oneLine, safeText } from '../src/text.js';
-import { comparisonFeed, dialogueFeed, failureFeed, progressText, row, runStamp, statusFeed } from './conversation.ts';
+import { comparisonFeed, dialogueFeed, failureFeed, feedRows, progressText, row, runStamp, statusFeed } from './conversation.ts';
 import { busyFor, chatQueue, writer } from './decisions.ts';
-import { agreementTarget, judgeWord, markRefusal, recordMark, type Answer } from './judge-review.ts';
+import { agreementTarget, judgeWord, markRefusal, recordLogMark, recordMark, seenVerdicts, type Answer } from './judge-review.ts';
 import { displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { resultOutput } from './model-output.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
@@ -145,7 +145,7 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
             { tone: 'warning', rows: [row('Сравнивать не с чем: этот прогон не повторяет прошлый.')] }, note);
           return host.feedResult(callId, { run: record.id, before: bundle.before.id, headline: bundle.comparison.headline, comparable: bundle.comparison.comparable,
             fixed: bundle.comparison.fixed.map(item => item.title), regressed: bundle.comparison.regressed.map(item => item.title), warnings: bundle.warnings },
-          comparisonFeed(bundle.comparison, bundle.before), `Сравнение · ${runStamp(record)}`);
+          comparisonFeed(bundle.comparison, bundle.before, { selected: bundle.comparisonSource?.kind === 'selected' }), `Сравнение · ${runStamp(record)}`);
         }
         if (params.report) {
           const artifacts = await exportArtifacts(bundle, directory);
@@ -175,33 +175,36 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
         const { record, view } = bundle;
         const scenario = scenarioNumbered(record, params.situation);
         const index = view.failures.findIndex(failure => failure.scenarioId === scenario.id);
-        const trial = attemptOf(record, scenario.id, view.failures[index]?.trialId);
-        if (!trial) throw new NeedsOwner('unknown_reference', `По ситуации №${params.situation} ещё нет записанного разговора.`, [], `По ситуации ${params.situation} ещё нет записанного разговора.`);
-        const feed = index >= 0 ? failureFeed(record, view, index)! : dialogueFeed(record, trial);
         const failure = view.failures[index];
         const differs = view.calibration?.disagreements.find(item => item.cardId === scenario.id);
+        // The calibration set one attempt against the logged conversation, whatever the others did: a situation that did not
+        // fail is shown by that attempt, a failure by its own — and the compared attempt is then shown beside the log.
+        const compared = differs && record.trials.find(item => item.id === differs.trialIds[0]);
+        const trial = failure ? attemptOf(record, scenario.id, failure.trialId) : compared ?? attemptOf(record, scenario.id);
+        if (!trial) throw new NeedsOwner('unknown_reference', `По ситуации №${params.situation} ещё нет записанного разговора.`, [], `По ситуации ${params.situation} ещё нет записанного разговора.`);
+        const feed = failure ? failureFeed(record, view, index)! : dialogueFeed(record, trial);
+        const other = compared && compared.id !== trial.id ? compared : undefined;
         if (differs) {
-          feed.rows.push(row(`С продом не совпало: ${oneLine(disagreementText(differs.expectations[0]!))}`, 'warning'));
+          feed.rows.push(row(`С продом не совпало${differs.attempt === undefined ? '' : ` (попытка ${differs.attempt})`}: ${oneLine(disagreementText(differs.expectations[0]!))}`, 'warning'));
           const batch = await lab.store.readImport(differs.log.importId).catch(() => undefined);
           const logged = batch?.dialogues.find(item => item.id === differs.log.dialogueId);
-          feed.more = [...feed.more ?? [], row(''), row('Сверка с продом', 'accent', true), ...differs.expectations.map(item => row(oneLine(disagreementText(item)), undefined, false, 2)),
-            row(differs.hint, 'muted', false, 2), row(conversationsText(differs), 'muted', false, 2),
-            ...(logged ? [row(''), row('Разговор из логов', 'accent', true), ...logged.events.flatMap(event => event.type === 'message' && (event.role === 'user' || event.role === 'assistant') && oneLine(event.content)
-              ? [{ text: `${(event.role === 'user' ? 'Клиент' : 'Агент').padEnd(9)}${oneLine(event.content)}`, indent: 2, hang: 11 }] : [])] : [])];
+          feed.more = [...feed.more ?? [], row(''), row('Сверка с продом', 'accent', true),
+            ...feedRows(logDisagreementRows(differs, { ...(other ? { attempt: trialTurns(other) } : {}), log: loggedTurns(logged) }), 2)];
         }
-        const turns = trial.events.filter(event => (event.type === 'user' || event.type === 'assistant') && oneLine(event.text ?? '')).slice(0, 40)
-          .map(event => ({ who: event.type === 'user' ? 'клиент' : 'агент', text: clip(oneLine(event.text), 600) }));
+        const talk = (attempt: typeof trial) => trialTurns(attempt).slice(0, 40).map(turn => ({ who: turn.who === 'Клиент' ? 'клиент' : 'агент', text: clip(turn.text, 600) }));
         return host.feedResult(callId, { run: record.id, situation: params.situation, title: oneLine(scenario.title), outcome: trial.outcome,
-          ...(failure ? { expected: failure.expected, said: failure.said?.quote ?? null, rule: (failure.violated ?? failure.rules[0])?.quote ?? null } : {}),
-          conversation: turns, ...(differs ? { production: { expectations: differs.expectations.map(disagreementText), hint: differs.hint } } : {}) },
+          ...(failure ? { expected: failure.expected, said: saidText(failure), rule: (failure.violated ?? failure.rules[0])?.quote ?? null } : {}),
+          conversation: talk(trial), ...(differs ? { production: { expectations: differs.expectations.map(item => disagreementText(item)), hint: differs.hint,
+            ...(differs.attempt === undefined ? {} : { attempt: differs.attempt }), ...(other ? { comparedConversation: talk(other) } : {}),
+            ...(logTargets(record, scenario.id).length ? { instruction: 'When the owner doubts the judge\'s reading of the logged conversation, offer agent_lab_agree with log: true.' } : {}) } } : {}) },
         feed, `Ситуация ${params.situation} · ${runStamp(record)}`);
       } catch (error) { return host.askOwner(callId, error); }
     },
   });
   pi.registerTool({
     ...displayFor(TOOL.agree), name: TOOL.agree, label: 'The owner\'s word on the judge',
-    description: 'The owner\'s own word on the judge\'s decision about one situation of a finished run: yes, the judge is right / no (with the owner\'s reason) / don\'t know — chosen by the owner in a native dialog; you only name the situation by its number and never supply the answer. It is what makes the accuracy trustworthy: offer it after showing a failure.',
-    parameters: Type.Object({ run: runRef, situation: number }, closed),
+    description: 'The owner\'s own word on the judge\'s decision about one situation of a finished run: yes, the judge is right / no (with the owner\'s reason) / don\'t know — chosen by the owner in a native dialog; you only name the situation by its number and never supply the answer. It is what makes the accuracy trustworthy: offer it after showing a failure. log: the judge\'s reading of the situation\'s logged conversation (the comparison with production) instead of the run\'s.',
+    parameters: Type.Object({ run: runRef, situation: number, log: Type.Optional(Type.Literal(true)) }, closed),
     executionMode: 'sequential',
     async execute(callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -214,6 +217,7 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
         const record = recordFor(await host.reading(directory).list(), params.run, 'results');
         if (isRunning(record.phase)) throw new Error('Прогон ещё идёт: ответить о решении судьи можно, когда он завершится.');
         const scenario = scenarioNumbered(record, params.situation);
+        if (params.log) return await agreeOnLog(callId, ctx, record, scenario, params.situation, directory);
         const view = buildResultView(record);
         const trial = attemptOf(record, scenario.id, view.failures.find(failure => failure.scenarioId === scenario.id)?.trialId);
         if (!trial) throw new NeedsOwner('unknown_reference', `У ситуации №${params.situation} нет записанного разговора.`, [], `У ситуации ${params.situation} нет записанного разговора.`);
@@ -239,4 +243,26 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
       } catch (error) { return host.askOwner(callId, error); }
     },
   });
+
+  /**
+   * The owner's word on the judge's reading of a situation's logged conversation (docs/design/card-v2-spec.md §10.3): the
+   * verdicts the judge gave there, asked natively; what the owner was shown goes with the answer. The calibration moves,
+   * the number never does.
+   */
+  async function agreeOnLog(callId: string, ctx: ExtensionContext, record: Experiment, scenario: Experiment['scenarios'][number],
+    situation: number, directory: string): Promise<AgentToolResult<unknown>> {
+    const refused = logRefusal(record, scenario.id);
+    if (refused) return host.feedResult(callId, { run: record.id, log: true, marked: false, reason: refused, instruction: 'Nothing was asked or written. Tell the owner why in one sentence.' },
+      { tone: 'warning', rows: [row(refused)] }, 'Ответ о судье по логу');
+    const targets = logTargets(record, scenario.id);
+    const options = ['Да, судья прав', 'Нет, судья ошибся', 'Не знаю'];
+    const picked = await ctx.ui.select(safeText(`«${oneLine(scenario.title)}». ${logQuestionText(targets)}`), options);
+    if (!picked) return host.feedResult(callId, { run: record.id, log: true, marked: false }, { tone: 'warning', rows: [row('Ответ не записан.')] }, 'Ответ о судье по логу');
+    const answer: Answer = picked === options[0] ? 'agree' : picked === options[1] ? 'disagree' : 'unsure';
+    const notice = await writer(host.operations, host.open, ctx.cwd, directory)(async lab => recordLogMark(ctx, lab, await lab.get(record.id), scenario.id, answer, { seen: seenVerdicts(targets) }));
+    if (!notice) return host.feedResult(callId, { run: record.id, log: true, marked: false }, { tone: 'warning', rows: [row('Ответ не записан.')] }, 'Ответ о судье по логу');
+    const calibration = buildResultView(await host.reading(directory).get(record.id)).calibration;
+    return host.feedResult(callId, { run: record.id, situation, log: true, answer, calibration: calibration?.text ?? null },
+      { rows: [row(safeText(notice), 'text', true), ...(calibration ? [row(safeText(calibration.text), 'muted')] : [])] }, `Ответ о судье по логу · ${runStamp(record)}`);
+  }
 }

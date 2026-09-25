@@ -274,7 +274,7 @@ test('confirming the expectations is recorded as exactly that, never as a human 
   // The run dialog confirms expectations; the verdicts do not exist yet, so nothing here says a
   // person checked them. The limitation must say so instead of disappearing.
   assert.deepEqual(result.caveats, [{ code: 'expectations_review' }]);
-  assert.ok(caveatLines(result).includes('Владелец подтвердил ожидания ситуаций перед запуском. Определения карточек и оценки судьи человеком не проверялись.'));
+  assert.ok(caveatLines(result).includes('Перед запуском вы подтвердили ожидания ситуаций, а не вердикты судьи.'));
   // An old record parses and keeps the two modes it could already hold.
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'human' }).reviewMode, 'human');
   assert.equal(experimentSchema.parse({ ...result, reviewMode: 'automated' }).reviewMode, 'automated');

@@ -21,7 +21,7 @@ import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { buildResultView, exitCodeOf, type ResultView } from './result-view.js';
-import { judgeCheckText, MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
+import { ANSWER_TEXT, calibrationRows, comparisonRows, judgeCheckText, logQuestionText, MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
 import { judgeCheckPlan, judgeCheckSummary } from './judge-check.js';
 import { evidenceBundle, exportArtifacts, importNumbers, readJudgeCheck, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
@@ -29,7 +29,8 @@ import { hostGrant, requiredAuthority, wordsOf } from './card/commands.js';
 import { conversionText } from './card/convert.js';
 import { cardCommandSchema, type CardCommand, type LibraryV2 } from './card/schema.js';
 import { rulebookChangeLines, rulebookLines, rulebookOf, shownRulebook, withKind, withRules, type RulebookView } from './card/rulebook.js';
-import { briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationData, situationViews, type SituationView } from './card/view.js';
+import { briefRows, changeText, countsText, detailRows, formatNote, listRows, plainSituationText, situationData, situationNumber, situationViews, type SituationView } from './card/view.js';
+import { logAnswerOf, logAnswerReviews, logRefusal, logTargets, logVerdictsText, NO_CALIBRATION } from './card/calibration-view.js';
 import { safeLine, wrapHanging } from './text.js';
 import { countText } from './plural.js';
 import { logImports } from './card/calibration-scope.js';
@@ -76,12 +77,16 @@ interface Command {
 }
 
 /**
- * The rows of the result screen with every text made safe for a terminal before layout: titles, quotes
- * and the owner's reasons come from records, and the layout must measure what will actually be printed.
+ * Rows of result-text.ts with every text made safe for a terminal before layout: titles, quotes and the owner's reasons
+ * come from records, and the layout must measure what will actually be printed.
  */
-const cliRows = (view: ResultView): ResultRow[] => resultScreen(view, { surface: 'cli' }).map(row => ({ ...row, text: safeLine(row.text),
+const safeRows = (rows: readonly ResultRow[]): ResultRow[] => rows.map(row => ({ ...row, text: safeLine(row.text),
   ...(row.right === undefined ? {} : { right: safeLine(row.right) }), ...(row.short === undefined ? {} : { short: safeLine(row.short) }),
   ...(row.parts ? { parts: row.parts.map(safeLine) } : {}) }));
+/** The rows of the result screen, safe for a terminal. */
+const cliRows = (view: ResultView): ResultRow[] => safeRows(resultScreen(view, { surface: 'cli' }));
+/** Rows laid out at the terminal's width, at most the mockups' 100 columns. */
+const shellText = (rows: readonly ResultRow[]): string => plainText(safeRows(rows), process.stdout.columns ?? MAX_WIDTH);
 /** The result screen as the terminal shows it: the same rows as the board, wrapped to the terminal width. */
 const screenText = (view: ResultView, warnings: string[]) => [plainText(cliRows(view), process.stdout.columns ?? MAX_WIDTH),
   ...warnings.map(warning => `Внимание: ${safeLine(warning)}`), ''].join('\n');
@@ -361,15 +366,61 @@ async function diff({ values, directory }: CommandInput): Promise<void> {
   const store = new ExperimentStore(directory);
   const [before, after] = await Promise.all([store.get(values.before), store.get(values.after)]);
   const compared = compareRuns(before, after);
+  // The words of the chat's comparison (result-text.ts comparisonRows), laid out for the terminal.
   if (values.json) process.stdout.write(`${JSON.stringify(compared, null, 2)}\n`);
-  else process.stdout.write([
-    safeLine(compared.headline), '',
-    ...(compared.regressed.length ? ['Сломалось:', ...compared.regressed.map(r => `  ✗ ${safeLine(r.title)}`), ''] : []),
-    ...(compared.fixed.length ? ['Исправлено:', ...compared.fixed.map(r => `  ✓ ${safeLine(r.title)}`), ''] : []),
-    ...(compared.incomparable.length ? ['Несравнимо:', ...compared.incomparable.map(r => `  ? ${safeLine(r.title)} (попытка ${r.repeat + 1}): ${safeLine(r.reason)}`), ''] : []),
-    ...(compared.notes.length ? ['Оговорки:', ...compared.notes.map(n => `  · ${safeLine(n)}`), ''] : []),
-  ].join('\n') + '\n');
+  else process.stdout.write(`${shellText(comparisonRows(compared, before))}\n`);
   if (!compared.comparable) process.exitCode = 2;
+}
+
+/**
+ * «Сверка с продом» of a finished run (docs/design/card-v2-spec.md §10): the line under the number, what was not compared and
+ * each disagreement, as the summary shows them. With --card N --choice, the owner's word on the judge's reading of that
+ * situation's logged conversation — the answer the chat and the board take: shown without --yes, written with it.
+ * --expectation names one expectation by its letter; a disagreement needs the owner's reason in --text. Only the
+ * comparison with production moves; the number never does.
+ */
+async function calibration({ values, directory }: CommandInput): Promise<void> {
+  if (!values.id) throw new Error('Укажите прогон: --id RUN.');
+  const store = new ExperimentStore(directory);
+  const record = await store.get(values.id);
+  const numbers = record.calibration?.entries.length ? await importNumbers(record, importId => store.readImport(importId)) : undefined;
+  const calibrationOf = (run: Experiment) => buildResultView(run, numbers ? { numbers } : {}).calibration;
+  const view = calibrationOf(record);
+  if (!view) throw new Error(NO_CALIBRATION);
+  if (values.card === undefined) {
+    const answerable = view.disagreements.filter(item => logTargets(record, item.cardId).length);
+    if (values.json) { await writeStdout(`${JSON.stringify({ runId: record.id, calibration: view, answerable: answerable.map(item => item.number) }, null, 2)}\n`); return; }
+    const rows: ResultRow[] = [{ role: 'calibration', indent: 0, text: view.text }, ...calibrationRows({ calibration: view })];
+    const next = answerable.length ? `Прав ли судья по разговору из логов: agent-lab calibration --id ${record.id} --card ${answerable.map(item => item.number).join('|')} --choice agree|disagree|unsure [--text «причина»] --yes` : '';
+    await writeStdout(`${shellText(rows)}\n${next ? `\n ${safeLine(next)}\n` : ''}`);
+    return;
+  }
+  const scenario = record.scenarios.find((item, at) => String(situationNumber(record, item.id, at + 1)) === values.card);
+  if (!scenario) throw new Error(`Ситуации №${values.card} в этом прогоне нет.`);
+  const refused = logRefusal(record, scenario.id);
+  if (refused) throw new Error(refused);
+  const all = logTargets(record, scenario.id);
+  // The letter as the owner typed it, read once — the same form, case and spacing as shown; the expectation's id is taken too.
+  const wanted = values.expectation?.normalize('NFKC').trim().toLocaleUpperCase('ru');
+  const targets = wanted === undefined ? all : all.filter(target => target.letter.toLocaleUpperCase('ru') === wanted || target.expectationId.toLocaleUpperCase('ru') === wanted);
+  if (!targets.length) throw new Error(`Судья по логу решил: ${logVerdictsText(all)}. Укажите --expectation ${all.map(target => target.letter).join('|')}.`);
+  const answer = values.choice;
+  if (answer !== 'agree' && answer !== 'disagree' && answer !== 'unsure') throw new Error(`${logQuestionText(targets)} Ответ: --choice agree (да, судья прав), disagree (нет, судья ошибся — с --text «причина») или unsure (не знаю).`);
+  const reason = values.text?.trim();
+  if (answer === 'disagree' && !reason) throw new Error('Для --choice disagree напишите, почему судья ошибся: --text «причина».');
+  if (reason && reason.length > 3000) throw new Error('Причина длиннее 3000 знаков — сократите её.');
+  const said = [logQuestionText(targets), `Ваш ответ: ${ANSWER_TEXT[answer]}${answer === 'disagree' ? ` — «${reason}»` : ''}.`];
+  // The same answer given again writes nothing, as in the chat and on the board.
+  const same = answer !== 'disagree' && logAnswerOf(record, targets) === answer;
+  if (values.json && !values.yes) { await writeStdout(`${JSON.stringify({ runId: record.id, situation: Number(values.card), answer, written: false, same, targets }, null, 2)}\n`); return; }
+  if (!values.yes || same) {
+    await writeStdout(`${[...said, same ? 'Этот ответ уже записан.' : 'Записать: та же команда с --yes. Число не изменится: ответ меняет только сверку с продом.'].map(line => safeLine(line)).join('\n')}\n`);
+    return;
+  }
+  await asWriter(directory, async lab => { for (const review of logAnswerReviews(targets, answer, reason ? { reason } : {})) await lab.addLogReview(record.id, review); });
+  const after = calibrationOf(await store.get(record.id));
+  if (values.json) { await writeStdout(`${JSON.stringify({ runId: record.id, situation: Number(values.card), answer, written: true, calibration: after?.text ?? null }, null, 2)}\n`); return; }
+  await writeStdout(`${[...said, `Записано. ${after?.text ?? ''}`].map(line => safeLine(line)).join('\n')}\n`);
 }
 
 /** A draft of a set made before libraries: its expectations as one sheet, or one test's definition; --yes confirms them. */
@@ -734,6 +785,10 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   summary: { help: [['agent-lab summary --id RUN [--json]', 'Сколько ситуаций агент прошёл, что не измерено и почему']], flags: ['id', 'json'], run: summary },
   logs: { help: [['agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--import ID] [--yes]', 'Какая версия агента записала логи: только тогда сверка с продом — калибровка']],
     flags: ['id', 'agent-version', 'unknown', 'import', 'yes'], run: logs },
+  calibration: { help: [['agent-lab calibration --id RUN [--json]', 'Сверка с продом: где синтетика разошлась с разговорами из логов и что это значит'],
+    ['agent-lab calibration --id RUN --card N --choice agree|disagree|unsure [--expectation А] [--text «причина»] [--yes] [--json]',
+      'Прав ли судья по разговору из логов ситуации N; без --yes — только что будет записано']],
+  flags: ['id', 'card', 'choice', 'expectation', 'text', 'yes', 'json'], run: calibration },
   reassess: { help: [['agent-lab reassess --id RUN [--input criteria.json] [--trial ID] --yes | --code-only', 'Оценить записанные разговоры заново: судьёй или только точными проверками']],
     flags: ['id', 'input', 'trial', 'yes', 'code-only'], failure: 2, run: reassess },
   'check-judge': { help: [['agent-lab check-judge --id RUN [--planted 10] [--controls 10] [--yes] [--json]', 'Проверить судью без человека: поймает ли он подброшенные ошибки; без --yes — только сколько вызовов']],

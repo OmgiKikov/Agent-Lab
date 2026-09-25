@@ -3,6 +3,7 @@ import { controllerEvent } from '../customer-moves.js';
 import { SMALL_SAMPLE, wilson } from '../interval.js';
 import { expectationResult, humanOverride, latestHumanReviews } from '../outcomes.js';
 import { pluralForm } from '../plural.js';
+import type { JudgeAnswer, Reader } from '../result-text.js';
 import type { AttemptDerivation, RunDerivation, SituationDerivation, Verdict } from '../run.js';
 import type { BehaviorPolicy } from '../scenario-contracts.js';
 import type { Calibration, LogJudgmentReceipt, LogReview } from './calibration.js';
@@ -34,6 +35,9 @@ import type { DialogueNumbers } from './view.js';
  * nothing about the customer — any customer would agree — and the line says so. A disagreement compares the customer's
  * path in each conversation, both read the same way (the moves the log's account can record), so the owner sees
  * whether the customer or the agent behaved differently. No text is interpreted: paths are typed moves.
+ *
+ * The words are the owner's, for their reader (result-text.ts Reader): in Pi the owner is spoken to and sent to what to
+ * check; the page the owner sends on says whose word a side is and asks its reader to do nothing.
  */
 
 /** Why a situation of the run was not compared with its log. */
@@ -47,7 +51,7 @@ const UNCOMPARED: readonly CalibrationExclusion[] = ['no_agent_reply', 'channel_
   'owner_unknown', 'judge_split', 'no_evidence', 'judge_unclear', 'synthetic_unmeasured'];
 /** The order of the exclusions line. */
 const EXCLUSIONS: readonly CalibrationExclusion[] = ['not_from_log', 'situation_edited', ...UNCOMPARED];
-const EXCLUSION_TEXT: Record<CalibrationExclusion, string> = {
+const EXCLUSION_TEXT: Record<Exclude<CalibrationExclusion, 'owner_unknown'>, string> = {
   not_from_log: 'не из логов',
   situation_edited: 'ситуация изменена',
   no_agent_reply: 'в логе агент не ответил',
@@ -55,18 +59,26 @@ const EXCLUSION_TEXT: Record<CalibrationExclusion, string> = {
   not_exercised_in_log: 'в логе не дошло до ожидания',
   receipt_invalid: 'запись судьи по логу не сходится',
   judge_failed: 'ответа судьи по логу нет',
-  owner_unknown: 'вы не смогли решить по логу',
   judge_split: 'оценки судьи по логу разошлись',
   no_evidence: 'в логе нет доказательства',
   judge_unclear: 'судья не смог решить по логу',
   synthetic_unmeasured: 'в синтетике не измерено',
 };
+/** Why a situation was not compared, for its reader: the one reason that is the owner's own word names the owner. */
+const exclusionText = (reason: CalibrationExclusion, reader: Reader): string => reason === 'owner_unknown'
+  ? `${reader === 'owner' ? 'вы не смогли' : 'владелец агента не смог'} решить по логу` : EXCLUSION_TEXT[reason];
 
 type Decided = 'pass' | 'fail';
 /** Whose verdict one side of a comparison is: the judge's, or the owner's where their latest word replaces it (outcomes.ts humanOverride). */
 export type Decider = 'judge' | 'owner';
 /** How a disagreeing situation leans: the synthetic side passed every differing expectation the log failed, failed every one the log passed, or both. */
 export type Leaning = 'softer' | 'stricter' | 'both';
+/**
+ * What a disagreement suggests (docs/design/card-v2-spec.md §10.5), typed and worded for its reader by hintText: the
+ * side nobody checked where one side is the owner's word, a customer who acted otherwise (and the first place), a path
+ * that could not be read, or the same customer — an agent that changed, the stand, or the stand or the judge's noise.
+ */
+export type Suggestion = { kind: 'check_log' | 'check_attempt' | 'unread' | 'agent_changed' | 'stand' | 'stand_or_judge' } | { kind: 'drift'; first: string };
 
 export interface CalibrationDisagreement {
   cardId: string; number: number; title: string;
@@ -78,6 +90,8 @@ export interface CalibrationDisagreement {
    * `same` ignores the final leaving, which ends both. Null when the attempt's moves could not be read.
    */
   path: { synthetic: string[]; log: string[]; same: boolean } | null;
+  /** What the difference suggests, typed; `hint` says it to the owner, hintText to any reader. */
+  suggests: Suggestion;
   /** What the difference suggests, in the owner's words. */
   hint: string;
   /** The synthetic attempt compared; the path is read from it. */
@@ -108,13 +122,19 @@ export interface CalibrationView {
   unfinished: NonNullable<Calibration['unfinished']> | null;
 }
 
-/** What the reader of a calibration is told in the details, whatever it shows. */
-export const CALIBRATION_CAVEATS = [
-  'Где вы не поправляли судью, обе стороны оценивает один и тот же судья: совпадение не доказывает, что он прав, — это показывают ваши отметки согласия с ним.',
-  'С разговором из логов сравнивается одна попытка каждой ситуации — первая измеренная; число выше учитывает все попытки.',
-  'Сверка покрывает только ситуации из логов.',
-  'Тестовый стенд и прод могут различаться даже при одной версии агента.',
-] as const;
+/** What the reader of a calibration is told in the details, whatever it shows; the owner's own corrections are said about the owner on a page for others. */
+export function calibrationCaveats(reader: Reader = 'owner'): readonly [string, string, string, string] {
+  const owner = reader === 'owner';
+  const marks = owner ? 'ваши отметки согласия с ним' : 'отметки владельца агента о согласии с ним';
+  return [
+    `Где ${owner ? 'вы не поправляли' : 'владелец агента не поправлял'} судью, обе стороны оценивает один и тот же судья: совпадение не доказывает, что он прав, — это показывают ${marks}.`,
+    'С разговором из логов сравнивается одна попытка каждой ситуации — первая измеренная; число выше учитывает все попытки.',
+    'Сверка покрывает только ситуации из логов.',
+    'Тестовый стенд и прод могут различаться даже при одной версии агента.',
+  ];
+}
+/** The caveats as the owner reads them in Pi. */
+export const CALIBRATION_CAVEATS = calibrationCaveats('owner');
 
 const percent = (share: number) => `${Math.round(share * 100)}%`;
 const SITUATIONS_OF: [string, string, string] = ['ситуации', 'ситуаций', 'ситуаций'];
@@ -294,17 +314,35 @@ const leaningOf = (differing: readonly Compared[]): Leaning => differing.every(r
   : differing.every(row => row.synthetic === 'fail') ? 'stricter' : 'both';
 
 /** The deterministic hint of a disagreement (docs/design/card-v2-spec.md §10.5). */
-function hintOf(differing: readonly Compared[], paths: ComparedPaths | null, mode: CalibrationView['mode']): string {
+function suggestionOf(differing: readonly Compared[], paths: ComparedPaths | null, mode: CalibrationView['mode']): Suggestion {
   // One side is the owner's word and the other the judge's: the judge may be wrong on the side nobody checked.
   const mixed = differing.find(row => row.decidedBy.synthetic !== row.decidedBy.log);
-  if (mixed) return mixed.decidedBy.synthetic === 'owner' ? 'В попытке решение ваше, по логу — судьи: проверьте, прав ли судья по логу.'
-    : 'По логу решение ваше, в попытке — судьи: проверьте, прав ли судья в попытке.';
-  if (!paths) return 'Путь клиента сравнить не удалось: сравните оба разговора сами.';
-  if (paths.first) return `Синтетический клиент повёл себя иначе, чем реальный: ${paths.first}. Это дрейф симулятора или ситуации.`;
-  if (mode === 'comparison') return 'Клиент тот же — вероятно, изменился агент (версии различаются или неизвестны).';
+  if (mixed) return { kind: mixed.decidedBy.synthetic === 'owner' ? 'check_log' : 'check_attempt' };
+  if (!paths) return { kind: 'unread' };
+  if (paths.first) return { kind: 'drift', first: paths.first };
+  if (mode === 'comparison') return { kind: 'agent_changed' };
   // Where the owner decided both sides, there is no judge's noise to suspect.
-  return differing.every(row => row.decidedBy.synthetic === 'owner') ? 'Клиент тот же — различается ответ агента: проверьте окружение стенда.'
-    : 'Клиент тот же — различается ответ агента: проверьте окружение стенда или шум судьи.';
+  return { kind: differing.every(row => row.decidedBy.synthetic === 'owner') ? 'stand' : 'stand_or_judge' };
+}
+
+/**
+ * What a disagreement suggests, for its reader: the owner is sent to what to check; a page for others says the same
+ * without asking anything and names the owner's word as the owner's.
+ */
+export function hintText(suggestion: Suggestion, reader: Reader = 'owner'): string {
+  const owner = reader === 'owner';
+  const whose = owner ? 'ваше' : 'владельца агента';
+  switch (suggestion.kind) {
+    case 'check_log': return `В попытке решение ${whose}, по логу — судьи: ${owner ? 'проверьте, прав ли судья по логу' : 'прав ли судья по логу, не проверено'}.`;
+    case 'check_attempt': return `По логу решение ${whose}, в попытке — судьи: ${owner ? 'проверьте, прав ли судья в попытке' : 'прав ли судья в попытке, не проверено'}.`;
+    case 'unread': return `Путь клиента сравнить не удалось${owner ? ': сравните оба разговора сами' : ''}.`;
+    case 'drift': return `Синтетический клиент повёл себя иначе, чем реальный: ${suggestion.first}. Это дрейф симулятора или ситуации.`;
+    case 'agent_changed': return 'Клиент тот же — вероятно, изменился агент (версии различаются или неизвестны).';
+    case 'stand': case 'stand_or_judge': {
+      const judge = suggestion.kind === 'stand_or_judge';
+      return `Клиент тот же — различается ответ агента: ${owner ? `проверьте окружение стенда${judge ? ' или шум судьи' : ''}` : `возможно, стенд отличается от прода${judge ? ' или сказался шум судьи' : ''}`}.`;
+    }
+  }
 }
 
 /* ───────────────────────────── the view ───────────────────────────── */
@@ -381,8 +419,7 @@ export function buildCalibration(run: RunDerivation, options: { numbers?: Dialog
   const situations = runLogSituations(record);
   const logged = situations.filter(situation => !situation.exclusion && situation.log);
   const { mode, versionNote } = calibrationMode(calibration, logged.map(situation => situation.log!.importId));
-  // The owner's latest verdict on each receipt: a later one replaces an earlier.
-  const marks = new Map((calibration.reviews ?? []).map(review => [review.key, review]));
+  const marks = logMarks(calibration);
   const excluded = new Map<CalibrationExclusion, string[]>();
   const exclude = (reason: CalibrationExclusion, id: string) => { excluded.set(reason, [...excluded.get(reason) ?? [], id]); };
   const disagreements: CalibrationDisagreement[] = [];
@@ -412,9 +449,10 @@ export function buildCalibration(run: RunDerivation, options: { numbers?: Dialog
     const sources = pathSources(record, derived.scenario);
     const steps = sources && syntheticSteps(attempt.trial, sources.policy, sources.facts);
     const paths = sources && steps ? comparePaths(steps, sources) : null;
+    const suggests = suggestionOf(differing, paths, mode);
     disagreements.push({ cardId: situation.id, number: situation.number, title: situation.title,
       expectations: differing.map(({ id, letter, text, synthetic, log, decidedBy }) => ({ id, letter, text, synthetic, log, decidedBy })),
-      leaning: lean, path: paths?.path ?? null, hint: hintOf(differing, paths, mode), trialIds: [attempt.trial.id],
+      leaning: lean, path: paths?.path ?? null, suggests, hint: hintText(suggests), trialIds: [attempt.trial.id],
       ...(record.settings.repeats > 1 ? { attempt: attempt.trial.repeat + 1 } : {}),
       log: { importId: situation.log.importId, dialogueId: situation.log.dialogueId, number: logNumber(record, situation.log.importId, situation.log.dialogueId, options.numbers) } });
   }
@@ -427,17 +465,94 @@ export function buildCalibration(run: RunDerivation, options: { numbers?: Dialog
 }
 
 /** «Не сравнивались: 4 — ситуация изменена (2), в логе не дошло до ожидания (2).»; null when every situation was compared. */
-export function exclusionsLine(view: Pick<CalibrationView, 'excluded'>): string | null {
+export function exclusionsLine(view: Pick<CalibrationView, 'excluded'>, reader: Reader = 'owner'): string | null {
   const total = view.excluded.reduce((sum, item) => sum + item.count, 0);
-  return total ? `Не сравнивались: ${total} — ${view.excluded.map(item => `${EXCLUSION_TEXT[item.reason]} (${item.count})`).join(', ')}.` : null;
+  return total ? `Не сравнивались: ${total} — ${view.excluded.map(item => `${exclusionText(item.reason, reader)} (${item.count})`).join(', ')}.` : null;
 }
 
 const VERDICT_WORD: Record<Decided, string> = { pass: 'выполнил', fail: 'нет' };
-/** One side of a disagreement: the verdict, and «ваша отметка» where it is the owner's word. */
-const sideText = (verdict: Decided, by: Decider): string => `${VERDICT_WORD[verdict]}${by === 'owner' ? ' (ваша отметка)' : ''}`;
+/** One side of a disagreement: the verdict, and whose mark it is where it is the owner's word. */
+const sideText = (verdict: Decided, by: Decider, reader: Reader): string =>
+  `${VERDICT_WORD[verdict]}${by === 'owner' ? ` (${reader === 'owner' ? 'ваша отметка' : 'отметка владельца агента'})` : ''}`;
 /** One disagreeing expectation: «Б · объяснить, как оформить возврат — в синтетике: выполнил, в проде: нет». */
-export const disagreementText = (row: CalibrationDisagreement['expectations'][number]): string =>
-  `${row.letter} · ${row.text} — в синтетике: ${sideText(row.synthetic, row.decidedBy.synthetic)}, в проде: ${sideText(row.log, row.decidedBy.log)}`;
+export const disagreementText = (row: CalibrationDisagreement['expectations'][number], reader: Reader = 'owner'): string =>
+  `${row.letter} · ${row.text} — в синтетике: ${sideText(row.synthetic, row.decidedBy.synthetic, reader)}, в проде: ${sideText(row.log, row.decidedBy.log, reader)}`;
 /** Where the two conversations of a disagreement are: the run's attempt compared and the logged dialogue. */
 export const conversationsText = (item: Pick<CalibrationDisagreement, 'log' | 'attempt'>): string =>
   `Разговоры: попытка${item.attempt === undefined ? '' : ` ${item.attempt}`} в этом прогоне · ${item.log.number === null ? 'исходный разговор из логов' : `диалог №${item.log.number} из логов`}`;
+
+/* ───────────────────────────── the owner's word on the log side ───────────────────────────── */
+
+/** The owner's latest word on each receipt of the log side, by its key: a later one replaces an earlier (outcomes.ts humanOverride). */
+export const logMarks = (calibration: Pick<Calibration, 'reviews'>): Map<string, LogReview> => new Map((calibration.reviews ?? []).map(review => [review.key, review]));
+
+/** One verdict of the log judge the owner can answer — the target `log:{key}` —: the expectation and the judge's own decided verdict, never the owner's. */
+export interface LogTarget { key: string; expectationId: string; letter: string; text: string; judge: Decided }
+
+/**
+ * The log judge's decided verdicts on one situation of a run, in the order of its expectations: what the owner's answer
+ * about the judge's reading of the logged conversation lands on. A receipt that does not stand (of another definition,
+ * altered, or an incomplete judgment) or that decided nothing has nothing to agree with; a situation the calibration
+ * does not cover has none.
+ */
+export function logTargets(record: Experiment, cardId: string): LogTarget[] {
+  const calibration = record.calibration;
+  const situation = calibration && runLogSituations(record).find(item => item.id === cardId);
+  if (!calibration || !situation || situation.exclusion) return [];
+  return situation.expectations.flatMap(({ expectation, letter }) => {
+    const entry = calibration.entries.find(item => item.cardId === cardId && item.expectationId === expectation.id);
+    const verdict = entry && logJudgmentComplete(entry, record) ? entry.result : 'unknown';
+    return entry && decided(verdict) ? [{ key: entry.key, expectationId: expectation.id, letter, text: expectation.text, judge: verdict }] : [];
+  });
+}
+
+const LOG_WORD: Record<Decided, string> = { pass: 'выполнил', fail: 'не выполнил' };
+/** «А — выполнил, Б — не выполнил»: what the judge decided on the logged conversation, expectation by expectation. */
+export const logVerdictsText = (targets: readonly Pick<LogTarget, 'letter' | 'judge'>[]): string => targets.map(target => `${target.letter} — ${LOG_WORD[target.judge]}`).join(', ');
+
+/** Said of a run whose situations were never compared with production. */
+export const NO_CALIBRATION = 'У этого прогона нет сверки с продом: судья не читал разговоры из логов.';
+
+/**
+ * Why no answer about the judge's reading of a situation's logged conversation can be given, in the owner's words;
+ * undefined when one can: a run without a calibration, a situation with no log of its own to compare with, a judge that
+ * decided nothing on it.
+ */
+export function logRefusal(record: Experiment, cardId: string): string | undefined {
+  if (!record.calibration) return NO_CALIBRATION;
+  const situation = runLogSituations(record).find(item => item.id === cardId);
+  if (!situation?.log || situation.exclusion) return 'Эта ситуация не сверялась с продом: у неё нет своего разговора из логов или она изменена.';
+  return logTargets(record, cardId).length ? undefined : 'Судья не вынес решения по разговору из логов этой ситуации — соглашаться не с чем.';
+}
+
+/**
+ * What the owner's latest one-key marks on the log judge's verdicts `targets` say, when every one of them has one: a
+ * disagreement with any of them, a doubt about all, an agreement with all.
+ */
+export function logAnswerOf(record: Pick<Experiment, 'calibration'>, targets: readonly LogTarget[]): JudgeAnswer | undefined {
+  if (!record.calibration || !targets.length) return undefined;
+  const marks = logMarks(record.calibration);
+  const given = targets.map(target => ({ target, mark: marks.get(target.key) }));
+  if (given.some(({ mark }) => mark?.source !== 'quick')) return undefined;
+  if (given.some(({ target, mark }) => mark!.verdict !== 'unknown' && mark!.verdict !== target.judge)) return 'disagree';
+  return given.every(({ mark }) => mark!.verdict === 'unknown') ? 'unsure' : given.every(({ target, mark }) => mark!.verdict === target.judge) ? 'agree' : undefined;
+}
+
+/** The note of a one-key mark that says the same as the judge, or that the owner cannot tell. */
+const AGREED = 'Быстрая отметка: согласен с судьёй.', UNSURE = 'Быстрая отметка: не могу сказать.';
+
+/**
+ * What an answer about the log judge writes, receipt by receipt, as one-key marks: the judge's verdict where the owner
+ * agrees — disputing some expectations is agreeing with the rest —, its opposite with the owner's reason where they
+ * dispute it (`disputed`, every target by default), «не знаю» where they cannot tell, which leaves the judge's verdict
+ * standing (outcomes.ts humanOverride). `judgeVerdict` is what the owner was shown.
+ */
+export function logAnswerReviews(targets: readonly LogTarget[], answer: JudgeAnswer, options: { disputed?: readonly string[]; reason?: string } = {}):
+  { key: string; source: 'quick'; verdict: Verdict; judgeVerdict: Decided; note: string }[] {
+  const disputed = new Set(options.disputed ?? targets.map(target => target.key));
+  return targets.map(target => {
+    const disputes = answer === 'disagree' && disputed.has(target.key);
+    const verdict = answer === 'unsure' ? 'unknown' as const : disputes ? (target.judge === 'fail' ? 'pass' as const : 'fail' as const) : target.judge;
+    return { key: target.key, source: 'quick' as const, verdict, judgeVerdict: target.judge, note: disputes ? options.reason ?? '' : answer === 'unsure' ? UNSURE : AGREED };
+  });
+}

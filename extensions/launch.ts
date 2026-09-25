@@ -79,7 +79,7 @@ export function cardPlan(record: Experiment, views: readonly SituationView[]): L
   const count = (status: SituationView['status']) => views.filter(view => view.status === status).length;
   const outside = [
     ...(count('needs_owner') ? [countText(count('needs_owner'), ['ждёт вашего ответа', 'ждут вашего ответа', 'ждут вашего ответа'])] : []),
-    ...(count('unusable') ? [`${count('unusable')} не подходит для теста`] : []),
+    ...(count('unusable') ? [countText(count('unusable'), ['не подходит для теста', 'не подходят для теста', 'не подходят для теста'])] : []),
     ...(count('checking') ? [countText(count('checking'), ['ещё не проверена', 'ещё не проверены', 'ещё не проверены'])] : []),
   ].join(' · ');
   return { situations: ready.length, conversations: ready.length * attempts, judgePerAttempt: 2 * Math.max(0, ...ready.map(view => view.brief.must.length)),

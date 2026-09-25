@@ -30,7 +30,7 @@ import { ExperimentStore } from './store.js';
  *   operation.ts  the one long operation at a time: budget, time, checkpoints, and the followers told of each change
  *   library.ts    situations: prepare, check, change by the owner's commands, accept
  *   run.ts        a run: the draft it starts from, the owner's confirmation, the dialogues
- *   review.ts     results: a re-assessment, a person's verdicts
+ *   review.ts     results: a re-assessment, a person's verdicts — on the run's conversations and on the logged ones
  *   judge-check.ts the judge checked with planted errors and untouched controls, beside the run
  */
 export class ExperimentLab {
@@ -121,6 +121,8 @@ export class ExperimentLab {
 
   reassess(id: string, raw?: ReassessmentInput, options?: { carryUsage?: boolean }): Promise<Experiment> { return review.reassess(this.lab, id, raw, options); }
   addHumanReview(id: string, raw: HumanReviewInput): Promise<Experiment> { return review.addHumanReview(this.lab, id, raw); }
+  /** The owner's verdict on the judge's reading of a logged conversation (`log:{key}` of the run's calibration): kept beside the receipt, never over it. */
+  addLogReview(id: string, raw: review.LogReviewInput): Promise<Experiment> { return review.addLogReview(this.lab, id, raw); }
   reviewResults(id: string, expectedHash: string): Promise<Experiment> { return review.reviewResults(this.lab, id, expectedHash); }
   /** How many calls a judge check of a finished run would take, and what it samples; spends nothing. */
   planJudgeCheck(id: string, options?: judgeCheck.JudgeCheckOptions): Promise<JudgeCheckPlan> { return judgeCheck.planJudgeCheck(this.lab, id, options); }

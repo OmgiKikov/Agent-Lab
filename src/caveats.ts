@@ -1,13 +1,15 @@
 import { z } from 'zod';
 import type { Experiment } from './contracts.js';
 import { countText } from './plural.js';
+import type { Reader } from './result-text.js';
 
 /*
  * What a record's result does not prove, particular to that record: notes the lab writes where they arise, each typed
  * by its code — never a sentence another module has to decode — at most once, in the order they arose. A fresh draft
  * of a record starts with none of them but the teaching example's: every other note is about the work done on that
- * record. Every surface reads them through caveatLines, in the owner's words; records written before notes were typed
- * keep their `limitations` strings, read there as they are.
+ * record. Every surface reads them through caveatLines, in the owner's words — spoken to in Pi, spoken about on a page
+ * the owner sends on (result-text.ts Reader); records written before notes were typed keep their `limitations`
+ * strings, read there as they are.
  */
 
 /** Why a run's failure causes could not be named: its budget ran out, it was stopped, the model did not answer, the model's answer did not hold, or something else broke. */
@@ -54,12 +56,20 @@ const CAUSE_TEXT: Readonly<Record<CauseFailure, string>> = {
   failed: 'разбор прервался из-за сбоя',
 };
 
-/** A note in the owner's words. */
-export function caveatText(caveat: Caveat): string {
+/** A note in the owner's words, as the owner reads it in Pi. */
+export const caveatText = (caveat: Caveat): string => caveatWords(caveat, 'owner');
+
+/**
+ * A note in the owner's words, for its reader: the owner is spoken to, whoever reads the owner's report is told about
+ * the owner and asked to do nothing. Whether the judge's verdicts were checked since is the trust line's to say
+ * (result-text.ts): a note written when the run started never claims it.
+ */
+export function caveatWords(caveat: Caveat, reader: Reader): string {
+  const owner = reader === 'owner';
   switch (caveat.code) {
     case 'demo': return 'Учебный пример: клиент, судья и подготовка — заготовки без модели; это не измерение качества модели.';
-    case 'automated_review': return 'Ожидания ситуаций проверены автоматически, без человека: спорные вердикты стоит посмотреть, однозначные годятся как предварительный результат.';
-    case 'expectations_review': return 'Владелец подтвердил ожидания ситуаций перед запуском. Определения карточек и оценки судьи человеком не проверялись.';
+    case 'automated_review': return `Ожидания ситуаций проверены автоматически, без человека: ${owner ? 'спорные вердикты стоит посмотреть, однозначные годятся как' : 'это'} предварительный результат.`;
+    case 'expectations_review': return `Перед запуском ${owner ? 'вы подтвердили' : 'владелец агента подтвердил'} ожидания ситуаций, а не вердикты судьи.`;
     case 'scripted_skipped': return `Без сценария — ${countText(caveat.situations, ['ситуация', 'ситуации', 'ситуаций'])}: в сценарном режиме их не запускали.`;
     case 'state_unconfirmed': return 'Адаптер не подтвердил сброс внешнего состояния ситуаций: проверки состояния не измерены.';
     case 'causes_unnamed': return `Причины провалов не названы: ${CAUSE_TEXT[caveat.cause]}.`;
@@ -74,9 +84,9 @@ export function caveatText(caveat: Caveat): string {
 const forOwner = (text: string): boolean => [...text].some(char => (char >= 'А' && char <= 'я') || char === 'ё' || char === 'Ё');
 
 /**
- * Every note of a record in the owner's words, each once: its typed notes, then the notes a record written before they
- * were typed keeps — those written for the owner, as they are.
+ * Every note of a record in the owner's words, for its reader, each once: its typed notes, then the notes a record
+ * written before they were typed keeps — those written for the owner, as they are.
  */
-export function caveatLines(record: Pick<Experiment, 'caveats' | 'limitations'>): string[] {
-  return [...new Set([...(record.caveats ?? []).map(caveatText), ...record.limitations.filter(forOwner)])];
+export function caveatLines(record: Pick<Experiment, 'caveats' | 'limitations'>, reader: Reader = 'owner'): string[] {
+  return [...new Set([...(record.caveats ?? []).map(caveat => caveatWords(caveat, reader)), ...record.limitations.filter(forOwner)])];
 }
