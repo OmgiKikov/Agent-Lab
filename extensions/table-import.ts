@@ -9,7 +9,7 @@ import type { TableChoices } from '../src/spreadsheet/mapping.js';
 import type { ProposedReading, TableReader } from '../src/spreadsheet/reading-task.js';
 import { readTableFile } from '../src/spreadsheet/workbook.js';
 import { fingerprint } from '../src/contracts.js';
-import { safeText } from '../src/text.js';
+import { safeLine, safeText } from '../src/text.js';
 import { ask } from './lab-ui.ts';
 
 /*
@@ -66,7 +66,8 @@ export async function importTable(ctx: Pick<ExtensionContext, 'ui'>, store: Expe
     if (asked.has(key)) throw new Error('Ответ не изменил, как Lab читает таблицу. Разметку можно задать в командной строке: agent-lab import --file … с флагами колонок и меток.');
     asked.add(key);
     const answers = questionAnswers(proposal.question);
-    const labels = answers.map((answer, index) => `${index + 1}  ${answer.label}`);
+    // An answer's label quotes the table's own names and values: each crosses the terminal boundary, and the pick is matched as shown.
+    const labels = answers.map((answer, index) => safeLine(`${index + 1}  ${answer.label}`));
     const picked = await ctx.ui.select(safeText(proposalLines(proposal).join('\n')), [...labels, 'Не сейчас']);
     const answer = answers[labels.indexOf(picked ?? '')];
     if (!answer) return { declined: true };

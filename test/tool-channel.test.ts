@@ -26,14 +26,14 @@ import { cardInput, cardRuntime, type Received } from './helpers/card-prep.js';
 
 const agent = (exportName: string): RunnableTarget => ({ kind: 'module', path: fileURLToPath(new URL('./fixtures/kb-agent.mjs', import.meta.url)), exportName });
 
-/** The fixture runtime; when the tool channel is offered, the explanation duty is proposed on the agent's tool and judged from its result. */
+/** The fixture runtime; when the tool channel is offered, the explanation duty is proposed on the agent's tool, named, and judged from its result. */
 function toolRuntime(received: Received): Runtime {
   const base = cardRuntime(received);
   return { ...base,
     async proposeCard(request, ctx): Promise<CardProposal> {
       const proposal = structuredClone(await base.proposeCard!(request, ctx));
       if (request.call.observations.includes('tool')) proposal.agentMust = proposal.agentMust.map((duty, index) =>
-        index === proposal.agentMust.length - 1 ? { ...duty, text: 'до ответа найти правила возврата в базе знаний', observation: 'tool' } : duty);
+        index === proposal.agentMust.length - 1 ? { ...duty, text: 'до ответа найти правила возврата в базе знаний', observation: 'tool', tool: request.call.tools![0]! } : duty);
       return proposal;
     },
     async assess(input, ctx) {
@@ -70,7 +70,8 @@ test('confirmed tools: the proposal is offered them, the card is compiled with t
     assert.deepEqual([experiment.toolChannel?.confirmed, experiment.toolChannel?.tools], [true, ['kb_search']], 'the probe is stored on the record');
     assert.deepEqual(seen.proposals.map(request => [request.call.observations, request.call.tools]), [[['reply', 'tool'], ['kb_search']], [['reply', 'tool'], ['kb_search']]]);
     assert.deepEqual(proposalPayload(seen.proposals[0]!).target, { observations: ['reply', 'tool'], tools: ['kb_search'] });
-    assert.deepEqual(library.cards.map(card => card.agentMust.map(duty => duty.observation)), [['reply', 'tool'], ['reply', 'tool']]);
+    assert.deepEqual(library.cards.map(card => card.agentMust.map(duty => [duty.observation, duty.tool])), [[['reply', undefined], ['tool', 'kb_search']], [['reply', undefined], ['tool', 'kb_search']]],
+      'a tool duty names the tool the connection showed');
 
     const accepted = await lab.acceptCards(draft.id, libraryHash(library), library.cards.map(card => card.id));
     const scenario = accepted.experiment.scenarios[0]!;
@@ -83,8 +84,10 @@ test('confirmed tools: the proposal is offered them, the card is compiled with t
     const finished = await lab.get(draft.id);
     assert.equal(finished.phase, 'results_review', finished.error ?? '');
     const trial = finished.trials.find(item => item.scenarioId === scenario.id)!;
-    const duty = { id: 'e2', observation: 'tool' as const };
-    assert.equal(recordedExpectationResult(trial, duty), 'pass', 'a cited tool result of a complete journal decides the duty');
+    assert.ok(isCardExecution(scenario.execution));
+    const duty = scenario.execution.evaluatorView.expectations.find(item => item.id === 'e2')!;
+    assert.deepEqual([duty.observation, duty.tool], ['tool', 'kb_search']);
+    assert.equal(recordedExpectationResult(trial, duty), 'pass', 'a cited result of the named tool, from a complete journal, decides the duty');
     assert.equal(recordedExpectationResult({ ...trial, observation: { ...trial.observation!, tools: 'partial' } }, duty), 'unknown', 'a partial journal proves nothing');
     const view = buildResultView(finished);
     assert.equal(view.scope.toolExpectations, 2);

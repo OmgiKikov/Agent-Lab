@@ -1,7 +1,7 @@
 import type { Experiment } from './contracts.js';
 import { situationViews } from './card/view.js';
 import { countText, pluralForm } from './plural.js';
-import type { ResultView } from './result-view.js';
+import { NOT_MEASURED_SIDE, type ResultView } from './result-view.js';
 import type { NotMeasuredCode } from './run.js';
 import { oneLine } from './text.js';
 
@@ -9,7 +9,8 @@ import { oneLine } from './text.js';
  * «Проблемы» (docs/design/ui-spec.md §8.6): what repeats, not a one-off error — the same cause in two or more situations of the
  * newest run, or a situation that keeps failing run after run. A problem in the agent is a cause of its failures;
  * a problem in the test is the customer Lab plays leaving the situation, so the conversation cannot be judged.
- * Every observation is a verified quote of the agent's recorded reply; nothing here is guessed — a hypothesis and a
+ * Every observation is a verified quote of the recorded reply the judge pointed at (explain.ts `said`) — a reply it did
+ * not point at proves nothing about the failure and is never an observation; nothing here is guessed — a hypothesis and a
  * way to check it need the failure analysis, which is a separate step. Pure: from stored results only.
  *
  *   newest run: causes ×2+ situations ─┐
@@ -25,16 +26,13 @@ export interface Problem {
   /** How many of the newest runs, one after another, it showed up in. */
   runsInRow: number;
   topics: string[];
-  /** The agent's own words in the newest run, each checked against the recorded reply. */
+  /** The agent's own words in the newest run that the judge pointed at, each checked against the recorded reply. */
   observations: { quote: string; title: string }[];
   /** A conversation of the newest run that shows it. */
   runId: string; trialId?: string;
 }
 
 export interface ProblemRun { record: Experiment; view: ResultView }
-
-/** The customer Lab plays left the situation: the test, not the agent, has to change. */
-const TEST_SIDE: readonly NotMeasuredCode[] = ['simulator_deviated', 'simulator_unclear', 'simulator_error', 'turn_limit'];
 
 /** Runs from the newest on, one after another, in which `hit` holds; the newest always counts. */
 function inRow(runs: readonly ProblemRun[], hit: (run: ProblemRun) => boolean): number {
@@ -83,7 +81,8 @@ export function recurringProblems(runs: readonly ProblemRun[]): Problem[] {
       runId: record.id, trialId: failure.trialId });
   }
   for (const reason of view.notMeasured.reasons) {
-    if (!TEST_SIDE.includes(reason.code)) continue;
+    // The customer Lab plays left the situation: the test, not the agent, has to change.
+    if (NOT_MEASURED_SIDE[reason.code] !== 'client') continue;
     const runsInRow = inRow(runs, run => unmeasuredBy(run, reason.code, reason.scenarioIds));
     if (reason.scenarioIds.length < 2 && runsInRow < 2) continue;
     problems.push({ key: `test:${reason.code}`, side: 'test', title: reason.label.charAt(0).toLocaleUpperCase('ru') + reason.label.slice(1), situations: situations(reason.scenarioIds),

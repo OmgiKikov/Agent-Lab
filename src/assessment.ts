@@ -46,7 +46,10 @@ export const replyQuality: Rubric = {
   passCriteria: 'Ответ корректен по материалам владельца, отвечает на запрос и, если следующий шаг нужен, даёт его без выдуманных фактов.',
   failCriteria: 'Ответ неверен, не по существу, неисполняем, противоречит материалам владельца или выдаёт неподтверждённое за факт.',
 };
-/** Diagnostic-only RAG rubrics. They are added to a judge run only when the adapter reports retrieval events. */
+/**
+ * Diagnostic-only RAG rubrics. Judgments under judge.ts JUDGE_PROTOCOL voted on them when the adapter reported retrieval
+ * events; a new judgment does not, and they stay here so those judgments still read and verify.
+ */
 const ragContextRecall: Rubric = {
   id: 'rag_context_recall', name: 'RAG · нужное знание найдено', subject: 'agent',
   description: 'Достаточно ли переданного агенту контекста по приложенным требованиям владельца; это не полнота поиска по всей базе знаний.',
@@ -79,9 +82,13 @@ export const metricAssessmentSchema = z.strictObject({
   citations: z.array(z.strictObject({ seq: z.number().int().nonnegative(), quote: z.string().min(1).max(2000) })).max(48).optional(),
 });
 export type MetricAssessment = z.infer<typeof metricAssessmentSchema>;
-/** The fixed opening belongs to the card, not to the reactive actor. */
-export function metricApplies(metric: Rubric, trial: Pick<Trial, 'userMode' | 'events'>): boolean {
-  if (RAG_METRIC_IDS.has(metric.id)) return ragEvidenceComplete(trial, metric.id === 'rag_context_faithfulness' ? 'model_context' : 'retrieval');
+/**
+ * Whether a rubric is voted on in this dialogue. The fixed opening belongs to the card, not to the reactive actor. A RAG
+ * diagnostic is voted on only under `ragDiagnostics` — the rule of the judgments that voted on them (judge.ts
+ * JUDGE_PROTOCOL) — and then only on complete evidence; today it is never voted on.
+ */
+export function metricApplies(metric: Rubric, trial: Pick<Trial, 'userMode' | 'events'>, options: { ragDiagnostics?: boolean } = {}): boolean {
+  if (RAG_METRIC_IDS.has(metric.id)) return !!options.ragDiagnostics && ragEvidenceComplete(trial, metric.id === 'rag_context_faithfulness' ? 'model_context' : 'retrieval');
   return metric.id !== 'user_fidelity' || metric.subject !== 'simulator'
     || trial.userMode === 'reactive' && trial.events.some(event => event.type === 'simulator');
 }
@@ -118,11 +125,15 @@ export type JudgeReceipt = z.infer<typeof judgeReceiptSchema>;
 export const assessmentEventContent = (event: TraceEvent): string =>
   event.text !== undefined && [event.tool, event.args, event.result, event.state].every(value => value === undefined) ? event.text
     : JSON.stringify({ text: event.text, tool: event.tool, args: event.args, result: event.result, state: event.state });
-/** Keep RAG diagnosis outside the frozen card: it appears only when the target exposes retrieval evidence. */
-export function assessmentRubrics(scenario: Pick<Scenario, 'metrics'>, trial: Pick<Trial, 'events'>): Rubric[] {
+/**
+ * The rubrics of a judgment: the card's own. Under `ragDiagnostics` — the rule of the judgments that voted on them
+ * (judge.ts JUDGE_PROTOCOL), kept so they verify — the RAG diagnostics were added whenever the target exposed retrieval
+ * evidence. Today they are not added: no view shows them, and they cost six requests per dialogue.
+ */
+export function assessmentRubrics(scenario: Pick<Scenario, 'metrics'>, trial: Pick<Trial, 'events'>, options: { ragDiagnostics?: boolean } = {}): Rubric[] {
   // These IDs are harness-owned diagnostics; a card cannot replace their criteria with a reference answer.
   const metrics = (scenario.metrics ?? []).map(metric => RAG_RUBRICS.find(rubric => rubric.id === metric.id) ?? metric);
-  if (!trial.events.some(event => event.type === 'retrieval')) return metrics;
+  if (!options.ragDiagnostics || !trial.events.some(event => event.type === 'retrieval')) return metrics;
   for (const rubric of RAG_RUBRICS) if (!metrics.some(metric => metric.id === rubric.id)) metrics.push(rubric);
   return metrics;
 }

@@ -5,7 +5,7 @@ import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectionLines, detectProject, evidenceText, targetLabel } from '../src/detect.js';
+import { detectionLines, detectProject, envFileNames, evidenceText, targetLabel } from '../src/detect.js';
 import { xlsxFile } from './helpers/xlsx.js';
 
 /** A temporary project folder with the given files; removed after the test. */
@@ -211,7 +211,7 @@ test('agent-lab detect prints the proposal in plain Russian; --json returns the 
   const lines = text.stdout.split('\n');
   for (const line of [
     'Агент', '  ✓ python agent.py', '      package.json: scripts.start = python agent.py', '      agent.py: читает запросы из stdin построчно и отвечает JSON',
-    '  ? http://localhost:8080/chat — возможно, агент; как он отвечает, не видно',
+    '  ? http://localhost:8080/chat — возможно, агент; подключу по вашему curl-запросу к нему',
     `  ${join('logs', 'support.jsonl')} — 3 разговора, 1 запись не подошла`, `  ${join('data', 'export.json')} — 1 разговор`,
     '  docs — 3 документа', '  knowledge — 1 документ', `  ${join('prompts', 'system.md')} — файл, 21 знак`,
     'Переменные из .env: BOT_TOKEN, OPENAI_API_KEY — значения Lab не читает.',
@@ -299,4 +299,55 @@ test('agent-lab build --prompts-from lists the prompts to pick; --prompt takes e
   assert.match(picked.stderr, /Промпты агента: app\/chains\/answer_chain\.py#SYSTEM_PROMPT\./);
   assert.match(picked.stdout, /Собрать: та же команда с --yes/);
   assert.equal(await exists(join(root, 'ran.txt')), false);
+});
+
+test('a module is the agent only by its contract, and a local address only under a key naming the agent — never a model server\'s', async t => {
+  const root = await project(t, {
+    // A Next.js login keeps a createSession of its own: a user's session, no session that answers.
+    'app/lib/session.ts': "import 'server-only';\nexport async function createSession(userId: string) {\n  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);\n"
+      + "  const sessionId = await db.insert({ userId, expiresAt });\n  cookies().set('session', sessionId, { httpOnly: true });\n}\n",
+    // The contract without Lab's request fields: maybe the agent — the owner says.
+    'bot/agent.mjs': "export function createSession() { return { async respond(message) { return 'Ответ: ' + message; } }; }\n",
+    'config.yaml': ['llm:', '  base_url: http://localhost:11434', 'ollama_url: "http://127.0.0.1:11434/api/chat"', 'lmstudio: http://localhost:1234/v1/chat/completions',
+      'openai_base: http://localhost:8000/v1', 'bot_url: http://localhost:1234/', 'agent_llm: http://localhost:8081/', 'service:', '  url: http://localhost:5432/db',
+      'agent:', '  endpoint: http://localhost:8080/chat # the bot itself', ''].join('\n'),
+    'package.json': JSON.stringify({ name: 'web', proxy: 'http://localhost:3000', scripts: { dev: 'next dev' } }),
+    'settings.json': JSON.stringify({ assistant: { url: 'http://localhost:9000/api/message' }, embeddings: { url: 'http://localhost:9001/embed' }, agent: { model: { url: 'http://localhost:9002/' } } }),
+    'app.toml': '[agent]\nurl = "http://localhost:7000/v1/chat/completions"\n[server]\nagent_url = "http://localhost:7001/hook"\n',
+  });
+  const { agents } = await detectProject(root);
+  assert.deepEqual(agents.map(agent => [agent.target.kind === 'module' ? agent.target.path : agent.target.kind === 'http' ? agent.target.url : agent.target.kind, agent.confidence]), [
+    [join(root, 'bot', 'agent.mjs'), 'medium'],
+    ['http://localhost:7001/hook', 'low'],
+    ['http://localhost:8080/chat', 'low'],
+    ['http://localhost:9000/api/message', 'low'],
+  ]);
+  const lines = detectionLines(await detectProject(root));
+  assert.ok(lines.includes('  ? http://localhost:8080/chat — возможно, агент; подключу по вашему curl-запросу к нему'), lines.join('\n'));
+  assert.ok(!lines.some(line => line.includes('11434') || line.includes('1234') || line.includes('session.ts')), lines.join('\n'));
+});
+
+test('a .env file yields variable names only, whatever its values span: quotes over lines, a key without quotes, escapes, comments', async t => {
+  const pem = ['-----BEGIN PRIVATE KEY-----', 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7', 'TAIL_OF_KEY=abc', 'dGhpcyBpcyBub3QgYSByZWFsIGtleQ==', '-----END PRIVATE KEY-----'];
+  const text = [
+    'OPENAI_API_KEY=sk-live-secret',
+    `PRIVATE_KEY="${pem.join('\n')}"`,
+    `RAW_KEY=${pem.join('\n')}`,
+    "SINGLE='first line",
+    "INNER_NAME=inside single quotes'",
+    'export QUOTED="value with \\" quote and',
+    'NOT_A_NAME=still inside"',
+    '# COMMENTED=x',
+    '  SPACED = value ',
+    '1BAD=x',
+    'bad-name=x',
+    'LAST=1',
+  ].join('\n');
+  const names = ['LAST', 'OPENAI_API_KEY', 'PRIVATE_KEY', 'QUOTED', 'RAW_KEY', 'SINGLE', 'SPACED'];
+  assert.deepEqual(envFileNames(text).sort(), names);
+  const root = await project(t, { '.env': text, '.env.local': 'LOCAL_ONLY="a\nb=c"\n' });
+  const detection = await detectProject(root);
+  assert.deepEqual(detection.env.names, [...names, 'LOCAL_ONLY'].sort());
+  const shown = JSON.stringify(detection) + detectionLines(detection).join('\n');
+  for (const secret of ['MIIEv', 'TAIL_OF_KEY', 'dGhpcy', 'NOT_A_NAME', 'INNER_NAME', 'sk-live']) assert.ok(!shown.includes(secret), secret);
 });

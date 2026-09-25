@@ -14,6 +14,7 @@ import { customerMoves, type CustomerMoves } from './customer-moves.js';
 import type { DialogueNumbers } from './card/view.js';
 import { ruleBar, type RuleBar } from './card/rulebook.js';
 import { judgeCheckSummary, type JudgeCheck, type JudgeCheckSummary } from './judge-check.js';
+import { roleChoices } from './llm/models.js';
 
 export { COUNTING_RULES } from './outcomes.js';
 
@@ -50,6 +51,32 @@ export const NOT_MEASURED_TEXT: Record<NotMeasuredCode, string> = {
   no_evidence: 'в ответе агента нет доказательства',
   judge_unclear: 'правила не дают однозначного ответа',
 };
+
+/** The reasons that name the owner, as a page for someone else says them: about the owner of the agent, never to them. */
+export const NOT_MEASURED_ABOUT_OWNER: Partial<Record<NotMeasuredCode, string>> = {
+  human_invalid: 'владелец агента отметил разговор как негодный',
+  human_unknown: 'владелец агента не смог решить',
+};
+
+/**
+ * On whose side a situation could not be measured, the one table of it: the agent (it did not answer, a stand replied,
+ * its state was not reset), the customer Lab plays (it left the situation, failed, or the conversation outgrew the
+ * limit), or the judge (it failed to answer); null where the reason is the run's, the record's or the owner's own.
+ * Each side asks the owner a different decision (inbox.ts), and a customer's side is a problem of the test (problems.ts).
+ */
+export const NOT_MEASURED_SIDE: Record<NotMeasuredCode, 'agent' | 'client' | 'judge' | null> = {
+  in_progress: null, not_reached: null, stopped: null, attempts_mismatch: null, human_invalid: null, human_unknown: null,
+  agent_error: 'agent', service_reply: 'agent', measurement_error: 'agent', reset_unconfirmed: 'agent',
+  turn_limit: 'client', simulator_error: 'client', simulator_deviated: 'client', simulator_unclear: 'client',
+  judge_error: 'judge', judge_unavailable: 'judge', judge_stopped: 'judge',
+  not_judged: null, judge_split: null, no_evidence: null, judge_unclear: null,
+};
+
+/**
+ * From this share of the counted situations left unmeasured the number is not to be trusted yet, like after a failed
+ * control: it stands on too few of the situations it names, and which ones fell out is not chance.
+ */
+export const UNMEASURED_ALARM = 0.2;
 
 type ExclusionKind = ValidationExclusion['kind'];
 const EXCLUSION_ORDER: ExclusionKind[] = ['unconfirmed', 'customer_data', 'masked', 'length'];
@@ -110,7 +137,16 @@ export interface ResultView {
   headline: { passed: number; decided: number; accuracy: number | null; range: [number, number] | null; smallSample: boolean };
   /** Situations still waiting in a running phase; never part of notMeasured. */
   pending: number;
-  notMeasured: { total: number; reasons: { code: NotMeasuredCode; label: string; count: number; scenarioIds: string[] }[] };
+  notMeasured: {
+    total: number; reasons: { code: NotMeasuredCode; label: string; count: number; scenarioIds: string[] }[];
+    /** The counted situations the share is taken of: decided, not measured and still waiting. */
+    of: number;
+    /**
+     * At least UNMEASURED_ALARM of the counted situations were not measured while some were decided: the number stands on
+     * too few of them to be trusted yet. Every surface raises it above the number, like a failed control.
+     */
+    alarm: boolean;
+  };
   /** The positive controls; `alarm` is set when one failed or could not be measured: then the number is not to be trusted yet. */
   control: { cards: ResultCard[]; alarm: 'failed' | 'unmeasured' | 'failed_or_unmeasured' | null };
   /**
@@ -131,6 +167,8 @@ export interface ResultView {
   failures: FailureExplanation[];
   /** Up to three failure causes, largest first; each names its distinct failed situations and carries one full explanation. */
   topCauses: { name: string; count: number; scenarioIds: string[]; example: FailureExplanation }[];
+  /** Recorded causes of failed situations beyond the three in `topCauses`. */
+  moreCauses: number;
   /** Per-topic rows and the traffic-weighted estimate, when the run's situations come from at least two topics. */
   topics: TopicView | null;
   /** How much of the logs' traffic the counted situations cover: a run of cards sampled from logs whose topics were mapped; null otherwise. */
@@ -143,7 +181,10 @@ export interface ResultView {
   calibration?: CalibrationView;
   /** The judge checked with planted errors and untouched controls (judge-check.ts); absent when this run was never checked. Never changes the headline. */
   judgeCheck?: JudgeCheckSummary;
-  /** The judge is the model that built the situations: the verdicts are not independent of the cards. */
+  /**
+   * The judge is the model that built the situations, so the verdicts are not independent of the cards: read from the
+   * models the judge's receipts recorded, else from the roles the run's settings resolve to (llm/models.ts roleChoices).
+   */
   sameModelJudge?: true;
   /** What the customer Lab played did (customer-moves.ts); absent when no conversation recorded a controlled move. Never changes the headline. */
   customer?: CustomerMoves;
@@ -160,6 +201,11 @@ export interface ResultView {
   scope: { cards: number; synthetic: number; dialogues: number; judgeModel?: string; costUsd: number | null; target: string | null;
     /** Expectations of the counted situations observed on the agent's tool calls; absent when there are none. */
     toolExpectations?: number };
+  /**
+   * What this record's result does not prove (caveats.ts): its typed notes, and the notes a record written before they were
+   * typed keeps; result-text.ts words them for their reader. Never changes the headline.
+   */
+  notes: Pick<Experiment, 'caveats' | 'limitations'>;
   /** Ordered: the recommended step first, then what can always be done with a finished result. */
   next: NextStep[];
 }
@@ -171,10 +217,13 @@ function stabilityOf(input: Experiment, before: Experiment | undefined): Stabili
   return stabilityBetweenRuns(before, input);
 }
 
+/** «Почему ошибается» names this many causes; the rest are only counted. */
+const TOP_CAUSES = 3;
+
 /**
- * The recorded failure clusters, counted in failed headline situations only. The example is the
- * explanation of the first failing cluster attempt whose goal failed (alone or with the rules), or
- * the situation's own one.
+ * The recorded failure clusters that hold a failed headline situation, largest first, counted in those situations
+ * only. The example is the explanation of the first failing cluster attempt whose goal failed (alone or with the
+ * rules), or the situation's own one.
  */
 function causesOf(run: RunDerivation, failures: FailureExplanation[]): ResultView['topCauses'] {
   const { record } = run;
@@ -188,8 +237,7 @@ function causesOf(run: RunDerivation, failures: FailureExplanation[]): ResultVie
     return [{ name: mode.name, count: scenarioIds.length, scenarioIds, example: own ?? failed.get(first.scenarioId)! }];
   })
     // Array.prototype.sort is stable: equal counts keep the recorded cluster order.
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 3);
+    .sort((a, b) => b.count - a.count);
 }
 
 /**
@@ -248,9 +296,11 @@ export function unmeasuredControl(card: Pick<ResultCard, 'outcome' | 'reason'>):
 }
 
 /**
- * The recommended step first — a control alarm, a run still going, the judge's review queue,
- * nothing decided, then fixing the agent when it failed — followed by what a finished result always
- * offers: the customer report and a repeat. A draft that never ran offers nothing.
+ * The recommended step first — a control alarm, a run still going, the reasons of too many unmeasured situations,
+ * the judge's review queue, then fixing the agent when it failed — followed by what a finished result always offers:
+ * a repeat and, while no alarm stands (a control, the unmeasured share, a judge that failed its check), the customer
+ * report. Whenever a situation was not measured, why is always among the steps: first under the alarm, last below it.
+ * A draft that never ran offers nothing.
  */
 function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted: boolean, reviewedTrials: Set<string>): NextStep[] {
   if (notStarted) return [];
@@ -263,12 +313,16 @@ function nextSteps(view: Omit<ResultView, 'next'>, running: boolean, notStarted:
   const passes = unmarked.filter(id => sampledPasses.includes(id)).length;
   // «Не могу сказать» keeps a situation in the queue: it is doubt, not a decision.
   const unsure = marks.filter(mark => !mark.stale && mark.answer === 'unsure' && (queueFailures.includes(mark.trialId) || sampledPasses.includes(mark.trialId))).length;
-  const steps: NextStep[] = [];
-  if (failures + passes + unsure > 0) steps.push({ kind: 'review_judge', failures, passes, unsure });
-  if (!view.headline.decided && view.notMeasured.total) steps.push({ kind: 'why_unmeasured', count: view.notMeasured.total });
-  if (!view.headline.decided) return steps;
+  const { alarm, total } = view.notMeasured;
+  const why: NextStep[] = total ? [{ kind: 'why_unmeasured', count: total }] : [];
+  // Too many situations unmeasured: why is the first thing to read, before any verdict of the judge.
+  const steps: NextStep[] = [...(alarm ? why : []), ...(failures + passes + unsure > 0 ? [{ kind: 'review_judge' as const, failures, passes, unsure }] : [])];
+  const after = alarm ? [] : why;
+  if (!view.headline.decided) return [...steps, ...after];
   const failed = view.headline.decided > view.headline.passed;
-  return [...steps, ...(failed ? [{ kind: 'repeat' } as const, { kind: 'report' } as const] : [{ kind: 'report' } as const, { kind: 'repeat' } as const])];
+  // A report is offered only for a number that can be trusted.
+  const report: NextStep[] = alarm || view.judgeCheck?.distrust ? [] : [{ kind: 'report' }];
+  return [...steps, ...(failed ? [{ kind: 'repeat' } as const, ...report] : [...report, { kind: 'repeat' } as const]), ...after];
 }
 
 /** Clear and vague requests apart, over the counted situations whose card is in the run's library. */
@@ -299,7 +353,9 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     goal: item.goal, rules: item.rules, parts: item.parts, control: item.control, flaky: item.flaky, unstable: unstableIds.has(item.scenario.id), provenance: item.scenario.provenance,
   }));
   const counted = cards.filter(card => !card.control);
-  const countingRules = [...new Set(run.situations.filter(item => !item.control)
+  // A situation without an attempt is counted by no rule yet; only when nothing has run do the rules it will be counted by stand in.
+  const ruled = run.situations.filter(item => !item.control);
+  const countingRules = [...new Set((ruled.some(item => item.attempts.length) ? ruled.filter(item => item.attempts.length) : ruled)
     .map(item => countingRuleOf(item.scenario, headlineRule(item.scenario, item.attempts.map(attempt => attempt.trial)))))].join(', ') || COUNTING_RULES;
   const failures = counted.filter(card => card.outcome === 'fail')
     .flatMap(card => failureExplanation(record, run.situation(card.scenarioId)!.scenario) ?? []);
@@ -307,7 +363,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const decided = passed + counted.filter(card => card.outcome === 'fail').length;
   const accuracy = decided ? passed / decided : null;
   // A draft that never ran has nothing pending and nothing unmeasured yet; its cards keep their reason.
-  const notStarted = !record.trials.length && (record.phase === 'preparing' || record.phase === 'review');
+  const notStarted = !record.trials.length && (record.phase === 'preparing' || record.phase === 'checking' || record.phase === 'review');
   const reasons = notStarted ? [] : NOT_MEASURED_CODES.filter(code => code !== 'in_progress').map(code => {
     const scenarioIds = counted.filter(card => card.outcome === 'unknown' && card.reason === code).map(card => card.scenarioId);
     return { code, label: NOT_MEASURED_TEXT[code], count: scenarioIds.length, scenarioIds };
@@ -325,15 +381,18 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
     const rule = headlineRule(item.scenario, item.attempts.map(attempt => attempt.trial));
     return n + (rule.kind === 'expectations' ? rule.expectations.filter(expectation => expectation.observation === 'tool').length : 0);
   }, 0);
+  const unmeasured = reasons.reduce((n, reason) => n + reason.count, 0);
+  const causes = causesOf(run, failures);
   const view: Omit<ResultView, 'next'> = {
     runId: record.id, phase: record.phase, mode: record.mode, createdAt: record.createdAt, countingRules,
     headline: { passed, decided, accuracy, range: wilson(passed, decided), smallSample: decided > 0 && decided < SMALL_SAMPLE },
     pending: notStarted ? 0 : counted.filter(card => card.reason === 'in_progress').length,
-    notMeasured: { total: reasons.reduce((n, reason) => n + reason.count, 0), reasons },
+    notMeasured: { total: unmeasured, reasons, of: counted.length,
+      alarm: decided > 0 && unmeasured > 0 && unmeasured >= UNMEASURED_ALARM * counted.length },
     control: { cards: controls, alarm },
     breakdown: breakdownOf(run, counted),
     coverage: { examined: record.dialogues.length + exclusions.length, included: record.dialogues.length, excluded: exclusionCounts(exclusions) },
-    cards, failures, topCauses: causesOf(run, failures),
+    cards, failures, topCauses: causes.slice(0, TOP_CAUSES), moreCauses: Math.max(0, causes.length - TOP_CAUSES),
     topics: topicView(record, cards), topicCoverage: trafficCoverage(record, cards),
     agreement: judgeAgreement(input),
     reviewed: { situations: reviewed.situations, contradicted: reviewed.contradicted },
@@ -348,18 +407,35 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
       target: record.targetVersion ?? record.targetRelease ?? null,
       ...(toolExpectations ? { toolExpectations } : {}),
     },
+    notes: { ...(record.caveats ? { caveats: structuredClone(record.caveats) } : {}), limitations: [...record.limitations] },
     ...(stability ? { stability } : {}),
   };
   const clarity = clarityOf(record, counted);
   if (clarity) view.clarity = clarity;
   const calibration = buildCalibration(run, options.numbers ? { numbers: options.numbers } : {});
+  if (calibration) view.calibration = calibration;
   const customer = customerMoves(run);
+  if (customer) view.customer = customer;
   const judgeCheck = judgeCheckSummary(options.judgeCheck, record);
-  // Use the same role precedence as the runtime; older records without a judge setting make no claim.
-  const judgeSetting = record.settings?.roles?.judge ?? record.settings?.judge;
-  const builder = record.settings?.roles?.builder ?? { provider: record.settings?.provider, model: record.settings?.model };
-  if (judgeSetting && record.trials.length && builder.provider === judgeSetting.provider && builder.model === judgeSetting.model) view.sameModelJudge = true;
-  return { ...view, ...(calibration ? { calibration } : {}), ...(judgeCheck ? { judgeCheck } : {}), ...(customer ? { customer } : {}), next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+  if (judgeCheck) view.judgeCheck = judgeCheck;
+  if (judgedByBuilder(record)) view.sameModelJudge = true;
+  return { ...view, next: nextSteps(view, isRunning(record.phase), notStarted, reviewed.trialIds) };
+}
+
+/**
+ * Whether the model that built the situations judged them: the models the judge's receipts (or older full audits)
+ * recorded when there are any, else the judge the run's settings resolve to. A teaching run calls no model, and a
+ * record that names no builder model claims nothing.
+ */
+function judgedByBuilder(record: Experiment): boolean {
+  if (record.mode === 'demo' || !record.trials.length || !record.settings) return false;
+  const { builder, judge } = roleChoices(record.settings);
+  if (!builder.provider || !builder.model) return false;
+  const recorded = record.trials.flatMap(trial => {
+    const judged = trial.judgeReceipt ?? trial.judgeAudit;
+    return judged ? [{ provider: judged.provider, model: judged.model }] : [];
+  });
+  return (recorded.length ? recorded : [judge]).some(choice => choice.provider === builder.provider && choice.model === builder.model);
 }
 
 /**

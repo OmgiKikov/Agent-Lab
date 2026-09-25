@@ -54,13 +54,19 @@ export const turnSchema = z.strictObject({
   source: z.discriminatedUnion('kind', [dialogueSource, ownerSource]),
 });
 
+/** An agent's tool as its connection names it: the probe's tool list (contracts.ts ToolChannel) and a trace event's `tool`. */
+export const toolNameSchema = z.string().min(1).max(200);
+
 export const expectationSchema = z.strictObject({
   id,                                                     // e1…e3
   text: text(300),                                        // an infinitive: «объяснить, где найти номер терминала»
   requirementIds: z.array(id).min(1).max(3),              // the quote is requirement.quote, drawn by the harness
   appliesWhen: text(300).optional(),                      // only for a duty that depends on the agent's path
   observation: z.enum(['reply', 'tool', 'state']),        // tool/state only where the connection confirmed it
-});
+  // A duty observed on the tools: the tool whose result proves it (card/expectations.ts). Absent — any tool's result,
+  // as on every card before it.
+  tool: toolNameSchema.optional(),
+}).refine(expectation => expectation.tool === undefined || expectation.observation === 'tool', 'Only a duty observed on the tools names a tool');
 
 /** The one difference of a similar card from its parent. */
 const similarChangeSchema = z.discriminatedUnion('kind', [
@@ -92,8 +98,11 @@ export const fillKindSchema = z.enum(['count', 'amount', 'date', 'time', 'name',
  * A value Lab wrote in where the de-identified log had a mark («#», «*», «<PHONE>»): the `span`-th mark (from 0) of the
  * message `event`, the mark as it stood and the plausible value in its place. The log keeps the mark; the card's opening,
  * turn and facts read the message with the value, and the brief says so («подставлено вместо обезличенного»).
+ * `maskVersion` is the table of marks `span` counts by (masking.ts): a table reads a message's marks anew, so the fill is
+ * always read by its own (card/checks.ts filledSpan). Absent on every fill written before the table: version 1.
  */
-const filledSchema = z.strictObject({ event: eventRefSchema, span: z.number().int().nonnegative(), mark: text(60), kind: fillKindSchema, value: text(80) });
+const filledSchema = z.strictObject({ event: eventRefSchema, span: z.number().int().nonnegative(), mark: text(60), kind: fillKindSchema, value: text(80),
+  maskVersion: z.literal(2).optional() });
 export type Filled = z.infer<typeof filledSchema>;
 
 export const cardSchema = z.strictObject({
@@ -117,6 +126,7 @@ export const cardSchema = z.strictObject({
   revision: z.number().int().positive(),
   // The customer cannot say what is wrong («не работает»): the card tests that the agent clarifies instead of guessing, and
   // the result counts such situations apart. Absent on a card whose customer states the request, as on every card before it.
+  // The reviewer checks the mark as a claim of its own (card/review.ts); the owner sees it and changes it (`edit_client`).
   clarity: z.literal('vague').optional(),
   // Values Lab wrote over the log's masking marks; absent on a card whose messages had none, as on every card before it.
   filled: z.array(filledSchema).min(1).max(40).optional(),
@@ -148,7 +158,9 @@ const removeFact = z.strictObject({ kind: z.literal('remove_fact'), cardId: id, 
 const editExpectation = z.strictObject({ kind: z.literal('edit_expectation'), cardId: id, expectationId: id, text: text(300).optional(),
   requirementIds: z.array(id).min(1).max(3).optional(), appliesWhen: text(300).nullable().optional() });
 const removeExpectation = z.strictObject({ kind: z.literal('remove_expectation'), cardId: id, expectationId: id });
-const editClient = z.strictObject({ kind: z.literal('edit_client'), cardId: id, wants: text(300).optional(), writes: text(3000).optional(), leaves: text(300).optional() });
+// `clarity`: whether the customer states their request — the owner's decision about the customer, beside the words.
+const editClient = z.strictObject({ kind: z.literal('edit_client'), cardId: id, wants: text(300).optional(), writes: text(3000).optional(), leaves: text(300).optional(),
+  clarity: z.enum(['clear', 'vague']).optional() });
 // `event` present: the turn is that later message of the source dialogue, `says` its exact text; absent: the owner's words. null removes it.
 // The card's whole list of references as it will be; an empty list removes them.
 const setReferences = z.strictObject({ kind: z.literal('set_references'), cardId: id, references: referencesSchema });
@@ -168,7 +180,8 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
   setFactDisclosure, setFact, removeFact, editExpectation, removeExpectation, editClient, setTurn, setReferences,
   // A series of changes of one card, confirmed and recorded once.
   z.strictObject({ kind: z.literal('edit_card'), cardId: id, changes: z.array(cardChangeSchema).min(1).max(12) }),
-  // Lab's plausible values over the log's masking marks (card/unmask.ts): the marks of the card's messages, and the facts whose value was a mark.
+  // Lab's plausible values over the log's masking marks (card/unmask.ts): the marks of the card's messages, each counted
+  // by its `maskVersion` as the card's fill records it, and the facts whose value was a mark.
   z.strictObject({ kind: z.literal('fill_masked'), cardId: id,
     spans: z.array(filledSchema.omit({ mark: true })).max(40), facts: z.array(z.strictObject({ factId: id, value: text(120) })).max(8) })
     .refine(command => command.spans.length + command.facts.length > 0, 'Nothing to fill'),
@@ -186,11 +199,16 @@ export const cardCommandSchema = z.discriminatedUnion('kind', [
 ]);
 export type CardCommand = z.infer<typeof cardCommandSchema>;
 
-/** The reviewer's answer on one semantic claim, addressed by content: key = digest(kind, subject, basisHash). */
+/**
+ * The reviewer's answer on one semantic claim, addressed by content: key = digest(kind, subject, basisHash). `clarity` is
+ * asked only of a card marked vague. `message`: the later customer message (its index) a doubt about the account is
+ * about, when the reviewer named one; absent on every receipt before it.
+ */
 const claimReceiptSchema = z.strictObject({
-  key: hash, kind: z.enum(['goal', 'fact', 'expectation', 'coverage', 'leak']), subject: z.string().max(20),
+  key: hash, kind: z.enum(['goal', 'fact', 'expectation', 'coverage', 'leak', 'clarity']), subject: z.string().max(20),
   basisHash: hash, status: z.enum(['ready', 'needs_owner', 'blocked']), reason: text(240),
   reviewer: z.strictObject({ protocol: z.literal('card-review-v1'), model: text(200) }),
+  message: z.number().int().nonnegative().optional(),
 });
 export type ClaimReceipt = z.infer<typeof claimReceiptSchema>;
 
@@ -253,7 +271,12 @@ const cardPreparationSchema = z.strictObject({
   protocol: z.enum(['cards-v1', 'cards-v2']),
   /** What the plan was made from: a resume on changed inputs is refused. */
   inputHash: hash,
-  status: z.enum(['preparing', 'complete', 'partial', 'cancelled']),
+  /**
+   * Retired: the word an earlier Lab wrote for how a launch ended — preparing, complete, partial, or cancelled, which it
+   * also wrote for a stop by the budget. Nothing reads it: what is left to prepare is `pending`, and how the work ended
+   * is the record's phase. Checkpoints that carry it still parse; a preparation this Lab continues drops it.
+   */
+  status: z.unknown().optional(),
   pending: ids(300), processed: ids(300),
   excluded: z.array(z.strictObject({ dialogueId: text(200), reason: text(2000) })).max(300),
   /** `cards-v1`: the whole policy was grounded in one call (a knowledge base small enough to read at once). */
@@ -282,7 +305,15 @@ const cardPreparationSchema = z.strictObject({
    * check of a card no unit names.
    */
   active: z.array(z.strictObject({ dialogueId: id.optional(), stage: preparationStageSchema })).min(1).max(MAX_PREPARATION_PARALLEL).optional(),
+  /** The time the preparation took, its creation and every resume together. */
   elapsedMs: z.number().int().nonnegative().optional(),
+  /**
+   * The model calls the preparation may make over its creation and every resume: the ceiling the owner agreed to, or
+   * raised it to when continuing. Checkpoints written before it existed lack it, and a resume reads the draft's limit.
+   */
+  callCeiling: z.number().int().nonnegative().optional(),
+  /** The model calls the preparation made, its creation and every resume together; lacking in older checkpoints. */
+  spentCalls: z.number().int().nonnegative().optional(),
   /** Proposal calls spent per unit, repairs included; the allowance survives a resume. */
   generationAttempts: z.array(z.strictObject({ dialogueId: id, calls: z.number().int().nonnegative() })).max(300).optional(),
   /** A large knowledge base: the articles chosen for each dialogue from the table of contents. */

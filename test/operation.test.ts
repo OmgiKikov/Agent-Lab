@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { Experiment } from '../src/contracts.js';
 import { createDemoRuntime, demoInput } from '../src/demo.js';
 import { ExperimentLab } from '../src/experiment.js';
-import { isRunning, moveTo, PHASE_TABLE, PHASES, stoppedPhase, type Phase } from '../src/phases.js';
+import { isRunning, moveTo, PHASE_TABLE, PHASES, restartAt, stopAt, stoppedPhase, type Phase } from '../src/phases.js';
 import { draftHash } from '../src/lab/record.js';
 import { ExperimentStore } from '../src/store.js';
 import { acceptedDemoDraft } from './helpers/demo-record.js';
@@ -77,8 +77,9 @@ test('a reader hears a record the writer saves without asking the disk again', {
 
 test('every phase has its rule; a move the table does not hold is refused and the record stays where it was', () => {
   assert.deepEqual(Object.keys(PHASE_TABLE).sort(), [...PHASES].sort());
-  assert.deepEqual(PHASES.filter(isRunning), ['preparing', 'evaluating', 'baseline', 'improving', 'control']);
+  assert.deepEqual(PHASES.filter(isRunning), ['preparing', 'checking', 'evaluating', 'baseline', 'improving', 'control']);
   assert.deepEqual(PHASES.filter(phase => !PHASE_TABLE[phase].next.length), ['cancelled', 'error'], 'a stopped or failed record is final: a repeat is a new record');
+  assert.deepEqual(PHASES.filter(phase => !!PHASE_TABLE[phase].stopped || !!PHASE_TABLE[phase].restart), PHASES.filter(isRunning), 'only work that is running is cut short or restarted');
   const record: { phase: Phase } = { phase: 'review' };
   moveTo(record, 'evaluating');
   assert.throws(() => moveTo(record, 'complete'), /не предусмотрен/);
@@ -86,6 +87,12 @@ test('every phase has its rule; a move the table does not hold is refused and th
   moveTo(record, 'results_review'); moveTo(record, 'complete'); moveTo(record, 'results_review');
   assert.equal(record.phase, 'results_review', 'a person\'s verdict reopens a completed review');
   const cut = (phase: Phase, stop: 'cancelled' | 'failed', librarySnapshot?: Experiment['librarySnapshot']) => stoppedPhase({ phase, ...(librarySnapshot ? { librarySnapshot } : {}) }, stop);
-  assert.deepEqual([cut('preparing', 'failed', {} as Experiment['librarySnapshot']), cut('preparing', 'cancelled'), cut('evaluating', 'failed'), cut('results_review', 'failed')],
-    ['review', 'cancelled', 'error', 'error'], 'a preparation keeps what it saved; a stop is a cancel; anything else an error, even while the last checkpoint was written');
+  assert.deepEqual([cut('preparing', 'failed', {} as Experiment['librarySnapshot']), cut('preparing', 'cancelled'), cut('evaluating', 'failed'), cut('checking', 'cancelled'), cut('checking', 'failed')],
+    ['review', 'cancelled', 'error', 'review', 'review'], 'a preparation keeps what it saved; a check always gives the draft back; a stop is a cancel; anything else an error');
+  assert.equal(cut('results_review', 'failed'), undefined, 'a finished record has no stop to take');
+  const finished: { phase: Phase } = { phase: 'review' };
+  assert.throws(() => stopAt(finished, 'cancelled'), /не предусмотрен/, 'a stop that arrives after the work moved its record on is a defect, never a saved state');
+  assert.equal(finished.phase, 'review');
+  assert.deepEqual((['preparing', 'checking', 'evaluating', 'review', 'complete'] as const).map(phase => restartAt({ phase })), ['interrupted', 'review', 'interrupted', 'review', 'complete'],
+    'a restart gives a draft cut short in its check back to the owner, marks other running work interrupted, and leaves the rest as it was');
 });

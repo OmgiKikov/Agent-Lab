@@ -50,16 +50,15 @@ function plausibleDraft() {
 const context = (evidence: CommandContext['evidence']): CommandContext => ({ evidence, maxTurns: 6, via: 'pi-confirm', at: '2026-09-24T11:00:00.000Z' });
 const plausibleOf = (card: Card) => card.client.knows.filter(fact => fact.source.kind === 'plausible');
 
-test('a proposal binds its plausible facts after the logged ones: named on request, vouched by no message, and the same answer without them is the same card', () => {
+test('a proposal binds its plausible facts after the logged ones: named on request, vouched by no message; the card\'s id digests the source and the answer', () => {
   const { library } = plausibleDraft();
   const late = library.cards[0]!;
   assert.deepEqual(late.client.knows.map(fact => [fact.id, fact.label, fact.disclosure, fact.source.kind]),
     [['f1', 'Номер терминала', 'on_request', 'dialogue'], ['f2', 'Тип оборудования', 'on_request', 'plausible']]);
   const dialogue = importBatch(dialogues).dialogues[0]!;
   const call = proposalCall({ source: { kind: 'dialogue', batchId: importBatch(dialogues).id, dialogueId: dialogue.id }, messages: loggedMessages(dialogue), sources: [{ id: 'source-1', name: 'Правила возвратов', content: policy }], maxTurns: 6 });
-  const { plausibleKnows: _none, clarity: _clear, ...earlier } = proposals.late;
-  assert.equal(bindProposal(proposals.late, call, 1).id, `card_${fingerprint({ source: call.source, proposal: earlier })}`,
-    'a card with no plausible facts and a clear request keeps the id its answer had before those fields existed');
+  assert.equal(bindProposal(proposals.late, call, 1).id, `card_${fingerprint({ source: call.source, proposal: proposals.late })}`,
+    'the whole answer: a card is bound once and keeps its id, so nothing derives it again and no older answer needs to read the same');
   assert.equal(cardProposalProblem({ ...proposals.late, plausibleKnows: [EQUIPMENT] }, call), undefined, 'a quality from a small closed set binds');
 });
 

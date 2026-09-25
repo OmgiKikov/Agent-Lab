@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { VERSION, emptyUsage, fingerprint, materialSources, type CreateInput, type Experiment, type Revision } from '../contracts.js';
 import { withDefaultGoalObservation } from '../normalize.js';
 import { evaluatorVersion } from '../pi.js';
+import type { Budget } from './operation.js';
 
 /*
  * A record's identity and how records are made: the three hashes a record is sealed by, a new draft from the owner's
@@ -33,11 +34,24 @@ export function resultHash(record: Experiment): string {
  * old hash.
  */
 export function measurementHash(record: Experiment): string {
-  return fingerprint({ version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
+  return fingerprint(measurementFields(record));
+}
+/** What measurementHash seals, field by field: a run's guard checks its large parts apart from the rest (lab/run.ts). */
+export function measurementFields(record: Experiment): Record<string, unknown> {
+  return { version: VERSION, workflow: record.workflow, task: record.task, baseline: record.revisions[0], mode: record.mode, sources: record.sources, requirements: record.requirements, scenarios: record.scenarios, settings: record.settings,
     target: record.target, goldenCases: record.goldenCases, dialogues: record.dialogues, profiles: record.profiles, notes: record.notes,
     positiveControlScenarioIds: record.positiveControlScenarioIds,
     librarySnapshot: record.librarySnapshot, originalImport: record.originalImport, generatorConfig:record.generatorConfig,generatorIdentity:record.generatorIdentity,
-    targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion });
+    targetVersion: record.targetVersion, targetFingerprint: record.targetFingerprint, evaluatorVersion: record.evaluatorVersion };
+}
+
+/**
+ * What one operation on a draft other than its preparation may spend — a run, a check, a fill, a re-assessment: the
+ * draft's limits, counted from that operation's start, never from what earlier work on the record spent. A preparation
+ * spends out of the ceiling its consent stated instead (card/budget.ts).
+ */
+export function draftBudget(record: Pick<Experiment, 'settings'>): Budget {
+  return { calls: record.settings.maxCalls, timeMs: record.settings.maxDurationMs };
 }
 
 /** The agent label a draft evaluates, identified by its content. */
@@ -68,8 +82,8 @@ export function newRecord(input: CreateInput): Experiment {
     target: input.target, goldenCases: [], dialogues: input.dialogues, profiles: [], notes: '',
     evaluatorVersion: evaluatorVersion(input.settings),
     ...(input.targetVersion ? { targetVersion: input.targetVersion } : {}),
-    // Only what is particular to this record: what every run's number does not prove is said by its trust line.
-    limitations: input.mode === 'demo' ? ['Учебный пример: пользователь, судья и подготовка — детерминированные заготовки без модели; это не измерение качества модели.'] : [],
+    // Only what is particular to this record, typed (caveats.ts): what every run's number does not prove is said by its trust line.
+    limitations: [], ...(input.mode === 'demo' ? { caveats: [{ code: 'demo' as const }] } : {}),
   };
 }
 
@@ -102,7 +116,10 @@ export function freshDraft(previous: Experiment, scenarioIds?: string[]): Experi
   delete record.targetRelease; delete record.assessmentOf; delete record.assessmentTrialIds; delete record.evidenceHash; delete record.releaseLog; delete record.calibration;
   retainAcceptedTests(record);
   record.evaluatorVersion = evaluatorVersion(record.settings);
-  record.limitations = previous.limitations.filter(note => !note.startsWith('Scripted mode skipped') && !note.startsWith('Не удалось назвать типы провалов:')
-    && !note.startsWith('Внешнее состояние карточек не подтверждено'));
+  // Every note is about the work done on the earlier record — its run, its review, its re-assessment, its usage — and
+  // none of it is this draft's; only the teaching example stays what it is.
+  record.limitations = [];
+  delete record.caveats;
+  if (record.mode === 'demo') record.caveats = [{ code: 'demo' }];
   return record;
 }

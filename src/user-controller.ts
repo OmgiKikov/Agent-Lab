@@ -19,10 +19,16 @@ export const userViewSchema = z.strictObject({
   missing: z.array(z.string()).max(20), persona: z.string().optional(),
 });
 export type UserView = z.infer<typeof userViewSchema>;
-interface UserState { policy: BehaviorPolicy; facts: UserView['facts']; position: string; counts: Record<string, number>; followUps: number; changed: string[] }
+/** `limit` is the most follow-ups this customer may write: its policy's own, or fewer when the run's messages end sooner. */
+interface UserState { policy: BehaviorPolicy; facts: UserView['facts']; position: string; counts: Record<string, number>; followUps: number; limit: number; changed: string[] }
 export type AllowedUserAction = BehaviorPolicy['actions'][number] & { to: string; when: string };
 
-export function createUserState(policy: BehaviorPolicy, facts: UserView['facts']): UserState {
+/**
+ * The customer at the start of a dialogue. `maxTurns` is the run's limit on the customer's messages, the opening
+ * included: the customer never plans a follow-up past the messages left after the opening, whatever its policy
+ * allows, so its move after the last message the run allows is a way out, never a message that cannot be delivered.
+ */
+export function createUserState(policy: BehaviorPolicy, facts: UserView['facts'], maxTurns?: number): UserState {
   const parsed = behaviorPolicySchema.parse(policy);
   if (!parsed.states.includes(parsed.initialState) || parsed.terminalStates.some(s => !parsed.states.includes(s))) throw new Error('Симулятор: неизвестное состояние политики');
   if (new Set(parsed.actions.map(a => a.id)).size !== parsed.actions.length || new Set(facts.map(f => f.id)).size !== facts.length) throw new Error('Симулятор: повтор идентификатора');
@@ -40,14 +46,15 @@ export function createUserState(policy: BehaviorPolicy, facts: UserView['facts']
     if (edges.has(key)) throw new Error('Симулятор: неоднозначный переход'); edges.add(key);
     if (a.kind === 'finish' && !parsed.terminalStates.includes(t.to)) throw new Error('Симулятор: finish должен завершать диалог');
   }
-  return { policy: structuredClone(parsed), facts: structuredClone(facts), position: parsed.initialState, counts: {}, followUps: 0, changed: [] };
+  const limit = maxTurns === undefined ? parsed.maxFollowUps : Math.max(0, Math.min(parsed.maxFollowUps, maxTurns - 1));
+  return { policy: structuredClone(parsed), facts: structuredClone(facts), position: parsed.initialState, counts: {}, followUps: 0, limit, changed: [] };
 }
 
 function candidates(state: UserState): AllowedUserAction[] {
   if (state.policy.terminalStates.includes(state.position)) return [];
   return state.policy.transitions.filter(t => t.from === state.position).flatMap(t => {
     const a = state.policy.actions.find(a => a.id === t.actionId)!;
-    if ((state.counts[a.id] ?? 0) >= state.policy.repetitionLimit || (a.kind !== 'finish' && state.followUps >= state.policy.maxFollowUps)) return [];
+    if ((state.counts[a.id] ?? 0) >= state.policy.repetitionLimit || (a.kind !== 'finish' && state.followUps >= state.limit)) return [];
     return [{ ...a, to: t.to, when: t.when }];
   });
 }

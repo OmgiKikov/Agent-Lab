@@ -2,33 +2,35 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
+import { calibrationConsent } from '../src/card/calibrate.js';
 import type { CardCommand } from '../src/card/schema.js';
 import { cardStatuses } from '../src/card/status.js';
 import { shownRulebook } from '../src/card/rulebook.js';
 import { convertible } from '../src/card/legacy-v1.js';
-import { pendingReviewCalls } from '../src/card/prepare.js';
+import { checkCalls } from '../src/card/check-calls.js';
 import { situationViews, type SituationAction, type SituationView } from '../src/card/view.js';
 import { isRunning } from '../src/phases.js';
 import { demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
+import type { Experiment } from '../src/contracts.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { decisions, type DecisionChoice } from '../src/inbox.js';
 import { situationCoverage } from '../src/miner/cards.js';
 import { recurringProblems } from '../src/problems.js';
-import { accuracyParts } from '../src/result-text.js';
+import { accuracyParts, loggedTurns, type Turn } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { plannedTrials } from '../src/run.js';
 import { agentSpaces, type AgentSpace } from '../src/workspace.js';
-import { safeText } from '../src/text.js';
-import { progressText, scenarioPlan } from './conversation.ts';
+import { safeLine, safeText } from '../src/text.js';
+import { launchLines, progressText, scenarioPlan } from './conversation.ts';
 import { applyRulebookChange, applySituationCommand, logsOf, settle, writer, type DecisionSurface } from './decisions.ts';
 import type { LabHost } from './host.ts';
-import { recordMark } from './judge-review.ts';
+import { recordLogMark, recordMark } from './judge-review.ts';
 import { ask, boardDiscussionContext, inputError, requireInteractive } from './lab-ui.ts';
 import { cardPlan, launchRun } from './launch.ts';
 import type { SessionOperation } from './operations.ts';
 import { newState, showWorkspace, type WorkspaceAction, type WorkspaceChanges, type WorkspaceState, type WorkspaceView } from './workspace.ts';
-import type { SpaceData } from './workspace-screens.ts';
+import { logKey, type SpaceData, type WorkKind } from './workspace-screens.ts';
 
 /*
  * /agent-lab: the loop that loads the agent's workspace from the store, shows it, takes the owner's action and does
@@ -40,10 +42,14 @@ import type { SpaceData } from './workspace-screens.ts';
 const WHEN = { 'сразу': 'initial', 'если спросят': 'on_request', 'не знает': 'unknown' } as const;
 const WHEN_CHOICES = ['сразу', 'если спросят', 'не знает'] as const;
 
-/** One field of a situation the owner rewrites in their own words, in a native editor. */
+/**
+ * One field of a situation the owner rewrites in their own words, in a native editor. The field comes from the record:
+ * it is shown escaped, and only what the owner changed in what they were shown counts as a change.
+ */
 async function ownWords(ctx: ExtensionCommandContext, title: string, current: string): Promise<string | undefined> {
-  const text = (await ctx.ui.editor(title, current))?.trim();
-  return text && text !== current ? text : undefined;
+  const shown = safeText(current);
+  const text = (await ctx.ui.editor(safeLine(title), shown))?.trim();
+  return text && text !== shown.trim() ? text : undefined;
 }
 
 /**
@@ -60,7 +66,8 @@ async function editCommand(ctx: ExtensionCommandContext, view: SituationView): P
   if (picked === menu[1]) return client('wants', 'Чего хочет клиент', brief.wants);
   if (picked === menu[4]) return client('leaves', 'Когда клиент уходит', brief.leaves ?? '');
   if (picked === menu[3]) {
-    const duties = brief.must.map((duty, index) => `${index + 1}  ${duty.text}`);
+    // A duty's words come from the record: every option crosses the terminal boundary, and the pick is matched as shown.
+    const duties = brief.must.map((duty, index) => safeLine(`${index + 1}  ${duty.text}`));
     const index = duties.length === 1 ? 0 : duties.indexOf(await ctx.ui.select('Какое ожидание изменить?', duties) ?? '');
     const expectationId = view.refs.must[index];
     if (index < 0 || !expectationId) return undefined;
@@ -68,7 +75,7 @@ async function editCommand(ctx: ExtensionCommandContext, view: SituationView): P
     return text === undefined ? undefined : { command: { kind: 'edit_expectation', cardId: view.id, expectationId, text }, words: text };
   }
   if (picked !== menu[2]) return undefined;
-  const facts = brief.knows.flatMap((fact, index) => view.refs.knows[index] ? [{ id: view.refs.knows[index]!, label: `${fact.what} — ${fact.when}` }] : []);
+  const facts = brief.knows.flatMap((fact, index) => view.refs.knows[index] ? [{ id: view.refs.knows[index]!, label: safeLine(`${fact.what} — ${fact.when}`) }] : []);
   const add = 'Добавить факт';
   const factPick = await ctx.ui.select('Какой факт?', [...facts.map(fact => fact.label), add]);
   if (factPick === add) {
@@ -93,8 +100,8 @@ async function situationCommand(ctx: ExtensionCommandContext, action: SituationA
     const { choice } = action;
     const question = view.question;
     if (!question?.id) return undefined;
-    const text = choice.needsText ? (await ctx.ui.editor(`${choice.label} — своими словами`, choice.command.kind === 'edit_client' ? choice.command.wants ?? choice.command.writes ?? ''
-      : choice.command.kind === 'edit_expectation' ? choice.command.text ?? '' : ''))?.trim() : undefined;
+    const text = choice.needsText ? (await ctx.ui.editor(safeLine(`${choice.label} — своими словами`), safeText(choice.command.kind === 'edit_client' ? choice.command.wants ?? choice.command.writes ?? ''
+      : choice.command.kind === 'edit_expectation' ? choice.command.text ?? '' : '')))?.trim() : undefined;
     if (choice.needsText && !text) return undefined;
     return { command: { kind: 'answer_question', cardId: view.id, questionId: question.id, choice: choice.id, ...(text ? { text } : {}) }, ...(text ? { words: text } : {}) };
   }
@@ -105,9 +112,35 @@ async function situationCommand(ctx: ExtensionCommandContext, action: SituationA
   return action.kind === 'edit' ? editCommand(ctx, view) : undefined;
 }
 
-/** What the workspace shows about one agent, read from the store now. */
-async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionOperation | undefined, now: Date): Promise<SpaceData> {
+/**
+ * What long work a record is under: this session's own work by the kind it was started as; another process's by the
+ * record — a check has a phase of its own (phases.ts), and an earlier Lab checked a draft in its preparing phase: one
+ * that already holds its situations and has nothing left to prepare from.
+ */
+function workKind(record: Experiment, job: SessionOperation | undefined): WorkKind {
+  if (job?.id === record.id) return job.kind === 'assessment' ? 'check' : job.kind;
+  if (record.phase === 'checking') return 'check';
+  if (record.phase !== 'preparing') return 'run';
+  return record.librarySnapshot && !record.preparationProgress?.pending.length ? 'check' : 'preparation';
+}
+
+/** The progress row of the work on `active`: its line and how far it got — a check does not know how far, so it draws no bar. */
+function workProgress(active: Experiment, kind: WorkKind, now: Date): { text: string; share: number | null } {
+  if (kind === 'check') return { text: 'Проверяю изменённые ситуации', share: null };
+  const prepared = active.preparationProgress;
+  const planned = plannedTrials(active);
+  const share = kind === 'preparation' ? prepared ? (prepared.processed.length + prepared.excluded.length) / Math.max(1, prepared.processed.length + prepared.excluded.length + prepared.pending.length) : 0
+    : planned ? active.trials.length / planned : 0;
+  return { text: progressText(active, now.getTime()), share };
+}
+
+/** Said on the plan of a draft whose agent is not connected yet: how the run will reach it. */
+const UNCONNECTED_NOTE = 'Как его запускать, Lab найдёт в папке проекта или спросит вас перед запуском.';
+
+/** What the workspace shows about one agent, read from the store now; `cwd` names the agent the way the run dialog will. */
+async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionOperation | undefined, now: Date, cwd?: string): Promise<SpaceData> {
   const setRecord = space.draft ?? space.runs[0];
+  const active = space.active;
   let set: SpaceData['set'];
   let pendingCalls = 0;
   if (setRecord) {
@@ -118,27 +151,47 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     // A card set can always be worked on: a finished run's situations are changed in a fresh draft of the same set.
     const editable = !!context && !isRunning(setRecord.phase);
     const coverage = context ? situationCoverage(context.library, cardStatuses({ library: context.library, evidence: context.evidence, maxTurns })) : undefined;
-    if (context && editable && setRecord.phase === 'review' && !setRecord.trials.length) pendingCalls = pendingReviewCalls(context.library, context.evidence);
+    if (context && editable && setRecord.phase === 'review' && !setRecord.trials.length) pendingCalls = checkCalls(context.experiment, context.library, context.evidence);
     const rulebook = context && shownRulebook(context.library);
+    const cards = !!context && !context.library.acceptance;
+    const plan = cards ? cardPlan(setRecord, views) : scenarioPlan(setRecord);
+    // The plan is said in the run dialog's own words (launch.ts reads the same lines): the owner reads one description of it.
+    const ready = views.filter(view => view.status === 'ready').map(view => view.id);
+    const calibration = !active && plan.situations ? await calibrationConsent(reader.store, context?.experiment ?? setRecord, cards ? ready : undefined).catch(() => null) : null;
+    const launch = !active && plan.situations ? launchLines(setRecord, plan, cwd, { calibration: calibration?.line ?? null, ...(setRecord.target.kind === 'unconnected' ? { note: UNCONNECTED_NOTE } : {}) }) : undefined;
     set = { record: setRecord, views, editable, ...(coverage ? { coverage } : {}), ...(rulebook ? { rulebook } : {}), running: job?.kind === 'assessment' && job.id === setRecord.id,
-      plan: context && !context.library.acceptance ? cardPlan(setRecord, views) : scenarioPlan(setRecord) };
+      plan, ...(launch ? { launch } : {}) };
   }
   // The newest run is read with its source run, so its stability is checked; the older ones only need their number.
   const runs = await Promise.all(space.runs.map(async (record, index) => ({ record, view: index ? buildResultView(record) : (await evidenceBundle(record, reader.store)).view })));
   const finished = runs.filter(run => run.record.phase === 'results_review' || run.record.phase === 'complete');
-  const active = space.active;
-  const planned = active ? plannedTrials(active) : 0;
-  const prepared = active?.preparationProgress;
-  const share = !active ? 0 : active.phase === 'preparing' ? prepared ? (prepared.processed.length + prepared.excluded.length) / Math.max(1, prepared.processed.length + prepared.excluded.length + prepared.pending.length) : 0
-    : planned ? active.trials.length / planned : 0;
+  const kind = active && workKind(active, job);
+  const logged = await loggedConversations(reader, runs.find(run => run.view.calibration?.disagreements.length)?.view);
   return {
-    space, ...(set ? { set } : {}), runs, now,
+    space, ...(set ? { set } : {}), runs, now, ...(logged.size ? { logged } : {}),
     // A first-format draft is not editable, but it has one decision: to go on in the new format.
     decisions: decisions({ ...(set && (set.editable || convertible(set.record)) ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}),
       logs: finished[0] ? await logsOf(reader.store, finished[0].record) : [], now }),
     problems: recurringProblems(finished),
-    ...(active ? { progress: { text: progressText(active, now.getTime()), share, stoppable: job?.id === active.id } } : {}),
+    ...(active && kind ? { progress: { kind, ...workProgress(active, kind, now), stoppable: job?.id === active.id } } : {}),
   };
+}
+
+/**
+ * The logged conversations a calibrated run disagrees with, read from their imports: what the board shows beside the
+ * judge's reading of them. An import that cannot be read leaves its conversations out, never the workspace.
+ */
+async function loggedConversations(reader: ExperimentLab, view: SpaceData['runs'][number]['view'] | undefined): Promise<Map<string, Turn[]>> {
+  const logged = new Map<string, Turn[]>();
+  const disagreements = view?.calibration?.disagreements ?? [];
+  for (const importId of new Set(disagreements.map(item => item.log.importId))) {
+    const batch = await reader.store.readImport(importId).catch(() => undefined);
+    for (const item of disagreements.filter(entry => entry.log.importId === importId)) {
+      const dialogue = batch?.dialogues.find(entry => entry.id === item.log.dialogueId);
+      if (dialogue) logged.set(logKey(item.log), loggedTurns(dialogue));
+    }
+  }
+  return logged;
 }
 
 /**
@@ -157,18 +210,18 @@ function workspaceChanges(reader: ExperimentLab, job: SessionOperation | undefin
   };
 }
 
-/** The folder's agents, and the open one's workspace. */
-export async function workspaceView(reader: ExperimentLab, state: WorkspaceState, job: SessionOperation | undefined): Promise<WorkspaceView> {
+/** The folder's agents, and the open one's workspace; `cwd` is the project folder the owner opened it in. */
+export async function workspaceView(reader: ExperimentLab, state: WorkspaceState, job: SessionOperation | undefined, cwd?: string): Promise<WorkspaceView> {
   const now = new Date();
   const spaces = agentSpaces(await reader.list());
   // One agent in the folder opens straight into its workspace.
   if (!state.space && spaces.length === 1) state.space = spaces[0]!.key;
   const open = spaces.find(space => space.key === state.space);
   const agents = spaces.length > 1 ? await Promise.all(spaces.map(async space => {
-    const data = space === open ? undefined : await spaceData(reader, space, job, now);
+    const data = space === open ? undefined : await spaceData(reader, space, job, now, cwd);
     return { space, result: space.runs[0] ? accuracyParts(buildResultView(space.runs[0])).value : null, decisions: data?.decisions.length ?? 0 };
   })) : spaces.map(space => ({ space, result: null, decisions: 0 }));
-  const data = open ? await spaceData(reader, open, job, now) : undefined;
+  const data = open ? await spaceData(reader, open, job, now, cwd) : undefined;
   if (data) for (const agent of agents) if (agent.space === open) agent.decisions = data.decisions.length;
   return { agents, ...(data ? { data } : {}) };
 }
@@ -216,8 +269,8 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
       const surface: DecisionSurface = { ctx, origin: 'board', writing, background };
       while (true) {
         const job = operations.current(directory);
-        const view = await workspaceView(reading(), state, job);
-        const action: WorkspaceAction = pending ?? await showWorkspace(ctx, view, state, () => workspaceView(reading(), state, operations.current(directory)),
+        const view = await workspaceView(reading(), state, job, ctx.cwd);
+        const action: WorkspaceAction = pending ?? await showWorkspace(ctx, view, state, () => workspaceView(reading(), state, operations.current(directory), ctx.cwd),
           workspaceChanges(reading(), operations.current(directory)));
         pending = undefined;
         state.notice = undefined;
@@ -237,7 +290,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
           }
           if (action.type === 'space') { Object.assign(state, newState(action.key)); continue; }
           // The workspace refreshed itself while it was open: the action is done on the records as they are now.
-          const data = (await workspaceView(reading(), state, operations.current(directory))).data;
+          const data = (await workspaceView(reading(), state, operations.current(directory), ctx.cwd)).data;
           if (!data) continue;
           if (action.type === 'ask') {
             const words = (await ctx.ui.input(safeText(`Спросить Lab про ${action.about}`), 'например: «поправь: клиент знает номер заранее»'))?.trim();
@@ -280,8 +333,8 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
           if (action.type === 'run') {
             const draft = data.space.draft;
             const started = await writing(async (lab, handOver) => {
-              // No draft: the newest run's set is repeated — the same situations, the agent as it is now.
-              const target = draft ?? (data.space.runs[0] ? await lab.repeat(data.space.runs[0].id) : undefined);
+              // No draft: the newest run's set is repeated — the same situations, the agent as it is now — written only when the owner starts it.
+              const target = draft ?? (data.space.runs[0] ? await lab.repeat(data.space.runs[0].id, undefined, undefined, { preview: true }) : undefined);
               if (!target) throw new Error('Запускать нечего: сначала соберите ситуации.');
               const run = await launchRun(ctx, lab, target);
               if (run) handOver(lease => background.detach(ctx, lease, target.id, 'board'));
@@ -305,6 +358,11 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             const artifacts = await exportArtifacts(await evidenceBundle(record, reading().store), directory);
             await (options.openReport ?? openFile)(artifacts.htmlReport).then(() => inform(`Отчёт для заказчика открыт в браузере: ${artifacts.htmlReport.replace(`${ctx.cwd}/`, '')}`),
               () => inform(`Отчёт для заказчика сохранён: ${artifacts.htmlReport.replace(`${ctx.cwd}/`, '')}`));
+            continue;
+          }
+          if (action.type === 'mark_log') {
+            const notice = await writing(async lab => recordLogMark(ctx, lab, await lab.get(action.runId), action.cardId, action.answer, { seen: action.seen }));
+            if (notice) inform(notice);
             continue;
           }
           if (action.type === 'mark') {

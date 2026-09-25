@@ -69,17 +69,37 @@ export const logJudgmentReceiptSchema = z.strictObject({
 export type LogJudgmentReceipt = z.infer<typeof logJudgmentReceiptSchema>;
 
 /**
+ * The owner's own verdict on one expectation judged on a logged conversation — the target `log:{key}` of
+ * docs/design/card-v2-spec.md §10.3. It is kept with the calibration it answers, apart from the verdicts on the run's
+ * attempts, so a mark on one side never lands on the other. `key` names the receipt; `judgeVerdict` and `judge` are
+ * the result the owner saw and the judgment it came from, filled from the receipt and never trusted from a caller.
+ * The latest verdict per key holds, by the rule every verdict of a person follows (outcomes.ts humanOverride): a
+ * one-key «не знаю» leaves the judge's verdict in place.
+ */
+export const logReviewSchema = z.strictObject({
+  id, createdAt: z.iso.datetime(), key: hash,
+  verdict: z.enum(['pass', 'fail', 'unknown']), note: text(3000),
+  source: z.literal('quick').optional(),
+  judgeVerdict: verdict,
+  judge: z.strictObject({ protocolHash: hash, inputHash: hash }),
+});
+export type LogReview = z.infer<typeof logReviewSchema>;
+
+/**
  * A run's calibration, only ever added to. `logVersions` is the snapshot of the declarations it used, so the
  * result reads the same whatever is declared later; an import nobody declared has no row and counts as
  * unknown. `unfinished`: the calibration stopped before every expectation was judged — the budget of the run
- * could not cover it (it is then skipped whole before any call) or the run was stopped.
+ * could not cover it (it is then skipped whole before any call), the run was stopped, the logs could not be read
+ * or are no longer the ones the situations were made from (skipped whole), or it broke on a failure of its own.
+ * `reviews`: the owner's verdicts on the log side, in the order given.
  */
 export const calibrationSchema = z.strictObject({
   protocol: z.literal(CALIBRATION_PROTOCOL),
   logVersions: z.array(z.strictObject({ importId: id, contentHash: hash, version: text(200).nullable(), receiptId: id })).max(30),
   testedVersion: text(200).nullable(),
   entries: z.array(logJudgmentReceiptSchema).max(600),
-  unfinished: z.enum(['budget', 'stopped']).optional(),
+  unfinished: z.enum(['budget', 'stopped', 'logs', 'failed']).optional(),
+  reviews: z.array(logReviewSchema).max(1000).optional(),
 });
 export type Calibration = z.infer<typeof calibrationSchema>;
 

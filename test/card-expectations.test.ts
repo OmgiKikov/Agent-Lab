@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compileCard } from '../src/card/compile.js';
-import { headlineRule, recordedExpectationResult, undecidedExpectation } from '../src/card/expectations.js';
+import { COUNTING_VERSION, headlineRule, recordedExpectationResult, undecidedExpectation } from '../src/card/expectations.js';
 import { cardVerdict, deriveRun, headlineCardOutcome } from '../src/run.js';
-import type { HumanReview, Trial } from '../src/contracts.js';
+import { isCardExecution, type HumanReview, type Trial } from '../src/contracts.js';
 import { judgeInput, observableSources } from '../src/judge.js';
 import { countingRuleFor, headlineTrialResult, markTargets, markUnderCurrentRule } from '../src/outcomes.js';
 import { buildResultView } from '../src/result-view.js';
@@ -160,6 +160,26 @@ test('a verdict stands only on evidence of its channel: a reply, a tool result o
   assert.equal(recordedExpectationResult({ ...state, observation: { state: 'reported', tools: 'complete', resetConfirmed: true } }, { id: 'e1', observation: 'state' }), 'fail');
 });
 
+test('a duty that names its tool stands only on that tool\'s result; one that names none reads any tool, as before', () => {
+  const card = briefCard({ agentMust: [{ id: 'e1', text: 'до ответа найти правила возврата в базе знаний', requirementIds: ['refund_rule'], observation: 'tool', tool: 'kb_search' }] });
+  const scenario = compileCard(card, { requirements });
+  assert.ok(isCardExecution(scenario.execution));
+  const expectation = scenario.execution.evaluatorView.expectations[0]!;
+  assert.equal(expectation.tool, 'kb_search');
+  const events: Trial['events'] = [{ seq: 0, type: 'user', text: 'Верните деньги' }, { seq: 1, type: 'tool_call', tool: 'crm_lookup' }, { seq: 2, type: 'tool_result', tool: 'crm_lookup', result: { ok: true } },
+    { seq: 3, type: 'tool_call', tool: 'kb_search' }, { seq: 4, type: 'tool_result', tool: 'kb_search', result: { ok: true } }, { seq: 5, type: 'assistant', text: 'Нашёл правила возврата.' }];
+  const attempt = (result: 'pass' | 'fail', evidence: number[], extra: Partial<Trial> = {}): Trial => ({ ...cardAttempt('t', scenario, {}), events,
+    observation: { state: 'missing', tools: 'complete' }, assessments: [{ metricId: 'e1', result, rationale: 'Оценка', evidence }], ...extra });
+  assert.equal(recordedExpectationResult(attempt('pass', [2]), expectation), 'unknown', 'another tool\'s result proves nothing about this duty');
+  assert.equal(recordedExpectationResult(attempt('fail', [2]), expectation), 'unknown');
+  assert.equal(recordedExpectationResult(attempt('pass', [2, 4]), expectation), 'pass', 'the named tool\'s result among the cited ones decides');
+  assert.equal(recordedExpectationResult(attempt('pass', [2]), { id: 'e1', observation: 'tool' }), 'pass', 'a card without the field: any tool\'s result, as before');
+  assert.equal(recordedExpectationResult(attempt('fail', [5], { countingVersion: COUNTING_VERSION }), expectation), 'fail', 'edition 2: a failure stands on the complete log');
+  assert.deepEqual(cardVerdict(cardRun([scenario], [attempt('pass', [2])]), scenario), { outcome: 'unknown', reason: 'no_evidence' });
+  const input = judgeInput({ scenario, sources: observableSources(cardRun([scenario], []).sources, requirements), trial: attempt('pass', [4]) });
+  assert.match(JSON.stringify(input.scenario), /"observation":"tool","tool":"kb_search"/, 'the judge reads which tool proves the duty');
+});
+
 test('a human verdict on an expectation overrides the judge; a quick «не могу сказать» leaves it; «ошибка теста» takes it out', () => {
   const scenario = compiledCard();
   const failed = cardAttempt('t', scenario, { e1: 'pass', e2: 'fail', e3: 'pass' });
@@ -205,9 +225,9 @@ test('the result names the parts of every card and says which expectation failed
   assert.equal(view.countingRules, 'all-expectations-v1', 'the view names the rule its situations are counted by');
   const [failure] = view.failures;
   assert.ok(failure);
-  assert.ok(failure.lines.includes('  Должен был: Б — объяснить, как оформить возврат'), failure.lines.join('\n'));
-  assert.ok(failure.lines.some(line => line.includes('Если номер терминала уже указан')), 'the owner rule of the failed expectation');
-  assert.ok(!failure.lines.some(line => line.includes('Без чека возврат')), 'not the rule of an expectation that passed');
+  assert.equal(failure.expected, 'Б — объяснить, как оформить возврат');
+  assert.ok(failure.rules.some(rule => rule.quote.includes('Если номер терминала уже указан')), 'the owner rule of the failed expectation');
+  assert.ok(!failure.rules.some(rule => rule.quote.includes('Без чека возврат')), 'not the rule of an expectation that passed');
 });
 
 test('the run plan states the judge\'s ceiling: two votes on every expectation of every attempt', () => {

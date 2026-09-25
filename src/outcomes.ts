@@ -53,9 +53,10 @@ type Judged = 'pass' | 'fail' | 'unknown';
  * one check) replaces the recorded result, with two exceptions: a one-key «не могу сказать» is
  * doubt, not a verdict, so the recorded result stays and the owner's hesitation can never quietly
  * take a failure out of the headline (a full review that says `unknown` still overrides); and
- * «invalid» takes the target out of the judgment altogether (`invalid: true`, no result).
+ * «invalid» takes the target out of the judgment altogether (`invalid: true`, no result). The owner's verdict on
+ * a logged conversation (card/calibration.ts LogReview) follows the same rule.
  */
-export function humanOverride(review: HumanReview | undefined, recorded: Judged | undefined): { invalid: boolean; result: Judged | undefined } {
+export function humanOverride(review: Pick<HumanReview, 'verdict' | 'source'> | undefined, recorded: Judged | undefined): { invalid: boolean; result: Judged | undefined } {
   if (review?.verdict === 'invalid') return { invalid: true, result: undefined };
   if (!review || (review.source === 'quick' && review.verdict === 'unknown')) return { invalid: false, result: recorded };
   return { invalid: false, result: review.verdict };
@@ -236,14 +237,16 @@ export function markTargets(scenario: Scenario | undefined, trial: Trial): { ver
 
 /**
  * Whether a quick mark answers the question the counting rule of its attempt asks. On a card counted by
- * its expectations only a mark stamped with that rule does. On any older card a mark stamped with
- * COUNTING_RULES or the card's own rule does; an unstamped mark was given under the previous goal-only
+ * its expectations only a mark stamped with that rule, in its edition, does: edition 2 reads more of the judge's
+ * failures as decided. On any older card a mark stamped with COUNTING_RULES or the card's own rule does — its
+ * editions ask the same per-attempt question; an unstamped mark was given under the previous goal-only
  * rule and counts only where both rules ask the same thing: on a legacy strict card, or on a situation
  * whose only mark target is the goal. Anywhere else it is a mark under another rule and stays out of the count.
  */
 export function markUnderCurrentRule(scenario: Scenario | undefined, trial: Trial, review: HumanReview, metricIds: string[]): boolean {
-  const rule = countingRuleFor(scenario, trial);
-  if (rule === 'all-expectations-v1') return review.countingRules === rule;
+  const counting = headlineRule(scenario, [trial]);
+  const rule = countingRuleOf(scenario, counting);
+  if (counting.kind === 'expectations') return review.countingRules === rule;
   if (review.countingRules === COUNTING_RULES || review.countingRules === rule) return true;
   if (review.countingRules !== undefined) return false;
   return !headlineMetricIds(scenario).length || (metricIds.length === 1 && metricIds[0] === GOAL_METRIC_ID);

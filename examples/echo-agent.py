@@ -8,6 +8,10 @@ Agent Lab starts this script once per dialogue and speaks JSON lines:
   stdin  -> {"type": "close", "sessionId": ...}   (then stdin ends)
 
 Replace `handle` with a call into your RAG agent. Keep one reply per request and flush stdout.
+stdout carries the protocol: the reply to a request is the next line of JSON. Print debugging to stderr
+(`log` below). A stray line on stdout that is not JSON — a print() left in your agent or a library's banner —
+does not break the dialogue: Agent Lab keeps it with stderr as diagnostics, and it shows in the reason when a
+reply fails. A stray line that is JSON would be taken for the reply, so keep JSON off stdout except the reply.
 "retrievals" are the exact knowledge-base chunks given to the model for this reply; set
 retrievalsComplete=true only when the list is the whole context. Without them Agent Lab cannot tell
 a search miss from a bad answer, and the RAG diagnosis stays silent.
@@ -19,6 +23,11 @@ unconfirmed external state as an invalid (unmeasured) dialogue, never as a pass.
 import json
 import re
 import sys
+
+
+def log(*values):
+    """Diagnostics go to stderr: Agent Lab shows them when a dialogue fails, and stdout stays the protocol."""
+    print(*values, file=sys.stderr, flush=True)
 
 
 def handle(request, records):
@@ -54,6 +63,7 @@ for line in sys.stdin:
         # This echo agent has no backend to load "external" into, so it only confirms a reset it actually performed.
         applied_external = "external" not in request["initialState"]
     turn += 1
+    log(f"turn {turn}: {len(request['message'])} characters")
     reply = handle(request, records)
     reply.update(eventsComplete=True, resetConfirmed=applied_external, turn=turn, version="echo-python-1",
                  usage={"calls": 0, "inputTokens": 0, "outputTokens": 0, "costUsd": 0})

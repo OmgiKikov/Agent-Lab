@@ -1,4 +1,4 @@
-import { judgeFailure, SERVICE_REPLY_REASON } from './run.js';
+import { SERVICE_REPLY_REASON } from './run.js';
 import { judgedScenario } from './card/legacy-v1.js';
 import { directChecks } from './checkpoints.js';
 import { createUserState, allowedUserActions, advanceUser, requiredUserTurns, userDecisionSchema } from './user-controller.js';
@@ -8,7 +8,8 @@ import { addUsage, emptyUsage, isCardExecution, runnableTarget, scriptIssue, typ
 import { assessmentRubrics, judgeAuditSchema, metricApplies, RAG_METRIC_IDS, ragEvidenceComplete, validateAssessments, type JudgeAudit, type MetricAssessment } from './assessment.js';
 import { userTurnSchema, type CallContext, type DialogueMessage, type Runtime, type TargetSession } from './runtime.js';
 import { valueTokens } from './verbatim.js';
-import { hasCompleteJudgment, observableSources, sealJudgeReceipt } from './judge.js';
+import { hasCompleteJudgment, judgmentFailure, observableSources, sealJudgeReceipt } from './judge.js';
+import { ProviderFailure } from './llm/model-call.js';
 import { openExternalTarget } from './targets.js';
 import { simulatorChecks } from './simulator.js';
 
@@ -24,6 +25,8 @@ import { simulatorChecks } from './simulator.js';
  *
  * Target: an external agent (http/module/command) whose reported events/records feed the grading.
  * Invalid = the harness could not measure the agent. Fail = the agent was measured and fell short.
+ * The run's limit on the customer's messages ends a conversation like the customer leaving does: the controlled
+ * customer never plans past it, and a talk that runs into it is judged as it went (`trial.turnLimit`).
  */
 function freshReadEvidence(events: TraceEvent[]): { passed: boolean; evidence: string } {
   const fresh = new Set<string>();
@@ -202,7 +205,7 @@ export async function evaluateTrial(input: {
       refusal = 'turn_limit';
       if (!control && requiredUserTurns(policy, facts) > settings.maxTurns) throw new Error('Обязательный путь пользователя не помещается в лимит реплик.');
       refusal = undefined;
-      if (!free) controlled = createUserState(policy, facts);
+      if (!free) controlled = createUserState(policy, facts, settings.maxTurns);
     }
     if (userMode === 'scripted' && !control) {
       const issue = scriptIssue(scenario.user, settings.maxTurns);
@@ -240,7 +243,8 @@ export async function evaluateTrial(input: {
         }
       } });
     let userMessage = scenario.user.opening;
-    for (let turn = 0; turn < settings.maxTurns; turn += 1) {
+    let turn = 0;
+    for (; turn < settings.maxTurns; turn += 1) {
       ctx.signal.throwIfAborted();
       append('user', userMessage);
       stage = 'target response';
@@ -293,11 +297,13 @@ export async function evaluateTrial(input: {
         ctx.signal.throwIfAborted();
         if (!answer.success) throw new Error('Симулятор выбрал действие, которого нет среди допустимых сейчас.');
         const decision = answer.data;
+        // The customer has written every message the run allows: leaving is its only move, so the talk ends at the limit
+        // and is judged as it went.
+        const limited = controlled.followUps >= settings.maxTurns - 1;
         const accepted = advanceUser(controlled, decision);
         emit({ type: 'simulator', result: { protocol: scenario.execution!.protocol, decision, accepted: true, from: controlled.position, to: accepted.state.position } });
         controlled = accepted.state;
-        if (accepted.done && !accepted.message) { stopped = true; break; }
-        if (turn + 1 >= settings.maxTurns) throw new Error('Симулятор исчерпал лимит реплик до завершения обязательного пути.');
+        if (accepted.done && !accepted.message) { stopped = true; if (limited) trial.turnLimit = true; break; }
         userMessage = accepted.message; finalUserReply = accepted.done;
         continue;
       }
@@ -310,17 +316,21 @@ export async function evaluateTrial(input: {
       userMessage = user.message;
       finalUserReply = user.done;
     }
+    // The agent answered the last message the run allows the customer while the talk was still going: the conversation
+    // ends here as it stands. It is an observation about the agent's conversation, never a failed measurement.
+    if (turn === settings.maxTurns) { stopped = true; trial.turnLimit = true; }
     trial.finalState = structuredClone(state);
     // Simulator checks describe the user side only; they are computed before grading and never touch the outcome.
     trial.simulatorChecks = simulatorChecks(scenario, trial);
     stage = 'проверка наблюдений';
     trial.checks = grade(scenario, trial);
     const allPassed = trial.checks.length > 0 && trial.checks.every(check => check.passed);
+    // Only an empty or a service reply leaves the loop unstopped, and each has already named its cause.
     trial.outcome = !stopped ? 'invalid' : trial.checks.length === 0 ? 'ungraded' : allPassed ? 'pass' : 'fail';
-    if (!stopped) trial.invalidCause ??= 'turn_limit';
-    trial.reason ||= !stopped ? 'Разговор не завершился в отведённое число реплик.' : trial.checks.length === 0
+    trial.reason ||= trial.checks.length === 0
       ? 'Диалог дошёл до конца, но объективных проверок в карточке нет: оценки по рубрикам считаются отдельно.'
       : allPassed ? 'Все объективные проверки пройдены.' : 'Часть объективных проверок провалена.';
+    if (trial.turnLimit) trial.reason += ' Клиенту не хватило реплик: разговор оценён таким, каким успел сложиться.';
     trial.reason += reportedState
       ? ' Состояние сообщил сам агент, доверенный код его не наблюдал.'
       : ' Состояние внешний агент не сообщил.';
@@ -360,7 +370,7 @@ export async function evaluateTrial(input: {
     } catch (error) {
       if (persistenceFailed) throw persistenceError;
       trial.assessmentError = (ctx.signal.aborted ? 'Metric assessment cancelled' : error instanceof Error ? error.message : 'Metric assessment failed').slice(0, 4000);
-      trial.assessmentFailure = judgeFailure(error, ctx.signal);
+      trial.assessmentFailure = judgmentFailure(error, ctx.signal);
     }
     trial.elapsedMs = Math.round(performance.now() - started);
   }
@@ -377,7 +387,7 @@ export async function assessTrial(runtime: Runtime, stored: Scenario, sources: S
   const scenario = judgedScenario(stored, trial);
   const metrics = assessmentRubrics(scenario, trial);
   if (!metrics.length) return [];
-  if (!runtime.assess) throw new Error('Metric assessment is unavailable for this runtime');
+  if (!runtime.assess) throw new ProviderFailure('unavailable', 'Metric assessment is unavailable for this runtime');
   let latest: JudgeAudit | undefined;
   let mapped: MetricAssessment[] | undefined;
   try {

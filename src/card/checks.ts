@@ -1,17 +1,17 @@
 import type { Requirement, Source } from '../contracts.js';
 import { countText } from '../plural.js';
-import { maskedSpans, withValues } from '../masking.js';
+import { maskedSpans, withValues, type MaskedSpan } from '../masking.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { clip } from '../text.js';
 import { requiredUserTurns } from '../user-controller.js';
 import { compilePolicy } from './compile.js';
-import type { Card, EventRef } from './schema.js';
+import type { Card, EventRef, Filled } from './schema.js';
 
 /*
  * The deterministic checks of a card (docs/design/card-v2-spec.md §2.4): references and exact text, never meaning. A value is in a
- * message when the message contains it after one normalisation — NFKC, Russian lower case, every run of spaces as
- * one — with no tokenizer, no fuzzy quote search and no regular expression over what people or models wrote.
- * Whether a fact is really the customer's or a rule really applies is the reviewer's claim (review.ts); these
+ * message when the message contains it as whole words after one normalisation — NFKC, Russian lower case, every run
+ * of spaces as one — with no tokenizer, no fuzzy quote search and no regular expression over what people or models
+ * wrote. Whether a fact is really the customer's or a rule really applies is the reviewer's claim (review.ts); these
  * rules only hold a reference or a value to what it promises.
  */
 
@@ -38,10 +38,21 @@ export const messageAt = (evidence: CardEvidence, event: EventRef): string | und
 
 export const sameEvent = (a: EventRef, b: EventRef): boolean => a.batchId === b.batchId && a.dialogueId === b.dialogueId && a.eventIndex === b.eventIndex;
 
-/** A logged message as the card reads it: the values Lab wrote over its masking marks (card/unmask.ts) in their place. */
+/**
+ * The mark a value Lab wrote in stands over: the `span`-th (from 0) of its message as the table of marks the fill counted
+ * by reads it (masking.ts) — version 1 for a fill that names none, as every fill written before the table. A table reads
+ * a message's marks anew, so a fill is read by its own: its value stays where it was written.
+ */
+export const filledSpan = (content: string, fill: Pick<Filled, 'span' | 'maskVersion'>): MaskedSpan | undefined =>
+  maskedSpans(content, fill.maskVersion ?? 1)[fill.span];
+
+/** A logged message as the card reads it: the values Lab wrote over its masking marks (card/unmask.ts), each over its own mark. */
 export function filledMessage(content: string, filled: Card['filled'], event: EventRef): string {
-  const values = new Map((filled ?? []).filter(item => sameEvent(item.event, event)).map(item => [item.span, item.value] as const));
-  return values.size ? withValues(content, values) : content;
+  const values = (filled ?? []).filter(item => sameEvent(item.event, event)).flatMap(item => {
+    const span = filledSpan(content, item);
+    return span ? [{ ...span, value: item.value }] : [];
+  });
+  return values.length ? withValues(content, values) : content;
 }
 
 /** The message a card's reference points at, as the card reads it; undefined when the import holds no such message. */
@@ -63,8 +74,25 @@ export function normalizeText(value: string): string {
   return words.join(' ');
 }
 
-/** Whether `text` holds `value` exactly, up to NFKC, case and spacing: «5678» is in «Номер  5678.», «56 78» is not. */
-export const contains = (text: string, value: string | number): boolean => normalizeText(text).includes(normalizeText(String(value)));
+/** A character of a word: a letter of a cased script or a digit (the normalisation has folded full-width digits already). */
+const wordChar = (char: string | undefined): boolean => char !== undefined && (char.toLocaleLowerCase('ru') !== char.toLocaleUpperCase('ru') || (char >= '0' && char <= '9'));
+
+/**
+ * Whether `text` holds `value` as whole words, up to NFKC, case and spacing: «5678» is in «Номер  5678.», not in «15678»;
+ * «3» is not in «Терминал 34567», and «56 78» is not in «5678». A value that is a piece of a longer word or number is
+ * another value: a fact is never found in a message only because its characters happen to be part of something else
+ * there. An empty value is in no text.
+ */
+export function contains(text: string, value: string | number): boolean {
+  const said = normalizeText(text), words = normalizeText(String(value));
+  if (!words) return false;
+  for (let at = said.indexOf(words); at >= 0; at = said.indexOf(words, at + 1)) {
+    const cutBefore = wordChar(said[at - 1]) && wordChar(words[0]);
+    const cutAfter = wordChar(said[at + words.length]) && wordChar(words.at(-1));
+    if (!cutBefore && !cutAfter) return true;
+  }
+  return false;
+}
 
 type Fact = Card['client']['knows'][number];
 /** A value that can stand in a message: text or a number. A yes/no fact is qualitative — its label says it all. */

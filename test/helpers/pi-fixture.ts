@@ -14,8 +14,13 @@ import { createPiRuntime } from '../../src/pi.js';
 export type Request = Parameters<NonNullable<ProviderConfig['streamSimple']>>[1];
 export type Options = Parameters<NonNullable<ProviderConfig['streamSimple']>>[2];
 export type Message = Awaited<ReturnType<ReturnType<ModelRuntime['streamSimple']>['result']>>;
-/** Reply text, reply content, or a whole reply that ends some other way than a normal stop. */
-export type Reply = string | Message['content'] | { content: Message['content']; stopReason: Message['stopReason']; errorMessage?: string };
+/**
+ * Reply text, reply content, or a whole reply that ends some other way than a normal stop. An error reply follows the SDK's
+ * stream protocol: refused before its answer began (no `start`, no usage), as a provider's HTTP error is, unless `started`;
+ * `status` and `headers` reach `onResponse` first, as an adapter that reports a refused response gives them.
+ */
+export type Reply = string | Message['content'] | { content: Message['content']; stopReason: Message['stopReason']; errorMessage?: string;
+  started?: boolean; status?: number; headers?: Record<string, string> };
 export const fixtureSettings = settingsSchema.parse({ provider: 'agent-lab-test', model: 'test-model', timeoutMs: 1000 });
 
 /** A call context with a call budget (`limit`) and summed usage; an unknown cost keeps the sum unknown. */
@@ -54,15 +59,18 @@ export async function fixture(reply: (request: Request, index: number, options?:
       modelsUsed.push(model.id);
       const index = requests.length;
       requests.push(JSON.parse(JSON.stringify(request)));
+      let refused = false;
       const finished = (async (): Promise<Message> => {
         const value = await reply(request, index, options);
         const shaped = typeof value === 'string' ? { content: [{ type: 'text' as const, text: value }] } : Array.isArray(value) ? { content: value } : value;
+        const stopReason = 'stopReason' in shaped ? shaped.stopReason : shaped.content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop';
+        refused = (stopReason === 'error' || stopReason === 'aborted') && !('started' in shaped && shaped.started);
+        if ('status' in shaped && shaped.status !== undefined) await options?.onResponse?.({ status: shaped.status, headers: shaped.headers ?? {} }, model);
         return {
           role: 'assistant', content: shaped.content, api: model.api, provider: model.provider, model: model.id,
-          usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18,
-            cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0.001, total: 0.032 } },
-          stopReason: 'stopReason' in shaped ? shaped.stopReason : shaped.content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop',
-          ...('errorMessage' in shaped && shaped.errorMessage ? { errorMessage: shaped.errorMessage } : {}), timestamp: Date.now(),
+          usage: refused ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+            : { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18, cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0.001, total: 0.032 } },
+          stopReason, ...('errorMessage' in shaped && shaped.errorMessage ? { errorMessage: shaped.errorMessage } : {}), timestamp: Date.now(),
         };
       })();
       // The SDK consumes only the public stream protocol, the iterator and result(); the class's private queue is not part
@@ -71,8 +79,9 @@ export async function fixture(reply: (request: Request, index: number, options?:
         result: () => finished,
         async *[Symbol.asyncIterator]() {
           const message = await finished;
-          yield { type: 'start', partial: message };
-          yield { type: 'done', reason: message.stopReason, message };
+          if (!refused) yield { type: 'start', partial: message };
+          yield message.stopReason === 'error' || message.stopReason === 'aborted'
+            ? { type: 'error', reason: message.stopReason, error: message } : { type: 'done', reason: message.stopReason, message };
         },
       } as unknown as ReturnType<ModelRuntime['streamSimple']>;
     },

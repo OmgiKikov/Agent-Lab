@@ -11,48 +11,53 @@ export type XmlToken =
   | { kind: 'close'; name: string }
   | { kind: 'text'; text: string };
 
-const damaged = (what: string) => new Error(`Таблица повреждена: ${what}. Сохраните файл заново.`);
+/** Which file a part belongs to, for the words a refusal is said in. */
+export type XmlSource = 'table' | 'document';
+const REFUSALS: Readonly<Record<XmlSource, { damaged: string; doctype: string }>> = {
+  table: { damaged: 'Таблица повреждена', doctype: 'Таблица содержит объявление DTD — такие файлы Lab не читает. Сохраните таблицу заново в Excel.' },
+  document: { damaged: 'Документ Word повреждён', doctype: 'Документ Word содержит объявление DTD — такие файлы Lab не читает. Сохраните документ заново в Word.' },
+};
 const isSpace = (char: string | undefined) => char === ' ' || char === '\t' || char === '\n' || char === '\r';
 
 /** The name without its namespace prefix: `x:row` → `row`. */
 export const localName = (name: string): string => name.slice(name.indexOf(':') + 1);
 
 /** The tokens of `xml` in document order. Whitespace between elements comes out as text; readers skip what they do not collect. */
-export function* xmlTokens(xml: string): Generator<XmlToken> {
+export function* xmlTokens(xml: string, source: XmlSource = 'table'): Generator<XmlToken> {
+  const damaged = (what: string) => new Error(`${REFUSALS[source].damaged}: ${what}. Сохраните файл заново.`);
+  const after = (marker: string, from: number, what: string): number => {
+    const end = xml.indexOf(marker, from);
+    if (end === -1) throw damaged(what);
+    return end + marker.length;
+  };
   let at = xml.charCodeAt(0) === 0xfeff ? 1 : 0;
   while (at < xml.length) {
     const open = xml.indexOf('<', at);
     if (open === -1) { yield { kind: 'text', text: decodeEntities(xml.slice(at)) }; return; }
     if (open > at) yield { kind: 'text', text: decodeEntities(xml.slice(at, open)) };
-    if (xml.startsWith('<!--', open)) { at = after(xml, '-->', open + 4, 'не закрыт комментарий'); continue; }
+    if (xml.startsWith('<!--', open)) { at = after('-->', open + 4, 'не закрыт комментарий'); continue; }
     if (xml.startsWith('<![CDATA[', open)) {
       const end = xml.indexOf(']]>', open + 9);
       if (end === -1) throw damaged('не закрыт блок CDATA');
       yield { kind: 'text', text: xml.slice(open + 9, end) };
       at = end + 3; continue;
     }
-    if (xml.startsWith('<?', open)) { at = after(xml, '?>', open + 2, 'не закрыта инструкция обработки'); continue; }
-    if (xml.startsWith('<!', open)) throw new Error('Таблица содержит объявление DTD — такие файлы Lab не читает. Сохраните таблицу заново в Excel.');
+    if (xml.startsWith('<?', open)) { at = after('?>', open + 2, 'не закрыта инструкция обработки'); continue; }
+    if (xml.startsWith('<!', open)) throw new Error(REFUSALS[source].doctype);
     if (xml[open + 1] === '/') {
       const end = xml.indexOf('>', open + 2);
       if (end === -1) throw damaged('не закрыт тег');
       yield { kind: 'close', name: xml.slice(open + 2, end).trim() };
       at = end + 1; continue;
     }
-    const tag = openTag(xml, open + 1);
+    const tag = openTag(xml, open + 1, damaged);
     yield tag.token;
     at = tag.end;
   }
 }
 
-function after(xml: string, marker: string, from: number, what: string): number {
-  const end = xml.indexOf(marker, from);
-  if (end === -1) throw damaged(what);
-  return end + marker.length;
-}
-
 /** An opening tag from its name to `>` or `/>`; a `>` inside a quoted attribute value belongs to the value. */
-function openTag(xml: string, start: number): { token: XmlToken; end: number } {
+function openTag(xml: string, start: number, damaged: (what: string) => Error): { token: XmlToken; end: number } {
   let at = start;
   while (at < xml.length && !isSpace(xml[at]) && xml[at] !== '>' && xml[at] !== '/') at++;
   const name = xml.slice(start, at);
@@ -83,10 +88,15 @@ function openTag(xml: string, start: number): { token: XmlToken; end: number } {
   }
 }
 
-const NAMED: Readonly<Record<string, string>> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: '\'' };
+/** The five entities XML predefines. */
+export const XML_ENTITIES: Readonly<Record<string, string>> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: '\'' };
 
-/** The five predefined entities and character references; anything else stays as written, since there is no DTD to define it. */
-export function decodeEntities(text: string): string {
+/**
+ * The named entities of `named` — by default the five XML predefines; an HTML reader passes its own — and character
+ * references; anything else stays as written, since there is no DTD to define it, and so does a reference to no
+ * character (`&#1114112;`): one odd entity never costs the whole file.
+ */
+export function decodeEntities(text: string, named: Readonly<Record<string, string>> = XML_ENTITIES): string {
   if (!text.includes('&')) return text;
   let result = '', at = 0;
   for (;;) {
@@ -94,7 +104,7 @@ export function decodeEntities(text: string): string {
     if (amp === -1) return result + text.slice(at);
     const semicolon = text.indexOf(';', amp + 1);
     const entity = semicolon === -1 || semicolon - amp > 12 ? undefined : text.slice(amp + 1, semicolon);
-    const decoded = entity === undefined ? undefined : NAMED[entity] ?? characterReference(entity);
+    const decoded = entity === undefined ? undefined : (Object.hasOwn(named, entity) ? named[entity] : undefined) ?? characterReference(entity);
     result += text.slice(at, amp) + (decoded ?? '&');
     at = decoded === undefined ? amp + 1 : semicolon + 1;
   }

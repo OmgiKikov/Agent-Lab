@@ -1,6 +1,6 @@
 import { fingerprint, type Experiment } from '../contracts.js';
 import type { CallContext, Runtime } from '../runtime.js';
-import { Stopped } from '../errors.js';
+import { BudgetExhausted, Stopped } from '../errors.js';
 import { observableSources, scenarioSources } from '../judge.js';
 import { pluralForm } from '../plural.js';
 import type { ImportBatch } from '../scenario-contracts.js';
@@ -19,7 +19,8 @@ import { calibrationKey, logJudgeInputV1, logJudgmentComplete } from './log-judg
  * A key is judged once: a repeat or a reassessment with the same cards, logs and judge copies the receipt and
  * its sidecar from the run it came from and pays nothing. The calls come out of the run's own limit: when that
  * cannot cover them the calibration is skipped whole, before any call, with the reason. Whatever happens here
- * — a stop, a failed request, a broken import — the synthetic result stands: this step never throws.
+ * — a stop, a failed request, a broken import — the synthetic result stands: this step never throws, and the
+ * calibration records why it did not finish as a typed cause (`unfinished`), never as a sentence to decode.
  */
 
 type CalibrationStore = Pick<ExperimentStore, 'get' | 'readImport' | 'readLogVersions' | 'readCalibrationAudit' | 'writeCalibrationAudit'>;
@@ -27,16 +28,27 @@ type CalibrationStore = Pick<ExperimentStore, 'get' | 'readImport' | 'readLogVer
 /** Expectations judged at once: two votes each, so four keep eight requests in flight, as one attempt's judgment does. */
 const CALIBRATION_CONCURRENCY = 4;
 
+/** The logs could not be read, or are no longer the ones the situations were made from: nothing of them is judged. */
+class LogsUnavailable extends Error {}
+
 /** The imports of the situations that have a log, read once and checked against the content the cards were made from. */
 async function logBatches(store: Pick<ExperimentStore, 'readImport'>, situations: readonly LogSituation[]): Promise<Map<string, ImportBatch>> {
   const batches = new Map<string, ImportBatch>();
   for (const log of situations.flatMap(situation => situation.exclusion || !situation.log ? [] : [situation.log])) {
     if (batches.has(log.importId)) continue;
-    const batch = await store.readImport(log.importId);
-    if (batch.contentHash !== log.importContentHash) throw new Error('Импорт логов не совпадает с тем, из которого сделаны ситуации.');
+    let batch: ImportBatch;
+    try { batch = await store.readImport(log.importId); } catch (error) { throw new LogsUnavailable(error instanceof Error ? error.message : String(error)); }
+    if (batch.contentHash !== log.importContentHash) throw new LogsUnavailable('Импорт логов не совпадает с тем, из которого сделаны ситуации.');
     batches.set(log.importId, batch);
   }
   return batches;
+}
+
+/** Why a calibration stopped on `error`: the run's stop or its budget, the logs, or a failure of the calibration itself. */
+function unfinishedCause(error: unknown, signal: AbortSignal): NonNullable<Calibration['unfinished']> {
+  if (error instanceof Stopped) return error.reason === 'budget' ? 'budget' : 'stopped';
+  if (signal.aborted) return 'stopped';
+  return error instanceof LogsUnavailable ? 'logs' : 'failed';
 }
 
 interface Job { key: string; request: LogJudgeRequest; skipped?: LogJudgmentReceipt['skipped']; identity: Omit<LogJudgmentReceipt, 'mode' | 'key' | 'protocolHash' | 'inputHash' | 'auditHash' | 'provider' | 'model' | 'skipped' | 'votes' | 'result' | 'complete'> }
@@ -100,7 +112,12 @@ export interface CalibrationWork {
   store: CalibrationStore;
   /** Saves the record with a progress line; the run's own checkpoint. */
   checkpoint(message: string): Promise<void>;
+  /** The calls the run's own budget has left (lab/operation.ts); without it, what the draft's limit leaves of the record's calls. */
+  callsLeft?(): number;
 }
+
+/** What the run leaves for the calibration: its own budget's rest, or — for a caller without one — the draft's limit less the record's calls. */
+const callsLeft = (record: Experiment, work: CalibrationWork): number => work.callsLeft?.() ?? record.settings.maxCalls - record.usage.calls;
 
 /**
  * Calibrates a run whose synthetic attempts are judged. Nothing happens when the owner turned calibration off,
@@ -121,12 +138,12 @@ export async function calibrateRun(record: Experiment, work: CalibrationWork): P
     const publish = () => { calibration.entries = jobs.flatMap(job => done.get(job.key) ?? []); };
     publish();
     const pending = jobs.filter(job => !done.has(job.key));
-    if (2 * pending.length > record.settings.maxCalls - record.usage.calls) { calibration.unfinished = 'budget'; return; }
+    if (2 * pending.length > callsLeft(record, work)) { calibration.unfinished = 'budget'; return; }
     await judgeAll(record, pending, judge, work, receipt => { done.set(receipt.key, receipt); publish(); }, done.size);
   } catch (error) {
-    // A broken import or store stops only the calibration; the run's result is kept as it was.
-    calibration.unfinished = 'stopped';
-    record.limitations.push(`Сверка с продом не завершена: ${error instanceof Error ? error.message : String(error)}`);
+    // A broken import or store stops only the calibration; the run's result is kept as it was. Why it did not finish is
+    // the calibration's own typed cause, which its view says in the owner's words — never a second note to decode.
+    calibration.unfinished ??= unfinishedCause(error, work.ctx.signal);
   }
 }
 
@@ -135,9 +152,9 @@ async function judgeAll(record: Experiment, pending: readonly Job[], judge: LogJ
   const calibration = record.calibration!;
   const total = already + pending.length;
   const ctx: CallContext = { ...work.ctx, onTargetEvent: undefined, onTrace: undefined,
-    // The calibration never draws the run over its limit: it stops itself before the run's own gate would abort the run.
+    // The calibration never draws the run over its limit: a call past what the run left is refused, and the run's result stands.
     beforeCall() {
-      if (record.usage.calls >= record.settings.maxCalls) throw new Stopped('budget', 'Лимит вызовов модели исчерпан: сверка с продом остановлена, результат прогона не изменился.');
+      if (callsLeft(record, work) <= 0) throw new BudgetExhausted('Лимит вызовов модели исчерпан: сверка с продом остановлена, результат прогона не изменился.');
       work.ctx.beforeCall();
     },
     onJudgment: (key, audit) => work.store.writeCalibrationAudit(record.id, key, audit) };
@@ -151,7 +168,8 @@ async function judgeAll(record: Experiment, pending: readonly Job[], judge: LogJ
         finished++;
         await work.checkpoint(`Сверяю с продом: ${finished} из ${total} · агент и клиент не запускаются`);
       } catch (error) {
-        calibration.unfinished = error instanceof Stopped && error.reason === 'budget' ? 'budget' : 'stopped';
+        // The first cause holds: the workers that stop after it only follow it.
+        calibration.unfinished ??= unfinishedCause(error, work.ctx.signal);
         if (!(error instanceof Stopped) && !work.ctx.signal.aborted) throw error;
       }
     }

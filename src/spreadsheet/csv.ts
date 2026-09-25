@@ -24,10 +24,20 @@ export function readCsv(bytes: Buffer, given?: CsvDialect): { rows: string[][]; 
   return { rows: records(text, delimiter, false), dialect: { delimiter, encoding } };
 }
 
-function detectEncoding(bytes: Buffer): Encoding {
+/**
+ * How text bytes are written: UTF-16 by its byte order mark, UTF-8 when every byte reads as UTF-8, else Windows-1251 —
+ * what Excel and Notepad save in a Russian locale. Documents are read the same way (materials.ts).
+ */
+export function textEncoding(bytes: Uint8Array): Encoding | 'utf-16be' {
   if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) throw new Error('Файл в кодировке UTF-16 BE — Lab её не читает. Сохраните таблицу как CSV в UTF-8.');
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
   try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); return 'utf-8'; } catch { return 'windows-1251'; }
+}
+
+function detectEncoding(bytes: Buffer): Encoding {
+  const encoding = textEncoding(bytes);
+  if (encoding === 'utf-16be') throw new Error('Файл в кодировке UTF-16 BE — Lab её не читает. Сохраните таблицу как CSV в UTF-8.');
+  return encoding;
 }
 
 function decode(bytes: Buffer, encoding: Encoding): string {

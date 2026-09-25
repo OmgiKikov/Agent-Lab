@@ -1,6 +1,5 @@
 import { addUsage, emptyUsage, isCardExecution, type Experiment, type Trial } from '../contracts.js';
 import { judgeModel } from '../comparison.js';
-import { Stopped } from '../errors.js';
 import { assessTrial } from '../evaluation.js';
 import { scenarioSources } from '../judge.js';
 import { agentReplies, JUDGE_CHECK_PROTOCOL, judgeCheckCounts, judgeCheckPlan, judgeCheckSchema, type JudgeCheck, type JudgeCheckCandidate, type JudgeCheckItem, type JudgeCheckPlan } from '../judge-check.js';
@@ -12,7 +11,9 @@ import type { Lab } from './context.js';
  * A judge check of a finished run (judge-check.ts): the builder plants one error into a copy of each sampled
  * dialogue, and the run's own judge — the same assessTrial path, prompt and receipts — judges every copy and every
  * untouched control on that one expectation. Only copies are judged: the run and its trials never change. The
- * result is written as the run's sidecar; the audits of the copies go to {runId}.judge-check/.
+ * result is written as the run's sidecar; the audits of the copies go to {runId}.judge-check/. The check is the lab's
+ * one operation while it lasts, beside the run (lab/operation.ts): its own ceiling and time, stopped by a cancel or the
+ * closing lab like any other paid work.
  *
  *   plan (ceiling) ──► per item: [builder: one reply rewritten] ──► copy judged ──► verdict ──► {runId}.judge-check.json
  */
@@ -70,8 +71,10 @@ async function plantedItem(work: Work, candidate: JudgeCheckCandidate, name: str
 }
 
 /**
- * Runs a judge check of `id` within its ceiling and writes it beside the run. The ceiling is the plan's: a call past
- * it is refused, and the items it would have judged stay without a verdict («stopped»), never guessed.
+ * Runs a judge check of `id` as the lab's one operation beside the run (lab/operation.ts), and writes it beside the run.
+ * Its ceiling is the plan's and its time the draft's, both from its start: a call past the ceiling is refused, and the
+ * items it would have judged stay without a verdict («stopped»), never guessed. A cancel — Ctrl+C, the owner's stop, the
+ * closing lab — stops the calls under way the same way; what was judged by then is written.
  */
 export function checkJudge(lab: Lab, id: string, options: JudgeCheckOptions = {}): Promise<JudgeCheck> {
   return lab.operations.change(async () => {
@@ -80,36 +83,31 @@ export function checkJudge(lab: Lab, id: string, options: JudgeCheckOptions = {}
     const runtime = await lab.runtime(record);
     const { assess, plantError } = runtime;
     if (!assess || !plantError) throw new Error('Проверка судьи недоступна для этого прогона: нужны судья и модель задачи (учебный пример их не даёт).');
-    const usage = emptyUsage();
-    const signal = AbortSignal.timeout(record.settings.maxDurationMs);
-    let exhausted = false;
-    const work: Work = {
-      record, runtime: { ...runtime, assess, plantError },
-      spent: () => exhausted || signal.aborted,
-      ctx: name => ({
-        signal, timeoutMs: record.settings.timeoutMs,
-        beforeCall() {
-          signal.throwIfAborted();
-          if (usage.calls >= plan.calls) { exhausted = true; throw new Stopped('budget', 'Лимит вызовов проверки судьи исчерпан.'); }
-          usage.calls++;
-        },
-        addUsage: delta => addUsage(usage, delta),
-        onJudgment: (_trialId, audit) => lab.store.writeJudgeCheckAudit(record.id, name, audit),
-      }),
-    };
-    const jobs = [
-      ...plan.planted.map((candidate, index) => () => plantedItem(work, candidate, `planted-${index + 1}`)),
-      ...plan.controls.map((candidate, index) => async (): Promise<JudgeCheckItem> => ({ kind: 'control', trialId: candidate.trial.id, expectationId: candidate.expectationId,
-        ...await judgeCopy(work, candidate, freshCopy(candidate.trial), `control-${index + 1}`) })),
-    ];
-    const items: JudgeCheckItem[] = new Array(jobs.length);
-    let next = 0;
-    const worker = async (): Promise<void> => { while (next < jobs.length) { const index = next++; items[index] = await jobs[index]!(); } };
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, worker));
-    const judged = items.flatMap(item => item.receipt ? [`${item.receipt.provider}/${item.receipt.model}`] : []);
-    const check = judgeCheckSchema.parse({ protocol: JUDGE_CHECK_PROTOCOL, runId: record.id, ...judgeCheckCounts(items), items,
-      judgeModel: judged[0] ?? judgeModel(record) ?? 'неизвестен', builderModel: `${plantError.builder.provider}/${plantError.builder.id}`, usage, at: new Date().toISOString() });
-    await lab.store.writeJudgeCheck(check);
-    return check;
+    return lab.operations.beside(record.id, async (calls, operation) => {
+      const usage = emptyUsage();
+      const work: Work = {
+        record, runtime: { ...runtime, assess, plantError },
+        spent: () => operation.exhausted || calls.signal.aborted,
+        ctx: name => ({ ...calls,
+          beforeCall() { calls.beforeCall(); usage.calls++; },
+          addUsage: delta => addUsage(usage, delta),
+          onJudgment: (_trialId, audit) => lab.store.writeJudgeCheckAudit(record.id, name, audit),
+        }),
+      };
+      const jobs = [
+        ...plan.planted.map((candidate, index) => () => plantedItem(work, candidate, `planted-${index + 1}`)),
+        ...plan.controls.map((candidate, index) => async (): Promise<JudgeCheckItem> => ({ kind: 'control', trialId: candidate.trial.id, expectationId: candidate.expectationId,
+          ...await judgeCopy(work, candidate, freshCopy(candidate.trial), `control-${index + 1}`) })),
+      ];
+      const items: JudgeCheckItem[] = new Array(jobs.length);
+      let next = 0;
+      const worker = async (): Promise<void> => { while (next < jobs.length) { const index = next++; items[index] = await jobs[index]!(); } };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, worker));
+      const judged = items.flatMap(item => item.receipt ? [`${item.receipt.provider}/${item.receipt.model}`] : []);
+      const check = judgeCheckSchema.parse({ protocol: JUDGE_CHECK_PROTOCOL, runId: record.id, ...judgeCheckCounts(items), items,
+        judgeModel: judged[0] ?? judgeModel(record) ?? 'неизвестен', builderModel: `${plantError.builder.provider}/${plantError.builder.id}`, usage, at: new Date().toISOString() });
+      await lab.store.writeJudgeCheck(check);
+      return check;
+    }, { budget: { calls: plan.calls, timeMs: record.settings.maxDurationMs }, timeoutMs: record.settings.timeoutMs, ownsMutation: true });
   });
 }
