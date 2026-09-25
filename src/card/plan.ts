@@ -251,7 +251,6 @@ export function planOutcomes(library: Pick<LibraryV2, 'plan' | 'cards'>, situati
       const card = cards.get(situation.scenarioId);
       return card?.scenarioRef?.scenarioId === scenario.id ? [{ situation, card }] : [];
     });
-
     // A situation still being checked is on its way, not unmeasured.
     const pending = (item: (typeof mine)[number]) => item.situation.outcome === 'unknown' && item.situation.reason === 'in_progress';
     const count = (items: typeof mine) => ({ passed: items.filter(item => item.situation.outcome === 'pass').length,
