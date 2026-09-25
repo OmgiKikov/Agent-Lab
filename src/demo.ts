@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
-import { createInputSchema, type CreateInput, type RunnableTarget } from './contracts.js';
-import type { MetricAssessment } from './assessment.js';
+import { createInputSchema, type CreateInput, type RunnableTarget, type TraceEvent } from './contracts.js';
+import { simulatorFidelity, type MetricAssessment } from './assessment.js';
 import type { Runtime } from './runtime.js';
 import type { DialogueProposal } from './card/proposal.js';
 import type { ReviewVerdict } from './card/review.js';
@@ -65,6 +65,19 @@ const DUTY: Record<string, 'ask' | 'explain'> = { ask_once: 'ask', refund_explan
 const asksNumber = (text: string) => /(?:уточните|сообщите|назовите|укажите|какой|номер.*\?).*номер|номер.*терминал.*\?/i.test(text);
 const DEMO_ONLY = 'Учебный пример поддерживает только свои два диалога и правило владельца. Для своих материалов выберите живой режим с моделью.';
 
+/** The teaching customer's one rule: after the opening, it says only the card's number, and only right after the agent asked for it. */
+function namesNumberWhenAsked(events: readonly TraceEvent[]): boolean {
+  let asked = false, opening = true;
+  for (const event of events) {
+    if (event.type === 'assistant') asked = asksNumber(event.text ?? '');
+    if (event.type !== 'user') continue;
+    if (opening) { opening = false; continue; }
+    if (!asked || !/терминала:\s*\d+/i.test(event.text ?? '')) return false;
+    asked = false;
+  }
+  return true;
+}
+
 /** The example's topic map is fixed, so its builder names no model: nothing is called and nothing is spent. */
 const DEMO_BUILDER = { provider: 'agent-lab', id: 'demo' };
 /** Both teaching dialogues ask for a refund: one topic. The answers pass the output contract a model's answer passes. */
@@ -100,7 +113,10 @@ export function createDemoRuntime(): Runtime {
       const tell = input.actions.find(a => a.id === 'disclose' || a.id.startsWith('tell_'));
       return { actionId: tell && asksNumber(reply) ? tell.id : input.actions.some(a => a.id === 'finish') ? 'finish' : 'leave' };
     },
-    /** The teaching judge: each duty of the example — a card's expectation or the old example's checkpoint — by a fixed reading of the dialogue. */
+    /**
+     * The teaching judge: each duty of the example — a card's expectation or the old example's checkpoint — by a fixed
+     * reading of the dialogue, and the customer's fidelity by the teaching customer's one rule.
+     */
     async assess({ scenario, trial }) {
       let hasNumber = false, repeated = false, asked = false;
       for (const event of trial.events) {
@@ -111,6 +127,10 @@ export function createDemoRuntime(): Runtime {
       const replies = trial.events.filter(e => e.type === 'assistant');
       const explained = replies.some(e => /Подайте заявление в поддержку/i.test(e.text ?? ''));
       return (scenario.metrics ?? []).map((metric): MetricAssessment => {
+        if (metric.id === simulatorFidelity.id) {
+          return { metricId: metric.id, result: namesNumberWhenAsked(trial.events) ? 'pass' : 'fail', evidence: trial.events.filter(e => e.type === 'user').map(e => e.seq),
+            rationale: 'Учебная проверка клиента: после первой реплики он называет номер терминала только в ответ на вопрос агента' };
+        }
         const duty = DUTY[metric.id];
         const pass = duty === 'ask' ? !repeated && (openingHasNumber || asked) : duty === 'explain' ? hasNumber && explained : undefined;
         return pass === undefined
