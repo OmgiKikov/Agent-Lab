@@ -1,4 +1,5 @@
 import { addUsage, emptyUsage, isCardExecution, type Experiment, type Trial } from '../contracts.js';
+import { recordedExpectationResult } from '../card/expectations.js';
 import { judgeModel } from '../comparison.js';
 import { assessTrial } from '../evaluation.js';
 import { scenarioSources } from '../judge.js';
@@ -38,13 +39,18 @@ function freshCopy(trial: Trial): Trial {
   return copy;
 }
 
-/** The run's judge on one copy, for one expectation: the verdict, and the receipt sealed as a run's is. */
+/**
+ * The run's judge on one copy, for one expectation: the verdict as the number would read it — through the
+ * expectation's channel, so a «fail» that cites no agent reply catches nothing — and the receipt sealed as a run's is.
+ */
 async function judgeCopy(work: Work, candidate: JudgeCheckCandidate, copy: Trial, name: string): Promise<Pick<JudgeCheckItem, 'result' | 'failure' | 'receipt'>> {
   const { record } = work;
   const scenario = { ...candidate.scenario, metrics: (candidate.scenario.metrics ?? []).filter(metric => metric.id === candidate.expectationId) };
+  const execution = candidate.scenario.execution;
+  const expectation = isCardExecution(execution) ? execution.evaluatorView.expectations.find(item => item.id === candidate.expectationId) : undefined;
   try {
-    const assessments = await assessTrial(work.runtime, scenario, scenarioSources(record, candidate.scenario), copy, work.ctx(name), record.requirements);
-    return { result: assessments.find(assessment => assessment.metricId === candidate.expectationId)?.result ?? 'unknown', ...(copy.judgeReceipt ? { receipt: copy.judgeReceipt } : {}) };
+    copy.assessments = await assessTrial(work.runtime, scenario, scenarioSources(record, candidate.scenario), copy, work.ctx(name), record.requirements);
+    return { result: (expectation && recordedExpectationResult(copy, expectation)) ?? 'unknown', ...(copy.judgeReceipt ? { receipt: copy.judgeReceipt } : {}) };
   } catch {
     return { result: null, failure: work.spent() ? 'stopped' : 'judge', ...(copy.judgeReceipt ? { receipt: copy.judgeReceipt } : {}) };
   }
