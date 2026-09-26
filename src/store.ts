@@ -12,7 +12,7 @@ import { libraryHash } from './scenario-library.js';
 import { LibraryMemo, ScenarioFiles } from './scenario-store.js';
 import type { z } from 'zod';
 import { isIdentifier } from './ids.js';
-import { LockedError, UnreadableRecord } from './errors.js';
+import { LockedError, NoSuchRecord, UnreadableRecord } from './errors.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import type { ScenarioLibrary } from './card/schema.js';
 import { readTopicMapFile, writeTopicMapFile } from './miner/files.js';
@@ -87,7 +87,7 @@ export class ExperimentStore {
   /** `processes`: what the system tells of the lock's holder (folder-lock.ts); injected only to check the lock's rules. */
   constructor(directory: string, private readonly processes: Processes = SYSTEM) { this.directory = resolve(directory); }
   private path(id: string): string {
-    if (!isIdentifier(id)) throw new Error('Invalid experiment ID');
+    if (!isIdentifier(id)) throw new NoSuchRecord(id, this.directory);
     return join(this.directory, `${id}.json`);
   }
   private files(): ScenarioFiles { return new ScenarioFiles(this.directory, this.memo); }
@@ -269,7 +269,7 @@ export class ExperimentStore {
     }
   }
   async get(id: string): Promise<Experiment> {
-    const file = await open(this.path(id), 'r');
+    const file = await open(this.path(id), 'r').catch(error => { throw (error as NodeJS.ErrnoException).code === 'ENOENT' ? new NoSuchRecord(id, this.directory) : error; });
     try {
       if ((await file.stat()).size > 50_000_000) throw new UnreadableRecord(id, false, 'она больше 50 МБ');
       const record = recordIn(id, await file.readFile('utf8'));

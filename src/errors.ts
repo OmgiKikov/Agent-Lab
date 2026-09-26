@@ -103,3 +103,15 @@ export function unreadableLines(unreadable: readonly UnreadableRecord[]): string
     ...(damaged.length ? [`Не читается ${records(damaged.length)}: ${damaged[0]!.reason}${damaged.length > 1 ? ' и другое' : ''}. Файлы оставлены как есть.`] : []),
   ];
 }
+
+/**
+ * No run or draft by that id in the data folder: an id that is not one (`../x`), or a record that is not there. It keeps
+ * a missing file's code, ENOENT, so a reader that falls back when a record is not written (a preview, an embedded source
+ * run) still does.
+ */
+export class NoSuchRecord extends Error {
+  readonly code = 'ENOENT';
+  constructor(readonly id: string, readonly directory: string) {
+    super(`Нет такого прогона или черновика: «${id.length > 80 ? `${id.slice(0, 80)}…` : id}» в папке данных ${directory}.`);
+  }
+}
