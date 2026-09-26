@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { DEFAULT_JUDGE, materialSources, settingsSchema, type CreateInput, type Settings } from '../contracts.js';
 import { Stopped } from '../errors.js';
 import { roleChoices } from '../llm/models.js';
+import { ProviderFailure } from '../llm/model-call.js';
 import type { BuilderModel } from '../miner/topic-map.js';
 import type { Runtime } from '../runtime.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { clip } from '../text.js';
 import { analysisConsent, analysisTime, continuationConsent, type AnalysisConsent, type ContinuationConsent } from '../discover/consent.js';
-import { analysisId, analysisJobs, continueFrom, runAnalysis, selectMore } from '../discover/analyze.js';
+import { analysisId, analysisJobs, continueFrom, runAnalysis, selectMore, unfittedCount } from '../discover/analyze.js';
 import { ANALYSIS_LIMIT, ANALYSIS_PROTOCOL, DEFAULT_ANALYSED, PER_TOPIC_LIMIT, analysisSchema, findingReviewSchema, logContractSchema, type LogAnalysis } from '../discover/schema.js';
 import type { Lab } from './context.js';
 
@@ -113,8 +114,11 @@ async function launch(lab: Lab, host: DiscoverHost, analysis: LogAnalysis, run: 
       analysis.status = unfinished === 'failed' ? 'failed' : 'stopped';
       analysis.unfinished = unfinished;
       analysis.error = clip(error instanceof Error ? error.message : String(error), 4000);
+      // What failed, by its class: the owner is told by the kind, the words of the error stay in `error`.
+      if (unfinished === 'failed') analysis.failure = error instanceof ProviderFailure ? error.retryable ? 'provider' : 'provider_refused' : 'other';
       for (const group of analysis.topics) if (!group.scenarioId && !group.planFailure) group.planFailure = 'not_reached';
-      await save(analysis.status === 'failed' ? `Разбор прервался: ${analysis.error}` : 'Разбор остановлен; найденное сохранено.').catch(() => {});
+      await save(analysis.status === 'failed' ? `Разбор прервался: ${analysis.failure === 'provider' ? 'связь с провайдером модели оборвалась' : analysis.failure === 'provider_refused' ? 'провайдер модели отказал' : 'произошла ошибка'}; найденное сохранено.`
+        : 'Разбор остановлен; найденное сохранено.').catch(() => {});
     } finally { if (host.live.current === analysis) delete host.live.current; }
   }, { budget: { calls: run.callCeiling, timeMs: analysisTime(run.conversations) }, timeoutMs: run.settings.timeoutMs });
   // Refused before it started (another operation is going on): the caller hears why. What the work did not survive
@@ -138,7 +142,7 @@ export async function analyze(lab: Lab, host: DiscoverHost, input: AnalyzeInput,
     formatVersion: 1, protocol: ANALYSIS_PROTOCOL, id: analysisId(), createdAt: now, updatedAt: now, status: 'running', message: 'Читаю логи.', mode: input.mode,
     task: input.task, logs: { importId: input.logs.id, contentHash: input.logs.contentHash, file: clip(input.file, 300), conversations: input.logs.sample?.dialogues ?? input.logs.dialogues.length + input.logs.rejected.length, readable: input.logs.dialogues.length,
       ...(contract ? { contract } : {}) },
-    selection: { requested, perTopic: PER_TOPIC_LIMIT, method: 'topics', picked: [], unjudgeable: [], beyond: 'shared' }, sources,
+    selection: { requested, perTopic: PER_TOPIC_LIMIT, method: 'topics', picked: [], unjudgeable: [], beyond: 'fitted' }, sources,
     models: { builder: { provider: builder.provider, model: builder.id }, judge: judgeOf(input.settings) },
     budget: { ceiling: options.callCeiling, spent: 0 }, topics: [], requirements: [], scenarios: [], assignments: [], findings: [], reviews: [],
   });
@@ -181,7 +185,7 @@ export async function continuationConsentOf(lab: Lab, host: DiscoverHost, input:
   if (!judge) throw new Error('Эта среда не умеет оценивать записанные разговоры.');
   const draft = continueFrom(earlier, batch, judge.protocolHash, { id: earlier.id, createdAt: earlier.createdAt, updatedAt: earlier.updatedAt, budget: earlier.budget, models: earlier.models, requested: requestedOf({ requested: input.more }) });
   return continuationConsent(lab.store, { earlier, draft, batch, more: requestedOf({ requested: input.more }), pendingJobs: analysisJobs(draft, batch, judge.protocolHash).length,
-    builder: host.builder(earlier.mode, settings), judge: judgeOf(settings) });
+    unfitted: unfittedCount(draft), builder: host.builder(earlier.mode, settings), judge: judgeOf(settings) });
 }
 
 /**

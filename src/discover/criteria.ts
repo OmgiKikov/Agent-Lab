@@ -13,19 +13,21 @@ import { ANALYSIS_PROTOCOL, type FindingSkip, type LogAnalysis, type LogContract
 
 /*
  * What a log analysis asks the judge: an expectation of a topic's plan (card/plan.ts) — a criterion (criterion.ts): the
- * owner's rules on verbatim quotes, the ways, the violation, the channel — put to one logged conversation, exactly as a
- * card's expectation is put to its conversation in a calibration (card/log-judge.ts): the same frozen `logged-v2` input,
- * the same two votes, the same channel rule. What differs is who owns the criterion: the plan, not an accepted card, so
- * nothing of a card or a run is in its address.
+ * owner's rules on verbatim quotes, the ways, the violation, the channel — put to one logged conversation, as a card's
+ * expectation is put to its conversation in a calibration (card/log-judge.ts): the same two votes, the same channel rule,
+ * and the frozen `logged-v3` input — `logged-v2` with the situation the expectation is for (the plan's question and the
+ * circumstances of the conversation's variation), because the plan was made over a topic, not from this conversation.
+ * What differs is who owns the criterion: the plan, not an accepted card, so nothing of a card or a run is in its address.
  *
  *   plan expectation ─► criterion (its channel the plan's: the reply unless the logs recorded tools and the plan chose one)
  *                    ─► criterion hash: the same criterion a check of the problem carries into its situations (discover/verify.ts)
  *   criterion + what the judge reads of it + import + conversation + judge protocol ─► key: while none changed, a finding holds
  *
- * Which expectations apply to a conversation is the plan's word, not the judge's: the plan names each analysed
- * conversation under the variation of the topic it stands for, and a variation's expectations are the ones that apply —
- * a conversation it named under none gets the expectations every variation shares. The judge then still decides whether
- * the moment of the expectation came at all (both conditions not met: not exercised). A criterion seen on the tools or the
+ * Which expectations apply to a conversation is the planner's word, not the judge's: the plan names each of its examples
+ * under the variation it stands for, and the planner fits every other conversation of the topic to a variation or to
+ * none (discover/analyze.ts fit); a variation's expectations and the shared ones apply. The judge then still decides
+ * whether this customer came with the situation at all and whether the moment of the expectation came (both conditions
+ * not met: not exercised). A criterion seen on the tools or the
  * state meets a log that did not record that channel completely: the judge is not asked (calibration-scope.ts logSkip).
  *
  * What a criterion requires and what a log observes are kept apart (analysisSkip). A criterion that requires a call of a
@@ -114,10 +116,13 @@ export function analysisJob(analysis: Pick<LogAnalysis, 'task' | 'sources' | 're
   const requirements: Requirement[] = analysis.requirements.filter(requirement => cited.has(requirement.id));
   const criterion = criterionOf(expectation, analysis.requirements);
   if (!criterion) throw new Error('Правило ожидания не найдено среди правил разбора.');
+  // The situation the expectation is for: the plan's question and the circumstances of the conversation's variation.
+  const variation = variationId ? scenario.variations.find(item => item.id === variationId) : undefined;
   // The rubric of a card's expectation seen on the tools, as a run and a calibration judge it (card/compile.ts).
   const request: Omit<LogJudgeRequest, 'key'> = { expectation: judged, letter, card, rubric: expectationRubric(judged, letter, card, { toolLog: judged.observation === 'tool' }), requirements,
     sources: judgedSources(analysis, expectation.requirementIds), importContentHash: batch.contentHash,
-    dialogue: { observation: dialogue.observation, events: dialogue.events } };
+    dialogue: { observation: dialogue.observation, events: dialogue.events },
+    situation: { question: scenario.question, ...(variation ? { circumstances: variation.title } : {}) } };
   // What the judge reads apart from the conversation — the rubric, the rules, the sources — is in the key beside the criterion.
   const { dialogue: _dialogue, importContentHash: _import, ...judgedInput } = logJudgeInput({ ...request, key: '' });
   const hash = criterionHash(criterion);

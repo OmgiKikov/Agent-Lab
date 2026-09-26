@@ -23,7 +23,8 @@ import { clip } from '../text.js';
 import { countText } from '../plural.js';
 import type { Operation } from '../lab/operation.js';
 import { analysisJob, applicableExpectations, planAssignments, unjudgeable, type AnalysisJob } from './criteria.js';
-import { ANALYSIS_TOTAL_LIMIT, findingSchema, type Finding, type LogAnalysis, type LogContract, type PlanIssue } from './schema.js';
+import { FIT_BATCH, fitAnswerSchema, fitProblem, NO_FIT, type FitRequest } from './fit.js';
+import { ANALYSIS_PROTOCOL, ANALYSIS_TOTAL_LIMIT, findingSchema, type Finding, type LogAnalysis, type LogContract, type PlanIssue } from './schema.js';
 
 /*
  * The work of one log analysis (DISCOVER), after the owner agreed to its ceiling. No situation is made and nothing of the
@@ -38,21 +39,27 @@ import { ANALYSIS_TOTAL_LIMIT, findingSchema, type Finding, type LogAnalysis, ty
  *                 verbatim (card/plan.ts) ─► the variation each example stands for. A plan no answer bound is Lab's work
  *                 not finishing, typed (PLAN_ISSUES); a plan that says the sources are silent is a gap only once the
  *                 reviewer confirms it (card/review.ts gapRequest, as a preparation's checkGap does)
- *   3. findings   per example, each expectation of its variation; per extra conversation, the expectations every
- *                 variation shares (no plan read it, so no variation is its) ─► the log judge, two votes
- *                 (card/log-judge.ts); one the log cannot show is kept as skipped, with no call (criteria.ts analysisSkip)
+ *   3. fit        per topic, its extra conversations' customer words ─► fitConversations (discover/fit.ts) ─► each under
+ *                 the variation it is in, or none. The ones the topic's plan does not fit become the examples of the
+ *                 topic's `others` group, planned (2) and fitted (3) the same way; what that plan does not fit either is
+ *                 never judged, and said so
+ *   4. findings   per conversation, each expectation of its variation and the shared ones ─► the log judge, two votes, told
+ *                 the situation the expectation is for (card/log-judge.ts `logged-v3`); one the log cannot show is kept as
+ *                 skipped, with no call (criteria.ts analysisSkip)
  *
  * Every step is saved before the next call, so what was paid for is never lost: a stop, the budget or a failure leave
- * the findings made so far, and the analysis says what it did not reach. A continuation (continueFrom) is a new analysis
- * that carries the earlier one's plans and every finding whose key still holds, and selects the next conversations.
+ * the findings made so far, and the analysis says what it did not reach. A provider that does not answer ends one step,
+ * never the analysis: a topic's plan or its fit is left unfinished (`provider_failed`), a judgment incomplete, and the rest
+ * goes on; nothing is asked again silently. A continuation (continueFrom) is a new analysis that carries the earlier one's
+ * plans and every complete finding whose key still holds, asks again what did not finish, and selects the next conversations.
  */
 
 /** Findings judged at once: two votes each, so four keep eight requests in flight, as a calibration does. */
 const CONCURRENCY = 4;
 /** The quotes a finding keeps of the votes that decided it. */
 const EVIDENCE = 12;
-/** Groups an analysis keeps at most (analysisSchema.topics). */
-const GROUPS = 20;
+/** Groups an analysis keeps at most (analysisSchema.topics): a topic's first group and the group of what its plan did not fit. */
+const GROUPS = 40;
 
 export interface AnalysisWork {
   runtime: Runtime;
@@ -119,7 +126,7 @@ async function select(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisW
     groups = pickInOrder(batch.dialogues.map(dialogue => dialogue.id).filter(id => !skip.has(id)), requested, perTopic).slice(0, GROUPS);
     analysis.selection.method = 'order';
   }
-  analysis.selection.beyond = 'shared';
+  analysis.selection.beyond = 'fitted';
   analysis.topics = groups;
   analysis.selection.picked = groups.flatMap(group => [...group.dialogueIds, ...group.extra ?? []]);
   await work.checkpoint(`Выбрано ${countText(analysis.selection.picked.length, ['разговор', 'разговора', 'разговоров'])} из ${countText(groups.length, ['темы', 'тем', 'тем'])}. Нахожу правила, которые к ним относятся.`);
@@ -155,7 +162,7 @@ export async function selectMore(analysis: LogAnalysis, batch: ImportBatch, more
     added.push(...groups.flatMap(group => group.dialogueIds));
   }
   analysis.selection.picked = [...analysis.selection.picked, ...added];
-  analysis.selection.beyond = 'shared';
+  analysis.selection.beyond = 'fitted';
   return added;
 }
 
@@ -175,6 +182,12 @@ function channelsOf(batch: ImportBatch, dialogueIds: readonly string[], contract
 
 /** A request the provider refused because it does not fit the model's window. */
 const overWindow = (error: unknown): boolean => error instanceof ProviderFailure && error.delivery === 'refused' && error.kind === 'context limit';
+/**
+ * The provider did not answer one call for a passing reason — a connection that broke, a request that never came back, a
+ * rate limit —, and no stop of the operation is behind it: that one step did not finish, and the rest goes on. A refusal
+ * that repeats on every call (no access, no credit) is not one: it ends the analysis, as a stop does.
+ */
+const providerFailed = (error: unknown, signal: AbortSignal): boolean => error instanceof ProviderFailure && error.retryable && !signal.aborted;
 
 /** The materials one topic's plan reads: all of them when they fit one request, otherwise the prompts and the articles chosen for the topic. */
 async function planSources(analysis: LogAnalysis, examples: PlanCall['examples'], work: AnalysisWork): Promise<Source[] | PlanIssue> {
@@ -189,6 +202,7 @@ async function planSources(analysis: LogAnalysis, examples: PlanCall['examples']
   catch (error) {
     if (error instanceof StructuredTaskError) return 'source_selection';
     if (overWindow(error)) return 'context_window';
+    if (providerFailed(error, work.ctx.signal)) return 'provider_failed';
     throw error;
   }
 }
@@ -211,8 +225,7 @@ function issueOf(error: StructuredTaskError): PlanIssue {
  */
 async function planTopic(analysis: LogAnalysis, batch: ImportBatch, group: Group, work: AnalysisWork): Promise<Planned> {
   const examples = group.dialogueIds.flatMap(id => {
-    const dialogue = batch.dialogues.find(item => item.id === id);
-    const customer = dialogue ? loggedMessages(dialogue).filter(message => message.role === 'user').slice(0, PLAN_MESSAGES).map(message => clip(message.content, PLAN_MESSAGE_CHARS)) : [];
+    const customer = customerWords(batch, id);
     return customer.length ? [{ dialogueId: id, customer }] : [];
   });
   if (!work.runtime.proposeScenario) return { issue: 'planner_unavailable' };
@@ -226,9 +239,11 @@ async function planTopic(analysis: LogAnalysis, batch: ImportBatch, group: Group
   let answer: unknown;
   try { answer = await work.runtime.proposeScenario({ task: analysis.task, call }, work.ctx); }
   catch (error) {
-    // No answer that holds, or a request too large for the model's window: Lab's work on the topic did not finish; anything else stops the analysis.
+    // No answer that holds, a request too large for the model's window, or a provider that did not answer: Lab's work on
+    // the topic did not finish; a stop, or anything else, stops the analysis.
     if (error instanceof StructuredTaskError) return { issue: issueOf(error) };
     if (overWindow(error)) return { issue: 'context_window' };
+    if (providerFailed(error, work.ctx.signal)) return { issue: 'provider_failed' };
     throw error;
   }
   // The runtime's own check is not taken on trust: the harness parses, finds every quote and holds every kind to the rulebook.
@@ -261,11 +276,19 @@ async function reviewGap(batch: ImportBatch, group: Group, asks: string, read: r
     return { ...unconfirmed(verdict?.reason ?? 'проверяющий не ответил'), reviewer: clip(review.model, 200) };
   } catch (error) {
     if (error instanceof StructuredTaskError || overWindow(error)) return unconfirmed('проверяющий не дал ответа, который проходит проверку Lab');
+    if (providerFailed(error, work.ctx.signal)) return unconfirmed('связь с моделью проверяющего оборвалась — проверить, что правила нет, не удалось');
     throw error;
   }
 }
 
-async function plan(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWork): Promise<void> {
+/** The customer's own words of a logged conversation, as a plan's example reads them: never the old agent's replies. */
+function customerWords(batch: ImportBatch, dialogueId: string): string[] {
+  const dialogue = batch.dialogues.find(item => item.id === dialogueId);
+  return dialogue ? loggedMessages(dialogue).filter(message => message.role === 'user').slice(0, PLAN_MESSAGES).map(message => clip(message.content, PLAN_MESSAGE_CHARS)) : [];
+}
+
+/** Every group with no plan yet, planned in turn; a gap the planner reports goes to the reviewer. */
+async function planGroups(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWork): Promise<void> {
   for (const [index, group] of analysis.topics.entries()) {
     if (group.scenarioId || group.planFailure) continue;
     work.ctx.signal.throwIfAborted();
@@ -285,12 +308,98 @@ async function plan(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWor
     analysis.scenarios = [...analysis.scenarios.filter(item => item.id !== scenario.id), scenario];
     analysis.assignments = [...analysis.assignments.filter(item => !group.dialogueIds.includes(item.dialogueId)), ...planAssignments(scenario, group.dialogueIds)];
   }
-  // A topic's extra conversations: no plan read them, so none is an example of a variation — its shared expectations apply.
+}
+
+/** The extra conversations of a group the planner has not fitted yet: none assigned to its plan, none found unfit. */
+const unfitted = (analysis: LogAnalysis, group: Group): string[] => (group.extra ?? [])
+  .filter(id => !group.unfit?.includes(id) && !analysis.assignments.some(item => item.dialogueId === id && item.scenarioId === group.scenarioId));
+
+/**
+ * Every planned group's extra conversations fitted to its plan, a call for at most FIT_BATCH of them: each under the
+ * variation the planner says it is in, or unfit. A call that did not finish leaves the rest unfitted, with why — never
+ * judged by the plan; a continuation fits them again.
+ */
+async function fitGroups(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWork): Promise<void> {
   for (const group of analysis.topics) {
-    if (!group.scenarioId || !group.extra?.length) continue;
-    const assigned = new Set(analysis.assignments.map(item => item.dialogueId));
-    analysis.assignments.push(...group.extra.filter(id => !assigned.has(id)).map(dialogueId => ({ dialogueId, scenarioId: group.scenarioId! })));
+    const scenario = analysis.scenarios.find(item => item.id === group.scenarioId);
+    if (!scenario || group.fitIssue) continue;
+    const pending = unfitted(analysis, group);
+    if (!pending.length) continue;
+    if (!work.runtime.fitConversations) { group.fitIssue = 'planner_unavailable'; continue; }
+    for (let at = 0; at < pending.length; at += FIT_BATCH) {
+      const conversations = pending.slice(at, at + FIT_BATCH).map(dialogueId => ({ dialogueId, customer: customerWords(batch, dialogueId) }));
+      work.ctx.signal.throwIfAborted();
+      await work.checkpoint(`Сверяю другие разговоры темы «${group.title}» с найденными правилами — ${countText(conversations.length, ['разговор', 'разговора', 'разговоров'])}`);
+      const request: FitRequest = { task: analysis.task, topic: group.title, question: scenario.question,
+        variations: scenario.variations.map(variation => ({ id: variation.id, title: variation.title })), conversations };
+      if (workInputIssue(request)) { group.fitIssue = 'context_window'; break; }
+      let answer: unknown;
+      try { answer = await work.runtime.fitConversations(request, work.ctx); }
+      catch (error) {
+        if (error instanceof StructuredTaskError) { group.fitIssue = issueOf(error); break; }
+        if (overWindow(error)) { group.fitIssue = 'context_window'; break; }
+        if (providerFailed(error, work.ctx.signal)) { group.fitIssue = 'provider_failed'; break; }
+        throw error;
+      }
+      // The runtime's own check is not taken on trust: every conversation answered once, by a variation of this plan or none.
+      const parsed = fitAnswerSchema(request).safeParse(answer);
+      if (!parsed.success || fitProblem(parsed.data, request)) { group.fitIssue = 'answer_schema'; break; }
+      for (const fit of parsed.data.fits) {
+        if (fit.variation === NO_FIT) group.unfit = [...group.unfit ?? [], fit.dialogueId];
+        else analysis.assignments.push({ dialogueId: fit.dialogueId, scenarioId: scenario.id, variationId: fit.variation });
+      }
+    }
   }
+}
+
+/** Extra conversations of an analysis the planner has not fitted to their group's plan yet: fitted before they are judged. */
+export const unfittedCount = (analysis: LogAnalysis): number => analysis.selection.beyond === 'fitted'
+  ? analysis.topics.reduce((sum, group) => sum + (group.scenarioId ? unfitted(analysis, group).length : 0), 0) : 0;
+
+/** The title of the group of a topic's conversations its first plan did not fit. */
+const othersTitle = (title: string): string => clip(`${title} — другие вопросы`, 120);
+
+/**
+ * The conversations a topic's first plan did not fit, moved to the topic's `others` group — its examples when the group is
+ * new, its extra conversations to fit when it has a plan already. What an `others` group's plan does not fit stays unfit.
+ * True when a conversation moved, so there is a plan or a fit to make.
+ */
+function gatherOthers(analysis: LogAnalysis): boolean {
+  let moved = false;
+  for (const group of [...analysis.topics]) {
+    if (group.others || !group.unfit?.length) continue;
+    const title = othersTitle(group.title);
+    const others = analysis.topics.find(item => item.others && item.title === title);
+    const placed = new Set(others ? [...others.dialogueIds, ...others.extra ?? []] : []);
+    const fresh = group.unfit.filter(id => !placed.has(id));
+    if (!fresh.length) continue;
+    const perTopic = analysis.selection.perTopic;
+    if (others) others.extra = [...others.extra ?? [], ...fresh];
+    else if (analysis.topics.length < GROUPS) {
+      analysis.topics.push({ title, ...(group.topicId ? { topicId: group.topicId } : {}), dialogueIds: fresh.slice(0, perTopic),
+        ...(fresh.length > perTopic ? { extra: fresh.slice(perTopic) } : {}), others: true });
+    } else continue;
+    moved = true;
+  }
+  return moved;
+}
+
+async function plan(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWork): Promise<void> {
+  if (analysis.selection.beyond !== 'fitted') {
+    // An analysis made before extra conversations were fitted keeps its reading: they are judged on the shared expectations.
+    await planGroups(analysis, batch, work);
+    for (const group of analysis.topics) {
+      if (!group.scenarioId || !group.extra?.length) continue;
+      const assigned = new Set(analysis.assignments.map(item => item.dialogueId));
+      analysis.assignments.push(...group.extra.filter(id => !assigned.has(id)).map(dialogueId => ({ dialogueId, scenarioId: group.scenarioId! })));
+    }
+    return;
+  }
+  // Plans, then the fit of every other conversation; what a topic's plan does not fit gets a plan of its own — once.
+  do {
+    await planGroups(analysis, batch, work);
+    await fitGroups(analysis, batch, work);
+  } while (gatherOthers(analysis));
 }
 
 /** What the votes that decided a finding cite, verbatim, and the first of their reasons. */
@@ -307,18 +416,24 @@ function evidenceOf(audit: JudgeAudit | undefined, result: Finding['result']): P
 }
 
 /**
- * Every expectation of every analysed conversation, in topic order: of its variation for a plan's example, the shared ones
- * for an extra conversation. With `pending`, only those with no finding yet.
+ * Every expectation of every analysed conversation, in topic order: those of its variation and the shared ones — for a
+ * plan's example, the variation the plan names; for an extra conversation, the one the planner fitted it to (`fitted`),
+ * never one it found unfit or has not fitted yet; before extra conversations were fitted, the shared ones only. With
+ * `pending`, only those with no finding yet.
  */
 export function analysisJobs(analysis: LogAnalysis, batch: ImportBatch, protocolHash: string, pending = true): AnalysisJob[] {
   const done = new Set(pending ? analysis.findings.map(finding => finding.key) : []);
+  const fitted = analysis.selection.beyond === 'fitted';
   return analysis.topics.flatMap(group => {
     const scenario = analysis.scenarios.find(item => item.id === group.scenarioId);
     if (!scenario) return [];
     return [...group.dialogueIds, ...group.extra ?? []].flatMap(dialogueId => {
       const dialogue = batch.dialogues.find(item => item.id === dialogueId);
-      if (!dialogue) return [];
-      const variationId = group.dialogueIds.includes(dialogueId) ? analysis.assignments.find(item => item.dialogueId === dialogueId)?.variationId : undefined;
+      if (!dialogue || group.unfit?.includes(dialogueId)) return [];
+      const example = group.dialogueIds.includes(dialogueId);
+      const assignment = analysis.assignments.find(item => item.dialogueId === dialogueId && item.scenarioId === scenario.id);
+      if (!example && fitted && !assignment) return [];
+      const variationId = example || fitted ? assignment?.variationId : undefined;
       return applicableExpectations(scenario, variationId).map(expectation => analysisJob(analysis, batch, scenario, expectation, dialogue, variationId, protocolHash))
         .filter(job => !done.has(job.key));
     });
@@ -338,7 +453,7 @@ async function judge(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWo
       // The log cannot show it: kept as a finding that decided nothing, with no call (as a calibration keeps it).
       if (job.skipped) {
         analysis.findings.push(findingSchema.parse({ key: job.key, dialogueId: job.dialogueId, scenarioId: job.scenarioId, expectationId: job.expectationId,
-          ...(job.variationId ? { variationId: job.variationId } : {}), criterionHash: job.criterionHash, mode: 'logged-v2', protocolHash: judge.protocolHash,
+          ...(job.variationId ? { variationId: job.variationId } : {}), criterionHash: job.criterionHash, mode: logJudgeInput(job.request).mode, protocolHash: judge.protocolHash,
           inputHash: fingerprint(logJudgeInput(job.request)), provider: judge.provider, model: judge.model, skipped: job.skipped, votes: [], result: 'unknown', complete: true, evidence: [] }));
         continue;
       }
@@ -348,7 +463,7 @@ async function judge(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWo
       try {
         const judgment = await judge.assess(job.request, ctx);
         analysis.findings.push(findingSchema.parse({ key: job.key, dialogueId: job.dialogueId, scenarioId: job.scenarioId, expectationId: job.expectationId,
-          ...(job.variationId ? { variationId: job.variationId } : {}), criterionHash: job.criterionHash, mode: 'logged-v2', ...judgment, ...evidenceOf(audit, judgment.result) }));
+          ...(job.variationId ? { variationId: job.variationId } : {}), criterionHash: job.criterionHash, mode: logJudgeInput(job.request).mode, ...judgment, ...evidenceOf(audit, judgment.result) }));
         const violations = new Set(analysis.findings.filter(finding => finding.result === 'fail').map(finding => finding.dialogueId)).size;
         await work.checkpoint(`Оцениваю разговоры: ${analysis.findings.length} из ${total} проверок${violations ? ` · нарушения в ${countText(violations, ['разговоре', 'разговорах', 'разговорах'])}` : ''}`);
       } catch (error) { stop ??= error; }
@@ -367,18 +482,28 @@ export async function runAnalysis(analysis: LogAnalysis, batch: ImportBatch, wor
 
 /**
  * A continuation of `earlier` as a new analysis, before anything is spent: its selection, plans and requirements, the
- * owner's words, and every finding whose key the current judge still gives — the same criterion, what the judge reads of
- * it, the same conversation of the same import, the same judge protocol —, so no call is made again for it. A finding of
- * another judge or of changed inputs is not carried: the earlier analysis keeps it. A topic whose plan Lab did not finish
- * — never a confirmed gap — is planned again under the new ceiling.
+ * owner's words, and every complete finding whose key the current judge still gives — the same criterion, what the judge
+ * reads of it (the situation included), the same conversation of the same import, the same judge protocol —, so no call is
+ * made again for it. A finding of another judge or of changed inputs is not carried: the earlier analysis keeps it; one
+ * the judge did not finish is asked again. A topic whose plan or fit Lab did not finish — never a confirmed gap — is
+ * planned or fitted again under the new ceiling; the extra conversations of an analysis made before they were fitted are
+ * fitted now.
  */
 export function continueFrom(earlier: LogAnalysis, batch: ImportBatch, protocolHash: string, fresh: Pick<LogAnalysis, 'id' | 'createdAt' | 'updatedAt' | 'budget' | 'models'> & { requested: number }): LogAnalysis {
-  const next: LogAnalysis = structuredClone({ ...earlier, id: fresh.id, createdAt: fresh.createdAt, updatedAt: fresh.updatedAt, budget: fresh.budget, models: fresh.models,
-    status: 'running' as const, message: 'Продолжаю разбор.', selection: { ...earlier.selection, requested: fresh.requested } });
-  delete next.unfinished; delete next.error;
-  for (const group of next.topics) if (group.planFailure && !group.rulesGap?.confirmed) { delete group.planFailure; delete group.planIssue; delete group.rulesGap; }
+  const next: LogAnalysis = structuredClone({ ...earlier, id: fresh.id, protocol: ANALYSIS_PROTOCOL, createdAt: fresh.createdAt, updatedAt: fresh.updatedAt, budget: fresh.budget, models: fresh.models,
+    status: 'running' as const, message: 'Продолжаю разбор.', selection: { ...earlier.selection, requested: fresh.requested, beyond: 'fitted' as const } });
+  delete next.unfinished; delete next.error; delete next.failure;
+  for (const group of next.topics) {
+    if (group.planFailure && !group.rulesGap?.confirmed) { delete group.planFailure; delete group.planIssue; delete group.rulesGap; }
+    delete group.fitIssue;
+  }
+  if (earlier.selection.beyond !== 'fitted') {
+    // Judged on the shared expectations before, fitting or not: now fitted like any other.
+    const extra = new Set(next.topics.flatMap(group => group.extra ?? []));
+    next.assignments = next.assignments.filter(item => !extra.has(item.dialogueId) || item.variationId !== undefined);
+  }
   const holding = new Set(analysisJobs(next, batch, protocolHash, false).map(job => job.key));
-  next.findings = next.findings.filter(finding => holding.has(finding.key));
+  next.findings = next.findings.filter(finding => holding.has(finding.key) && finding.complete);
   next.continues = { analysisId: earlier.id, picked: earlier.selection.picked.length, reused: next.findings.length };
   return next;
 }

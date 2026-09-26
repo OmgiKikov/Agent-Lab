@@ -2,7 +2,7 @@ import { countText, pluralForm } from '../plural.js';
 import { clip } from '../text.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import type { PlanIssue } from './schema.js';
-import type { AnalysisView, Example, FindingUndecided, ProblemView } from './view.js';
+import type { AnalysisView, Example, FindingUndecided, ProblemView, Unreached } from './view.js';
 import type { ProblemCheck } from './check.js';
 
 /*
@@ -38,13 +38,24 @@ const ISSUE: Readonly<Record<PlanIssue, string>> = {
   context_window: 'разговоры темы вместе с материалами не поместились в окно модели',
   source_selection: 'Lab не смог выбрать статьи под эту тему',
   planner_unavailable: 'в этой среде нет модели, которая находит правила',
+  provider_failed: 'провайдер модели не ответил — связь оборвалась',
 };
+/** Why a selected conversation was never judged, after «не оценены N:». */
+const UNREACHED: Readonly<Record<Unreached, string>> = {
+  no_rules: 'для их темы в ваших материалах нет правил — проверяющий подтвердил',
+  lab_unfinished: 'работа Lab над их темой не закончилась',
+  unfit: 'не подошли ни к одному плану своей темы',
+  no_duty: 'к их варианту плана не относится ни одно правило',
+  not_reached: 'разбор до них не дошёл',
+};
+/** A sentence of a model that ends with its own period, ready to stand before another. */
+const sentence = (text: string): string => text.endsWith('.') ? text.slice(0, -1) : text;
 
 /** A topic with no plan, in the owner's words: whose it is — Lab's work, Lab's unconfirmed reading, or the owner's confirmed gap. */
 export function gapLine(gap: AnalysisView['gaps'][number]): string {
   const size = countText(gap.conversations, CONVERSATIONS);
-  if (gap.rulesGap?.confirmed) return `Тема «${gap.title}» (${size}): правила нет — ${gap.rulesGap.asks}. Проверяющий подтвердил, что в прочитанных материалах об этом не сказано.`;
-  if (gap.rulesGap) return `Тема «${gap.title}» (${size}) не оценена: Lab не нашёл правила для запроса «${gap.rulesGap.asks}», но проверяющий не подтвердил, что его нет${gap.rulesGap.reason ? ` (${gap.rulesGap.reason})` : ''}. Это не пробел в ваших правилах.`;
+  if (gap.rulesGap?.confirmed) return `Тема «${gap.title}» (${size}): правила нет — ${sentence(gap.rulesGap.asks)}. Проверяющий подтвердил, что в прочитанных материалах об этом не сказано.`;
+  if (gap.rulesGap) return `Тема «${gap.title}» (${size}) не оценена: Lab не нашёл правила для запроса «${sentence(gap.rulesGap.asks)}», но проверяющий не подтвердил, что его нет${gap.rulesGap.reason ? ` (${sentence(gap.rulesGap.reason)})` : ''}. Это не пробел в ваших правилах.`;
   const why = gap.reason === 'unusable' ? gap.issue ? ISSUE[gap.issue] : GAP.unusable : GAP[gap.reason];
   return `Тема «${gap.title}» (${size}) не оценена: ${why}. Это работа Lab, а не ваши правила.`;
 }
@@ -54,6 +65,12 @@ const UNFINISHED: Readonly<Record<NonNullable<AnalysisView['unfinished']>, strin
   time: 'кончилось отведённое время',
   closing: 'Pi закрылся',
   failed: 'произошла ошибка',
+};
+/** What failed, when the analysis ended on a failure: said instead of «произошла ошибка» where it is known. */
+const FAILED: Readonly<Record<NonNullable<AnalysisView['failure']>, string>> = {
+  provider: 'связь с провайдером модели оборвалась',
+  provider_refused: 'провайдер модели отказал — проверьте доступ к модели и баланс',
+  other: 'произошла ошибка',
 };
 
 /** The violation in the owner's words: the rule's own description of it, or the duty that was not kept. */
@@ -112,8 +129,24 @@ export function headline(view: AnalysisView): string {
   const scope = coverage.processed === coverage.picked
     ? `Разобрано ${countText(coverage.processed, CONVERSATIONS)} из ${coverage.logged} в «${view.file}»`
     : `Разобрано ${coverage.processed} из ${countText(coverage.picked, OF_CONVERSATIONS)}, выбранных в «${view.file}» (в логе — ${coverage.logged})`;
-  const found = view.problems.length ? `нарушений правил — ${view.problems.length}` : coverage.decided ? 'нарушений правил не найдено' : 'ни одно правило не удалось оценить';
+  const found = view.problems.length ? `нарушено правил — ${view.problems.length}, в ${countText(view.violated, IN_CONVERSATIONS)}`
+    : coverage.decided ? 'нарушений правил не найдено' : 'ни одно правило не удалось оценить';
   return `${scope}: ${found}.`;
+}
+
+/**
+ * The way from the log to what was judged, in one sentence, and why each selected conversation that was not judged was
+ * not: the answer to «почему выбрано 24, оценено 18, а в логе 866».
+ */
+export function funnelLines(view: AnalysisView): string[] {
+  const { coverage } = view;
+  const read = coverage.readable < coverage.logged ? `Lab прочитал ${coverage.readable} (в одну загрузку входит не больше ${coverage.readable})` : `Lab прочитал все`;
+  const unreached = coverage.unreached.reduce((sum, item) => sum + item.count, 0);
+  return [
+    `Из ${countText(coverage.logged, OF_CONVERSATIONS)} лога ${read}, выбрал для разбора ${coverage.picked}, правила оценены в ${coverage.decided}.`,
+    ...(unreached ? [`Не оценены ${unreached}: ${coverage.unreached.map(item => `${item.count} — ${UNREACHED[item.reason]}`).join('; ')}.`] : []),
+    ...(coverage.undecided ? [`Ещё в ${countText(coverage.undecided, IN_CONVERSATIONS)} правила проверялись, но ни одно не удалось оценить — причины ниже.`] : []),
+  ];
 }
 
 /**
@@ -123,7 +156,7 @@ export function headline(view: AnalysisView): string {
  */
 export function pickedHow(coverage: Pick<AnalysisView['coverage'], 'method' | 'perTopic' | 'beyond'>): string {
   if (coverage.method === 'order') return 'темы не размечены, поэтому разобраны первые по порядку в логе';
-  return coverage.beyond === 'shared' ? 'места делятся между темами по их доле среди прочитанных разговоров; места, оставшиеся после округления, получают сначала темы без единого места'
+  return coverage.beyond ? 'места делятся между темами по их доле среди прочитанных разговоров; места, оставшиеся после округления, получают сначала темы без единого места'
     : `места делятся между темами по их доле среди прочитанных разговоров, не больше ${coverage.perTopic} из одной темы; места, оставшиеся после округления, получают сначала темы без единого места`;
 }
 
@@ -133,8 +166,10 @@ export function coverageLines(view: AnalysisView): string[] {
   const unread = coverage.logged - coverage.readable;
   const rest = coverage.judgeable - coverage.picked;
   return [
-    `Выбрано ${countText(coverage.picked, CONVERSATIONS)}; разобрано ${coverage.processed}; правила оценены в ${coverage.decided}${coverage.undecided ? `; в ${coverage.undecided} — ни одно не удалось оценить` : ''}${coverage.notReached ? `; до ${coverage.notReached} разбор не дошёл` : ''}.`,
+    ...funnelLines(view),
     ...(coverage.sharedOnly ? [`В ${countText(coverage.sharedOnly, IN_CONVERSATIONS)} сверх ${coverage.perTopic} примеров, по которым Lab нашёл правила темы, проверены только общие правила темы — правила отдельных вариантов к ним не прикладывались.`] : []),
+    ...(coverage.fitted || coverage.ownPlan ? [`Правила темы Lab находил по её первым разговорам; ${[...coverage.fitted ? [`${coverage.fitted} других Lab сверил с найденным планом и оценил по правилам их варианта`] : [],
+      ...coverage.ownPlan ? [`для ${coverage.ownPlan}, не подошедших к плану темы, нашёл правила отдельно`] : []].join(', ')}.`] : []),
     ...(view.continues ? [`Это продолжение разбора ${view.continues.analysisId}: там было выбрано ${view.continues.picked}; ${countText(view.continues.reused, ['оценка перенесена', 'оценки перенесены', 'оценок перенесено'])} без вызова модели.`] : []),
     ...(view.undecided.length ? [`Не удалось оценить: ${view.undecided.map(item => `${UNDECIDED[item.reason]} — ${item.count}`).join(', ')}.`] : []),
     ...(rest > 0 ? [`Не разбирались ${countText(rest, CONVERSATIONS)}: ${pickedHow(coverage)}. Их можно разобрать продолжением — сделанное не оплачивается повторно.`] : []),
@@ -169,7 +204,8 @@ export function analysisLines(view: AnalysisView, options: { examples?: number; 
   const shown = view.problems.slice(0, options.problems ?? 8);
   const lines = [headline(view)];
   if (view.status !== 'done' && view.status !== 'running') {
-    lines.push(`Разбор не закончен: ${view.unfinished ? UNFINISHED[view.unfinished] : 'процесс Lab завершился раньше'}. Найденное ниже сохранено.`);
+    const why = view.unfinished === 'failed' && view.failure ? FAILED[view.failure] : view.unfinished ? UNFINISHED[view.unfinished] : 'процесс Lab завершился раньше';
+    lines.push(`Разбор не закончен: ${why}. Найденное ниже сохранено; продолжение доделает остальное и не заплатит повторно за сделанное.`);
   }
   const traffic = trafficLine(view);
   if (traffic) lines.push(traffic);
@@ -192,9 +228,14 @@ export function analysisLines(view: AnalysisView, options: { examples?: number; 
 /** The one useful next step, by what the analysis found. */
 export function nextStep(view: AnalysisView): string {
   if (view.status === 'running') return 'Дождитесь конца разбора — итог придёт сам.';
+  // Work cut short is finished by a continuation, before anything is asked of the owner's rules.
+  if (view.failure === 'provider_refused') return 'Дальше: проверьте доступ к модели и баланс у провайдера, затем продолжите разбор — сделанное не оплачивается повторно.';
+  if (view.status === 'failed' || view.status === 'interrupted' || view.unfinished === 'budget' || view.unfinished === 'time') {
+    return 'Дальше: продолжите разбор — Lab доделает то, до чего не дошёл, и не заплатит повторно за уже сделанное.';
+  }
   if (view.problems.length) return 'Дальше: откройте пример нарушения и скажите, прав ли судья, — или сделайте из него проверку для новой версии агента.';
   // Only a gap the reviewer confirmed is the owner's to fill; Lab's own unfinished work is repeated by a continuation.
-  if (view.gaps.some(gap => gap.rulesGap?.confirmed)) return 'Дальше: допишите правило для темы, где проверяющий подтвердил, что правила нет.';
+  if (view.gaps.some(gap => gap.rulesGap?.confirmed)) return 'Дальше: добавьте в материалы правило для темы, где проверяющий подтвердил, что его нет, — например, тексты из кода агента, если оно записано там.';
   if (view.gaps.length) return 'Дальше: продолжите разбор — Lab попробует снова темы, где его работа не завершилась; ваши правила менять не нужно.';
   return 'Дальше: продолжите разбор следующими разговорами или разберите другую выгрузку.';
 }

@@ -171,7 +171,9 @@ const demoLogRespond: Respond = async (_prompt, input) => {
  */
 export function createDemoAnalysisRuntime(): Runtime {
   return { ...createDemoRuntime(), logJudge: { provider: DEMO_BUILDER.provider, model: DEMO_BUILDER.id, protocolHash: logProtocolHash(),
-    assess: (request, ctx) => judgeLogged(request, { provider: DEMO_BUILDER.provider, id: DEMO_BUILDER.id }, ctx, demoLogRespond) } };
+    assess: (request, ctx) => judgeLogged(request, { provider: DEMO_BUILDER.provider, id: DEMO_BUILDER.id }, ctx, demoLogRespond) },
+    // The teaching logs hold one question: every other conversation of its topic is in the plan's first variation.
+    async fitConversations(input) { return { fits: input.conversations.map(conversation => ({ dialogueId: conversation.dialogueId, variation: input.variations[0]!.id })) }; } };
 }
 
 /** Explicit deterministic teaching runtime: no model is called, and nothing here is evidence of model quality. */

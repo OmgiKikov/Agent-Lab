@@ -26,6 +26,14 @@ export const CALIBRATION_PROTOCOL = 'sim-to-real-v1';
  */
 export const LOGGED_MODE_V1 = 'logged-v1';
 export const LOGGED_MODE = 'logged-v2';
+/**
+ * `logged-v3`: the `logged-v2` input with the situation the expectation is for — the question the customers of a plan
+ * come with and the circumstances of its variation — so the judge first decides whether the conversation's customer came
+ * with it at all. A log analysis (DISCOVER) asks it: its expectations come from a plan over a topic, and a conversation
+ * of the topic may never have been in that situation. A calibration judges a card on the conversation it was made from,
+ * and asks `logged-v2`.
+ */
+export const LOGGED_MODE_V3 = 'logged-v3';
 
 /**
  * The owner's word on which version of the agent wrote an import's logs; `null` — «неизвестно». A command of
@@ -129,6 +137,11 @@ export interface LogJudgeRequest {
   sources: Source[];
   importContentHash: string;
   dialogue: LoggedDialogue;
+  /**
+   * The situation the expectation is for (`logged-v3`): the question the plan's customers come with and, for a variation,
+   * its circumstances. Absent — `logged-v2`, the conversation is the expectation's own situation.
+   */
+  situation?: { question: string; circumstances?: string };
 }
 
 /** The judge's side of a receipt; the calibration adds what the key is made of. */

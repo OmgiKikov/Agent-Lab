@@ -9,6 +9,7 @@ import type { ImportBatch, LeftOutCount } from '../scenario-contracts.js';
 import { planTopicMap, reusableTopicMap, topicMapKey, type BuilderModel } from '../miner/topic-map.js';
 import type { ExperimentStore } from '../store.js';
 import { unjudgeable } from './criteria.js';
+import { FIT_BATCH } from './fit.js';
 import { ANALYSIS_LIMIT, ANALYSIS_TOTAL_LIMIT, PER_TOPIC_LIMIT, type LogAnalysis } from './schema.js';
 
 /*
@@ -19,6 +20,8 @@ import { ANALYSIS_LIMIT, ANALYSIS_TOTAL_LIMIT, PER_TOPIC_LIMIT, type LogAnalysis
  *   ceiling = the topic map (none when a map of these logs is reused)
  *           + a plan per topic, with the choice of its articles when the materials do not fit one request, and the
  *             reviewer's check when the plan says the materials are silent for the topic
+ *           + where a topic may hold more conversations than its plan reads: the fit of them (a call for FIT_BATCH),
+ *             and a plan and a fit of those the topic's plan does not fit
  *           + for each conversation, at most every expectation of a plan, two votes each
  *
  * A continuation (continuationConsent) is agreed to the same way: the next conversations, what is reused without a call.
@@ -33,11 +36,18 @@ const PLAN_TOPICS = 16;
 /** Votes of the judge on one expectation of one conversation. */
 const VOTES = 2;
 
-/** The most model calls an analysis of `conversations` makes: every answer passing the first time. */
-export function analysisCeiling(input: { task: string; sources: readonly Source[]; conversations: number; topicMapCalls: number; topics?: number }): number {
+/**
+ * The most model calls an analysis of `conversations` makes: every answer passing the first time. `extras`: a topic may
+ * hold more conversations than its plan read — always so in a continuation —, so they are fitted, and those the topic's
+ * plan does not fit get a plan and a fit of their own.
+ */
+export function analysisCeiling(input: { task: string; sources: readonly Source[]; conversations: number; topicMapCalls: number; topics?: number; extras?: boolean }): number {
   const reading = workInputIssue({ task: input.task, sources: input.sources }) ? READING_CALLS : 0;
   const topics = input.topics ?? Math.min(input.conversations, PLAN_TOPICS);
-  return input.topicMapCalls + topics * (1 + reading + GAP_REVIEW_CALLS) + input.conversations * PLAN_EXPECTATIONS * VOTES;
+  const plan = 1 + reading + GAP_REVIEW_CALLS;
+  const extras = input.extras ?? input.conversations > topics;
+  const fitting = extras ? topics * (plan + 2) + Math.ceil(input.conversations / FIT_BATCH) : 0;
+  return input.topicMapCalls + topics * plan + fitting + input.conversations * PLAN_EXPECTATIONS * VOTES;
 }
 
 /** The time an analysis may take: an hour, and a minute more for every conversation. */
@@ -113,6 +123,8 @@ export interface ContinuationConsent {
   reused: number; stale: number;
   /** Topics whose plan Lab did not finish before, planned again. */
   replanned: number;
+  /** Conversations selected before and not fitted to their topic's plan yet: fitted now, then judged. */
+  refitted: number;
   topicMapCalls: number; callCeiling: number; demo: boolean;
   readers: AnalysisConsent['readers'];
 }
@@ -122,21 +134,23 @@ export interface ContinuationConsent {
  * (discover/analyze.ts continueFrom) and `pendingJobs` the judgments its carried conversations still need.
  */
 export async function continuationConsent(store: Pick<ExperimentStore, 'readTopicMap'>, input: { earlier: LogAnalysis; draft: LogAnalysis; batch: ImportBatch; more: number; pendingJobs: number;
-  builder: BuilderModel; judge: { provider: string; model: string } }): Promise<ContinuationConsent> {
+  unfitted: number; builder: BuilderModel; judge: { provider: string; model: string } }): Promise<ContinuationConsent> {
   const { earlier, draft, batch } = input;
   const judgeable = batch.dialogues.filter(dialogue => !unjudgeable(dialogue)).length;
   const picked = earlier.selection.picked.length;
   const available = Math.max(0, Math.min(judgeable, ANALYSIS_TOTAL_LIMIT) - picked);
-  if (!available) throw new Error(`В разборе уже выбраны все ${countText(picked, CONVERSATIONS)}, которые можно оценить: продолжать нечем. Разберите другую выгрузку логов.`);
+  const replannedGroups = draft.topics.filter(group => !group.scenarioId);
+  // Lab's own unfinished work — a plan, a fit, a judgment — is done by a continuation even when every conversation is selected.
+  const unfinished = replannedGroups.length + input.unfitted + input.pendingJobs;
+  if (!available && !unfinished) throw new Error(`В разборе уже выбраны и оценены все ${countText(picked, CONVERSATIONS)}, которые можно оценить: продолжать нечем. Разберите другую выгрузку логов.`);
   const analysed = Math.min(input.more, available, ANALYSIS_LIMIT);
   const stored = earlier.selection.method === 'topics' ? await store.readTopicMap(topicMapKey(batch, input.builder)) : undefined;
   const topicMapCalls = earlier.selection.method !== 'topics' || reusableTopicMap(stored, batch, input.builder) ? 0 : planTopicMap(batch, input.builder, stored).calls;
-  const replannedGroups = draft.topics.filter(group => !group.scenarioId);
   const replannedConversations = replannedGroups.reduce((sum, group) => sum + group.dialogueIds.length + (group.extra?.length ?? 0), 0);
-  const plans = analysisCeiling({ task: draft.task, sources: draft.sources, conversations: analysed + replannedConversations, topicMapCalls,
-    topics: replannedGroups.length + Math.min(analysed, PLAN_TOPICS) });
+  const plans = analysisCeiling({ task: draft.task, sources: draft.sources, conversations: analysed + replannedConversations + input.unfitted, topicMapCalls,
+    topics: replannedGroups.length + Math.min(analysed + input.unfitted, PLAN_TOPICS), extras: true });
   return { analysisId: earlier.id, file: earlier.logs.file, judgeable, picked, available, analysed, reused: draft.continues?.reused ?? 0,
-    stale: earlier.findings.length - (draft.continues?.reused ?? 0), replanned: replannedGroups.length, topicMapCalls,
+    stale: earlier.findings.length - (draft.continues?.reused ?? 0), replanned: replannedGroups.length, refitted: input.unfitted, topicMapCalls,
     callCeiling: plans + input.pendingJobs * VOTES, demo: earlier.mode === 'demo', readers: earlier.mode === 'demo' ? [] : readersOf(input.builder, input.judge) };
 }
 
@@ -165,7 +179,7 @@ export function analysisConsentText(consent: AnalysisConsent, file: string): { q
         : `В логах ${countText(consent.conversations, CONVERSATIONS)}.`,
       ...(unread ? [`Не прочитаны ${countText(unread, CONVERSATIONS)}: ${leftOutWords(consent.unread).join(' · ')}.`] : []),
       ...(skippedTotal ? [`Нечего оценивать в ${countText(skippedTotal, IN_CONVERSATIONS)}: ${[...skipped.no_customer ? [`нет реплики клиента — ${skipped.no_customer}`] : [], ...skipped.no_agent_reply ? [`нет ответа агента — ${skipped.no_agent_reply}`] : []].join(', ')}.`] : []),
-      `Lab разметит темы всех прочитанных разговоров — это покажет, с чем приходят клиенты, — и разберёт до ${countText(consent.analysed, CONVERSATIONS_UP_TO)} из ${consent.judgeable}: места делятся между темами по их доле среди прочитанных разговоров, а места, оставшиеся после округления, получают сначала темы без единого места. Правила темы Lab находит по ${consent.perTopic} её разговорам; остальные разговоры темы оцениваются по общим правилам темы. Частота нарушений будет среди разобранных, а не по всему трафику. Продолжить разбор следующими разговорами можно позже — уже сделанное не оплачивается повторно.`,
+      `Lab разметит темы всех прочитанных разговоров — это покажет, с чем приходят клиенты, — и разберёт до ${countText(consent.analysed, CONVERSATIONS_UP_TO)} из ${consent.judgeable}: места делятся между темами по их доле среди прочитанных разговоров, а места, оставшиеся после округления, получают сначала темы без единого места. Правила темы Lab находит по её разговорам, не больше ${consent.perTopic}; другой разговор темы Lab сначала сверяет с найденным планом и оценивает по правилам того варианта, в котором клиент, — а разговорам, которые ни к одному варианту не подошли, ищет правила отдельно. Частота нарушений будет среди разобранных, а не по всему трафику. Продолжить разбор следующими разговорами можно позже — уже сделанное не оплачивается повторно.`,
       'Правила берутся из ваших материалов, каждое — на дословной цитате; к каждому разговору — только правила его ситуации.',
       consent.recorded.length ? `Вы подтвердили: лог записывает каждый вызов ${consent.recorded.join(', ')} в разговорах, помеченных полными. Если правило требует такой вызов, а его нет, — это нарушение. Отсутствие вызова других инструментов не доказывается.`
         : 'Что лог записывает каждый вызов инструментов, вы не подтверждали: если правило требует действия, а вызова в логе нет, Lab скажет «не видно», а не «нарушено».',
@@ -181,13 +195,15 @@ export function analysisConsentText(consent: AnalysisConsent, file: string): { q
 export function continuationConsentText(consent: ContinuationConsent): { question: string; lines: string[] } {
   const providers = new Set(consent.readers.map(reader => reader.provider));
   return {
-    question: `Продолжить разбор «${consent.file}»: ещё до ${countText(consent.analysed, CONVERSATIONS_UP_TO)}?`,
+    question: consent.analysed ? `Продолжить разбор «${consent.file}»: ещё до ${countText(consent.analysed, CONVERSATIONS_UP_TO)}?`
+      : `Доделать разбор «${consent.file}»? Новых разговоров не осталось — Lab закончит то, что не доделал.`,
     lines: [
       `Уже выбрано ${consent.picked} из ${countText(consent.judgeable, CONVERSATIONS_UP_TO)}, которые можно оценить; не выбрано ещё ${consent.available}. Следующие Lab возьмёт так же: по доле тем среди прочитанных разговоров, без отбора по исходу.`,
       consent.reused ? `Уже сделанные оценки — ${consent.reused} — перейдут без вызова модели: правила, логи и судья те же.` : 'Уже сделанных оценок, которые можно перенести, нет.',
       ...(consent.stale ? [`${countText(consent.stale, ['оценка', 'оценки', 'оценок'])} прошлого разбора сделаны другим судьёй или по другим правилам — Lab оценит их заново; прошлый разбор не меняется.`] : []),
       ...(consent.replanned ? [`Тем, где работа Lab не закончилась, — ${consent.replanned}: правила для них Lab попробует найти снова.`] : []),
-      'Новые разговоры тем, для которых правила уже найдены, оцениваются по общим правилам темы; для новой темы Lab найдёт правила по её разговорам.',
+      ...(consent.refitted ? [`${countText(consent.refitted, ['разговор', 'разговора', 'разговоров'])} прошлого разбора Lab сначала сверит с планом темы, потом оценит.`] : []),
+      'Новый разговор темы, для которой правила уже найдены, Lab сначала сверяет с её планом и оценивает по правилам того варианта, в котором клиент; разговорам, которые ни к одному варианту не подошли, и новой теме Lab ищет правила отдельно.',
       ...(consent.readers.length ? [`Тексты разговоров уйдут ${providers.size > 1 ? 'провайдерам' : `провайдеру ${consent.readers[0]!.provider}`}: ${consent.readers.map(reader => `${providers.size > 1 ? `${reader.provider} — ` : ''}модель ${reader.model} ${work(reader.roles)}`).join('; ')}.`] : []),
       consent.demo ? 'Учебный пример: оценки — заготовки без модели, ничего не тратится.' : `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. Это потолок, а не прогноз.`,
     ],

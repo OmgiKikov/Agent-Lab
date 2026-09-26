@@ -3,7 +3,7 @@ import { judgeAuditSchema, validateAssessments, type JudgeAudit, type MetricAsse
 import type { CallContext } from '../runtime.js';
 import { Stopped } from '../errors.js';
 import { castVotes, JUDGE_PROMPT, JUDGE_PROTOCOL, judgmentRows, type Respond } from '../judge.js';
-import { LOGGED_MODE, LOGGED_MODE_V1, logJudgmentReceiptSchema, type LogJudgeRequest, type LogJudgment, type LogJudgmentReceipt, type LoggedDialogue } from './calibration.js';
+import { LOGGED_MODE, LOGGED_MODE_V1, LOGGED_MODE_V3, logJudgmentReceiptSchema, type LogJudgeRequest, type LogJudgment, type LogJudgmentReceipt, type LoggedDialogue } from './calibration.js';
 import { channelHolds, COUNTING_VERSION } from './expectations.js';
 
 /*
@@ -16,8 +16,12 @@ import { channelHolds, COUNTING_VERSION } from './expectations.js';
  * synthetic one, and its protocol hash carries the mode, so neither judgment can close the other's receipt.
  */
 
-/** The judge protocol on recorded conversations under one judge configuration; never equal to a synthetic protocol hash. */
-export const logProtocolHash = (configurationHash?: string): string => fingerprint({ protocol: JUDGE_PROTOCOL, mode: LOGGED_MODE, configuration: configurationHash });
+/**
+ * The judge protocol on recorded conversations under one judge configuration and one mode; never equal to a synthetic
+ * protocol hash. `logged-v2` is the default: every receipt sealed before `logged-v3` carries its hash.
+ */
+export const logProtocolHash = (configurationHash?: string, mode: typeof LOGGED_MODE | typeof LOGGED_MODE_V3 = LOGGED_MODE): string =>
+  fingerprint({ protocol: JUDGE_PROTOCOL, mode, configuration: configurationHash });
 
 type KeyParts = Pick<LogJudgmentReceipt, 'definitionHash' | 'expectationId' | 'importContentHash' | 'dialogueId' | 'protocolHash'>;
 /** The address of one expectation judged on one recorded conversation: while none of these changed, its receipt holds. */
@@ -58,11 +62,36 @@ const LOG_SCOPE = 'A recorded conversation of a real customer with the productio
   + 'The agent\'s words prove only what was said; its actions show only in the recorded tool and state events.';
 
 /**
- * The complete, frozen input of judgment (b) in its mode `logged-v2`. Any change to what it holds or how it is
- * rendered is a new mode, never an edit here. Stored receipts of every mode are checked against the input their own
- * audit keeps (logJudgmentComplete), never against a rendering made again.
+ * `logged-v3`: the same scope, and the situation the expectation is for (`situation`). The expectation comes from a plan
+ * over a topic of the logs, not from this conversation: the judge first decides whether this customer came with that
+ * situation, and a conversation that never was in it did not exercise the expectation — however much the reply leaves out.
+ * The violation is what the rubric names, never merely the duty not being met.
+ */
+const LOG_SCOPE_V3 = `${LOG_SCOPE} `
+  + 'The expectation comes from the owner\'s plan for a situation customers come with (`situation`: the question they ask and, when given, their circumstances), not from this conversation. '
+  + 'First decide whether this customer came with that situation: asked that question, or those circumstances arose in the conversation. '
+  + 'If they did not, the expectation was never due here: both conditions are not_met — not exercised —, whatever the agent said or left out. '
+  + 'The failCondition is met only when the conversation shows what the rubric names as the violation; that the passCondition is not met does not by itself meet the failCondition.';
+
+/**
+ * The complete, frozen input of judgment (b): mode `logged-v2`, or `logged-v3` when the request names the situation the
+ * expectation is for. Any change to what either holds or how it is rendered is a new mode, never an edit here. Stored
+ * receipts of every mode are checked against the input their own audit keeps (logJudgmentComplete), never against a
+ * rendering made again.
  */
 export function logJudgeInput(request: LogJudgeRequest) {
+  return request.situation ? situatedInput(request, request.situation) : loggedInput(request);
+}
+
+/** `logged-v3`: the situation first, then what `logged-v2` holds, under the situated scope. */
+function situatedInput(request: LogJudgeRequest, situation: NonNullable<LogJudgeRequest['situation']>) {
+  const { mode: _mode, evaluationScope: _scope, ...rest } = loggedInput(request);
+  return { mode: LOGGED_MODE_V3 as typeof LOGGED_MODE_V3, situation: { question: situation.question, ...(situation.circumstances ? { circumstances: situation.circumstances } : {}) },
+    ...rest, evaluationScope: LOG_SCOPE_V3 };
+}
+
+/** `logged-v2`, exactly as its receipts were sealed. */
+function loggedInput(request: LogJudgeRequest) {
   const { expectation } = request;
   const cited = new Set(expectation.requirementIds);
   return {
@@ -75,8 +104,8 @@ export function logJudgeInput(request: LogJudgeRequest) {
     dialogue: { observation: request.dialogue.observation, events: loggedEvents(request.dialogue) },
   };
 }
-/** The input of a stored audit, of either mode: `logged-v1` judged the log by a rubric of its own and named no tool. */
-type LogInput = Omit<ReturnType<typeof logJudgeInput>, 'mode'> & { mode: typeof LOGGED_MODE | typeof LOGGED_MODE_V1 };
+/** The input of a stored audit, of any mode: `logged-v1` judged the log by a rubric of its own and named no tool. */
+type LogInput = Omit<ReturnType<typeof loggedInput>, 'mode'> & { mode: typeof LOGGED_MODE | typeof LOGGED_MODE_V1 | typeof LOGGED_MODE_V3 };
 
 /** The same events in the shape the citation check reads: a quote must be verbatim in the event it cites. */
 const traceEvents = (events: readonly LoggedEvent[]): TraceEvent[] => events.map(event => ({ seq: event.seq, type: TRACE_TYPE[event.type], text: event.content }));
@@ -97,7 +126,7 @@ function parseLogVote(raw: string, input: LogInput): MetricAssessment[] {
   if (rows.length !== 1 || rows[0]!.metricId !== rubric.id) throw new Error('Assessment must cover every requested metric exactly once');
   const { passCondition, failCondition, ...row } = rows[0]!;
   const result = passCondition === 'met' && failCondition === 'not_met' ? 'pass' : failCondition === 'met' && passCondition === 'not_met' ? 'fail' : 'unknown';
-  const current = input.mode === LOGGED_MODE;
+  const current = input.mode !== LOGGED_MODE_V1;
   const assessment = validateAssessments([rubric], traceEvents(input.dialogue.events), [{ ...row, result }], { meaningfulQuotes: current })[0]!;
   if (result === 'unknown') return [assessment];
   const cited = input.dialogue.events.filter(event => assessment.evidence.includes(event.seq));
@@ -167,7 +196,7 @@ export async function judgeLogged(request: LogJudgeRequest, model: { provider: s
   const data = logJudgeInput(request);
   const input = JSON.stringify(data);
   const audit: JudgeAudit = {
-    protocolHash: logProtocolHash(model.configurationHash), inputHash: fingerprint(data), provider: model.provider, model: model.id,
+    protocolHash: logProtocolHash(model.configurationHash, data.mode), inputHash: fingerprint(data), provider: model.provider, model: model.id,
     ...(model.configurationHash ? { configurationHash: model.configurationHash } : {}),
     ...(model.transport ? { transport: model.transport } : {}),
     prompt: JUDGE_PROMPT, input, attempts: [], notApplicable: [],

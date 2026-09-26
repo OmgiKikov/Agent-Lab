@@ -31,6 +31,12 @@ export interface Quote { seq: number; role: 'customer' | 'agent' | 'other'; quot
 export interface Example { key: string; dialogueId: string; quotes: Quote[]; rationale?: string; review?: FindingReview['verdict']; absent?: string }
 /** Why a finding decided nothing: the log judge's reasons (card/log-judge.ts), and a required call whose absence the log cannot show. */
 export type FindingUndecided = LogUndecided | 'call_unconfirmed';
+/**
+ * Why a selected conversation was never judged: the reviewer confirmed its topic's materials hold no rule for it; Lab's
+ * own work on its topic's plan or fit did not finish; no plan of its topic fits it; its variation of the plan holds no
+ * expectation; or the analysis ended before it.
+ */
+export type Unreached = 'no_rules' | 'lab_unfinished' | 'unfit' | 'no_duty' | 'not_reached';
 export interface ProblemView {
   /** The criterion's hash (criterion.ts): the same across topics and analyses whose plans say exactly the same. */
   key: string;
@@ -53,20 +59,26 @@ export interface ProblemView {
   examples: Example[];
 }
 export interface AnalysisView {
-  id: string; status: LogAnalysis['status']; unfinished?: LogAnalysis['unfinished']; error?: string; message: string;
+  id: string; status: LogAnalysis['status']; unfinished?: LogAnalysis['unfinished']; failure?: LogAnalysis['failure']; error?: string; message: string;
   file: string; mode: LogAnalysis['mode']; createdAt: string;
   coverage: {
     logged: number; readable: number; judgeable: number;
     unjudgeable: { reason: LogAnalysis['selection']['unjudgeable'][number]['reason']; count: number }[];
-    /** Selected conversations; `perTopic` bounds the examples a topic's plan reads (`beyond: 'shared'`), or — before — the topic. */
-    picked: number; method: LogAnalysis['selection']['method']; perTopic: number; beyond?: 'shared';
+    /** Selected conversations; `perTopic` bounds the examples a topic's plan reads (`beyond`), or — before — the topic. */
+    picked: number; method: LogAnalysis['selection']['method']; perTopic: number; beyond?: NonNullable<LogAnalysis['selection']['beyond']>;
     /** Selected conversations that were processed: judged, or skipped with the reason the log cannot show a rule. */
     processed: number;
     /** Processed conversations decided on at least one rule, those processed but decided on none, those selected and never processed. */
     decided: number; undecided: number; notReached: number;
-    /** Selected conversations beyond their topic's plan examples: judged on the rules every variation of the plan shares. */
+    /** Selected conversations beyond their topic's plan examples judged on the rules every variation of the plan shares (`shared`). */
     sharedOnly: number;
+    /** Under `fitted`: extra conversations judged under the variation the planner fitted them to, and those judged under a plan of their own. */
+    fitted: number; ownPlan: number;
+    /** Selected conversations never judged, counted by why. */
+    unreached: { reason: Unreached; count: number }[];
   };
+  /** Conversations with at least one violation the owner did not dispute. */
+  violated: number;
   /** The analysis this one continues, with how many it had selected and how many findings came over with no call. */
   continues?: NonNullable<LogAnalysis['continues']>;
   /** The tools the owner declared the log records every call of; absent — none declared. */
@@ -170,20 +182,27 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
     if (reason) undecided.set(reason, (undecided.get(reason) ?? 0) + 1);
   }
   const picked = analysis.selection.picked;
-  const extra = new Set(analysis.topics.flatMap(group => group.extra ?? []));
+  const extra = new Set(analysis.topics.filter(group => !group.others).flatMap(group => group.extra ?? []));
+  const ownPlan = new Set(analysis.topics.filter(group => group.others && group.scenarioId).flatMap(group => [...group.dialogueIds, ...group.extra ?? []]));
   const judged = new Set(analysis.findings.map(finding => finding.dialogueId));
   const decidedOn = new Set(analysis.findings.filter(finding => finding.result !== 'unknown').map(finding => finding.dialogueId));
   const unjudgeable = (['no_customer', 'no_agent_reply'] as const).map(reason => ({ reason, count: analysis.selection.unjudgeable.filter(item => item.reason === reason).length }))
     .filter(item => item.count);
   const traffic = analysis.traffic && { labeled: analysis.traffic.labeled, topics: analysis.traffic.topics };
   return {
-    id: analysis.id, status: analysis.status, ...(analysis.unfinished ? { unfinished: analysis.unfinished } : {}), ...(analysis.error ? { error: analysis.error } : {}),
+    id: analysis.id, status: analysis.status, ...(analysis.unfinished ? { unfinished: analysis.unfinished } : {}), ...(analysis.failure ? { failure: analysis.failure } : {}),
+    ...(analysis.error ? { error: analysis.error } : {}),
     message: analysis.message, file: analysis.logs.file, mode: analysis.mode, createdAt: analysis.createdAt,
     coverage: { logged: analysis.logs.conversations, readable: analysis.logs.readable, judgeable: analysis.logs.readable - analysis.selection.unjudgeable.length,
       unjudgeable, picked: picked.length, method: analysis.selection.method, perTopic: analysis.selection.perTopic, ...(analysis.selection.beyond ? { beyond: analysis.selection.beyond } : {}),
       processed: picked.filter(id => judged.has(id)).length,
       decided: picked.filter(id => decidedOn.has(id)).length, undecided: picked.filter(id => judged.has(id) && !decidedOn.has(id)).length,
-      notReached: picked.filter(id => !judged.has(id)).length, sharedOnly: picked.filter(id => extra.has(id) && judged.has(id)).length },
+      notReached: picked.filter(id => !judged.has(id)).length,
+      sharedOnly: analysis.selection.beyond === 'fitted' ? 0 : picked.filter(id => extra.has(id) && judged.has(id)).length,
+      fitted: analysis.selection.beyond === 'fitted' ? picked.filter(id => extra.has(id) && !ownPlan.has(id) && judged.has(id)).length : 0,
+      ownPlan: picked.filter(id => ownPlan.has(id) && judged.has(id)).length,
+      unreached: unreachedOf(analysis, picked.filter(id => !judged.has(id))) },
+    violated: new Set(analysis.findings.filter(counted).map(finding => finding.dialogueId)).size,
     ...(analysis.continues ? { continues: analysis.continues } : {}), ...(contract ? { recorded: [...contract.tools] } : {}),
     ...(traffic ? { traffic: traffic.topics.map(topic => ({ title: topic.title, dialogues: topic.dialogues, share: topic.dialogues / traffic.labeled,
       picked: analysis.topics.find(group => group.topicId === topic.id)?.dialogueIds.length ?? 0 })) } : {}),
@@ -195,6 +214,26 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
       ...(group.rulesGap ? { rulesGap: group.rulesGap } : {}), conversations: group.dialogueIds.length + (group.extra?.length ?? 0) }] : []),
     models: analysis.models, budget: analysis.budget,
   };
+}
+
+/** Why each of `ids`, selected and never judged, was not: read off the group that holds it now, never guessed. */
+function unreachedOf(analysis: LogAnalysis, ids: readonly string[]): AnalysisView['coverage']['unreached'] {
+  const reasonOf = (id: string): Unreached => {
+    const groups = analysis.topics.filter(group => group.dialogueIds.includes(id) || group.extra?.includes(id));
+    // A conversation its topic's first plan did not fit is held by the topic's `others` group, when it was made.
+    const owner = groups.find(group => group.others) ?? groups[0];
+    if (!owner) return 'not_reached';
+    if (owner.planFailure) return owner.rulesGap?.confirmed ? 'no_rules' : owner.planFailure === 'unusable' ? 'lab_unfinished' : 'not_reached';
+    if (!owner.scenarioId) return 'not_reached';
+    if (owner.unfit?.includes(id)) return 'unfit';
+    const example = owner.dialogueIds.includes(id);
+    const assigned = analysis.assignments.some(item => item.dialogueId === id && item.scenarioId === owner.scenarioId);
+    if (!example && analysis.selection.beyond === 'fitted' && !assigned) return owner.fitIssue ? 'lab_unfinished' : 'not_reached';
+    return analysis.status === 'done' ? 'no_duty' : 'not_reached';
+  };
+  const counts = new Map<Unreached, number>();
+  for (const id of ids) { const reason = reasonOf(id); counts.set(reason, (counts.get(reason) ?? 0) + 1); }
+  return [...counts].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count);
 }
 
 /** A finding of the analysis by its key, with the problem it belongs to; undefined for a key the analysis does not have. */

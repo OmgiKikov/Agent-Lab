@@ -15,10 +15,11 @@ import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import { plantError } from './judge-check-task.js';
 import {
-  CARD_CUSTOMER_ROLE, CUSTOMER_DECISION_ROLE, CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SCENARIO_CHANNELS, SCENARIO_GAPS, SCENARIO_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
+  CARD_CUSTOMER_ROLE, CUSTOMER_DECISION_ROLE, CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, FIT_ROLE, SCENARIO_CHANNELS, SCENARIO_GAPS, SCENARIO_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { planPayload, planProposalSchema, planSlipKind, planSlips, type PlanProposal } from './card/plan.js';
+import { fitAnswerSchema, fitProblem, type FitAnswer } from './discover/fit.js';
 import { cardReviewSchema, laterMessages } from './card/review.js';
 import { fillWithModel } from './card/unmask.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
@@ -193,6 +194,13 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       };
       return run<PlanProposal>({ id: 'scenario-plan', label: 'План сценария', role: 'builder', instructions,
         output: planProposalSchema(input.call), check, bounded: { requestBytes: MODEL_REQUEST_BYTES + 16_000 } }, payload, ctx);
+    },
+    async fitConversations(input, ctx) {
+      const oversize = workInputIssue(input);
+      if (oversize) throw new Error(oversize);
+      // Every conversation answered once, each by a variation of this plan or none: the harness's check, its exact reason back.
+      return run<FitAnswer>({ id: 'fit-conversations', label: 'Разговоры и варианты плана', role: 'builder', instructions: FIT_ROLE,
+        output: fitAnswerSchema(input), check: value => fitProblem(value, input) }, input, ctx);
     },
     async reviewCard(input, ctx) {
       const oversize = workInputIssue(input.payload);
