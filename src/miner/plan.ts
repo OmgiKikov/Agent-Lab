@@ -92,6 +92,12 @@ export class NothingFits extends Error {
   readonly roles: readonly string[];
 }
 
+/** Refuses logs no situation can be made from — why, and what to do (NothingFits) — before anything else is asked of the owner. */
+export function ensureSomethingFits(batch: ImportBatch): void {
+  const { dialogueIds, unsuitable } = usableConversations(batch);
+  if (!dialogueIds.length) throw new NothingFits(logLeft(batch, unsuitable), batch.sample?.dialogues ?? batch.dialogues.length + batch.rejected.length);
+}
+
 /** The role names of an import's conversations Lab does not know, as written: what the owner is asked to map. */
 export const loggedRolesToMap = (batch: ImportBatch): string[] => unknownRoles(logLeft(batch, []).counts);
 
