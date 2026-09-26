@@ -26,6 +26,7 @@ export function exampleAt(view: AnalysisView, place: { problem: number; example?
 /** What the model reads of an analysis, and what it is asked to do with it. */
 export function analysisOutput(view: AnalysisView): Record<string, unknown> {
   return {
+    ...(view.checking ? { checking: view.checking, facts: view.facts } : {}),
     analysis: view.id, status: view.status, ...(view.unfinished ? { unfinished: view.unfinished } : {}), file: view.file,
     selected: view.coverage.picked, analysed: view.coverage.processed, notReached: view.coverage.notReached, of: view.coverage.logged, decidedIn: view.coverage.decided,
     unansweredConversations: view.coverage.unjudgeable.find(item => item.reason === 'no_agent_reply')?.count ?? 0,
@@ -43,15 +44,17 @@ export function analysisOutput(view: AnalysisView): Record<string, unknown> {
         said: example.quotes.map(quote => ({ by: quote.role, quote: clip(quote.quote, 400) })), ...(example.rationale ? { judge: clip(example.rationale, 600) } : {}),
         ...(example.review ? { owner: example.review } : {}) })),
     })),
-    noViolations: view.clean.map(item => ({ rule: item.text, checkedIn: item.checked })),
+    ...(view.checking === 'facts' ? { supportedFacts: view.clean.map(item => ({ fact: item.text, checkedIn: item.checked })) }
+      : { noViolations: view.clean.map(item => ({ rule: item.text, checkedIn: item.checked })) }),
     ...(view.overruled.length ? { disputedByOwner: view.overruled.map(problem => ({ violation: problemTitle(problem), disputed: problem.disputed })) } : {}),
     notDecided: coverageLines(view),
     gaps: view.gaps.map(gap => ({ topic: gap.title, reason: gap.reason, ...(gap.issue ? { labWorkUnfinished: gap.issue } : {}),
       ...(gap.rulesGap ? { rulesGap: gap.rulesGap.confirmed ? 'confirmed by the reviewer' : 'not confirmed: Lab\'s reading, not the owner\'s gap' } : {}), conversations: gap.conversations })),
     limits: limitLines(view), next: nextStep(view),
     instruction: 'This is an analysis of logged conversations (no situation was made, the agent did not run). Tell the owner in 3–6 short Russian sentences: '
+      + (view.checking === 'facts' ? 'This is a factual comparison of actual assertions, not a bot-duty checklist. Report supported, contradicted and unknown claims separately. For a possible contradiction show the assistant quote and the reference quote. Do not ask whether a handoff was allowed or whether an employee step was mandatory: this check makes neither judgment. The owner can confirm the factual contradiction before turning it into a regression check. ' : '')
       + 'how many conversations were analysed (analysed) of those selected (selected) and of how many in the log; the main violations, each with how often among the conversations it was checked on and one verbatim example; '
-      + 'what could not be decided and why; that the frequency is among the analysed conversations, not all traffic. A knowledgeOnly finding needs the owner to decide whether these facts were required in that reply and whether a handoff was allowed; present it as a possible issue, never an established breach. If unansweredConversations is positive, name it as a separate signal whose cause needs checking, never as a judged violation. Do not re-judge, add or soften violations. '
+      + 'what could not be decided and why; that the frequency is among the analysed conversations, not all traffic. Present findings as possible issues, never established breaches. For rule-based analyses only, a knowledgeOnly finding needs the owner to decide whether these facts were required in that reply and whether a handoff was allowed. If unansweredConversations is positive, name it as a separate signal whose cause needs checking, never as a judged violation. Do not invent findings. '
       + 'A gap is the owner\'s missing rule only when rulesGap is confirmed; labWorkUnfinished is Lab\'s own work not finishing — never ask the owner to add a rule for it. '
       + 'Offer ONE next step from `next`: to say whether the judge is right about an example (agent_lab_analyze with review {problem, example}; the host asks the owner, you never pass the verdict), '
       + 'to continue with the next conversations (agent_lab_analyze with analysis and more; the host asks the owner), to open it in /agent-lab, '
@@ -74,7 +77,8 @@ export async function analysisAnswer(lab: ExperimentLab, analysis: LogAnalysis):
     ...(view.problems.length > top.length ? [row(`…и ещё ${view.problems.length - top.length}`, 'muted')] : []),
     row(safeText(nextStep(view)), 'muted')];
   const traffic = trafficLine(view);
-  const feed: Feed = { title: view.status === 'done' ? 'Разбор логов' : 'Разбор логов не закончен', tone: view.status === 'done' ? (view.problems.length || unanswered ? 'warning' : 'success') : 'warning',
+  const uncertainFacts = view.facts && (view.facts.unknown > 0 || view.facts.failed > 0 || view.coverage.decided === 0);
+  const feed: Feed = { title: view.status === 'done' ? 'Разбор логов' : 'Разбор логов не закончен', tone: view.status === 'done' ? (view.problems.length || unanswered || uncertainFacts ? 'warning' : 'success') : 'warning',
     rows, more: [...(traffic ? [row(safeText(traffic), 'muted')] : []), ...lines.slice(1).map(line => row(safeText(line), 'muted'))], expand: 'весь разбор' };
   return { output: analysisOutput(view), feed, note: `Разбор логов · ${stampOf(analysis)}`, stamp: analysis.updatedAt };
 }

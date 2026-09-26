@@ -3,13 +3,14 @@ import { DEFAULT_JUDGE, materialSources, settingsSchema, type CreateInput, type 
 import { Stopped } from '../errors.js';
 import { roleChoices } from '../llm/models.js';
 import { ProviderFailure } from '../llm/model-call.js';
+import { knowledgeOnly } from '../discover/facts.js';
 import type { BuilderModel } from '../miner/topic-map.js';
 import type { Runtime } from '../runtime.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import { clip } from '../text.js';
 import { analysisConsent, analysisTime, continuationConsent, type AnalysisConsent, type ContinuationConsent } from '../discover/consent.js';
 import { analysisId, analysisJobs, continueFrom, runAnalysis, selectMore, unfittedCount } from '../discover/analyze.js';
-import { ANALYSIS_LIMIT, ANALYSIS_PROTOCOL, DEFAULT_ANALYSED, PER_TOPIC_LIMIT, analysisSchema, findingReviewSchema, logContractSchema, type LogAnalysis } from '../discover/schema.js';
+import { ANALYSIS_LIMIT, ANALYSIS_PROTOCOL, FACT_ANALYSIS_PROTOCOL, DEFAULT_ANALYSED, PER_TOPIC_LIMIT, analysisSchema, findingReviewSchema, logContractSchema, type LogAnalysis } from '../discover/schema.js';
 import type { Lab } from './context.js';
 
 /*
@@ -139,10 +140,11 @@ export async function analyze(lab: Lab, host: DiscoverHost, input: AnalyzeInput,
   const now = new Date().toISOString();
   const contract = input.logContract && logContractSchema.parse({ ...input.logContract, confirmedAt: now });
   const analysis: LogAnalysis = analysisSchema.parse({
-    formatVersion: 1, protocol: ANALYSIS_PROTOCOL, id: analysisId(), createdAt: now, updatedAt: now, status: 'running', message: 'Читаю логи.', mode: input.mode,
+    formatVersion: 1, protocol: knowledgeOnly(sources) ? FACT_ANALYSIS_PROTOCOL : ANALYSIS_PROTOCOL, id: analysisId(), createdAt: now, updatedAt: now, status: 'running', message: 'Читаю логи.', mode: input.mode,
     task: input.task, logs: { importId: input.logs.id, contentHash: input.logs.contentHash, file: clip(input.file, 300), conversations: input.logs.sample?.dialogues ?? input.logs.dialogues.length + input.logs.rejected.length, readable: input.logs.dialogues.length,
       ...(contract ? { contract } : {}) },
     selection: { requested, perTopic: PER_TOPIC_LIMIT, method: 'topics', picked: [], unjudgeable: [], beyond: 'fitted' }, sources,
+    ...(knowledgeOnly(sources) ? { checking: 'facts', factChecks: [] } : {}),
     models: { builder: { provider: builder.provider, model: builder.id }, judge: judgeOf(input.settings) },
     budget: { ceiling: options.callCeiling, spent: 0 }, topics: [], requirements: [], scenarios: [], assignments: [], findings: [], reviews: [],
   });
@@ -181,7 +183,7 @@ export async function continuationConsentOf(lab: Lab, host: DiscoverHost, input:
   const { earlier, batch } = await continued(lab, input.analysisId);
   const settings = continuationSettings(earlier, input.settings);
   const runtime = await host.runtime(earlier.mode, settings, earlier.id);
-  const judge = runtime.logJudge;
+  const judge = earlier.checking === 'facts' || knowledgeOnly(earlier.sources) ? runtime.factChecker : runtime.logJudge;
   if (!judge) throw new Error('Эта среда не умеет оценивать записанные разговоры.');
   const draft = continueFrom(earlier, batch, judge.protocolHash, { id: earlier.id, createdAt: earlier.createdAt, updatedAt: earlier.updatedAt, budget: earlier.budget, models: earlier.models, requested: requestedOf({ requested: input.more }) });
   return continuationConsent(lab.store, { earlier, draft, batch, more: requestedOf({ requested: input.more }), pendingJobs: analysisJobs(draft, batch, judge.protocolHash).length,
@@ -197,10 +199,11 @@ export async function continueAnalysis(lab: Lab, host: DiscoverHost, input: Cont
   const settings = continuationSettings(earlier, input.settings);
   const more = requestedOf({ requested: input.more });
   const runtime = await host.runtime(earlier.mode, settings, earlier.id);
-  if (!runtime.logJudge) throw new Error('Эта среда не умеет оценивать записанные разговоры.');
+  const judge = earlier.checking === 'facts' || knowledgeOnly(earlier.sources) ? runtime.factChecker : runtime.logJudge;
+  if (!judge) throw new Error('Эта среда не умеет оценивать записанные разговоры.');
   const now = new Date().toISOString();
   const builder = host.builder(earlier.mode, settings);
-  const analysis = analysisSchema.parse(continueFrom(earlier, batch, runtime.logJudge.protocolHash, { id: analysisId(), createdAt: now, updatedAt: now, requested: more,
+  const analysis = analysisSchema.parse(continueFrom(earlier, batch, judge.protocolHash, { id: analysisId(), createdAt: now, updatedAt: now, requested: more,
     budget: { ceiling: options.callCeiling, spent: 0 }, models: { builder: { provider: builder.provider, model: builder.id }, judge: judgeOf(settings) } }));
   return launch(lab, host, analysis, { mode: earlier.mode, settings, callCeiling: options.callCeiling, conversations: analysis.selection.picked.length + more,
     start: async () => batch,

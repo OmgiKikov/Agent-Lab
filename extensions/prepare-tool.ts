@@ -180,7 +180,8 @@ async function fromAnalysis(host: PrepareHost, callId: string, ctx: ExtensionCon
   if (problem.knowledgeOnly && !problem.confirmedDialogueIds.length) {
     throw new NeedsOwner('needs_owner_input',
       `Проблема ${named.problem} основана только на статье базы знаний. Сначала откройте её пример в разборе ${analysis.id} и подтвердите, что это нарушение именно для данного обращения. До этого проверку из неё не собираем.`, [],
-      'Статья базы знаний не задаёт обязательность каждого сведения в ответе. Откройте пример и подтвердите, что здесь есть нарушение.');
+      view.checking === 'facts' ? 'Сравните утверждение бота с фактом из статьи и подтвердите противоречие. После этого из примера можно сделать проверку новой версии.'
+        : 'Статья базы знаний не задаёт обязательность каждого сведения в ответе. Откройте пример и подтвердите, что здесь есть нарушение.');
   }
   const selected = problem.knowledgeOnly ? { ...problem, dialogueIds: problem.confirmedDialogueIds } : problem;
   const { link, controls, neighbours } = checkLink(analysis, selected, criteriaHeld(view));

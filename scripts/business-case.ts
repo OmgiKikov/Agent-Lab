@@ -140,7 +140,8 @@ for (const [exportName, expected] of [['createFixedSession', 0], ['createRegress
   const outcome = spawnSync(process.execPath, [join(repo, 'dist/cli.js'), 'evaluate', '--input', suiteFile, '--connection', file, '--data-dir', join(ci, exportName), '--yes'], { encoding: 'utf8' });
   const json = outcome.stdout ? JSON.parse(outcome.stdout) as { exitCode: number; lines: string[] } : undefined;
   say(`9. agent-lab evaluate — ${exportName}`, `exit ${outcome.status} (expected ${expected})`, ...(json?.lines.filter(line => line.includes('Точность') || line.includes('Итог') || line.includes('Сломалось') || line.includes('Воспроизведена') || line.includes('не воспроизведена')) ?? [outcome.stderr.slice(0, 400)]));
-  expect(outcome.status === expected, `CI: agent-lab evaluate on ${exportName} exits ${expected}`);
+  expect(outcome.status === expected && json?.exitCode === expected && Array.isArray(json.lines),
+    `CI: agent-lab evaluate on ${exportName} returns an evaluation report and exits ${expected}`);
 }
 say('Native dialogs the owner answered', ...dialogs);
 console.log(`\nproject: ${cwd}`);

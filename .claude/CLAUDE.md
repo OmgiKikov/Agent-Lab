@@ -409,6 +409,8 @@ Situations come from logs (below), from the owner's rules alone, from a saved su
 
 ### DISCOVER: logs → findings → problems
 
+Article-only inputs (`sources.every(kind === 'knowledge')`) use `checking: facts` (`src/discover/facts.ts`, `facts-work.ts`): a deterministic sample with no topic-map calls, relevant articles, actual assistant claims compared with source facts, then review of alleged contradictions only. Supported, contradicted, unknown and no-claim conversations remain distinct. Employee procedures and omitted information are never factual contradictions. Every decided claim has an exact assistant quote and a whole source clause. Findings carry ordinary criteria into VERIFY after the owner's confirmation. Completed checks and unfinished first readings are reused on continuation under the same checker and inputs. `scripts/factual-evaluation.ts` tests the live model on labelled synthetic cases and can separately replay real unlabelled data without inventing a quality score. See `docs/factual-checking.md`.
+
 `agent_lab_analyze` / `agent-lab analyze`: logs and rules → one consent (ceiling; no agent, no situation) → the import's
 topic map (the typical traffic) → seats by each topic's share (`miner/sample.ts allocate`); a topic's first 8 are its
 plan's examples → a plan per topic (card/plan.ts: expectations on verbatim quotes, each a criterion; a tool a rule

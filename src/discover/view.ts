@@ -30,7 +30,7 @@ export interface Quote { seq: number; role: 'customer' | 'agent' | 'other'; quot
  */
 export interface Example { key: string; dialogueId: string; quotes: Quote[]; rationale?: string; review?: FindingReview['verdict']; absent?: string }
 /** Why a finding decided nothing: the log judge's reasons (card/log-judge.ts), and a required call whose absence the log cannot show. */
-export type FindingUndecided = LogUndecided | 'call_unconfirmed';
+export type FindingUndecided = LogUndecided | 'call_unconfirmed' | 'facts_unknown' | 'facts_no_claims' | 'facts_no_sources' | 'facts_failed';
 /**
  * Why a selected conversation was never judged: the reviewer confirmed its topic's materials hold no rule for it; Lab's
  * own work on its topic's plan or fit did not finish; no plan of its topic fits it; its variation of the plan holds no
@@ -63,6 +63,8 @@ export interface ProblemView {
   examples: Example[];
 }
 export interface AnalysisView {
+  checking?: 'facts';
+  facts?: { completed: number; supported: number; contradicted: number; unknown: number; noClaims: number; failed: number };
   id: string; status: LogAnalysis['status']; unfinished?: LogAnalysis['unfinished']; failure?: LogAnalysis['failure']; error?: string; message: string;
   file: string; mode: LogAnalysis['mode']; createdAt: string;
   coverage: {
@@ -189,15 +191,28 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
     const reason = findingUndecided(finding);
     if (reason) undecided.set(reason, (undecided.get(reason) ?? 0) + 1);
   }
+  const checks = analysis.factChecks ?? [];
+  const completed = checks.filter(check => check.complete && !check.issue);
+  const claims = completed.flatMap(check => check.claims);
+  const facts = analysis.checking === 'facts' ? { completed: completed.length,
+    supported: claims.filter(claim => claim.result === 'supported').length,
+    contradicted: analysis.findings.filter(counted).length,
+    unknown: claims.filter(claim => claim.result === 'unknown').length,
+    noClaims: completed.filter(check => !check.claims.length).length, failed: checks.filter(check => !check.complete).length } : undefined;
+  if (facts) for (const [reason, count] of [['facts_unknown', facts.unknown], ['facts_no_claims', facts.noClaims],
+    ['facts_no_sources', checks.filter(check => check.issue === 'no_sources').length], ['facts_failed', facts.failed]] as const) {
+    if (count) undecided.set(reason, count);
+  }
   const picked = analysis.selection.picked;
   const extra = new Set(analysis.topics.filter(group => !group.others).flatMap(group => group.extra ?? []));
   const ownPlan = new Set(analysis.topics.filter(group => group.others && group.scenarioId).flatMap(group => [...group.dialogueIds, ...group.extra ?? []]));
-  const judged = new Set(analysis.findings.map(finding => finding.dialogueId));
+  const judged = new Set([...analysis.findings.map(finding => finding.dialogueId), ...checks.filter(check => check.complete || check.issue).map(check => check.dialogueId)]);
   const decidedOn = new Set(analysis.findings.filter(finding => finding.result !== 'unknown').map(finding => finding.dialogueId));
   const unjudgeable = (['no_customer', 'no_agent_reply'] as const).map(reason => ({ reason, count: analysis.selection.unjudgeable.filter(item => item.reason === reason).length }))
     .filter(item => item.count);
   const traffic = analysis.traffic && { labeled: analysis.traffic.labeled, topics: analysis.traffic.topics };
   return {
+    ...(facts ? { checking: 'facts' as const, facts } : {}),
     id: analysis.id, status: analysis.status, ...(analysis.unfinished ? { unfinished: analysis.unfinished } : {}), ...(analysis.failure ? { failure: analysis.failure } : {}),
     ...(analysis.error ? { error: analysis.error } : {}),
     message: analysis.message, file: analysis.logs.file, mode: analysis.mode, createdAt: analysis.createdAt,
@@ -216,7 +231,8 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
       picked: analysis.topics.find(group => group.topicId === topic.id)?.dialogueIds.length ?? 0 })) } : {}),
     problems: views.filter(view => view.violations > 0).sort((a, b) => b.violations - a.violations || b.checked - a.checked),
     overruled: views.filter(view => view.violations === 0 && view.disputed > 0),
-    clean: views.filter(view => view.violations === 0 && view.checked > 0).map(view => ({ text: view.duty.text, checked: view.checked, disputed: view.disputed, key: view.key, held: view.held, topics: view.topics })),
+    clean: views.filter(view => view.violations === 0 && view.checked > 0).map(view => ({ text: analysis.checking === 'facts' ? view.rules[0]?.quote ?? view.duty.text : view.duty.text,
+      checked: view.checked, disputed: view.disputed, key: view.key, held: view.held, topics: view.topics })),
     undecided: [...undecided].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
     gaps: analysis.topics.flatMap(group => group.planFailure ? [{ title: group.title, reason: group.planFailure, ...(group.planIssue ? { issue: group.planIssue } : {}),
       ...(group.rulesGap ? { rulesGap: group.rulesGap } : {}), conversations: group.dialogueIds.length + (group.extra?.length ?? 0) }] : []),

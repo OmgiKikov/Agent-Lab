@@ -7,7 +7,7 @@ import type { CallContext, Runtime } from './runtime.js';
  * preparations made before the proposal cited the materials itself, `prepare` how still older journals name it, and
  * `scenarioProposals` and `assessScenarioProposals` are the first format's preparation; nothing makes any of them now.
  */
-type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeScenario' | 'proposeCard' | 'reviewCard' | 'topicMap';
+type Method = 'groundRequirements' | 'prepare' | 'selectSources' | 'scenarioProposals' | 'assessScenarioProposals' | 'proposeScenario' | 'proposeCard' | 'reviewCard' | 'topicMap' | 'checkLogFacts';
 export type GeneratorEvidence = {
   workId: string;
   method: Method;
@@ -50,6 +50,7 @@ export function captureGeneratorEvidence(runtime: Runtime, emit: (event: Generat
   const topicMap: Runtime['topicMap'] = mapper && { builder: mapper.builder,
     build: (plan, ctx, onProgress) => capture('topicMap', (input: typeof plan, inner: CallContext) => mapper.build(input, inner, onProgress))(plan, ctx) };
   return { ...runtime,
+    ...(runtime.factChecker ? { factChecker: { ...runtime.factChecker, check: capture('checkLogFacts', runtime.factChecker.check.bind(runtime.factChecker)) } } : {}),
     ...(topicMap ? { topicMap } : {}),
     ...(runtime.selectSources ? { selectSources: capture('selectSources', runtime.selectSources.bind(runtime)) } : {}),
     // The plan of a topic is the builder's paid work like a card: its request and answer are evidence too.

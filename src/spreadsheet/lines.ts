@@ -113,7 +113,7 @@ function outcomeLines({ mapping, preview, basis }: ReadyProposal): string[] {
     ? `  Повторы убраны: ${countText(repeats.messages, MESSAGES)} в ${countText(repeats.dialogues, CONVERSATIONS_IN)} — каждый обмен остался один раз.`
     : `  В ${countText(repeats.dialogues, CONVERSATIONS_IN)} обмен повторяется подряд (копий — ${countText(repeats.messages, MESSAGES)}); Lab читает их как написано.`);
   const markup = preview.markup;
-  if (markup) lines.push(mapping.interfaceMarkup
+  if (markup) lines.push(mapping.interfaceMarkup === 'fenced'
     ? `  Вставки в \`\`\` в ответах агента (${countText(markup.messages, MESSAGES)}) читаются как элементы интерфейса, а не как слова агента.`
     : `  Вставки в \`\`\` в ответах агента (${countText(markup.messages, MESSAGES)}) читаются как слова агента.`);
   // The model's verdict is said only while the copies are its decision; the owner's own choice needs no reason.

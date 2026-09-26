@@ -10,6 +10,8 @@ import { planTopicMap, reusableTopicMap, topicMapKey, type BuilderModel } from '
 import type { ExperimentStore } from '../store.js';
 import { unjudgeable } from './criteria.js';
 import { FIT_BATCH } from './fit.js';
+import { knowledgeOnly } from './facts.js';
+import { factCeiling } from './facts-work.js';
 import { ANALYSIS_LIMIT, ANALYSIS_TOTAL_LIMIT, PER_TOPIC_LIMIT, type LogAnalysis } from './schema.js';
 
 /*
@@ -54,6 +56,7 @@ export function analysisCeiling(input: { task: string; sources: readonly Source[
 export const analysisTime = (conversations: number): number => Math.min(4 * 3_600_000, 3_600_000 + conversations * 60_000);
 
 export interface AnalysisConsent {
+  checking?: 'facts';
   /** Every conversation of the log, the ones the import could read, and those of them Lab can judge. */
   conversations: number; readable: number; judgeable: number;
   /** A log larger than one import: the readable conversations its sample was drawn from, and those taken. */
@@ -85,17 +88,19 @@ export async function analysisConsent(store: Pick<ExperimentStore, 'readTopicMap
   for (const dialogue of batch.dialogues) { const reason = unjudgeable(dialogue); if (reason) counts[reason]++; }
   const judgeable = batch.dialogues.length - counts.no_customer - counts.no_agent_reply;
   if (!judgeable) throw new Error(`В логах нет ни одного разговора, где клиент пишет и агент отвечает: разбирать нечего.${batch.dialogues.length ? ` Без реплики клиента — ${counts.no_customer}, без ответа агента — ${counts.no_agent_reply}. Проверьте, что сообщения клиента помечены ролью user, а агента — assistant.` : ''}`);
-  const stored = await store.readTopicMap(topicMapKey(batch, input.builder));
-  const topicMapCalls = reusableTopicMap(stored, batch, input.builder) ? 0 : planTopicMap(batch, input.builder, stored).calls;
+  const facts = knowledgeOnly(input.sources);
+  const stored = facts ? undefined : await store.readTopicMap(topicMapKey(batch, input.builder));
+  const topicMapCalls = facts || reusableTopicMap(stored, batch, input.builder) ? 0 : planTopicMap(batch, input.builder, stored).calls;
   const analysed = Math.min(input.requested, judgeable, ANALYSIS_LIMIT);
   const conversations = batch.sample?.dialogues ?? batch.dialogues.length + batch.rejected.length;
   const unread = countLeftOut(batch.rejected.flatMap(row => row.issues ? [{ issues: row.issues, ...(row.id ? { id: row.id } : {}) }] : []));
   const readers = readersOf(input.builder, input.judge);
   return {
+    ...(facts ? { checking: 'facts' as const } : {}),
     conversations, readable: batch.dialogues.length, judgeable,
     ...batch.sample && batch.dialogues.length < batch.sample.usable ? { sample: { usable: batch.sample.usable, taken: batch.dialogues.length } } : {},
     unread, unjudgeable: counts, analysed, perTopic: PER_TOPIC_LIMIT, topicMapCalls, demo: !!input.demo, recorded: [...input.recorded ?? []],
-    callCeiling: analysisCeiling({ task: input.task, sources: input.sources, conversations: analysed, topicMapCalls }),
+    callCeiling: facts ? factCeiling(input.task, input.sources, analysed) : analysisCeiling({ task: input.task, sources: input.sources, conversations: analysed, topicMapCalls }),
     prompts: promptLoad(input.sources), readers: input.demo ? [] : readers, personal: personalData(batch),
   };
 }
@@ -114,6 +119,8 @@ function readersOf(builder: BuilderModel, judge: { provider: string; model: stri
  * carried with no call (findings whose key still holds under this judge), what is done again and why, the ceiling.
  */
 export interface ContinuationConsent {
+  checking?: 'facts';
+  changedMethod?: boolean;
   analysisId: string; file: string;
   /** Conversations the judge can read, those the analysis selected before, and those not selected yet. */
   judgeable: number; picked: number; available: number;
@@ -139,6 +146,16 @@ export async function continuationConsent(store: Pick<ExperimentStore, 'readTopi
   const judgeable = batch.dialogues.filter(dialogue => !unjudgeable(dialogue)).length;
   const picked = earlier.selection.picked.length;
   const available = Math.max(0, Math.min(judgeable, ANALYSIS_TOTAL_LIMIT) - picked);
+  if (draft.checking === 'facts') {
+    const finished = new Set((draft.factChecks ?? []).filter(record => record.complete).map(record => record.dialogueId));
+    const pending = draft.selection.picked.filter(id => !finished.has(id)).length;
+    const analysed = Math.min(input.more, available, ANALYSIS_LIMIT);
+    if (!analysed && !pending) throw new Error('Все доступные разговоры уже прошли проверку фактов.');
+    return { checking: 'facts', ...(earlier.checking !== 'facts' ? { changedMethod: true } : {}), analysisId: earlier.id, file: earlier.logs.file, judgeable, picked, available, analysed,
+      reused: draft.continues?.reused ?? 0, stale: earlier.findings.length - (draft.continues?.reused ?? 0), replanned: 0, refitted: 0,
+      topicMapCalls: 0, callCeiling: factCeiling(draft.task, draft.sources, analysed + pending), demo: earlier.mode === 'demo',
+      readers: earlier.mode === 'demo' ? [] : readersOf(input.builder, input.judge) };
+  }
   // A confirmed gap keeps its failure: it is the owner's to fill, and is not planned again.
   const replannedGroups = draft.topics.filter(group => !group.scenarioId && !group.planFailure);
   // Lab's own unfinished work — a plan, a fit, a judgment — is done by a continuation even when every conversation is selected.
@@ -163,7 +180,9 @@ const PROMPTS: [string, string, string] = ['промпт', 'промпта', 'п
 const IN_CONVERSATIONS: [string, string, string] = ['разговоре', 'разговорах', 'разговорах'];
 
 /** What each model does with the conversations' text. */
-const work = (roles: readonly ('builder' | 'judge')[]): string => roles.includes('builder')
+const work = (roles: readonly ('builder' | 'judge')[], facts = false): string => facts
+  ? roles.includes('builder') ? roles.includes('judge') ? 'подбирает статьи и проверяет факты' : 'подбирает статьи' : 'проверяет факты и возможные противоречия'
+  : roles.includes('builder')
   ? roles.includes('judge') ? 'размечает темы, находит правила и оценивает разговоры' : 'размечает темы и находит правила, которые к ним относятся' : 'оценивает разговоры по правилам';
 
 /** The consent in the owner's words: one question and the lines under it. Every surface asks it with these words. */
@@ -173,21 +192,24 @@ export function analysisConsentText(consent: AnalysisConsent, file: string): { q
   const providers = new Set(consent.readers.map(reader => reader.provider));
   const kinds = [...personal.cards ? [`номера карт — ${personal.cards}`] : [], ...personal.phones ? [`телефоны — ${personal.phones}`] : [], ...personal.emails ? [`почта — ${personal.emails}`] : []];
   return {
-    question: `Найти ошибки агента в ${countText(consent.analysed, IN_CONVERSATIONS)} из «${file}»?`,
+    question: `${consent.checking === 'facts' ? 'Проверить факты в ответах агента' : 'Найти ошибки агента'} в ${countText(consent.analysed, IN_CONVERSATIONS)} из «${file}»?`,
     lines: [
       sample ? `В логах ${countText(consent.conversations, CONVERSATIONS)}; в одну загрузку входит ${sample.taken} из ${sample.usable} прочитанных — по хешу содержимого, без отбора по исходу.`
         : `В логах ${countText(consent.conversations, CONVERSATIONS)}.`,
       ...(unread ? [`Не прочитаны ${countText(unread, CONVERSATIONS)}: ${leftOutWords(consent.unread).join(' · ')}.`] : []),
       ...(skipped.no_customer ? [`В ${countText(skipped.no_customer, IN_CONVERSATIONS)} нет реплики клиента: правила ответа агента там не оценить.`] : []),
       ...(skipped.no_agent_reply ? [`В ${countText(skipped.no_agent_reply, IN_CONVERSATIONS)} после обращения клиента нет записанного ответа агента. Это отдельный сигнал для проверки: возможны молчание агента, передача человеку или обрыв записи. В оценку правил эти разговоры не войдут.`] : []),
-      `Lab разметит темы всех прочитанных разговоров — это покажет, с чем приходят клиенты, — и разберёт до ${countText(consent.analysed, CONVERSATIONS_UP_TO)} из ${consent.judgeable}: места делятся между темами по их доле среди прочитанных разговоров, а места, оставшиеся после округления, получают сначала темы без единого места. Правила темы Lab находит по её разговорам, не больше ${consent.perTopic}; другой разговор темы Lab сначала сверяет с найденным планом и оценивает по правилам того варианта, в котором клиент, — а разговорам, которые ни к одному варианту не подошли, ищет правила отдельно. Частота нарушений будет среди разобранных, а не по всему трафику. Продолжить разбор следующими разговорами можно позже — уже сделанное не оплачивается повторно.`,
-      'Правила берутся из ваших материалов, каждое — на дословной цитате; к каждому разговору — только правила его ситуации.',
+      consent.checking === 'facts'
+        ? `В материалах справочные статьи. Lab возьмёт до ${consent.analysed} разговоров из ${consent.judgeable} без отбора по ответу бота и сверит сказанные факты с подходящими статьями. Разметка всех тем для этого не нужна. Пропуск шага из инструкции сотруднику, передача человеку и отсутствие сведений в статье сами по себе не считаются ошибкой.`
+        : `Lab разметит темы всех прочитанных разговоров — это покажет, с чем приходят клиенты, — и разберёт до ${countText(consent.analysed, CONVERSATIONS_UP_TO)} из ${consent.judgeable}: места делятся между темами по их доле среди прочитанных разговоров, а места, оставшиеся после округления, получают сначала темы без единого места. Правила темы Lab находит по её разговорам, не больше ${consent.perTopic}; другой разговор темы Lab сначала сверяет с найденным планом и оценивает по правилам того варианта, в котором клиент, — а разговорам, которые ни к одному варианту не подошли, ищет правила отдельно. Частота нарушений будет среди разобранных, а не по всему трафику. Продолжить разбор следующими разговорами можно позже — уже сделанное не оплачивается повторно.`,
+      consent.checking === 'facts' ? 'Возможное противоречие показывается двумя цитатами: утверждение бота и факт из статьи. Отсутствие сведений остаётся без вывода.'
+        : 'Правила берутся из ваших материалов, каждое — на дословной цитате; к каждому разговору — только правила его ситуации.',
       consent.recorded.length ? `Вы подтвердили: лог записывает каждый вызов ${consent.recorded.join(', ')} в разговорах, помеченных полными. Если правило требует такой вызов, а его нет, — это нарушение. Отсутствие вызова других инструментов не доказывается.`
         : 'Что лог записывает каждый вызов инструментов, вы не подтверждали: если правило требует действия, а вызова в логе нет, Lab скажет «не видно», а не «нарушено».',
-      ...(consent.readers.length ? [`Тексты разговоров уйдут ${providers.size > 1 ? 'провайдерам' : `провайдеру ${consent.readers[0]!.provider}`}: ${consent.readers.map(reader => `${providers.size > 1 ? `${reader.provider} — ` : ''}модель ${reader.model} ${work(reader.roles)}`).join('; ')}.`] : []),
+      ...(consent.readers.length ? [`Тексты разговоров уйдут ${providers.size > 1 ? 'провайдерам' : `провайдеру ${consent.readers[0]!.provider}`}: ${consent.readers.map(reader => `${providers.size > 1 ? `${reader.provider} — ` : ''}модель ${reader.model} ${work(reader.roles, consent.checking === 'facts')}`).join('; ')}.`] : []),
       ...(personal.conversations ? [`В ${countText(personal.conversations, IN_CONVERSATIONS)} похоже на личные данные: ${kinds.join(', ')}; они уйдут ${providers.size > 1 ? 'провайдерам' : 'провайдеру'} как есть.`] : []),
       ...(consent.prompts.count ? [`Промпты агента — ${countText(consent.prompts.count, PROMPTS)}, ${Math.ceil(consent.prompts.bytes / 1000)} КБ — судья читает их правила с каждым разговором.`] : []),
-      consent.demo ? 'Учебный пример: темы, правила и оценки — заготовки без модели, ничего не тратится. Агент не запускается, ситуации не создаются.' : `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}: по два голоса судьи на каждое правило каждого разговора. Это потолок, а не прогноз. Агент не запускается, ситуации не создаются.`,
+      consent.demo ? 'Учебный пример: темы, правила и оценки — заготовки без модели, ничего не тратится. Агент не запускается, ситуации не создаются.' : `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}${consent.checking === 'facts' ? ', включая выбор статей, проверку утверждений, перепроверку возможных противоречий и ограниченные повторы неудачных ответов' : ': по два голоса судьи на каждое правило каждого разговора'}. Это потолок, а не прогноз. Агент не запускается, ситуации не создаются.`,
     ],
   };
 }
@@ -199,13 +221,15 @@ export function continuationConsentText(consent: ContinuationConsent): { questio
     question: consent.analysed ? `Продолжить разбор «${consent.file}»: ещё до ${countText(consent.analysed, CONVERSATIONS_UP_TO)}?`
       : `Доделать разбор «${consent.file}»? Новых разговоров не осталось — Lab закончит то, что не доделал.`,
     lines: [
-      `Уже выбрано ${consent.picked} из ${countText(consent.judgeable, CONVERSATIONS_UP_TO)}, которые можно оценить; не выбрано ещё ${consent.available}. Следующие Lab возьмёт так же: по доле тем среди прочитанных разговоров, без отбора по исходу.`,
+      `Уже выбрано ${consent.picked} из ${countText(consent.judgeable, CONVERSATIONS_UP_TO)}, которые можно оценить; не выбрано ещё ${consent.available}. Следующие Lab возьмёт так же: ${consent.checking === 'facts' ? 'из воспроизводимой выборки' : 'по доле тем среди прочитанных разговоров'}, без отбора по исходу.`,
       consent.reused ? `Уже сделанные оценки — ${consent.reused} — перейдут без вызова модели: правила, логи и судья те же.` : 'Уже сделанных оценок, которые можно перенести, нет.',
-      ...(consent.stale ? [`${countText(consent.stale, ['оценка', 'оценки', 'оценок'])} прошлого разбора сделаны другим судьёй или по другим правилам — Lab оценит их заново; прошлый разбор не меняется.`] : []),
+      ...(consent.changedMethod ? ['Статьи теперь используются для проверки сказанных фактов. Старые замечания о пропущенных шагах не переносятся; выбранные ранее разговоры будут проверены заново. Прошлый отчёт сохраняется.']
+        : consent.stale ? [`${countText(consent.stale, ['оценка', 'оценки', 'оценок'])} прошлого разбора сделаны другим судьёй или по другим правилам — Lab оценит их заново; прошлый разбор не меняется.`] : []),
       ...(consent.replanned ? [`Тем, где работа Lab не закончилась, — ${consent.replanned}: правила для них Lab попробует найти снова.`] : []),
       ...(consent.refitted ? [`${countText(consent.refitted, ['разговор', 'разговора', 'разговоров'])} прошлого разбора Lab сначала сверит с планом темы, потом оценит.`] : []),
-      'Новый разговор темы, для которой правила уже найдены, Lab сначала сверяет с её планом и оценивает по правилам того варианта, в котором клиент; разговорам, которые ни к одному варианту не подошли, и новой теме Lab ищет правила отдельно.',
-      ...(consent.readers.length ? [`Тексты разговоров уйдут ${providers.size > 1 ? 'провайдерам' : `провайдеру ${consent.readers[0]!.provider}`}: ${consent.readers.map(reader => `${providers.size > 1 ? `${reader.provider} — ` : ''}модель ${reader.model} ${work(reader.roles)}`).join('; ')}.`] : []),
+      consent.checking === 'facts' ? 'Следующие разговоры проверяются на фактические противоречия со статьями. Готовые проверки сохраняются; незавершённая перепроверка продолжится со своего шага.'
+        : 'Новый разговор темы, для которой правила уже найдены, Lab сначала сверяет с её планом и оценивает по правилам того варианта, в котором клиент; разговорам, которые ни к одному варианту не подошли, и новой теме Lab ищет правила отдельно.',
+      ...(consent.readers.length ? [`Тексты разговоров уйдут ${providers.size > 1 ? 'провайдерам' : `провайдеру ${consent.readers[0]!.provider}`}: ${consent.readers.map(reader => `${providers.size > 1 ? `${reader.provider} — ` : ''}модель ${reader.model} ${work(reader.roles, consent.checking === 'facts')}`).join('; ')}.`] : []),
       consent.demo ? 'Учебный пример: оценки — заготовки без модели, ничего не тратится.' : `Расход — не больше ${countText(consent.callCeiling, CALLS)} модели${consent.topicMapCalls ? `, из них ${consent.topicMapCalls} — на разметку тем` : ''}. Это потолок, а не прогноз.`,
     ],
   };

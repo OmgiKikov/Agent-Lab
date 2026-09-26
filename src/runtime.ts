@@ -5,6 +5,7 @@ import type { ErrorPlanter } from './judge-check-task.js';
 import type { CardProposal, CardProposalRequest } from './card/proposal.js';
 import type { PlanProposal, PlanRequest } from './card/plan.js';
 import type { FitAnswer, FitRequest } from './discover/fit.js';
+import type { FactChecker } from './discover/facts.js';
 import type { CardReview, CardReviewRequest } from './card/review.js';
 import type { MaskFiller } from './card/unmask.js';
 import type { FailureMode, Scenario, Source, TraceEvent, Trial, Usage } from './contracts.js';
@@ -81,6 +82,8 @@ export interface Runtime {
   assess?(input: { scenario: Scenario; sources: Source[]; trial: Trial; cutOff?: CutOff }, ctx: CallContext): Promise<MetricAssessment[]>;
   /** The same judge on a recorded conversation (card/log-judge.ts): one expectation, two votes, a receipt of its own. */
   logJudge?: LogJudge;
+  /** Actual factual statements compared with reference articles, without inferring duties from employee scripts. */
+  factChecker?: FactChecker;
   /** The builder's planted errors of a judge check (judge-check-task.ts): one agent reply rewritten so one expectation is broken. */
   plantError?: ErrorPlanter;
   /** The builder's plausible values over the masking marks of one existing card (card/unmask.ts), made into a command the owner confirms. */

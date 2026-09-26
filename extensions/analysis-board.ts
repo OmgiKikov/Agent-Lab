@@ -81,7 +81,9 @@ function problemScreen(entry: AnalysisEntry, key: string, selected: number): Scr
   const problem = listed(entry.view)[index];
   if (!problem) return undefined;
   const body: Row[] = [{ text: problem.violations ? `В ${problemSize(problem)}.` : `Все нарушения вы оспорили (${problem.disputed}): они не считаются.`, tone: 'muted' },
-    ...(problem.knowledgeOnly ? [{ text: 'Основание — только статьи базы знаний. Подтвердите, обязательны ли эти сведения в ответе и допустима ли передача оператору.', tone: 'warning' as const }] : []),
+    ...(problem.knowledgeOnly ? [{ text: entry.view.checking === 'facts'
+      ? 'Сравните утверждение бота с цитатой из статьи: относятся ли они к одному факту, продукту и условиям? Перед созданием проверки подтвердите противоречие.'
+      : 'Основание — только статьи базы знаний. Подтвердите, обязательны ли эти сведения в ответе и допустима ли передача оператору.', tone: 'warning' as const }] : []),
     ...problem.rules.map((rule): Row => ({ text: `Правило: «${clip(rule.quote, 400)}» — ${rule.source}.` })), { text: '' },
     { text: problem.examples.length ? 'Примеры — откройте, чтобы увидеть разговор целиком и сказать, прав ли судья:' : 'Примеров нет.', tone: 'accent', bold: true }];
   const items: number[] = [];

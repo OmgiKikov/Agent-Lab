@@ -134,10 +134,12 @@ const cellText = (sheet: Sheet, row: number, column: Column) => cellOf(sheet, ro
  */
 function collapsed<T extends { role?: string; content: string }>(mapping: TableMapping, written: T[]): { messages: T[]; repeats: number; markup: number; dropped: { droppedRepeats?: number } } {
   const markup = written.filter(message => message.role === 'assistant' && fencedBlocks(message.content).length).length;
-  const read = mapping.interfaceMarkup === 'fenced' ? written.map(message => message.role === 'assistant' ? { ...message, content: withoutInterfaceMarkup(message.content) } : message) : written;
-  const once = withoutRepeats(read);
-  const repeats = read.length - once.length;
-  return mapping.collapseRepeats ? { messages: once, repeats, markup, dropped: repeats ? { droppedRepeats: repeats } : {} } : { messages: read, repeats, markup, dropped: {} };
+  // Compare the original messages: two different buttons must not become duplicate turns after both render as a mark.
+  const once = withoutRepeats(written);
+  const repeats = written.length - once.length;
+  const selected = mapping.collapseRepeats ? once : written;
+  const messages = mapping.interfaceMarkup === 'fenced' ? selected.map(message => message.role === 'assistant' ? { ...message, content: withoutInterfaceMarkup(message.content) } : message) : selected;
+  return { messages, repeats, markup, dropped: mapping.collapseRepeats && repeats ? { droppedRepeats: repeats } : {} };
 }
 
 /** One conversation per row: `conversations` holds each conversation's one row (selection.ts conversationRows). */

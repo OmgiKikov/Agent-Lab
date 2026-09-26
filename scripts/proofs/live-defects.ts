@@ -19,6 +19,8 @@ import { judgeLogged, logProtocolHash } from '../../src/card/log-judge.js';
 import { INTERFACE_ELEMENT } from '../../src/interface-markup.js';
 import { confirmTableImport, proposeTableImport, readConfirmedTable, readingConfirmed } from '../../src/spreadsheet/import.js';
 import { questionText } from '../../src/spreadsheet/lines.js';
+import { importTable } from '../../src/spreadsheet/dialogues.js';
+import { readTableFile, readWorkbook } from '../../src/spreadsheet/workbook.js';
 import { ExperimentLab } from '../../src/experiment.js';
 import { planSlips, type PlanCall, type PlanProposal } from '../../src/card/plan.js';
 import { settingsSchema } from '../../src/contracts.js';
@@ -186,6 +188,20 @@ export async function proofLiveDefects(): Promise<void> {
   const refused = await readConfirmedTable(table, join(before, '.agent-lab')).then(() => '', (error: Error) => error.message);
   claim('I', !await readingConfirmed(table, join(before, '.agent-lab')) && refused.includes('--interface-markup') && await readingConfirmed(table, join(dir, '.agent-lab')),
     `(7) a reading confirmed before the question is asked it again: «${refused}»`);
+
+  const buttons = join(dir, 'different-buttons.csv');
+  await writeFile(buttons, ['Id диалога;Текст',
+    '1;CLIENT Покажи. AGENT Выберите кнопку ```transition-code first``` CLIENT Покажи. AGENT Выберите кнопку ```transition-code second```',
+    '2;CLIENT Покажи. AGENT Выберите кнопку ```transition-code same``` CLIENT Покажи. AGENT Выберите кнопку ```transition-code same```'].join('\n'));
+  const buttonReading = await proposeTableImport(buttons, { collapseRepeats: true, interfaceMarkup: true });
+  if (buttonReading.status !== 'ready') throw new Error('Button fixture did not read');
+  const buttonFile = await readTableFile(buttons);
+  const buttonBook = readWorkbook(buttonFile.bytes, buttonFile.file);
+  const buttonImport = importTable(buttonBook.sheets[0]!, buttonReading.mapping);
+  claim('I', buttonImport.batch.dialogues.find(item => item.id === '1')?.events.length === 4
+    && buttonImport.batch.dialogues.find(item => item.id === '2')?.events.length === 2
+    && JSON.stringify(buttonReading.preview) === JSON.stringify(buttonImport.preview),
+    '(7) distinct buttons retain distinct turns; only original repeated exchanges collapse, and preview matches the import');
 
   // (8) The agent's prompt is Markdown; the planner quotes it without the marks, or with a slip of one letter.
   const prompt = '### СТРОГИЕ ЗАПРЕТЫ\n**Абсолютное табу** на:\n- Любые упоминания внутренних систем: ЕРМ, ППРБ, банковские статусы.\n- Удали из ответа любые упоминания: «ЦКР» (включая `#ЦКР`), «SberHelp».';

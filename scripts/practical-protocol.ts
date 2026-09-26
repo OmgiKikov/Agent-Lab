@@ -58,7 +58,7 @@ const datasetSchema = z.object({
   /** `teaching`: the deterministic teaching runtime, which knows only the teaching dialogues and rule. */
   runtime: z.enum(['teaching', 'live']),
   task: z.string().min(1), file: z.string().min(1),
-  materials: z.array(z.object({ name: z.string().min(1), content: z.string().min(1) })).min(1),
+  materials: z.array(z.object({ name: z.string().min(1), content: z.string().min(1), kind: z.enum(['knowledge', 'prompt']).optional() })).min(1),
   logContract: z.object({ tools: z.array(z.string().min(1)).min(1) }).optional(),
   dialogues: z.array(z.object({ id: z.string().min(1), strata: z.array(z.enum(STRATA)).min(1), labels: z.array(labelSchema).min(1) }).passthrough()).min(1),
 }).passthrough();

@@ -38,7 +38,7 @@ export async function proposeTableImport(path: string, choices: TableChoices = {
 }
 
 function proposeFrom(workbook: Workbook, file: TableFile, chosen: TableChoices, proposed: ProposedReading | undefined): TableProposal {
-  return withMarkup(readingOf(workbook, file, chosen, proposed), chosen);
+  return withMarkup(readingOf(workbook, file, chosen, proposed), chosen, workbook);
 }
 
 /**
@@ -46,13 +46,15 @@ function proposeFrom(workbook: Workbook, file: TableFile, chosen: TableChoices, 
  * until they say, and their yes reads them so (interface-markup.ts). Lab never decides it: the same characters may be
  * words the customer reads.
  */
-function withMarkup(proposal: TableProposal, chosen: TableChoices): TableProposal {
+function withMarkup(proposal: TableProposal, chosen: TableChoices, workbook: Workbook): TableProposal {
   if (proposal.status !== 'ready' || !proposal.preview.markup) return proposal;
   if (chosen.interfaceMarkup === undefined) {
     const of = proposal.preview.selected ?? proposal.preview.dialogues;
     return { ...proposal, status: 'question', question: { kind: 'markup', ...proposal.preview.markup, of }, found: of } as TableProposal;
   }
-  return { ...proposal, mapping: tableMappingSchema.parse({ ...proposal.mapping, interfaceMarkup: chosen.interfaceMarkup ? 'fenced' : 'text' }) };
+  const mapping = tableMappingSchema.parse({ ...proposal.mapping, interfaceMarkup: chosen.interfaceMarkup ? 'fenced' : 'text' });
+  const sheet = workbook.sheets.find(sheet => sheet.name === proposal.sheet)!;
+  return { ...proposal, mapping, preview: importTable(sheet, mapping).preview };
 }
 
 /** Whether the owner has not said how to read the fenced blocks of the agent's messages a mapping of `path` finds. */

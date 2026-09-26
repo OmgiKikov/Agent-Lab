@@ -19,6 +19,10 @@ const UNDECIDED: Readonly<Record<FindingUndecided, string>> = {
   no_agent_reply: 'агент в разговоре не ответил',
   channel_unobserved: 'действия агента в этом разговоре записаны не полностью',
   call_unconfirmed: 'вызова нужного инструмента в логе нет, а что лог записывает каждый такой вызов, не подтверждено — сделано ли действие, не видно',
+  facts_unknown: 'утверждение нельзя проверить по найденным статьям и доступному контексту',
+  facts_no_claims: 'в разговоре нет фактических утверждений для сравнения со статьями',
+  facts_no_sources: 'для разговора не найдены подходящие статьи',
+  facts_failed: 'проверка фактов не завершилась',
   not_exercised_in_log: 'разговор не дошёл до правила',
   judge_failed: 'судья не дал ответа',
   judge_split: 'два голоса судьи разошлись',
@@ -126,6 +130,7 @@ export function exampleLine(example: Example): string {
 export function headline(view: AnalysisView): string {
   const { coverage } = view;
   if (view.status === 'running') return `Разбор идёт: ${view.message}`;
+  if (view.facts) return `Проверка фактов завершена для ${view.facts.completed} из ${coverage.picked} выбранных разговоров: подтверждено статьями ${view.facts.supported}, возможных противоречий ${view.facts.contradicted}, не удалось проверить ${view.facts.unknown}.`;
   const scope = coverage.processed === coverage.picked
     ? `Разобрано ${countText(coverage.processed, CONVERSATIONS)} из ${coverage.logged} в «${view.file}»`
     : `Разобрано ${coverage.processed} из ${countText(coverage.picked, OF_CONVERSATIONS)}, выбранных в «${view.file}» (в логе — ${coverage.logged})`;
@@ -163,6 +168,7 @@ export function funnelLines(view: AnalysisView): string[] {
  * or, with no topic map, the first ones of the log.
  */
 export function pickedHow(coverage: Pick<AnalysisView['coverage'], 'method' | 'perTopic' | 'beyond'>): string {
+  if (coverage.method === 'sample') return 'взята воспроизводимая выборка без отбора по ответу бота';
   if (coverage.method === 'order') return 'темы не размечены, поэтому разобраны первые по порядку в логе';
   return coverage.beyond ? 'места делятся между темами по их доле среди прочитанных разговоров; места, оставшиеся после округления, получают сначала темы без единого места'
     : `места делятся между темами по их доле среди прочитанных разговоров, не больше ${coverage.perTopic} из одной темы; места, оставшиеся после округления, получают сначала темы без единого места`;
@@ -173,6 +179,11 @@ export function coverageLines(view: AnalysisView): string[] {
   const { coverage } = view;
   const unread = coverage.logged - coverage.readable;
   const rest = coverage.judgeable - coverage.picked;
+  if (view.facts) return [
+    `В файле ${coverage.logged} разговоров; в загрузке ${coverage.readable}; выбрано ${coverage.picked}, проверка фактов завершена для ${view.facts.completed}.`,
+    ...(view.undecided.length ? [`Без вывода: ${view.undecided.map(item => `${UNDECIDED[item.reason]} — ${item.count}`).join('; ')}.`] : []),
+    ...(rest > 0 ? [`Не проверено ещё ${rest} разговоров из этой загрузки. Продолжение берёт следующие разговоры, готовые результаты сохраняются.`] : []),
+  ];
   const noCustomer = coverage.unjudgeable.find(item => item.reason === 'no_customer')?.count ?? 0;
   const noReply = coverage.unjudgeable.find(item => item.reason === 'no_agent_reply')?.count ?? 0;
   return [
@@ -204,6 +215,11 @@ export function trafficLine(view: AnalysisView): string | undefined {
 
 /** What the answer does not say. */
 export function limitLines(view: AnalysisView): string[] {
+  if (view.checking === 'facts') return [
+    'Проверены отдельные фактические утверждения по найденным статьям. Это не оценка всего ответа или всего агента.',
+    'Отсутствие сведений, скрытые значения и неясные условия остаются без вывода. Пропущенный шаг из инструкции сотруднику не считается ошибкой бота.',
+    'Материалы предоставлены сейчас; их применимость к дате разговора может быть неизвестна. Возможное противоречие проверьте по двум цитатам.',
+  ];
   return [
     'Частота — среди разобранных разговоров, где правило проверено; это не доля всего трафика и не доля клиентов.',
     'Оценено по правилам, которые вы дали сейчас; действовали ли они в дни этих разговоров, Lab не знает.',
@@ -230,17 +246,17 @@ export function analysisLines(view: AnalysisView, options: { examples?: number; 
   if (traffic) lines.push(traffic);
   if (shown.length) {
     const knowledge = view.problems.filter(problem => problem.knowledgeOnly).reduce((sum, problem) => sum + problem.violations, 0);
-    lines.push('', 'Возможные нарушения по оценке судьи:');
-    if (knowledge) lines.push(`${knowledge} из них основаны только на статьях базы знаний: владелец должен подтвердить, обязательны ли эти сведения в конкретном ответе и допустима ли передача оператору.`);
+    lines.push('', view.checking === 'facts' ? 'Возможные фактические противоречия — сравните цитаты:' : 'Возможные нарушения по оценке судьи:');
+    if (knowledge && view.checking !== 'facts') lines.push(`${knowledge} из них основаны только на статьях базы знаний: владелец должен подтвердить, обязательны ли эти сведения в конкретном ответе и допустима ли передача оператору.`);
     shown.forEach((problem, index) => {
-      lines.push(`${index + 1}. ${problemTitle(problem)} — ${problemSize(problem)}${problem.knowledgeOnly ? ' · обязательность для этого ответа не подтверждена' : ''}.`);
+      lines.push(`${index + 1}. ${problemTitle(problem)} — ${problemSize(problem)}${problem.knowledgeOnly && view.checking !== 'facts' ? ' · обязательность для этого ответа не подтверждена' : ''}.`);
       for (const rule of problem.rules.slice(0, 2)) lines.push(`   Правило: «${clip(rule.quote, 240)}» — ${rule.source}.`);
       for (const example of problem.examples.slice(0, examples)) lines.push(`   ${exampleLine(example)}`);
       if (problem.disputed) lines.push(`   Вы оспорили — ${problem.disputed}; они не считаются.`);
     });
     if (view.problems.length > shown.length) lines.push(`…и ещё ${view.problems.length - shown.length}.`);
   }
-  if (view.clean.length) lines.push('', `Без нарушений: ${view.clean.slice(0, 5).map(item => `«${clip(item.text, 120)}» — ${countText(item.checked, CONVERSATIONS)}${item.disputed ? ` (вы оспорили ${item.disputed} ${item.disputed === 1 ? 'вывод' : 'вывода'} судьи)` : ''}`).join('; ')}${view.clean.length > 5 ? `; ещё ${view.clean.length - 5}` : ''}.`);
+  if (view.clean.length) lines.push('', `${view.checking === 'facts' ? 'Подтверждено статьями' : 'Без нарушений'}: ${view.clean.slice(0, 5).map(item => `«${clip(item.text, 120)}» — ${countText(item.checked, CONVERSATIONS)}${item.disputed ? ` (вы оспорили ${item.disputed} ${item.disputed === 1 ? 'вывод' : 'вывода'} судьи)` : ''}`).join('; ')}${view.clean.length > 5 ? `; ещё ${view.clean.length - 5}` : ''}.`);
   if (view.gaps.length) lines.push('', ...view.gaps.map(gapLine));
   lines.push('', ...coverageLines(view), ...limitLines(view));
   return lines;
@@ -254,6 +270,9 @@ export function nextStep(view: AnalysisView): string {
   if (view.status === 'failed' || view.status === 'interrupted' || view.unfinished === 'budget' || view.unfinished === 'time') {
     return 'Дальше: продолжите разбор — Lab доделает то, до чего не дошёл, и не заплатит повторно за уже сделанное.';
   }
+  if (view.facts && !view.problems.length) return view.facts.failed
+    ? 'Дальше: продолжите незавершённые проверки фактов; готовые результаты сохранятся.'
+    : 'Прямых противоречий среди проверенных утверждений не найдено. Для оценки обязательных действий нужны инструкции самого бота; можно продолжить проверку фактов на следующих разговорах.';
   if (view.problems.length) return 'Дальше: откройте пример нарушения и скажите, прав ли судья, — или сделайте из него проверку для новой версии агента.';
   // Only a gap the reviewer confirmed is the owner's to fill; Lab's own unfinished work is repeated by a continuation.
   if (view.gaps.some(gap => gap.rulesGap?.confirmed)) return 'Дальше: добавьте в материалы правило для темы, где проверяющий подтвердил, что его нет, — например, тексты из кода агента, если оно записано там.';

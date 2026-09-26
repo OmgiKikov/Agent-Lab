@@ -42,6 +42,7 @@ import { claim, cleanUp, failures, folder, preparedCheck, repeatWith, run } from
 import { proofBeyondEight, proofLabFailures } from './proofs/discover-work.js';
 import { proofLiveDefects } from './proofs/live-defects.js';
 import { proofRest } from './proofs/rest.js';
+import { proofFacts } from './proofs/facts.js';
 
 const problemWith = (view: ReturnType<typeof analysisView>, start: string): ProblemView => {
   const problem = view.problems.find(item => item.duty.text.startsWith(start));
@@ -210,9 +211,10 @@ try {
   await proofBeyondEight();
   await proofBoard();
   await proofLiveDefects();
+  await proofFacts();
 } finally {
   await cleanUp();
 }
 const failed = failures();
-console.log(failed ? `\n${failed} claim(s) FAILED` : '\nReport A: all claims PASS — A B C D E F G H I. Contract checks on constructed cases; judge quality on real dialogues is report B.');
+console.log(failed ? `\n${failed} claim(s) FAILED` : '\nReport A: all claims PASS — A B C D E F G H I J. Contract checks on constructed cases; judge quality on real dialogues is report B.');
 process.exit(failed ? 1 : 0);

@@ -20,6 +20,7 @@ import {
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { planPayload, planProposalSchema, planSlipKind, planSlips, type PlanProposal } from './card/plan.js';
 import { fitAnswerSchema, fitProblem, type FitAnswer } from './discover/fit.js';
+import { FACT_ATTEMPTS, FACT_PROTOCOL, FACT_ROLE, factAnswerSchema, factProblem } from './discover/facts.js';
 import { cardReviewSchema, laterMessages } from './card/review.js';
 import { fillWithModel } from './card/unmask.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
@@ -225,6 +226,11 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
     },
     logJudge: { provider: judge.provider, model: judge.id, protocolHash: logProtocolHash(judgeModel.configurationHash),
       assess: (request, ctx) => judgeLogged(request, judgeModel, ctx, respond(ctx)) },
+    factChecker: { provider: judge.provider, model: judge.id,
+      protocolHash: fingerprint({ protocol: FACT_PROTOCOL, instructions: FACT_ROLE, provider: judge.provider, model: judge.id, configuration: judgeModel.configurationHash }),
+      check: (request, ctx) => run({ id: request.review ? 'review-log-facts' : 'check-log-facts', label: 'Проверка фактов в ответе', role: 'judge',
+        instructions: FACT_ROLE, output: factAnswerSchema, check: answer => factProblem(answer, request), attempts: FACT_ATTEMPTS,
+        bounded: { requestBytes: MODEL_REQUEST_BYTES } }, request, ctx) },
     // The errors a judge check plants are the builder's work too; the run's own judge then reads them.
     plantError: { builder, plant: (request, ctx) => plantError(request, { run, ctx }) },
     // So are the values written over a card's masking marks after it was made.

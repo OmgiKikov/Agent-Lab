@@ -6,6 +6,7 @@ import { identifierSchema as id, sha256Schema as hash, text } from '../ids.js';
 import { IMPORT_DIALOGUE_LIMIT, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
 import { PLAN_EXPECTATIONS } from '../card/plan.js';
 import { topicIdSchema, trafficSchema } from '../miner/schema.js';
+import { FACT_PROTOCOL, factCheckSchema } from './facts.js';
 
 /*
  * The stored shape of a log analysis (DISCOVER): what the agent did with real customers, judged against the owner's
@@ -24,6 +25,8 @@ import { topicIdSchema, trafficSchema } from '../miner/schema.js';
  */
 
 /**
+ * `discover-v4`: article-only inputs compare actual assistant claims with reference facts (`grounded-v1`), preserving
+ * supported, contradicted and unknown claims separately. Existing rule-based records retain their original reading.
  * `discover-v3`: the judge is told the situation each expectation is for (`logged-v3`), and a conversation beyond a topic's
  * plan examples is judged only under the variation the planner says it fits — one no variation fits gets a plan of its own.
  * `discover-v2`: a finding's `criterionHash` is the kernel's (criterion.ts) — the criterion's own fields — and a criterion
@@ -32,6 +35,7 @@ import { topicIdSchema, trafficSchema } from '../miner/schema.js';
  * from that hash.
  */
 export const ANALYSIS_PROTOCOL = 'discover-v3';
+export const FACT_ANALYSIS_PROTOCOL = 'discover-v4';
 const ANALYSIS_PROTOCOL_V2 = 'discover-v2';
 const ANALYSIS_PROTOCOL_V1 = 'discover-v1';
 /**
@@ -92,7 +96,7 @@ export const findingSchema = z.strictObject({
   key: hash,
   dialogueId: id, scenarioId: id, expectationId: id, variationId: id.optional(),
   criterionHash: hash,
-  mode: z.enum([LOGGED_MODE, LOGGED_MODE_V3]), protocolHash: hash, inputHash: hash, auditHash: hash.optional(),
+  mode: z.enum([LOGGED_MODE, LOGGED_MODE_V3, FACT_PROTOCOL]), protocolHash: hash, inputHash: hash, auditHash: hash.optional(),
   provider: text(120), model: text(200),
   skipped: z.enum(FINDING_SKIPS).optional(),
   votes: z.array(z.strictObject({ pass: condition.optional(), fail: condition.optional(), result: verdict.optional(), error: z.literal(true).optional() })).max(4),
@@ -130,7 +134,7 @@ export const PLAN_ISSUES = ['answer_schema', 'quote_not_verbatim', 'answer_check
 export type PlanIssue = typeof PLAN_ISSUES[number];
 
 export const analysisSchema = z.strictObject({
-  formatVersion: z.literal(1), protocol: z.enum([ANALYSIS_PROTOCOL_V1, ANALYSIS_PROTOCOL_V2, ANALYSIS_PROTOCOL]),
+  formatVersion: z.literal(1), protocol: z.enum([ANALYSIS_PROTOCOL_V1, ANALYSIS_PROTOCOL_V2, ANALYSIS_PROTOCOL, FACT_ANALYSIS_PROTOCOL]),
   id, createdAt: z.iso.datetime(), updatedAt: z.iso.datetime(),
   status: z.enum(ANALYSIS_STATUSES), message: z.string().max(2000),
   unfinished: z.enum(UNFINISHED).optional(),
@@ -138,6 +142,9 @@ export const analysisSchema = z.strictObject({
   /** What failed, typed, when the analysis ended on a failure; absent on an analysis made before it was typed. */
   failure: z.enum(FAILURES).optional(),
   mode: z.enum(['demo', 'live']),
+  /** Absent on existing analyses: their original rule-based interpretation remains readable. */
+  checking: z.literal('facts').optional(),
+  factChecks: z.array(factCheckSchema).max(ANALYSIS_TOTAL_LIMIT).optional(),
   task: text(2000),
   /**
    * The import read: its identity, the file's name, every conversation of the log and those the import could read;
@@ -158,7 +165,7 @@ export const analysisSchema = z.strictObject({
    */
   selection: z.strictObject({
     requested: z.number().int().positive().max(ANALYSIS_LIMIT), perTopic: z.number().int().positive().max(PER_TOPIC_LIMIT),
-    method: z.enum(['topics', 'order']),
+    method: z.enum(['topics', 'order', 'sample']),
     picked: z.array(id).max(ANALYSIS_TOTAL_LIMIT),
     unjudgeable: z.array(z.strictObject({ dialogueId: id, reason: z.enum(UNJUDGEABLE) })).max(IMPORT_DIALOGUE_LIMIT),
     /**
@@ -204,9 +211,9 @@ export const analysisSchema = z.strictObject({
      * (`confirmed`, card/review.ts gapRequest, as a preparation checks a gap); otherwise Lab's reading, not the owner's gap.
      */
     rulesGap: z.strictObject({ asks: text(300), confirmed: z.boolean(), reason: z.string().max(600).optional(), reviewer: z.string().max(200).optional() }).optional(),
-  })).max(40),
-  requirements: z.array(requirementSchema).max(RECORD_REQUIREMENT_LIMIT),
-  scenarios: z.array(businessScenarioSchema).max(40),
+  })).max(ANALYSIS_TOTAL_LIMIT),
+  requirements: z.array(requirementSchema).max(Math.max(RECORD_REQUIREMENT_LIMIT, ANALYSIS_TOTAL_LIMIT * PLAN_EXPECTATIONS)),
+  scenarios: z.array(businessScenarioSchema).max(ANALYSIS_TOTAL_LIMIT),
   /** The variation of its topic's plan each analysed conversation stands for; none — only the plan's shared expectations apply to it. */
   assignments: z.array(z.strictObject({ dialogueId: id, scenarioId: id, variationId: id.optional() })).max(ANALYSIS_TOTAL_LIMIT),
   findings: z.array(findingSchema).max(ANALYSIS_TOTAL_LIMIT * PLAN_EXPECTATIONS),

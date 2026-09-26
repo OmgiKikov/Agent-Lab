@@ -24,7 +24,9 @@ import { countText } from '../plural.js';
 import type { Operation } from '../lab/operation.js';
 import { analysisJob, applicableExpectations, planAssignments, unjudgeable, type AnalysisJob } from './criteria.js';
 import { FIT_BATCH, fitAnswerSchema, fitProblem, NO_FIT, type FitRequest } from './fit.js';
-import { ANALYSIS_PROTOCOL, ANALYSIS_TOTAL_LIMIT, findingSchema, type Finding, type LogAnalysis, type LogContract, type PlanIssue } from './schema.js';
+import { carryFactChecks, runFactAnalysis, selectFactConversations } from './facts-work.js';
+import { knowledgeOnly } from './facts.js';
+import { ANALYSIS_PROTOCOL, FACT_ANALYSIS_PROTOCOL, ANALYSIS_TOTAL_LIMIT, findingSchema, type Finding, type LogAnalysis, type LogContract, type PlanIssue } from './schema.js';
 
 /*
  * The work of one log analysis (DISCOVER), after the owner agreed to its ceiling. No situation is made and nothing of the
@@ -138,6 +140,7 @@ async function select(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisW
  * the analysis gets a group whose first `perTopic` its plan reads. Without a topic map, the next ones in the log's order.
  */
 export async function selectMore(analysis: LogAnalysis, batch: ImportBatch, more: number, work: Pick<AnalysisWork, 'runtime' | 'store' | 'ctx' | 'checkpoint'>): Promise<string[]> {
+  if (analysis.checking === 'facts') return selectFactConversations(analysis, batch, more);
   const taken = new Set([...analysis.selection.picked, ...analysis.selection.unjudgeable.map(item => item.dialogueId)]);
   const room = Math.min(more, ANALYSIS_TOTAL_LIMIT - analysis.selection.picked.length);
   const perTopic = analysis.selection.perTopic;
@@ -422,6 +425,7 @@ function evidenceOf(audit: JudgeAudit | undefined, result: Finding['result']): P
  * `pending`, only those with no finding yet.
  */
 export function analysisJobs(analysis: LogAnalysis, batch: ImportBatch, protocolHash: string, pending = true): AnalysisJob[] {
+  if (analysis.checking === 'facts') return [];
   const done = new Set(pending ? analysis.findings.map(finding => finding.key) : []);
   const fitted = analysis.selection.beyond === 'fitted';
   return analysis.topics.flatMap(group => {
@@ -475,6 +479,7 @@ async function judge(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWo
 
 /** Runs an analysis from where its record stands: the selection, the plans, then the findings. */
 export async function runAnalysis(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWork): Promise<void> {
+  if (analysis.checking === 'facts') return runFactAnalysis(analysis, batch, work);
   if (!analysis.topics.length) await select(analysis, batch, work);
   await plan(analysis, batch, work);
   await judge(analysis, batch, work);
@@ -493,6 +498,18 @@ export function continueFrom(earlier: LogAnalysis, batch: ImportBatch, protocolH
   const next: LogAnalysis = structuredClone({ ...earlier, id: fresh.id, protocol: ANALYSIS_PROTOCOL, createdAt: fresh.createdAt, updatedAt: fresh.updatedAt, budget: fresh.budget, models: fresh.models,
     status: 'running' as const, message: 'Продолжаю разбор.', selection: { ...earlier.selection, requested: fresh.requested, beyond: 'fitted' as const } });
   delete next.unfinished; delete next.error; delete next.failure;
+  if (earlier.checking !== 'facts' && knowledgeOnly(earlier.sources)) {
+    // Preserve the earlier record, but do not carry its article-derived duties into the new factual comparison.
+    next.checking = 'facts'; next.factChecks = []; next.findings = [];
+    next.scenarios = []; next.topics = []; next.requirements = []; next.assignments = [];
+  }
+  if (next.checking === 'facts') {
+    next.protocol = FACT_ANALYSIS_PROTOCOL;
+    delete next.selection.beyond;
+    carryFactChecks(next, batch, protocolHash);
+    next.continues = { analysisId: earlier.id, picked: earlier.selection.picked.length, reused: next.findings.length };
+    return next;
+  }
   for (const group of next.topics) {
     if (group.planFailure && !group.rulesGap?.confirmed) { delete group.planFailure; delete group.planIssue; delete group.rulesGap; }
     delete group.fitIssue;
