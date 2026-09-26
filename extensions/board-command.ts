@@ -13,7 +13,7 @@ import { situationViews, type SituationAction, type SituationView } from '../src
 import { isRunning } from '../src/phases.js';
 import { demoInput } from '../src/demo.js';
 import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
-import { isRunnable, type Experiment } from '../src/contracts.js';
+import type { Experiment } from '../src/contracts.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { decisions, type DecisionChoice } from '../src/inbox.js';
 import { situationCoverage } from '../src/miner/cards.js';
@@ -28,7 +28,7 @@ import { applyRulebookChange, applySituationCommand, logsOf, settle, writer, typ
 import type { LabHost } from './host.ts';
 import { blindCheck, recordLogMark, recordMark } from './judge-review.ts';
 import { ask, boardDiscussionContext, inputError, requireInteractive } from './lab-ui.ts';
-import { cardPlan, keptExam, launchRun } from './launch.ts';
+import { cardPlan, launchRun } from './launch.ts';
 import type { SessionOperation } from './operations.ts';
 import { newState, showWorkspace, type WorkspaceAction, type WorkspaceChanges, type WorkspaceState, type WorkspaceView } from './workspace.ts';
 import { logKey, type SpaceData, type WorkKind } from './workspace-screens.ts';
@@ -160,10 +160,7 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     // The plan is said in the run dialog's own words (launch.ts reads the same lines): the owner reads one description of it.
     const ready = views.filter(view => view.status === 'ready').map(view => view.id);
     const calibration = !active && plan.situations ? await calibrationConsent(reader.store, context?.experiment ?? setRecord, cards ? ready : undefined).catch(() => null) : null;
-    // The exam the run dialog takes from the project's connection file, as it will take it.
-    const kept = !active && cwd && isRunnable(setRecord.target) ? await keptExam(setRecord.target, cwd) : undefined;
-    const launch = !active && plan.situations ? launchLines(kept && isRunnable(setRecord.target) ? { ...setRecord, target: { ...setRecord.target, exam: kept } } : setRecord, plan, cwd,
-      { calibration: calibration?.line ?? null, ...(setRecord.target.kind === 'unconnected' ? { note: UNCONNECTED_NOTE } : {}), ...(kept ? { exam: 'connection' as const } : {}) }) : undefined;
+    const launch = !active && plan.situations ? launchLines(setRecord, plan, cwd, { calibration: calibration?.line ?? null, ...(setRecord.target.kind === 'unconnected' ? { note: UNCONNECTED_NOTE } : {}) }) : undefined;
     set = { record: setRecord, views, editable, ...(coverage ? { coverage } : {}), ...(rulebook ? { rulebook } : {}), running: job?.kind === 'assessment' && job.id === setRecord.id,
       plan, ...(launch ? { launch } : {}) };
   }
