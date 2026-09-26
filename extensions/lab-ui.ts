@@ -2,11 +2,10 @@ import type { AgentToolResult, ExtensionContext, Theme, ToolDefinition, ToolRend
 import type { Component } from '@earendil-works/pi-tui';
 import { z } from 'zod';
 import { safeText } from '../src/text.js';
-import { AgentRequestFailed, CommandRefused, LibraryConflict, LockedError, StaleRevisionError, STOP_LABEL, STOP_REASONS, Stopped, UnknownReference } from '../src/errors.js';
 import type { Experiment } from '../src/contracts.js';
 import { convertible } from '../src/card/legacy-v1.js';
-import { ProviderFailure, type ProviderFailureKind } from '../src/llm/model-call.js';
-import { StructuredTaskError } from '../src/llm/structured.js';
+import { forOwner, ownerText, problemOf, recordErrorText as storedErrorText, stopOf, stoppedByOwner } from '../src/error-text.js';
+import { TOOL } from './steps.ts';
 import { ActionHead, contentText, lineBody, renderFeedResult, callText } from './render/feed.ts';
 import { renderAgentLabResult } from './render/verdict-block.ts';
 import type { Tone } from './render/theme.ts';
@@ -37,7 +36,8 @@ export const displayFor = (name: string): Pick<ToolDefinition, 'renderShell' | '
   },
   renderResult: (result, options, theme, context) => {
     const state: RowState = context.state ?? {};
-    if (context.isError) { state.tone = 'error'; return lineBody(contentText(result), 'error', theme); }
+    // Pi's own refusals (a schema, a tool not in this step) are said in the owner's words, never as Pi wrote them.
+    if (context.isError) { state.tone = 'error'; return lineBody(toolErrorText(contentText(result)), 'error', theme); }
     if (options.isPartial) { state.tone = 'muted'; return legacyResult(result, options, theme); }
     return renderFeedResult(result, options, theme, (r, o, t) => renderAgentLabResult(r, o, t, legacyResult, tone => { state.tone = tone; }), tone => { state.tone = tone; });
   },
@@ -71,43 +71,6 @@ export class NeedsOwner extends Error {
 
 /* ───────────────────────────── errors in the owner's words ───────────────────────────── */
 
-/** Why long work stopped (Stopped), what was kept and the way on. */
-const STOPPED: Record<Stopped['reason'], string> = {
-  budget: 'Закончился лимит вызовов модели; сделанное сохранено. Поднять лимит — ваше решение: скажите «подними лимит».',
-  time: 'Закончилось время, отведённое на эту работу; сделанное сохранено.',
-  cancelled: 'Остановлено по вашей просьбе; сделанное сохранено.',
-  closing: 'Работа остановилась при закрытии Agent Lab; сделанное сохранено.',
-};
-/**
- * The fixed labels lab/operation.ts gives each stop (src/errors.ts STOP_LABEL), and the English ones records kept before
- * them. A record keeps its stop's label as its error, so a stored stop is read back here by exact equality with these,
- * never by searching the text.
- */
-const STOP_LABELS: Readonly<Record<string, Stopped['reason']>> = {
-  ...Object.fromEntries(STOP_REASONS.map(reason => [STOP_LABEL[reason], reason])),
-  'Model call budget exhausted.': 'budget', 'Experiment time limit reached.': 'time', 'Cancelled by the user.': 'cancelled', 'Application is closing.': 'closing',
-};
-const PROVIDER: Record<ProviderFailureKind, string> = {
-  'rate limit': 'Провайдер модели ограничил частоту запросов. Подождите минуту и повторите.',
-  overloaded: 'Провайдер модели перегружен или временно недоступен — повторите позже.',
-  'insufficient credit': 'У провайдера модели закончились средства. Пополните счёт или выберите другую модель (/model).',
-  'access denied': 'Провайдер модели отказал в доступе. Проверьте ключ и права на модель (/login).',
-  timeout: 'Модель не ответила вовремя. Повторите позже.',
-  'connection failure': 'Нет связи с провайдером модели. Проверьте сеть и повторите.',
-  'context limit': 'Запрос не поместился в окно модели. Выберите модель с окном больше (/model) или меньше материалов.',
-  'bad request': 'Провайдер модели отверг запрос в таком виде — повтор не поможет. Выберите другую модель (/model) или сообщите разработчикам Lab.',
-  incomplete: 'Модель оборвала ответ. Повторите.',
-  deadline: 'Модель не ответила за отведённое время. Повторите позже.',
-  unavailable: 'Модель недоступна. Проверьте ключ и права на модель (/login, /model).',
-  empty: 'Модель вернула пустой ответ. Повторите.',
-  length: 'Ответ модели упёрся в предел длины. Повторите или выберите модель с большим пределом ответа (/model).',
-};
-const AGENT: Record<AgentRequestFailed['kind'], string> = {
-  unreachable: 'Агент не отвечает. Проверьте, что он запущен и доступен, и повторите.',
-  timeout: 'Агент не ответил вовремя. Проверьте его и повторите.',
-  status: 'Агент ответил ошибкой. Посмотрите его журнал и повторите.',
-  tls: 'Сертификат агента не прошёл проверку. Укажите корневой сертификат (CA) в NODE_EXTRA_CA_CERTS и перезапустите Pi.',
-};
 /** The fields an input names, as the owner calls them. */
 const FIELD: Readonly<Record<string, string>> = {
   task: 'описание агента', materials: 'правила', rules: 'правило', requirementIds: 'правило', bind: 'правило', unbind: 'правило', included: 'правила свода', kinds: 'виды правил',
@@ -117,24 +80,6 @@ const FIELD: Readonly<Record<string, string>> = {
   repeats: 'число попыток', scenarioCount: 'число ситуаций', situations: 'число ситуаций', note: 'причина', version: 'версия агента', url: 'адрес агента',
   command: 'команда запуска агента', path: 'файл агента', module: 'файл агента', args: 'аргументы запуска',
 };
-
-/** Whether a message was written for the owner: everything the engine says to a person is Russian, an English message is a diagnostic. */
-const forOwner = (message: string): boolean => [...message].some(char => (char >= 'А' && char <= 'я') || char === 'ё' || char === 'Ё');
-
-/** What one zod issue says, in plain words. */
-function problemOf(issue: z.core.$ZodIssue): string {
-  switch (issue.code) {
-    case 'too_big': return issue.origin === 'string' ? `не длиннее ${issue.maximum} знаков` : `не больше ${issue.maximum}`;
-    case 'too_small': return issue.origin === 'string' ? Number(issue.minimum) <= 1 ? 'не может быть пустым' : `не короче ${issue.minimum} знаков`
-      : issue.origin === 'array' ? `нужно хотя бы ${issue.minimum}` : `не меньше ${issue.minimum}`;
-    case 'invalid_format': return 'в недопустимом виде';
-    case 'invalid_value': return 'такого значения нет';
-    case 'invalid_type': return 'не указано или не того вида';
-    case 'unrecognized_keys': return 'лишние поля';
-    case 'custom': return forOwner(issue.message) ? issue.message : 'не проходит проверку';
-    default: return 'не проходит проверку';
-  }
-}
 
 /** A zod error as the owner reads it: the field and what is wrong with it, never a raw issue dump. */
 export function zodText(error: z.ZodError): string {
@@ -152,33 +97,20 @@ function diagnose(error: unknown): void {
 /** What the owner reads when the cause is not theirs to act on; the original goes to the terminal's error output. */
 export const UNKNOWN_ERROR = 'Не получилось из-за внутренней ошибки Agent Lab. Попробуйте ещё раз; подробности — в выводе ошибок терминала.';
 
-/** The owner's words for an error Lab knows; undefined for anything else. */
-function knownText(error: unknown): string | undefined {
-  if (error instanceof NeedsOwner) return error.ownerText;
-  if (error instanceof LockedError) return `Папку данных ${error.directory} сейчас ведёт другой процесс Agent Lab — другая сессия Pi или команда agent-lab. Смотреть можно здесь; изменения и запуск — после его завершения. Если такого процесса точно нет, удалите файл ${error.lockFile} и повторите.`;
-  if (error instanceof StaleRevisionError) return error.message;
-  if (error instanceof LibraryConflict) return 'Ситуации изменились. Откройте их заново и повторите по свежему состоянию.';
-  if (error instanceof CommandRefused || error instanceof UnknownReference) return error.message;
-  if (error instanceof Stopped) return STOPPED[error.reason];
-  if (error instanceof ProviderFailure) return error.kind === 'unavailable' && forOwner(error.message) ? error.message : PROVIDER[error.kind];
-  // The target names the cause in the owner's words (an expired or untrusted certificate, a refused port); the table is the fallback.
-  if (error instanceof AgentRequestFailed) return error.kind === 'status' ? (error.status !== undefined ? `Агент ответил ошибкой ${error.status}. Посмотрите его журнал и повторите.` : AGENT.status)
-    : forOwner(error.message) ? error.message : AGENT[error.kind];
-  if (error instanceof StructuredTaskError) { diagnose(error); return 'Модель Lab несколько раз ответила не в том виде; ничего не записано. Повторите позже или выберите другую модель (/model).'; }
-  if (error instanceof z.ZodError) return `Не получилось: ${zodText(error)}. Ничего не записано.`;
-  // The engine's own refusals are plain errors worded for the owner; a plain error in English is a diagnostic.
-  if (error instanceof Error && Object.getPrototypeOf(error) === Error.prototype && forOwner(error.message)) return error.message;
-  return undefined;
-}
-
 /**
- * Why an action did not happen, in the owner's words, with the way on: the one translator of the chat and the workspace.
- * Typed errors by their kind; a zod error as the field and the problem; the engine's own refusals as they are. Anything
- * else never reaches the owner or the model: a neutral phrase does, and the original goes to the terminal's error output.
+ * Why an action did not happen, in the owner's words, with the way on: the chat's and the workspace's use of the one
+ * translator (src/error-text.ts), plus what only the chat has — a question to the owner, a field of a tool's input. What
+ * the owner is not shown never reaches the model either: a neutral phrase does, and the original goes to the terminal's
+ * error output.
  */
 export function inputError(error: unknown): string {
-  const known = knownText(error);
-  if (known !== undefined) return safeText(known);
+  if (error instanceof NeedsOwner) return safeText(error.ownerText);
+  if (error instanceof z.ZodError) return safeText(`Не получилось: ${zodText(error)}. Ничего не записано.`);
+  const known = ownerText(error, 'chat');
+  if (known) {
+    if (known.detail !== undefined) diagnose(error);
+    return safeText(known.text);
+  }
   diagnose(error);
   return UNKNOWN_ERROR;
 }
@@ -188,15 +120,34 @@ export function inputError(error: unknown): string {
  * message as it is, anything else — a diagnostic the owner cannot act on — as a neutral phrase. Undefined without an error.
  */
 export function recordErrorText(error: string | null | undefined): string | undefined {
-  if (!error) return undefined;
-  const stop = Object.hasOwn(STOP_LABELS, error) ? STOP_LABELS[error] : undefined;
-  return safeText(stop ? STOPPED[stop] : forOwner(error) ? error : 'Работа прервалась из-за внутренней ошибки Agent Lab; сделанное сохранено.');
+  const text = storedErrorText(error, 'chat');
+  return text === undefined ? undefined : safeText(text);
 }
-/** Whether a record's work was stopped by the owner's own request (its stop's fixed label). */
-export const stoppedByOwner = (error: string | null | undefined): boolean => !!error && Object.hasOwn(STOP_LABELS, error) && STOP_LABELS[error] === 'cancelled';
-/** How a record's last work was stopped: its typed stop, or — a record written before it — its stop's fixed label; undefined when no stop cut it short. */
-export const stopOf = (record: Pick<Experiment, 'stop' | 'error'>): Stopped['reason'] | undefined =>
-  record.stop ?? (record.error && Object.hasOwn(STOP_LABELS, record.error) ? STOP_LABELS[record.error] : undefined);
+export { stopOf, stoppedByOwner };
+
+/**
+ * Pi's own refusal of a Lab tool call, which never reached the tool, in the owner's words (the model still reads Pi's
+ * text): arguments its schema refused, or a tool that is not among this step's (steps.ts). Pi's texts are read by their
+ * fixed beginnings, the one place that reads them; anything else a Lab tool failed with was already said by inputError.
+ */
+export function toolErrorText(text: string): string {
+  if (text.startsWith('Validation failed for tool ')) return 'Модель передала инструменту Lab неверные параметры — ничего не сделано. Она поправит запрос сама; если нет — повторите просьбу своими словами.';
+  const named = text.startsWith('Tool ') && text.endsWith(' not found') ? text.slice(5, -10) : undefined;
+  const missing = named?.startsWith('"') && named.endsWith('"') ? named.slice(1, -1) : named;
+  if (missing !== undefined) {
+    const later = STEP_OF[missing];
+    return later ? `Модель обратилась к инструменту, который откроется позже: ${later}. Ничего не сделано.`
+      : 'Модель обратилась к инструменту, которого здесь нет. Ничего не сделано.';
+  }
+  if (text === 'Operation aborted') return 'Остановлено.';
+  return forOwner(text) ? text : UNKNOWN_ERROR;
+}
+/** When each Lab tool the model may reach for too early becomes one of the step's (steps.ts). */
+const STEP_OF: Readonly<Record<string, string>> = {
+  [TOOL.cards]: 'ситуации появятся после подготовки', [TOOL.edit]: 'ситуации появятся после подготовки', [TOOL.decide]: 'ситуации появятся после подготовки',
+  [TOOL.run]: 'прогон — когда ситуации подготовлены', [TOOL.results]: 'результаты — после первого прогона с разговорами',
+  [TOOL.explain]: 'разбор — после первого прогона с разговорами', [TOOL.agree]: 'сверка — после первого прогона с разговорами',
+};
 
 /** What the workspace hands to the conversation with a request about one object: stable identities, never a copy of editable state. */
 export function boardDiscussionContext(record: Experiment, situation?: { number: number; id: string }) {

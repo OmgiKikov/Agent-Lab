@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { countText } from './plural.js';
 
 /*
  * Failures a caller reacts to by kind, not by reading the message. The messages themselves stay
@@ -97,3 +98,36 @@ export class AgentFailure extends Error {}
 
 /** The adapter answered but could not measure the turn — it reported a measurementError, or the agent's version changed mid-dialogue. */
 export class MeasurementFailure extends Error {}
+
+/**
+ * A record file the store cannot read, and why, in the owner's words: written by a newer Lab (fields or values this one
+ * does not know — «обновите Lab»), or damaged. Lists show it instead of dropping it; the file stays as it is.
+ */
+export class UnreadableRecord extends Error {
+  constructor(readonly id: string, readonly newer: boolean, readonly reason: string) {
+    super(newer ? `Запись ${id}.json от более новой версии Agent Lab — обновите Lab, чтобы её открыть.`
+      : `Запись ${id}.json не читается: ${reason}. Файл оставлен как есть.`);
+  }
+}
+
+/** The records a listing could not read, in the owner's words: those of a newer Lab together, the damaged ones with the first reason. */
+export function unreadableLines(unreadable: readonly UnreadableRecord[]): string[] {
+  const records = (n: number) => countText(n, ['запись', 'записи', 'записей']);
+  const newer = unreadable.filter(item => item.newer), damaged = unreadable.filter(item => !item.newer);
+  return [
+    ...(newer.length ? [`Не открывается ${records(newer.length)} от более новой версии Agent Lab — обновите Lab, чтобы ${newer.length === 1 ? 'её' : 'их'} открыть.`] : []),
+    ...(damaged.length ? [`Не читается ${records(damaged.length)}: ${damaged[0]!.reason}${damaged.length > 1 ? ' и другое' : ''}. Файлы оставлены как есть.`] : []),
+  ];
+}
+
+/**
+ * No run or draft by that id in the data folder: an id that is not one (`../x`), or a record that is not there. It keeps
+ * a missing file's code, ENOENT, so a reader that falls back when a record is not written (a preview, an embedded source
+ * run) still does.
+ */
+export class NoSuchRecord extends Error {
+  readonly code = 'ENOENT';
+  constructor(readonly id: string, readonly directory: string) {
+    super(`Нет такого прогона или черновика: «${id.length > 80 ? `${id.slice(0, 80)}…` : id}» в папке данных ${directory}.`);
+  }
+}

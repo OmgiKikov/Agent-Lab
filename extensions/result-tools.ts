@@ -20,6 +20,7 @@ import { suiteHoldsLogs, suiteSavedText } from '../src/suite.js';
 import { accuracyRow, loggedTurns, logDisagreementRows, logQuestionText, saidText, situationOutcomeText, trialTurns } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { clip, oneLine, safeText } from '../src/text.js';
+import { unreadableLines } from '../src/errors.js';
 import { comparisonFeed, dialogueFeed, failureFeed, feedRows, progressText, row, runStamp, statusFeed } from './conversation.ts';
 import { busyFor, chatQueue, writer } from './decisions.ts';
 import { agreementTarget, blindCheck, judgeWord, markRefusal, recordLogMark, recordMark, seenVerdicts, type Answer } from './judge-review.ts';
@@ -108,6 +109,9 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
       const found = !records.length || records[0]!.target.kind === 'unconnected' ? await detectProject(ctx.cwd).catch(() => undefined) : undefined;
       const decisions = records.length ? (await chatQueue(reader)).decisions.length : 0;
       const feed = statusFeed(records, active);
+      // A record this Lab cannot read is said, never dropped from the list without a word.
+      const unreadable = unreadableLines(reader.store.diagnostics);
+      feed.rows.push(...unreadable.map(line => row(line, 'warning')));
       if (active) feed.rows.push(row(progressText(await active.lab.get(active.id)), 'accent'));
       if (decisions) feed.rows.push(row(`Нужно ваше решение: ${decisions}`, 'warning'));
       if (found) {
@@ -123,7 +127,7 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
       const connected = records[0] && isRunnable(records[0].target) ? records[0].target : undefined;
       const contract = found ? !found.agents.some(agent => agent.confidence === 'high' && examShowsMemory(agent.target.exam)) : !!connected && !examShowsMemory(connected.exam);
       return host.feedResult(callId, { runs: records.slice(0, 12).map(record => recordEntry(record)), ...(active ? { working: { run: active.id, kind: active.kind } } : {}),
-        decisions, ...(found ? { found: foundOutput(found) } : {}), ...(contract ? { adapterContract: adapterContract() } : {}) }, feed, 'Что есть в проекте');
+        decisions, ...(unreadable.length ? { unreadable } : {}), ...(found ? { found: foundOutput(found) } : {}), ...(contract ? { adapterContract: adapterContract() } : {}) }, feed, 'Что есть в проекте');
     },
   });
   pi.registerTool({

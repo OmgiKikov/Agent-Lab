@@ -19,7 +19,10 @@ import type { Model } from './model-call.js';
  */
 
 export type ModelRole = 'builder' | 'judge' | 'simulator';
-export const AUTH_HELP = 'Войдите в Pi через /login или задайте ключ выбранного провайдера, затем выберите доступную модель. Живой прогон никогда не подменяется демо.';
+/** The way to a model Pi can use, said wherever a model is missing — a preparation, a run, a status — on both surfaces. */
+export const AUTH_HELP = 'Войдите в Pi (/login) или задайте ключ провайдера, затем выберите доступную модель: в чате — /model, в терминале — agent-lab status покажет модели, которые видит Pi.';
+/** Each role's model as the owner calls it. */
+const ROLE_WORDS: Readonly<Record<ModelRole, string>> = { builder: 'модель, которая готовит ситуации', simulator: 'модель, которая играет клиента', judge: 'модель судьи' };
 
 /** The model of every role, and what the judge's transport promises (recorded in every judge receipt). */
 export type ModelTable = Readonly<Record<ModelRole, Model>> & {
@@ -53,9 +56,9 @@ function configured(runtime: ModelRuntime, choice: Choice): Model {
   if (model) return model;
   const joined = `${choice.provider}/${choice.model}`;
   const suggested = runtime.getModels().find(candidate => `${candidate.provider}/${candidate.id}` === joined || `${candidate.provider}/${candidate.id}` === choice.provider);
-  throw new Error(`Модель не найдена в конфигурации Pi: provider=${choice.provider}, model=${choice.model}.${suggested
-    ? ` Укажите provider="${suggested.provider}", model="${suggested.id}"; это разные поля.`
-    : ' Прочитайте доступные модели через agent-lab status и выберите точную пару provider/model.'}`);
+  throw new Error(suggested
+    ? `Pi не знает модели «${joined}»: провайдер и модель записаны вместе. Укажите провайдера «${suggested.provider}» и модель «${suggested.id}» по отдельности.`
+    : `Pi не знает модели «${joined}». Выберите модель из тех, что видит Pi: в чате — /model, в терминале — agent-lab status.`);
 }
 
 /** The OpenRouter Chat Completions adapter of a catalog model, pinned to one upstream when one is named. */
@@ -86,14 +89,17 @@ export async function resolveModels(runtime: ModelRuntime, settings: Settings, s
     if (!models.some(candidate => candidate.id === model.id)) throw new Error(missing);
     return model;
   };
-  const main = await available({ provider: settings.provider, model: settings.model }, `Не удалось проверить доступ к моделям. ${AUTH_HELP}`, AUTH_HELP);
+  const named = `${settings.provider}/${settings.model}`;
+  const main = await available({ provider: settings.provider, model: settings.model }, `Не удалось проверить, доступна ли модель «${named}». ${AUTH_HELP}`,
+    `Модель «${named}» недоступна с вашим входом в Pi. ${AUTH_HELP}`);
   const choices = roleChoices(settings);
   // A role that resolves to the run's own model is that model, checked once above; any other is named in its own error.
-  const role = (choice: Choice) => choice.provider === settings.provider && choice.model === settings.model ? main
-    : available(choice, `Не удалось проверить доступ к модели роли ${choice.provider}/${choice.model}. ${AUTH_HELP}`, `Модель роли недоступна: ${choice.provider}/${choice.model}. ${AUTH_HELP}`);
-  const builder = await role(choices.builder);
-  const simulator = await role(choices.simulator);
-  const judge = await role(choices.judge);
+  const role = (name: ModelRole, choice: Choice) => choice.provider === settings.provider && choice.model === settings.model ? main
+    : available(choice, `Не удалось проверить, доступна ли ${ROLE_WORDS[name]} «${choice.provider}/${choice.model}». ${AUTH_HELP}`,
+      `Недоступна ${ROLE_WORDS[name]} «${choice.provider}/${choice.model}». ${AUTH_HELP}`);
+  const builder = await role('builder', choices.builder);
+  const simulator = await role('simulator', choices.simulator);
+  const judge = await role('judge', choices.judge);
   const upstream = choices.judgeUpstream;
   const openRouter = judge.provider === 'openrouter';
   const judgeModel = openRouter ? openRouterChat(judge, upstream) : judge;

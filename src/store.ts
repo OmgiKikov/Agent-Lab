@@ -1,18 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, utimesSync, watch } from 'node:fs';
-import { mkdir, open, readFile, readdir, unlink, utimes } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir, open, readFile, readdir, stat, unlink, utimes } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { judgeAuditSchema, type JudgeAudit } from './assessment.js';
 import { judgeCheckSchema, type JudgeCheck } from './judge-check.js';
 import { experimentSchema, fingerprint, type Experiment, type TraceEvent } from './contracts.js';
-import { createFileExclusive, writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
+import { createFileExclusive, syncDirectory, writeFileAtomic, writeFileAtomicSync } from './fs-atomic.js';
 import { clearGate, find, HEARTBEAT_MS, held, provedDead, sameFound, SYSTEM, tokenNow, type Found, type Processes } from './folder-lock.js';
 import type { GeneratorEvidence } from './generator-evidence.js';
 import { libraryHash } from './scenario-library.js';
 import { LibraryMemo, ScenarioFiles } from './scenario-store.js';
-import { oneLine } from './text.js';
+import type { z } from 'zod';
 import { isIdentifier } from './ids.js';
-import { LockedError } from './errors.js';
+import { LockedError, NoSuchRecord, UnreadableRecord } from './errors.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import type { ScenarioLibrary } from './card/schema.js';
 import { readTopicMapFile, writeTopicMapFile } from './miner/files.js';
@@ -36,15 +36,46 @@ import { isRunning } from './phases.js';
 
 type AuditFolder = 'judge' | 'calibration' | 'judge-check';
 
+/** What one schema issue says of a record's field, in plain words. */
+function issueWords(issue: z.core.$ZodIssue): string {
+  const field = issue.path.length ? `поле «${issue.path.join('.')}»` : 'запись';
+  switch (issue.code) {
+    case 'invalid_type': return `${field} не того вида`;
+    case 'too_big': return `${field} больше допустимого`;
+    case 'too_small': return `${field} меньше допустимого`;
+    default: return `${field} не проходит проверку`;
+  }
+}
+/**
+ * A record file's text as a record. What this Lab does not know — a field it has no name for, a value or a kind it does
+ * not have, which is how a newer Lab's additive changes read here — means the record comes from a newer Lab.
+ */
+function recordIn(id: string, text: string): Experiment {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { throw new UnreadableRecord(id, false, 'файл повреждён — это не JSON'); }
+  const parsed = experimentSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues;
+  const newer = issues.every(issue => issue.code === 'unrecognized_keys' || issue.code === 'invalid_value' || issue.code === 'invalid_union');
+  throw new UnreadableRecord(id, newer, issues.slice(0, 2).map(issueWords).join('; '));
+}
+
 /**
  * A writer whose heartbeat is this late was frozen — a laptop asleep, a stopped process — and may have lost its lock to
  * another machine meanwhile (folder-lock.ts): before its next write it reads the lock again.
  */
 const OVERDUE_MS = HEARTBEAT_MS * 1.5;
+/** A temporary file of an atomic write (fs-atomic.ts): its target's name, a UUID, `.tmp`. */
+const TEMPORARY = /^(.+)\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
+/** Files at the folder's top that processes without the writer's lock write too. */
+const OTHERS_FILES: ReadonlySet<string> = new Set(['.lock', '.recovery', 'connection.local.json', 'gateway.json']);
+/** No live write of a file takes this long. */
+const LIVE_WRITE_MS = 60_000;
 
 export class ExperimentStore {
   readonly directory: string;
-  diagnostics: { id: string; message: string }[] = [];
+  /** The records the last listing could not read, and why (UnreadableRecord): the surfaces show them. */
+  diagnostics: UnreadableRecord[] = [];
   private lockToken: string | null = null;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   /** When this writer last found its lock its own and renewed it. */
@@ -57,7 +88,7 @@ export class ExperimentStore {
   /** `processes`: what the system tells of the lock's holder (folder-lock.ts); injected only to check the lock's rules. */
   constructor(directory: string, private readonly processes: Processes = SYSTEM) { this.directory = resolve(directory); }
   private path(id: string): string {
-    if (!isIdentifier(id)) throw new Error('Invalid experiment ID');
+    if (!isIdentifier(id)) throw new NoSuchRecord(id, this.directory);
     return join(this.directory, `${id}.json`);
   }
   private files(): ScenarioFiles { return new ScenarioFiles(this.directory, this.memo); }
@@ -129,9 +160,14 @@ export class ExperimentStore {
     try { await work(); }
     finally { try { await unlink(path); } finally { held.delete(token); } }
   }
-  /** Only writers initialize; atomic records and the journal can be read without owning the lock. */
+  /**
+   * Only writers initialize; atomic records and the journal can be read without owning the lock. The folder lives in the
+   * owner's project and holds production dialogues: it ignores itself for git (`.gitignore` with `*`, the file included),
+   * written once, whatever the project's own .gitignore says, so `git add -A` never takes it into a repository.
+   */
   async init(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    await createFileExclusive(join(this.directory, '.gitignore'), '*\n');
     const observed = await this.lock();
     if (!observed) await this.acquire();
     else {
@@ -146,7 +182,30 @@ export class ExperimentStore {
         await this.acquire();
       });
     }
+    await this.sweepTemporaries();
     try { await this.recoverPublications(); } catch (error) { await this.close(); throw error; }
+  }
+  /**
+   * Removes what dead processes left of their writes: the temporary files of atomic writes (`<name>.<uuid>.tmp`) and the
+   * markers of a gate's clearing. Every write of the store goes through its one writer, so once this writer holds the
+   * folder its own kinds of temporary file are never a live write's. The files at the folder's top that processes without
+   * the lock write too — a lock attempt, the remembered connection of `doctor`, the gateway's settings when the folder is
+   * the home one — are removed only when older than LIVE_WRITE_MS, which no live write takes.
+   */
+  private async sweepTemporaries(): Promise<void> {
+    let names: string[];
+    try { names = await readdir(this.directory, { recursive: true }); } catch { return; }
+    for (const name of names) {
+      const temporary = TEMPORARY.exec(basename(name));
+      const marker = dirname(name) === '.' && name.endsWith('.clearing') && (name.startsWith('.lock.') || name.startsWith('.recovery.'));
+      if (!temporary && !marker) continue;
+      const path = join(this.directory, name);
+      if (marker || dirname(name) === '.' && OTHERS_FILES.has(temporary![1]!)) {
+        const info = await stat(path).catch(() => undefined);
+        if (!info || Date.now() - info.mtimeMs < LIVE_WRITE_MS) continue;
+      }
+      await unlink(path).catch(() => {});
+    }
   }
   async close(): Promise<void> {
     await this.writerQueue;
@@ -187,7 +246,28 @@ export class ExperimentStore {
   private async saveRecord(validated: Experiment): Promise<void> {
     this.assertWriting('Для изменения записи откройте лабораторию как писатель.');
     if (validated.librarySnapshot) await this.files().retainLibrary(validated.librarySnapshot);
+    // A checkpoint covers the evidence its record points at: the dialogue lines and the judges' audits reach the disk first.
+    await this.flushEvidence(validated.id);
     await writeFileAtomic(this.path(validated.id), JSON.stringify(validated, null, 2));
+  }
+  /**
+   * What a record's work wrote since its last checkpoint without flushing it: the trace journal, which takes a line per
+   * event of every dialogue, and the folders of the audits replaced at every vote — too many to flush one by one. They are
+   * flushed at the record's next checkpoint (saveRecord). The other journals flush every line: one per call or verdict.
+   */
+  private readonly unflushed = new Map<string, Set<string>>();
+  private written(id: string, path: string): void {
+    const paths = this.unflushed.get(id) ?? new Set<string>();
+    paths.add(path); this.unflushed.set(id, paths);
+  }
+  private async flushEvidence(id: string): Promise<void> {
+    const paths = this.unflushed.get(id);
+    if (!paths) return;
+    this.unflushed.delete(id);
+    for (const path of paths) {
+      if (path.endsWith('.jsonl')) { const file = await open(path, 'r'); try { await file.sync(); } finally { await file.close(); } }
+      else await syncDirectory(path);
+    }
   }
   /**
    * The record as stored — except one left in a running phase by a writer that is gone: a reader shows it where the next
@@ -199,11 +279,11 @@ export class ExperimentStore {
     return record;
   }
   private async read(id: string): Promise<Experiment> {
-    const file = await open(this.path(id), 'r');
+    const file = await open(this.path(id), 'r').catch(error => { throw (error as NodeJS.ErrnoException).code === 'ENOENT' ? new NoSuchRecord(id, this.directory) : error; });
     try {
-      if ((await file.stat()).size > 50_000_000) throw new Error('Experiment record exceeds 50 MB');
-      const record = experimentSchema.parse(JSON.parse(await file.readFile('utf8')));
-      if (record.id !== id) throw new Error('Experiment ID does not match its file');
+      if ((await file.stat()).size > 50_000_000) throw new UnreadableRecord(id, false, 'она больше 50 МБ');
+      const record = recordIn(id, await file.readFile('utf8'));
+      if (record.id !== id) throw new UnreadableRecord(id, false, 'в файле записан другой прогон');
       return record;
     } finally { await file.close(); }
   }
@@ -217,8 +297,9 @@ export class ExperimentStore {
     const records: Experiment[] = [];
     results.forEach((result, index) => {
       if (result.status === 'fulfilled') records.push(result.value);
-      else this.diagnostics.push({ id: ids[index]!, message: result.reason instanceof SyntaxError ? 'Некорректный JSON. Исходный файл сохранён.'
-        : oneLine(result.reason instanceof Error ? result.reason.message : result.reason).slice(0, 240) });
+      // A record that cannot be read is listed apart, with why — never dropped without a word.
+      else this.diagnostics.push(result.reason instanceof UnreadableRecord ? result.reason
+        : new UnreadableRecord(ids[index]!, false, `файл не открывается (${(result.reason as NodeJS.ErrnoException)?.code ?? 'ошибка чтения'})`));
     });
     // The writer is asked about once per listing, and only when some record says its work goes on.
     if (records.some(record => isRunning(record.phase)) && await this.writerGone()) {
@@ -276,7 +357,9 @@ export class ExperimentStore {
     this.assertWriting('Для записи трассы откройте лабораторию как писатель.');
     this.path(id);
     if (!isIdentifier(trialId)) throw new Error('Invalid trial ID');
-    appendFileSync(join(this.directory, `${id}.trace.jsonl`), `${JSON.stringify({ trialId, event })}\n`, { mode: 0o600 });
+    const path = join(this.directory, `${id}.trace.jsonl`);
+    appendFileSync(path, `${JSON.stringify({ trialId, event })}\n`, { mode: 0o600 });
+    this.written(id, path);
   }
   /** Same writer as the library; each raw attempt is durable before parsing or another call. */
   appendGeneratorEvidence(id: string, event: GeneratorEvidence): void {
@@ -365,6 +448,7 @@ export class ExperimentStore {
     const content = JSON.stringify(judgeAuditSchema.parse(audit));
     mkdirSync(join(this.directory, `${id}.${folder}`), { recursive: true, mode: 0o700 });
     writeFileAtomicSync(target, content);
+    this.written(id, join(this.directory, `${id}.${folder}`));
   }
   private async readAudit(id: string, folder: AuditFolder, name: string): Promise<JudgeAudit | null> {
     const target = this.auditPath(id, folder, name);

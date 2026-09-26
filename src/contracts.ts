@@ -251,7 +251,9 @@ const userSchema = z.strictObject({
   script: z.array(z.string().min(1).max(3000).refine(v => !!v.trim(), 'Empty user message')).max(15).optional()
     .describe('Follow-up messages AFTER opening, never include opening itself. [] means opening only. Every line must fit maxFollowUps and maxTurns.'),
   /** Atomic facts the user can state, with their exact values. */
-  knows: z.array(text.max(300)).max(20).refine(v => unique(v.map(x => x.toLocaleLowerCase())), 'Duplicate known facts').optional(),
+  // Case is folded without the process's locale (toLowerCase, never toLocaleLowerCase): under tr_TR «ID» would fold to «ıd»
+  // and a set of facts valid everywhere else would be refused.
+  knows: z.array(text.max(300)).max(20).refine(v => unique(v.map(x => x.toLowerCase())), 'Duplicate known facts').optional(),
   /** What the user cannot know, in words: backend reasons, correct business answers, hidden state. */
   cannotKnow: z.array(text.max(300)).max(20).optional(),
   /** Complete replies to clarifications the agent is likely to ask; the simulator uses them verbatim. */
@@ -817,9 +819,10 @@ export function validatePreparation(raw: unknown, sources: Source[]): Preparatio
         states.set(key, c.value);
       } else if (c.kind === 'answer_contains' || c.kind === 'answer_omits') {
         const required = c.kind === 'answer_contains';
-        const seen = phrases.get(c.value.toLocaleLowerCase());
+        // Folded without the locale, as the checks themselves compare (see `knows` above).
+        const seen = phrases.get(c.value.toLowerCase());
         if (seen !== undefined && seen !== required) throw new Error(`Contradictory answer checks in ${s.id}`);
-        phrases.set(c.value.toLocaleLowerCase(), required);
+        phrases.set(c.value.toLowerCase(), required);
       } else if (c.kind === 'answer_equals') {
         if (exactAnswer !== undefined && exactAnswer !== c.value) throw new Error(`Contradictory exact answer checks in ${s.id}`);
         exactAnswer = c.value;
@@ -831,7 +834,7 @@ export function validatePreparation(raw: unknown, sources: Source[]): Preparatio
         calls.set(c.tool, { min, max });
       }
     }
-    if (exactAnswer !== undefined && [...phrases].some(([phrase, required]) => !required && exactAnswer.toLocaleLowerCase().includes(phrase))) {
+    if (exactAnswer !== undefined && [...phrases].some(([phrase, required]) => !required && exactAnswer.toLowerCase().includes(phrase))) {
       throw new Error(`Exact answer contains forbidden wording in ${s.id}`);
     }
     for (const c of s.checks) if (c.kind === 'state_equals') {
