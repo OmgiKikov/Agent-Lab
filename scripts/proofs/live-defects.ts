@@ -42,10 +42,13 @@ const dropped = () => new ProviderFailure('connection failure', 'Pi provider res
  * A stand-in judge that reads the situation as the `logged-v3` scope tells a judge to: a customer who never asked for a
  * refund was not in the situation — both conditions not met; one who did is judged on the reply. `seen` keeps what it was told.
  */
+/** What each vote of the situated judge was told of the log's scope. */
+const scopes: string[] = [];
 function situatedJudge(seen: { mode?: string; situation?: { question: string; circumstances?: string } }[]): Runtime['logJudge'] {
   return { provider: 'stub', model: 'stub-judge', protocolHash: logProtocolHash(), assess: (request, ctx) => judgeLogged(request, { provider: 'stub', id: 'stub-judge' }, ctx, async (_prompt, raw) => {
-    const data = JSON.parse(raw) as { mode: string; situation?: { question: string; circumstances?: string }; scenario: { metrics: { id: string }[] }; dialogue: { events: { seq: number; type: string; content: string }[] } };
+    const data = JSON.parse(raw) as { mode: string; evaluationScope: string; situation?: { question: string; circumstances?: string }; scenario: { metrics: { id: string }[] }; dialogue: { events: { seq: number; type: string; content: string }[] } };
     seen.push({ mode: data.mode, ...(data.situation ? { situation: data.situation } : {}) });
+    scopes.push(data.evaluationScope);
     const reply = data.dialogue.events.find(event => event.type === 'assistant')!;
     const inSituation = data.dialogue.events.some(event => event.type === 'user' && event.content.includes('оплат'));
     const [pass, fail] = !inSituation ? ['not_met', 'not_met'] : reply.content.includes('Подайте заявление') ? ['met', 'not_met'] : ['not_met', 'met'];
@@ -85,8 +88,9 @@ export async function proofLiveDefects(): Promise<void> {
   const situated = await withLab('i-situation', { proposeScenario: onePlan, logJudge: situatedJudge(seen) },
     lab => analysed(lab, input([row('k1', 'Верните оплату за заказ 5.', 'Не знаю.'), row('k2', 'Терминал не включается.', 'Не знаю.')])));
   const finding = (id: string) => situated.analysis.findings.find(item => item.dialogueId === id);
-  claim('I', seen.length === 4 && seen.every(item => item.mode === 'logged-v3' && item.situation?.question === 'Клиент просит вернуть оплату' && item.situation.circumstances === 'Номер заказа назван'),
-    `(1) the judge is told the situation the duty is for: ${JSON.stringify(seen[0]?.situation)} (mode ${seen[0]?.mode})`);
+  claim('I', seen.length === 4 && seen.every(item => item.mode === 'logged-v3' && item.situation?.question === 'Клиент просит вернуть оплату' && item.situation.circumstances === 'Номер заказа назван')
+    && scopes.every(scope => scope.includes('de-identified') && scope.includes('Never read a masked value as missing')),
+    `(1) the judge is told the situation the duty is for: ${JSON.stringify(seen[0]?.situation)} (mode ${seen[0]?.mode}), and that a masked value («#») is never a missing one`);
   claim('I', finding('k1')?.result === 'fail' && finding('k2')?.result === 'unknown' && JSON.stringify(situated.view.problems[0]?.dialogueIds) === '["k1"]'
     && analysisLines(situated.view).some(line => line.includes('разговор не дошёл до правила')),
     `(1) «Не знаю.» to a refund request is a violation (k1 ${finding('k1')?.result}); to «Терминал не включается» it is no violation of the refund duty (k2 ${finding('k2')?.result}, not exercised)`);

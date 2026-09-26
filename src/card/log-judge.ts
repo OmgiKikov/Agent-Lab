@@ -71,7 +71,9 @@ const LOG_SCOPE_V3 = `${LOG_SCOPE} `
   + 'The expectation comes from the owner\'s plan for a situation customers come with (`situation`: the question they ask and, when given, their circumstances), not from this conversation. '
   + 'First decide whether this customer came with that situation: asked that question, or those circumstances arose in the conversation. '
   + 'If they did not, the expectation was never due here: both conditions are not_met — not exercised —, whatever the agent said or left out. '
-  + 'The failCondition is met only when the conversation shows what the rubric names as the violation; that the passCondition is not met does not by itself meet the failCondition.';
+  + 'The failCondition is met only when the conversation shows what the rubric names as the violation; that the passCondition is not met does not by itself meet the failCondition. '
+  + 'The log is de-identified: a mark such as #, *, ***, XXX or a bracketed placeholder ([ФИО], <PHONE>) stands where the agent or the customer wrote a value — a number, a date, a name, a count. '
+  + 'Never read a masked value as missing, wrong or cut short: the agent wrote something there, and what it was cannot be judged.';
 
 /**
  * The complete, frozen input of judgment (b): mode `logged-v2`, or `logged-v3` when the request names the situation the
