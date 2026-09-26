@@ -15,7 +15,7 @@ import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import { plantError } from './judge-check-task.js';
 import {
-  CARD_CUSTOMER_ROLE, CUSTOMER_DECISION_ROLE, CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SCENARIO_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
+  CARD_CUSTOMER_ROLE, CUSTOMER_DECISION_ROLE, CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SCENARIO_CHANNELS, SCENARIO_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
 import { planPayload, planProblem, planProposalSchema, type PlanProposal } from './card/plan.js';
@@ -183,7 +183,8 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       const oversize = workInputIssue(payload);
       if (oversize) throw new Error(oversize);
       // A quote not found verbatim, a kind of rule outside the rulebook or an example named twice goes back with its exact reason.
-      return run<PlanProposal>({ id: 'scenario-plan', label: 'План сценария', role: 'builder', instructions: SCENARIO_ROLE,
+      // A call whose topic's logs recorded tools or state reads how an expectation is seen on them; any other reads as it always did.
+      return run<PlanProposal>({ id: 'scenario-plan', label: 'План сценария', role: 'builder', instructions: input.call.channels ? `${SCENARIO_ROLE}\n${SCENARIO_CHANNELS}` : SCENARIO_ROLE,
         output: planProposalSchema(input.call), check: value => planProblem(value, input.call), bounded: { requestBytes: MODEL_REQUEST_BYTES + 16_000 } }, payload, ctx);
     },
     async reviewCard(input, ctx) {

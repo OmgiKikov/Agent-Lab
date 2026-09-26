@@ -5,7 +5,8 @@ import { bindPlan, planProblem, planProposalSchema, type PlanCall } from '../car
 import { PLAN_MESSAGE_CHARS, PLAN_MESSAGES } from '../card/prepare.js';
 import { DEFAULT_RULEBOOK } from '../card/rulebook.js';
 import type { BusinessScenario } from '../card/schema.js';
-import type { Source } from '../contracts.js';
+import { fingerprint, type Source } from '../contracts.js';
+import { logJudgeInput } from '../card/log-judge.js';
 import { SOURCES_PER_DIALOGUE, workInputIssue } from '../limits.js';
 import { ProviderFailure } from '../llm/model-call.js';
 import { StructuredTaskError } from '../llm/structured.js';
@@ -28,10 +29,13 @@ import { findingSchema, type Finding, type LogAnalysis } from './schema.js';
  * agent runs: the topic map, the plans and the judge read the logged conversations and the owner's materials only.
  *
  *   1. selection  readable conversations the judge can read (a customer's message and an agent's reply) ─► the import's
- *                 topic map (reused when stored) ─► up to `requested`, spread over the topics, at most `perTopic` of one
- *   2. plans      per topic: its conversations' customer words + the materials ─► proposeScenario ─► the harness binds
- *                 every quote verbatim (card/plan.ts) ─► the variation each conversation stands for
- *   3. findings   per conversation, each expectation of its variation ─► the log judge, two votes (card/log-judge.ts)
+ *                 topic map (reused when stored) ─► up to `requested`, seats by each topic's share of the read
+ *                 conversations, at most `perTopic` of one (miner/sample.ts allocate)
+ *   2. plans      per topic: its conversations' customer words + the materials (+ the tools and the state its logs
+ *                 recorded, if any) ─► proposeScenario ─► the harness binds every quote verbatim (card/plan.ts) ─► the
+ *                 variation each conversation stands for
+ *   3. findings   per conversation, each expectation of its variation ─► the log judge, two votes (card/log-judge.ts);
+ *                 one the log cannot show (a tool or state not recorded completely) is kept as skipped, with no call
  *
  * Every step is saved before the next call, so what was paid for is never lost: a stop, the budget or a failure leave
  * the findings made so far, and the analysis says what it did not reach.
@@ -101,6 +105,20 @@ async function select(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisW
   await work.checkpoint(`Выбрано ${countText(analysis.selection.picked.length, ['разговор', 'разговора', 'разговоров'])} из ${countText(groups.length, ['темы', 'тем', 'тем'])}. Нахожу правила, которые к ним относятся.`);
 }
 
+/**
+ * What the topic's conversations recorded besides the replies: the tools the agent called, by name, and whether a state
+ * is recorded. Undefined when they recorded neither: the plan is then asked about replies alone, as a preparation's is.
+ */
+function channelsOf(batch: ImportBatch, dialogueIds: readonly string[]): PlanCall['channels'] {
+  const events = dialogueIds.flatMap(id => batch.dialogues.find(dialogue => dialogue.id === id)?.events ?? []);
+  const tools = events.filter(event => event.type === 'tool');
+  const state = events.some(event => event.type === 'state');
+  if (!tools.length && !state) return undefined;
+  // A tool event names its tool as the log judge reads it (card/log-judge.ts loggedEvents).
+  const names = [...new Set(tools.flatMap(event => { const tool = (event.data as { tool?: unknown } | null)?.tool; return typeof tool === 'string' && tool.trim() ? [tool] : []; }))].sort();
+  return { tools: names.slice(0, 40), toolEvents: tools.length > 0, state };
+}
+
 /** The materials one topic's plan reads: all of them when they fit one request, otherwise the prompts and the articles chosen for the topic. */
 async function planSources(analysis: LogAnalysis, examples: PlanCall['examples'], work: AnalysisWork): Promise<Source[]> {
   const prompts = analysis.sources.filter(source => source.kind === 'prompt');
@@ -125,8 +143,9 @@ async function planTopic(analysis: LogAnalysis, batch: ImportBatch, group: Group
   const read = await planSources(analysis, examples, work);
   const [first, ...rest] = read.map(({ id, name, content, kind }) => ({ id, name, content, ...(kind ? { kind } : {}) }));
   if (!first || !examples.length || !work.runtime.proposeScenario) return undefined;
+  const channels = channelsOf(batch, group.dialogueIds);
   const call: PlanCall = { topic: { title: group.title, ...(group.topicId && analysis.traffic ? { key: { batchId: batch.id, id: group.topicId } } : {}) },
-    examples, sources: [first, ...rest], binds: { kinds: DEFAULT_RULEBOOK.kinds, rules: [] } };
+    examples, sources: [first, ...rest], binds: { kinds: DEFAULT_RULEBOOK.kinds, rules: [] }, ...(channels ? { channels } : {}) };
   let answer: unknown;
   try { answer = await work.runtime.proposeScenario({ task: analysis.task, call }, work.ctx); }
   catch (error) {
@@ -197,6 +216,13 @@ async function judge(analysis: LogAnalysis, batch: ImportBatch, work: AnalysisWo
   const worker = async (): Promise<void> => {
     while (next < jobs.length && stop === undefined) {
       const job = jobs[next++]!;
+      // The log cannot show it: kept as a finding that decided nothing, with no call (as a calibration keeps it).
+      if (job.skipped) {
+        analysis.findings.push(findingSchema.parse({ key: job.key, dialogueId: job.dialogueId, scenarioId: job.scenarioId, expectationId: job.expectationId,
+          ...(job.variationId ? { variationId: job.variationId } : {}), criterionHash: job.criterionHash, mode: 'logged-v2', protocolHash: judge.protocolHash,
+          inputHash: fingerprint(logJudgeInput(job.request)), provider: judge.provider, model: judge.model, skipped: job.skipped, votes: [], result: 'unknown', complete: true, evidence: [] }));
+        continue;
+      }
       let audit: JudgeAudit | undefined;
       const ctx: CallContext = { ...work.ctx, onTrace: undefined, onTargetEvent: undefined,
         onJudgment: (key, value) => { work.store.writeAnalysisAudit(analysis.id, key, value); audit = value; } };

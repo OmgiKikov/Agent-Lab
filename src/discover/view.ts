@@ -1,7 +1,8 @@
-import { fingerprint } from '../contracts.js';
+import type { Criterion } from '../contracts.js';
 import { logUndecided, type LogUndecided } from '../card/log-judge.js';
-import { normalizeText } from '../card/checks.js';
+import { criterionHash } from '../criterion.js';
 import type { ImportBatch } from '../scenario-contracts.js';
+import { planCriterion } from './criteria.js';
 import { oneLine } from '../text.js';
 import type { Finding, FindingReview, LogAnalysis } from './schema.js';
 
@@ -11,8 +12,9 @@ import type { Finding, FindingReview, LogAnalysis } from './schema.js';
  *
  *   coverage   every conversation of the log ─► read ─► judgeable ─► analysed ─► decided on at least one rule
  *   traffic    the topics of all read conversations: what customers come with — never mixed with the violations
- *   problems   violations grouped by the rule and the behaviour it asks (not by topic), each with how many of the
- *              conversations it was decided on it broke, what could not be decided, and the conversations that show it
+ *   problems   violations grouped by their criterion (criterion.ts: the rules, the behaviour, the ways, the violation,
+ *              the channel — never the topic), each with how many of the conversations it was decided on it broke, what
+ *              could not be decided, the conversations that show it, and those where it held with evidence
  *   gaps       topics no rule of the owner was found for: a gap in the rules, never a violation
  *
  * A violation counts in a conversation where the judge found it and the owner did not dispute it; the owner's word is
@@ -22,8 +24,10 @@ import type { Finding, FindingReview, LogAnalysis } from './schema.js';
 export interface Quote { seq: number; role: 'customer' | 'agent' | 'other'; quote: string }
 export interface Example { key: string; dialogueId: string; quotes: Quote[]; rationale?: string; review?: FindingReview['verdict'] }
 export interface ProblemView {
-  /** The rule and the behaviour it asks: the same across topics and analyses whose plans say the same. */
+  /** The criterion's hash (criterion.ts): the same across topics and analyses whose plans say exactly the same. */
   key: string;
+  /** The criterion the violations break, as the judge read it: what a check of the problem carries into its situations. */
+  criterion: Criterion;
   duty: { text: string; mustNot: boolean; acceptable?: string; violation?: string };
   rules: { quote: string; source: string }[];
   topics: string[];
@@ -31,6 +35,12 @@ export interface ProblemView {
   violations: number; checked: number; unknown: number;
   /** Every conversation it was broken in, in the order of the findings. */
   dialogueIds: string[];
+  /**
+   * Conversations where it applied, was decided and held: every finding of it there passed, complete, with evidence, and
+   * no word of the owner overrode it. Only these may stand beside the violations as controls of a check (discover/verify.ts);
+   * a conversation it could not be decided on, or that never reached it, is none.
+   */
+  held: string[];
   confirmed: number; disputed: number;
   examples: Example[];
 }
@@ -73,16 +83,17 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
   const topicOf = new Map(analysis.topics.map(group => [group.scenarioId, group.title]));
   const counted = (finding: Finding) => finding.result === 'fail' && reviews.get(finding.key)?.verdict !== 'disputed';
 
-  // Problems: the findings of one duty — its rules and its words — over every topic that has it.
-  const groups = new Map<string, { findings: Finding[]; duty: ProblemView['duty']; rules: ProblemView['rules']; topics: Set<string> }>();
+  // Problems: the findings of one criterion over every topic whose plan has it — derived from the plan, never read off
+  // a stored hash, so an analysis made before the kernel groups the same way.
+  const groups = new Map<string, { findings: Finding[]; criterion: Criterion; duty: ProblemView['duty']; rules: ProblemView['rules']; topics: Set<string> }>();
   for (const finding of analysis.findings) {
     const scenario = analysis.scenarios.find(item => item.id === finding.scenarioId);
     const expectation = scenario?.expectations.find(item => item.id === finding.expectationId);
-    if (!scenario || !expectation) continue;
-    const rules = analysis.requirements.filter(requirement => expectation.requirementIds.includes(requirement.id))
-      .map(requirement => ({ quote: requirement.quote, source: sourceName.get(requirement.sourceId) ?? requirement.sourceId }));
-    const key = fingerprint({ rules: rules.map(rule => rule.quote).sort(), mustNot: expectation.strength === 'must_not', text: normalizeText(expectation.text) });
-    const group = groups.get(key) ?? { findings: [], rules, topics: new Set<string>(),
+    const criterion = expectation && planCriterion(analysis, expectation);
+    if (!scenario || !expectation || !criterion) continue;
+    const rules = criterion.requirements.map(requirement => ({ quote: requirement.quote, source: sourceName.get(requirement.sourceId) ?? requirement.sourceId }));
+    const key = criterionHash(criterion);
+    const group = groups.get(key) ?? { findings: [], criterion, rules, topics: new Set<string>(),
       duty: { text: expectation.text, mustNot: expectation.strength === 'must_not', ...(expectation.acceptable ? { acceptable: expectation.acceptable } : {}), ...(expectation.violation ? { violation: expectation.violation } : {}) } };
     group.findings.push(finding);
     group.topics.add(topicOf.get(finding.scenarioId) ?? scenario.topic);
@@ -99,7 +110,14 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
       return { key: finding.key, dialogueId: finding.dialogueId, quotes: quotes.map(item => ({ seq: item.seq, role: roleOf(batch, finding.dialogueId, item.seq), quote: oneLine(item.quote) })),
         ...(finding.rationale ? { rationale: oneLine(finding.rationale) } : {}), ...(review ? { review } : {}) };
     });
-    return { key, duty: group.duty, rules: group.rules, topics: [...group.topics], dialogueIds: [...new Set(violated.map(finding => finding.dialogueId))],
+    // A pass, complete and with its evidence, that the owner did not take back: their «нарушение есть» or «не уверен» on it does.
+    const held = (finding: Finding) => {
+      const word = reviews.get(finding.key)?.verdict;
+      return finding.result === 'pass' && finding.complete && !finding.skipped && finding.evidence.length > 0 && (word === undefined || word === 'disputed');
+    };
+    const passed = [...new Set(group.findings.filter(held).map(finding => finding.dialogueId))]
+      .filter(dialogueId => group.findings.every(finding => finding.dialogueId !== dialogueId || held(finding)));
+    return { key, criterion: group.criterion, duty: group.duty, rules: group.rules, topics: [...group.topics], dialogueIds: [...new Set(violated.map(finding => finding.dialogueId))], held: passed,
       violations: conversations(group.findings, counted), checked: conversations(group.findings, decided),
       unknown: conversations(group.findings, finding => finding.result === 'unknown' && !group.findings.some(other => other.dialogueId === finding.dialogueId && decided(other))),
       confirmed: conversations(group.findings, finding => finding.result === 'fail' && reviews.get(finding.key)?.verdict === 'confirmed'),

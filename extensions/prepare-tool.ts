@@ -9,13 +9,13 @@ import { demoInput } from '../src/demo.js';
 import { targetLabel, type ProjectDetection } from '../src/detect.js';
 import { analysisView } from '../src/discover/view.js';
 import { problemTitle } from '../src/discover/text.js';
-import { problemConversations, subsetImport } from '../src/discover/verify.js';
+import { checkLink, subsetImport } from '../src/discover/verify.js';
 import type { ImportBatch } from '../src/scenario-contracts.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { consentText, DEFAULT_SITUATIONS, NothingFits, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
 import { countText } from '../src/plural.js';
 import type { Encoding } from '../src/spreadsheet/csv.js';
-import { clip, safeText } from '../src/text.js';
+import { safeText } from '../src/text.js';
 import { preparedAnswer, STOP_HINT, type Background } from './background.ts';
 import { progressText, row, runStamp } from './conversation.ts';
 import { ask, displayFor, isInteractive, NeedsOwner, requireInteractive, zodText } from './lab-ui.ts';
@@ -73,7 +73,7 @@ export const prepareParameters = Type.Object({
   }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet: sheet, conversation id, text, selection, repeated exchanges, CSV encoding, logged answer or expected result. A column is a header or a letter.' })),
   suite: Type.Optional(path('A saved set of situations (.evals/*.json) to load into a fresh draft instead of preparing: free, nothing runs.')),
   fromAnalysis: Type.Optional(Type.Object({ analysis: Type.String({ minLength: 1, maxLength: 200 }), problem: Type.Integer({ minimum: 1 }) },
-    { ...closed, description: 'Only when the owner asks to make a check from a problem a log analysis found (agent_lab_analyze): the analysis id or "latest", and the problem number from its answer. The situations are made from the conversations where it was broken and the other analysed conversations of its topics; the rules are the analysis\'s.' })),
+    { ...closed, description: 'Only when the owner asks to make a check from a problem a log analysis found (agent_lab_analyze): the analysis id or "latest", and the problem number from its answer. The situations are made from the conversations where it was broken and those where the same rule held; each carries the problem\'s rule exactly as the analysis judged it.' })),
   demo: Type.Optional(Type.Literal(true, { description: 'The built-in teaching example: no model, no keys, one minute.' })),
 }, closed);
 type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string; fromAnalysis?: { analysis: string; problem: number };
@@ -157,8 +157,9 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
 
 /**
  * A check of a problem a log analysis found (DISCOVER → VERIFY): situations from the conversations where it was broken
- * and the other analysed conversations of its topics, by the analysis's own rules — an ordinary preparation from logs,
- * whose draft keeps the link to the analysis and the problem.
+ * and from those where the same criterion held with evidence (controls), by the analysis's own rules — an ordinary
+ * preparation from logs, whose draft keeps the link to the analysis, the problem and its criterion, which every card of
+ * those conversations carries (discover/verify.ts).
  */
 async function fromAnalysis(host: PrepareHost, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
   named: { analysis: string; problem: number }, situations: number | undefined): Promise<AgentToolResult<unknown>> {
@@ -173,15 +174,15 @@ async function fromAnalysis(host: PrepareHost, callId: string, ctx: ExtensionCon
     throw new NeedsOwner('unknown_reference', `В разборе нет проблемы ${named.problem}.${known.length ? ` Есть: ${known.join('; ')}.` : ' Нарушений в нём нет.'} Спросите владельца, какую он имеет в виду.`, known.map((_, index) => String(index + 1)),
       `Проблемы ${named.problem} в разборе нет — из какой сделать проверку?`);
   }
-  const dialogueIds = problemConversations(analysis, problem);
-  const broken = dialogueIds.filter(id => problem.dialogueIds.includes(id)).length;
-  const line = `Ситуации — для проверки проблемы «${problemTitle(problem)}» из разбора логов: ${countText(broken, ['разговор', 'разговора', 'разговоров'])} с нарушением`
-    + `${dialogueIds.length > broken ? ` и ${countText(dialogueIds.length - broken, ['разговор', 'разговора', 'разговоров'])} тех же тем без него — исправление не должно их сломать` : ''}.`;
-  return consentAndPrepare(host, callId, ctx, signal, onUpdate, { task: analysis.task, logsName: analysis.logs.file, libraryImport: subsetImport(batch, dialogueIds),
+  const { link, controls } = checkLink(analysis, problem);
+  const conversations: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
+  const line = `Ситуации — для проверки проблемы «${problemTitle(problem)}» из разбора логов: ${countText(link.broken.length, conversations)} с нарушением`
+    + (controls.length ? ` и ${countText(controls.length, conversations)}, где агент это правило соблюдал, — исправление не должно их сломать.`
+      : '. Разговоров, где это правило проверено и соблюдено, в разборе нет: что исправление ничего не сломало рядом, проверка не покажет.')
+    + ' Каждая ситуация проверяет правило проблемы в точности так, как его оценил разбор.';
+  return consentAndPrepare(host, callId, ctx, signal, onUpdate, { task: analysis.task, logsName: analysis.logs.file, libraryImport: subsetImport(batch, link.dialogueIds),
     materials: analysis.sources.map(({ name, content, kind }) => ({ name, content, ...(kind ? { kind } : {}) })), notes: [],
-    rules: analysis.sources.map(source => source.name), situations: situations ?? dialogueIds.length, mode: analysis.mode,
-    fromAnalysis: { link: { analysisId: analysis.id, problemKey: problem.key, title: clip(problemTitle(problem), 300), dialogueIds,
-      broken: dialogueIds.filter(id => problem.dialogueIds.includes(id)) }, line } });
+    rules: analysis.sources.map(source => source.name), situations: situations ?? link.dialogueIds.length, mode: analysis.mode, fromAnalysis: { link, line } });
 }
 
 /** The draft's settings, the owner's consent with the ceiling, then the preparation. */

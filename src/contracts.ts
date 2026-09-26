@@ -334,13 +334,33 @@ export const dialogueSchema = z.strictObject({
 export type Dialogue = z.infer<typeof dialogueSchema>;
 
 /**
+ * A criterion (criterion.ts): what the agent must — or must not — do, the owner's rules it stands on, each a verbatim
+ * quote of a material with the sentence the judge reads as the rule, the other ways that also fulfil it, what breaks it,
+ * and the channel it is seen on — the agent's reply, a result of its tool (`tool` names which; absent — any), or the
+ * state. The one shape a log analysis (DISCOVER) and a situation (VERIFY) judge the same thing by.
+ */
+export const criterionSchema = z.strictObject({
+  text: text.max(300),
+  requirements: z.array(z.strictObject({ id: identifier, text: text.max(2000), quote: text.max(3000), sourceId: identifier })).min(1).max(3),
+  strength: z.literal('must_not').optional(), acceptable: text.max(600).optional(), violation: text.max(600).optional(),
+  observation: z.enum(['reply', 'tool', 'state']), tool: z.string().min(1).max(200).optional(),
+}).refine(criterion => criterion.tool === undefined || criterion.observation === 'tool', 'Only a criterion observed on the tools names a tool');
+export type Criterion = z.infer<typeof criterionSchema>;
+
+/**
  * Where a draft's situations came from when they check a problem a log analysis found (discover/verify.ts): the analysis,
- * the problem — the rule and the behaviour it asks — and the logged conversations they were made from. Metadata of the
- * draft: it moves no hash and no number.
+ * the problem and the logged conversations they were made from. `criterion` is the problem's criterion frozen as the
+ * analysis judged it and `criterionHash` its hash: every situation made from `dialogueIds` carries it as one of its
+ * expectations, and the check reads that expectation alone (discover/check.ts). A link without them was made before
+ * the criterion was shared: its check states nothing.
  */
 export const fromAnalysisSchema = z.strictObject({ analysisId: identifier, problemKey: sha256Schema, title: text.max(300), dialogueIds: z.array(identifier).min(1).max(16),
-  /** The conversations of `dialogueIds` the problem was found in; the others are the same topics' conversations without it. */
-  broken: z.array(identifier).min(1).max(16) });
+  /**
+   * The conversations of `dialogueIds` the problem was found in. The others are controls: conversations where the same
+   * criterion applied, was decided and held, with evidence, and no word of the owner overrode it.
+   */
+  broken: z.array(identifier).min(1).max(16),
+  criterion: criterionSchema.optional(), criterionHash: sha256Schema.optional() });
 export type FromAnalysis = z.infer<typeof fromAnalysisSchema>;
 
 export const createInputSchema = z.strictObject({

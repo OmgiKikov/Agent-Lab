@@ -47,9 +47,11 @@ export function resultOutput(record: Experiment, view: ResultView) {
     run: record.id,
     lines: plainText(resultScreen(view, { surface: 'board', details: true }), MAX_WIDTH).split('\n'),
     failures: view.failures.map(failure => ({ situation: situationNumber(record, failure.scenarioId, position(failure.scenarioId)), title: failure.title })),
-    ...(view.problemCheck ? { problemFromLogs: { problem: view.problemCheck.title, reproducedOnThisVersion: view.problemCheck.reproduced,
+    ...(view.problemCheck ? { problemFromLogs: view.problemCheck.unbound ? { problem: view.problemCheck.title, notBound: view.problemCheck.unbound,
+      rule: 'No situation checks the problem\'s rule exactly: say nothing about found, reproduced or fixed; offer to make the check from the analysis again.' }
+      : { problem: view.problemCheck.title, reproducedOnThisVersion: view.problemCheck.reproduced, controls: view.problemCheck.controls.length,
       ...(view.problemCheck.before ? { againstRepeatedRun: view.problemCheck.before.verdict, brokeBeside: view.problemCheck.before.regressed } : {}),
-      rule: 'Say «исправлено» only when againstRepeatedRun is fixed; regressed means the fix is not accepted.' } } : {}),
+      rule: 'Say «исправлено» only when againstRepeatedRun is fixed; regressed means the fix is not accepted. With controls 0, nothing beside the problem was checked.' } } : {}),
     ...(view.notMeasured.total ? { notMeasured: view.notMeasured.total } : {}),
     next: nextRows(view, 'chat')[0]?.text ?? null,
     shownToOwner: SHOWN_TO_OWNER,

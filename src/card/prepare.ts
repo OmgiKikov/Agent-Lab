@@ -21,6 +21,8 @@ import { bindProposal, cardProposalProblem, cardProposalSchema, namedVariation, 
 import { revisionClaims, claimReceipts, GAP_CLAIM, gapRequest, pendingClaims, REVIEW_PROTOCOL, reviewedBrief, reviewRequests, ReviewTooLarge, type CardReview, type ReviewContext } from './review.js';
 import { cardSchema, type Card, type CardPreparation, type LibraryV2, type PreparationProgress } from './schema.js';
 import { assessorReference } from './assessor.js';
+import { criterionRequirements } from '../criterion.js';
+import { linkedCriterion, withCriterion } from '../discover/verify.js';
 
 /*
  * Preparing situations — from dialogues of an import, or from the owner's rules alone (docs/design/card-v2-spec.md §8, C9):
@@ -30,6 +32,9 @@ import { assessorReference } from './assessor.js';
  *                  and cites for every duty the sentences it rests on
  *               ─► binding (each cited sentence becomes a rule of the library) + checks ─► review
  *               ─► a card the reviewer blocked: ONE revision with the reviewer's reasons ─► binding + checks ─► review
+ *
+ * A check of a problem found in the logs (the draft's `fromAnalysis`): at binding, the card of a conversation the check
+ * names carries the problem's criterion exactly, whatever the builder proposed (discover/verify.ts withCriterion).
  *
  * There is no step that writes the rules out first: the prompts and the articles are the rules, and a duty cites them
  * verbatim. Over the request's cap the last articles give way; the prompts and the customer's messages never do, and
@@ -78,7 +83,9 @@ function ensureAgentRevision(record: Experiment, agent: AgentSpec | undefined): 
 export function preparationInputHash(record: Experiment, protocol: string): string {
   const { maxCalls: _calls, maxDurationMs: _duration, timeoutMs: _timeout, ...settings } = record.settings;
   return fingerprint({ protocol, task: record.task, mode: record.mode, sources: record.sources,
-    target: record.target, notes: record.notes, originalImport: record.originalImport, settings });
+    target: record.target, notes: record.notes, originalImport: record.originalImport, settings,
+    // A check of a problem from the logs: the criterion its cards carry is an input too.
+    ...(record.fromAnalysis ? { fromAnalysis: record.fromAnalysis } : {}) });
 }
 
 /** What a preparation turns into situations. */
@@ -376,7 +383,7 @@ class Preparation {
   private async propose(unit: string, dialogue: ImportBatch['dialogues'][number] | undefined, read: Source[], revision?: Revision): Promise<Card | LeftOut | Uncovered> {
     const { record, batch, progress } = this;
     if (!revision?.card && this.library.cards.length >= CARD_LIMIT) return { excluded: `В наборе уже ${CARD_LIMIT} ситуаций.` };
-    if (record.requirements.length + CARD_CITATIONS > RECORD_REQUIREMENT_LIMIT) return { excluded: `В наборе уже ${countText(record.requirements.length, ['правило', 'правила', 'правил'])} — больше одна подготовка не держит.` };
+    if (record.requirements.length + CARD_CITATIONS + (record.fromAnalysis?.criterion?.requirements.length ?? 0) > RECORD_REQUIREMENT_LIMIT) return { excluded: `В наборе уже ${countText(record.requirements.length, ['правило', 'правила', 'правил'])} — больше одна подготовка не держит.` };
     // What binds the bot: the kinds of the owner's rulebook, and the single rules of another kind the owner included.
     const rulebook = rulebookOf(this.library);
     const binds: ProposalCall['binds'] = { kinds: rulebook.kinds,
@@ -428,9 +435,14 @@ class Preparation {
     const bound = withTrafficTopic(bindProposal(parsed.data, asked.call, revision?.card ? revision.card.number : this.library.nextNumber), topic);
     // The assessor's markup of this conversation, carried by the import, is the situation's reference from the start.
     const references = dialogue ? assessorReference(dialogue.original, record.sources) : undefined;
-    const card = references ? cardSchema.parse({ ...bound, references }) : bound;
+    const own = references ? cardSchema.parse({ ...bound, references }) : bound;
+    // A check of a problem found in the logs: a card of a conversation it names carries the problem's criterion exactly,
+    // its rules among the library's (discover/verify.ts).
+    const linked = dialogue && record.fromAnalysis?.dialogueIds.includes(unit) ? linkedCriterion(record.fromAnalysis) : undefined;
+    const rules = [...proposalRequirements(parsed.data, asked.call), ...linked ? criterionRequirements(linked.criterion) : []];
+    const card = linked ? withCriterion(own, linked.criterion, [...record.requirements, ...rules], plan?.scenario) : own;
     // A sentence another card already cites is already a rule of the library, by the same id: the first wording stays.
-    const cited = proposalRequirements(parsed.data, asked.call).filter(requirement => !record.requirements.some(known => known.id === requirement.id));
+    const cited = rules.filter((requirement, index) => !record.requirements.some(known => known.id === requirement.id) && rules.findIndex(other => other.id === requirement.id) === index);
     const requirements = [...record.requirements, ...cited];
     const next = revision?.card ? replaceCard(withRequirements(this.library, requirements), revision.card.id, card)
       : addCard(withRequirements(this.library, requirements), card, dialogue && batch ? { dialogueId: unit, batchId: batch.id, sourceIds: sources.map(source => source.id) } : undefined);

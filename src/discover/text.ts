@@ -68,6 +68,16 @@ export function headline(view: AnalysisView): string {
   return `${scope}: ${found}.`;
 }
 
+/**
+ * How the analysed conversations were chosen, as miner/sample.ts allocate chooses them: seats by each topic's share of
+ * the read conversations, at most so many of one topic, the seats rounding leaves first to topics that got none —
+ * or, with no topic map, the first ones of the log.
+ */
+export function pickedHow(coverage: Pick<AnalysisView['coverage'], 'method' | 'perTopic'>): string {
+  return coverage.method === 'order' ? 'темы не размечены, поэтому разобраны первые по порядку в логе'
+    : `места делятся между темами по их доле среди прочитанных разговоров, не больше ${coverage.perTopic} из одной темы; места, оставшиеся после округления, получают сначала темы без единого места`;
+}
+
 /** What was not analysed or not decided, and why — each part once. */
 export function coverageLines(view: AnalysisView): string[] {
   const { coverage } = view;
@@ -76,7 +86,7 @@ export function coverageLines(view: AnalysisView): string[] {
   return [
     `Правила оценены в ${countText(coverage.decided, IN_CONVERSATIONS)} из ${coverage.picked}${coverage.undecided ? `; в ${coverage.undecided} — ни одно не удалось оценить` : ''}${coverage.notReached ? `; до ${coverage.notReached} разбор не дошёл` : ''}.`,
     ...(view.undecided.length ? [`Не удалось оценить: ${view.undecided.map(item => `${UNDECIDED[item.reason]} — ${item.count}`).join(', ')}.`] : []),
-    ...(rest > 0 ? [`Не разбирались ${countText(rest, CONVERSATIONS)}: Lab берёт поровну из всех тем, не больше ${coverage.perTopic} из одной.`] : []),
+    ...(rest > 0 ? [`Не разбирались ${countText(rest, CONVERSATIONS)}: ${pickedHow(coverage)}.`] : []),
     ...(coverage.unjudgeable.length ? [`Нечего оценивать в ${countText(coverage.unjudgeable.reduce((sum, item) => sum + item.count, 0), IN_CONVERSATIONS)}: ${coverage.unjudgeable.map(item => `${item.reason === 'no_customer' ? 'нет реплики клиента' : 'нет ответа агента'} — ${item.count}`).join(', ')}.`] : []),
     ...(unread > 0 ? [`Не прочитаны ${countText(unread, CONVERSATIONS)} лога.`] : []),
   ];
@@ -140,28 +150,36 @@ const SITUATIONS_WITH: [string, string, string] = ['ситуации', 'ситу
 
 /**
  * The three facts of a check made from a problem of the logs, in the owner's words: found in the logs, reproduced (or
- * not) on this version, fixed (or not, or broken beside it) against the run it repeats. «Исправлено» only when the
- * problem reproduced before and the two runs compare.
+ * not) on this version, fixed (or not, or broken beside it) against the run it repeats — each read off the one
+ * expectation that is the problem's criterion. «Исправлено» only when the problem reproduced before and the two runs
+ * compare; nothing at all when no situation carries the criterion.
  */
 export function problemCheckLines(check: ProblemCheck): string[] {
+  if (check.unbound) {
+    return [`«${check.title}» — проверка не привязана к правилу проблемы: ${check.unbound === 'no_criterion' ? 'черновик собран до того, как Lab стал переносить правило проблемы в ситуации'
+      : 'ни одна ситуация проверки не проверяет это правило в точности — его ожидание изменено или не попало в ситуацию'}. Найдена ли, воспроизведена ли и исправлена ли проблема, этот прогон не говорит. Соберите проверку из разбора заново.`];
+  }
   const failed = check.broken.filter(item => item.outcome === 'fail').length;
   const reproduced = check.reproduced === 'yes'
-    ? `Воспроизведена на ${versionWord(check.version)}: агент снова ошибся в ${failed} из ${countText(check.broken.length, SITUATIONS_WITH)} с нарушением.`
+    ? `Воспроизведена на ${versionWord(check.version)}: агент снова нарушил это правило в ${failed} из ${countText(check.broken.length, SITUATIONS_WITH)} с нарушением.`
     : check.reproduced === 'no'
-      ? `На ${versionWord(check.version)} не воспроизведена: ${check.broken.length === 1 ? 'в единственной ситуации' : `во всех ${countText(check.broken.length, SITUATIONS_WITH)}`} с нарушением агент справился.${check.before ? '' : ' Это ещё не «исправлено»: так можно сказать только против версии, где проблема воспроизводилась.'}`
-      : `На ${versionWord(check.version)} измерить не удалось: ситуации с нарушением не решены.`;
-  const beside = check.opposite.filter(item => item.outcome === 'fail');
+      ? `На ${versionWord(check.version)} не воспроизведена: ${check.broken.length === 1 ? 'в единственной ситуации' : `во всех ${countText(check.broken.length, SITUATIONS_WITH)}`} с нарушением агент это правило выполнил.${check.before ? '' : ' Это ещё не «исправлено»: так можно сказать только против версии, где проблема воспроизводилась.'}`
+      : `На ${versionWord(check.version)} измерить не удалось: ${check.broken.length ? 'правило в ситуациях с нарушением не оценено' : 'ситуаций из разговоров с нарушением в проверке нет'}.`;
+  const beside = check.controls.filter(item => item.outcome === 'fail');
   const lines = [`«${check.title}» — найдена в логах в ${countText(check.found, IN_CONVERSATIONS)}.`, reproduced,
-    ...(check.opposite.length ? [beside.length ? `Рядом не справился: ${beside.map(item => `№${item.number} «${clip(item.title, 80)}»`).join(', ')} — ситуации тех же тем, где нарушения не было.`
-      : `Ситуации тех же тем без нарушения пройдены: ${check.opposite.filter(item => item.outcome === 'pass').length} из ${check.opposite.length}.`] : [])];
+    check.controls.length ? beside.length ? `Рядом не справился: ${beside.map(item => `№${item.number} «${clip(item.title, 80)}»`).join(', ')} — ситуации из разговоров, где агент в логах это правило соблюдал.`
+      : `Ситуации из разговоров, где агент в логах это правило соблюдал: правило выполнено в ${check.controls.filter(item => item.outcome === 'pass').length} из ${check.controls.length}.`
+    : check.controlConversations ? 'Ситуаций из разговоров, где правило соблюдалось, в проверке нет: сломалось ли что-то рядом, она не показывает.'
+    : 'Разговоров, где это правило проверено и соблюдено, в разборе не было: сломалось ли что-то рядом, эта проверка не показывает.',
+    ...(check.uncarried ? [`${countText(check.uncarried, ['ситуация', 'ситуации', 'ситуаций'])} этой проверки не ${check.uncarried === 1 ? 'проверяет' : 'проверяют'} правило проблемы в точности — ${check.uncarried === 1 ? 'она не считается' : 'они не считаются'}.`] : [])];
   const before = check.before;
   if (!before) return lines;
   const against = `против прогона ${new Date(before.createdAt).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} (${versionWord(before.version)})`;
-  lines.push(before.verdict === 'fixed' ? `Исправлено ${against}: там проблема воспроизводилась, здесь — нет, условия проверки те же, и рядом ничего не сломалось.`
-    : before.verdict === 'regressed' ? `Сломалось ${against}: ${before.regressed.map(title => `«${clip(title, 80)}»`).join(', ')} — там агент справлялся. Исправление не принимается, пока это не починено.`
+  lines.push(before.verdict === 'fixed' ? `Исправлено ${against}: там проблема воспроизводилась, здесь — нет, условия проверки те же${check.controls.length ? ', и рядом ничего не сломалось' : ''}.`
+    : before.verdict === 'regressed' ? `Сломалось ${against}: ${before.regressed.map(title => `«${clip(title, 80)}»`).join(', ')} — там агент это правило выполнял. Исправление не принимается, пока это не починено.`
     : before.verdict === 'not_fixed' ? `Не исправлено ${against}: проблема воспроизводится по-прежнему.`
     : before.why === 'incomparable' ? `Сравнить ${against} нельзя: условия проверки изменились — ситуации, судья или клиент. «Исправлено» не доказано.`
     : before.why === 'not_reproduced_before' ? `«Исправлено» не доказано: ${against} проблема не воспроизводилась — сравните с версией, где она была.`
-    : `«Исправлено» не доказано ${against}: часть ситуаций не измерена.`);
+    : `«Исправлено» не доказано ${against}: правило проблемы измерено не во всех ситуациях.`);
   return lines;
 }

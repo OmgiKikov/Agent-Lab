@@ -161,6 +161,10 @@ export const planExpectationSchema = z.strictObject({
   strength: z.literal('must_not').optional(), acceptable: text(600).optional(), violation: text(600).optional(),
   // The variations it applies to; absent — every variation of the scenario.
   variationIds: ids(8).min(1).optional(),
+  // The channel it is seen on, where the logs recorded more than the replies (card/plan.ts PlanCall.channels): `tool` —
+  // a result of the tool it names (absent — of any tool), `state` — the recorded state. Absent — the agent's reply, as on
+  // every plan before channels.
+  observation: z.enum(['tool', 'state']).optional(), tool: toolNameSchema.optional(),
 });
 export const businessScenarioSchema = z.strictObject({
   id, topic: text(120), trafficTopic: cardTopicSchema.optional(), question: text(300),

@@ -34,6 +34,12 @@ export interface PlanCall {
   sources: [CallSource, ...CallSource[]];
   /** What the owner's rulebook binds: whole kinds, and single rules of another kind by their source and quote. */
   binds: ProposalCall['binds'];
+  /**
+   * What the topic's logged conversations recorded besides the replies — the tools the agent called there, by name, and
+   * whether a state event is in them —, when they recorded any: an expectation may then be seen on that channel. Absent —
+   * the replies only, and the call asks exactly what it asked before channels (a preparation's plan never names them).
+   */
+  channels?: { tools: string[]; toolEvents: boolean; state: boolean };
 }
 export interface PlanRequest { task: string; call: PlanCall }
 
@@ -45,25 +51,45 @@ export const PLAN_EXPECTATIONS = 6;
 export function planProposalSchema(call: PlanCall) {
   const examples = call.examples.map(example => example.dialogueId);
   const example = examples.length ? z.enum(examples as [string, ...string[]], { error: 'Not a conversation of this topic: name only ids from examples.' }) : z.never();
+  const expectation = {
+    text: text(300), strength: z.enum(['must', 'must_not']), acceptable: text(600).nullable(), violation: text(600).nullable(),
+    basis: z.array(basisProposal(call)).min(1).max(3),
+    // The places of the variations it applies to in `variations`; null — all of them.
+    variations: z.array(z.number().int().nonnegative()).min(1).max(PLAN_VARIATIONS).nullable(),
+  };
   return z.strictObject({
     question: text(300),
     variations: z.array(z.strictObject({ title: text(160), examples: z.array(example).max(examples.length) })).min(1).max(PLAN_VARIATIONS),
-    expectations: z.array(z.strictObject({
-      text: text(300), strength: z.enum(['must', 'must_not']), acceptable: text(600).nullable(), violation: text(600).nullable(),
-      basis: z.array(basisProposal(call)).min(1).max(3),
-      // The places of the variations it applies to in `variations`; null — all of them.
-      variations: z.array(z.number().int().nonnegative()).min(1).max(PLAN_VARIATIONS).nullable(),
-    })).min(1).max(PLAN_EXPECTATIONS),
+    expectations: z.array(z.strictObject({ ...expectation, ...channelFields(call) })).min(1).max(PLAN_EXPECTATIONS),
   });
 }
 export type PlanProposal = z.infer<ReturnType<typeof planProposalSchema>>;
+
+/**
+ * The channel of an expectation, asked only where the logs recorded one besides the replies: enums of this call — the
+ * channels the topic's conversations hold, the tools named in them (null — any tool's result).
+ */
+function channelFields(call: PlanCall) {
+  const channels = call.channels;
+  if (!channels || !channels.toolEvents && !channels.state) return {};
+  const observations = ['reply', ...channels.toolEvents ? ['tool'] : [], ...channels.state ? ['state'] : []] as [string, ...string[]];
+  const [first, ...rest] = channels.tools;
+  return { observation: z.enum(observations, { error: `Observe it on ${observations.join(', ')}.` }),
+    ...(channels.toolEvents ? { tool: (first === undefined ? z.null() : z.enum([first, ...rest], { error: 'Name a tool of channels.tools, or null.' }).nullable()) } : {}) };
+}
+/** The channel a proposed expectation is seen on and its tool: the reply when the call asked no channel. */
+function proposedChannel(expectation: PlanProposal['expectations'][number]): { observation: 'reply' | 'tool' | 'state'; tool?: string } {
+  const { observation, tool } = expectation as { observation?: unknown; tool?: unknown };
+  if (observation === 'tool') return { observation, ...(typeof tool === 'string' ? { tool } : {}) };
+  return { observation: observation === 'state' ? 'state' : 'reply' };
+}
 
 /** What the builder reads: the task, the topic, the customers' words of its conversations, the sources, the rulebook. */
 export function planPayload(request: PlanRequest) {
   const { call } = request;
   return { task: request.task, topic: call.topic.title, examples: call.examples,
     sources: call.sources.map(({ id, name, content, kind }) => ({ id, name: kind === 'prompt' ? `${name} (промпт агента)` : name, content })),
-    rulebook: { binds: call.binds.kinds } };
+    rulebook: { binds: call.binds.kinds }, ...(call.channels ? { channels: call.channels } : {}) };
 }
 
 /** Why a proposed plan cannot be bound, in the builder's words, or undefined: the structured task's check sends it back verbatim. */
@@ -84,6 +110,8 @@ export function planProblem(proposal: PlanProposal, call: PlanCall): string | un
   });
   proposal.expectations.forEach((expectation, i) => {
     for (const index of expectation.variations ?? []) if (index >= proposal.variations.length) slips.push(`expectations[${i}].variations names ${index}, and there are ${proposal.variations.length} variations: use their places from 0, or null for all.`);
+    const { tool } = expectation as { tool?: unknown };
+    if (typeof tool === 'string' && proposedChannel(expectation).observation !== 'tool') slips.push(`expectations[${i}] is observed on "${proposedChannel(expectation).observation}" and names the tool "${tool}": set "tool" to null, or observe it on "tool" when only the tool's result proves it.`);
     expectation.basis.forEach((basis, j) => {
       const name = `expectations[${i}].basis[${j}]`;
       const at = located(basis, call);
@@ -112,10 +140,13 @@ export function bindPlan(proposal: PlanProposal, call: PlanCall): { scenario: Bu
       if (!rules.has(id)) rules.set(id, { id, text: at.clause.sentence, sourceId: at.sourceId, quote: at.quote, critical: true, observable: true, kind: basis.kind });
       return id;
     });
+    // The reply is the channel a plan names by saying none: a plan bound from replies alone is what it was before channels.
+    const channel = proposedChannel(expectation);
     return { id: `s${index + 1}`, text: expectation.text, requirementIds: [...new Set(requirementIds)],
       ...(expectation.strength === 'must_not' ? { strength: 'must_not' as const } : {}),
       ...(expectation.acceptable !== null ? { acceptable: expectation.acceptable } : {}), ...(expectation.violation !== null ? { violation: expectation.violation } : {}),
-      ...(expectation.variations ? { variationIds: [...new Set(expectation.variations)].map(place => `v${place + 1}`) } : {}) };
+      ...(expectation.variations ? { variationIds: [...new Set(expectation.variations)].map(place => `v${place + 1}`) } : {}),
+      ...(channel.observation !== 'reply' ? { observation: channel.observation, ...(channel.tool ? { tool: channel.tool } : {}) } : {}) };
   });
   const scenario: BusinessScenario = { id: `scenario_${fingerprint({ topic: call.topic.title, proposal }).slice(0, 24)}`, topic: call.topic.title,
     ...(call.topic.key ? { trafficTopic: call.topic.key } : {}), question: proposal.question, variations, expectations };

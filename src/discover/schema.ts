@@ -21,7 +21,13 @@ import { topicIdSchema, trafficSchema } from '../miner/schema.js';
  * verdict never overwrites one, and a new analysis is a new record — the old one keeps its history.
  */
 
-export const ANALYSIS_PROTOCOL = 'discover-v1';
+/**
+ * `discover-v2`: a finding's `criterionHash` is the kernel's (criterion.ts) — the criterion's own fields — and a criterion
+ * seen on the tools or the state is judged only on a log that recorded that channel. `discover-v1` hashed what the judge
+ * read of the criterion; its records still read, and every surface derives a criterion from the plan, never from that hash.
+ */
+export const ANALYSIS_PROTOCOL = 'discover-v2';
+const ANALYSIS_PROTOCOL_V1 = 'discover-v1';
 /** Conversations one analysis reads at most, and from one topic: the examples one plan call reads (card/prepare.ts). */
 export const ANALYSIS_LIMIT = 128;
 export const PER_TOPIC_LIMIT = 8;
@@ -37,10 +43,12 @@ const verdict = z.enum(['pass', 'fail', 'unknown']);
 const condition = z.enum(['met', 'not_met', 'unclear']);
 
 /**
- * One expectation of a plan judged on one logged conversation. Addressed by content — the criterion as judged (its
- * words, the rules it cites and the sources they stand in), the import, the conversation and the judge's protocol — so
- * nothing of a card, an accepted definition or a run is in it. `evidence`: what the votes that decided cite, each quote
- * verbatim in the event it names (the judge's own check); `skipped`: the log could not show it and the judge was not asked.
+ * One expectation of a plan judged on one logged conversation. Addressed by content — the criterion (criterion.ts) and
+ * what the judge read of it (the rubric, the rules, the sources), the import, the conversation and the judge's protocol —
+ * so nothing of a card, an accepted definition or a run is in it. `evidence`: what the votes that decided cite, each
+ * quote verbatim in the event it names (the judge's own check); `skipped`: the log could not show it — the agent never
+ * replied, or the criterion is seen on the tools or the state and the log did not record that channel completely — and
+ * the judge was not asked.
  */
 export const findingSchema = z.strictObject({
   key: hash,
@@ -48,7 +56,7 @@ export const findingSchema = z.strictObject({
   criterionHash: hash,
   mode: z.literal(LOGGED_MODE), protocolHash: hash, inputHash: hash, auditHash: hash.optional(),
   provider: text(120), model: text(200),
-  skipped: z.enum(['no_agent_reply']).optional(),
+  skipped: z.enum(['no_agent_reply', 'channel_unobserved']).optional(),
   votes: z.array(z.strictObject({ pass: condition.optional(), fail: condition.optional(), result: verdict.optional(), error: z.literal(true).optional() })).max(4),
   result: verdict,
   complete: z.boolean(),
@@ -75,7 +83,7 @@ export const UNJUDGEABLE = ['no_customer', 'no_agent_reply'] as const;
 export const PLAN_FAILURES = ['unusable', 'interrupted', 'not_reached'] as const;
 
 export const analysisSchema = z.strictObject({
-  formatVersion: z.literal(1), protocol: z.literal(ANALYSIS_PROTOCOL),
+  formatVersion: z.literal(1), protocol: z.enum([ANALYSIS_PROTOCOL_V1, ANALYSIS_PROTOCOL]),
   id, createdAt: z.iso.datetime(), updatedAt: z.iso.datetime(),
   status: z.enum(ANALYSIS_STATUSES), message: z.string().max(2000),
   unfinished: z.enum(UNFINISHED).optional(),
@@ -85,8 +93,9 @@ export const analysisSchema = z.strictObject({
   /** The import read: its identity, the file's name, every conversation of the log and those the import could read. */
   logs: z.strictObject({ importId: id, contentHash: hash, file: text(300), conversations: z.number().int().nonnegative(), readable: z.number().int().nonnegative() }),
   /**
-   * What was analysed and how it was chosen: `topics` — spread over the import's topics, at most `perTopic` from one;
-   * `order` — the first ones, when the runtime maps no topics. The rest of the readable conversations are not analysed.
+   * What was analysed and how it was chosen: `topics` — seats by each topic's share of the read conversations, at most
+   * `perTopic` from one, the seats rounding leaves first to topics with none (miner/sample.ts allocate); `order` — the
+   * first ones, when the runtime maps no topics. The rest of the readable conversations are not analysed.
    */
   selection: z.strictObject({
     requested: z.number().int().positive().max(ANALYSIS_LIMIT), perTopic: z.number().int().positive().max(PER_TOPIC_LIMIT),
