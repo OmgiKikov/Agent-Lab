@@ -66,8 +66,12 @@ export function adapterContract(): AdapterContract {
       + 'through a conversation and a run; with a promptFile every reply returns the promptHash it was sent. An empty reply without a handoff is not measured.',
     outcome: OUTCOMES,
     exam: `target.exam: paths {name, steps, initialState?}; a step is say (the customer's words) or press (a button of the previous reply), expect ${EXAM_EXPECTATIONS.join(' | ')}, `
-      + 'and contains — a value the reply must hold. The exam counts only with a path of two or more steps whose later step checks with contains what the customer said '
-      + 'earlier; without one the result shows no percent. Lab runs it before every run, without a model; a failed exam stops the run. From the chat, the paths '
+      + 'and contains — a value the reply must hold. The exam counts only when it shows memory and isolation. Memory: a path where the customer gives a value (a number, a name, '
+      + 'a choice) and a later step asks about it without repeating it and checks with contains that the reply holds it; Lab also asks that later question alone in a fresh '
+      + 'conversation, where the reply must not hold the value. Isolation: a second path with a value of its own, open at the same time, whose step checks its own value with '
+      + 'contains after the first path told its value — its reply must not hold the other conversation\'s value; a fresh conversation after all paths must hold none of them. '
+      + 'Values fit the agent\'s purpose (a terminal number it knows, not a token to memorise). Without both the result shows no percent. Lab runs it before every run, without '
+      + 'a model; a failed exam stops the run. From the chat, the paths '
       + 'go to agent_lab_run as exam when the owner asks for them: Lab shows them to the owner and writes them into connection.json only at their word.',
     rules: [
       'eventsComplete, retrievalsComplete and resetConfirmed only when the adapter\'s code proves them.',

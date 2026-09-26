@@ -11,6 +11,7 @@ import { registerBoardCommand } from './board-command.ts';
 import { registerConnectTool } from './connect-tool.ts';
 import { registerDecideTool } from './decide-tool.ts';
 import { registerPrepareTool } from './prepare-tool.ts';
+import { registerAnalyzeTool } from './analyze-tool.ts';
 import { registerResultTools } from './result-tools.ts';
 import { registerRunTool } from './run-tool.ts';
 import { registerSituationTools } from './situation-tools.ts';
@@ -23,7 +24,7 @@ import { inputError, isInteractive, NeedsOwner } from './lab-ui.ts';
 import { createGateway, type GatewayOptions } from './gateway.ts';
 
 /*
- * Agent Lab inside Pi: ten tools, of which the model sees only those of the step the project is at (steps.ts), the
+ * Agent Lab inside Pi: eleven tools, of which the model sees only those of the step the project is at (steps.ts), the
  * /agent-lab workspace, and the messages long work reports back with. What the model is told comes from one source,
  * the agent-builder skill (skills/agent-builder/SKILL.md): `agent-lab chat` makes its body part of the session's own
  * system prompt (src/instructions.ts), so the turns Pi starts for a message of Lab carry it as much as the owner's;
@@ -115,6 +116,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     if (event.systemPrompt.includes(instructions)) return;
     return { systemPrompt: `${event.systemPrompt}\n\n${instructions}` };
   });
+  registerAnalyzeTool(tools, host);
   registerPrepareTool(tools, host);
   registerSituationTools(tools, host);
   registerDecideTool(tools, host);

@@ -36,7 +36,9 @@ export type Writing = <T>(work: (lab: ExperimentLab, handOver: (start: (lease: L
 /** Long work of this session that has ended and is still handing over its result: a write waits for it instead of failing. */
 async function finishing(operations: SessionOperations, directory: string): Promise<{ done: Promise<void> } | undefined> {
   const job = operations.current(directory);
-  return job && job.kind !== 'assessment' && !isRunning((await job.lab.get(job.id)).phase) ? job : undefined;
+  if (!job || job.kind === 'assessment') return undefined;
+  const ended = job.kind === 'analysis' ? (await job.lab.getAnalysis(job.id)).status !== 'running' : !isRunning((await job.lab.get(job.id)).phase);
+  return ended ? job : undefined;
 }
 
 /**

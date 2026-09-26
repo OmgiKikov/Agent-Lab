@@ -11,7 +11,8 @@ import { ActionBlock, ActionBody, ActionHead, expandHint, feedFor, feedTone, isF
 import { isVerdictDetails, renderAgentLabResult } from './render/verdict-block.ts';
 import type { Tone } from './render/theme.ts';
 import { inputError, legacyResult, recordErrorText, stoppedByOwner } from './lab-ui.ts';
-import type { LabLease, Presentation, SessionOperation, SessionOperations } from './operations.ts';
+import { isExperiment, type LabLease, type Presentation, type SessionOperation, type SessionOperations } from './operations.ts';
+import { analysisAnswer } from './analysis-output.ts';
 import { situationItem, situationOutput, situationsOutput } from './model-output.ts';
 import { situationFeed, situationsFeed } from './situation-tools.ts';
 
@@ -27,8 +28,9 @@ import { situationFeed, situationsFeed } from './situation-tools.ts';
 export const RUN_MESSAGE = 'agent-lab-run';
 export const CHECK_MESSAGE = 'agent-lab-check';
 export const BUILD_MESSAGE = 'agent-lab-build';
+export const ANALYSIS_MESSAGE = 'agent-lab-analysis';
 /** The head of each message when its feed does not name one. */
-const MESSAGE_TITLE: Record<string, string> = { [RUN_MESSAGE]: 'Прогон завершён', [CHECK_MESSAGE]: 'Проверка ситуаций', [BUILD_MESSAGE]: 'Ситуации готовы' };
+const MESSAGE_TITLE: Record<string, string> = { [RUN_MESSAGE]: 'Прогон завершён', [CHECK_MESSAGE]: 'Проверка ситуаций', [BUILD_MESSAGE]: 'Ситуации готовы', [ANALYSIS_MESSAGE]: 'Разбор логов' };
 /** How to stop long work: in words, since Esc interrupts only the current action. */
 export const STOP_HINT = 'остановить — напишите «стоп»';
 const CONVERSATIONS_OF: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
@@ -80,7 +82,7 @@ export function messageBlock(kind: string, message: { content: unknown; details?
 }
 
 export function registerMessageRenderers(pi: ExtensionAPI): void {
-  for (const kind of [RUN_MESSAGE, CHECK_MESSAGE, BUILD_MESSAGE]) pi.registerMessageRenderer?.(kind, (message, options, theme) => messageBlock(kind, message, options.expanded, theme));
+  for (const kind of [RUN_MESSAGE, CHECK_MESSAGE, BUILD_MESSAGE, ANALYSIS_MESSAGE]) pi.registerMessageRenderer?.(kind, (message, options, theme) => messageBlock(kind, message, options.expanded, theme));
 }
 
 /** The situations of a card record with their status now: the draft's cards read against its imports. */
@@ -158,6 +160,7 @@ const CONTINUES: Record<SessionOperation['kind'], string> = {
   run: 'Прогон продолжается — итог придёт сюда сообщением.',
   preparation: 'Подготовка ситуаций продолжается — ситуации придут сюда сообщением.',
   assessment: 'Проверка ситуаций продолжается — итог придёт сюда сообщением.',
+  analysis: 'Разбор логов продолжается — итог придёт сюда сообщением.',
 };
 
 /** The session's hand-overs of long work: a run or a preparation that outlives its row, a check of changed situations. */
@@ -177,6 +180,11 @@ export class Background {
     this.detach(ctx, owned, id, 'chat', finished => preparedAnswer(owned.lab, finished, !!finished.error));
   }
 
+  /** A log analysis that outlives the row of its call: the row above the input follows it, its findings arrive as a message. */
+  analysis(ctx: ExtensionContext, owned: LabLease, id: string): SessionOperation {
+    return this.host.operations.present(owned, this.analysisPresentation(ctx, owned, id));
+  }
+
   /**
    * A check of changed situations too long for the row of its command. The conversation goes on; the outcome
    * arrives as a message — quietly when the situation is ready, with a turn when the owner has something to decide.
@@ -190,7 +198,8 @@ export class Background {
    * is drawn here and its result arrives here. The owner is told it goes on.
    */
   adopt(ctx: ExtensionContext): void {
-    const job = this.host.operations.adopt((parked, lease) => parked.kind === 'assessment' ? this.checkPresentation(ctx, lease, parked.id, undefined)
+    const job = this.host.operations.adopt((parked, lease) => parked.kind === 'analysis' ? this.analysisPresentation(ctx, lease, parked.id)
+      : parked.kind === 'assessment' ? this.checkPresentation(ctx, lease, parked.id, undefined)
       : this.workPresentation(ctx, lease, parked.id, parked.origin, parked.kind === 'preparation' ? finished => preparedAnswer(lease.lab, finished, !!finished.error) : undefined));
     if (job) ctx.ui?.notify?.(CONTINUES[job.kind], 'info');
   }
@@ -198,7 +207,7 @@ export class Background {
   private workPresentation(ctx: ExtensionContext, owned: LabLease, id: string, origin: SessionOperation['origin'], prepared?: (finished: Experiment) => Promise<Prepared>): Presentation {
     const progress = new ProgressRow(ctx, prepared ? BUILD_MESSAGE : RUN_MESSAGE, STOP_HINT);
     return { kind: prepared ? 'preparation' : 'run', id, origin,
-      progress: record => progress.show(progressText(record)),
+      progress: record => { if (isExperiment(record)) progress.show(progressText(record)); },
       complete: async job => {
         const finished = await owned.lab.get(id);
         if (prepared) {
@@ -227,11 +236,27 @@ export class Background {
     };
   }
 
+  private analysisPresentation(ctx: ExtensionContext, owned: LabLease, id: string): Presentation {
+    const progress = new ProgressRow(ctx, ANALYSIS_MESSAGE, STOP_HINT);
+    return { kind: 'analysis', id, origin: 'chat',
+      progress: record => { if (!isExperiment(record)) progress.show(`Разбор логов · ${record.message}`); },
+      complete: async job => {
+        if (job.quiet) return;
+        const answer = await analysisAnswer(owned.lab, await owned.lab.getAnalysis(id));
+        this.pi.sendMessage({ customType: ANALYSIS_MESSAGE, display: true, content: JSON.stringify(answer.output),
+          details: rememberFeed(`analysis:${id}:${answer.stamp}`, answer.feed, answer.note) }, { deliverAs: 'followUp', triggerTurn: true });
+      },
+      error: error => ctx.ui.notify?.(`Не удалось завершить разбор логов: ${inputError(error)}`, 'error'),
+      clear: () => progress.clear(),
+    };
+  }
+
   private checkPresentation(ctx: ExtensionContext, owned: LabLease, id: string, card: number | undefined): Presentation {
     const progress = new ProgressRow(ctx, CHECK_MESSAGE);
     let usedBefore: number | undefined;
     return { kind: 'assessment', id, origin: 'chat',
       progress: record => {
+        if (!isExperiment(record)) return;
         usedBefore ??= record.usage.calls;
         progress.show(`Проверяю изменённые ситуации · вызовов модели: ${record.usage.calls - usedBefore}`);
       },

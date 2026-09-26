@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { Experiment } from '../src/contracts.js';
+import type { LogAnalysis } from '../src/discover/schema.js';
 import { ExperimentLab } from '../src/experiment.js';
 
-type OperationKind = 'run' | 'preparation' | 'assessment';
+type OperationKind = 'run' | 'preparation' | 'assessment' | 'analysis';
+/** What long work is followed by: a run's or a preparation's record, or a log analysis (a record of its own). */
+export type Followed = Experiment | LogAnalysis;
+/** Whether the followed record is a run's or a draft's, not a log analysis. */
+export const isExperiment = (record: Followed): record is Experiment => 'phase' in record;
 export interface LabLease { directory: string; lab: ExperimentLab; close(): Promise<void> }
 export interface SessionOperation {
   operationId: string;
@@ -20,7 +25,7 @@ export interface Presentation {
   id: string;
   origin: SessionOperation['origin'];
   /** Draws how far the work got, from its live record: at once, then at every change. */
-  progress(record: Experiment): void;
+  progress(record: Followed): void;
   complete(job: SessionOperation): Promise<void>;
   clear(): void;
   error(error: unknown): void;
@@ -68,6 +73,14 @@ export function followRecord(lab: ExperimentLab, id: string, draw: (record: Expe
   return () => { stopped = true; unfollow(); };
 }
 
+/** The same for a log analysis, which has a record and followers of its own (lab/discover.ts). */
+export function followAnalysis(lab: ExperimentLab, id: string, draw: (analysis: LogAnalysis) => void): () => void {
+  let changed = false, stopped = false;
+  const unfollow = lab.followAnalysis(analysis => { if (analysis.id === id && !stopped) { changed = true; draw(analysis); } });
+  void lab.getAnalysis(id).then(analysis => { if (!changed && !stopped) draw(analysis); }, () => { /* the next change draws it */ });
+  return () => { stopped = true; unfollow(); };
+}
+
 /** Owns the session's writer lease and presentation, never experimental state or execution. */
 export class SessionOperations {
   private lease?: LabLease;
@@ -87,6 +100,8 @@ export class SessionOperations {
       ? 'Сейчас идёт подготовка ситуаций. Готовые ситуации, разговоры и результаты можно смотреть; правки и новый запуск — после её завершения или остановки.'
       : active?.kind === 'run'
         ? 'Сейчас идёт прогон. Ситуации, разговоры и результаты можно смотреть; правки и новый запуск — после его завершения или остановки.'
+      : active?.kind === 'analysis'
+        ? 'Сейчас идёт разбор логов. Готовые результаты можно смотреть; новый запуск — после его завершения или остановки.'
         : 'Уже идёт другая работа Agent Lab. Готовые результаты можно смотреть; новый запуск — после её завершения.';
   }
   reader(directory: string): ExperimentLab { return this.lease?.directory === directory ? this.lease.lab : this.createLab(directory); }
@@ -114,7 +129,8 @@ export class SessionOperations {
     const stage: Stage = { presentation, held: Promise.resolve(), hold() {}, ended: false,
       release: ended => { if (this.job === ended) { this.job = undefined; this.stage = undefined; } } };
     this.job = job; this.stage = stage;
-    const unfollow = followRecord(owned.lab, job.id, record => { if (!stage.ended) stage.presentation?.progress(record); });
+    const draw = (record: Followed) => { if (!stage.ended) stage.presentation?.progress(record); };
+    const unfollow = job.kind === 'analysis' ? followAnalysis(owned.lab, job.id, draw) : followRecord(owned.lab, job.id, draw);
     job.done = (async () => {
       try { await owned.lab.waitForIdle(); await stage.held; await stage.presentation?.complete(job); }
       catch (error) { stage.presentation?.error(error); }
@@ -177,7 +193,8 @@ export class SessionOperations {
     stage.presentation = presentation;
     stage.hold();
     // The row is drawn at once from the live record; the work's next change redraws it.
-    void job.lab.get(job.id).then(record => { if (!stage.ended && stage.presentation === presentation) presentation.progress(record); }, () => { /* the next change draws it */ });
+    void (job.kind === 'analysis' ? job.lab.getAnalysis(job.id) : job.lab.get(job.id))
+      .then((record: Followed) => { if (!stage.ended && stage.presentation === presentation) presentation.progress(record); }, () => { /* the next change draws it */ });
     return job;
   }
 }

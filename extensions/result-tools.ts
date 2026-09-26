@@ -9,7 +9,8 @@ import { evidenceBundle, exportArtifacts } from '../src/artifacts.js';
 import { disagreementText, logRefusal, logTargets } from '../src/card/calibration-view.js';
 import { situationNumber } from '../src/card/view.js';
 import { isRunnable, type Experiment, type Trial } from '../src/contracts.js';
-import { examShowsMemory } from '../src/exam.js';
+import { examCanVouch } from '../src/exam.js';
+import { analysisView } from '../src/discover/view.js';
 import { isRunning } from '../src/phases.js';
 import { detectionLines, detectProject, evidenceText, targetLabel, type ProjectDetection } from '../src/detect.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -27,7 +28,7 @@ import { agreementTarget, blindCheck, judgeWord, markRefusal, recordLogMark, rec
 import { ask, displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { resultOutput } from './model-output.ts';
 import type { LabLease, SessionOperations } from './operations.ts';
-import { projectPath } from './prepare-tool.ts';
+import { projectPath } from './owner-inputs.ts';
 import { recordEntry, recordFor } from './records.ts';
 import type { Feed } from './render/feed.ts';
 import { rememberView, VERDICT_KIND, type VerdictDetails } from './render/verdict-block.ts';
@@ -96,7 +97,7 @@ const attemptOf = (record: Experiment, scenarioId: string, failedTrialId?: strin
 export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host: ResultHost): void {
   pi.registerTool({
     ...displayFor(TOOL.status), name: TOOL.status, label: 'What exists in this project',
-    description: 'Read-only and free. The runs of this project, newest first, with their ids; the work going on now; how many decisions wait for the owner; and — before anything is prepared, or while the agent is not connected — what Lab found in the project folder: how to start the agent, log files, rules and the agent\'s prompt. While Lab sees no sure way to start the agent, or its connection has no exam that counts, adapterContract says exactly how an agent must speak to Lab: help the owner write or fix an adapter and its exam by it. Call it first when you do not know what exists.',
+    description: 'Read-only and free. The runs of this project, newest first, with their ids; the analyses of its logs (agent_lab_analyze with analysis shows one); the work going on now; how many decisions wait for the owner; and — before anything is prepared, or while the agent is not connected — what Lab found in the project folder: how to start the agent, log files, rules and the agent\'s prompt. While Lab sees no sure way to start the agent, or its connection has no exam that counts, adapterContract says exactly how an agent must speak to Lab: help the owner write or fix an adapter and its exam by it. Call it first when you do not know what exists.',
     parameters: Type.Object({}, closed),
     executionMode: 'sequential',
     async execute(callId, _params, signal, _onUpdate, ctx) {
@@ -112,7 +113,10 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
       // A record this Lab cannot read is said, never dropped from the list without a word.
       const unreadable = unreadableLines(reader.store.diagnostics);
       feed.rows.push(...unreadable.map(line => row(line, 'warning')));
-      if (active) feed.rows.push(row(progressText(await active.lab.get(active.id)), 'accent'));
+      if (active) feed.rows.push(row(active.kind === 'analysis' ? `Разбор логов · ${(await active.lab.getAnalysis(active.id)).message}` : progressText(await active.lab.get(active.id)), 'accent'));
+      // Analyses of the logs are records of their own: the newest few, so the chat can go on from one.
+      const analyses = await reader.listAnalyses().catch(() => []);
+      if (analyses[0] && analyses[0].status !== 'running') feed.rows.push(row(safeText(`Разборов логов: ${analyses.length}; последний — «${analyses[0].logs.file}», ${analysisView(analyses[0]).problems.length ? `нарушений правил — ${analysisView(analyses[0]).problems.length}` : 'нарушений не найдено'}.`), 'muted'));
       if (decisions) feed.rows.push(row(`Нужно ваше решение: ${decisions}`, 'warning'));
       if (found) {
         const shown = foundRows(found);
@@ -125,9 +129,10 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
       }
       // The contract an adapter must speak, generated from the code: while no sure way to start the agent shows, or its connection has no exam that counts.
       const connected = records[0] && isRunnable(records[0].target) ? records[0].target : undefined;
-      const contract = found ? !found.agents.some(agent => agent.confidence === 'high' && examShowsMemory(agent.target.exam)) : !!connected && !examShowsMemory(connected.exam);
+      const contract = found ? !found.agents.some(agent => agent.confidence === 'high' && examCanVouch(agent.target.exam)) : !!connected && !examCanVouch(connected.exam);
       return host.feedResult(callId, { runs: records.slice(0, 12).map(record => recordEntry(record)), ...(active ? { working: { run: active.id, kind: active.kind } } : {}),
-        decisions, ...(unreadable.length ? { unreadable } : {}), ...(found ? { found: foundOutput(found) } : {}), ...(contract ? { adapterContract: adapterContract() } : {}) }, feed, 'Что есть в проекте');
+        decisions, ...(analyses.length ? { analyses: analyses.slice(0, 5).map(analysis => ({ analysis: analysis.id, file: analysis.logs.file, status: analysis.status, createdAt: analysis.createdAt, problems: analysisView(analysis).problems.length })) } : {}),
+        ...(unreadable.length ? { unreadable } : {}), ...(found ? { found: foundOutput(found) } : {}), ...(contract ? { adapterContract: adapterContract() } : {}) }, feed, 'Что есть в проекте');
     },
   });
   pi.registerTool({

@@ -4,6 +4,8 @@ import { countText, pluralForm } from './plural.js';
 import { NOT_MEASURED_SIDE, type ResultView } from './result-view.js';
 import type { NotMeasuredCode } from './run.js';
 import { oneLine } from './text.js';
+import type { AnalysisView } from './discover/view.js';
+import { problemTitle } from './discover/text.js';
 
 /*
  * «Проблемы» (docs/design/ui-spec.md §8.6): what repeats, not a one-off error — the same cause in two or more situations of the
@@ -16,6 +18,10 @@ import { oneLine } from './text.js';
  *   newest run: causes ×2+ situations ─┐
  *   a failure that repeats in a row  ──┼──► Problem { side, situations, runs in a row, observations }
  *   the customer left the situation  ──┘
+ *
+ * The same section holds what an analysis of the logs found (DISCOVER): a violation of the owner's rule in real
+ * conversations, with how many of the conversations it was checked on it broke — `origin` says so. It need not repeat:
+ * one conversation where the agent broke a rule is already worth the owner's look.
  */
 
 export interface Problem {
@@ -28,8 +34,10 @@ export interface Problem {
   topics: string[];
   /** The agent's own words in the newest run that the judge pointed at, each checked against the recorded reply. */
   observations: { quote: string; title: string }[];
-  /** A conversation of the newest run that shows it. */
+  /** A conversation of the newest run that shows it; for a problem from the logs, the analysis. */
   runId: string; trialId?: string;
+  /** A problem found in the logged conversations (DISCOVER): its analysis, and in how many of the conversations it was checked on it broke. */
+  origin?: { kind: 'logs'; analysisId: string; violations: number; checked: number };
 }
 
 export interface ProblemRun { record: Experiment; view: ResultView }
@@ -91,8 +99,17 @@ export function recurringProblems(runs: readonly ProblemRun[]): Problem[] {
   return problems;
 }
 
+/** The violations the newest analysis of the logs found, as problems of the section; none without one. */
+export function logProblems(view: AnalysisView | undefined): Problem[] {
+  if (!view) return [];
+  return view.problems.map(problem => ({ key: `logs:${problem.key}`, side: 'agent' as const, title: oneLine(problemTitle(problem)), situations: [], runsInRow: 1, topics: problem.topics,
+    observations: problem.examples.flatMap(example => example.quotes.filter(quote => quote.role === 'agent').slice(0, 1).map(quote => ({ quote: oneLine(quote.quote), title: `разговор ${example.dialogueId} из логов` }))),
+    runId: view.id, origin: { kind: 'logs' as const, analysisId: view.id, violations: problem.violations, checked: problem.checked } }));
+}
+
 /** «2 ситуации · 2 прогона подряд» — the size of a problem in one phrase. */
 export function problemSize(problem: Problem): string {
+  if (problem.origin) return `${problem.origin.violations} из ${countText(problem.origin.checked, ['разговора', 'разговоров', 'разговоров'])} логов`;
   const runs = problem.runsInRow > 1 ? ` · ${problem.runsInRow} ${pluralForm(problem.runsInRow, ['прогон', 'прогона', 'прогонов'])} подряд` : '';
   return `${countText(problem.situations.length, ['ситуация', 'ситуации', 'ситуаций'])}${runs}`;
 }
@@ -100,8 +117,11 @@ export function problemSize(problem: Problem): string {
 /** «3 повторяющиеся проблемы: 2 в агенте, 1 в тесте» — the answer of the problems' screen. */
 export function problemsLine(problems: readonly Problem[]): string {
   if (!problems.length) return 'Повторяющихся проблем нет: разовые ошибки — в «Прогонах».';
+  const logs = problems.filter(problem => problem.origin).length;
+  if (logs === problems.length) return `${countText(logs, ['нарушение правил', 'нарушения правил', 'нарушений правил'])} в логах — по последнему разбору`;
   const agent = problems.filter(problem => problem.side === 'agent').length;
   const test = problems.length - agent;
   const parts = [agent ? `${agent} в агенте` : '', test ? `${test} в тесте` : ''].filter(Boolean).join(', ');
-  return `${countText(problems.length, ['повторяющаяся проблема', 'повторяющиеся проблемы', 'повторяющихся проблем'])}: ${parts}`;
+  const noun: [string, string, string] = logs ? ['проблема', 'проблемы', 'проблем'] : ['повторяющаяся проблема', 'повторяющиеся проблемы', 'повторяющихся проблем'];
+  return `${countText(problems.length, noun)}: ${parts}${logs ? `; из них по логам — ${logs}` : ''}`;
 }

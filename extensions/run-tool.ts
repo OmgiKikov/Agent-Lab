@@ -20,7 +20,7 @@ import { progressText, row, runStamp, runWhen, stoppedLines } from './conversati
 import { ask, displayFor, NeedsOwner, requireInteractive } from './lab-ui.ts';
 import { cardPlan, EXAM_FIRST, launchRun, runTarget, writeExam, type LaunchAgent } from './launch.ts';
 import { followRecord, type LabLease, type SessionOperations } from './operations.ts';
-import { projectPath } from './prepare-tool.ts';
+import { projectPath } from './owner-inputs.ts';
 import { recordFor } from './records.ts';
 import type { Feed } from './render/feed.ts';
 import { TOOL } from './steps.ts';
@@ -269,7 +269,9 @@ async function start(host: RunHost, callId: string, ctx: ExtensionContext, signa
 /** How the work of this session goes, from the stored record; a named run is answered about that run. */
 async function progress(host: RunHost, callId: string, ctx: ExtensionContext, id: string | undefined): Promise<AgentToolResult<unknown>> {
   const directory = resolve(ctx.cwd, '.agent-lab');
-  const job = host.operations.current(directory);
+  // An analysis of the logs is not a run: its progress row and its answer are its own (analyze-tool.ts).
+  const current = host.operations.current(directory);
+  const job = current?.kind === 'analysis' ? undefined : current;
   const named = id ? recordFor(await host.reading(directory).list(), id, 'situations') : undefined;
   const record = job && (!named || named.id === job.id) ? await job.lab.get(job.id) : named ?? recordFor(await host.reading(directory).list(), undefined, 'situations');
   const running = isRunning(record.phase);
@@ -294,6 +296,12 @@ async function stop(host: RunHost, callId: string, ctx: ExtensionContext, id: st
     const elsewhere = (await host.reading(directory).list()).some(record => isRunning(record.phase));
     throw new Error(elsewhere ? 'В этой сессии ничего не идёт: ни прогона, ни подготовки, ни проверки. Работу другой сессии Pi останавливают там.'
       : 'Сейчас ничего не идёт — останавливать нечего.');
+  }
+  if (job.kind === 'analysis') {
+    await host.operations.stop(job);
+    const message = 'Разбор логов остановлен; найденное сохранено — его можно посмотреть.';
+    return host.feedResult(callId, { analysis: job.id, stopped: true, message, instruction: 'Show what was found with agent_lab_analyze analysis if the owner asks.' },
+      { tone: 'warning', rows: [row(message)] }, 'Разбор остановлен');
   }
   const going = job.kind === 'assessment' ? 'проверка ситуаций' : job.kind === 'preparation' ? 'подготовка ситуаций' : 'прогон';
   // The run the owner named must be the one that is going: another run is never stopped in its place.

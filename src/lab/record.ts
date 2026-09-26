@@ -82,6 +82,7 @@ export function newRecord(input: CreateInput): Experiment {
     target: input.target, goldenCases: [], dialogues: input.dialogues, profiles: [], notes: '',
     evaluatorVersion: evaluatorVersion(input.settings),
     ...(input.targetVersion ? { targetVersion: input.targetVersion } : {}),
+    ...(input.fromAnalysis ? { fromAnalysis: structuredClone(input.fromAnalysis) } : {}),
     // Only what is particular to this record, typed (caveats.ts): what every run's number does not prove is said by its trust line.
     limitations: [], ...(input.mode === 'demo' ? { caveats: [{ code: 'demo' as const }] } : {}),
   };

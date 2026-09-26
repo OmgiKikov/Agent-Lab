@@ -1,31 +1,28 @@
-import { stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { basename, extname, join, relative, resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { z } from 'zod';
 import { preparationCeiling, runLimit, runTime } from '../src/card/budget.js';
-import { createInputSchema, isRunnable, judgeFor, materialSources, SCENARIO_LIMIT, settingsSchema, type Experiment } from '../src/contracts.js';
+import { createInputSchema, isRunnable, judgeFor, materialSources, SCENARIO_LIMIT, settingsSchema, type Experiment, type FromAnalysis } from '../src/contracts.js';
 import { rememberedConnection } from '../src/connection.js';
 import { demoInput } from '../src/demo.js';
-import { detectProject, targetLabel, type ProjectDetection } from '../src/detect.js';
+import { targetLabel, type ProjectDetection } from '../src/detect.js';
+import { analysisView } from '../src/discover/view.js';
+import { problemTitle } from '../src/discover/text.js';
+import { problemConversations, subsetImport } from '../src/discover/verify.js';
+import type { ImportBatch } from '../src/scenario-contracts.js';
 import type { ExperimentLab } from '../src/experiment.js';
-import { readDialogueImport } from '../src/imports.js';
-import { expandMaterials, promptMaterials } from '../src/materials.js';
-import type { PromptCandidate } from '../src/prompt-candidates.js';
-import { consentText, DEFAULT_SITUATIONS, ensureSomethingFits, loggedRolesToMap, NothingFits, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
+import { consentText, DEFAULT_SITUATIONS, NothingFits, preparationConsent, rulesConsentText } from '../src/miner/plan.js';
 import { countText } from '../src/plural.js';
 import type { Encoding } from '../src/spreadsheet/csv.js';
-import { TABLE_EXTENSIONS } from '../src/spreadsheet/workbook.js';
-import { safeText } from '../src/text.js';
+import { clip, safeText } from '../src/text.js';
 import { preparedAnswer, STOP_HINT, type Background } from './background.ts';
 import { progressText, row, runStamp } from './conversation.ts';
 import { ask, displayFor, isInteractive, NeedsOwner, requireInteractive, zodText } from './lab-ui.ts';
 import { followRecord, type LabLease, type SessionOperations } from './operations.ts';
 import type { Feed } from './render/feed.ts';
 import { TOOL } from './steps.ts';
-import { confirmedBefore, importTable } from './table-import.ts';
-import { choosePromptsWithLab } from './prompt-choice.ts';
+import { declined, endedEarly, ownerInputs, projectPath, shownPath } from './owner-inputs.ts';
 
 /*
  * «Проверь агента, логи — выгрузка.xlsx» (docs/design/ui-spec.md §4.10): logs, the owner's rules and the agent become a draft of
@@ -75,23 +72,13 @@ export const prepareParameters = Type.Object({
       { maxItems: 3, description: 'Columns of the assessor\'s expected result the owner named: answer text, article id or answer code.' })),
   }, { ...closed, description: 'Only when the owner corrected how to read a spreadsheet: sheet, conversation id, text, selection, repeated exchanges, CSV encoding, logged answer or expected result. A column is a header or a letter.' })),
   suite: Type.Optional(path('A saved set of situations (.evals/*.json) to load into a fresh draft instead of preparing: free, nothing runs.')),
+  fromAnalysis: Type.Optional(Type.Object({ analysis: Type.String({ minLength: 1, maxLength: 200 }), problem: Type.Integer({ minimum: 1 }) },
+    { ...closed, description: 'Only when the owner asks to make a check from a problem a log analysis found (agent_lab_analyze): the analysis id or "latest", and the problem number from its answer. The situations are made from the conversations where it was broken and the other analysed conversations of its topics; the rules are the analysis\'s.' })),
   demo: Type.Optional(Type.Literal(true, { description: 'The built-in teaching example: no model, no keys, one minute.' })),
 }, closed);
-type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string;
+type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string; fromAnalysis?: { analysis: string; problem: number };
   table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean;
     encoding?: Encoding; answer?: string; expected?: { column: string; kind: 'answer' | 'article' | 'code' | 'article_or_code' }[] }; suite?: string; demo?: true };
-
-/** A path the owner or the model named: `~/…` is the owner's home, anything else is relative to the project. */
-export function projectPath(named: string, cwd: string): string {
-  return named === '~' || named.startsWith('~/') ? join(homedir(), named.slice(1)) : resolve(cwd, named);
-}
-/** How a path is shown to the owner: inside the project relative to it, elsewhere from ~. */
-function shownPath(file: string, cwd: string): string {
-  const inside = relative(cwd, file);
-  if (inside && !inside.startsWith('..')) return inside;
-  const home = homedir();
-  return file.startsWith(`${home}/`) ? `~/${file.slice(home.length + 1)}` : file;
-}
 
 /**
  * A schema error in the owner's language: which field and what is wrong, never a raw issue dump. A call limit the
@@ -120,6 +107,7 @@ export function registerPrepareTool(pi: Pick<ExtensionAPI, 'registerTool'>, host
         if (busy) throw new Error(busy);
         if (params.demo) return await prepare(host, callId, ctx, signal, onUpdate, demoInput(), { notes: [] });
         if (params.suite) return await loadSuite(host, callId, ctx, projectPath(params.suite, ctx.cwd));
+        if (params.fromAnalysis) return await fromAnalysis(host, callId, ctx, signal, onUpdate, params.fromAnalysis, params.situations);
         return await fromOwner(host, callId, ctx, signal, onUpdate, params);
       } catch (error) { return host.askOwner(callId, error); }
     },
@@ -138,139 +126,71 @@ async function loadSuite(host: PrepareHost, callId: string, ctx: ExtensionContex
   } finally { await close(); }
 }
 
-/** Which of the logs Lab found in the project folder: the one there is, or the owner's pick of several; «rules» — the owner chose to start without logs. */
-async function logsOf(ctx: ExtensionContext, found: ProjectDetection | undefined): Promise<string | 'rules' | undefined> {
-  const logs = found?.logs ?? [];
-  if (!logs.length) throw new NeedsOwner('needs_owner_input', 'В папке проекта нет файлов с разговорами. Спросите владельца, где лежат логи (JSON, JSONL, XLSX или CSV), — или пусть скажет «начать без логов» (withoutLogs).', [],
-    'Есть записи разговоров с агентом? Назовите файл с логами — или скажите «начать без логов».');
-  if (logs.length === 1) return join(found!.root, logs[0]!.file);
-  requireInteractive(ctx, 'В папке несколько файлов с логами: какой взять, решает владелец в интерактивном терминале Pi. Назовите файл в logs.');
-  const labels = logs.slice(0, 8).map(log => safeText(`${log.file} — ${countText(log.dialogues, ['разговор', 'разговора', 'разговоров'])}${log.table ? ', таблица' : ''}`));
-  const without = 'Без логов — по вашим правилам';
-  const picked = await ctx.ui.select(safeText('Из каких логов собрать ситуации?\n\nLab нашёл в папке проекта несколько файлов с разговорами:'), [...labels, without, 'Не сейчас']);
-  if (picked === without) return 'rules';
-  const index = labels.indexOf(picked ?? '');
-  return index < 0 ? undefined : join(found!.root, logs[index]!.file);
+/** What a preparation is made from: the task, the logs as an import (none from the rules alone), the rules and where they came from. */
+interface Source {
+  task: string;
+  /** The log's name as the consent says it. */
+  logsName?: string;
+  libraryImport?: ImportBatch;
+  materials: z.infer<typeof createInputSchema>['materials'];
+  /** Where the rules came from, in the owner's words: files, prompts, «ваши слова из разговора». */
+  rules: string[];
+  found?: ProjectDetection | undefined;
+  notes: string[];
+  situations?: number;
+  /** The problem of a log analysis the situations check, and the consent's line about it. */
+  fromAnalysis?: { link: FromAnalysis; line: string };
+  /** The teaching example's analysis makes a teaching check: its judge is a stand-in, and so is the check's. */
+  mode?: 'demo' | 'live';
 }
-
-/** A prompt id the request named that Lab did not find: the model named it wrong, the owner is asked. */
-function unknownPrompt(id: string, found: ProjectDetection | undefined): never {
-  const known = (found?.prompts ?? []).slice(0, 12).map(prompt => prompt.id);
-  throw new NeedsOwner('unknown_reference', `Промпта ${id} Lab в проекте не нашёл.${known.length ? ` Есть: ${known.join('; ')}.` : ''} Спросите владельца, какой нужен.`, known,
-    'Такого промпта Lab в проекте не нашёл — какой из найденных задаёт ответ клиенту?');
-}
-
-/** The answers to «кто пишет под этой ролью?»: a role of the conversation, or the owner's word that Lab should leave those conversations aside. */
-const ROLE_ANSWERS = [['клиент', 'user'], ['агент — бот, которого проверяем', 'assistant'], ['служебное', 'system']] as const;
-const LEAVE_ROLE = 'не знаю — оставить эти разговоры в стороне';
-
-/**
- * Who writes under each role name of the logs Lab does not know (`client`, `operator`): one native question per name,
- * never guessed — a bank's «operator» may be a person, not the bot. `declined` when the owner stepped back.
- */
-async function askLoggedRoles(ctx: ExtensionContext, names: readonly string[]): Promise<ReadonlyMap<string, 'user' | 'assistant' | 'system'> | 'declined'> {
-  const roles = new Map<string, 'user' | 'assistant' | 'system'>();
-  for (const name of names) {
-    const picked = await ctx.ui.select(safeText(`Кто пишет сообщения с ролью «${name}» в логах?\n\nLab читает роли user, assistant, system и tool, а эту не угадывает: под ней может быть и бот, и живой сотрудник.`),
-      [...ROLE_ANSWERS.map(([label]) => label), LEAVE_ROLE, 'Не сейчас']);
-    const role = ROLE_ANSWERS.find(([label]) => label === picked)?.[1];
-    if (role) roles.set(name, role);
-    else if (picked !== LEAVE_ROLE) return 'declined';
-  }
-  return roles;
-}
-
-const declined = (host: PrepareHost, callId: string, text: string) =>
-  host.feedResult(callId, { cancelled: true, spent: 0, instruction: 'The owner stepped back: nothing was spent or written. Do not ask again unless they do.' },
-    { tone: 'warning', rows: [row(text)] }, 'Сбор ситуаций отменён');
 
 /** Logs and rules of the owner's own agent: what Lab finds, the owner's consent, then the preparation. */
 async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
   params: PrepareParams): Promise<AgentToolResult<unknown>> {
+  const read = await ownerInputs(host, callId, ctx, signal, params, 'prepare');
+  if (endedEarly(read)) return read;
+  const { logs, libraryImport, expanded, prompts, files, found, notes } = read;
+  return consentAndPrepare(host, callId, ctx, signal, onUpdate, { task: params.task!, ...(logs !== 'rules' ? { logsName: basename(logs) } : {}), ...(libraryImport ? { libraryImport } : {}),
+    materials: expanded.materials, found, notes, ...(params.situations ? { situations: params.situations } : {}),
+    rules: [...(params.rules ? ['ваши слова из разговора'] : []), ...prompts.map(prompt => prompt.id), ...[...files.promptFiles, ...files.materialFiles].map(file => shownPath(file, ctx.cwd))] });
+}
+
+/**
+ * A check of a problem a log analysis found (DISCOVER → VERIFY): situations from the conversations where it was broken
+ * and the other analysed conversations of its topics, by the analysis's own rules — an ordinary preparation from logs,
+ * whose draft keeps the link to the analysis and the problem.
+ */
+async function fromAnalysis(host: PrepareHost, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
+  named: { analysis: string; problem: number }, situations: number | undefined): Promise<AgentToolResult<unknown>> {
+  const reader = host.reading(resolve(ctx.cwd, '.agent-lab'));
+  const analysis = named.analysis === 'latest' ? (await reader.listAnalyses())[0] : await reader.getAnalysis(named.analysis);
+  if (!analysis) throw new NeedsOwner('unknown_reference', 'В этом проекте ещё нет ни одного разбора логов. Предложите владельцу сначала разобрать логи.', [], 'Разборов логов ещё нет — разобрать логи?');
+  const batch = await reader.store.readImport(analysis.logs.importId);
+  const view = analysisView(analysis, batch);
+  const problem = view.problems[named.problem - 1];
+  if (!problem) {
+    const known = view.problems.map((item, index) => `${index + 1}. ${problemTitle(item)}`);
+    throw new NeedsOwner('unknown_reference', `В разборе нет проблемы ${named.problem}.${known.length ? ` Есть: ${known.join('; ')}.` : ' Нарушений в нём нет.'} Спросите владельца, какую он имеет в виду.`, known.map((_, index) => String(index + 1)),
+      `Проблемы ${named.problem} в разборе нет — из какой сделать проверку?`);
+  }
+  const dialogueIds = problemConversations(analysis, problem);
+  const broken = dialogueIds.filter(id => problem.dialogueIds.includes(id)).length;
+  const line = `Ситуации — для проверки проблемы «${problemTitle(problem)}» из разбора логов: ${countText(broken, ['разговор', 'разговора', 'разговоров'])} с нарушением`
+    + `${dialogueIds.length > broken ? ` и ${countText(dialogueIds.length - broken, ['разговор', 'разговора', 'разговоров'])} тех же тем без него — исправление не должно их сломать` : ''}.`;
+  return consentAndPrepare(host, callId, ctx, signal, onUpdate, { task: analysis.task, logsName: analysis.logs.file, libraryImport: subsetImport(batch, dialogueIds),
+    materials: analysis.sources.map(({ name, content, kind }) => ({ name, content, ...(kind ? { kind } : {}) })), notes: [],
+    rules: analysis.sources.map(source => source.name), situations: situations ?? dialogueIds.length, mode: analysis.mode,
+    fromAnalysis: { link: { analysisId: analysis.id, problemKey: problem.key, title: clip(problemTitle(problem), 300), dialogueIds,
+      broken: dialogueIds.filter(id => problem.dialogueIds.includes(id)) }, line } });
+}
+
+/** The draft's settings, the owner's consent with the ceiling, then the preparation. */
+async function consentAndPrepare(host: PrepareHost, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
+  source: Source): Promise<AgentToolResult<unknown>> {
   const directory = resolve(ctx.cwd, '.agent-lab');
-  const named = !!(params.materials || params.prompts || params.rules);
-  // A prompt named by its id (file#CONSTANT) is one Lab finds in the project, verbatim.
-  const byId = (params.prompts ?? []).filter(item => item.includes('#'));
-  // Lab looks through the project for what the request did not name: the logs, the rules, how the agent is started.
-  const found = params.logs && named && !byId.length ? undefined : await detectProject(ctx.cwd).catch(() => undefined);
-  const logs = params.withoutLogs ? 'rules' as const : params.logs ? projectPath(params.logs, ctx.cwd) : await logsOf(ctx, found);
-  if (logs === undefined) return declined(host, callId, 'Не собираю: файл с логами не выбран. Ничего не потрачено.');
-  if (logs !== 'rules' && !await stat(logs).then(info => info.isFile(), () => false)) {
-    throw new NeedsOwner('unknown_reference', `Файла с логами ${shownPath(logs, ctx.cwd)} нет. Спросите владельца, где он лежит.`, [], `Файла ${shownPath(logs, ctx.cwd)} нет — где лежат логи?`);
-  }
-  // The model can say this itself from the project or the owner's words: a plain error it corrects, never a question to
-  // the owner. The owner reads it too, so it names no parameter: the tool's schema tells the model which one it is.
-  if (!params.task) throw new Error('Не хватает описания агента: одной-двумя фразами — что он делает и что проверить.');
-  // The rules: the files named, otherwise the knowledge folders found in the project and the prompts the owner picks among
-  // those found; the owner's own words on top.
-  let prompts: PromptCandidate[];
-  if (named) {
-    prompts = byId.map(id => found?.prompts.find(prompt => prompt.id === id) ?? unknownPrompt(id, found));
-  } else {
-    if (found?.prompts.length) requireInteractive(ctx, 'Какие промпты — правила ответа бота, выбираете вы в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) — или назовите промпты сами. Ничего не потрачено.');
-    let picked: PromptCandidate[] | 'declined' = [];
-    if (found?.prompts.length) {
-      // The writer's lease for the length of the choice: a proposal Lab's model makes is stored for the next look.
-      const owned = await host.open(ctx.cwd);
-      try { await owned.lab.init(); picked = await choosePromptsWithLab(ctx, owned.lab, found.prompts, signal); } finally { await owned.close(); }
-    }
-    if (picked === 'declined') return declined(host, callId, 'Не собираю: промпты не выбраны. Ничего не потрачено.');
-    prompts = picked;
-  }
-  const files = named ? { materialFiles: (params.materials ?? []).map(item => projectPath(item, ctx.cwd)),
-    promptFiles: (params.prompts ?? []).filter(item => !item.includes('#')).map(item => projectPath(item, ctx.cwd)) }
-    : { materialFiles: (found?.materials ?? []).map(item => join(found!.root, item.folder)), promptFiles: [] };
-  const inline = [...(params.rules ? [{ name: 'Правила из разговора', content: params.rules }] : []),
-    ...promptMaterials(prompts).map(({ name, content, kind }) => ({ name, content, kind }))];
-  const expanded = await expandMaterials({ ...(inline.length ? { materials: inline } : {}), ...files }, ctx.cwd);
-  if (!expanded.materials.length) throw new NeedsOwner('needs_owner_input', 'Нет правил, по которым судить агента: Lab не нашёл ни промпта, ни базы знаний. Спросите владельца, где они (файлы или папка: materials, prompts), или пусть напишет правила словами (rules).', [],
-    'По каким правилам судить агента? Назовите файл с промптом или базой знаний — или напишите правила словами.');
-  const notes = [...expanded.skipped.slice(0, 20).map(item => `Пропущен ${shownPath(item.file, ctx.cwd)}: ${item.reason}.`),
-    ...(expanded.skipped.length > 20 ? [`…и ещё ${expanded.skipped.length - 20} пропущенных файлов.`] : [])];
-
-  // The logs become an import: a spreadsheet only through the reading its owner confirmed.
-  let libraryImport: Awaited<ReturnType<typeof readDialogueImport>> | undefined;
-  if (logs !== 'rules') {
-    if (TABLE_EXTENSIONS.has(extname(logs).toLowerCase())) {
-      const { sheet, id, text, where, request: words, collapseRepeats, encoding, answer, expected } = params.table ?? {};
-      // The owner's corrections, said in words; which conversations to keep is asked natively when no value was named.
-      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }),
-        ...(encoding ? { encoding } : {}), ...(answer ? { perRow: 'question' as const, answer } : {}), ...(expected?.length ? { expected } : {}) };
-      if (Object.keys(choices).length || words || !await confirmedBefore(logs, directory)) {
-        requireInteractive(ctx, 'Как читать таблицу, решаете вы в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не прочитано и не потрачено.');
-        const owned = await host.open(ctx.cwd);
-        let imported: Awaited<ReturnType<typeof importTable>>;
-        try {
-          await owned.lab.init();
-          // The chat's model reads the table, as it prepares the situations after it; without one Lab reads it by itself and says so.
-          const settings = ctx.model && settingsSchema.parse({ provider: ctx.model.provider, model: ctx.model.id });
-          const reader = settings && (await owned.lab.modelRuntime(settings)).tableReading;
-          imported = await importTable(ctx, owned.lab.store, logs, choices, reader && settings ? { reader, timeoutMs: settings.timeoutMs, signal, ...(words ? { words } : {}) } : undefined);
-        } finally { await owned.close(); }
-        if ('declined' in imported) return declined(host, callId, 'Таблицу не загружаю: вы не подтвердили, как её читать. Ничего не потрачено.');
-        if ('refused' in imported) return host.feedResult(callId, { refused: imported.refused, instruction: 'Nothing was read. Tell the owner why in one sentence; they may name the sheet or a column (table).' },
-          { tone: 'warning', rows: [row(safeText(imported.refused))] }, 'Таблица не прочитана');
-      }
-    }
-    const read = async (roles?: ReadonlyMap<string, 'user' | 'assistant' | 'system'>) => {
-      try { return await readDialogueImport(logs, { directory, ...(roles ? { roles } : {}) }); }
-      catch (error) { throw new Error(safeText(`Не удалось прочитать логи ${shownPath(logs, ctx.cwd)}: ${error instanceof Error ? error.message : String(error)} Агент не запускался, ничего не потрачено.`)); }
-    };
-    libraryImport = await read();
-    // A table's roles are its confirmed reading; a JSON log's unknown role names are the owner's word, asked before the consent.
-    const names = TABLE_EXTENSIONS.has(extname(logs).toLowerCase()) ? [] : loggedRolesToMap(libraryImport);
-    if (names.length) {
-      requireInteractive(ctx, `В логах роли, которых Lab не знает (${names.join(', ')}): кто пишет под ними, решаете вы в интерактивном терминале Pi. Откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не потрачено.`);
-      const roles = await askLoggedRoles(ctx, names);
-      if (roles === 'declined') return declined(host, callId, 'Не собираю: вы не сказали, кто пишет под ролями логов. Ничего не потрачено.');
-      if (roles.size) libraryImport = await read(roles);
-    }
-    // Logs no situation can be made from are refused with every reason and the way out, the engine's own words.
-    try { ensureSomethingFits(libraryImport); } catch (error) { throw error instanceof NothingFits ? new Error(error.message) : error; }
-  }
-
+  const { libraryImport, found, notes } = source;
   // The run's settings are the host's: the model names neither a limit nor a model.
-  const count = params.situations ?? (libraryImport ? DEFAULT_SITUATIONS : RULES_SITUATIONS);
+  const count = source.situations ?? (libraryImport ? DEFAULT_SITUATIONS : RULES_SITUATIONS);
   if (!libraryImport && count > SCENARIO_LIMIT) throw new Error(`По правилам без логов Lab готовит не больше ${SCENARIO_LIMIT} ситуаций за раз.`);
   // The draft's limits are its run's, computed from the run's plan (card/budget.ts): every situation at its most
   // expectations, one attempt with a customer Lab plays, and — from logs — the comparison with production. The
@@ -283,10 +203,11 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
   let input: z.infer<typeof createInputSchema>;
   try {
     input = createInputSchema.parse({
-      task: params.task, mode: 'live', workflow: 'evaluate', materials: expanded.materials, scenarioCount: libraryImport ? 0 : count,
+      task: source.task, mode: source.mode ?? 'live', workflow: 'evaluate', materials: source.materials, scenarioCount: libraryImport ? 0 : count,
       target: connection?.target ?? { kind: 'unconnected' }, ...(connection?.targetVersion ? { targetVersion: connection.targetVersion } : {}),
       // The import is what the preparation reads; no older projection of it gates what the import accepted.
       ...(libraryImport ? { originalImport: libraryImport } : {}),
+      ...(source.fromAnalysis ? { fromAnalysis: source.fromAnalysis.link } : {}),
       settings: settingsSchema.parse({ provider: ctx.model?.provider ?? '', model: ctx.model?.id ?? '', judge, ...run, userModes: ['reactive'],
         maxCalls: runLimit(count, run, !!libraryImport), maxDurationMs: runTime(count * run.repeats),
         // A proposal that reads the agent's prompts and articles whole routinely exceeds the two-minute default per call.
@@ -301,12 +222,11 @@ async function fromOwner(host: PrepareHost, callId: string, ctx: ExtensionContex
     .catch(error => { throw error instanceof NothingFits ? new Error(error.message) : error; }) : undefined;
   // The ceiling the owner agrees to is the one the preparation stops at: it goes to the lab with the consent.
   const callCeiling = consent?.callCeiling ?? preparationCeiling({ task: input.task, sources: materialSources(input.materials), situations: count, fromLogs: false });
-  const plan = consent ? consentText(consent, basename(logs)) : rulesConsentText(count, callCeiling, isRunnable(input.target));
-  const sources = [...(params.rules ? ['ваши слова из разговора'] : []), ...prompts.map(prompt => prompt.id),
-    ...[...files.promptFiles, ...files.materialFiles].map(file => shownPath(file, ctx.cwd))];
+  const plan = consent ? consentText(consent, source.logsName ?? 'логов') : rulesConsentText(count, callCeiling, isRunnable(input.target));
   const agent = connection ? `Агент: ${targetLabel(connection.target, ctx.cwd)}.`
     : found?.agents[0] ? `Агента Lab подключит перед прогоном — в папке нашёл: ${targetLabel(found.agents[0].target, found.root)}.` : 'Как запускать агента, Lab спросит перед прогоном.';
-  const lines = [...plan.lines, `Правила: ${sources.slice(0, 4).join(', ')}${sources.length > 4 ? ` и ещё ${sources.length - 4}` : ''} — ${countText(expanded.materials.length, DOCUMENTS)}.`, agent];
+  const lines = [...(source.fromAnalysis ? [source.fromAnalysis.line] : []), ...plan.lines,
+    `Правила: ${source.rules.slice(0, 4).join(', ')}${source.rules.length > 4 ? ` и ещё ${source.rules.length - 4}` : ''} — ${countText(input.materials.length, DOCUMENTS)}.`, agent];
   if (!await ask(ctx, plan.question, lines, 'Собрать ситуации')) return declined(host, callId, 'Не собираю: вы отказались. Ничего не потрачено.');
   return prepare(host, callId, ctx, signal, onUpdate, input, { situations: consent?.promised ?? count, callCeiling, notes });
 }

@@ -8,7 +8,7 @@ import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
 import { accuracyParts, comparisonRows, noRuleText, saidText, situationLabel, situationOutcomeText, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
 import { CONNECTION_FILE, shownAddress } from '../src/connect.js';
-import { examShowsMemory } from '../src/exam.js';
+import { examCanVouch, memoryProbes } from '../src/exam.js';
 import { commandText, folderText, releaseText, targetLabel } from '../src/detect.js';
 import { agentLine, agentOwnName, agentVersion } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
@@ -131,7 +131,7 @@ const PATHS: [string, string, string] = ['путь', 'пути', 'путей'];
 function examLine(target: RunnableTarget, from: 'connection' | undefined, offered: boolean): string {
   const offer = offered ? ' Его можно сначала составить по коду агента.' : '';
   if (!target.exam) return `Без экзамена подключения процента не будет — Lab покажет, в скольких ситуациях агент справился, но не долю: не проверено, что через это подключение агент помнит разговор.${offer}`;
-  if (!examShowsMemory(target.exam)) return `Экзамен подключения не проверяет память разговора — процента не будет: нужен путь из двух шагов и больше, где поздний шаг проверяет, что в ответе есть сказанное раньше.${offer}`;
+  if (!examCanVouch(target.exam)) return `${memoryProbes(target.exam).length ? 'Экзамен подключения не проверяет, что разговоры не смешиваются, — процента не будет: нужен второй путь со своим значением, который идёт одновременно с первым.' : 'Экзамен подключения не проверяет память разговора — процента не будет: нужен путь, где клиент называет значение, а поздний шаг проверяет, что агент его помнит.'}${offer}`;
   return `Экзамен подключения: ${countText(target.exam.length, PATHS)}${from === 'connection' ? ` из ${CONNECTION_FILE}` : ''} — Lab пройдёт его перед прогоном, без модели; не пройден — прогон не запустится.`;
 }
 

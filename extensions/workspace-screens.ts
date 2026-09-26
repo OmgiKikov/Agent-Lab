@@ -413,7 +413,8 @@ export function progressLines(progress: NonNullable<SpaceData['progress']>, widt
 export function problemsScreen(data: SpaceData, selected: number, width: number): Screen {
   const w = room(width);
   const body: Line[] = [...wsLines([ws('answer', problemsLine(data.problems)),
-    ...(data.problems.length ? [ws('muted', 'У каждой — ситуации и дословные ответы агента. Разовые ошибки — в «Прогонах».')] : [])], w)];
+    ...(data.problems.length ? [ws('muted', data.problems.every(problem => problem.origin) ? 'У каждой — дословный ответ агента из логов. Прав ли судья, скажите в чате: «пример 1.1 — не нарушение».'
+      : 'У каждой — ситуации и дословные ответы агента. Разовые ошибки — в «Прогонах».')] : [])], w)];
   const items: number[] = [];
   let anchor: number | undefined;
   let number = 0;
@@ -594,14 +595,14 @@ export function allRunsScreen(data: SpaceData, selected: number, width: number):
 /** One problem open (docs/design/ui-spec.md §8.6): its size and topics, what the agent said, the conversation to open. */
 export function problemScreen(problem: Problem, number: number, width: number): Screen {
   const w = room(width);
-  const facts = [countText(problem.situations.length, ['ситуация', 'ситуации', 'ситуаций']), ...(problem.runsInRow > 1 ? [`в ${problem.runsInRow} прогонах подряд`] : []),
+  const facts = [problem.origin ? `в ${problemSize(problem)}` : countText(problem.situations.length, ['ситуация', 'ситуации', 'ситуаций']), ...(problem.runsInRow > 1 ? [`в ${problem.runsInRow} прогонах подряд`] : []),
     ...(problem.topics.length ? [`${pluralForm(problem.topics.length, ['тема', 'темы', 'темы'])}: ${problem.topics.join(', ')}`] : [])];
   const body = wsLines([
     ws('answer', `${String(number).padEnd(2)} ${problem.title}`, 1, { clip: true, right: { role: problem.side === 'agent' ? 'warning' : 'muted', text: problem.side === 'agent' ? 'проблема в агенте' : 'проблема в тесте' } }),
     ws('muted', facts.join(' · '), 4),
     ws('blank', ''),
     ws('heading', problem.side === 'agent' ? 'Наблюдение' : 'Ситуации'),
-    ...(problem.side === 'agent' && problem.observations.length ? problem.observations.map(item => ws('text', `«${item.quote}» — ситуация «${item.title}»`, 4, { hang: 2 }))
+    ...(problem.side === 'agent' && problem.observations.length ? problem.observations.map(item => ws('text', problem.origin ? `«${item.quote}» — ${item.title}` : `«${item.quote}» — ситуация «${item.title}»`, 4, { hang: 2 }))
       : problem.situations.map(item => ws('text', item.title, 4, { hang: 2 }))),
     ...(problem.trialId ? [ws('blank', ''), ws('actions', '1 Открыть разговор')] : []),
   ], w);

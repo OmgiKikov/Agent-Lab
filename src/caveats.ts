@@ -83,10 +83,20 @@ export function caveatWords(caveat: Caveat, reader: Reader): string {
 /** Whether a stored note was written for the owner: everything the lab says to a person is Russian, an English note is a diagnostic. */
 const forOwner = (text: string): boolean => [...text].some(char => (char >= 'А' && char <= 'я') || char === 'ё' || char === 'Ё');
 
+/** A record's notes as the result reads them: `legacyExam` when its connection passed an exam stored before the controls (exam.ts). */
+export type RecordNotes = Pick<Experiment, 'caveats' | 'limitations'> & { legacyExam?: true };
+
+/** Whether a record's connection exam passed under the old protocol: no controls, so neither memory nor isolation was shown by them. */
+export const legacyExamPassed = (record: Pick<Experiment, 'connectionExam'>): boolean =>
+  record.connectionExam?.status === 'passed' && !record.connectionExam.properties;
+
+const LEGACY_EXAM = 'Подключение проверено экзаменом прежнего протокола: зависимость ответа от прошлых реплик и изоляция разговоров контрольными разговорами не проверялись. Новый прогон пройдёт новый экзамен.';
+
 /**
  * Every note of a record in the owner's words, for its reader, each once: its typed notes, then the notes a record
- * written before they were typed keeps — those written for the owner, as they are.
+ * written before they were typed keeps — those written for the owner, as they are —, then the old protocol of its exam.
  */
-export function caveatLines(record: Pick<Experiment, 'caveats' | 'limitations'>, reader: Reader = 'owner'): string[] {
-  return [...new Set([...(record.caveats ?? []).map(caveat => caveatWords(caveat, reader)), ...record.limitations.filter(forOwner)])];
+export function caveatLines(record: RecordNotes, reader: Reader = 'owner'): string[] {
+  return [...new Set([...(record.caveats ?? []).map(caveat => caveatWords(caveat, reader)), ...record.limitations.filter(forOwner),
+    ...(record.legacyExam ? [LEGACY_EXAM] : [])])];
 }

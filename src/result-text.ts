@@ -14,6 +14,7 @@ import type { NotMeasuredCode } from './run.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import { oneLine } from './text.js';
 import { blank, type ResultRow } from './result-layout.js';
+import { problemCheckLines } from './discover/text.js';
 
 export { fitRows, MAX_WIDTH, plainText, wrapText, type ResultRole, type ResultRow } from './result-layout.js';
 
@@ -84,7 +85,7 @@ export type Level = 'good' | 'warn' | 'bad' | 'none';
 /** Why the percent waits, by how the connection's exam ended (ResultView.connection). */
 const EXAM_WITHHELD: Readonly<Record<ExamWithheld, string>> = {
   absent: 'подключение агента не проверено экзаменом', failed: 'подключение агента не прошло экзамен',
-  simple: 'экзамен подключения слишком простой — нет проверки памяти разговора',
+  simple: 'экзамен подключения не доказал память разговора или то, что разговоры не смешиваются',
 };
 /**
  * The answer of every result surface in three pieces, so the report can set the number large:
@@ -751,9 +752,9 @@ const EXAM_STEP: Readonly<Record<ExamWithheld, { board: string; chat: string; cl
   failed: { board: 'Исправить подключение: экзамен не пройден — без него процент не считается',
     chat: 'Дальше: исправьте подключение — скажите «проверь подключение».',
     cli: 'Исправьте подключение и сдайте экзамен: agent-lab doctor --connection подключение.json --yes' },
-  simple: { board: 'Добавить в экзамен проверку памяти разговора — без неё процент не считается',
-    chat: 'Дальше: добавьте в экзамен проверку памяти разговора.',
-    cli: 'Дополните раздел exam проверкой памяти разговора, затем agent-lab doctor --connection подключение.json --yes' },
+  simple: { board: 'Дополнить экзамен проверкой памяти и второго одновременного разговора — без них процент не считается',
+    chat: 'Дальше: дополните экзамен проверкой памяти разговора и вторым одновременным разговором со своим значением.',
+    cli: 'Дополните раздел exam проверкой памяти разговора и вторым одновременным путём со своим значением, затем agent-lab doctor --connection подключение.json --yes' },
 };
 
 /** One next step as a row of the «Дальше» list on the board and in the report. */
@@ -840,10 +841,16 @@ export function barRows(view: ResultView): ResultRow[] {
  * owner's disagreements, the calibration against production and what the result does not prove;
  * the run line and «Дальше» last. Blocks are separated by one blank row, never two.
  */
+/** «Проблема из разбора логов»: the three facts of a check made from a problem of the logs (discover/check.ts); nothing for any other run. */
+export function problemCheckRows(view: Pick<ResultView, 'problemCheck'>): ResultRow[] {
+  const check = view.problemCheck;
+  return check ? [{ role: 'heading', indent: 0, text: 'Проблема из разбора логов' }, ...problemCheckLines(check).map(text => ({ role: 'item' as const, indent: 2, text }))] : [];
+}
+
 export function resultScreen(view: ResultView, options: { surface: 'board' | 'cli'; details?: boolean; now?: Date }): ResultRow[] {
   // The board keeps its first screen short; its details and the CLI list every error, the unmeasured situations and the owner's disagreements once.
   const full = options.surface === 'cli' || !!options.details;
-  const blocks = [headRows(view, { brief: !full }), scenarioRows(view), topicRows(view), causeRows(view),
+  const blocks = [headRows(view, { brief: !full }), problemCheckRows(view), scenarioRows(view), topicRows(view), causeRows(view),
     ...(full ? [errorListRows(view), unmeasuredRows(view), rulesGapRows(view), disagreementRows(view), calibrationRows(view), caveatRows(view)] : []),
     [runLine(view, options.now), ...barRows(view)], nextRows(view, options.surface)];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
@@ -891,7 +898,7 @@ export function chatBlock(view: ResultView, options: { expanded: boolean }): Res
   }
   const head = headRows(view).map(row => row.role.startsWith('accuracy') || row.role === 'alarm' ? row : { ...row, indent: 2 });
   const indent = (rows: ResultRow[]) => rows.map(row => ({ ...row, indent: row.indent + 2 }));
-  const blocks = [head, indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
+  const blocks = [head, indent(problemCheckRows(view)), indent(scenarioRows(view)), indent(causeRows(view, { examples: true })), indent(unmeasuredRows(view)), indent(caveatRows(view)), indent(nextRows(view, 'chat'))];
   return blocks.filter(rows => rows.length).flatMap((rows, i) => i ? [blank, ...rows] : rows);
 }
 

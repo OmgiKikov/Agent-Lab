@@ -16,6 +16,8 @@ import { LockedError, NoSuchRecord, UnreadableRecord } from './errors.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import type { ScenarioLibrary } from './card/schema.js';
 import { readTopicMapFile, writeTopicMapFile } from './miner/files.js';
+import { listAnalysisFiles, readAnalysisAuditFile, readAnalysisFile, writeAnalysisAuditFile, writeAnalysisFile } from './discover/files.js';
+import type { LogAnalysis } from './discover/schema.js';
 import { readProposedFile, writeProposedFile, writeReadingFile } from './spreadsheet/files.js';
 import type { ProposedReading } from './spreadsheet/reading-task.js';
 import { readPurposeFile, writePurposeFile, type PurposeProposal } from './prompt-purpose.js';
@@ -542,6 +544,19 @@ export class ExperimentStore {
   readTopicMap(key: TopicMapKey): Promise<unknown> { return readTopicMapFile(this.directory, key); }
   /** Stores a topic map, or the progress of its build, next to its import. */
   writeTopicMap(value: TopicMap | TopicMapProgress): Promise<void> { return this.writeTransaction(() => writeTopicMapFile(this.directory, value)); }
+
+  /* ── log analyses (discover/): records of their own, never runs ── */
+  /** Replaces the stored log analysis with this one (discover/files.ts). */
+  writeAnalysis(analysis: LogAnalysis): Promise<void> { return this.writeTransaction(() => writeAnalysisFile(this.directory, analysis)); }
+  readAnalysis(id: string): Promise<LogAnalysis> { return readAnalysisFile(this.directory, id); }
+  /** Every stored log analysis, newest first. */
+  listAnalyses(): Promise<LogAnalysis[]> { return listAnalysisFiles(this.directory); }
+  /** The judge's audit of one finding of an analysis: synchronous, as every judgment reports its changes. */
+  writeAnalysisAudit(id: string, key: string, audit: JudgeAudit): void {
+    this.assertWriting('Для записи оценки откройте лабораторию как писатель.');
+    writeAnalysisAuditFile(this.directory, id, key, audit);
+  }
+  readAnalysisAudit(id: string, key: string): Promise<JudgeAudit | null> { return readAnalysisAuditFile(this.directory, id, key); }
   /** Which agent version wrote an import's logs, as the owner declared it (card/calibration.ts); undefined before the first declaration. */
   readLogVersions(importId: string): Promise<LogVersionJournal | undefined> { return new ScenarioFiles(this.directory).readLogVersions(importId); }
   /** Appends a declaration to its import's journal, if the journal is still the one it was prepared on. */

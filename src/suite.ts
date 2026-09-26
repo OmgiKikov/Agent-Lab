@@ -30,7 +30,17 @@ function citations(record: Pick<Experiment, 'librarySnapshot' | 'originalImport'
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 
-type SuiteSource = Pick<Experiment, 'librarySnapshot' | 'originalImport' | 'dialogues' | 'scenarios'>;
+type SuiteSource = Pick<Experiment, 'librarySnapshot' | 'originalImport' | 'dialogues' | 'scenarios' | 'fromAnalysis'>;
+
+/**
+ * What a suite is for, written into its file: `known_problem` — the check of a problem a log analysis found (its title
+ * and analysis with it), which must keep passing so the problem does not come back; `typical` — the everyday situations.
+ * The same runs and the same file either way; files saved before it say nothing and read as typical.
+ */
+export function suitePurpose(definition: Pick<Experiment, 'fromAnalysis'>): { purpose: 'known_problem'; problem: { title: string; analysisId: string } } | { purpose: 'typical' } {
+  const link = definition.fromAnalysis;
+  return link ? { purpose: 'known_problem', problem: { title: link.title, analysisId: link.analysisId } } : { purpose: 'typical' };
+}
 
 /**
  * Whether a suite of `definition` carries what the customers wrote in the owner's logs: the import batches its cards cite,
@@ -51,9 +61,10 @@ export function suiteHoldsLogs(definition: SuiteSource): boolean {
  * in Git and run after every change of the agent.
  */
 export function suiteSavedText(definition: SuiteSource, place: { private: boolean }): string {
-  if (!suiteHoldsLogs(definition)) return 'Его можно добавить в Git и запускать после каждой правки агента.';
-  return place.private ? 'В наборе — разговоры клиентов из ваших логов. Файл лежит рядом с логами и закрыт — только для вас: не переносите его в репозиторий и не пересылайте.'
-    : 'В наборе — разговоры клиентов из ваших логов, а файл лежит вне папки Lab: не добавляйте его в Git и не пересылайте.';
+  const purpose = definition.fromAnalysis ? `Это набор известной проблемы «${definition.fromAnalysis.title}»: запускайте его после каждой правки агента — провал значит, что проблема вернулась или сломалось рядом. ` : '';
+  if (!suiteHoldsLogs(definition)) return `${purpose}Его можно добавить в Git и запускать после каждой правки агента.`;
+  return purpose + (place.private ? 'В наборе — разговоры клиентов из ваших логов. Файл лежит рядом с логами и закрыт — только для вас: не переносите его в репозиторий и не пересылайте.'
+    : 'В наборе — разговоры клиентов из ваших логов, а файл лежит вне папки Lab: не добавляйте его в Git и не пересылайте.');
 }
 
 /**
@@ -70,7 +81,7 @@ export async function suiteText(store: Pick<ExperimentStore, 'readImport'>, defi
     if (batch.contentHash !== cited.contentHash) throw new Error('Логи в этой папке не те, из которых сделаны ситуации: набор не сохранён.');
     imports.push(batch);
   }
-  return `${JSON.stringify({ format: SUITE_FORMAT, definition: { ...definition, target }, ...imports.length ? { imports } : {} }, null, 2)}\n`;
+  return `${JSON.stringify({ format: SUITE_FORMAT, ...suitePurpose(definition), definition: { ...definition, target }, ...imports.length ? { imports } : {} }, null, 2)}\n`;
 }
 
 /**

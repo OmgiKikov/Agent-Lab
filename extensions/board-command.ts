@@ -17,7 +17,8 @@ import { isRunnable, type Experiment } from '../src/contracts.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { decisions, type DecisionChoice } from '../src/inbox.js';
 import { situationCoverage } from '../src/miner/cards.js';
-import { recurringProblems } from '../src/problems.js';
+import { logProblems, recurringProblems } from '../src/problems.js';
+import { analysisView } from '../src/discover/view.js';
 import { accuracyParts, loggedTurns, type Turn } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { plannedTrials } from '../src/run.js';
@@ -120,7 +121,7 @@ async function situationCommand(ctx: ExtensionCommandContext, action: SituationA
  * that already holds its situations and has nothing left to prepare from.
  */
 function workKind(record: Experiment, job: SessionOperation | undefined): WorkKind {
-  if (job?.id === record.id) return job.kind === 'assessment' ? 'check' : job.kind;
+  if (job?.id === record.id && job.kind !== 'analysis') return job.kind === 'assessment' ? 'check' : job.kind;
   if (record.phase === 'checking') return 'check';
   if (record.phase !== 'preparing') return 'run';
   return record.librarySnapshot && !record.preparationProgress?.pending.length ? 'check' : 'preparation';
@@ -175,12 +176,15 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     : setRecord && !setRecord.trials.length && setRecord.preparationProgress ? setRecord : undefined;
   const preparation = preparing ? await preparationDetails(reader.store, preparing, now.getTime()) : undefined;
   const logged = await loggedConversations(reader, runs.find(run => run.view.calibration?.disagreements.length)?.view);
+  // The newest finished analysis of the logs: its violations are problems of the section too.
+  const analysis = (await reader.listAnalyses().catch(() => [])).find(item => item.status !== 'running');
+  const analysed = analysis && analysisView(analysis, await reader.store.readImport(analysis.logs.importId).catch(() => undefined));
   return {
     space, ...(set ? { set } : {}), runs, now, ...(logged.size ? { logged } : {}), ...(preparation ? { preparation: preparation.preparation } : {}),
     // A first-format draft is not editable, but it has one decision: to go on in the new format.
     decisions: decisions({ ...(set && (set.editable || convertible(set.record)) ? { draft: { record: set.record, views: set.views, pendingCalls } } : {}), ...(finished[0] ? { run: finished[0] } : {}),
       logs: finished[0] ? await logsOf(reader.store, finished[0].record) : [], now }),
-    problems: recurringProblems(finished),
+    problems: [...recurringProblems(finished), ...logProblems(analysed)],
     ...(active && kind ? { progress: { kind, ...workProgress(active, kind, now), ...preparation, stoppable: job?.id === active.id } } : {}),
   };
 }
@@ -210,7 +214,9 @@ function workspaceChanges(reader: ExperimentLab, job: SessionOperation | undefin
   return changed => {
     const stops = [reader.store.watch(() => changed())];
     let line = '';
-    if (job) stops.push(job.lab.follow(record => {
+    // A log analysis has a record of its own: its steps redraw the board too.
+    if (job?.kind === 'analysis') stops.push(job.lab.followAnalysis(() => changed()));
+    else if (job) stops.push(job.lab.follow(record => {
       const next = progressText(record);
       if (next !== line) { line = next; changed(); }
     }));
@@ -354,7 +360,7 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
           if (action.type === 'stop') {
             const job = operations.current(directory);
             if (!job) { inform('Сейчас ничего не идёт.', 'text'); continue; }
-            if (!await ask(ctx, job.kind === 'assessment' ? 'Остановить проверку ситуаций?' : job.kind === 'preparation' ? 'Остановить подготовку?' : 'Остановить прогон?',
+            if (!await ask(ctx, job.kind === 'assessment' ? 'Остановить проверку ситуаций?' : job.kind === 'preparation' ? 'Остановить подготовку?' : job.kind === 'analysis' ? 'Остановить разбор логов?' : 'Остановить прогон?',
               ['Записанные ситуации, проверки и разговоры сохранятся. Закрыть доску можно и без остановки.'], 'Остановить')) continue;
             await operations.stop(job);
             inform('Остановлено; записанное сохранено.', 'warning');

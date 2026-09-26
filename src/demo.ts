@@ -6,6 +6,11 @@ import type { DialogueProposal } from './card/proposal.js';
 import type { PlanProposal } from './card/plan.js';
 import type { ReviewVerdict } from './card/review.js';
 import { buildTopicMap, type TopicTaskRunner } from './miner/topic-map.js';
+import { judgeLogged, logProtocolHash } from './card/log-judge.js';
+import type { Respond } from './judge.js';
+import { importBatch } from './scenario-library.js';
+import type { AnalyzeInput } from './lab/discover.js';
+import { settingsSchema } from './contracts.js';
 
 /*
  * The built-in teaching example: two invented refund dialogues, one owner rule and a small module
@@ -23,18 +28,27 @@ const demoDialogues = [
 ];
 
 /**
- * The teaching agent's connection exam (exam.ts): it answers the customer, and it keeps the conversation — the refund is
- * explained only once the number it asked for has come. The exam proves the channel, never the agent's duties: the
- * baseline's repeated question passes it, and the run is what finds that error.
+ * The teaching agent's connection exam (exam.ts): it answers the customer, it keeps the conversation — asked which
+ * terminal the customer has, it says the number named earlier — and it keeps two customers apart: the two paths run at
+ * once with different numbers. The exam proves the channel, never the agent's duties: the baseline's repeated question
+ * passes it, and the run is what finds that error.
  */
 const DEMO_EXAM: NonNullable<RunnableTarget['exam']> = [
-  { name: 'Номер назван сразу', steps: [{ say: 'Номер терминала: 1234. Помогите с возвратом.', expect: 'reply' }] },
-  { name: 'Номер по просьбе агента', steps: [{ say: 'Помогите с возвратом.', expect: 'reply' }, { say: 'Номер терминала: 5678', expect: 'reply', contains: 'заявление' }] },
+  { name: 'Номер назван сразу', steps: [{ say: 'Номер терминала: 1234. Помогите с возвратом.', expect: 'reply' }, { say: 'Какой у меня терминал?', expect: 'reply', contains: '1234' }] },
+  { name: 'Номер по просьбе агента', steps: [{ say: 'Помогите с возвратом.', expect: 'reply' }, { say: 'Номер терминала: 5678', expect: 'reply', contains: 'заявление' },
+    { say: 'Какой у меня терминал?', expect: 'reply', contains: '5678' }] },
 ];
 
 /** The teaching agent; `fixed` is the corrected version that no longer asks for a number it already has. Resolved from src and from dist alike. */
 export function demoTarget(fixed = false): RunnableTarget {
   return { kind: 'module', path: fileURLToPath(new URL('../examples/scenario-lab-target.mjs', import.meta.url)), exportName: fixed ? 'createFixedSession' : 'createSession', exam: DEMO_EXAM };
+}
+
+/** The teaching example's logs analysed for violations (DISCOVER): the same two dialogues and rule, no situation, no agent. */
+export function demoAnalysisInput(): AnalyzeInput {
+  return { task: 'Учебный разбор логов возвратов: два вымышленных диалога', mode: 'demo', file: 'учебные логи',
+    materials: [{ name: 'Учебное правило владельца', content: demoPolicy }], logs: importBatch(demoDialogues),
+    settings: settingsSchema.parse({ timeoutMs: 60000 }) };
 }
 
 /** A two-dialogue library prepared by the deterministic demo runtime against the teaching agent. */
@@ -112,6 +126,51 @@ const demoTopics: TopicTaskRunner = async (task, input) => {
   if (problem) throw new Error(problem);
   return value;
 };
+
+/**
+ * The teaching judge of a recorded conversation: the example's three expectations by the same fixed reading of the
+ * replies, answered in the judge's own format — so the real two votes, the verbatim check of every quote and the channel
+ * rule (card/log-judge.ts) read it. Each quote is a whole event.
+ */
+const demoLogRespond: Respond = async (_prompt, input) => {
+  const data = JSON.parse(input) as { scenario: { metrics: { id: string }[]; execution: { expectations: { text: string }[] } };
+    dialogue: { events: { seq: number; type: string; content: string }[] } };
+  const metricId = data.scenario.metrics[0]!.id;
+  const duty = data.scenario.execution.expectations[0]!.text;
+  const events = data.dialogue.events;
+  const named = events.find(event => event.type === 'user' && /терминала:\s*\d+/i.test(event.content));
+  const asks = events.filter(event => event.type === 'assistant' && asksNumber(event.content));
+  const explained = events.find(event => event.type === 'assistant' && /Подайте заявление в поддержку/i.test(event.content));
+  const cite = (...cited: ({ seq: number; content: string } | undefined)[]) => {
+    const held = cited.filter((event): event is { seq: number; content: string } => !!event);
+    return { evidence: held.map(event => event.seq), citations: held.map(event => ({ seq: event.seq, quote: event.content })) };
+  };
+  const answer = (pass: 'met' | 'not_met', fail: 'met' | 'not_met', rationale: string, cited: ReturnType<typeof cite>) =>
+    JSON.stringify({ assessments: [{ metricId, rationale, ...cited, passCondition: pass, failCondition: fail }] });
+  if (duty.startsWith('не спрашивать номер')) {
+    const again = named && asks.find(event => event.seq > named.seq);
+    if (!named) return answer('not_met', 'not_met', 'Учебная проверка: клиент не называл номер терминала — ожидание не наступило.', cite());
+    return again ? answer('not_met', 'met', 'Учебная проверка: агент снова спросил номер терминала, который клиент уже назвал.', cite(named, again))
+      : answer('met', 'not_met', 'Учебная проверка: агент не переспрашивал номер терминала.', cite(named, events.find(event => event.type === 'assistant' && event.seq > named.seq)));
+  }
+  if (duty.startsWith('спросить номер')) {
+    return asks[0] ? answer('met', 'not_met', 'Учебная проверка: агент спросил номер терминала.', cite(asks[0]))
+      : answer('not_met', 'met', 'Учебная проверка: агент не спросил номер терминала.', cite(events.find(event => event.type === 'assistant')));
+  }
+  if (explained) return answer('met', 'not_met', 'Учебная проверка: агент объяснил, как оформить возврат.', cite(explained));
+  const after = named && events.find(event => event.type === 'assistant' && event.seq > named.seq);
+  return after ? answer('not_met', 'met', 'Учебная проверка: номер назван, а агент так и не объяснил, как оформить возврат.', cite(named, after))
+    : answer('not_met', 'not_met', 'Учебная проверка: разговор закончился раньше, чем агент мог объяснить возврат.', cite());
+};
+
+/**
+ * The teaching runtime of a log analysis: the teaching one with its judge of recorded conversations. Apart from
+ * createDemoRuntime on purpose: the teaching run has no comparison with production, and stays as it was.
+ */
+export function createDemoAnalysisRuntime(): Runtime {
+  return { ...createDemoRuntime(), logJudge: { provider: DEMO_BUILDER.provider, model: DEMO_BUILDER.id, protocolHash: logProtocolHash(),
+    assess: (request, ctx) => judgeLogged(request, { provider: DEMO_BUILDER.provider, id: DEMO_BUILDER.id }, ctx, demoLogRespond) } };
+}
 
 /** Explicit deterministic teaching runtime: no model is called, and nothing here is evidence of model quality. */
 export function createDemoRuntime(): Runtime {

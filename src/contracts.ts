@@ -333,8 +333,19 @@ export const dialogueSchema = z.strictObject({
 });
 export type Dialogue = z.infer<typeof dialogueSchema>;
 
+/**
+ * Where a draft's situations came from when they check a problem a log analysis found (discover/verify.ts): the analysis,
+ * the problem — the rule and the behaviour it asks — and the logged conversations they were made from. Metadata of the
+ * draft: it moves no hash and no number.
+ */
+export const fromAnalysisSchema = z.strictObject({ analysisId: identifier, problemKey: sha256Schema, title: text.max(300), dialogueIds: z.array(identifier).min(1).max(16),
+  /** The conversations of `dialogueIds` the problem was found in; the others are the same topics' conversations without it. */
+  broken: z.array(identifier).min(1).max(16) });
+export type FromAnalysis = z.infer<typeof fromAnalysisSchema>;
+
 export const createInputSchema = z.strictObject({
   task: text.max(8000),
+  fromAnalysis: fromAnalysisSchema.optional(),
   originalImport: importBatchSchema.optional(),
   materials: z.array(materialSchema).min(1).max(MATERIAL_LIMIT),
   mode: z.enum(['demo', 'live']),
@@ -569,6 +580,15 @@ export const examResultSchema = z.strictObject({
     said: z.string().max(3000), pressed: z.boolean(), expect: z.enum(['reply', 'buttons', 'handoff']), got: z.enum(EXAM_TURNS),
     passed: z.boolean(), problem: z.string().max(1000).optional(), status: z.string().max(200).optional(),
   })).max(8) })).max(10),
+  /**
+   * Each property on its own (exam.ts): replies reach the customer, the agent keeps the conversation, conversations are
+   * kept apart. Absent in exams stored before the controls: their «passed» is the old protocol's and shows neither.
+   */
+  properties: z.strictObject({ transport: z.enum(['passed', 'failed']), memory: z.enum(['shown', 'not_shown', 'failed']),
+    isolation: z.enum(['shown', 'not_shown', 'failed']) }).optional(),
+  /** The controls: a memory question alone in a fresh conversation, before the paths (`dependency`) and after them (`fresh`). */
+  controls: z.array(z.strictObject({ kind: z.enum(['dependency', 'fresh']), path: z.string().max(200), said: z.string().max(3000),
+    got: z.enum(EXAM_TURNS), passed: z.boolean(), problem: z.string().max(1000).optional() })).max(20).optional(),
 });
 export type ExamResult = z.infer<typeof examResultSchema>;
 
@@ -582,6 +602,8 @@ export interface Experiment {
   toolChannel?: ToolChannel;
   connectionExam?: ExamResult;
   realism?: Realism;
+  /** The problem of a log analysis these situations check (fromAnalysisSchema); absent otherwise. `discovery` is a retired field. */
+  fromAnalysis?: FromAnalysis;
   schemaVersion: '1'; id: string; task: string; mode: 'demo' | 'live'; workflow: 'evaluate' | 'compare';
   createdAt: string; updatedAt: string; phase: Phase; message: string;
   sources: Source[]; settings: Settings; target: Target; requirements: Requirement[]; questions: string[];
@@ -720,6 +742,7 @@ export const experimentSchema: z.ZodType<Experiment> = z.strictObject({
   toolChannel: toolChannelSchema.optional(),
   connectionExam: examResultSchema.optional(),
   realism: realismSchema.optional(),
+  fromAnalysis: fromAnalysisSchema.optional(),
   schemaVersion: z.literal('1'), id: identifier, task: text.max(8000), mode: z.enum(['demo', 'live']), createdAt: text, updatedAt: text,
   workflow: z.enum(['evaluate', 'compare']).default('compare'),
   phase: z.enum(PHASES), message: z.string(),

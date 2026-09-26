@@ -18,6 +18,8 @@ import { roleChoices } from './llm/models.js';
 import { simulatorEvidence, type SimulatorEvidence } from './simulator-evidence.js';
 import { planOutcomes, type ScenarioOutcome } from './card/plan.js';
 import { blindAgreement, type BlindAgreement } from './blind.js';
+import { legacyExamPassed, type RecordNotes } from './caveats.js';
+import { problemCheck, type ProblemCheck } from './discover/check.js';
 import { oneLine } from './text.js';
 
 export { COUNTING_RULES } from './outcomes.js';
@@ -305,9 +307,15 @@ export interface ResultView {
     toolExpectations?: number };
   /**
    * What this record's result does not prove (caveats.ts): its typed notes, and the notes a record written before they were
-   * typed keeps; result-text.ts words them for their reader. Never changes the headline.
+   * typed keeps, and an exam that passed under the old protocol; result-text.ts words them for their reader. Never
+   * changes the headline.
    */
-  notes: Pick<Experiment, 'caveats' | 'limitations'>;
+  notes: RecordNotes;
+  /**
+   * A run of situations made from a problem of a log analysis (discover/check.ts): whether the problem was found in the
+   * logs, reproduced on this version, and fixed against the run this one repeats. Absent for every other run.
+   */
+  problemCheck?: ProblemCheck;
   /** Ordered: the recommended step first, then what can always be done with a finished result. */
   next: NextStep[];
 }
@@ -539,7 +547,11 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
   const examined = record.connectionExam?.status;
   // Evidence changed after the run carries no percent either: the counts it would stand on are not the run's.
   const withheld = examined !== undefined && examined !== 'passed' || run.integrity === 'altered';
+  // A check of a problem from the logs: its three facts, against the run it repeats when that run is at hand.
+  const earlier = record.fromAnalysis && options.before?.fromAnalysis ? { record: options.before, outcomes: buildResultView(options.before).cards } : undefined;
+  const check = record.fromAnalysis ? problemCheck(record, cards, earlier) : undefined;
   const view: Omit<ResultView, 'next' | 'trustIssues'> = {
+    ...(check ? { problemCheck: check } : {}),
     ...(examined ? { connection: examined } : {}),
     integrity: run.integrity,
     simulator: simulatorEvidence(record),
@@ -566,7 +578,7 @@ export function buildResultView(input: Experiment, options: { before?: Experimen
       target: record.targetVersion ?? record.targetRelease ?? null,
       ...(toolExpectations ? { toolExpectations } : {}),
     },
-    notes: { ...(record.caveats ? { caveats: structuredClone(record.caveats) } : {}), limitations: [...record.limitations] },
+    notes: { ...(record.caveats ? { caveats: structuredClone(record.caveats) } : {}), limitations: [...record.limitations], ...(legacyExamPassed(record) ? { legacyExam: true as const } : {}) },
     ...(stability ? { stability } : {}),
   };
   if (withheld && view.topics) view.topics = { ...view.topics, weighted: null };

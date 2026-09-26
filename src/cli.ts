@@ -11,6 +11,7 @@ import { draftHash } from './lab/record.js';
 import { suitePlace } from './lab/run.js';
 import { suiteHoldsLogs, suiteSavedText } from './suite.js';
 import { demoInput } from './demo.js';
+import { analyzeCommand } from './cli/analyze.js';
 import { createInputSchema, isRunnable, materialSources, runnableTarget, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
 import { Stopped, unreadableLines } from './errors.js';
 import { compareRuns } from './comparison.js';
@@ -676,7 +677,7 @@ async function evaluate({ values, directory }: CommandInput): Promise<void> {
 }
 
 /** A new draft's input from a task file: the materials read whole, the connection, the logs as an import. Reads only. */
-async function taskInput(values: Flags, directory: string): Promise<{ input: CreateInput; logs: string }> {
+async function taskInput(values: Flags, directory: string, options: { withoutAgent?: true } = {}): Promise<{ input: CreateInput; logs: string }> {
   if (!values.input) throw new Error('Укажите задачу: agent-lab build --input задача.json');
   let raw = JSON.parse(await readFile(values.input, 'utf8'));
   if (raw.materialFiles || raw.promptFiles) {
@@ -697,6 +698,8 @@ async function taskInput(values: Flags, directory: string): Promise<{ input: Cre
     process.stderr.write(`Промпты агента: ${chosen.map(prompt => prompt.id).join(', ')}.\n`);
     raw = { ...raw, materials: [...raw.materials ?? [], ...promptMaterials(chosen).map(({ name, content, kind }) => ({ name, content, kind }))] };
   }
+  // An analysis of the logs needs no agent: it is never connected for one, whatever the folder remembers.
+  if (options.withoutAgent) raw = { ...raw, target: { kind: 'unconnected' } };
   const connection = values.connection ? await readConnection(values.connection) : !raw.target ? await rememberedConnection(directory) : undefined;
   // Role names of the logs Lab does not know are read by the owner's word only (--roles), never guessed.
   const roles = loggedRolesOf(values.roles);
@@ -987,6 +990,11 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   run: { help: [['agent-lab run --id RUN --yes [--parallel 4]', 'Прогнать утверждённые ситуации; итог — JSON для скрипта']], flags: ['id', 'yes', 'parallel', 'json'], failure: 2, run },
   repeat: { help: [['agent-lab repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID]', 'Новый черновик тех же ситуаций']], flags: ['id', 'case', 'control'], run: repeat },
   demo: { help: [['agent-lab demo [--json]', 'Учебный пример целиком, без модели и ключей: итог экраном, с --json — JSON']], flags: ['json'], run: demo },
+  analyze: { help: [['agent-lab analyze --input задача.json --dialogues-file логи.jsonl|.xlsx [--roles client=клиент] [--conversations N] [--yes] [--json]', 'Найти ошибки агента в записанных разговорах по вашим правилам: без ситуаций, без подключения агента и без симуляции; без --yes — только согласие на расход'],
+    ['agent-lab analyze --id РАЗБОР [--finding КЛЮЧ --verdict confirmed|disputed|unsure [--note "почему"] --yes]', 'Посмотреть разбор; подтвердить или оспорить находку'],
+    ['agent-lab analyze --demo', 'Учебный разбор логов, без модели и ключей']],
+  flags: ['input', 'dialogues-file', 'roles', 'conversations', 'prompt', 'prompts', 'prompts-from', 'yes', 'json', 'id', 'finding', 'verdict', 'note', 'demo'],
+    run: command => analyzeCommand(command, { asWriter, taskInput: (values, directory) => taskInput(values, directory, { withoutAgent: true }), writeStdout }) },
   summary: { help: [['agent-lab summary --id RUN [--json]', 'Сколько ситуаций агент прошёл, что не измерено и почему']], flags: ['id', 'json'], run: summary },
   logs: { help: [['agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--import НОМЕР] [--yes]', 'Какая версия агента записала логи: только тогда сверка с продом — калибровка']],
     flags: ['id', 'agent-version', 'unknown', 'import', 'yes'], run: logs },

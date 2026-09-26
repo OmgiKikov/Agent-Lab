@@ -81,7 +81,8 @@ Agent Lab — пакет для Pi, который прогоняет насто
 - `src/llm/` - One typed core for model calls: `model-call.ts`, `structured.ts`, `models.ts`
 - `src/miner/` - Topic map, representative sample, coverage of an import
 - `src/spreadsheet/` - `.xlsx`/`.csv` logs read through an owner-confirmed mapping
-- `extensions/` - Pi extension (`agent-lab.ts`), its nine tools, the `/agent-lab` workspace, `render/`
+- `extensions/` - Pi extension (`agent-lab.ts`), its eleven tools, the `/agent-lab` workspace, `render/`
+- `src/discover/` - Log analysis (DISCOVER): its record, criteria, consent, the analysis work, view and words, the bridge to a check
 - `skills/agent-builder/SKILL.md` - The one instruction source of an Agent Lab chat
 - `examples/` - Reference adapters, a connection, a saved suite, the teaching example, a CI workflow
 - `test/` - `*.test.ts`, `helpers/`, `fixtures/` (frozen records of older formats), `live/` (paid model checks)
@@ -286,7 +287,8 @@ one derivation of the result.
 | **Workspace & inbox** | The agent's workspace, open decisions, recurring problems, derived from records | `src/workspace.ts`, `src/inbox.ts`, `src/problems.ts` |
 | **ExperimentStore** | Storage only: atomic record files, the writer's lock, journals and sidecars, content-addressed file areas, publication recovery, a change feed for readers | `src/store.ts`, `src/scenario-store.ts` |
 | **CLI** | One table of commands over the same ExperimentLab operations; `--yes` is the owner's word | `src/cli.ts`, `src/cli/import-flags.ts` |
-| **Pi extension** | Nine tools switched on by step, the `/agent-lab` workspace, long work handed to the session and followed through the engine's events | `extensions/*` |
+| **Log analysis (DISCOVER)** | The owner's rules put to logged conversations with no card, agent or simulator: topic map, one plan per topic, the log judge per applicable expectation; a record of its own (`analyses/{id}.json`), findings with verbatim evidence, the owner's word beside them; a problem becomes a check through an ordinary preparation (`fromAnalysis`) | `src/discover/*`, `src/lab/discover.ts`, `extensions/analyze-tool.ts` |
+| **Pi extension** | Eleven tools switched on by step, the `/agent-lab` workspace, long work handed to the session and followed through the engine's events | `extensions/*` |
 
 ## Pattern Overview
 
@@ -378,6 +380,18 @@ pushed to followers; content-addressed evidence; one derivation of the result.
 7. **Result:** `deriveRun` → `ResultView` → «Точность агента: N% — X из Y ситуаций» with interval, what is not
    measured, causes, calibration — the same in chat, board, CLI and report.
 
+### Log analysis (DISCOVER)
+
+`agent_lab_analyze` / `agent-lab analyze`: logs and rules → one consent (ceiling; no agent, no situation) → the import's
+topic map (the typical traffic) → up to 8 conversations a topic → a plan per topic (card/plan.ts: expectations on
+verbatim quotes; the variation each conversation stands for) → the log judge on each applicable expectation (the frozen
+`logged-v2` input, two votes, keyed by criterion + conversation, never by a card) → problems grouped by rule and
+behaviour, frequency among the conversations each was checked on. The owner confirms or disputes a finding natively;
+`agent_lab_prepare` with `fromAnalysis` makes situations from a problem's conversations (the draft keeps `fromAnalysis`).
+A run of such a draft states three facts apart (`src/discover/check.ts`): found in the logs, reproduced on this version,
+fixed against the run it repeats — only when it reproduced there, the runs compare and nothing beside it broke. Its saved
+suite is marked `purpose: known_problem`.
+
 ### Re-assessment
 
 A finished run's recorded dialogues are judged again under new criteria or another judge (`lab/review.ts`): a
@@ -401,9 +415,9 @@ row (`extensions/prepare-tool.ts`, `run-tool.ts`), the session's progress row (`
 ## Entry Points
 
 - **CLI (`dist/cli.js`, `src/cli.ts`):** `detect`, `import`, `build`, `cards`, `accept`, `run`, `repeat`, `demo`,
-  `summary`, `logs`, `reassess`, `export`, `diff`, `save-suite`, `evaluate`, `suites`, `doctor`, `status`; `chat` (or
+  `summary`, `logs`, `reassess`, `export`, `diff`, `save-suite`, `evaluate`, `suites`, `doctor`, `status`, `analyze`; `chat` (or
   no command in a terminal) opens Pi with the extension.
-- **Pi tools (`extensions/steps.ts`):** `agent_lab_status`, `agent_lab_prepare` → + `agent_lab_cards`,
+- **Pi tools (`extensions/steps.ts`):** `agent_lab_status`, `agent_lab_analyze`, `agent_lab_prepare`, `agent_lab_connect` → + `agent_lab_cards`,
   `agent_lab_edit`, `agent_lab_decide`, `agent_lab_run` once situations exist → + `agent_lab_results`,
   `agent_lab_explain`, `agent_lab_agree` once a run has conversations.
 - **Pi command:** `/agent-lab` — the agent's workspace; `/agent-lab demo` — the teaching example.

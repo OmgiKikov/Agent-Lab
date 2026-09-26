@@ -269,7 +269,7 @@ export interface LogSample {
  * otherwise a stored build in progress is continued, and every finished step is stored before the next call, so
  * a build cut short by a crash, a stop or the budget costs nothing it already paid for.
  */
-async function topicMapOf(store: ExperimentStore, batch: ImportBatch, mapper: NonNullable<Runtime['topicMap']>, ctx: CallContext, onStep: (message: string) => void | Promise<void>): Promise<TopicMap> {
+export async function topicMapOf(store: Pick<ExperimentStore, 'readTopicMap' | 'writeTopicMap'>, batch: ImportBatch, mapper: NonNullable<Runtime['topicMap']>, ctx: CallContext, onStep: (message: string) => void | Promise<void>): Promise<TopicMap> {
   const stored = await store.readTopicMap(topicMapKey(batch, mapper.builder));
   const reused = reusableTopicMap(stored, batch, mapper.builder);
   if (reused) return reused;

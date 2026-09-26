@@ -12,7 +12,7 @@ import { portableTarget, rememberConnection, resolveTarget, suiteEvidence, type 
 import { addCaveat, type CauseFailure } from '../caveats.js';
 import { SANDBOX_RETIRED, draftPatchSchema, experimentSchema, fingerprint, isCardExecution, isRunnable, judgeFallback, runnableTarget, scriptIssue, settingsSchema, unconfirmedReferences, validateFailureModes, validatePreparation, type DraftPatch, type Experiment, type FailureMode, type Revision, type Scenario, type UserMode } from '../contracts.js';
 import { BudgetExhausted, Stopped } from '../errors.js';
-import { examConnection, examRefusal } from '../exam.js';
+import { examConnection, examLines, examRefusal } from '../exam.js';
 import { ProviderFailure } from '../llm/model-call.js';
 import { roleChoices } from '../llm/models.js';
 import { StructuredTaskError } from '../llm/structured.js';
@@ -414,8 +414,8 @@ async function examine(lab: Lab, record: Experiment, ctx: CallContext): Promise<
   record.connectionExam = await examConnection(target, ctx.signal, (name, index, of) => lab.operations.say(record, `Экзамен подключения, путь ${index + 1} из ${of}: ${name}`));
   ctx.signal.throwIfAborted();
   if (record.connectionExam.status === 'failed') throw new Error(examRefusal(record.connectionExam));
-  // A too simple exam does not stop the run: it is measured, and its percent waits for an exam that checks memory.
-  if (record.connectionExam.status === 'simple') lab.operations.say(record, 'Экзамен подключения слишком простой — нет проверки памяти разговора: прогон идёт, процент не будет показан.');
+  // A too simple exam does not stop the run: it is measured, and its percent waits for an exam that shows memory and isolation.
+  if (record.connectionExam.status === 'simple') lab.operations.say(record, `${examLines(record.connectionExam)[0]} Прогон идёт, процент не будет показан.`);
 }
 
 /** The rollout of the version under test. The adapter's reported `version` remains the identity; this only performs the deployment. */

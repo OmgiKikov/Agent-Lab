@@ -7,7 +7,7 @@ import type { DialogueNumbers } from './card/view.js';
 import type { Connection } from './connection.js';
 import type { CreateInput, DraftPatch, Experiment, HumanReviewInput, ReassessmentInput, Settings } from './contracts.js';
 import type { Runtime } from './runtime.js';
-import { createDemoRuntime } from './demo.js';
+import { createDemoAnalysisRuntime, createDemoRuntime } from './demo.js';
 import { captureGeneratorEvidence } from './generator-evidence.js';
 import type { Lab } from './lab/context.js';
 import * as library from './lab/library.js';
@@ -18,6 +18,10 @@ import * as review from './lab/review.js';
 import * as judgeCheck from './lab/judge-check.js';
 import type { JudgeCheck, JudgeCheckPlan } from './judge-check.js';
 import * as run from './lab/run.js';
+import * as discover from './lab/discover.js';
+import type { AnalysisConsent } from './discover/consent.js';
+import type { LogAnalysis } from './discover/schema.js';
+import { builderOf } from './miner/plan.js';
 import { createPiRuntime } from './pi.js';
 import { ExperimentStore } from './store.js';
 import { adoptAgentRegistry } from './agent-processes.js';
@@ -33,6 +37,7 @@ import { adoptAgentRegistry } from './agent-processes.js';
  *   run.ts        a run: the draft it starts from, the owner's confirmation, the dialogues
  *   review.ts     results: a re-assessment, a person's verdicts — on the run's conversations and on the logged ones
  *   judge-check.ts the judge checked with planted errors and untouched controls, beside the run
+ *   discover.ts   a log analysis: the owner's rules put to the logged conversations, beside the runs — a record of its own
  */
 export class ExperimentLab {
   readonly store: ExperimentStore;
@@ -41,11 +46,24 @@ export class ExperimentLab {
   private initializing: Promise<void> | undefined;
   /** Fresh drafts the owner sees before anything is written (Lab.preview): gone with this lab, written by their first change. */
   private readonly previews = new Map<string, Experiment>();
+  /** Who follows the running log analysis, and the analysis while it runs. */
+  private readonly analysisFollowers = new Set<(analysis: LogAnalysis) => void>();
+  private readonly liveAnalysis: { current?: LogAnalysis } = {};
+  private readonly discoverHost: discover.DiscoverHost;
   constructor(directory: string, private readonly injectedRuntime?: Runtime) {
     this.store = new ExperimentStore(directory);
     this.operations = new OperationRunner(this.store);
     this.lab = { store: this.store, operations: this.operations, get: id => this.get(id), list: () => this.list(), runtime: record => this.runtime(record),
       preview: record => { this.previews.set(record.id, structuredClone(record)); } };
+    this.discoverHost = {
+      runtime: async (mode, settings, id) => {
+        const runtime = this.injectedRuntime ?? (mode === 'demo' ? createDemoAnalysisRuntime() : await createPiRuntime(settings));
+        return captureGeneratorEvidence(runtime, event => this.store.appendGeneratorEvidence(id, event));
+      },
+      builder: (mode, settings) => (this.injectedRuntime ?? (mode === 'demo' ? createDemoRuntime() : undefined))?.topicMap?.builder ?? builderOf(settings),
+      announce: analysis => { for (const follower of this.analysisFollowers) try { follower(analysis); } catch { /* the work goes on */ } },
+      live: this.liveAnalysis,
+    };
   }
 
   /**
@@ -67,6 +85,7 @@ export class ExperimentLab {
         markInterrupted(record, await this.store.sentCalls(record.id));
         record.updatedAt = new Date().toISOString(); await this.store.save(record);
       }
+      await discover.settleInterrupted(this.lab);
       this.operations.open();
     } catch (error) { await this.store.close(); throw error; }
   }
@@ -128,6 +147,29 @@ export class ExperimentLab {
   planJudgeCheck(id: string, options?: judgeCheck.JudgeCheckOptions): Promise<JudgeCheckPlan> { return judgeCheck.planJudgeCheck(this.lab, id, options); }
   /** Plants errors into copies of the run's dialogues and re-judges them: the result is the run's sidecar, the run never changes. */
   checkJudge(id: string, options?: judgeCheck.JudgeCheckOptions): Promise<JudgeCheck> { return judgeCheck.checkJudge(this.lab, id, options); }
+
+  /** What an analysis of the logs would read, leave out and spend at most: nothing is spent or written. */
+  analysisConsent(input: discover.AnalyzeInput): Promise<AnalysisConsent> { return discover.consentOf(this.lab, this.discoverHost, input); }
+  /** Starts the analysis of the logs the owner agreed to, within `callCeiling`; returns once it is saved as started. */
+  analyze(input: discover.AnalyzeInput, options: { callCeiling: number }): Promise<LogAnalysis> { return discover.analyze(this.lab, this.discoverHost, input, options); }
+  /** An analysis as it is now: the running one's live copy, otherwise the stored file. */
+  async getAnalysis(id: string): Promise<LogAnalysis> {
+    const live = this.liveAnalysis.current;
+    return live?.id === id ? structuredClone(live) : this.store.readAnalysis(id);
+  }
+  async listAnalyses(): Promise<LogAnalysis[]> {
+    const live = this.liveAnalysis.current;
+    return (await this.store.listAnalyses()).map(analysis => live?.id === analysis.id ? structuredClone(live) : analysis);
+  }
+  /** The owner's word on one finding of an analysis, kept beside the judge's verdict. */
+  reviewFinding(id: string, input: Parameters<typeof discover.reviewFinding>[3]): Promise<LogAnalysis> { return discover.reviewFinding(this.lab, this.discoverHost, id, input); }
+  /** Follows the running analysis: `follower` is told of every change of its record as it happens; returns how to stop. */
+  followAnalysis(follower: (analysis: LogAnalysis) => void): () => void {
+    this.analysisFollowers.add(follower);
+    return () => { this.analysisFollowers.delete(follower); };
+  }
+  /** Stops the running analysis `id`; what it found is kept. */
+  async cancelAnalysis(id: string): Promise<LogAnalysis> { this.operations.cancel(id); return this.getAnalysis(id); }
 
   /** Stops the operation running `id`; what it recorded is kept. */
   async cancel(id: string): Promise<Experiment> { return this.operations.cancel(id) ?? this.store.get(id); }

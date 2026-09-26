@@ -6,7 +6,7 @@ import { calibrationConsent } from '../src/card/calibrate.js';
 import { describeCheck, fingerprint, isRunnable, type Experiment, type RunnableTarget } from '../src/contracts.js';
 import { CONNECTION_FILE } from '../src/connect.js';
 import { projectConnection, sameConnection, saveExam } from '../src/connection.js';
-import { examPlanLines, examShowsMemory } from '../src/exam.js';
+import { examCanVouch, examPlanLines, isolationChecks, memoryProbes } from '../src/exam.js';
 import type { Exam } from '../src/target-schema.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
 import { detectProject, evidenceText, releaseText, targetLabel, type AgentCandidate } from '../src/detect.js';
@@ -175,7 +175,7 @@ const sameExam = (a: Exam | undefined, b: Exam | undefined) => (a === undefined)
  * nothing was written. An exam that never checks the conversation's memory is refused before the owner is asked.
  */
 export async function writeExam(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, record: Experiment, target: RunnableTarget, exam: Exam): Promise<boolean> {
-  if (!examShowsMemory(exam)) throw new Error('Экзамен не записан: в нём нет пути, который проверяет память разговора. Нужен путь из двух шагов и больше, где поздний шаг проверяет (contains), что в ответе есть сказанное клиентом раньше — номер, имя, выбор. Ничего не записано.');
+  if (!examCanVouch(exam)) throw new Error(`Экзамен не записан: ${!memoryProbes(exam).length ? 'в нём нет пути, который проверяет память разговора. Нужен путь из двух шагов и больше, где клиент называет значение — номер, имя, выбор, — а поздний шаг спрашивает о нём и проверяет (contains), что оно есть в ответе; в самом позднем шаге значение не повторяется' : !isolationChecks(exam).length ? 'в нём нет проверки, что разговоры не смешиваются. Нужен второй путь со своим значением, который идёт одновременно с первым и проверяет (contains) своё значение, — например, второй клиент называет другой номер' : ''}. Ничего не записано.`);
   const file = resolve(ctx.cwd, CONNECTION_FILE);
   const current = await projectConnection(file);
   const where = current === null ? `Lab сохранит это подключение вместе с экзаменом в ${CONNECTION_FILE} в папке проекта.`
@@ -215,7 +215,7 @@ export async function launchRun(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, lab: 
   const kept = reached && !agent.exam ? await keptExam(reached.target, ctx.cwd) : undefined;
   const exam = agent.exam ?? kept;
   const target = reached && (agent.target || reached.found || exam && !sameExam(exam, reached.target.exam)) ? { ...reached.target, ...(exam ? { exam } : {}) } : undefined;
-  const examined = { ...(kept ? { exam: 'connection' as const } : {}), ...(options.offerExam && reached && !examShowsMemory((target ?? reached.target).exam) ? { offerExam: true } : {}) };
+  const examined = { ...(kept ? { exam: 'connection' as const } : {}), ...(options.offerExam && reached && !examCanVouch((target ?? reached.target).exam) ? { offerExam: true } : {}) };
   const answers = [LAUNCH, ...examined.offerExam ? [EXAM_FIRST] : [], NOT_NOW];
   const connect = target || agent.version ? { ...(target ? { target } : {}), ...(agent.version ? { targetVersion: agent.version } : {}) } : undefined;
   /** The draft as the plan names it: with the agent it will be connected to. */

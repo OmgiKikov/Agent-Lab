@@ -118,8 +118,9 @@ const UNUSABLE_PLAN = 'Ни один ответ модели не прошёл �
 const PLAN_INTERRUPTED = 'Подготовка прервалась во время платного вызова плана: его стоимость неизвестна, поэтому план этой темы не составляется повторно.';
 /** The conversations of a topic the plan reads, and how much of each: the customers' own words, a screen of them. */
 const PLAN_EXAMPLES = 8;
-const PLAN_MESSAGES = 4;
-const PLAN_MESSAGE_CHARS = 600;
+/** What a plan call reads of each example conversation: its customer's first messages, clipped (the log analysis reads the same, discover/analyze.ts). */
+export const PLAN_MESSAGES = 4;
+export const PLAN_MESSAGE_CHARS = 600;
 /** The in-flight name of a topic's plan call: never a unit of the preparation. */
 const planUnit = (topic: string): string => `plan_${fingerprint(topic).slice(0, 16)}`;
 const isPlanUnit = (unit: string | undefined): boolean => !!unit?.startsWith('plan_');
