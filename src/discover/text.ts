@@ -290,6 +290,14 @@ export function checkVerdictLine(check: ProblemCheck): string | undefined {
   if (before.verdict === 'fixed' && (against.unknown.length || before.besideUnknown.length)) return 'Итог: проблема исправлена; что ничего проверенного не сломалось, не подтверждено — часть не измерена.';
   if (before.verdict === 'fixed' && !against.tests) return 'Итог: проблема исправлена; других правил, выполнявшихся на прежней версии, в проверке нет — что ничего не сломалось, она не показывает.';
   if (before.verdict === 'fixed') return 'Итог: проблема исправлена, и ничего проверенного не сломалось.';
-  if (against.broken.length) return `Итог: проблема не исправлена${before.verdict === 'regressed' ? ', и её правило сломалось там, где выполнялось' : ''}; сломалось и другое обязательное — ${countText(against.broken.length, EXPECTATIONS)}.`;
-  return undefined;
+  // Every other verdict says what became of the problem in its own terms, then what broke beside it.
+  const problem = before.verdict === 'not_fixed' ? 'проблема не исправлена'
+    : before.verdict === 'regressed' ? before.reproduced === 'no' ? 'известная проблема вернулась: в прогоне, который повторяет этот, её не было' : 'правило проблемы сломалось там, где выполнялось'
+    : before.why === 'not_reproduced_before' ? check.reproduced === 'no' ? 'известная проблема не вернулась: её нет ни здесь, ни в прогоне, который повторяет этот'
+      : 'правило проблемы здесь измерено не везде, а в прогоне, который повторяет этот, проблемы не было'
+    : before.why === 'judge_only' ? 'разница в проблеме — в судье, не в агенте'
+    : before.why === 'partial' ? 'в проверенных случаях проблемы нет, но проверены не все выбранные'
+    : 'правило проблемы здесь измерено не везде';
+  const beside = against.broken.length ? `; сломалось и другое обязательное — ${countText(against.broken.length, EXPECTATIONS)}. Такую версию принимать нельзя` : '';
+  return `Итог: ${problem}${beside}.`;
 }
