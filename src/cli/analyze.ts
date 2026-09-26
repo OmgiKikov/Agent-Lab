@@ -1,8 +1,8 @@
 import { ExperimentLab } from '../experiment.js';
 import type { CreateInput } from '../contracts.js';
 import { demoAnalysisInput } from '../demo.js';
-import { analysisConsentText } from '../discover/consent.js';
-import type { LogAnalysis } from '../discover/schema.js';
+import { analysisConsentText, continuationConsentText } from '../discover/consent.js';
+import { toolNameSchema, type LogAnalysis } from '../discover/schema.js';
 import { analysisLines, nextStep } from '../discover/text.js';
 import { analysisView } from '../discover/view.js';
 import type { AnalyzeInput } from '../lab/discover.js';
@@ -51,9 +51,22 @@ async function analysisText(store: ExperimentStore, analysis: LogAnalysis): Prom
 }
 
 /**
+ * The tools the owner says the log records every call of (`--recorded-tools a,b`): identifiers, each once. The owner's word,
+ * given on the command line that also says --yes; without --yes it only shows in the consent.
+ */
+function recordedTools(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  const tools = [...new Set(value.split(',').map(tool => tool.trim()).filter(Boolean))];
+  const wrong = tools.filter(tool => !toolNameSchema.safeParse(tool).success);
+  if (!tools.length || wrong.length) throw new Error(`--recorded-tools — имена инструментов через запятую, как их пишет лог: например create_refund,find_order.${wrong.length ? ` Не имя инструмента: ${wrong.join(', ')}.` : ''}`);
+  return tools;
+}
+
+/**
  * `analyze` (DISCOVER): the owner's rules put to the logged conversations — no situation, no agent, no simulated
- * customer. Without --yes it shows the consent and spends nothing; `--id` shows an analysis; `--finding` with `--verdict`
- * and --yes records the owner's word on one finding; `--demo` analyses the teaching example's logs, free.
+ * customer. Without --yes it shows the consent and spends nothing; `--id` shows an analysis; `--id` with `--more N`
+ * continues it with the next conversations (the consent without --yes); `--finding` with `--verdict` and --yes records
+ * the owner's word on one finding; `--demo` analyses the teaching example's logs, free.
  */
 export async function analyzeCommand({ values, directory }: { values: Flags; directory: string }, deps: AnalyzeDeps): Promise<void> {
   const { asWriter, taskInput, writeStdout } = deps;
@@ -66,6 +79,25 @@ export async function analyzeCommand({ values, directory }: { values: Flags; dir
       const key = findingKey(await lab.getAnalysis(id), named);
       const analysis = await lab.reviewFinding(id, { key, verdict, note: values.note ?? '', via: 'cli-yes' });
       await writeStdout(values.json ? `${JSON.stringify(analysisView(analysis), null, 2)}\n` : await analysisText(lab.store, analysis));
+    });
+    return;
+  }
+  if (values.id && values.more !== undefined) {
+    const input = { analysisId: values.id, more: Number(values.more) };
+    const consent = await new ExperimentLab(directory).continuationConsent(input);
+    const text = continuationConsentText(consent);
+    if (!values.yes && !consent.demo) {
+      await writeStdout(values.json ? `${JSON.stringify({ question: text.question, lines: text.lines, conversations: consent.analysed, reused: consent.reused, callCeiling: consent.callCeiling }, null, 2)}\n`
+        : `${[text.question, '', ...text.lines, '', 'Продолжить: та же команда с --yes. Без него ничего не записано и не потрачено.'].map(line => safeLine(line)).join('\n')}\n`);
+      return;
+    }
+    await asWriter(directory, async lab => {
+      const started = await lab.continueAnalysis(input, { callCeiling: consent.callCeiling });
+      await lab.waitForIdle();
+      const analysis = await lab.getAnalysis(started.id);
+      await writeStdout(values.json ? `${JSON.stringify(analysisView(analysis, await lab.store.readImport(analysis.logs.importId).catch(() => undefined)), null, 2)}\n`
+        : `${await analysisText(lab.store, analysis)}\nРазбор: ${analysis.id} (продолжение ${values.id})\n`);
+      if (analysis.status === 'failed') process.exitCode = 1;
     });
     return;
   }
@@ -83,6 +115,8 @@ export async function analyzeCommand({ values, directory }: { values: Flags; dir
     input = { task: task.input.task, mode: task.input.mode, materials: task.input.materials, logs: task.input.originalImport!, file: task.logs, settings: task.input.settings,
       ...(values.conversations === undefined ? {} : { requested: Number(values.conversations) }) };
   }
+  const tools = recordedTools(values['recorded-tools']);
+  if (tools) input = { ...input, logContract: { tools, via: 'cli-yes' } };
   const consent = await new ExperimentLab(directory).analysisConsent(input);
   const text = analysisConsentText(consent, input.file);
   if (!values.yes && !values.demo) {

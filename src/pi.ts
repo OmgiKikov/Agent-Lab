@@ -15,10 +15,10 @@ import { gatewayStatus, type GatewayStatus } from './giga-transport.js';
 import { runStructured, type StructuredTask } from './llm/structured.js';
 import { plantError } from './judge-check-task.js';
 import {
-  CARD_CUSTOMER_ROLE, CUSTOMER_DECISION_ROLE, CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SCENARIO_CHANNELS, SCENARIO_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
+  CARD_CUSTOMER_ROLE, CUSTOMER_DECISION_ROLE, CARD_REVIEW_ROLE, CARD_ROLE, FAILURE_MODES_ROLE, SCENARIO_CHANNELS, SCENARIO_GAPS, SCENARIO_ROLE, SIMULATOR_ROLE, SOURCE_SELECTION_ROLE, USER_CONTROLLER_ROLE,
 } from './prompts.js';
 import { cardProposalProblem, cardProposalSchema, proposalBounds, proposalPayload, type CardProposal } from './card/proposal.js';
-import { planPayload, planProblem, planProposalSchema, type PlanProposal } from './card/plan.js';
+import { planPayload, planProposalSchema, planSlipKind, planSlips, type PlanProposal } from './card/plan.js';
 import { cardReviewSchema, laterMessages } from './card/review.js';
 import { fillWithModel } from './card/unmask.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
@@ -184,8 +184,15 @@ export async function createPiRuntime(settings: Settings, injectedRuntime?: Mode
       if (oversize) throw new Error(oversize);
       // A quote not found verbatim, a kind of rule outside the rulebook or an example named twice goes back with its exact reason.
       // A call whose topic's logs recorded tools or state reads how an expectation is seen on them; any other reads as it always did.
-      return run<PlanProposal>({ id: 'scenario-plan', label: 'План сценария', role: 'builder', instructions: input.call.channels ? `${SCENARIO_ROLE}\n${SCENARIO_CHANNELS}` : SCENARIO_ROLE,
-        output: planProposalSchema(input.call), check: value => planProblem(value, input.call), bounded: { requestBytes: MODEL_REQUEST_BYTES + 16_000 } }, payload, ctx);
+      // A call that may report a topic the sources say nothing for reads how (a log analysis asks it); the others read as before.
+      const instructions = [SCENARIO_ROLE, ...input.call.channels ? [SCENARIO_CHANNELS] : [], ...input.call.gaps ? [SCENARIO_GAPS] : []].join('\n');
+      // The harness's rejection is typed, so a plan no answer bound says which kind of slip it was (discover/analyze.ts).
+      const check = (value: PlanProposal) => {
+        const slips = planSlips(value, input.call);
+        return slips.length ? { reason: slips.map(slip => slip.text).join('\n'), issue: planSlipKind(value, input.call)! } : undefined;
+      };
+      return run<PlanProposal>({ id: 'scenario-plan', label: 'План сценария', role: 'builder', instructions,
+        output: planProposalSchema(input.call), check, bounded: { requestBytes: MODEL_REQUEST_BYTES + 16_000 } }, payload, ctx);
     },
     async reviewCard(input, ctx) {
       const oversize = workInputIssue(input.payload);

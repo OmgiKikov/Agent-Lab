@@ -38,8 +38,17 @@ export interface PlanCall {
    * What the topic's logged conversations recorded besides the replies — the tools the agent called there, by name, and
    * whether a state event is in them —, when they recorded any: an expectation may then be seen on that channel. Absent —
    * the replies only, and the call asks exactly what it asked before channels (a preparation's plan never names them).
+   * `recorded`: the tools the owner declared the log records every call of (discover/schema.ts logContractSchema), whether
+   * or not a call shows. `byRule`: what a rule requires is not what the logs happened to record — an expectation may be
+   * seen on a tool no conversation shows, named exactly as the sentence of its cited rule writes it (a log analysis asks it).
    */
-  channels?: { tools: string[]; toolEvents: boolean; state: boolean };
+  channels?: { tools: string[]; toolEvents: boolean; state: boolean; recorded?: string[]; byRule?: true };
+  /**
+   * The plan may say that no sentence of the sources tells what the agent must do for the topic's customers: no
+   * expectation and `uncovered` — what they ask. A gap only once a reviewer confirms it (discover/analyze.ts, as a
+   * preparation's checkGap does); a preparation's plan never asks it.
+   */
+  gaps?: true;
 }
 export interface PlanRequest { task: string; call: PlanCall }
 
@@ -60,22 +69,50 @@ export function planProposalSchema(call: PlanCall) {
   return z.strictObject({
     question: text(300),
     variations: z.array(z.strictObject({ title: text(160), examples: z.array(example).max(examples.length) })).min(1).max(PLAN_VARIATIONS),
-    expectations: z.array(z.strictObject({ ...expectation, ...channelFields(call) })).min(1).max(PLAN_EXPECTATIONS),
+    expectations: z.array(z.strictObject({ ...expectation, ...channelFields(call) })).min(call.gaps ? 0 : 1).max(PLAN_EXPECTATIONS),
+    // What the topic's customers ask that no sentence of the sources answers; null — the expectations cover the topic.
+    ...(call.gaps ? { uncovered: text(300).nullable() } : {}),
   });
 }
 export type PlanProposal = z.infer<ReturnType<typeof planProposalSchema>>;
 
+/** The tools a plan call knows by name: those its conversations show a call of, and those the owner declared the log records. */
+const knownTools = (channels: NonNullable<PlanCall['channels']>): string[] => [...new Set([...channels.tools, ...channels.recorded ?? []])].sort();
+
 /**
- * The channel of an expectation, asked only where the logs recorded one besides the replies: enums of this call — the
- * channels the topic's conversations hold, the tools named in them (null — any tool's result).
+ * The channel of an expectation, asked only where the logs recorded one besides the replies, or where a rule may require
+ * a tool they never show (`byRule`): enums of this call — the channels the topic's conversations hold, the tools named in
+ * them or declared recorded (null — any tool's result) —, or with `byRule` a tool's name the harness checks (planSlips).
  */
 function channelFields(call: PlanCall) {
   const channels = call.channels;
-  if (!channels || !channels.toolEvents && !channels.state) return {};
-  const observations = ['reply', ...channels.toolEvents ? ['tool'] : [], ...channels.state ? ['state'] : []] as [string, ...string[]];
-  const [first, ...rest] = channels.tools;
-  return { observation: z.enum(observations, { error: `Observe it on ${observations.join(', ')}.` }),
-    ...(channels.toolEvents ? { tool: (first === undefined ? z.null() : z.enum([first, ...rest], { error: 'Name a tool of channels.tools, or null.' }).nullable()) } : {}) };
+  if (!channels) return {};
+  const tools = knownTools(channels);
+  const toolable = channels.toolEvents || tools.length > 0 || !!channels.byRule;
+  if (!toolable && !channels.state) return {};
+  const observations = ['reply', ...toolable ? ['tool'] : [], ...channels.state ? ['state'] : []] as [string, ...string[]];
+  const [first, ...rest] = tools;
+  const tool = channels.byRule ? z.string().min(1).max(200).nullable()
+    : first === undefined ? z.null() : z.enum([first, ...rest], { error: 'Name a tool of channels.tools, or null.' }).nullable();
+  return { observation: z.enum(observations, { error: `Observe it on ${observations.join(', ')}.` }), ...(toolable ? { tool } : {}) };
+}
+
+/** Which channel fields a plan call asks of every expectation (channelFields): a stand-in answers in exactly that shape. */
+export function asksChannel(call: PlanCall): { observation: boolean; tool: boolean } {
+  const fields = channelFields(call);
+  return { observation: 'observation' in fields, tool: 'tool' in fields };
+}
+
+/** A tool's name as a log writes it: an identifier (targets.ts eventScope), never a pattern. */
+const TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_.:/-]*$/;
+/** A character that continues a tool's name at its edge: a letter of any script, a numeral or an underscore. */
+const identifierChar = (char: string | undefined): boolean => char !== undefined && (char === '_' || char >= '0' && char <= '9' || char.toLowerCase() !== char.toUpperCase());
+/** Whether `sentence` writes the tool's name as a whole identifier — «инструментом create_refund.» names create_refund, never refund. */
+export function namesTool(sentence: string, tool: string): boolean {
+  for (let at = sentence.indexOf(tool); at >= 0; at = sentence.indexOf(tool, at + 1)) {
+    if (!identifierChar(sentence[at - 1]) && !identifierChar(sentence[at + tool.length])) return true;
+  }
+  return false;
 }
 /** The channel a proposed expectation is seen on and its tool: the reply when the call asked no channel. */
 function proposedChannel(expectation: PlanProposal['expectations'][number]): { observation: 'reply' | 'tool' | 'state'; tool?: string } {
@@ -92,38 +129,75 @@ export function planPayload(request: PlanRequest) {
     rulebook: { binds: call.binds.kinds }, ...(call.channels ? { channels: call.channels } : {}) };
 }
 
-/** Why a proposed plan cannot be bound, in the builder's words, or undefined: the structured task's check sends it back verbatim. */
-export function planProblem(proposal: PlanProposal, call: PlanCall): string | undefined {
-  const slips: string[] = [];
+/**
+ * What kind of slip keeps a proposed plan from binding, as the harness found it — the owner is told that Lab's work did
+ * not finish, by its kind (discover/schema.ts PLAN_ISSUES), never that their rules have a gap: `quote` — a quote is not
+ * verbatim in its source; `grounding` — it is, but stands for no whole clause; `rulebook` — a rule of a kind the rulebook
+ * does not bind; `structure` — examples, variations or channels that do not hold together.
+ */
+export type PlanSlipKind = 'quote' | 'grounding' | 'rulebook' | 'structure';
+export interface PlanSlip { kind: PlanSlipKind; text: string }
+
+/** Every slip of a proposed plan, typed, each with the reason the builder is sent back with. */
+export function planSlips(proposal: PlanProposal, call: PlanCall): PlanSlip[] {
+  const slips: PlanSlip[] = [];
+  const slip = (kind: PlanSlipKind, text: string) => { slips.push({ kind, text }); };
   const seen = new Map<string, number>();
   proposal.variations.forEach((variation, i) => variation.examples.forEach(dialogueId => {
     const earlier = seen.get(dialogueId);
-    if (earlier !== undefined && earlier !== i) slips.push(`variations[${i}] and variations[${earlier}] both name conversation ${dialogueId}: every conversation is an example of one variation at most.`);
+    if (earlier !== undefined && earlier !== i) slip('structure', `variations[${i}] and variations[${earlier}] both name conversation ${dialogueId}: every conversation is an example of one variation at most.`);
     seen.set(dialogueId, i);
   }));
+  const { uncovered } = proposal as { uncovered?: unknown };
+  if (typeof uncovered === 'string' && proposal.expectations.length) slip('structure', 'uncovered is set, and there are expectations: give uncovered only when no sentence of the sources says what the agent must do for this topic, with no expectation; otherwise null.');
+  if (!proposal.expectations.length && typeof uncovered !== 'string') slip('structure', 'There is no expectation and uncovered is null: give the expectations the sources support, or — only when no sentence says what the agent must do here — uncovered: what the customers ask.');
   // A variation is a circumstance that changes what the agent must do: one no expectation applies to would leave its
   // conversations with nothing to check, and the builder would report them as a gap in the owner's rules.
-  proposal.variations.forEach((variation, i) => {
+  if (proposal.expectations.length) proposal.variations.forEach((variation, i) => {
     if (!proposal.expectations.some(expectation => !expectation.variations || expectation.variations.includes(i))) {
-      slips.push(`variations[${i}] «${variation.title}»: no expectation applies to it. A variation is a circumstance that changes what the agent must do: give it the expectations that apply to it (list its place in their variations, or null for all), or drop the variation and move its examples to the variation they belong to.`);
+      slip('structure', `variations[${i}] «${variation.title}»: no expectation applies to it. A variation is a circumstance that changes what the agent must do: give it the expectations that apply to it (list its place in their variations, or null for all), or drop the variation and move its examples to the variation they belong to.`);
     }
   });
+  const channels = call.channels;
   proposal.expectations.forEach((expectation, i) => {
-    for (const index of expectation.variations ?? []) if (index >= proposal.variations.length) slips.push(`expectations[${i}].variations names ${index}, and there are ${proposal.variations.length} variations: use their places from 0, or null for all.`);
+    for (const index of expectation.variations ?? []) if (index >= proposal.variations.length) slip('structure', `expectations[${i}].variations names ${index}, and there are ${proposal.variations.length} variations: use their places from 0, or null for all.`);
     const { tool } = expectation as { tool?: unknown };
-    if (typeof tool === 'string' && proposedChannel(expectation).observation !== 'tool') slips.push(`expectations[${i}] is observed on "${proposedChannel(expectation).observation}" and names the tool "${tool}": set "tool" to null, or observe it on "tool" when only the tool's result proves it.`);
+    const observed = proposedChannel(expectation).observation;
+    if (typeof tool === 'string' && observed !== 'tool') slip('structure', `expectations[${i}] is observed on "${observed}" and names the tool "${tool}": set "tool" to null, or observe it on "tool" when only the tool's result proves it.`);
     expectation.basis.forEach((basis, j) => {
       const name = `expectations[${i}].basis[${j}]`;
       const at = located(basis, call);
       const grounding = at && groundingSlip(name, at);
-      if (!at) slips.push(`${name}: the quote is not a verbatim substring of its source. Copy the exact characters of a whole sentence or clause instead of paraphrasing.`);
-      else if (grounding) slips.push(grounding);
+      if (!at) slip('quote', `${name}: the quote is not a verbatim substring of its source. Copy the exact characters of a whole sentence or clause instead of paraphrasing.`);
+      else if (grounding) slip('grounding', grounding);
       else if (!call.binds.kinds.includes(basis.kind) && !call.binds.rules.some(rule => rule.sourceId === at.sourceId && rule.quote === at.quote)) {
-        slips.push(`${name} is a rule of kind ${basis.kind}, and the owner's rulebook binds the agent only by ${call.binds.kinds.join(', ')}: cite a rule of those kinds, or drop this expectation.`);
+        slip('rulebook', `${name} is a rule of kind ${basis.kind}, and the owner's rulebook binds the agent only by ${call.binds.kinds.join(', ')}: cite a rule of those kinds, or drop this expectation.`);
       }
     });
+    // A tool a rule requires may be one no log shows (byRule): it is then the tool the cited sentence names, exactly.
+    if (observed !== 'tool' || !channels?.byRule) return;
+    if (typeof tool !== 'string') {
+      if (!channels.toolEvents) slip('structure', `expectations[${i}] is observed on "tool" with no tool named, and these logs record no tool call: name the tool the cited rule requires, exactly as its sentence writes it.`);
+      return;
+    }
+    const cited = expectation.basis.some(basis => { const at = located(basis, call); return !!at && namesTool(at.clause.sentence, tool); });
+    if (!TOOL_NAME.test(tool) || !knownTools(channels).includes(tool) && !cited) {
+      slip('structure', `expectations[${i}].tool "${tool}" is neither a tool of channels.tools or channels.recorded nor a name the sentence of its cited rule writes: name the tool exactly as the rule writes it, or observe the expectation on "reply" when the rule requires no tool.`);
+    }
   });
-  return slips.length ? slips.join('\n') : undefined;
+  return slips;
+}
+
+/** Why a proposed plan cannot be bound, in the builder's words, or undefined: the structured task's check sends it back verbatim. */
+export function planProblem(proposal: PlanProposal, call: PlanCall): string | undefined {
+  const slips = planSlips(proposal, call);
+  return slips.length ? slips.map(item => item.text).join('\n') : undefined;
+}
+
+/** The kind of a proposed plan's slips, or undefined when it binds: a quote not verbatim first — the slip the owner can check. */
+export function planSlipKind(proposal: PlanProposal, call: PlanCall): PlanSlipKind | undefined {
+  const slips = planSlips(proposal, call);
+  return slips.some(item => item.kind === 'quote') ? 'quote' : slips[0]?.kind;
 }
 
 /** The scenario a checked proposal makes and the rules it cites, as the library stores them. */

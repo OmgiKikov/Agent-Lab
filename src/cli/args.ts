@@ -28,6 +28,7 @@ export const FLAGS = {
   ceiling: { type: 'string' },
   'allow-logs': { type: 'boolean' }, replace: { type: 'boolean' },
   demo: { type: 'boolean' }, conversations: { type: 'string' }, finding: { type: 'string' }, verdict: { type: 'string' }, note: { type: 'string' },
+  'recorded-tools': { type: 'string' }, more: { type: 'string' },
 } as const;
 export type Flag = keyof typeof FLAGS;
 export type Flags = ReturnType<typeof parseArgs<{ options: typeof FLAGS; allowPositionals: true }>>['values'];

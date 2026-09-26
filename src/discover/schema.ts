@@ -4,6 +4,7 @@ import { businessScenarioSchema } from '../card/schema.js';
 import { LOGGED_MODE } from '../card/calibration.js';
 import { identifierSchema as id, sha256Schema as hash, text } from '../ids.js';
 import { IMPORT_DIALOGUE_LIMIT, MATERIAL_LIMIT, RECORD_REQUIREMENT_LIMIT } from '../limits.js';
+import { PLAN_EXPECTATIONS } from '../card/plan.js';
 import { topicIdSchema, trafficSchema } from '../miner/schema.js';
 
 /*
@@ -17,7 +18,8 @@ import { topicIdSchema, trafficSchema } from '../miner/schema.js';
  *        ─► per conversation, each expectation of its variation judged on the log (card/log-judge.ts) ─► findings
  *        ─► the owner's word on a finding, kept apart from the judge's (reviews)
  *
- * Every schema here is stored: a new field is `.optional()`, never `.default()`. Findings are the judge's; a person's
+ * Every schema here is stored: a new field is `.optional()`, never `.default()`; an enum only gains values and a bound only
+ * grows, so every record written before still parses as it was. Findings are the judge's; a person's
  * verdict never overwrites one, and a new analysis is a new record — the old one keeps its history.
  */
 
@@ -28,11 +30,17 @@ import { topicIdSchema, trafficSchema } from '../miner/schema.js';
  */
 export const ANALYSIS_PROTOCOL = 'discover-v2';
 const ANALYSIS_PROTOCOL_V1 = 'discover-v1';
-/** Conversations one analysis reads at most, and from one topic: the examples one plan call reads (card/prepare.ts). */
+/**
+ * Conversations one round of an analysis selects at most — the first sample, or one continuation of it —, and the examples
+ * of one topic its plan reads (card/prepare.ts): a bound of the plan call, never of the topic. The conversations of a
+ * topic beyond its plan's examples are judged too, on the expectations every variation of the plan shares.
+ */
 export const ANALYSIS_LIMIT = 128;
 export const PER_TOPIC_LIMIT = 8;
 /** Conversations analysed when the owner names no number. */
 export const DEFAULT_ANALYSED = 24;
+/** Conversations an analysis and its continuations select at most in all: every conversation one import holds. */
+export const ANALYSIS_TOTAL_LIMIT = IMPORT_DIALOGUE_LIMIT;
 
 export const ANALYSIS_STATUSES = ['running', 'done', 'stopped', 'failed', 'interrupted'] as const;
 export type AnalysisStatus = typeof ANALYSIS_STATUSES[number];
@@ -40,6 +48,25 @@ export type AnalysisStatus = typeof ANALYSIS_STATUSES[number];
 export const UNFINISHED = ['budget', 'stopped', 'time', 'closing', 'failed'] as const;
 
 const verdict = z.enum(['pass', 'fail', 'unknown']);
+/**
+ * Why a finding decided nothing with no call: the agent never replied; the conversation's record of the channel is
+ * incomplete (or holds none of it); or — `call_unconfirmed` — the criterion requires a call of a tool, the conversation
+ * holds no call of it, and no declared contract of the log (`logs.contract`) says the log records every call of that tool:
+ * whether the call was made cannot be seen, so it is neither a violation nor kept.
+ */
+export const FINDING_SKIPS = ['no_agent_reply', 'channel_unobserved', 'call_unconfirmed'] as const;
+export type FindingSkip = typeof FINDING_SKIPS[number];
+
+/** A tool's name as a log and an adapter write it (targets.ts eventScope): an identifier, never a pattern. */
+export const toolNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_.:/-]*$/).max(200);
+/**
+ * The owner's declaration of what the analysed import records beside the messages: the tools whose every call it writes
+ * into each conversation it marks complete. Only under it does a complete conversation with no call of a required tool
+ * show that the call was not made; without it — or for a tool it does not name — a missing call is never proved, and a
+ * conversation the log marks incomplete proves nothing of the tools either way. `via`: how the owner said it.
+ */
+export const logContractSchema = z.strictObject({ tools: z.array(toolNameSchema).min(1).max(50), via: z.enum(['pi-confirm', 'cli-yes']), confirmedAt: z.iso.datetime() });
+export type LogContract = z.infer<typeof logContractSchema>;
 const condition = z.enum(['met', 'not_met', 'unclear']);
 
 /**
@@ -56,7 +83,7 @@ export const findingSchema = z.strictObject({
   criterionHash: hash,
   mode: z.literal(LOGGED_MODE), protocolHash: hash, inputHash: hash, auditHash: hash.optional(),
   provider: text(120), model: text(200),
-  skipped: z.enum(['no_agent_reply', 'channel_unobserved']).optional(),
+  skipped: z.enum(FINDING_SKIPS).optional(),
   votes: z.array(z.strictObject({ pass: condition.optional(), fail: condition.optional(), result: verdict.optional(), error: z.literal(true).optional() })).max(4),
   result: verdict,
   complete: z.boolean(),
@@ -81,6 +108,14 @@ export type FindingReview = z.infer<typeof findingReviewSchema>;
 export const UNJUDGEABLE = ['no_customer', 'no_agent_reply'] as const;
 /** Why a topic has no plan: no answer bound to the owner's rules, its call died in flight, or the analysis stopped before it. */
 export const PLAN_FAILURES = ['unusable', 'interrupted', 'not_reached'] as const;
+/**
+ * Why Lab's own work on a topic's plan did not finish (`unusable`), typed where it was seen — never a gap in the owner's
+ * rules: the model's answers failed the output schema, or failed the harness's check of their content (a quote not verbatim
+ * in its source; another slip — a rule of a kind the rulebook does not bind, a variation with nothing to check), the request
+ * did not fit the model's window, the articles for the topic could not be chosen, or the runtime has no planner.
+ */
+export const PLAN_ISSUES = ['answer_schema', 'quote_not_verbatim', 'answer_check', 'context_window', 'source_selection', 'planner_unavailable'] as const;
+export type PlanIssue = typeof PLAN_ISSUES[number];
 
 export const analysisSchema = z.strictObject({
   formatVersion: z.literal(1), protocol: z.enum([ANALYSIS_PROTOCOL_V1, ANALYSIS_PROTOCOL]),
@@ -90,8 +125,18 @@ export const analysisSchema = z.strictObject({
   error: z.string().max(4000).optional(),
   mode: z.enum(['demo', 'live']),
   task: text(2000),
-  /** The import read: its identity, the file's name, every conversation of the log and those the import could read. */
-  logs: z.strictObject({ importId: id, contentHash: hash, file: text(300), conversations: z.number().int().nonnegative(), readable: z.number().int().nonnegative() }),
+  /**
+   * The import read: its identity, the file's name, every conversation of the log and those the import could read;
+   * `contract` — what the owner declared the log records beside the messages (logContractSchema).
+   */
+  logs: z.strictObject({ importId: id, contentHash: hash, file: text(300), conversations: z.number().int().nonnegative(), readable: z.number().int().nonnegative(),
+    contract: logContractSchema.optional() }),
+  /**
+   * An analysis that continues an earlier one of the same import and materials: the earlier's selection, plans and every
+   * finding whose key still holds were carried over — `reused` findings, no call made for them — and the next conversations
+   * not selected before were added. The earlier analysis is never changed.
+   */
+  continues: z.strictObject({ analysisId: id, picked: z.number().int().nonnegative(), reused: z.number().int().nonnegative() }).optional(),
   /**
    * What was analysed and how it was chosen: `topics` — seats by each topic's share of the read conversations, at most
    * `perTopic` from one, the seats rounding leaves first to topics with none (miner/sample.ts allocate); `order` — the
@@ -100,8 +145,14 @@ export const analysisSchema = z.strictObject({
   selection: z.strictObject({
     requested: z.number().int().positive().max(ANALYSIS_LIMIT), perTopic: z.number().int().positive().max(PER_TOPIC_LIMIT),
     method: z.enum(['topics', 'order']),
-    picked: z.array(id).max(ANALYSIS_LIMIT),
+    picked: z.array(id).max(ANALYSIS_TOTAL_LIMIT),
     unjudgeable: z.array(z.strictObject({ dialogueId: id, reason: z.enum(UNJUDGEABLE) })).max(IMPORT_DIALOGUE_LIMIT),
+    /**
+     * `shared`: `perTopic` bounds only the examples a topic's plan reads; the topic's other selected conversations
+     * (`topics[].extra`) are judged on the expectations every variation of its plan shares. Absent — an analysis made
+     * before: `perTopic` bounded the topic's conversations.
+     */
+    beyond: z.literal('shared').optional(),
   }),
   sources: z.array(z.strictObject({ id, name: text(180), content: z.string().min(1), hash, kind: z.enum(['knowledge', 'prompt']).optional() })).min(1).max(MATERIAL_LIMIT),
   models: z.strictObject({ builder: z.strictObject({ provider: z.string().max(120), model: z.string().max(200) }),
@@ -112,15 +163,26 @@ export const analysisSchema = z.strictObject({
   traffic: trafficSchema.optional(),
   topics: z.array(z.strictObject({
     title: text(120), topicId: topicIdSchema.optional(),
+    /** The topic's conversations its plan reads as examples; each is judged on the expectations of its variation. */
     dialogueIds: z.array(id).min(1).max(PER_TOPIC_LIMIT),
+    /** The topic's other selected conversations: no plan read them, so no variation of it is theirs — they are judged on its shared expectations. */
+    extra: z.array(id).max(ANALYSIS_TOTAL_LIMIT).optional(),
     scenarioId: id.optional(),
     planFailure: z.enum(PLAN_FAILURES).optional(),
+    /** Why Lab's own work on the plan did not finish (`unusable`): never the owner's gap. Absent on an analysis made before it was typed. */
+    planIssue: z.enum(PLAN_ISSUES).optional(),
+    /**
+     * The planner found no rule of the materials for the topic's customers (`asks`, in its words). A gap in the owner's
+     * rules only when the reviewer confirmed that no sentence of what the planner read says what the agent must do
+     * (`confirmed`, card/review.ts gapRequest, as a preparation checks a gap); otherwise Lab's reading, not the owner's gap.
+     */
+    rulesGap: z.strictObject({ asks: text(300), confirmed: z.boolean(), reason: z.string().max(600).optional(), reviewer: z.string().max(200).optional() }).optional(),
   })).max(20),
   requirements: z.array(requirementSchema).max(RECORD_REQUIREMENT_LIMIT),
   scenarios: z.array(businessScenarioSchema).max(20),
   /** The variation of its topic's plan each analysed conversation stands for; none — only the plan's shared expectations apply to it. */
-  assignments: z.array(z.strictObject({ dialogueId: id, scenarioId: id, variationId: id.optional() })).max(ANALYSIS_LIMIT),
-  findings: z.array(findingSchema).max(ANALYSIS_LIMIT * 8),
+  assignments: z.array(z.strictObject({ dialogueId: id, scenarioId: id, variationId: id.optional() })).max(ANALYSIS_TOTAL_LIMIT),
+  findings: z.array(findingSchema).max(ANALYSIS_TOTAL_LIMIT * PLAN_EXPECTATIONS),
   reviews: z.array(findingReviewSchema).max(5000),
 });
 export type LogAnalysis = z.infer<typeof analysisSchema>;

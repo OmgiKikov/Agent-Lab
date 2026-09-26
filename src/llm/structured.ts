@@ -25,8 +25,11 @@ export interface StructuredTask<O> {
   readonly instructions: string;
   /** The answer's shape, built per call so a reference can be an enum of exactly the ids this call supplied. */
   readonly output: z.ZodType<O>;
-  /** A domain rule the schema cannot express; its message goes back to the model verbatim. Pure. */
-  readonly check?: (value: O) => string | undefined;
+  /**
+   * A domain rule the schema cannot express; its message goes back to the model verbatim. Pure. A check that types its
+   * rejection (`issue`) lets a caller tell the kinds apart when no answer passed (StructuredTaskError.issue).
+   */
+  readonly check?: (value: O) => string | { reason: string; issue: string } | undefined;
   /**
    * A large evidence task: the request is capped in bytes, and a repair starts a fresh request
    * carrying the original input and only the latest rejected draft, so failed drafts never pile up in context.
@@ -47,15 +50,26 @@ export type TaskRunner = <O>(task: StructuredTask<O>, input: unknown, ctx: CallC
  */
 export const TASK_ATTEMPTS = 5;
 
-/** Complete replies were received and charged, but none of them passed the output contract. */
-export class StructuredTaskError extends Error {}
+/**
+ * Complete replies were received and charged, but none of them passed the output contract. `outcome`: how the last one
+ * failed — not JSON, not the schema, or the task's own check of its content (`domain`); `issue`: the kind the check named.
+ */
+export class StructuredTaskError extends Error {
+  readonly outcome?: 'syntax' | 'schema' | 'domain';
+  readonly issue?: string;
+  constructor(message: string, options: { cause?: unknown; outcome?: 'syntax' | 'schema' | 'domain' | undefined; issue?: string | undefined } = {}) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    if (options.outcome) this.outcome = options.outcome;
+    if (options.issue) this.issue = options.issue;
+  }
+}
 
 const outputContract = (schema: z.ZodType) => `Return exactly one compact JSON object, without markdown fences or pretty-printing whitespace, matching this JSON schema:\n${JSON.stringify(z.toJSONSchema(schema))}\nInside strings, escape double quotes as \\" and line breaks as \\n; when copying source text, «» may stand for its straight double quotes.`;
 const userMessage = (text: string): ChatMessage => ({ role: 'user', content: text, timestamp: Date.now() });
 const NOT_JSON = 'Return one JSON object and nothing else; escape line breaks inside strings as \\n.';
 const repairOf = (rejection: string) => `Your previous answer was rejected. ${rejection}\nReturn the corrected object in full, as one compact JSON object and nothing else.`;
 
-type Admission<O> = { ok: true; value: O } | { ok: false; outcome: 'syntax' | 'schema' | 'domain'; reason: string };
+type Admission<O> = { ok: true; value: O } | { ok: false; outcome: 'syntax' | 'schema' | 'domain'; reason: string; issue?: string };
 /** One enclosing Markdown fence is presentation only. The JSON inside is parsed and validated without repairs. */
 function admit<O>(task: StructuredTask<O>, text: string): Admission<O> {
   let parsed: unknown;
@@ -70,7 +84,8 @@ function admit<O>(task: StructuredTask<O>, text: string): Admission<O> {
     return { ok: false, outcome: 'schema', reason: `These fields do not match the schema: ${validated.error.issues.map(issue => `${issue.path.join('.') || 'root'} (${issue.message})`).join('; ')}.` };
   }
   const problem = task.check?.(validated.data);
-  return problem ? { ok: false, outcome: 'domain', reason: problem } : { ok: true, value: validated.data };
+  if (!problem) return { ok: true, value: validated.data };
+  return typeof problem === 'string' ? { ok: false, outcome: 'domain', reason: problem } : { ok: false, outcome: 'domain', reason: problem.reason, issue: problem.issue };
 }
 
 /** Why a whole reply that cannot be used as it stands (ProviderFailure delivery `answered`) is rejected, in the model's terms. */
@@ -87,7 +102,7 @@ const unusable = (failure: ProviderFailure): string => failure.kind === 'length'
 function labelled(label: string, error: unknown): unknown {
   if (error instanceof Stopped || error instanceof ModelCallDefect) return error;
   const message = `${label}: ${error instanceof Error ? error.message : 'шаг не удался'}`;
-  if (error instanceof StructuredTaskError) return new StructuredTaskError(message, { cause: error });
+  if (error instanceof StructuredTaskError) return new StructuredTaskError(message, { cause: error, outcome: error.outcome, issue: error.issue });
   if (error instanceof ProviderFailure) {
     return new ProviderFailure(error.kind, message, { delivery: error.delivery, retryable: error.retryable,
       ...(error.status === undefined ? {} : { status: error.status }), cause: error });
@@ -116,6 +131,7 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
   ctx.onGeneratorTransport?.({ role: task.id, provider: model.provider, model: model.id, api: model.api, effectiveTemperature: 'provider-default' });
   let messages = [userMessage(JSON.stringify(input))];
   let rejection = '';
+  let last: { outcome: 'syntax' | 'schema' | 'domain'; issue?: string | undefined } | undefined;
   const attempts = Math.min(task.attempts ?? TASK_ATTEMPTS, TASK_ATTEMPTS);
   try {
     for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -126,6 +142,7 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
       } catch (error) {
         if (!(error instanceof ProviderFailure) || error.delivery !== 'answered') throw error;
         rejection = unusable(error);
+        last = { outcome: 'syntax' };
         ctx.onGeneratorValidation?.({ attempt, accepted: false, reason: rejection, outcome: 'syntax' });
         // No reply message to continue from: the repair is a fresh request with the original input.
         messages = [userMessage(JSON.stringify({ input, repair: repairOf(rejection) }))];
@@ -138,6 +155,7 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
         return admission.value;
       }
       rejection = admission.reason;
+      last = { outcome: admission.outcome, issue: admission.issue };
       ctx.onGeneratorValidation?.({ attempt, accepted: false, reason: rejection, outcome: admission.outcome });
       const repair = repairOf(rejection);
       // A bounded task keeps the original evidence and only the latest failure: accumulated full drafts can exhaust the context.
@@ -145,7 +163,7 @@ export async function runStructured<O>(runtime: ModelRuntime, models: ModelTable
         ? [userMessage(JSON.stringify({ input, repair, previousReply: reply.text }))]
         : [...messages, reply.message, userMessage(repair)];
     }
-    throw new StructuredTaskError(`${repeatedRejection(attempts)}. Последняя причина: ${rejection}`);
+    throw new StructuredTaskError(`${repeatedRejection(attempts)}. Последняя причина: ${rejection}`, { outcome: last?.outcome, issue: last?.issue });
   } catch (error) {
     throw labelled(task.label, error);
   }

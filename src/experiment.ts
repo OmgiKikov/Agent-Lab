@@ -19,7 +19,7 @@ import * as judgeCheck from './lab/judge-check.js';
 import type { JudgeCheck, JudgeCheckPlan } from './judge-check.js';
 import * as run from './lab/run.js';
 import * as discover from './lab/discover.js';
-import type { AnalysisConsent } from './discover/consent.js';
+import type { AnalysisConsent, ContinuationConsent } from './discover/consent.js';
 import type { LogAnalysis } from './discover/schema.js';
 import { builderOf } from './miner/plan.js';
 import { createPiRuntime } from './pi.js';
@@ -152,6 +152,10 @@ export class ExperimentLab {
   analysisConsent(input: discover.AnalyzeInput): Promise<AnalysisConsent> { return discover.consentOf(this.lab, this.discoverHost, input); }
   /** Starts the analysis of the logs the owner agreed to, within `callCeiling`; returns once it is saved as started. */
   analyze(input: discover.AnalyzeInput, options: { callCeiling: number }): Promise<LogAnalysis> { return discover.analyze(this.lab, this.discoverHost, input, options); }
+  /** What continuing an analysis with its next conversations would reuse, do again and spend at most: nothing is spent or written. */
+  continuationConsent(input: discover.ContinueInput): Promise<ContinuationConsent> { return discover.continuationConsentOf(this.lab, this.discoverHost, input); }
+  /** Starts a continuation the owner agreed to — a new analysis carrying what still holds —, within `callCeiling`. */
+  continueAnalysis(input: discover.ContinueInput, options: { callCeiling: number }): Promise<LogAnalysis> { return discover.continueAnalysis(this.lab, this.discoverHost, input, options); }
   /** An analysis as it is now: the running one's live copy, otherwise the stored file. */
   async getAnalysis(id: string): Promise<LogAnalysis> {
     const live = this.liveAnalysis.current;

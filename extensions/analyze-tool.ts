@@ -3,11 +3,11 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext } from '@earendil-
 import { Type } from 'typebox';
 import { judgeFor, settingsSchema } from '../src/contracts.js';
 import { demoAnalysisInput } from '../src/demo.js';
-import { analysisConsentText } from '../src/discover/consent.js';
-import { ANALYSIS_LIMIT, DEFAULT_ANALYSED, type LogAnalysis } from '../src/discover/schema.js';
-import { exampleLine, problemTitle } from '../src/discover/text.js';
+import { analysisConsentText, continuationConsentText } from '../src/discover/consent.js';
+import { ANALYSIS_LIMIT, DEFAULT_ANALYSED, toolNameSchema, type LogAnalysis } from '../src/discover/schema.js';
+import { conversationLines, exampleLine, problemTitle, reviewWord } from '../src/discover/text.js';
 import { analysisView } from '../src/discover/view.js';
-import type { AnalyzeInput } from '../src/lab/discover.js';
+import type { AnalyzeInput, ContinueInput } from '../src/lab/discover.js';
 import { countText } from '../src/plural.js';
 import { clip, safeText } from '../src/text.js';
 import { analysisAnswer, exampleAt } from './analysis-output.ts';
@@ -34,15 +34,17 @@ const { task, logs, materials, prompts, rules, table } = prepareParameters.prope
 
 export const analyzeParameters = Type.Object({
   task, logs, materials, prompts, rules, table,
-  conversations: Type.Optional(Type.Integer({ minimum: 1, maximum: ANALYSIS_LIMIT, description: `How many conversations to judge at most, only when the owner named a number: ${DEFAULT_ANALYSED} by default.` })),
+  conversations: Type.Optional(Type.Integer({ minimum: 1, maximum: ANALYSIS_LIMIT, description: `How many conversations to judge at most, only when the owner named a number: ${DEFAULT_ANALYSED} by default. With analysis and more: how many more.` })),
+  recordedTools: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { maxItems: 50, description: 'The tools whose every call the log records, only when the owner said so or the log\'s format documents it; the host asks the owner natively to confirm, and without that a missing call is never counted as a violation.' })),
   analysis: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'An analysis id from an earlier answer, or "latest": shows it again; nothing is spent.' })),
+  more: Type.Optional(Type.Literal(true, { description: 'With analysis: continue it with the next conversations not selected before (conversations says how many); the host asks the owner natively for the ceiling; findings already made are not paid for again.' })),
   review: Type.Optional(Type.Object({ problem: Type.Integer({ minimum: 1 }), example: Type.Optional(Type.Integer({ minimum: 1 })) },
     { ...closed, description: 'With analysis: the example the owner wants to judge themselves, by the numbers of the answer (example "1.2" is problem 1, example 2). The host asks the owner natively whether the judge is right; you never pass the verdict.' })),
   stop: Type.Optional(Type.Literal(true, { description: 'Only when the owner asks to stop the analysis going on: what it found is kept.' })),
   demo: Type.Optional(Type.Literal(true, { description: 'The teaching example\'s logs: no model, no keys, a few seconds.' })),
 }, closed);
 type AnalyzeParams = { task?: string; logs?: string; materials?: string[]; prompts?: string[]; rules?: string; table?: Parameters<typeof ownerInputs>[4]['table'];
-  conversations?: number; analysis?: string; review?: { problem: number; example?: number }; stop?: true; demo?: true };
+  conversations?: number; recordedTools?: string[]; analysis?: string; more?: true; review?: { problem: number; example?: number }; stop?: true; demo?: true };
 
 type Host = Pick<LabHost, 'operations' | 'open' | 'reading' | 'background' | 'feedResult' | 'askOwner' | 'inlineBuildMs'>;
 
@@ -62,10 +64,11 @@ export function registerAnalyzeTool(pi: Pick<ExtensionAPI, 'registerTool'>, host
       const directory = resolve(ctx.cwd, '.agent-lab');
       try {
         if (params.stop) return await stop(host, callId, directory);
-        if (params.analysis) return params.review ? await review(host, callId, ctx, directory, params.analysis, params.review) : await show(host, callId, directory, params.analysis);
+        if (params.analysis && !params.more) return params.review ? await review(host, callId, ctx, directory, params.analysis, params.review) : await show(host, callId, directory, params.analysis);
         const busy = host.operations.busy(directory);
         if (busy) throw new Error(busy);
-        if (params.demo) return await start(host, callId, ctx, signal, onUpdate, demoAnalysisInput(), []);
+        if (params.analysis) return await continueOne(host, callId, ctx, signal, onUpdate, directory, params.analysis, params.conversations);
+        if (params.demo) return await start(host, callId, ctx, signal, onUpdate, { input: demoAnalysisInput() }, []);
         return await fromOwner(host, callId, ctx, signal, onUpdate, params, directory);
       } catch (error) { return host.askOwner(callId, error); }
     },
@@ -100,8 +103,13 @@ async function review(host: Host, callId: string, ctx: ExtensionContext, directo
       `Примера ${name} в разборе нет — какой открыть?`);
   }
   const { problem, example } = found;
+  // The whole source conversation, every message as the log holds it: a summary of the evidence never stands in for it.
+  const batch = await host.reading(directory).store.readImport(analysis.logs.importId).catch(() => undefined);
+  const dialogue = batch?.dialogues.find(item => item.id === example.dialogueId);
   const body = [`Судья: ${problemTitle(problem)}.`, ...problem.rules.slice(0, 2).map(rule => `Правило: «${clip(rule.quote, 300)}» — ${rule.source}.`), exampleLine(example),
-    ...(example.rationale ? [`Почему, по словам судьи: ${clip(example.rationale, 500)}`] : [])];
+    ...(example.rationale ? [`Почему, по словам судьи: ${clip(example.rationale, 500)}`] : []),
+    ...(example.review ? [`Ваша отметка сейчас: ${reviewWord(example.review)}.`] : []),
+    '', `Разговор ${example.dialogueId} целиком:`, ...(dialogue ? conversationLines(dialogue, example.quotes.map(quote => quote.seq)) : ['— его нет в логах этого разбора.'])];
   const answers = ['Да, это нарушение', 'Нет, это не нарушение', 'Не знаю', 'Не сейчас'] as const;
   const picked = await ctx.ui.select(safeText(['Прав ли судья?', '', ...body].join('\n')), [...answers]);
   const verdict = picked === answers[0] ? 'confirmed' : picked === answers[1] ? 'disputed' : picked === answers[2] ? 'unsure' : undefined;
@@ -126,6 +134,38 @@ async function stop(host: Host, callId: string, directory: string): Promise<Agen
   return host.feedResult(callId, { ...answer.output, stopped: true }, { ...answer.feed, title: 'Разбор остановлен' }, answer.note);
 }
 
+/**
+ * The owner's word on what the log records: the tools the model named, confirmed natively — only then does a complete
+ * conversation with no call of a required tool count as the action not made. Undefined when none was named or the owner said no.
+ */
+async function recordedBy(ctx: ExtensionContext, named: readonly string[] | undefined, file: string): Promise<AnalyzeInput['logContract']> {
+  const tools = [...new Set((named ?? []).map(tool => tool.trim()).filter(tool => toolNameSchema.safeParse(tool).success))];
+  if (!tools.length) return undefined;
+  const yes = 'Да, каждый вызов';
+  const picked = await ctx.ui.select(safeText([`Лог «${file}» записывает каждый вызов этих инструментов в разговорах, помеченных полными?`, '', tools.join(', '), '',
+    'Если да, разговор без вызова инструмента, которого требует правило, — нарушение. Если нет или вы не знаете, Lab скажет «не видно», а не «нарушено».'].join('\n')),
+    [yes, 'Нет или не знаю']);
+  return picked === yes ? { tools, via: 'pi-confirm' } : undefined;
+}
+
+/** A continuation of an analysis: its consent natively — the next conversations, what is reused with no call, the ceiling —, then the work. */
+async function continueOne(host: Host, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
+  directory: string, named: string, more: number | undefined): Promise<AgentToolResult<unknown>> {
+  const earlier = await analysisNamed(host, directory, named);
+  const session = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
+  const settings = earlier.mode === 'demo' || !session ? undefined
+    : settingsSchema.parse({ provider: session.provider, model: session.id, judge: judgeFor(ctx.modelRegistry?.getAvailable().map(model => ({ provider: model.provider, id: model.id })) ?? [], session), timeoutMs: 600_000 });
+  if (earlier.mode === 'live' && !settings) throw new Error('В Pi не выбрана модель: выберите её (/model). Ничего не потрачено.');
+  const input = { analysisId: earlier.id, ...(more ? { more } : {}), ...(settings ? { settings } : {}) };
+  const consent = await host.reading(directory).continuationConsent(input);
+  const text = continuationConsentText(consent);
+  if (!consent.demo) {
+    requireInteractive(ctx, 'Продолжение разбора тратит вызовы модели: согласие даёте вы в интерактивном терминале Pi. Ничего не потрачено.');
+    if (!await ask(ctx, text.question, text.lines, 'Продолжить')) return declined(host, callId, 'Не продолжаю: вы отказались. Ничего не потрачено.', 'analyze');
+  }
+  return start(host, callId, ctx, signal, onUpdate, { continues: input }, [], consent.callCeiling);
+}
+
 /** The owner's logs and rules, the consent with the ceiling, then the analysis. */
 async function fromOwner(host: Host, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
   params: AnalyzeParams, directory: string): Promise<AgentToolResult<unknown>> {
@@ -136,17 +176,18 @@ async function fromOwner(host: Host, callId: string, ctx: ExtensionContext, sign
   const session = { provider: ctx.model.provider, id: ctx.model.id };
   // What Pi can reach right now, from its own registry: the independent default judge when it can, else the session's model.
   const judge = judgeFor(ctx.modelRegistry?.getAvailable().map(model => ({ provider: model.provider, id: model.id })) ?? [], session);
+  requireInteractive(ctx, 'Разбор логов тратит вызовы модели: согласие на расход даёте вы в интерактивном терминале Pi. Откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не потрачено.');
+  const logContract = await recordedBy(ctx, params.recordedTools, basename(read.logs));
   const input: AnalyzeInput = { task: params.task!, mode: 'live', materials: read.expanded.materials, logs: read.libraryImport, file: basename(read.logs),
     settings: settingsSchema.parse({ provider: session.provider, model: session.id, judge, timeoutMs: 600_000 }),
-    ...(params.conversations ? { requested: params.conversations } : {}) };
-  requireInteractive(ctx, 'Разбор логов тратит вызовы модели: согласие на расход даёте вы в интерактивном терминале Pi. Откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не потрачено.');
+    ...(params.conversations ? { requested: params.conversations } : {}), ...(logContract ? { logContract } : {}) };
   const consent = await host.reading(directory).analysisConsent(input);
   const text = analysisConsentText(consent, input.file);
   const sources = [...(params.rules ? ['ваши слова из разговора'] : []), ...read.prompts.map(prompt => prompt.id),
     ...[...read.files.promptFiles, ...read.files.materialFiles].map(file => shownPath(file, ctx.cwd))];
   const lines = [...text.lines, `Правила: ${sources.slice(0, 4).join(', ')}${sources.length > 4 ? ` и ещё ${sources.length - 4}` : ''} — ${countText(read.expanded.materials.length, DOCUMENTS)}.`];
   if (!await ask(ctx, text.question, lines, 'Найти ошибки')) return declined(host, callId, 'Не разбираю: вы отказались. Ничего не потрачено.', 'analyze');
-  return start(host, callId, ctx, signal, onUpdate, input, read.notes, consent.callCeiling);
+  return start(host, callId, ctx, signal, onUpdate, { input }, read.notes, consent.callCeiling);
 }
 
 /**
@@ -154,7 +195,7 @@ async function fromOwner(host: Host, callId: string, ctx: ExtensionContext, sign
  * run does: the row above the input follows it and its findings arrive as a message.
  */
 async function start(host: Host, callId: string, ctx: ExtensionContext, signal: AbortSignal, onUpdate: ((update: AgentToolResult<unknown>) => void) | undefined,
-  input: AnalyzeInput, notes: string[], ceiling?: number): Promise<AgentToolResult<unknown>> {
+  work: { input: AnalyzeInput } | { continues: ContinueInput }, notes: string[], ceiling?: number): Promise<AgentToolResult<unknown>> {
   const owned = await host.open(ctx.cwd);
   const { lab, close } = owned;
   const interactive = isInteractive(ctx) && !!ctx.ui;
@@ -165,8 +206,8 @@ async function start(host: Host, callId: string, ctx: ExtensionContext, signal: 
   try {
     await lab.init(); signal.addEventListener('abort', cancel, { once: true }); signal.throwIfAborted();
     if (interactive) signal.removeEventListener('abort', cancel);
-    const callCeiling = ceiling ?? (await lab.analysisConsent(input)).callCeiling;
-    id = (await lab.analyze(input, { callCeiling })).id;
+    const callCeiling = ceiling ?? ('input' in work ? (await lab.analysisConsent(work.input)).callCeiling : (await lab.continuationConsent(work.continues)).callCeiling);
+    id = ('input' in work ? await lab.analyze(work.input, { callCeiling }) : await lab.continueAnalysis(work.continues, { callCeiling })).id;
     if (signal.aborted && !interactive) cancel();
     let last = '';
     unfollow = followAnalysis(lab, id, analysis => {

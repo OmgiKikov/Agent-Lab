@@ -1,7 +1,8 @@
-import type { LogUndecided } from '../card/log-judge.js';
 import { countText } from '../plural.js';
 import { clip } from '../text.js';
-import type { AnalysisView, Example, ProblemView } from './view.js';
+import type { ImportBatch } from '../scenario-contracts.js';
+import type { PlanIssue } from './schema.js';
+import type { AnalysisView, Example, FindingUndecided, ProblemView } from './view.js';
 import type { ProblemCheck } from './check.js';
 
 /*
@@ -14,9 +15,10 @@ const CONVERSATIONS: [string, string, string] = ['разговор', 'разго
 const OF_CONVERSATIONS: [string, string, string] = ['разговора', 'разговоров', 'разговоров'];
 const IN_CONVERSATIONS: [string, string, string] = ['разговоре', 'разговорах', 'разговорах'];
 
-const UNDECIDED: Readonly<Record<LogUndecided, string>> = {
+const UNDECIDED: Readonly<Record<FindingUndecided, string>> = {
   no_agent_reply: 'агент в разговоре не ответил',
-  channel_unobserved: 'действия агента в логе не записаны',
+  channel_unobserved: 'действия агента в этом разговоре записаны не полностью',
+  call_unconfirmed: 'вызова нужного инструмента в логе нет, а что лог записывает каждый такой вызов, не подтверждено — сделано ли действие, не видно',
   not_exercised_in_log: 'разговор не дошёл до правила',
   judge_failed: 'судья не дал ответа',
   judge_split: 'два голоса судьи разошлись',
@@ -24,10 +26,28 @@ const UNDECIDED: Readonly<Record<LogUndecided, string>> = {
   judge_unclear: 'судья не смог решить',
 };
 const GAP: Readonly<Record<AnalysisView['gaps'][number]['reason'], string>> = {
-  unusable: 'Lab не нашёл в ваших правилах, что должен агент в этой теме',
+  unusable: 'работа Lab над правилами темы не завершилась',
   interrupted: 'разбор остановился, пока Lab искал правила темы',
   not_reached: 'разбор остановился раньше',
 };
+/** Why Lab's own work on a topic's plan did not finish: never the owner's rules. */
+const ISSUE: Readonly<Record<PlanIssue, string>> = {
+  answer_schema: 'ответы модели не прошли проверку формата',
+  quote_not_verbatim: 'модель цитировала правила не дословно, и Lab не принял ни одного ответа',
+  answer_check: 'ответы модели не прошли проверку Lab (вид правила, варианты или инструмент не сходятся)',
+  context_window: 'разговоры темы вместе с материалами не поместились в окно модели',
+  source_selection: 'Lab не смог выбрать статьи под эту тему',
+  planner_unavailable: 'в этой среде нет модели, которая находит правила',
+};
+
+/** A topic with no plan, in the owner's words: whose it is — Lab's work, Lab's unconfirmed reading, or the owner's confirmed gap. */
+export function gapLine(gap: AnalysisView['gaps'][number]): string {
+  const size = countText(gap.conversations, CONVERSATIONS);
+  if (gap.rulesGap?.confirmed) return `Тема «${gap.title}» (${size}): правила нет — ${gap.rulesGap.asks}. Проверяющий подтвердил, что в прочитанных материалах об этом не сказано.`;
+  if (gap.rulesGap) return `Тема «${gap.title}» (${size}) не оценена: Lab не нашёл правила для запроса «${gap.rulesGap.asks}», но проверяющий не подтвердил, что его нет${gap.rulesGap.reason ? ` (${gap.rulesGap.reason})` : ''}. Это не пробел в ваших правилах.`;
+  const why = gap.reason === 'unusable' ? gap.issue ? ISSUE[gap.issue] : GAP.unusable : GAP[gap.reason];
+  return `Тема «${gap.title}» (${size}) не оценена: ${why}. Это работа Lab, а не ваши правила.`;
+}
 const UNFINISHED: Readonly<Record<NonNullable<AnalysisView['unfinished']>, string>> = {
   budget: 'кончился согласованный лимит вызовов модели',
   stopped: 'вы его остановили',
@@ -52,18 +72,46 @@ export function problemSize(problem: Pick<ProblemView, 'violations' | 'checked' 
 }
 
 const ROLE: Readonly<Record<Example['quotes'][number]['role'], string>> = { customer: 'клиент', agent: 'агент', other: 'в разговоре' };
+/** A logged conversation's lines at most on one screen; a longer one says how many more there are. */
+const CONVERSATION_LINES = 80;
+
+/**
+ * A logged conversation whole, as the log holds it: every message and every recorded tool or state event, numbered by its
+ * place in the log, the events the judge cited marked «→». What the owner opens from an example: the evidence's
+ * surroundings, never a summary instead of them.
+ */
+export function conversationLines(dialogue: Pick<ImportBatch['dialogues'][number], 'events' | 'observation'>, cited: readonly number[] = []): string[] {
+  const who = (event: ImportBatch['dialogues'][number]['events'][number]): string => {
+    if (event.type === 'message') return event.role === 'user' ? 'клиент' : event.role === 'assistant' ? 'агент' : event.role === 'system' ? 'система' : 'инструмент';
+    const tool = event.type === 'tool' ? (event.data as { tool?: unknown } | null)?.tool : undefined;
+    return event.type === 'tool' ? `инструмент${typeof tool === 'string' ? ` ${tool}` : ''}` : event.type === 'state' ? 'состояние' : 'поиск';
+  };
+  const lines = dialogue.events.map(event => `${cited.includes(event.index) ? '→' : ' '} ${event.index}. ${who(event)}: ${clip(event.content ?? JSON.stringify(event.data), 400)}`);
+  const shown = lines.slice(0, CONVERSATION_LINES);
+  return [...shown, ...(lines.length > shown.length ? [`…и ещё ${lines.length - shown.length} — весь разговор в файле логов.`] : []),
+    ...(dialogue.observation !== 'complete' ? ['Лог не помечает этот разговор полным: вызовы инструментов в нём могут быть записаны не все.'] : [])];
+}
+/** The owner's own word on an example, as the example says it. */
+export const reviewWord = (review: Example['review']): string => review === 'confirmed' ? 'вы подтвердили' : review === 'disputed' ? 'вы оспорили' : review === 'unsure' ? 'вы не уверены' : '';
+
 /** One example: the conversation and what was said in it, verbatim. */
 export function exampleLine(example: Example): string {
   const said = example.quotes.slice(0, 3).map(quote => `${ROLE[quote.role]}: «${clip(quote.quote, 200)}»`).join(' → ');
-  const review = example.review === 'confirmed' ? ' · вы подтвердили' : example.review === 'disputed' ? ' · вы оспорили' : example.review === 'unsure' ? ' · вы не уверены' : '';
-  return `Разговор ${example.dialogueId}${said ? `: ${said}` : ''}${review}`;
+  const absent = example.absent ? ` · в полном журнале нет вызова ${example.absent}: действие не выполнено` : '';
+  const review = example.review ? ` · ${reviewWord(example.review)}` : '';
+  return `Разговор ${example.dialogueId}${said ? `: ${said}` : ''}${absent}${review}`;
 }
 
-/** The first line: what was analysed and what it came to. */
+/**
+ * The first line: how many of the selected conversations were processed, of how many in the log, and what it came to —
+ * never «разобрано» for conversations the work did not reach.
+ */
 export function headline(view: AnalysisView): string {
   const { coverage } = view;
   if (view.status === 'running') return `Разбор идёт: ${view.message}`;
-  const scope = `Разобрано ${countText(coverage.picked, CONVERSATIONS)} из ${coverage.logged} в «${view.file}»`;
+  const scope = coverage.processed === coverage.picked
+    ? `Разобрано ${countText(coverage.processed, CONVERSATIONS)} из ${coverage.logged} в «${view.file}»`
+    : `Разобрано ${coverage.processed} из ${countText(coverage.picked, OF_CONVERSATIONS)}, выбранных в «${view.file}» (в логе — ${coverage.logged})`;
   const found = view.problems.length ? `нарушений правил — ${view.problems.length}` : coverage.decided ? 'нарушений правил не найдено' : 'ни одно правило не удалось оценить';
   return `${scope}: ${found}.`;
 }
@@ -73,8 +121,9 @@ export function headline(view: AnalysisView): string {
  * the read conversations, at most so many of one topic, the seats rounding leaves first to topics that got none —
  * or, with no topic map, the first ones of the log.
  */
-export function pickedHow(coverage: Pick<AnalysisView['coverage'], 'method' | 'perTopic'>): string {
-  return coverage.method === 'order' ? 'темы не размечены, поэтому разобраны первые по порядку в логе'
+export function pickedHow(coverage: Pick<AnalysisView['coverage'], 'method' | 'perTopic' | 'beyond'>): string {
+  if (coverage.method === 'order') return 'темы не размечены, поэтому разобраны первые по порядку в логе';
+  return coverage.beyond === 'shared' ? 'места делятся между темами по их доле среди прочитанных разговоров; места, оставшиеся после округления, получают сначала темы без единого места'
     : `места делятся между темами по их доле среди прочитанных разговоров, не больше ${coverage.perTopic} из одной темы; места, оставшиеся после округления, получают сначала темы без единого места`;
 }
 
@@ -84,9 +133,11 @@ export function coverageLines(view: AnalysisView): string[] {
   const unread = coverage.logged - coverage.readable;
   const rest = coverage.judgeable - coverage.picked;
   return [
-    `Правила оценены в ${countText(coverage.decided, IN_CONVERSATIONS)} из ${coverage.picked}${coverage.undecided ? `; в ${coverage.undecided} — ни одно не удалось оценить` : ''}${coverage.notReached ? `; до ${coverage.notReached} разбор не дошёл` : ''}.`,
+    `Выбрано ${countText(coverage.picked, CONVERSATIONS)}; разобрано ${coverage.processed}; правила оценены в ${coverage.decided}${coverage.undecided ? `; в ${coverage.undecided} — ни одно не удалось оценить` : ''}${coverage.notReached ? `; до ${coverage.notReached} разбор не дошёл` : ''}.`,
+    ...(coverage.sharedOnly ? [`В ${countText(coverage.sharedOnly, IN_CONVERSATIONS)} сверх ${coverage.perTopic} примеров, по которым Lab нашёл правила темы, проверены только общие правила темы — правила отдельных вариантов к ним не прикладывались.`] : []),
+    ...(view.continues ? [`Это продолжение разбора ${view.continues.analysisId}: там было выбрано ${view.continues.picked}; ${countText(view.continues.reused, ['оценка перенесена', 'оценки перенесены', 'оценок перенесено'])} без вызова модели.`] : []),
     ...(view.undecided.length ? [`Не удалось оценить: ${view.undecided.map(item => `${UNDECIDED[item.reason]} — ${item.count}`).join(', ')}.`] : []),
-    ...(rest > 0 ? [`Не разбирались ${countText(rest, CONVERSATIONS)}: ${pickedHow(coverage)}.`] : []),
+    ...(rest > 0 ? [`Не разбирались ${countText(rest, CONVERSATIONS)}: ${pickedHow(coverage)}. Их можно разобрать продолжением — сделанное не оплачивается повторно.`] : []),
     ...(coverage.unjudgeable.length ? [`Нечего оценивать в ${countText(coverage.unjudgeable.reduce((sum, item) => sum + item.count, 0), IN_CONVERSATIONS)}: ${coverage.unjudgeable.map(item => `${item.reason === 'no_customer' ? 'нет реплики клиента' : 'нет ответа агента'} — ${item.count}`).join(', ')}.`] : []),
     ...(unread > 0 ? [`Не прочитаны ${countText(unread, CONVERSATIONS)} лога.`] : []),
   ];
@@ -102,10 +153,12 @@ export function trafficLine(view: AnalysisView): string | undefined {
 /** What the answer does not say. */
 export function limitLines(view: AnalysisView): string[] {
   return [
-    'Частота — среди разобранных разговоров, где правило проверено; это не доля всего трафика.',
+    'Частота — среди разобранных разговоров, где правило проверено; это не доля всего трафика и не доля клиентов.',
     'Оценено по правилам, которые вы дали сейчас; действовали ли они в дни этих разговоров, Lab не знает.',
     'Нет нарушения — значит, проверенные правила соблюдены; остальное в разговоре не проверялось.',
     'Слова агента о сделанном не доказывают действие: оно видно только в записанных событиях инструментов.',
+    view.recorded?.length ? `Что вызова нет, Lab считает нарушением только для ${view.recorded.join(', ')} — вы подтвердили, что лог записывает каждый их вызов.`
+      : 'Что лог записывает каждый вызов инструментов, не подтверждено: отсутствие вызова нигде не засчитано нарушением.',
     ...(view.mode === 'demo' ? ['Учебный пример: темы, правила и оценки — заготовки без модели; это не оценка модели.'] : []),
   ];
 }
@@ -131,7 +184,7 @@ export function analysisLines(view: AnalysisView, options: { examples?: number; 
     if (view.problems.length > shown.length) lines.push(`…и ещё ${view.problems.length - shown.length}.`);
   }
   if (view.clean.length) lines.push('', `Без нарушений: ${view.clean.slice(0, 5).map(item => `«${clip(item.text, 120)}» — ${countText(item.checked, CONVERSATIONS)}${item.disputed ? ` (вы оспорили ${item.disputed} ${item.disputed === 1 ? 'вывод' : 'вывода'} судьи)` : ''}`).join('; ')}${view.clean.length > 5 ? `; ещё ${view.clean.length - 5}` : ''}.`);
-  if (view.gaps.length) lines.push('', ...view.gaps.map(gap => `Тема «${gap.title}» не оценена: ${GAP[gap.reason]} (${countText(gap.conversations, CONVERSATIONS)}).`));
+  if (view.gaps.length) lines.push('', ...view.gaps.map(gapLine));
   lines.push('', ...coverageLines(view), ...limitLines(view));
   return lines;
 }
@@ -140,14 +193,15 @@ export function analysisLines(view: AnalysisView, options: { examples?: number; 
 export function nextStep(view: AnalysisView): string {
   if (view.status === 'running') return 'Дождитесь конца разбора — итог придёт сам.';
   if (view.problems.length) return 'Дальше: откройте пример нарушения и скажите, прав ли судья, — или сделайте из него проверку для новой версии агента.';
-  if (view.gaps.some(gap => gap.reason === 'unusable')) return 'Дальше: допишите правила для тем, которые Lab не смог оценить.';
-  return 'Дальше: разберите больше разговоров или другую выгрузку.';
+  // Only a gap the reviewer confirmed is the owner's to fill; Lab's own unfinished work is repeated by a continuation.
+  if (view.gaps.some(gap => gap.rulesGap?.confirmed)) return 'Дальше: допишите правило для темы, где проверяющий подтвердил, что правила нет.';
+  if (view.gaps.length) return 'Дальше: продолжите разбор — Lab попробует снова темы, где его работа не завершилась; ваши правила менять не нужно.';
+  return 'Дальше: продолжите разбор следующими разговорами или разберите другую выгрузку.';
 }
 
 /** A version as the owner reads it. */
 const versionWord = (version: string | null): string => version ? `версии ${version}` : 'версии, которую агент не назвал';
 const SITUATIONS_WITH: [string, string, string] = ['ситуации', 'ситуаций', 'ситуаций'];
-
 /**
  * The three facts of a check made from a problem of the logs, in the owner's words: found in the logs, reproduced (or
  * not) on this version, fixed (or not, or broken beside it) against the run it repeats — each read off the one

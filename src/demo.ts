@@ -3,7 +3,7 @@ import { createInputSchema, type CreateInput, type RunnableTarget, type TraceEve
 import { simulatorFidelity, type MetricAssessment } from './assessment.js';
 import type { Runtime } from './runtime.js';
 import type { DialogueProposal } from './card/proposal.js';
-import type { PlanProposal } from './card/plan.js';
+import { asksChannel, type PlanProposal } from './card/plan.js';
 import type { ReviewVerdict } from './card/review.js';
 import { buildTopicMap, type TopicTaskRunner } from './miner/topic-map.js';
 import { judgeLogged, logProtocolHash } from './card/log-judge.js';
@@ -125,7 +125,7 @@ const demoTopics: TopicTaskRunner = async (task, input) => {
     ? { topics: [{ title: 'Возврат оплаты', description: 'Клиент просит вернуть оплату за покупку.' }] }
     : { assignments: conversations.map(({ dialogueId }) => ({ dialogueId, topicId: 't1' })) });
   const problem = task.check?.(value);
-  if (problem) throw new Error(problem);
+  if (problem) throw new Error(typeof problem === 'string' ? problem : problem.reason);
   return value;
 };
 
@@ -185,7 +185,11 @@ export function createDemoRuntime(): Runtime {
     },
     async proposeScenario(input) {
       if (input.call.topic.title !== 'Возврат оплаты' || input.call.examples.some(example => example.dialogueId !== 'known' && example.dialogueId !== 'late')) throw new Error(DEMO_ONLY);
-      return { ...DEMO_PLAN, variations: DEMO_PLAN.variations.map(variation => ({ ...variation, examples: variation.examples.filter(id => input.call.examples.some(example => example.dialogueId === id)) })) };
+      // A call that asks for channels or gaps (a log analysis) is answered in its shape: every teaching duty is seen on the reply, and the rule covers the topic.
+      const asked = asksChannel(input.call);
+      return { ...DEMO_PLAN, variations: DEMO_PLAN.variations.map(variation => ({ ...variation, examples: variation.examples.filter(id => input.call.examples.some(example => example.dialogueId === id)) })),
+        expectations: DEMO_PLAN.expectations.map(expectation => ({ ...expectation, ...(asked.observation ? { observation: 'reply' } : {}), ...(asked.tool ? { tool: null } : {}) })),
+        ...(input.call.gaps ? { uncovered: null } : {}) } as PlanProposal;
     },
     /** Every claim holds except the one the example teaches with: a number named after the agent's question, while no one has vouched for it. */
     async reviewCard(input) {

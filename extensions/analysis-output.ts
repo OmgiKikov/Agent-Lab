@@ -27,7 +27,9 @@ export function exampleAt(view: AnalysisView, place: { problem: number; example?
 export function analysisOutput(view: AnalysisView): Record<string, unknown> {
   return {
     analysis: view.id, status: view.status, ...(view.unfinished ? { unfinished: view.unfinished } : {}), file: view.file,
-    analysed: view.coverage.picked, of: view.coverage.logged, decidedIn: view.coverage.decided,
+    selected: view.coverage.picked, analysed: view.coverage.processed, notReached: view.coverage.notReached, of: view.coverage.logged, decidedIn: view.coverage.decided,
+    ...(view.coverage.sharedOnly ? { judgedOnSharedRulesOnly: view.coverage.sharedOnly } : {}), ...(view.continues ? { continues: view.continues.analysisId, reusedFindings: view.continues.reused } : {}),
+    ...(view.recorded ? { logRecordsEveryCallOf: view.recorded } : {}),
     ...(view.traffic ? { traffic: view.traffic.map(topic => ({ topic: topic.title, share: Math.round(topic.share * 100) / 100 })) } : {}),
     problems: view.problems.map((problem, index) => ({
       number: index + 1, violation: problemTitle(problem), size: problemSize(problem), inConversations: problem.violations, checkedIn: problem.checked, notDecidedIn: problem.unknown,
@@ -37,13 +39,18 @@ export function analysisOutput(view: AnalysisView): Record<string, unknown> {
         ...(example.review ? { owner: example.review } : {}) })),
     })),
     noViolations: view.clean.map(item => ({ rule: item.text, checkedIn: item.checked })),
-    notDecided: coverageLines(view), gaps: view.gaps.map(gap => ({ topic: gap.title, reason: gap.reason, conversations: gap.conversations })),
+    ...(view.overruled.length ? { disputedByOwner: view.overruled.map(problem => ({ violation: problemTitle(problem), disputed: problem.disputed })) } : {}),
+    notDecided: coverageLines(view),
+    gaps: view.gaps.map(gap => ({ topic: gap.title, reason: gap.reason, ...(gap.issue ? { labWorkUnfinished: gap.issue } : {}),
+      ...(gap.rulesGap ? { rulesGap: gap.rulesGap.confirmed ? 'confirmed by the reviewer' : 'not confirmed: Lab\'s reading, not the owner\'s gap' } : {}), conversations: gap.conversations })),
     limits: limitLines(view), next: nextStep(view),
     instruction: 'This is an analysis of logged conversations (no situation was made, the agent did not run). Tell the owner in 3–6 short Russian sentences: '
-      + 'how many conversations were analysed of how many; the main violations, each with how often among the conversations it was checked on and one verbatim example; '
+      + 'how many conversations were analysed (analysed) of those selected (selected) and of how many in the log; the main violations, each with how often among the conversations it was checked on and one verbatim example; '
       + 'what could not be decided and why; that the frequency is among the analysed conversations, not all traffic. Do not re-judge, add or soften violations. '
+      + 'A gap is the owner\'s missing rule only when rulesGap is confirmed; labWorkUnfinished is Lab\'s own work not finishing — never ask the owner to add a rule for it. '
       + 'Offer ONE next step from `next`: to say whether the judge is right about an example (agent_lab_analyze with review {problem, example}; the host asks the owner, you never pass the verdict), '
-      + 'to clarify a rule, or to make a check of a new agent version from a problem (agent_lab_prepare with fromAnalysis {analysis, problem}).',
+      + 'to continue with the next conversations (agent_lab_analyze with analysis and more; the host asks the owner), to open it in /agent-lab, '
+      + 'or to make a check of a new agent version from a problem (agent_lab_prepare with fromAnalysis {analysis, problem}).',
   };
 }
 

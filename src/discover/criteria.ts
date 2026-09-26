@@ -9,7 +9,7 @@ import { criterionHash, criterionOf } from '../criterion.js';
 import { observableSources } from '../judge.js';
 import { workInputIssue } from '../limits.js';
 import type { ImportBatch } from '../scenario-contracts.js';
-import { ANALYSIS_PROTOCOL, type LogAnalysis } from './schema.js';
+import { ANALYSIS_PROTOCOL, type FindingSkip, type LogAnalysis, type LogContract } from './schema.js';
 
 /*
  * What a log analysis asks the judge: an expectation of a topic's plan (card/plan.ts) — a criterion (criterion.ts): the
@@ -27,6 +27,15 @@ import { ANALYSIS_PROTOCOL, type LogAnalysis } from './schema.js';
  * a conversation it named under none gets the expectations every variation shares. The judge then still decides whether
  * the moment of the expectation came at all (both conditions not met: not exercised). A criterion seen on the tools or the
  * state meets a log that did not record that channel completely: the judge is not asked (calibration-scope.ts logSkip).
+ *
+ * What a criterion requires and what a log observes are kept apart (analysisSkip). A criterion that requires a call of a
+ * tool stays that criterion whatever the logs hold; on one conversation it is:
+ *
+ *   the log marks the conversation incomplete ──────────────────────────► unknown (channel_unobserved): proves nothing
+ *   complete, and it holds a call of the required tool ─────────────────► judged: its result may pass, another tool's never
+ *   complete, no call of it, the owner's contract says the log records ─► judged: the call was not made — a failure the
+ *     every call of that tool (logs.contract)                               judge may find (card/expectations.ts channelHolds)
+ *   complete, no call of it, no such contract ──────────────────────────► unknown (call_unconfirmed): not observable, no call
  */
 
 type PlanExpectation = BusinessScenario['expectations'][number];
@@ -69,10 +78,34 @@ function judgedSources(analysis: Pick<LogAnalysis, 'task' | 'sources' | 'require
  * show it, and the judge is not asked.
  */
 export interface AnalysisJob { key: string; criterionHash: string; request: LogJudgeRequest; scenarioId: string; expectationId: string; variationId?: string; dialogueId: string;
-  skipped?: 'no_agent_reply' | 'channel_unobserved' }
+  skipped?: FindingSkip }
+
+/** The tool a logged tool event names, as the log judge reads it (card/log-judge.ts loggedEvents). */
+const toolOf = (event: ImportBatch['dialogues'][number]['events'][number]): string | undefined => {
+  const tool = event.type === 'tool' ? (event.data as { tool?: unknown } | null)?.tool : undefined;
+  return typeof tool === 'string' && tool ? tool : undefined;
+};
+
+/**
+ * Why the log cannot show an expectation on one conversation, so the judge is not asked: the calibration's own rule
+ * (logSkip) — the agent never replied, or the channel was not recorded completely — and, for a criterion that requires a
+ * call of a named tool, a conversation with no call of it whose log no contract of the owner declares to record every
+ * call of that tool (`call_unconfirmed`). Under such a contract the missing call is observable, and the judge is asked.
+ */
+export function analysisSkip(expectation: Pick<Expectation, 'observation' | 'tool'>, dialogue: ImportBatch['dialogues'][number], contract: LogContract | undefined): FindingSkip | undefined {
+  const skip = logSkip(expectation, dialogue);
+  if (skip === 'no_agent_reply' || expectation.observation !== 'tool' || expectation.tool === undefined) return skip;
+  if (dialogue.observation !== 'complete') return 'channel_unobserved';
+  if (dialogue.events.some(event => toolOf(event) === expectation.tool)) return undefined;
+  return contract?.tools.includes(expectation.tool) ? undefined : 'call_unconfirmed';
+}
+
+/** Whether the owner's contract of the log covers the tool a criterion requires: part of a tool finding's address, so a new contract judges it anew. */
+const recordedBy = (judged: Pick<Expectation, 'observation' | 'tool'>, contract: LogContract | undefined): { recorded: boolean } | Record<string, never> =>
+  judged.observation === 'tool' && contract ? { recorded: judged.tool !== undefined && contract.tools.includes(judged.tool) } : {};
 
 /** The judge's request for an expectation of `scenario` on one conversation of the analysis's import. */
-export function analysisJob(analysis: Pick<LogAnalysis, 'task' | 'sources' | 'requirements'>, batch: Pick<ImportBatch, 'contentHash'>, scenario: BusinessScenario,
+export function analysisJob(analysis: Pick<LogAnalysis, 'task' | 'sources' | 'requirements'> & { logs?: Pick<LogAnalysis['logs'], 'contract'> }, batch: Pick<ImportBatch, 'contentHash'>, scenario: BusinessScenario,
   expectation: PlanExpectation, dialogue: ImportBatch['dialogues'][number], variationId: string | undefined, protocolHash: string): AnalysisJob {
   const judged = judgedExpectation(expectation);
   const letter = expectationLetter(expectation.id);
@@ -88,8 +121,10 @@ export function analysisJob(analysis: Pick<LogAnalysis, 'task' | 'sources' | 're
   // What the judge reads apart from the conversation — the rubric, the rules, the sources — is in the key beside the criterion.
   const { dialogue: _dialogue, importContentHash: _import, ...judgedInput } = logJudgeInput({ ...request, key: '' });
   const hash = criterionHash(criterion);
-  const key = fingerprint({ protocol: ANALYSIS_PROTOCOL, criterionHash: hash, judged: fingerprint(judgedInput), importContentHash: batch.contentHash, dialogueId: dialogue.id, protocolHash });
-  const skipped = logSkip(judged, dialogue);
+  const contract = analysis.logs?.contract;
+  const key = fingerprint({ protocol: ANALYSIS_PROTOCOL, criterionHash: hash, judged: fingerprint(judgedInput), importContentHash: batch.contentHash, dialogueId: dialogue.id, protocolHash,
+    ...recordedBy(judged, contract) });
+  const skipped = analysisSkip(judged, dialogue, contract);
   return { key, criterionHash: hash, request: { ...request, key }, scenarioId: scenario.id, expectationId: expectation.id, ...(variationId ? { variationId } : {}), dialogueId: dialogue.id,
     ...(skipped ? { skipped } : {}) };
 }
