@@ -1,75 +1,44 @@
 /*
- * Deterministic proofs of the semantic contract between DISCOVER and VERIFY and of the connection exam — no model, no
- * key, no network beyond a local HTTP fake: the teaching runtime, a scripted judge in the judge's own answer format and
- * fake agents. Each proof prints PASS or FAIL per claim; the process exits 1 when any claim fails.
+ * Report A — deterministic contract checks of the semantic contract between DISCOVER and VERIFY and of the connection
+ * exam: no model, no key, no network beyond a local HTTP fake — the teaching runtime, scripted judges in the judge's own
+ * answer format, stub planners and fake agents. Each claim prints PASS or FAIL; the process exits 1 when any fails. It
+ * says the contract holds on these constructed cases, never that a judge is good on real conversations: that is report
+ * B, a protocol on labelled real dialogues (scripts/practical-protocol.ts).
  *
  *   A  a criterion DISCOVER found in a logged conversation is the one the check's card carries (same criterion hash),
  *      and the check reads that expectation: the baseline reproduces, the fixed teaching version is «fixed» against it
- *   B  a conversation where the criterion was not decided (UNKNOWN) is no control, and no regression is read off it
- *   C  a tool criterion is never passed by the agent's words: the channel rule and the log's own record decide
+ *   B  a conversation where the criterion was not decided (UNKNOWN) is no control of it
+ *   C  what a rule requires is kept apart from what the logs observe: a tool criterion never passes on words, a missing
+ *      call fails only under the owner's contract of the log, and is «not observable» otherwise (item 1)
  *   D  an adapter that shares one memory between conversations cannot pass the isolation exam
+ *   E  the chosen problem and the rest of the mandatory set are two answers: incomparable runs, the judge's own
+ *      difference, an unmeasured control, unchecked chosen cases, a local fix beside a regression (item 2)
+ *   F  Lab's own failure is never told as the owner's missing rule; a rules gap only on the reviewer's word (item 3)
+ *   G  DISCOVER beyond 8 conversations a topic: bounded first sample, stop, continuation without paying twice (item 4)
+ *   H  DISCOVER on its own in /agent-lab: analysis, evidence, whole conversation, the owner's mark, links (item 5)
  *
  * Run from the repository: npx tsx scripts/semantic-proofs.ts
  */
 import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { hostGrant } from '../src/card/commands.js';
-import { judgeLogged, logProtocolHash, type logJudgeInput } from '../src/card/log-judge.js';
-import { situationViews } from '../src/card/view.js';
-import { createInputSchema, settingsSchema, type Experiment } from '../src/contracts.js';
 import { criterionHash, expectationCriterionHash } from '../src/criterion.js';
-import { createDemoAnalysisRuntime, demoAnalysisInput, demoTarget } from '../src/demo.js';
+import { createDemoAnalysisRuntime, demoAnalysisInput } from '../src/demo.js';
 import { problemCheck } from '../src/discover/check.js';
-import { checkLink, problemConversations, subsetImport } from '../src/discover/verify.js';
+import { checkLink, problemConversations } from '../src/discover/verify.js';
 import { analysisView, type ProblemView } from '../src/discover/view.js';
-import type { LogAnalysis } from '../src/discover/schema.js';
+import type { Experiment } from '../src/contracts.js';
 import { examCanVouch, examConnection } from '../src/exam.js';
 import { ExperimentLab } from '../src/experiment.js';
-import { draftHash } from '../src/lab/record.js';
 import { buildResultView } from '../src/result-view.js';
 import type { Runtime } from '../src/runtime.js';
-import { importBatch, libraryHash } from '../src/scenario-library.js';
 import { runnableTargetSchema } from '../src/target-schema.js';
+import { proofBoard } from './proofs/board.js';
+import { proofChannels } from './proofs/channels.js';
+import { claim, cleanUp, failures, folder, preparedCheck, repeatWith, run } from './proofs/common.js';
+import { proofBeyondEight, proofLabFailures } from './proofs/discover-work.js';
+import { proofRest } from './proofs/rest.js';
 
-let failed = 0;
-const claim = (proof: string, ok: boolean, text: string): void => { if (!ok) failed++; console.log(`${ok ? 'PASS' : 'FAIL'} ${proof}  ${text}`); };
-const folders: string[] = [];
-const folder = async (name: string) => { const dir = await mkdtemp(join(tmpdir(), `semantic-proofs-${name}-`)); folders.push(dir); return dir; };
-
-/** The teaching agent in one of its versions: the baseline asks again for a number it has, the fixed one does not, the regressed one never asks. */
-const version = (exportName: 'createSession' | 'createFixedSession' | 'createRegressedSession') => ({ ...demoTarget(), exportName });
-
-/** A check of the problem, prepared, its questions answered «a» as the teaching owner does, and its ready situations accepted. */
-async function preparedCheck(lab: ExperimentLab, analysis: LogAnalysis, link: Experiment['fromAnalysis'], dialogueIds: string[]): Promise<Experiment> {
-  const batch = await lab.store.readImport(analysis.logs.importId);
-  const draft = await lab.create(createInputSchema.parse({ task: analysis.task, mode: 'demo', materials: analysis.sources.map(({ name, content }) => ({ name, content })),
-    scenarioCount: 0, target: version('createSession'), originalImport: subsetImport(batch, dialogueIds), fromAnalysis: link,
-    settings: settingsSchema.parse({ repeats: 1, maxTurns: 6, maxCalls: 200, userModes: ['reactive'] }) }), { situations: dialogueIds.length });
-  await lab.waitForIdle();
-  let context = await lab.cardContext(draft.id);
-  for (const view of situationViews(context.experiment, { evidence: context.evidence, maxTurns: 6 })) if (view.question?.id) {
-    const answer = await lab.prepareCardCommand(draft.id, { kind: 'answer_question', cardId: view.id, questionId: view.question.id, choice: 'a' }, { via: 'cli-yes' });
-    await lab.applyCardCommand(draft.id, answer, hostGrant(answer, 'confirmed'));
-  }
-  context = await lab.cardContext(draft.id);
-  const ready = situationViews(context.experiment, { evidence: context.evidence, maxTurns: 6 }).filter(view => view.status === 'ready');
-  await lab.acceptCards(draft.id, libraryHash(context.library), ready.map(view => view.id));
-  return lab.get(draft.id);
-}
-async function run(lab: ExperimentLab, id: string): Promise<Experiment> {
-  const draft = await lab.get(id);
-  await lab.start(id, { approved: true, reviewer: 'automated', expectedHash: draftHash(draft) });
-  await lab.waitForIdle();
-  return lab.get(id);
-}
-async function repeatWith(lab: ExperimentLab, of: Experiment, exportName: Parameters<typeof version>[0]): Promise<Experiment> {
-  const fresh = await lab.repeat(of.id);
-  const updated = await lab.updateDraft(fresh.id, draftHash(fresh), { target: version(exportName) });
-  return run(lab, updated.id);
-}
 const problemWith = (view: ReturnType<typeof analysisView>, start: string): ProblemView => {
   const problem = view.problems.find(item => item.duty.text.startsWith(start));
   if (!problem) throw new Error(`No problem «${start}…» in the teaching analysis`);
@@ -146,7 +115,10 @@ async function proofsAB(): Promise<void> {
     const result = buildResultView(regressed, { before: yBaseline });
     const lateFails = result.failures.some(failure => failure.title.includes('по просьбе'));
     claim('B', lateFails && result.problemCheck?.before?.verdict === 'fixed' && !result.problemCheck.before.regressed.length && !result.problemCheck.controls.length,
-      `candidate fails the «late» situation (${lateFails}), yet problemCheck: controls ${result.problemCheck?.controls.length}, verdict ${result.problemCheck?.before?.verdict}, regressed ${JSON.stringify(result.problemCheck?.before?.regressed)}`);
+      `candidate fails the «late» situation (${lateFails}); Y's own answer reads no regression off it: controls ${result.problemCheck?.controls.length}, verdict ${result.problemCheck?.before?.verdict}, regressed ${JSON.stringify(result.problemCheck?.before?.regressed)}`);
+    const rest = result.problemCheck?.rest.against;
+    claim('B', !!rest?.broken.some(item => item.title.includes('по просьбе')),
+      `…and the rest of the check, confirmed on the baseline, does not hide it: broke ${JSON.stringify(rest?.broken.map(item => `№${item.number} ${item.text}`))}`);
   } finally { await lab.close(); }
 }
 
@@ -171,73 +143,6 @@ async function injected(link: NonNullable<Experiment['fromAnalysis']>, hash: str
     const card = library?.cards.find(item => item.origin.kind === 'dialogue' && item.origin.dialogueId === 'known');
     const carried = card?.agentMust.find(duty => !duty.appliesWhen && expectationCriterionHash(duty, library!.requirements) === hash);
     claim('A', !!carried && card!.agentMust.length === 2, `a builder that leaves X out: the harness puts it into card №${card?.number} as ${carried?.id} (duties: ${card?.agentMust.map(duty => duty.id).join(', ')})`);
-  } finally { await lab.close(); }
-}
-
-// ─── C: a tool criterion on logs with and without the tool's record ───────────────────────────────────────────────
-const REFUND_RULE = 'Возврат оплаты агент оформляет только инструментом create_refund.';
-async function proofC(): Promise<void> {
-  const ask = 'Верните деньги за заказ 42, пожалуйста.';
-  const said = 'Готово, возврат оформлен.';
-  const rows = [
-    { id: 'words', observation: 'complete', events: [{ type: 'message', role: 'user', content: ask }, { type: 'tool', tool: 'find_order', content: 'order 42: paid 1500' },
-      { type: 'message', role: 'assistant', content: said }] },
-    { id: 'bare', observation: 'complete', events: [{ type: 'message', role: 'user', content: `${ask} Срочно.` }, { type: 'message', role: 'assistant', content: said }] },
-    { id: 'partial', observation: 'partial', events: [{ type: 'message', role: 'user', content: `${ask} Это снова я.` }, { type: 'message', role: 'assistant', content: said }] },
-    { id: 'tool', observation: 'complete', events: [{ type: 'message', role: 'user', content: `${ask} Заказ оплачен картой.` }, { type: 'tool', tool: 'create_refund', content: 'refund 42 created: 1500' },
-      { type: 'message', role: 'assistant', content: said }] },
-  ];
-  let offered: unknown;
-  const judged: string[] = [];
-  const stub: Runtime = {
-    async proposeScenario(input) {
-      offered = input.call.channels;
-      return { question: 'Клиент просит вернуть оплату', variations: [{ title: 'Клиент просит вернуть оплату за заказ', examples: input.call.examples.map(example => example.dialogueId) }],
-        expectations: [{ text: 'оформить возврат инструментом create_refund', strength: 'must', acceptable: null, violation: 'агент говорит, что возврат оформлен, а create_refund не вызван',
-          basis: [{ sourceId: 'source-1', quote: REFUND_RULE, kind: 'behavior' }], variations: null, observation: 'tool', tool: 'create_refund' }] } as never;
-    },
-    // A credulous judge in the judge's own format: it passes the refund on the words, citing any tool it sees beside them.
-    logJudge: { provider: 'stub', model: 'scripted-judge', protocolHash: logProtocolHash(), assess: (request, ctx) => judgeLogged(request, { provider: 'stub', id: 'scripted-judge' }, ctx,
-      async (_prompt, input) => {
-        const data = JSON.parse(input) as { scenario: { metrics: { id: string }[] }; dialogue: { events: { seq: number; type: string; content: string; tool?: string }[] } };
-        const events = data.dialogue.events;
-        judged.push(events.find(event => event.type === 'user')!.content);
-        const refund = events.find(event => event.type === 'tool_result' && event.tool === 'create_refund');
-        const cited = refund ? [refund] : events.filter(event => event.type === 'assistant' || event.type === 'tool_result');
-        return JSON.stringify({ assessments: [{ metricId: data.scenario.metrics[0]!.id, rationale: refund ? 'Инструмент create_refund вернул результат.' : 'Агент сказал, что возврат оформлен.',
-          evidence: cited.map(event => event.seq), citations: cited.map(event => ({ seq: event.seq, quote: event.content })), passCondition: 'met', failCondition: 'not_met' }] });
-      }) },
-  };
-  const lab = new ExperimentLab(join(await folder('c'), '.agent-lab'), stub);
-  await lab.init();
-  try {
-    const started = await lab.analyze({ task: 'Бот оформляет возвраты', mode: 'live', file: 'журнал возвратов', materials: [{ name: 'Правило возвратов', content: REFUND_RULE }],
-      logs: importBatch(rows), settings: settingsSchema.parse({ timeoutMs: 60000 }) }, { callCeiling: 100 });
-    await lab.waitForIdle();
-    const analysis = await lab.getAnalysis(started.id);
-    const expectation = analysis.scenarios[0]?.expectations[0];
-    claim('C', JSON.stringify(offered) === JSON.stringify({ tools: ['create_refund', 'find_order'], toolEvents: true, state: false }) && expectation?.observation === 'tool' && expectation.tool === 'create_refund',
-      `the plan was offered the tools the logs recorded ${JSON.stringify(offered)}; the criterion is seen on tool ${expectation?.tool}`);
-    const finding = (id: string) => analysis.findings.find(item => item.dialogueId === id);
-    const words = finding('words');
-    claim('C', !!words && words.result !== 'pass' && words.complete && words.votes.length === 2,
-      `(i) complete log, the agent says «${said}», only find_order recorded: judge voted pass on the words → finding ${words?.result} (channel rule)`);
-    const bare = finding('bare');
-    claim('C', bare?.result === 'unknown' && bare.skipped === 'channel_unobserved' && !judged.some(text => text.includes('Срочно')),
-      `(i) complete log with no tool event at all: ${bare?.skipped} → ${bare?.result}, judge not asked`);
-    const partial = finding('partial');
-    claim('C', partial?.result === 'unknown' && partial.skipped === 'channel_unobserved' && !judged.some(text => text.includes('снова я')),
-      `(ii) partially observed log: ${partial?.skipped} → ${partial?.result}, judge not asked (judge calls: ${judged.length})`);
-    const tool = finding('tool');
-    const toolEvent = rows[3]!.events.findIndex(event => event.type === 'tool');
-    claim('C', tool?.result === 'pass' && tool.evidence.some(item => item.seq === toolEvent && item.quote.includes('refund')),
-      `(iii) complete log with the create_refund result: ${tool?.result} on evidence ${JSON.stringify(tool?.evidence)}`);
-    // What the judge was actually sent for (i): the audit the analysis kept beside the finding.
-    const audit = words && await lab.store.readAnalysisAudit(analysis.id, words.key);
-    const sent = audit ? JSON.parse(audit.input) as ReturnType<typeof logJudgeInput> : undefined;
-    claim('C', new Set(analysis.findings.map(item => item.criterionHash)).size === 1 && sent?.scenario.execution.expectations[0]?.observation === 'tool'
-      && !!sent.scenario.metrics[0]?.description.includes('журналу инструментов'),
-      'every finding carries one criterion hash; the judge was sent the tool expectation with the tool-log rule');
   } finally { await lab.close(); }
 }
 
@@ -294,10 +199,15 @@ async function proofD(): Promise<void> {
 
 try {
   await proofsAB();
-  await proofC();
+  await proofChannels();
   await proofD();
+  await proofRest();
+  await proofLabFailures();
+  await proofBeyondEight();
+  await proofBoard();
 } finally {
-  await Promise.all(folders.map(dir => rm(dir, { recursive: true, force: true })));
+  await cleanUp();
 }
-console.log(failed ? `\n${failed} claim(s) FAILED` : '\nAll claims PASS: A B C D');
+const failed = failures();
+console.log(failed ? `\n${failed} claim(s) FAILED` : '\nReport A: all claims PASS — A B C D E F G H. Contract checks on constructed cases; judge quality on real dialogues is report B.');
 process.exit(failed ? 1 : 0);

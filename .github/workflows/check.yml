@@ -31,6 +31,11 @@ jobs:
       - name: Teaching example
         if: ${{ !cancelled() }}
         run: node dist/cli.js demo
+      # Report A: deterministic contract checks of DISCOVER, VERIFY and the connection exam — stub runtimes, no model or key.
+      # It proves the contract on constructed cases, never judge quality on real dialogues (that is report B).
+      - name: Semantic proofs
+        if: ${{ !cancelled() }}
+        run: npx tsx scripts/semantic-proofs.ts
       - name: Package contents
         if: ${{ !cancelled() }}
         run: npm pack --dry-run
