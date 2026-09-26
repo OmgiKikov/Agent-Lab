@@ -102,7 +102,7 @@ export default function agentLab(pi: ExtensionAPI, options: AgentLabOptions = {}
     ctx.ui.setTitle(`Agent Lab · ${ctx.cwd.split('/').at(-1)}`);
     ctx.ui.setHeader((_tui, theme) => new Text(`${theme.bold('Agent Lab')} — насколько хорош ваш агент.\n${theme.fg('muted', safeText(ctx.cwd))}`, 1, 1));
     ctx.ui.setWidget('agent-lab-start', ['Напишите обычными словами, например: «проверь агента в этой папке, логи — logs.xlsx».',
-      '/agent-lab — рабочее пространство агента · /agent-lab demo — учебный пример без модели и ключей.',
+      '/agent-lab logs — ваши разборы логов · /agent-lab — все результаты · /agent-lab demo — отдельный учебный пример.',
       // A refused gateway is otherwise only in stderr, which the terminal does not show, and looks like an unexplained «no api key».
       ...[gateway.note()].filter((line): line is string => !!line)]);
   });

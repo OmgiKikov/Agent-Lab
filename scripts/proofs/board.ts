@@ -74,5 +74,47 @@ export async function proofBoard(): Promise<void> {
     const owners = analysisOwners(spaces, [analysis, await lab.getAnalysis(second.id)]);
     claim('H', spaces.length === 2 && owners.get(first.id) === 'demo' && !owners.has(second.id) && ![...owners.values()].includes(spaces.find(space => space.key !== 'demo')!.key),
       `(4) two agents: the analysis a check was made from belongs to «${owners.get(first.id)}»; the other analysis links to none (${owners.has(second.id) ? 'linked' : 'its import only'}); the other agent gets none`);
+    // A demo beside a real log analysis must not be the default selection on the folder screen.
+    const homeState = newState();
+    const homeView = await workspaceView(lab, homeState, undefined);
+    let picked: WorkspaceAction | undefined;
+    const home = new LabWorkspace(homeView, homeState, plain, value => { picked = value; }, () => {}, () => 40);
+    home.handleInput(ENTER);
+    claim('H', picked?.type === 'analyses', '(5) logs are selected before the demo when both exist in the folder');
+
+    const idleState = newState('demo');
+    const idleView = await workspaceView(lab, idleState, undefined);
+    let changed: (() => void) | undefined;
+    const idle = new LabWorkspace(idleView, idleState, plain, value => { picked = value; }, () => {}, () => 40,
+      async () => idleView, notify => { changed = notify; return () => { changed = undefined; }; });
+    claim('H', !!changed && screenOf(idle).includes('Разборы логов'), '(5) an idle demo workspace follows new records and shows a direct log shortcut');
+    picked = undefined; idle.handleInput('l');
+    claim('H', (picked as WorkspaceAction | undefined)?.type === 'analyses' && !changed, '(5) the log shortcut opens analyses and releases the previous subscription');
+
+    const updated = structuredClone(analysis); updated.status = 'running'; updated.message = 'Проверка ещё идёт';
+    const batch = await lab.store.readImport(analysis.logs.importId);
+    const entry = { analysis: updated, view: analysisView(updated, batch), batch };
+    let refresh: (() => void) | undefined;
+    let rendered!: () => void;
+    const redraw = new Promise<void>(resolve => { rendered = resolve; });
+    const live = new AnalysisBoard({ entries: [entry] }, newAnalysisState({ id: updated.id }), plain, () => {}, rendered, () => 200,
+      async () => ({ entries: [{ analysis, view: analysisView(analysis, batch), batch }] }), notify => { refresh = notify; return () => { refresh = undefined; }; });
+    refresh?.();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([redraw, new Promise<void>((_, reject) => { timeout = setTimeout(() => reject(new Error('Analysis screen did not refresh')), 2000); })]);
+      claim('H', !screenOf(live).includes('Проверка ещё идёт'), '(6) an open analysis redraws its finished result without closing the board');
+    } finally { clearTimeout(timeout); live.dispose(); }
+
+    // Another process writes only the nested analysis record, not a top-level run or journal.
+    let changedId: string | undefined;
+    let saved!: () => void;
+    const notification = new Promise<void>(resolve => { saved = resolve; });
+    const unwatch = lab.store.watch(id => { if (id === analysis.id) { changedId = id; saved(); } });
+    try {
+      await lab.store.writeAnalysis({ ...analysis, message: 'Проверка обновилась' });
+      await Promise.race([notification, new Promise<void>((_, reject) => { timeout = setTimeout(() => reject(new Error('Nested analysis write was not observed')), 2000); })]);
+      claim('H', changedId === analysis.id, '(6) the store follows analysis checkpoints in the child folder');
+    } finally { clearTimeout(timeout); unwatch(); }
   } finally { await lab.close(); }
 }

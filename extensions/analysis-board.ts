@@ -24,7 +24,8 @@ export interface AnalysisEntry { analysis: LogAnalysis; view: AnalysisView; batc
 export interface AnalysisBoardView { entries: AnalysisEntry[] }
 
 /** What is open, innermost last; the command keeps it across actions, so the board comes back to the same place. */
-export type AnalysisFrame = { kind: 'analysis'; id: string } | { kind: 'problem'; id: string; key: string } | { kind: 'example'; id: string; key: string; finding: string };
+export type AnalysisFrame = { kind: 'analysis'; id: string } | { kind: 'problem'; id: string; key: string } | { kind: 'example'; id: string; key: string; finding: string }
+  | { kind: 'factConversation'; id: string; dialogueId: string };
 export interface AnalysisBoardState { stack: AnalysisFrame[]; selected: Record<string, number>; notice?: { text: string; tone: Tone } }
 export const newAnalysisState = (open?: { id: string; problemKey?: string }): AnalysisBoardState => ({
   stack: open ? [{ kind: 'analysis', id: open.id }, ...(open.problemKey ? [{ kind: 'problem' as const, id: open.id, key: open.problemKey }] : [])] : [], selected: {} });
@@ -43,6 +44,7 @@ const when = (iso: string): string => new Date(iso).toLocaleString('ru-RU', { da
 function listScreen(entries: readonly AnalysisEntry[], selected: number): Screen {
   const body: Row[] = [];
   const items: number[] = [];
+  if (!entries.length) body.push({ text: 'В этой папке пока нет разборов. В чате укажите файл логов и материалы, по которым проверить ответы.', tone: 'muted' });
   entries.forEach(({ analysis, view }, index) => {
     items.push(body.length);
     const mine = index === selected;
@@ -68,11 +70,42 @@ function analysisScreen(entry: AnalysisEntry, selected: number): Screen {
     const mine = index === selected;
     body.push({ text: `${mine ? GLYPH.selected : ' '} ${index + 1}. ${problemTitle(problem)} — ${problem.violations ? problemSize(problem) : `вы оспорили ${problem.disputed}`}${problem.knowledgeOnly ? ' · по базе знаний, требуется ваша оценка' : ''}`, bold: mine });
   });
+  if (view.checking === 'facts' && entry.analysis.factChecks?.length) {
+    body.push({ text: '' }, { text: 'Проверенные разговоры — откройте, чтобы увидеть утверждения и источники:', tone: 'accent', bold: true });
+    entry.analysis.factChecks.forEach((check, index) => {
+      const at = listed(view).length + index;
+      const summary = check.complete ? `подтверждено ${check.claims.filter(claim => claim.result === 'supported').length}, возможных противоречий ${check.claims.filter(claim => claim.result === 'contradicted').length}, без вывода ${check.claims.filter(claim => claim.result === 'unknown').length}`
+        : check.issue ? 'проверка не завершена' : 'проверяется';
+      items.push(body.length);
+      body.push({ text: `${at === selected ? GLYPH.selected : ' '} Разговор ${index + 1}: ${summary}`, bold: at === selected },
+        { text: check.question, tone: 'muted', indent: 3 });
+    });
+  }
   // The rest of the answer as analysisLines words it, without the headline and the problems shown above.
   const rest = lines.slice(1).filter(line => line !== unfinished);
   body.push({ text: '' }, ...rest.map((text): Row => ({ text, tone: text.startsWith('Отдельный сигнал:') ? 'warning' : 'muted' })), { text: '' }, { text: nextStep(view), tone: 'muted' });
   return { head: [{ text: headline(view), bold: true, tone: view.problems.length ? 'warning' : 'text' }, { text: `Разбор ${view.id} · ${when(view.createdAt)}`, tone: 'dim' }],
-    body, items, foot: listed(view).length ? '↑↓ выбрать · Enter открыть · Esc назад' : 'Esc назад' };
+    body, items, foot: items.length ? '↑↓ выбрать · Enter открыть · Esc назад' : 'Esc назад' };
+}
+
+/** Every factual result remains inspectable, including supported and unknown claims with no problem row. */
+function factConversationScreen(entry: AnalysisEntry, dialogueId: string): Screen | undefined {
+  const check = entry.analysis.factChecks?.find(check => check.dialogueId === dialogueId);
+  if (!check) return undefined;
+  const dialogue = entry.batch?.dialogues.find(dialogue => dialogue.id === dialogueId);
+  const body: Row[] = [{ text: check.note, tone: 'muted' }];
+  if (!check.complete) body.push({ text: 'Проверка не закончена. Предварительные ответы модели не считаются результатом.', tone: 'warning' });
+  else check.claims.forEach((claim, index) => {
+    const result = claim.result === 'supported' ? 'Подтверждено статьёй' : claim.result === 'contradicted' ? 'Возможное противоречие' : 'Не удалось проверить';
+    body.push({ text: '' }, { text: `${index + 1}. ${result}`, bold: true, tone: claim.result === 'supported' ? 'success' : 'warning' },
+      { text: `Бот: «${claim.agent.quote}»` });
+    if (claim.reference) body.push({ text: `Статья: «${claim.reference.quote}»` },
+      { text: entry.analysis.sources.find(source => source.id === claim.reference!.sourceId)?.name ?? claim.reference.sourceId, tone: 'muted' });
+    body.push({ text: claim.reason, tone: 'muted' });
+  });
+  body.push({ text: '' }, { text: 'Исходный разговор:', bold: true, tone: 'accent' },
+    ...(dialogue ? conversationLines(dialogue).map((text): Row => ({ text })) : [{ text: 'Исходный разговор не найден в этой папке.', tone: 'warning' } as Row]));
+  return { head: [{ text: check.question, bold: true }, { text: `Разговор ${dialogueId}`, tone: 'dim' }], body, items: [], foot: '↑↓ листать · Esc назад' };
 }
 
 /** One problem: its size, its rules verbatim, its examples to open. */
@@ -122,11 +155,30 @@ function exampleScreen(entry: AnalysisEntry, key: string, finding: string): Scre
 export class AnalysisBoard implements Component {
   private scroll = 0;
   private done = false;
+  private loading = false;
+  private stale = false;
+  private unfollow?: () => void;
 
-  constructor(private readonly view: AnalysisBoardView, private readonly state: AnalysisBoardState, private readonly theme: Pick<Theme, 'fg' | 'bold'>,
-    private readonly finish: (action: AnalysisAction) => void, private readonly redraw: () => void, private readonly rows: () => number = () => 32) {
+  constructor(private view: AnalysisBoardView, private readonly state: AnalysisBoardState, private readonly theme: Pick<Theme, 'fg' | 'bold'>,
+    private readonly finish: (action: AnalysisAction) => void, private readonly redraw: () => void, private readonly rows: () => number = () => 32,
+    private readonly load?: () => Promise<AnalysisBoardView>, changes?: (changed: () => void) => () => void) {
     // An open object that is gone closes, down to what is still there.
     while (this.state.stack.length && !this.screen(WORKSPACE_WIDTH)) this.state.stack.pop();
+    if (load && changes) this.unfollow = changes(() => { void this.refresh(); });
+  }
+
+  private async refresh(): Promise<void> {
+    if (this.done || !this.load) return;
+    if (this.loading) { this.stale = true; return; }
+    this.loading = true;
+    try {
+      const view = await this.load();
+      if (this.done) return;
+      this.view = view;
+      while (this.state.stack.length && !this.screen(WORKSPACE_WIDTH)) this.state.stack.pop();
+      this.redraw();
+    } catch { /* Keep the readable snapshot; a later checkpoint can refresh it. */ }
+    finally { this.loading = false; if (this.stale && !this.done) { this.stale = false; void this.refresh(); } }
   }
 
   private get top(): AnalysisFrame | undefined { return this.state.stack.at(-1); }
@@ -143,8 +195,9 @@ export class AnalysisBoard implements Component {
     if (!top) return listScreen(this.view.entries, selected ?? this.cursor(this.view.entries.length));
     const entry = this.entry(top.id);
     if (!entry) return undefined;
-    if (top.kind === 'analysis') return analysisScreen(entry, selected ?? this.cursor(listed(entry.view).length));
+    if (top.kind === 'analysis') return analysisScreen(entry, selected ?? this.cursor(this.count()));
     if (top.kind === 'problem') return problemScreen(entry, top.key, selected ?? this.cursor(listed(entry.view).find(problem => problem.key === top.key)?.examples.length ?? 0));
+    if (top.kind === 'factConversation') return factConversationScreen(entry, top.dialogueId);
     return exampleScreen(entry, top.key, top.finding);
   }
 
@@ -153,14 +206,14 @@ export class AnalysisBoard implements Component {
     const top = this.top;
     if (!top) return this.view.entries.length;
     const entry = this.entry(top.id);
-    if (top.kind === 'analysis') return entry ? listed(entry.view).length : 0;
+    if (top.kind === 'analysis') return entry ? listed(entry.view).length + (entry.view.checking === 'facts' ? entry.analysis.factChecks?.length ?? 0 : 0) : 0;
     if (top.kind === 'problem') return entry ? listed(entry.view).find(problem => problem.key === top.key)?.examples.length ?? 0 : 0;
     return 0;
   }
 
-  private end(action: AnalysisAction): void { if (this.done) return; this.done = true; this.finish(action); }
+  private end(action: AnalysisAction): void { if (this.done) return; this.dispose(); this.finish(action); }
   invalidate(): void {}
-  dispose(): void { this.done = true; }
+  dispose(): void { this.done = true; this.unfollow?.(); this.unfollow = undefined; }
 
   handleInput(data: string): void {
     if (this.done) return;
@@ -182,7 +235,14 @@ export class AnalysisBoard implements Component {
     if (!key('enter') || !count) return;
     this.scroll = 0; this.state.notice = undefined;
     if (!top) { const entry = this.view.entries[cursor]; if (entry) this.state.stack.push({ kind: 'analysis', id: entry.analysis.id }); }
-    else if (top.kind === 'analysis') { const view = this.entry(top.id)?.view; const problem = view && listed(view)[cursor]; if (problem) this.state.stack.push({ kind: 'problem', id: top.id, key: problem.key }); }
+    else if (top.kind === 'analysis') {
+      const entry = this.entry(top.id); const problem = entry && listed(entry.view)[cursor];
+      if (problem) this.state.stack.push({ kind: 'problem', id: top.id, key: problem.key });
+      else if (entry?.view.checking === 'facts') {
+        const check = entry.analysis.factChecks?.[cursor - listed(entry.view).length];
+        if (check) this.state.stack.push({ kind: 'factConversation', id: top.id, dialogueId: check.dialogueId });
+      }
+    }
     else if (top.kind === 'problem') {
       const view = this.entry(top.id)?.view;
       const example = view && listed(view).find(problem => problem.key === top.key)?.examples[cursor];
@@ -228,7 +288,8 @@ export class AnalysisBoard implements Component {
 }
 
 /** Shows the folder's analyses until the owner acts: back to the workspace, closes, or gives their word on an example. */
-export function showAnalyses(ctx: ExtensionContext, view: AnalysisBoardView, state: AnalysisBoardState): Promise<AnalysisAction> {
-  return ctx.ui.custom<AnalysisAction>((tui, theme, _keys, done) => new AnalysisBoard(view, state, theme, done, () => tui.requestRender(), () => tui.terminal.rows),
+export function showAnalyses(ctx: ExtensionContext, view: AnalysisBoardView, state: AnalysisBoardState,
+  load?: () => Promise<AnalysisBoardView>, changes?: (changed: () => void) => () => void): Promise<AnalysisAction> {
+  return ctx.ui.custom<AnalysisAction>((tui, theme, _keys, done) => new AnalysisBoard(view, state, theme, done, () => tui.requestRender(), () => tui.terminal.rows, load, changes),
     { overlay: true, overlayOptions: { width: '100%', maxHeight: '100%', anchor: 'top-left', margin: 0 } });
 }

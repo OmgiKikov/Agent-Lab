@@ -620,6 +620,7 @@ export function helpScreen(width: number): Screen {
     key('1 2 3', 'действие у выбранного или ответ на вопрос'),
     key('a', 'спросить Lab про выбранное'),
     key('d', 'как это проверяется — для разработчика'),
+    key('l', 'открыть разборы ваших логов из любой области'),
     key('?', 'эта подсказка'),
     ws('blank', ''),
     ws('muted', 'Всё то же можно сказать словами в чате: «покажи вторую ситуацию», «запусти готовые».'),
@@ -644,22 +645,26 @@ export function startScreen(selected: number, width: number): Screen {
 
 /** Several agents in one folder (docs/design/ui-spec.md §8.2): each with its version, its latest result and the decisions it waits for. */
 export function agentsScreen(spaces: readonly { space: AgentSpace; result: string | null; decisions: number }[], selected: number, width: number, now: Date,
-  logs?: { count: number; unlinked: number }): Screen {
+  logs?: { count: number; unlinked: number; running?: number; latest?: { file: string; message: string } }): Screen {
   const w = room(width);
   const body: Line[] = [];
+  const items: number[] = [];
+  if (logs) {
+    items.push(body.length);
+    body.push(...wsLines([ws(selected === 0 ? 'selected' : 'text', `${selected === 0 ? '›' : ' '} Разборы логов — ${logs.count}${logs.running ? ` · идёт ${logs.running}` : ''}`),
+      ...(logs.latest ? [ws('muted', logs.latest.file, 3), ws(logs.running ? 'accent' : 'muted', logs.latest.message, 3)] : [])], w), blank);
+  }
   spaces.forEach((item, index) => {
-    const mine = index === selected;
+    items.push(body.length);
+    const mine = index + (logs ? 1 : 0) === selected;
     const latest = item.space.runs[0];
     const version = item.space.demo ? 'учебный пример' : item.space.version ? `версия ${item.space.version}` : '';
     body.push(...wsLines([ws(mine ? 'selected' : 'text', `${mine ? '›' : ' '} ${clip(item.space.name, 28).padEnd(28)}${clip(version, 22).padEnd(22)}${item.result && latest ? `${item.result} — ${whenText(latest.createdAt, now)}` : ''}`, 1,
       { clip: true, ...(item.decisions ? { right: { role: 'warning', text: `нужно ваше решение: ${item.decisions}` } } : {}) })], w));
   });
-  // The folder's analyses of logs open on their own: an analysis needs no agent, card or run.
-  const logsRow = logs ? spaces.length : -1;
-  if (logs) body.push(...(spaces.length ? [blank] : []), ...wsLines([ws(selected === logsRow ? 'selected' : 'text', `${selected === logsRow ? '›' : ' '} Разборы логов — ${logs.count}`, 1,
-    { clip: true, ...(logs.unlinked ? { right: { role: 'muted', text: logs.unlinked === logs.count ? 'без агента' : `без агента: ${logs.unlinked}` } } : {}) })], w));
   const last = spaces.length + (logs ? 1 : 0);
-  body.push(blank, ...wsLines([ws(selected === last ? 'selected' : 'text', `${selected === last ? '›' : ' '} Проверить нового агента`)], w));
+  body.push(blank); items.push(body.length);
+  body.push(...wsLines([ws(selected === last ? 'selected' : 'text', `${selected === last ? '›' : ' '} Проверить нового агента`)], w));
   return { head: wsLines([ws('answer', 'Agent Lab'), ws('muted', spaces.length ? 'Агенты и разборы логов в этой папке' : 'Разборы логов в этой папке')], w), body,
-    foot: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'Esc', text: 'закрыть' }], anchor: Math.min(selected, last) };
+    items, foot: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'Esc', text: 'закрыть' }], anchor: items[Math.min(selected, last)] ?? 0 };
 }

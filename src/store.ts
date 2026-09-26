@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, utimesSync, watch } from 'node:fs';
+import { appendFileSync, mkdirSync, utimesSync, watch, type FSWatcher } from 'node:fs';
 import { mkdir, open, readFile, readdir, stat, unlink, utimes } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { judgeAuditSchema, type JudgeAudit } from './assessment.js';
@@ -375,6 +375,20 @@ export class ExperimentStore {
    */
   watch(changed: (id?: string) => void): () => void {
     let stopped = false, alive: boolean | undefined;
+    let root: FSWatcher | undefined, analyses: FSWatcher | undefined;
+    const notify = (name: string | Buffer | null) => {
+      if (stopped) return;
+      const id = typeof name === 'string' && name.endsWith('.json') ? name.slice(0, -5) : undefined;
+      if (id !== undefined && isIdentifier(id)) changed(id);
+    };
+    // Analyses are in a child folder. A non-recursive root watch never sees their checkpoints, especially across Pi sessions.
+    const followAnalyses = () => {
+      if (stopped || analyses) return;
+      try {
+        analyses = watch(join(this.directory, 'analyses'), (_event, name) => notify(name));
+        analyses.on('error', () => { analyses?.close(); analyses = undefined; });
+      } catch { /* A new data folder has no analyses yet; the root watcher attaches when it appears. */ }
+    };
     const look = async () => {
       const gone = await this.writerGone().catch(() => false);
       if (!stopped && alive === true && gone) changed();
@@ -384,13 +398,14 @@ export class ExperimentStore {
     const writer = setInterval(() => { void look(); }, HEARTBEAT_MS);
     writer.unref();
     try {
-      const watcher = watch(this.directory, (_event, name) => {
-        const id = typeof name === 'string' && name.endsWith('.json') ? name.slice(0, -5) : undefined;
-        if (id !== undefined && isIdentifier(id)) changed(id);
+      root = watch(this.directory, (_event, name) => {
+        if (name === 'analyses') { followAnalyses(); if (!stopped) changed(); }
+        else notify(name);
       });
-      watcher.on('error', () => watcher.close());
-      return () => { stopped = true; clearInterval(writer); watcher.close(); };
-    } catch { return () => { stopped = true; clearInterval(writer); }; }
+      root.on('error', () => root?.close());
+    } catch { /* Watching the existing analysis folder may still be possible. */ }
+    followAnalyses();
+    return () => { stopped = true; clearInterval(writer); root?.close(); analyses?.close(); };
   }
 
   /* ── journals and sidecars ── */

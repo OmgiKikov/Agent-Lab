@@ -84,6 +84,14 @@ export async function proofFacts(): Promise<void> {
     const screen = board.render(120).join('\n');
     claim('J', screen.includes(FACT) && screen.includes(WRONG) && screen.includes('Сравните утверждение бота') && !screen.includes('обязательны ли'),
       'the real Pi problem screen shows both quotes and asks about the contradiction, not an invented bot duty');
+    const unknownState = newAnalysisState({ id: final.id });
+    unknownState.selected[`analysis:${final.id}:`] = view.problems.length + final.factChecks!.findIndex(check => check.dialogueId === 'f4');
+    const unknownBoard = new AnalysisBoard(await analysesView(lab), unknownState,
+      { fg: (_tone: string, text: string) => text, bold: (text: string) => text } as never, () => {}, () => {}, () => 200);
+    unknownBoard.handleInput('\r');
+    const unknownScreen = unknownBoard.render(120).join('\n');
+    claim('J', unknownScreen.includes('Не удалось проверить') && unknownScreen.includes('Комиссия составляет два процента.') && unknownScreen.includes('Исходный разговор'),
+      'a conversation with only unknown claims opens with its words and explanation even though it is not a problem');
   });
 
   let drop = true, initialCalls = 0, reviews = 0;

@@ -247,7 +247,9 @@ export async function workspaceView(reader: ExperimentLab, state: WorkspaceState
   })) : spaces.map(space => ({ space, result: null, decisions: 0 }));
   const data = open ? await spaceData(reader, open, job, now, cwd, linkedTo(open)) : undefined;
   if (data) for (const agent of agents) if (agent.space === open) agent.decisions = data.decisions.length;
-  return { agents, ...(data ? { data } : {}), ...(analyses.length ? { logs: { count: analyses.length, unlinked } } : {}) };
+  return { agents, ...(data ? { data } : {}), ...(analyses.length ? { logs: { count: analyses.length, unlinked,
+    running: analyses.filter(analysis => analysis.status === 'running').length,
+    latest: { file: analyses[0]!.logs.file, message: analyses[0]!.message } } } : {}) };
 }
 
 /** Every analysis of the folder, newest first, with its view and its import: what «Разборы логов» shows. */
@@ -266,7 +268,8 @@ export async function analysesView(reader: ExperimentLab): Promise<AnalysisBoard
  */
 async function analysesLoop(ctx: ExtensionCommandContext, reading: () => ExperimentLab, writing: ReturnType<typeof writer>, state: AnalysisBoardState): Promise<'back' | 'close'> {
   while (true) {
-    const action = await showAnalyses(ctx, await analysesView(reading()), state);
+    const action = await showAnalyses(ctx, await analysesView(reading()), state,
+      () => analysesView(reading()), changed => reading().store.watch(() => changed()));
     state.notice = undefined;
     if (action.type !== 'review') return action.type;
     try {
@@ -297,7 +300,7 @@ export interface BoardOptions {
 export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: BoardOptions = {}): void {
   const { open, operations, background } = host;
   pi.registerCommand('agent-lab', {
-    description: 'Рабочее пространство агента: /agent-lab, /agent-lab demo или /agent-lab /путь/к/проекту. /agent-lab gateway — подключить шлюз моделей',
+    description: 'Рабочее пространство агента: /agent-lab. Разборы ваших логов: /agent-lab logs. Учебный пример: /agent-lab demo. /agent-lab gateway — подключить шлюз моделей',
     async handler(args, ctx) {
       requireInteractive(ctx, 'Рабочее пространство открывается в интерактивном терминале Pi.');
       const request = args.trim();
@@ -308,7 +311,8 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
       const reading = () => operations.reader(directory);
       const state = newState();
       let handoff: { request: string; context: unknown } | undefined;
-      let pending: WorkspaceAction | undefined = request === 'demo' ? { type: 'demo' } : request === 'new' || request.startsWith('/') || request.startsWith('~') ? { type: 'new' } : undefined;
+      let pending: WorkspaceAction | undefined = request === 'logs' || request === 'логи' ? { type: 'analyses' }
+        : request === 'demo' ? { type: 'demo' } : request === 'new' || request.startsWith('/') || request.startsWith('~') ? { type: 'new' } : undefined;
       if (request && !pending) {
         const records = await reading().list();
         const found = records.filter(record => record.id === request || record.id.startsWith(request));

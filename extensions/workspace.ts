@@ -9,6 +9,7 @@ import type { DecisionChoice } from '../src/inbox.js';
 import type { AgentSpace } from '../src/workspace.js';
 import { agreementTarget, seenVerdicts, type Answer } from './judge-review.ts';
 import { GLYPH, type Tone } from './render/theme.ts';
+import { safeLine } from '../src/text.js';
 import { agentsScreen, allRunsScreen, areasOf, header, helpScreen, inboxScreen, judgedScreen, logScreen, NARROW, problemScreen, problemsScreen, resultPicks, resultScreen, rulebookScreen, runActions,
   runStepScreen, situationScreen, situationsScreen, startScreen, type Area, type Hint, type Line, type ResultPick, type Screen, type SpaceData, type Step } from './workspace-screens.ts';
 
@@ -59,7 +60,7 @@ export const newState = (space?: string): WorkspaceState => ({ ...(space ? { spa
 export interface WorkspaceView {
   agents: { space: AgentSpace; result: string | null; decisions: number }[];
   data?: SpaceData;
-  logs?: { count: number; unlinked: number };
+  logs?: { count: number; unlinked: number; running?: number; latest?: { file: string; message: string } };
 }
 
 /** What the owner asked for; the command does it and opens the workspace again. */
@@ -90,7 +91,7 @@ const ANSWERS: Answer[] = ['agree', 'disagree', 'unsure'];
 /** How often the spinner of work going on turns: the pace of Pi's own Loader, so the chat and the workspace turn alike. */
 const SPIN_MS = 80;
 /** The letter keys as the Russian layout types them. */
-const RUSSIAN: Record<string, string> = { 'в': 'd', 'ф': 'a', 'й': 'q', 'о': 'j', 'л': 'k' };
+const RUSSIAN: Record<string, string> = { 'в': 'd', 'ф': 'a', 'й': 'q', 'о': 'j', 'л': 'k', 'д': 'l' };
 
 /**
  * How an open workspace hears that what it shows has changed: `changed` is called at every change — a record written
@@ -119,9 +120,9 @@ export class LabWorkspace implements Component {
     this.reconcile();
     // Work going on is followed, not polled: the workspace reads itself again when the work reports a change. Only its
     // spinner turns on a clock, and that clock draws — it never reads.
-    if (this.load && changes && (view.data?.progress || view.data?.space.active)) {
+    if (this.load && changes) {
       this.unfollow = changes(() => this.changed());
-      this.spinning = setInterval(() => { this.frame++; this.redraw(); }, SPIN_MS);
+      this.activity();
     }
   }
 
@@ -166,7 +167,7 @@ export class LabWorkspace implements Component {
       if (ended && this.state.step) this.state.step = ended !== 'run' ? 'situations' : fresh.data?.runs.length ? 'result' : this.state.step;
       if (ended) this.state.notice = undefined;
       this.reconcile();
-      if (!fresh.data?.progress && !fresh.data?.space.active) this.stopFollowing();
+      this.activity();
       this.redraw();
     } catch { /* the last snapshot stays on screen; the next change tries again */ }
     finally {
@@ -176,6 +177,11 @@ export class LabWorkspace implements Component {
   }
 
   private stopFollowing(): void { this.unfollow?.(); this.unfollow = undefined; clearInterval(this.spinning); this.spinning = undefined; }
+  private activity(): void {
+    const active = this.view.data?.progress || this.view.data?.space.active || this.view.logs?.running;
+    if (active && !this.spinning) this.spinning = setInterval(() => { this.frame++; this.redraw(); }, SPIN_MS);
+    else if (!active && this.spinning) { clearInterval(this.spinning); this.spinning = undefined; }
+  }
   dispose(): void { this.disposed = true; this.stopFollowing(); }
   invalidate(): void {}
 
@@ -224,7 +230,8 @@ export class LabWorkspace implements Component {
     if (!data) return this.listed ? agentsScreen(this.view.agents, this.cursor(), width, new Date(), this.view.logs) : startScreen(this.cursor(), width);
     const top = this.top;
     const place = this.state.step ? { step: this.state.step } : { area: this.state.area ?? 'runs' };
-    const withHead = (screen: Screen & { picks?: ResultPick[] }) => ({ ...screen, head: [...header(data, place, width, this.rows() < 28), ...screen.head] });
+    const logs: Line[] = this.view.logs ? [[{ text: safeLine(` l  Разборы логов — ${this.view.logs.count}${this.view.logs.running ? ` · идёт ${this.view.logs.running}` : ''} · открыть`), tone: 'accent', bold: true }]] : [];
+    const withHead = (screen: Screen & { picks?: ResultPick[] }) => ({ ...screen, head: [...logs, ...header(data, place, width, this.rows() < 28), ...screen.head] });
     if (top?.kind === 'situation') {
       const view = this.situation(top.id);
       if (view) return withHead(situationScreen(view, { details: this.state.details, running: !!data.set?.running, editable: !!data.set?.editable }, width));
@@ -301,6 +308,7 @@ export class LabWorkspace implements Component {
     }
     if (key('ctrl+c')) return this.finish({ type: 'close' });
     if (this.state.help) return;
+    if (input === 'l' && this.view.logs) return this.finish({ type: 'analyses' });
     const { data } = this.view;
     if (!data) return this.handleStart(input, key);
     if (input === 'd') { this.state.details = !this.state.details; this.state.selected[this.listKey()] = 0; this.home(); this.redraw(); return; }
@@ -328,9 +336,10 @@ export class LabWorkspace implements Component {
     if (!key('enter')) return;
     if (this.listed) {
       const cursor = this.cursor();
-      const chosen = this.view.agents[cursor];
+      if (this.view.logs && cursor === 0) return this.finish({ type: 'analyses' });
+      const chosen = this.view.agents[cursor - (this.view.logs ? 1 : 0)];
       if (chosen) return this.finish({ type: 'space', key: chosen.space.key });
-      return this.finish(this.view.logs && cursor === this.view.agents.length ? { type: 'analyses' } : { type: 'new' });
+      return this.finish({ type: 'new' });
     }
     return this.finish({ type: this.cursor() === 0 ? 'new' : 'demo' });
   }
