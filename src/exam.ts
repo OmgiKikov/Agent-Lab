@@ -25,10 +25,13 @@ import { clip } from './text.js';
  * Memory is shown by a probe: a later step that checks with `contains` a value the customer gave earlier in the same
  * path and does not repeat in that step — «мой номер 783194» … «какой у меня номер?» → 783194. A step that checks a word
  * the agent says anyway («Здравствуйте») proves nothing, so the probe's question is also asked alone before the paths:
- * a reply that holds the value without the earlier turn does not show memory. Isolation is shown when a conversation that
- * checks a value of its own speaks after another conversation told the agent its value and does not hold it — two
- * customers with different numbers open at the same time — and when a fresh conversation after all paths holds no value
- * any of them told. The paths start only once every conversation is open, so the order of messages is always the same.
+ * a reply that holds the value without the earlier turn does not show memory. Isolation is shown only by two memory
+ * probes of two paths (isolationPairs) — two customers open at once, each with a value of its own — whose values differ
+ * (neither holds the other), neither of which is in the other path's own words, and which the relay's order interleaves:
+ * each path asks for its value after the other path told the agent its own. Each answer must hold its own value and not
+ * the other's, and a fresh conversation after all paths must hold none of them. A step of another path that checks some
+ * word of its own («Здравствуйте») proves nothing about isolation: an agent that keeps one memory for everyone passes it.
+ * The paths start only once every conversation is open, so the order of messages is always the same.
  * A run starts only on an exam that did not fail (lab/run.ts); without a passed one it is measured and its percent is
  * not shown (result-view.ts): the number stands on a connection nobody has shown to work. An exam stored before these
  * controls existed has no `properties`: its «passed» is the old protocol's, and the result says so (caveats.ts).
@@ -65,28 +68,34 @@ export function memoryProbes(exam: Exam): MemoryProbe[] {
 const pathMaterial = (path: Path): string =>
   [...path.steps.map(customerText), path.initialState === undefined ? '' : JSON.stringify(path.initialState)].join('\n');
 
-/** A step of another conversation that must not hold a probe's value: it checks a value of its own and speaks after the probe's value reached the agent. */
-export interface IsolationCheck { probe: MemoryProbe; path: number; step: number }
+/** A step's place in the relay's order: round after round, the paths in order, each message answered before the next (relay). */
+const relayPlace = (exam: Exam, path: number, step: number): number => step * exam.length + path;
 
 /**
- * Where the paths show that conversations are kept apart: a step of another path that checks its own value with
- * `contains` and, in the relay's order (round after round, paths in order), speaks after the probe's value was told —
- * while that path never tells the value itself. Its reply must hold its own value and not the other conversation's.
+ * Two memory probes that can show conversations are kept apart: of two paths held open together, with values that
+ * differ — neither holds the other —, neither value in the other path's own words, and interleaved by the relay so that
+ * each path asks for its value after the other path told the agent its own. One keeps its customer's value and not the
+ * other's only if the agent keeps the two conversations apart.
  */
-export function isolationChecks(exam: Exam): IsolationCheck[] {
-  return memoryProbes(exam).flatMap(probe => exam.flatMap((path, index) => {
-    if (index === probe.path || contains(pathMaterial(path), probe.value)) return [];
-    return path.steps.flatMap((step, i) => step.contains !== undefined && !contains(step.contains, probe.value)
-      && (i > probe.given || i === probe.given && index > probe.path) ? [{ probe, path: index, step: i }] : []);
+export interface IsolationPair { a: MemoryProbe; b: MemoryProbe }
+
+/** Every pair of memory probes of the exam that meets the isolation contract (IsolationPair), in path order. */
+export function isolationPairs(exam: Exam): IsolationPair[] {
+  const probes = memoryProbes(exam);
+  const place = (probe: MemoryProbe, step: number) => relayPlace(exam, probe.path, step);
+  return probes.flatMap((a, i) => probes.slice(i + 1).flatMap((b): IsolationPair[] => {
+    if (a.path === b.path || contains(a.value, b.value) || contains(b.value, a.value)) return [];
+    if (contains(pathMaterial(exam[b.path]!), a.value) || contains(pathMaterial(exam[a.path]!), b.value)) return [];
+    return place(a, a.step) > place(b, b.given) && place(b, b.step) > place(a, a.given) ? [{ a, b }] : [];
   }));
 }
 
 /**
- * Whether an exam can vouch for a percent: it has a memory probe and a step that shows conversations are kept apart.
- * An exam without them is too weak to count — a one-question exam is passed by an agent that forgets everything, and an
- * exam of one conversation by an agent that mixes its customers up.
+ * Whether an exam can vouch for a percent: it holds a memory probe and a pair of them that can show conversations are
+ * kept apart (isolationPairs). An exam without them is too weak to count — a one-question exam is passed by an agent that
+ * forgets everything, and an exam whose second path checks a word of its own by an agent that mixes its customers up.
  */
-export const examCanVouch = (exam: Exam | undefined): boolean => !!exam && memoryProbes(exam).length > 0 && isolationChecks(exam).length > 0;
+export const examCanVouch = (exam: Exam | undefined): boolean => !!exam && memoryProbes(exam).length > 0 && isolationPairs(exam).length > 0;
 
 /** The agent's turn after one customer message, as the events recorded it. */
 function turnAfter(events: readonly TraceEvent[], from: number): { got: ExamTurn; text?: string; status?: string } {
@@ -247,10 +256,11 @@ export async function examConnection(target: RunnableTarget, signal: AbortSignal
   signal.throwIfAborted();
   const probes = memoryProbes(exam);
   const controls: Control[] = [];
-  const dependency = new Map<MemoryProbe, Control>();
+  // A path has one probe at most (memoryProbes), so its place names the probe's controls.
+  const dependency = new Map<number, Control>();
   for (const probe of probes) {
     const { control: result } = await control(target, exam, probe, 'dependency', [{ value: probe.value, path: probe.path }], signal);
-    dependency.set(probe, result); controls.push(result);
+    dependency.set(probe.path, result); controls.push(result);
   }
   const turns = relay(exam.length);
   const ran = await Promise.all(exam.map(async (path, index) => {
@@ -261,17 +271,25 @@ export async function examConnection(target: RunnableTarget, signal: AbortSignal
   signal.throwIfAborted();
   const paths = ran.map(item => item.result);
 
-  // Isolation across the open conversations: a reply that holds another conversation's value.
-  const checks = isolationChecks(exam);
-  let isolationHeld = 0, isolationBroken = false;
-  for (const check of checks) {
-    const reply = ran[check.path]!.replies[check.step];
-    if (reply === undefined) continue;
-    const step = paths[check.path]!.steps[check.step]!;
-    if (contains(reply, check.probe.value)) {
-      fail(step, `в ответе «${clip(check.probe.value, 120)}» из разговора «${clip(exam[check.probe.path]!.name, 120)}» — разговоры не отделены друг от друга`);
-      isolationBroken = true;
-    } else if (step.passed) isolationHeld++;
+  // Isolation across the open conversations, pair by pair: a reply of one path, after the other path told its value,
+  // that holds that value is a leak; a pair whose two answers each hold their own value and no leak shows the paths apart.
+  const pairs = isolationPairs(exam);
+  let isolationBroken = false;
+  const apart: IsolationPair[] = [];
+  for (const pair of pairs) {
+    let leaked = false;
+    for (const [own, other] of [[pair.a, pair.b], [pair.b, pair.a]] as const) {
+      ran[own.path]!.replies.forEach((reply, index) => {
+        if (reply === undefined || relayPlace(exam, own.path, index) < relayPlace(exam, other.path, other.given) || !contains(reply, other.value)) return;
+        const step = paths[own.path]!.steps[index]!;
+        const problem = `в ответе «${clip(other.value, 120)}» из разговора «${clip(exam[other.path]!.name, 120)}» — разговоры не отделены друг от друга`;
+        if (!step.problem?.includes(problem)) fail(step, problem);
+        leaked = true;
+      });
+    }
+    const holds = (probe: MemoryProbe) => { const reply = ran[probe.path]!.replies[probe.step]; return reply !== undefined && contains(reply, probe.value); };
+    if (leaked) isolationBroken = true;
+    else if (holds(pair.a) && holds(pair.b)) apart.push(pair);
   }
   for (const path of paths) path.passed = path.steps.every(step => step.passed);
 
@@ -282,23 +300,27 @@ export async function examConnection(target: RunnableTarget, signal: AbortSignal
     const reply = ran[probe.path]!.replies[probe.step];
     return reply !== undefined && !contains(reply, probe.value) && !values.some(item => item.path !== probe.path && contains(reply, item.value));
   });
-  const memoryShown = heldProbes.some(probe => dependency.get(probe)?.passed);
+  const memoryShown = heldProbes.some(probe => dependency.get(probe.path)?.passed);
 
   // A fresh conversation after every path: it knows none of the values the paths told.
   const fresh: Control[] = [];
+  const freshOf = new Map<number, Control>();
   if (paths.every(path => path.passed)) {
-    for (const probe of probes.filter(item => dependency.get(item)?.passed)) {
+    for (const probe of probes.filter(item => dependency.get(item.path)?.passed)) {
       const { control: result, leaked } = await control(target, exam, probe, 'fresh', values, signal);
-      fresh.push(result); controls.push(result);
+      fresh.push(result); controls.push(result); freshOf.set(probe.path, result);
       if (leaked) isolationBroken = true;
     }
   }
   signal.throwIfAborted();
 
+  // A pair proves isolation once both its probes show memory (their questions alone did not bring the values) and the
+  // fresh conversation after the paths knew none of the values (every fresh control ran and passed).
+  const proven = (probe: MemoryProbe) => dependency.get(probe.path)?.passed === true && freshOf.get(probe.path)?.passed === true;
   const properties: NonNullable<ExamResult['properties']> = {
     transport: paths.every(path => path.steps.every(step => meets(step.expect, step.got))) ? 'passed' : 'failed',
     memory: forgotten ? 'failed' : memoryShown ? 'shown' : 'not_shown',
-    isolation: isolationBroken ? 'failed' : isolationHeld > 0 && fresh.length > 0 && fresh.every(item => item.passed) ? 'shown' : 'not_shown',
+    isolation: isolationBroken ? 'failed' : fresh.length > 0 && fresh.every(item => item.passed) && apart.some(pair => proven(pair.a) && proven(pair.b)) ? 'shown' : 'not_shown',
   };
   const failed = !paths.every(path => path.passed) || properties.isolation === 'failed';
   const status = failed ? 'failed' : properties.transport === 'passed' && properties.memory === 'shown' && properties.isolation === 'shown' ? 'passed' : 'simple';
@@ -306,7 +328,7 @@ export async function examConnection(target: RunnableTarget, signal: AbortSignal
 }
 
 const MEMORY_HOW = 'нужен путь, где клиент называет значение (номер, имя, выбор), а следующий шаг спрашивает о нём и через contains проверяет, что агент его помнит; в самом вопросе значение не повторяется';
-const ISOLATION_HOW = 'нужен второй путь со своим значением, который идёт одновременно с первым и проверяет через contains своё, — например, второй клиент называет другой номер';
+const ISOLATION_HOW = 'нужны два пути, у каждого своё значение (например, разные номера терминала, и ни один не входит в другой): каждый клиент называет своё, а поздний шаг спрашивает о нём и проверяет через contains; вопрос каждого пути должен идти после того, как другой путь назвал своё значение, — пути идут по очереди, шаг за шагом';
 const PROPERTY_WORDS = { passed: 'да', failed: 'нет', shown: 'доказана', not_shown: 'не показана' } as const;
 
 /** Why an exam whose paths passed does not count, in the owner's words: what it did not show and how to show it. */

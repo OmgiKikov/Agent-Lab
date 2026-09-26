@@ -6,7 +6,7 @@ import { calibrationConsent } from '../src/card/calibrate.js';
 import { describeCheck, fingerprint, isRunnable, type Experiment, type RunnableTarget } from '../src/contracts.js';
 import { CONNECTION_FILE } from '../src/connect.js';
 import { projectConnection, sameConnection, saveExam } from '../src/connection.js';
-import { examCanVouch, examPlanLines, isolationChecks, memoryProbes } from '../src/exam.js';
+import { examCanVouch, examPlanLines, isolationPairs, memoryProbes } from '../src/exam.js';
 import type { Exam } from '../src/target-schema.js';
 import { situationViews, type SituationView } from '../src/card/view.js';
 import { detectProject, evidenceText, releaseText, targetLabel, type AgentCandidate } from '../src/detect.js';
@@ -175,7 +175,7 @@ const sameExam = (a: Exam | undefined, b: Exam | undefined) => (a === undefined)
  * nothing was written. An exam that never checks the conversation's memory is refused before the owner is asked.
  */
 export async function writeExam(ctx: Pick<ExtensionContext, 'ui' | 'cwd'>, record: Experiment, target: RunnableTarget, exam: Exam): Promise<boolean> {
-  if (!examCanVouch(exam)) throw new Error(`Экзамен не записан: ${!memoryProbes(exam).length ? 'в нём нет пути, который проверяет память разговора. Нужен путь из двух шагов и больше, где клиент называет значение — номер, имя, выбор, — а поздний шаг спрашивает о нём и проверяет (contains), что оно есть в ответе; в самом позднем шаге значение не повторяется' : !isolationChecks(exam).length ? 'в нём нет проверки, что разговоры не смешиваются. Нужен второй путь со своим значением, который идёт одновременно с первым и проверяет (contains) своё значение, — например, второй клиент называет другой номер' : ''}. Ничего не записано.`);
+  if (!examCanVouch(exam)) throw new Error(`Экзамен не записан: ${!memoryProbes(exam).length ? 'в нём нет пути, который проверяет память разговора. Нужен путь из двух шагов и больше, где клиент называет значение — номер, имя, выбор, — а поздний шаг спрашивает о нём и проверяет (contains), что оно есть в ответе; в самом позднем шаге значение не повторяется' : !isolationPairs(exam).length ? 'в нём нет проверки, что разговоры не смешиваются. Нужны два таких пути памяти, каждый со своим значением (например, два клиента с разными номерами; ни одно значение не входит в другое и не звучит в чужом пути). Lab ведёт пути по очереди, шаг за шагом: вопрос каждого пути о своём значении должен идти после того, как другой путь назвал своё' : ''}. Ничего не записано.`);
   const file = resolve(ctx.cwd, CONNECTION_FILE);
   const current = await projectConnection(file);
   const where = current === null ? `Lab сохранит это подключение вместе с экзаменом в ${CONNECTION_FILE} в папке проекта.`

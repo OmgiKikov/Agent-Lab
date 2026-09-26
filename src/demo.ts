@@ -30,13 +30,15 @@ const demoDialogues = [
 /**
  * The teaching agent's connection exam (exam.ts): it answers the customer, it keeps the conversation — asked which
  * terminal the customer has, it says the number named earlier — and it keeps two customers apart: the two paths run at
- * once with different numbers. The exam proves the channel, never the agent's duties: the baseline's repeated question
- * passes it, and the run is what finds that error.
+ * once, each with its own number, and each asks for it after the other named its own (the relay's order: the first
+ * path names 5678 at its second step, the second names 1234 at once and asks right after the first named its number).
+ * The exam proves the channel, never the agent's duties: the baseline's repeated question passes it, and the run is
+ * what finds that error.
  */
 const DEMO_EXAM: NonNullable<RunnableTarget['exam']> = [
-  { name: 'Номер назван сразу', steps: [{ say: 'Номер терминала: 1234. Помогите с возвратом.', expect: 'reply' }, { say: 'Какой у меня терминал?', expect: 'reply', contains: '1234' }] },
   { name: 'Номер по просьбе агента', steps: [{ say: 'Помогите с возвратом.', expect: 'reply' }, { say: 'Номер терминала: 5678', expect: 'reply', contains: 'заявление' },
     { say: 'Какой у меня терминал?', expect: 'reply', contains: '5678' }] },
+  { name: 'Номер назван сразу', steps: [{ say: 'Номер терминала: 1234. Помогите с возвратом.', expect: 'reply' }, { say: 'Какой у меня терминал?', expect: 'reply', contains: '1234' }] },
 ];
 
 /** The teaching agent; `fixed` is the corrected version that no longer asks for a number it already has. Resolved from src and from dist alike. */

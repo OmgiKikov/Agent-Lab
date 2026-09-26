@@ -68,8 +68,10 @@ export function adapterContract(): AdapterContract {
     exam: `target.exam: paths {name, steps, initialState?}; a step is say (the customer's words) or press (a button of the previous reply), expect ${EXAM_EXPECTATIONS.join(' | ')}, `
       + 'and contains — a value the reply must hold. The exam counts only when it shows memory and isolation. Memory: a path where the customer gives a value (a number, a name, '
       + 'a choice) and a later step asks about it without repeating it and checks with contains that the reply holds it; Lab also asks that later question alone in a fresh '
-      + 'conversation, where the reply must not hold the value. Isolation: a second path with a value of its own, open at the same time, whose step checks its own value with '
-      + 'contains after the first path told its value — its reply must not hold the other conversation\'s value; a fresh conversation after all paths must hold none of them. '
+      + 'conversation, where the reply must not hold the value. Isolation: two such memory paths, open at the same time, with different values (neither contains the '
+      + 'other, neither appears in the other path\'s own messages); Lab sends the paths\' messages in turn, step by step, path after path, so write them so that each path asks '
+      + 'for its value after the other path told its own. Each answer must hold its own value and not the other\'s; a fresh conversation after all paths must hold none of '
+      + 'them. A second path that only checks some word of its own (a greeting) proves nothing about isolation. '
       + 'Values fit the agent\'s purpose (a terminal number it knows, not a token to memorise). Without both the result shows no percent. Lab runs it before every run, without '
       + 'a model; a failed exam stops the run. From the chat, the paths '
       + 'go to agent_lab_run as exam when the owner asks for them: Lab shows them to the owner and writes them into connection.json only at their word.',
