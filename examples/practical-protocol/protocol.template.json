@@ -1,0 +1,23 @@
+{
+  "format": "agent-lab-practical-protocol-1",
+  "about": "Протокол отчёта B. Владелец заполняет его ДО прогона: размер выборки, сколько диалогов каждого слоя, пороги и кто и когда их зафиксировал. Пустое поле (null) — вердиктов нет, только измерения; на настоящих диалогах harness без зафиксированного протокола не запускается. Доли — от 0 до 1: *Rate — не больше, *Min — не меньше. Пути в Pi отмечает сам владелец после прогона. Настоящие диалоги в репозиторий не кладутся.",
+  "fixedAt": null,
+  "fixedBy": null,
+  "sample": {
+    "size": null,
+    "strata": { "successful": null, "failing": null, "undecided": null, "long": null, "rule_exceptions": null, "rag": null, "tool_actions": null }
+  },
+  "thresholds": {
+    "falseAccusationRate": null,
+    "missedViolationRate": null,
+    "applicabilityErrorRate": null,
+    "ruleExtractionErrorRate": null,
+    "cardErrorRate": null,
+    "simulatorDeviationRate": null,
+    "cardsAcceptedWithoutReworkMin": null,
+    "reproducedOnSourceVersionMin": null,
+    "maxCallsPerUsefulResult": null,
+    "maxCostPerUsefulResultUsd": null
+  },
+  "piPath": { "walkedWithoutEditingJson": null, "walkedWithoutAuthorsHelp": null, "notes": "" }
+}
