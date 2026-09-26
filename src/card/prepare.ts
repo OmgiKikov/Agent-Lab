@@ -22,7 +22,7 @@ import { revisionClaims, claimReceipts, GAP_CLAIM, gapRequest, pendingClaims, RE
 import { cardSchema, type Card, type CardPreparation, type LibraryV2, type PreparationProgress } from './schema.js';
 import { assessorReference } from './assessor.js';
 import { criterionRequirements } from '../criterion.js';
-import { linkedCriterion, withCriterion } from '../discover/verify.js';
+import { criterionConversations, linkedCriterion, withCriterion } from '../discover/verify.js';
 
 /*
  * Preparing situations — from dialogues of an import, or from the owner's rules alone (docs/design/card-v2-spec.md §8, C9):
@@ -436,9 +436,9 @@ class Preparation {
     // The assessor's markup of this conversation, carried by the import, is the situation's reference from the start.
     const references = dialogue ? assessorReference(dialogue.original, record.sources) : undefined;
     const own = references ? cardSchema.parse({ ...bound, references }) : bound;
-    // A check of a problem found in the logs: a card of a conversation it names carries the problem's criterion exactly,
-    // its rules among the library's (discover/verify.ts).
-    const linked = dialogue && record.fromAnalysis?.dialogueIds.includes(unit) ? linkedCriterion(record.fromAnalysis) : undefined;
+    // A check of a problem found in the logs: a card of a conversation it names for the problem carries the problem's
+    // criterion exactly, its rules among the library's; a neighbour's card keeps its own duties (discover/verify.ts).
+    const linked = dialogue && record.fromAnalysis && criterionConversations(record.fromAnalysis).includes(unit) ? linkedCriterion(record.fromAnalysis) : undefined;
     const rules = [...proposalRequirements(parsed.data, asked.call), ...linked ? criterionRequirements(linked.criterion) : []];
     const card = linked ? withCriterion(own, linked.criterion, [...record.requirements, ...rules], plan?.scenario) : own;
     // A sentence another card already cites is already a rule of the library, by the same id: the first wording stays.

@@ -1,4 +1,4 @@
-import { countText } from '../plural.js';
+import { countText, pluralForm } from '../plural.js';
 import { clip } from '../text.js';
 import type { ImportBatch } from '../scenario-contracts.js';
 import type { PlanIssue } from './schema.js';
@@ -202,11 +202,21 @@ export function nextStep(view: AnalysisView): string {
 /** A version as the owner reads it. */
 const versionWord = (version: string | null): string => version ? `версии ${version}` : 'версии, которую агент не назвал';
 const SITUATIONS_WITH: [string, string, string] = ['ситуации', 'ситуаций', 'ситуаций'];
+const IN_SITUATIONS: [string, string, string] = ['ситуации', 'ситуациях', 'ситуациях'];
+const IN_EXPECTATIONS: [string, string, string] = ['ожидании', 'ожиданиях', 'ожиданиях'];
+
+const EXPECTATIONS: [string, string, string] = ['ожидание', 'ожидания', 'ожиданий'];
+/** A run as the owner recognises it: when it was made and which version it tested. */
+const runWord = (before: { createdAt: string; version: string | null }): string =>
+  `прогона ${new Date(before.createdAt).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} (${versionWord(before.version)})`;
+/** An expectation of the rest by its situation: «№2 «…»: спросить номер терминала». */
+const restItem = (item: { number: number; title: string; text: string }): string => `№${item.number} «${clip(item.title, 60)}»: ${clip(item.text, 100)}`;
+
 /**
- * The three facts of a check made from a problem of the logs, in the owner's words: found in the logs, reproduced (or
- * not) on this version, fixed (or not, or broken beside it) against the run it repeats — each read off the one
- * expectation that is the problem's criterion. «Исправлено» only when the problem reproduced before and the two runs
- * compare; nothing at all when no situation carries the criterion.
+ * The problem's answer of a check made from a problem of the logs, in the owner's words: found in the logs, reproduced
+ * (or not) on this version, fixed (or not, or broken beside it) against the run it repeats — each read off the one
+ * expectation that is the problem's criterion. «Исправлено» only when the problem reproduced before in every chosen case,
+ * the two runs compare and the agent answered otherwise; nothing at all when no situation carries the criterion.
  */
 export function problemCheckLines(check: ProblemCheck): string[] {
   if (check.unbound) {
@@ -214,26 +224,72 @@ export function problemCheckLines(check: ProblemCheck): string[] {
       : 'ни одна ситуация проверки не проверяет это правило в точности — его ожидание изменено или не попало в ситуацию'}. Найдена ли, воспроизведена ли и исправлена ли проблема, этот прогон не говорит. Соберите проверку из разбора заново.`];
   }
   const failed = check.broken.filter(item => item.outcome === 'fail').length;
+  const { missing, changed } = check.unchecked;
   const reproduced = check.reproduced === 'yes'
     ? `Воспроизведена на ${versionWord(check.version)}: агент снова нарушил это правило в ${failed} из ${countText(check.broken.length, SITUATIONS_WITH)} с нарушением.`
     : check.reproduced === 'no'
-      ? `На ${versionWord(check.version)} не воспроизведена: ${check.broken.length === 1 ? 'в единственной ситуации' : `во всех ${countText(check.broken.length, SITUATIONS_WITH)}`} с нарушением агент это правило выполнил.${check.before ? '' : ' Это ещё не «исправлено»: так можно сказать только против версии, где проблема воспроизводилась.'}`
+      ? `На ${versionWord(check.version)} не воспроизведена: ${check.broken.length === 1 ? 'в единственной проверенной ситуации' : `во всех ${countText(check.broken.length, SITUATIONS_WITH)}`} с нарушением агент это правило выполнил.${check.before ? '' : ' Это ещё не «исправлено»: так можно сказать только против версии, где проблема воспроизводилась.'}`
       : `На ${versionWord(check.version)} измерить не удалось: ${check.broken.length ? 'правило в ситуациях с нарушением не оценено' : 'ситуаций из разговоров с нарушением в проверке нет'}.`;
   const beside = check.controls.filter(item => item.outcome === 'fail');
+  const unmeasured = check.controls.filter(item => item.outcome === 'unknown');
   const lines = [`«${check.title}» — найдена в логах в ${countText(check.found, IN_CONVERSATIONS)}.`, reproduced,
+    // Chosen cases the run checks nothing on: what passed is never read as every chosen case.
+    ...(missing + changed ? [`Проверено ${check.found - missing - changed} из ${countText(check.found, OF_CONVERSATIONS)} с нарушением: ${[...missing ? [`для ${missing} ситуации в проверке нет`] : [], ...changed ? [`в ${changed} правило проблемы изменено или не попало в ситуацию`] : []].join(', ')} — про них проверка ничего не говорит, и успех остальных не означает успеха всех выбранных.`] : []),
     check.controls.length ? beside.length ? `Рядом не справился: ${beside.map(item => `№${item.number} «${clip(item.title, 80)}»`).join(', ')} — ситуации из разговоров, где агент в логах это правило соблюдал.`
-      : `Ситуации из разговоров, где агент в логах это правило соблюдал: правило выполнено в ${check.controls.filter(item => item.outcome === 'pass').length} из ${check.controls.length}.`
-    : check.controlConversations ? 'Ситуаций из разговоров, где правило соблюдалось, в проверке нет: сломалось ли что-то рядом, она не показывает.'
-    : 'Разговоров, где это правило проверено и соблюдено, в разборе не было: сломалось ли что-то рядом, эта проверка не показывает.',
-    ...(check.uncarried ? [`${countText(check.uncarried, ['ситуация', 'ситуации', 'ситуаций'])} этой проверки не ${check.uncarried === 1 ? 'проверяет' : 'проверяют'} правило проблемы в точности — ${check.uncarried === 1 ? 'она не считается' : 'они не считаются'}.`] : [])];
+      : `Ситуации из разговоров, где агент в логах это правило соблюдал: правило выполнено в ${check.controls.filter(item => item.outcome === 'pass').length} из ${check.controls.length}${unmeasured.length ? `, не измерено в ${unmeasured.length} — что там ничего не сломалось, не подтверждено` : ''}.`
+    : check.controlConversations ? 'Ситуаций из разговоров, где это правило соблюдалось, в проверке нет: сломалось ли оно рядом, она не показывает.'
+    : 'Разговоров, где это правило проверено и соблюдено, в разборе не было: сломалось ли оно рядом, эта проверка не показывает.'];
   const before = check.before;
   if (!before) return lines;
-  const against = `против прогона ${new Date(before.createdAt).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} (${versionWord(before.version)})`;
-  lines.push(before.verdict === 'fixed' ? `Исправлено ${against}: там проблема воспроизводилась, здесь — нет, условия проверки те же${check.controls.length ? ', и рядом ничего не сломалось' : ''}.`
+  const against = `против ${runWord(before)}`;
+  lines.push(before.verdict === 'fixed' ? `Исправлено ${against}: там проблема воспроизводилась, здесь — нет, условия проверки те же${check.controls.length && !before.besideUnknown.length ? ', и в ситуациях, где это правило соблюдалось, оно не сломалось' : ''}.`
     : before.verdict === 'regressed' ? `Сломалось ${against}: ${before.regressed.map(title => `«${clip(title, 80)}»`).join(', ')} — там агент это правило выполнял. Исправление не принимается, пока это не починено.`
     : before.verdict === 'not_fixed' ? `Не исправлено ${against}: проблема воспроизводится по-прежнему.`
-    : before.why === 'incomparable' ? `Сравнить ${against} нельзя: условия проверки изменились — ситуации, судья или клиент. «Исправлено» не доказано.`
+    : before.why === 'incomparable' ? `Сравнить ${against} нельзя: условия проверки изменились — ситуации, судья или клиент. Ни «исправлено», ни «сломалось» не доказано.`
     : before.why === 'not_reproduced_before' ? `«Исправлено» не доказано: ${against} проблема не воспроизводилась — сравните с версией, где она была.`
+    : before.why === 'judge_only' ? `«Исправлено» не доказано ${against}: в ${countText(before.judgeOnly.length, IN_SITUATIONS)} агент ответил так же, как там, а судья решил иначе — разница в судье, не в агенте.`
+    : before.why === 'partial' ? `«Исправлено» не доказано ${against} для всех выбранных: в проверенных проблема не воспроизводится, но не все выбранные проверены.`
     : `«Исправлено» не доказано ${against}: правило проблемы измерено не во всех ситуациях.`);
+  if (before.besideUnknown.length && before.verdict === 'fixed') lines.push(`Что рядом ничего не сломалось, не подтверждено: в ${countText(before.besideUnknown.length, IN_SITUATIONS)}, где это правило соблюдалось, оно не измерено.`);
   return lines;
+}
+
+/**
+ * The rest's answer of the same check: every other expectation of its situations — the other duties of the chosen ones
+ * and the neighbours' —, apart from the problem. Against the run it repeats, only what passed there is a regression test,
+ * what broke is named even when the problem is fixed, and what was not measured is said as not confirmed.
+ */
+export function restCheckLines(check: ProblemCheck): string[] {
+  const { rest } = check;
+  if (!rest.total) return ['Других обязательных ожиданий в проверке нет: что исправление не сломало остальное, она не показывает.'];
+  const lines: string[] = [];
+  const against = rest.against;
+  if (!against) {
+    lines.push(`${countText(rest.total, EXPECTATIONS)} других правил: выполнено ${rest.passed}, нарушено ${rest.failed}, не измерено ${rest.unknown}. Проверкой на регрессии для следующей версии станут только выполненные здесь — ${rest.passed}.`);
+  } else if (!against.comparable) {
+    lines.push(`${countText(rest.total, EXPECTATIONS)} других правил не сравнить с прогоном, который повторяет этот: условия проверки изменились. Поломки других правил не доказаны и не исключены.`);
+  } else {
+    lines.push(`Выполнялись там — ${countText(against.tests, EXPECTATIONS)} других правил, это проверка на регрессии: здесь выполнено ${against.held.length}, сломалось ${against.broken.length}, не измерено ${against.unknown.length}.`);
+    if (against.broken.length) lines.push(`Сломалось: ${against.broken.slice(0, 4).map(restItem).join('; ')}${against.broken.length > 4 ? `; ещё ${against.broken.length - 4}` : ''}.`);
+    if (against.unknown.length) lines.push(`Не подтверждено, что не сломалось: ${against.unknown.slice(0, 4).map(restItem).join('; ')}${against.unknown.length > 4 ? `; ещё ${against.unknown.length - 4}` : ''} — не измерено.`);
+    if (against.judgeOnly.length) lines.push(`В ${countText(against.judgeOnly.length, IN_EXPECTATIONS)} ответы агента те же, а судья решил иначе — это не поломка агента.`);
+    if (against.unconfirmed) lines.push(`Ещё ${countText(against.unconfirmed, EXPECTATIONS)} там ${pluralForm(against.unconfirmed, ['не выполнялось или не измерено', 'не выполнялись или не измерены', 'не выполнялись или не измерены'])} — в проверку на регрессии не ${pluralForm(against.unconfirmed, ['входит', 'входят', 'входят'])}.`);
+    if (against.changed) lines.push(`${countText(against.changed, EXPECTATIONS)} ${pluralForm(against.changed, ['изменилось', 'изменились', 'изменились'])} с тех пор — не сравниваются.`);
+  }
+  if (rest.sameCriterion) lines.push(`${countText(rest.sameCriterion, EXPECTATIONS)} с правилом проблемы — в ситуациях не из выбранных для неё разговоров: контролем проблемы не считаются и в остальное не входят.`);
+  return lines;
+}
+
+/** The one line that puts the two answers together: a local fix never hides what broke beside it. */
+export function checkVerdictLine(check: ProblemCheck): string | undefined {
+  const before = check.before;
+  const against = check.rest.against;
+  if (check.unbound || !before || !against) return undefined;
+  if (!before.comparable || !against.comparable) return 'Итог: прогоны несравнимы — ни исправление, ни поломка не доказаны.';
+  if (before.verdict === 'fixed' && against.broken.length) return `Итог: проблема исправлена локально, но сломалось другое обязательное — ${countText(against.broken.length, EXPECTATIONS)}. Такую версию принимать нельзя.`;
+  if (before.verdict === 'fixed' && (against.unknown.length || before.besideUnknown.length)) return 'Итог: проблема исправлена; что ничего проверенного не сломалось, не подтверждено — часть не измерена.';
+  if (before.verdict === 'fixed' && !against.tests) return 'Итог: проблема исправлена; других правил, выполнявшихся на прежней версии, в проверке нет — что ничего не сломалось, она не показывает.';
+  if (before.verdict === 'fixed') return 'Итог: проблема исправлена, и ничего проверенного не сломалось.';
+  if (against.broken.length) return `Итог: проблема не исправлена${before.verdict === 'regressed' ? ', и её правило сломалось там, где выполнялось' : ''}; сломалось и другое обязательное — ${countText(against.broken.length, EXPECTATIONS)}.`;
+  return undefined;
 }

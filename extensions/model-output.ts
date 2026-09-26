@@ -50,8 +50,12 @@ export function resultOutput(record: Experiment, view: ResultView) {
     ...(view.problemCheck ? { problemFromLogs: view.problemCheck.unbound ? { problem: view.problemCheck.title, notBound: view.problemCheck.unbound,
       rule: 'No situation checks the problem\'s rule exactly: say nothing about found, reproduced or fixed; offer to make the check from the analysis again.' }
       : { problem: view.problemCheck.title, reproducedOnThisVersion: view.problemCheck.reproduced, controls: view.problemCheck.controls.length,
-      ...(view.problemCheck.before ? { againstRepeatedRun: view.problemCheck.before.verdict, brokeBeside: view.problemCheck.before.regressed } : {}),
-      rule: 'Say «исправлено» only when againstRepeatedRun is fixed; regressed means the fix is not accepted. With controls 0, nothing beside the problem was checked.' } } : {}),
+      ...(view.problemCheck.before ? { againstRepeatedRun: view.problemCheck.before.verdict, ...(view.problemCheck.before.why ? { notProvenBecause: view.problemCheck.before.why } : {}),
+        brokeBeside: view.problemCheck.before.regressed, controlsNotMeasured: view.problemCheck.before.besideUnknown.length } : {}),
+      restOfCheck: view.problemCheck.rest.against ? { comparable: view.problemCheck.rest.against.comparable, regressionTests: view.problemCheck.rest.against.tests,
+        broken: view.problemCheck.rest.against.broken.map(item => `№${item.number}: ${item.text}`), notMeasured: view.problemCheck.rest.against.unknown.length }
+        : { expectations: view.problemCheck.rest.total, passedHere: view.problemCheck.rest.passed },
+      rule: 'Two answers, never merged: the problem (say «исправлено» only when againstRepeatedRun is fixed; regressed means the fix is not accepted) and the rest of the check (restOfCheck.broken is a regression of another rule even when the problem is fixed; notMeasured means no regression is not confirmed). With controls 0, the problem\'s rule was not checked beside it.' } } : {}),
     ...(view.notMeasured.total ? { notMeasured: view.notMeasured.total } : {}),
     next: nextRows(view, 'chat')[0]?.text ?? null,
     shownToOwner: SHOWN_TO_OWNER,

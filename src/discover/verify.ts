@@ -16,40 +16,59 @@ import type { ProblemView } from './view.js';
  * one of its duties, exactly (its hash), so the run's verdict on that duty is the verdict on the problem.
  *
  *   problem ─► the conversations where it was broken, then those where the same criterion applied, was decided and held
- *              with evidence (controls; a conversation it was not decided on is none)
+ *              with evidence (controls; a conversation it was not decided on is none), then neighbours: conversations
+ *              where ANOTHER rule of the analysis held with evidence — what else the agent must keep doing
  *           ─► their original rows read again ─► a new import ─► agent_lab_prepare ─► a card per conversation
- *           ─► withCriterion: the card's duty that is the criterion, or the criterion put in ─► situations the owner accepts
+ *           ─► withCriterion on the problem's own conversations: the card's duty that is the criterion, or the criterion
+ *              put in; a neighbour's card keeps its own duties ─► situations the owner accepts
  *
- * The draft keeps the link (contracts.ts `fromAnalysis`): the analysis, the problem, the conversations, the criterion.
+ * The draft keeps the link (contracts.ts `fromAnalysis`): the analysis, the problem, the conversations, the criterion,
+ * and which conversations are neighbours. A neighbour is never a control of the problem: its expectations are regression
+ * tests of other rules, and count as such only once a baseline run passed them (discover/check.ts).
  */
 
 /** Conversations one check of a problem is made from at most: the examples one plan of a topic reads. */
 export const CHECK_CONVERSATIONS = 8;
 /** Seats of a check kept for controls while there are any: the violations never take them all. */
 const CONTROL_SEATS = 2;
+/** Seats of a check kept for neighbours while there are any: conversations where another rule held. */
+const NEIGHBOUR_SEATS = 2;
+
+/** Another criterion of the analysis: its key, the conversations where it held with evidence, its topics. */
+export interface OtherCriterion { key: string; held: readonly string[]; topics: readonly string[] }
 
 /**
  * The conversations a check of `problem` is made from: those it was broken in, then its controls — conversations where
- * the same criterion held with evidence (ProblemView.held); at most `limit`, a seat or two kept for controls.
+ * the same criterion held with evidence (ProblemView.held) —, then neighbours — conversations where another criterion of
+ * the analysis held with evidence, those of the problem's topics first; at most `limit`, a seat or two kept for each.
  */
-export function problemConversations(problem: Pick<ProblemView, 'dialogueIds' | 'held'>, limit = CHECK_CONVERSATIONS): { dialogueIds: string[]; broken: string[]; controls: string[] } {
-  const broken = problem.dialogueIds.slice(0, Math.max(1, limit - Math.min(problem.held.length, CONTROL_SEATS)));
-  const controls = problem.held.filter(id => !broken.includes(id)).slice(0, limit - broken.length);
-  return { dialogueIds: [...broken, ...controls], broken, controls };
+export function problemConversations(problem: Pick<ProblemView, 'key' | 'dialogueIds' | 'held' | 'topics'>, limit = CHECK_CONVERSATIONS, others: readonly OtherCriterion[] = []):
+  { dialogueIds: string[]; broken: string[]; controls: string[]; neighbours: string[] } {
+  const own = new Set([...problem.dialogueIds, ...problem.held]);
+  const ranked = [...others.filter(other => other.key !== problem.key)].sort((a, b) =>
+    Number(b.topics.some(topic => problem.topics.includes(topic))) - Number(a.topics.some(topic => problem.topics.includes(topic))));
+  const candidates = [...new Set(ranked.flatMap(other => other.held))].filter(id => !own.has(id));
+  const broken = problem.dialogueIds.slice(0, Math.max(1, limit - Math.min(problem.held.length, CONTROL_SEATS) - Math.min(candidates.length, NEIGHBOUR_SEATS)));
+  const controls = problem.held.filter(id => !broken.includes(id)).slice(0, Math.max(0, limit - broken.length - Math.min(candidates.length, NEIGHBOUR_SEATS)));
+  const neighbours = candidates.slice(0, Math.max(0, limit - broken.length - controls.length));
+  return { dialogueIds: [...broken, ...controls, ...neighbours], broken, controls, neighbours };
 }
 
 /**
  * The link a check of `problem` keeps in its draft (contracts.ts `fromAnalysis`): the analysis, the problem, the
- * conversations — broken first, then controls — and the problem's criterion frozen with its hash.
+ * conversations — broken first, then controls, then neighbours — and the problem's criterion frozen with its hash.
  */
-export function checkLink(analysis: Pick<LogAnalysis, 'id'>, problem: Pick<ProblemView, 'key' | 'criterion' | 'dialogueIds' | 'held' | 'duty'>): { link: FromAnalysis; controls: string[] } {
-  const { dialogueIds, broken, controls } = problemConversations(problem);
-  return { controls, link: { analysisId: analysis.id, problemKey: problem.key, title: clip(problemTitle(problem), 300), dialogueIds, broken,
-    criterion: structuredClone(problem.criterion), criterionHash: problem.key } };
+export function checkLink(analysis: Pick<LogAnalysis, 'id'>, problem: Pick<ProblemView, 'key' | 'criterion' | 'dialogueIds' | 'held' | 'duty' | 'topics'>, others: readonly OtherCriterion[] = []):
+  { link: FromAnalysis; controls: string[]; neighbours: string[] } {
+  const { dialogueIds, broken, controls, neighbours } = problemConversations(problem, CHECK_CONVERSATIONS, others);
+  return { controls, neighbours, link: { analysisId: analysis.id, problemKey: problem.key, title: clip(problemTitle(problem), 300), dialogueIds, broken,
+    criterion: structuredClone(problem.criterion), criterionHash: problem.key, ...(neighbours.length ? { neighbours } : {}) } };
 }
 
-/** The controls of a check: the conversations of its link the problem was not found in. */
-export const controlsOf = (link: Pick<FromAnalysis, 'dialogueIds' | 'broken'>): string[] => link.dialogueIds.filter(id => !link.broken.includes(id));
+/** The conversations of a link the problem's criterion is checked on: every one but the neighbours. */
+export const criterionConversations = (link: Pick<FromAnalysis, 'dialogueIds' | 'neighbours'>): string[] => link.dialogueIds.filter(id => !link.neighbours?.includes(id));
+/** The controls of a check: the conversations of its link the criterion is checked on and the problem was not found in. */
+export const controlsOf = (link: Pick<FromAnalysis, 'dialogueIds' | 'broken' | 'neighbours'>): string[] => criterionConversations(link).filter(id => !link.broken.includes(id));
 
 /**
  * An import of some conversations of `batch`: their original rows read again, the way the batch read them (its table of

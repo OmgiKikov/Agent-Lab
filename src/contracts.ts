@@ -360,7 +360,13 @@ export const fromAnalysisSchema = z.strictObject({ analysisId: identifier, probl
    * criterion applied, was decided and held, with evidence, and no word of the owner overrode it.
    */
   broken: z.array(identifier).min(1).max(16),
-  criterion: criterionSchema.optional(), criterionHash: sha256Schema.optional() });
+  criterion: criterionSchema.optional(), criterionHash: sha256Schema.optional(),
+  /**
+   * Conversations of `dialogueIds` checked for what else the agent must keep doing, not for the problem: there another
+   * rule of the analysis held with evidence. Their situations do not carry the problem's criterion; their expectations
+   * are regression tests of other rules once a baseline run passed them (discover/check.ts). Absent on older links.
+   */
+  neighbours: z.array(identifier).max(16).optional() });
 export type FromAnalysis = z.infer<typeof fromAnalysisSchema>;
 
 export const createInputSchema = z.strictObject({

@@ -7,7 +7,7 @@ import { createInputSchema, isRunnable, judgeFor, materialSources, SCENARIO_LIMI
 import { rememberedConnection } from '../src/connection.js';
 import { demoInput } from '../src/demo.js';
 import { targetLabel, type ProjectDetection } from '../src/detect.js';
-import { analysisView } from '../src/discover/view.js';
+import { analysisView, criteriaHeld } from '../src/discover/view.js';
 import { problemTitle } from '../src/discover/text.js';
 import { checkLink, subsetImport } from '../src/discover/verify.js';
 import type { ImportBatch } from '../src/scenario-contracts.js';
@@ -174,12 +174,13 @@ async function fromAnalysis(host: PrepareHost, callId: string, ctx: ExtensionCon
     throw new NeedsOwner('unknown_reference', `В разборе нет проблемы ${named.problem}.${known.length ? ` Есть: ${known.join('; ')}.` : ' Нарушений в нём нет.'} Спросите владельца, какую он имеет в виду.`, known.map((_, index) => String(index + 1)),
       `Проблемы ${named.problem} в разборе нет — из какой сделать проверку?`);
   }
-  const { link, controls } = checkLink(analysis, problem);
+  const { link, controls, neighbours } = checkLink(analysis, problem, criteriaHeld(view));
   const conversations: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
   const line = `Ситуации — для проверки проблемы «${problemTitle(problem)}» из разбора логов: ${countText(link.broken.length, conversations)} с нарушением`
     + (controls.length ? ` и ${countText(controls.length, conversations)}, где агент это правило соблюдал, — исправление не должно их сломать.`
-      : '. Разговоров, где это правило проверено и соблюдено, в разборе нет: что исправление ничего не сломало рядом, проверка не покажет.')
-    + ' Каждая ситуация проверяет правило проблемы в точности так, как его оценил разбор.';
+      : '. Разговоров, где это правило проверено и соблюдено, в разборе нет: что исправление не сломало его рядом, проверка не покажет.')
+    + ' Каждая из них проверяет правило проблемы в точности так, как его оценил разбор.'
+    + (neighbours.length ? ` Ещё ${countText(neighbours.length, conversations)}, где агент соблюдал другие правила, — проверка на регрессии остального: засчитается то, что выполнит нынешняя версия.` : '');
   return consentAndPrepare(host, callId, ctx, signal, onUpdate, { task: analysis.task, logsName: analysis.logs.file, libraryImport: subsetImport(batch, link.dialogueIds),
     materials: analysis.sources.map(({ name, content, kind }) => ({ name, content, ...(kind ? { kind } : {}) })), notes: [],
     rules: analysis.sources.map(source => source.name), situations: situations ?? link.dialogueIds.length, mode: analysis.mode, fromAnalysis: { link, line } });

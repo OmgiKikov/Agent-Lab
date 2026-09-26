@@ -27,14 +27,19 @@ const SITUATIONS: [string, string, string] = ['ситуация', 'ситуац�
  */
 const PAIRS_OF: [string, string, string] = ['пары разговоров', 'пар разговоров', 'пар разговоров'];
 
-function rubricReviewNote(scenario: Scenario | undefined, before: Trial, after: Trial): string | undefined {
+/**
+ * The same replies of the agent in both attempts, and a decided verdict of the judge on one of its metrics that differs:
+ * the difference is the judge's, never proof that the agent got better or worse. A typed signal (`judgeOnly` of a pair)
+ * that every reader — a comparison, a check of a problem from the logs — reads the same way; the note words it.
+ */
+export function judgeOnly(scenario: Scenario | undefined, before: Trial, after: Trial): boolean {
   const replies = before.events.filter(e => e.type === 'assistant').map(e => e.text);
   const flipped = scenario?.metrics?.some(m => m.subject === 'agent'
     && before.assessments?.some(a => a.metricId === m.id && a.result !== 'unknown'
       && after.assessments?.some(b => b.metricId === m.id && b.result !== 'unknown' && b.result !== a.result)));
-  return flipped && replies.length && fingerprint(replies) === fingerprint(after.events.filter(e => e.type === 'assistant').map(e => e.text))
-    ? 'Ответы агента совпали, а оценки судьи различаются: разница не доказывает, что агент стал лучше или хуже.' : undefined;
+  return !!flipped && replies.length > 0 && fingerprint(replies) === fingerprint(after.events.filter(e => e.type === 'assistant').map(e => e.text));
 }
+const JUDGE_ONLY_NOTE = 'Ответы агента совпали, а оценки судьи различаются: разница не доказывает, что агент стал лучше или хуже.';
 
 /** Below this many compared situations a difference may be chance; repeats do not add situations. */
 const TRUSTED_SAMPLE = 30;
@@ -47,8 +52,9 @@ const TRUSTED_SAMPLE = 30;
  */
 export interface RunComparison {
   headline: string; comparable: boolean;
+  /** `judgeOnly`: the agent answered the same in both conversations and only the judge's verdict differs (judgeOnly); `reviewNote` words it. */
   pairs: { scenarioId: string; userMode: UserMode; repeat: number; beforeTrialId: string; afterTrialId: string;
-    change: 'fixed' | 'regressed' | 'unchanged' | 'unknown'; reviewNote?: string }[];
+    change: 'fixed' | 'regressed' | 'unchanged' | 'unknown'; reviewNote?: string; judgeOnly?: true }[];
   coverage: { plannedPairs: number; validPairs: number; excludedPairs: number; missingBefore: number; missingAfter: number; invalidBefore: number; invalidAfter: number;
     /** Each excluded pair once, by its first reason; the parts add up to `excludedPairs`. Absent when nothing was paired. */
     excludedBy?: ExcludedBy };
@@ -351,13 +357,14 @@ function compareRunsAgainst(before: Experiment, after: Experiment, identity: Sou
     const now = headlineTrialResult(scenario, following, after.humanReviews);
     let change: RunComparison['pairs'][number]['change'] = was === 'unknown' || now === 'unknown' ? 'unknown'
       : was === now ? 'unchanged' : now === 'pass' ? 'fixed' : 'regressed';
-    const reviewNote = rubricReviewNote(scenario, trial, following);
+    const sameReplies = judgeOnly(scenario, trial, following);
+    const reviewNote = sameReplies ? JUDGE_ONLY_NOTE : undefined;
     if (reviewNote) change = 'unknown';
     if (reviewNote) notes.push(`${scenario!.title} · попытка ${trial.repeat + 1}: ${reviewNote}`);
     if (change === 'unknown') addIncomparable({ scenarioId: trial.scenarioId, userMode: trial.userMode, repeat: trial.repeat },
       reviewNote ?? 'ни судья, ни человек не решили, справился ли агент в этой паре разговоров', trial.id, following.id);
     return { scenarioId: trial.scenarioId, userMode: trial.userMode, repeat: trial.repeat,
-      beforeTrialId: trial.id, afterTrialId: following.id, change, ...(reviewNote ? { reviewNote } : {}) };
+      beforeTrialId: trial.id, afterTrialId: following.id, change, ...(reviewNote ? { reviewNote, judgeOnly: true as const } : {}) };
   });
   // Open the actual changed attempt, not an unchanged repeat of a changed card.
   const rank = { regressed: 0, fixed: 1, unchanged: 2, unknown: 2 };

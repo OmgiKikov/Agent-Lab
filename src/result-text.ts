@@ -14,7 +14,7 @@ import type { NotMeasuredCode } from './run.js';
 import type { ImportBatch } from './scenario-contracts.js';
 import { oneLine } from './text.js';
 import { blank, type ResultRow } from './result-layout.js';
-import { problemCheckLines } from './discover/text.js';
+import { checkVerdictLine, problemCheckLines, restCheckLines } from './discover/text.js';
 
 export { fitRows, MAX_WIDTH, plainText, wrapText, type ResultRole, type ResultRow } from './result-layout.js';
 
@@ -841,10 +841,17 @@ export function barRows(view: ResultView): ResultRow[] {
  * owner's disagreements, the calibration against production and what the result does not prove;
  * the run line and «Дальше» last. Blocks are separated by one blank row, never two.
  */
-/** «Проблема из разбора логов»: the three facts of a check made from a problem of the logs (discover/check.ts); nothing for any other run. */
+/**
+ * «Проблема из разбора логов» and «Остальное обязательное»: the two answers of a check made from a problem of the logs
+ * (discover/check.ts), each under its own heading, and the line that puts them together; nothing for any other run.
+ */
 export function problemCheckRows(view: Pick<ResultView, 'problemCheck'>): ResultRow[] {
   const check = view.problemCheck;
-  return check ? [{ role: 'heading', indent: 0, text: 'Проблема из разбора логов' }, ...problemCheckLines(check).map(text => ({ role: 'item' as const, indent: 2, text }))] : [];
+  if (!check) return [];
+  const verdict = checkVerdictLine(check);
+  return [{ role: 'heading', indent: 0, text: 'Проблема из разбора логов' }, ...problemCheckLines(check).map(text => ({ role: 'item' as const, indent: 2, text })),
+    { role: 'heading', indent: 0, text: 'Остальное обязательное в проверке' }, ...restCheckLines(check).map(text => ({ role: 'item' as const, indent: 2, text })),
+    ...(verdict ? [{ role: 'item' as const, indent: 0, text: verdict }] : [])];
 }
 
 export function resultScreen(view: ResultView, options: { surface: 'board' | 'cli'; details?: boolean; now?: Date }): ResultRow[] {
