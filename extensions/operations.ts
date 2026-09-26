@@ -150,8 +150,9 @@ export class SessionOperations {
     if (this.job !== job) throw new Error('Эта операция уже завершена или принадлежит другой сессии.');
     job.quiet = true;
     // The executor may have finished between the displayed progress and this request.
-    // cancel only fails when there is no active execution; still await presentation/release.
-    await job.lab.cancel(job.id).catch(() => {});
+    // cancel only fails when there is no active execution; still await presentation/release. A log analysis is a record
+    // of its own, never a run's: it is stopped by its own cancel.
+    await (job.kind === 'analysis' ? job.lab.cancelAnalysis(job.id) : job.lab.cancel(job.id)).catch(() => {});
     await job.done;
   }
 
