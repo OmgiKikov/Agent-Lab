@@ -133,8 +133,9 @@ export class ExperimentLab {
   async cancel(id: string): Promise<Experiment> { return this.operations.cancel(id) ?? this.store.get(id); }
   /** Resolves when the running operation has ended and its last checkpoint is saved. */
   async waitForIdle(): Promise<void> { await this.operations.idle(); }
-  async close(): Promise<void> {
-    this.operations.shutdown();
+  /** Closes the lab; `stop: 'cancelled'` — the owner stopped it (Ctrl+C in a command), and the work going on ends as their stop. */
+  async close(options: { stop?: 'cancelled' } = {}): Promise<void> {
+    this.operations.shutdown(options.stop ?? 'closing');
     try { await this.initializing; await this.operations.settled(); } finally { await this.store.close(); }
   }
 

@@ -83,10 +83,13 @@ export class OperationRunner {
   /** Accepts work from now on; a runner that began closing never opens again. */
   open(): void { if (this.state === 'closed') this.state = 'open'; }
   get closing(): boolean { return this.state === 'closing'; }
-  /** Refuses new work and stops the running operation, whose evidence is saved as it ends. */
-  shutdown(): void {
+  /** Why the runner is closing: the application closes, or the owner stopped everything (Ctrl+C in a command). */
+  private closedBy: 'closing' | 'cancelled' = 'closing';
+  /** Refuses new work and stops the running operation, whose evidence is saved as it ends; `reason`: whose stop it is. */
+  shutdown(reason: 'closing' | 'cancelled' = 'closing'): void {
+    if (this.state !== 'closing') this.closedBy = reason;
     this.state = 'closing';
-    this.active?.controller.abort(new Stopped('closing'));
+    this.active?.controller.abort(new Stopped(this.closedBy));
   }
   /** Resolves when the last operation has ended; its failure to save stays observable here. */
   async idle(): Promise<void> { await this.lastTask; }
@@ -103,6 +106,8 @@ export class OperationRunner {
 
   /** Refuses work while the lab is closed, an operation runs or — unless the caller is that change — another change is going on. */
   ensureIdle(ownsMutation = false): void {
+    // Work asked for while the lab closes is stopped the way the running work was: the owner's stop or the closing.
+    if (this.state === 'closing') throw new Stopped(this.closedBy);
     if (this.state !== 'open') throw new Error('Лаборатория не открыта.');
     // ponytail: one active local experiment; use per-experiment workers when concurrent runs are needed.
     if (this.active || (!ownsMutation && this.mutation)) throw new Error('Уже идёт другая операция над экспериментом. Дождитесь её или остановите.');
