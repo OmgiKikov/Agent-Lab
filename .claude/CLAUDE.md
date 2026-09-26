@@ -4,11 +4,17 @@
 
 **Agent Lab**
 
-Agent Lab — пакет для Pi, который прогоняет настоящего AI-агента на реальных диалогах и отвечает понятным языком: насколько хорош агент, где и почему он ошибается и чему в этой оценке можно верить. Он для трёх людей: владельца агента, который запускает проверку сам; менеджера заказчика, которому нужен ответ «хорош ли агент»; новичка, который впервые ставит Lab на своего агента без нашей помощи.
+Agent Lab — пакет для Pi: три продукта в одной оболочке на общем ядре. Каждый — самостоятельная точка входа, а не шаг одного конвейера; результат одного может стать входом другого, но не обязан.
 
-Этот проект доводит работающий MVP до продукта топ-уровня: числу можно верить, результат понятен без объяснений, начать легко, и всё выглядит красиво.
+- **DISCOVER** — что происходит в реальных разговорах: правила владельца прикладываются к логам, без агента, ситуаций и симулятора. Ответ — какие правила нарушаются, как часто среди разобранных разговоров и где это видно дословно.
+- **VERIFY** — как агент ведёт себя в воспроизводимых ситуациях: настоящий агент говорит с клиентом, которого играет Lab. Ответ — насколько хорош агент, где и почему он ошибается и чему в этом числе можно верить. Ситуация (карточка) принадлежит VERIFY: карточка = критерий + воспроизводимый мир клиента.
+- **PROTECT** — известная проблема не вернулась и ничего проверенного не сломалось. Пока есть только пометка сохранённого набора `purpose: known_problem`; больше ничего из PROTECT не построено.
 
-**Core Value:** Владелец агента и заказчик за 10 секунд понимают, насколько хорош агент и почему он ошибается, и верят этому числу.
+Общее ядро: источники и правила → критерий → доказательства и суждение → проверка человеком. Критерий (`src/criterion.ts`) — что агент должен или не должен делать, его правила дословными цитатами, допустимые пути, нарушение, канал наблюдения (ответ, инструмент, состояние); его хеш один и тот же в DISCOVER и VERIFY. Судейский стек один: тот же промпт, два голоса и одно правило канала — на синтетическом разговоре и на логе (`src/judge.ts`, `src/card/log-judge.ts`, `channelHolds`).
+
+Lab для трёх людей: владельца агента, который запускает проверку сам; менеджера заказчика, которому нужен ответ «хорош ли агент»; новичка, который впервые ставит Lab на своего агента без нашей помощи. Этот проект доводит работающий MVP до продукта топ-уровня: выводу можно верить, результат понятен без объяснений, начать легко, и всё выглядит красиво.
+
+**Core Value:** Владелец агента и заказчик за 10 секунд понимают, где агент нарушает правила и насколько он хорош, — и верят ответу: каждый вывод стоит на критерии с дословным основанием и на наблюдённых доказательствах.
 
 ### Constraints
 
@@ -82,7 +88,8 @@ Agent Lab — пакет для Pi, который прогоняет насто
 - `src/miner/` - Topic map, representative sample, coverage of an import
 - `src/spreadsheet/` - `.xlsx`/`.csv` logs read through an owner-confirmed mapping
 - `extensions/` - Pi extension (`agent-lab.ts`), its eleven tools, the `/agent-lab` workspace, `render/`
-- `src/discover/` - Log analysis (DISCOVER): its record, criteria, consent, the analysis work, view and words, the bridge to a check
+- `src/criterion.ts` - The kernel's criterion: its fields, its hash, how a plan's expectation or a card's duty is one
+- `src/discover/` - Log analysis (DISCOVER): its record, criteria, consent, the analysis work, view and words, the bridge to a check (VERIFY)
 - `skills/agent-builder/SKILL.md` - The one instruction source of an Agent Lab chat
 - `examples/` - Reference adapters, a connection, a saved suite, the teaching example, a CI workflow
 - `test/` - `*.test.ts`, `helpers/`, `fixtures/` (frozen records of older formats), `live/` (paid model checks)
@@ -238,10 +245,27 @@ Agent Lab — пакет для Pi, который прогоняет насто
 
 ## System Overview
 
-Agent Lab runs a real AI agent on situations drawn from its real logged conversations and answers one question in
-plain words: how good the agent is — one accuracy number with its interval, what is not measured and why, the causes of
-failure and how far the synthetic customers agree with production. Three surfaces share one engine; the engine shares
-one derivation of the result.
+Three products in one shell, on one kernel, each its own entry point — not stages of one pipeline:
+
+- **DISCOVER** (`src/discover/`, `src/lab/discover.ts`): the owner's rules put to logged conversations; no agent, card or
+  simulator. Its record is an analysis (`analyses/{id}.json`), never a run.
+- **VERIFY** (`src/card/`, `src/lab/library.ts`, `src/lab/run.ts`): a real agent in reproducible situations — a card is
+  a criterion plus a reproducible customer world — and one accuracy number with what is not measured, the causes of
+  failure and how far the synthetic customers agree with production.
+- **PROTECT**: a known problem did not come back and nothing verified broke. Only the suite metadata exists
+  (`src/suite.ts`, `purpose: known_problem`); running such a suite is VERIFY's run.
+
+```text
+  kernel:  sources / rules ──► criterion (src/criterion.ts) ──► evidence and judgment ──► a person's review
+           materials, verbatim   words, rules, strength, ways,    judge.ts, card/log-judge.ts,    reviews beside the
+           quotes                violation, channel; one hash     channelHolds — one judge stack   judge, never over it
+
+  DISCOVER: logs ─► plan expectation = criterion ─► log judge per conversation ─► problems keyed by criterion hash
+  VERIFY:   card = criterion + customer world ─► run ─► per-expectation verdicts ─► result
+  bridge:   a problem's criterion, frozen in the draft's `fromAnalysis`, is carried into every linked card exactly
+```
+
+Three surfaces share one engine; the engine shares one derivation of the result.
 
 ```text
   Pi chat: 9 tools, active by step        /agent-lab workspace (board)        agent-lab CLI: command table
@@ -287,6 +311,7 @@ one derivation of the result.
 | **Workspace & inbox** | The agent's workspace, open decisions, recurring problems, derived from records | `src/workspace.ts`, `src/inbox.ts`, `src/problems.ts` |
 | **ExperimentStore** | Storage only: atomic record files, the writer's lock, journals and sidecars, content-addressed file areas, publication recovery, a change feed for readers | `src/store.ts`, `src/scenario-store.ts` |
 | **CLI** | One table of commands over the same ExperimentLab operations; `--yes` is the owner's word | `src/cli.ts`, `src/cli/import-flags.ts` |
+| **Criterion (kernel)** | The one unit DISCOVER and VERIFY judge by: a plan's expectation and a card's duty are the same criterion exactly when their hashes are; the hash covers the criterion's own fields only | `src/criterion.ts`, `criterionSchema` in `src/contracts.ts` |
 | **Log analysis (DISCOVER)** | The owner's rules put to logged conversations with no card, agent or simulator: topic map, one plan per topic, the log judge per applicable expectation; a record of its own (`analyses/{id}.json`), findings with verbatim evidence, the owner's word beside them; a problem becomes a check through an ordinary preparation (`fromAnalysis`) | `src/discover/*`, `src/lab/discover.ts`, `extensions/analyze-tool.ts` |
 | **Pi extension** | Eleven tools switched on by step, the `/agent-lab` workspace, long work handed to the session and followed through the engine's events | `extensions/*` |
 
@@ -362,7 +387,9 @@ pushed to followers; content-addressed evidence; one derivation of the result.
 
 ## Data Flow
 
-### Logs → situations → run → result
+### VERIFY: situations → run → result
+
+Situations come from logs (below), from the owner's rules alone, from a saved suite, or from a problem DISCOVER found.
 
 1. **Import:** a JSON/JSONL export or a spreadsheet read through the owner's confirmed mapping becomes an immutable,
    content-addressed import batch (`src/imports.ts`, `src/spreadsheet/`).
@@ -380,17 +407,25 @@ pushed to followers; content-addressed evidence; one derivation of the result.
 7. **Result:** `deriveRun` → `ResultView` → «Точность агента: N% — X из Y ситуаций» with interval, what is not
    measured, causes, calibration — the same in chat, board, CLI and report.
 
-### Log analysis (DISCOVER)
+### DISCOVER: logs → findings → problems
 
 `agent_lab_analyze` / `agent-lab analyze`: logs and rules → one consent (ceiling; no agent, no situation) → the import's
-topic map (the typical traffic) → up to 8 conversations a topic → a plan per topic (card/plan.ts: expectations on
-verbatim quotes; the variation each conversation stands for) → the log judge on each applicable expectation (the frozen
-`logged-v2` input, two votes, keyed by criterion + conversation, never by a card) → problems grouped by rule and
-behaviour, frequency among the conversations each was checked on. The owner confirms or disputes a finding natively;
-`agent_lab_prepare` with `fromAnalysis` makes situations from a problem's conversations (the draft keeps `fromAnalysis`).
-A run of such a draft states three facts apart (`src/discover/check.ts`): found in the logs, reproduced on this version,
-fixed against the run it repeats — only when it reproduced there, the runs compare and nothing beside it broke. Its saved
-suite is marked `purpose: known_problem`.
+topic map (the typical traffic) → seats by each topic's share, at most 8 a topic (`miner/sample.ts allocate`) → a plan
+per topic (card/plan.ts: expectations on verbatim quotes, each a criterion; a tool or state channel offered only when
+the topic's logs recorded one) → the log judge on each applicable expectation (the frozen `logged-v2` input, two votes,
+the channel rule; a tool/state criterion on a log that did not record that channel is skipped, `channel_unobserved`)
+→ problems keyed by criterion hash, frequency among the conversations each was decided on. The owner confirms or
+disputes a finding natively.
+
+### DISCOVER → VERIFY (optional bridge)
+
+`agent_lab_prepare` with `fromAnalysis`: the problem's conversations — where it was broken, then controls: those where
+the same criterion applied, was decided and passed with evidence, not overridden by the owner — become an ordinary
+preparation; the draft's `fromAnalysis` holds the frozen criterion and its hash, and every card of a linked conversation
+carries it exactly (`discover/verify.ts withCriterion`). A run of such a draft reads that one expectation
+(`src/discover/check.ts`) and states three facts apart: found in the logs, reproduced on this version, fixed against the
+run it repeats — only when it reproduced there, the runs compare and no control broke; with no card carrying the
+criterion it states none. Its saved suite is marked `purpose: known_problem` (all of PROTECT that exists).
 
 ### Re-assessment
 
@@ -405,8 +440,10 @@ row (`extensions/prepare-tool.ts`, `run-tool.ts`), the session's progress row (`
 
 ## Key Abstractions
 
+- **Criterion:** the kernel's unit of judgment — words, rules (verbatim), strength, ways, violation, channel — and its hash (`src/criterion.ts`, `criterionSchema` in `src/contracts.ts`).
+- **LogAnalysis:** DISCOVER's record — selection, plans, findings keyed by criterion and conversation, the owner's words (`src/discover/schema.ts`).
 - **Experiment (record):** one run or draft; one JSON file; `phase` moves only along `PHASE_TABLE` (`src/contracts.ts`, `src/phases.ts`).
-- **Card / LibraryV2:** a situation's brief (what the customer wants, writes, knows, when they leave) and 1–3 duties with the owner's rules; revisions sealed by `libraryHash` (`src/card/schema.ts`).
+- **Card / LibraryV2:** VERIFY's situation — a criterion or three (its duties) plus a reproducible customer world (what the customer wants, writes, knows, when they leave); revisions sealed by `libraryHash` (`src/card/schema.ts`).
 - **Scenario:** a card compiled at acceptance; its `fingerprint` is the definition hash the acceptance seals (`src/card/compile.ts`).
 - **Trial:** one dialogue with its events, checks, assessments and receipts; never recalculated in place (`src/contracts.ts`).
 - **Operation / Follower:** the running work and whoever follows it (`src/lab/operation.ts`).
