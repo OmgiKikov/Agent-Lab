@@ -60,6 +60,40 @@ function recordIn(id: string, text: string): Experiment {
 }
 
 /**
+ * The records this process has read, validated, by their file's identity — inode, size, modification time — so that a
+ * record is decoded again only when its file changed: every save replaces the file with a new inode, so a changed record
+ * is never taken for an unchanged one, and the file stays the only truth. Decoding is what reading costs (half a second
+ * for fifty runs that carry 1.5 MB of materials each, almost all of it UTF-8), and the board and the chat read the list
+ * again at every checkpoint of a run. Each caller gets its own copy. At most BUDGET bytes of files are kept, the least
+ * recently read dropped first.
+ */
+class DecodedRecords {
+  private static readonly BUDGET = 128_000_000;
+  private readonly entries = new Map<string, { ino: number; size: number; mtimeMs: number; record: Experiment }>();
+  private bytes = 0;
+  recall(path: string, file: { ino: number; size: number; mtimeMs: number }): Experiment | undefined {
+    const entry = this.entries.get(path);
+    if (!entry || entry.ino !== file.ino || entry.size !== file.size || entry.mtimeMs !== file.mtimeMs) return undefined;
+    // Read again: the most recent now.
+    this.entries.delete(path); this.entries.set(path, entry);
+    return entry.record;
+  }
+  keep(path: string, file: { ino: number; size: number; mtimeMs: number }, record: Experiment): void {
+    const previous = this.entries.get(path);
+    if (previous) { this.bytes -= previous.size; this.entries.delete(path); }
+    if (file.size > DecodedRecords.BUDGET / 4) return;
+    // The kept record is never handed out: every caller gets a copy of it.
+    this.entries.set(path, { ino: file.ino, size: file.size, mtimeMs: file.mtimeMs, record });
+    this.bytes += file.size;
+    for (const [oldest, entry] of this.entries) {
+      if (this.bytes <= DecodedRecords.BUDGET) break;
+      this.entries.delete(oldest); this.bytes -= entry.size;
+    }
+  }
+}
+const decoded = new DecodedRecords();
+
+/**
  * A writer whose heartbeat is this late was frozen — a laptop asleep, a stopped process — and may have lost its lock to
  * another machine meanwhile (folder-lock.ts): before its next write it reads the lock again.
  */
@@ -268,13 +302,19 @@ export class ExperimentStore {
       else await syncDirectory(path);
     }
   }
+  /** The record as its file holds it now, validated; the caller's own copy. */
   async get(id: string): Promise<Experiment> {
-    const file = await open(this.path(id), 'r').catch(error => { throw (error as NodeJS.ErrnoException).code === 'ENOENT' ? new NoSuchRecord(id, this.directory) : error; });
+    const path = this.path(id);
+    const file = await open(path, 'r').catch(error => { throw (error as NodeJS.ErrnoException).code === 'ENOENT' ? new NoSuchRecord(id, this.directory) : error; });
     try {
-      if ((await file.stat()).size > 50_000_000) throw new UnreadableRecord(id, false, 'она больше 50 МБ');
+      const info = await file.stat();
+      if (info.size > 50_000_000) throw new UnreadableRecord(id, false, 'она больше 50 МБ');
+      const known = decoded.recall(path, info);
+      if (known) return structuredClone(known);
       const record = recordIn(id, await file.readFile('utf8'));
       if (record.id !== id) throw new UnreadableRecord(id, false, 'в файле записан другой прогон');
-      return record;
+      decoded.keep(path, info, record);
+      return structuredClone(record);
     } finally { await file.close(); }
   }
   async list(): Promise<Experiment[]> {
