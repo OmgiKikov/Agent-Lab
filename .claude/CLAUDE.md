@@ -410,22 +410,34 @@ Situations come from logs (below), from the owner's rules alone, from a saved su
 ### DISCOVER: logs → findings → problems
 
 `agent_lab_analyze` / `agent-lab analyze`: logs and rules → one consent (ceiling; no agent, no situation) → the import's
-topic map (the typical traffic) → seats by each topic's share, at most 8 a topic (`miner/sample.ts allocate`) → a plan
-per topic (card/plan.ts: expectations on verbatim quotes, each a criterion; a tool or state channel offered only when
-the topic's logs recorded one) → the log judge on each applicable expectation (the frozen `logged-v2` input, two votes,
-the channel rule; a tool/state criterion on a log that did not record that channel is skipped, `channel_unobserved`)
-→ problems keyed by criterion hash, frequency among the conversations each was decided on. The owner confirms or
-disputes a finding natively.
+topic map (the typical traffic) → seats by each topic's share (`miner/sample.ts allocate`); a topic's first 8 are its
+plan's examples, the rest judged on the plan's shared expectations → a plan per topic (card/plan.ts: expectations on
+verbatim quotes, each a criterion; a tool a rule requires is kept whatever the logs recorded — `channels.byRule`) → the
+log judge on each applicable expectation (the frozen `logged-v2` input, two votes, the channel rule) → problems keyed by
+criterion hash, frequency among the conversations each was decided on, never of all traffic. What a rule requires is
+apart from what the log observes: an incomplete conversation proves nothing of the tools (`channel_unobserved`); a
+complete one without the required call is judged — the call can be found absent — only under the owner's log contract
+(`logs.contract`: the tools the log records every call of), otherwise UNKNOWN `call_unconfirmed`. A topic with no plan is
+Lab's unfinished work, typed (`planIssue`), never the owner's gap; a rules gap is the owner's only when the reviewer
+confirmed it (`rulesGap`). A continuation is a new analysis that carries every finding whose key still holds and selects
+the next conversations. The owner confirms or disputes a finding natively — in the chat or in `/agent-lab` «Разборы
+логов», which opens every analysis with its evidence and the whole logged conversation, with no card or run.
 
 ### DISCOVER → VERIFY (optional bridge)
 
 `agent_lab_prepare` with `fromAnalysis`: the problem's conversations — where it was broken, then controls: those where
-the same criterion applied, was decided and passed with evidence, not overridden by the owner — become an ordinary
-preparation; the draft's `fromAnalysis` holds the frozen criterion and its hash, and every card of a linked conversation
-carries it exactly (`discover/verify.ts withCriterion`). A run of such a draft reads that one expectation
-(`src/discover/check.ts`) and states three facts apart: found in the logs, reproduced on this version, fixed against the
-run it repeats — only when it reproduced there, the runs compare and no control broke; with no card carrying the
-criterion it states none. Its saved suite is marked `purpose: known_problem` (all of PROTECT that exists).
+the same criterion applied, was decided and passed with evidence, not overridden by the owner, then neighbours: where
+another rule held with evidence — become an ordinary preparation; the draft's `fromAnalysis` holds the frozen criterion
+and its hash, and every card of the problem's conversations carries it exactly (`discover/verify.ts withCriterion`). A
+run of such a draft gives two answers apart (`src/discover/check.ts`): the problem — found, reproduced on this version,
+fixed against the run it repeats only when it reproduced there in every chosen case, the runs compare, the agent answered
+otherwise (`judgeOnly` pairs are the judge's difference) and no control broke; and the rest of the mandatory set — every
+other expectation, a regression test only once it passed on the run it repeats. Incomparable runs prove neither a fix
+nor a regression. Its saved suite is marked `purpose: known_problem` (all of PROTECT that exists).
+
+Proof: report A (`scripts/semantic-proofs.ts`, CI) — deterministic contract checks; one business case end to end
+(`scripts/business-case.ts`, CI); report B (`scripts/practical-protocol.ts`) — the owner's protocol on labelled real
+dialogues, fixed before the run.
 
 ### Re-assessment
 

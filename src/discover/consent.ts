@@ -183,7 +183,7 @@ export function continuationConsentText(consent: ContinuationConsent): { questio
   return {
     question: `Продолжить разбор «${consent.file}»: ещё до ${countText(consent.analysed, CONVERSATIONS_UP_TO)}?`,
     lines: [
-      `Уже выбрано ${consent.picked} из ${countText(consent.judgeable, CONVERSATIONS)}, которые можно оценить; не выбрано ещё ${consent.available}. Следующие Lab возьмёт так же: по доле тем среди прочитанных разговоров, без отбора по исходу.`,
+      `Уже выбрано ${consent.picked} из ${countText(consent.judgeable, CONVERSATIONS_UP_TO)}, которые можно оценить; не выбрано ещё ${consent.available}. Следующие Lab возьмёт так же: по доле тем среди прочитанных разговоров, без отбора по исходу.`,
       consent.reused ? `Уже сделанные оценки — ${consent.reused} — перейдут без вызова модели: правила, логи и судья те же.` : 'Уже сделанных оценок, которые можно перенести, нет.',
       ...(consent.stale ? [`${countText(consent.stale, ['оценка', 'оценки', 'оценок'])} прошлого разбора сделаны другим судьёй или по другим правилам — Lab оценит их заново; прошлый разбор не меняется.`] : []),
       ...(consent.replanned ? [`Тем, где работа Lab не закончилась, — ${consent.replanned}: правила для них Lab попробует найти снова.`] : []),
