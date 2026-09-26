@@ -175,13 +175,22 @@ async function fromAnalysis(host: PrepareHost, callId: string, ctx: ExtensionCon
     throw new NeedsOwner('unknown_reference', `В разборе нет проблемы ${named.problem}.${known.length ? ` Есть: ${known.join('; ')}.` : ' Нарушений в нём нет.'} Спросите владельца, какую он имеет в виду.`, known.map((_, index) => String(index + 1)),
       `Проблемы ${named.problem} в разборе нет — из какой сделать проверку?`);
   }
-  const { link, controls, neighbours } = checkLink(analysis, problem, criteriaHeld(view));
+  // A knowledge article says what is true, but does not by itself require this agent to answer instead of handing off.
+  // Only the owner's confirmed examples may become regression situations for such a finding.
+  if (problem.knowledgeOnly && !problem.confirmedDialogueIds.length) {
+    throw new NeedsOwner('needs_owner_input',
+      `Проблема ${named.problem} основана только на статье базы знаний. Сначала откройте её пример в разборе ${analysis.id} и подтвердите, что это нарушение именно для данного обращения. До этого проверку из неё не собираем.`, [],
+      'Статья базы знаний не задаёт обязательность каждого сведения в ответе. Откройте пример и подтвердите, что здесь есть нарушение.');
+  }
+  const selected = problem.knowledgeOnly ? { ...problem, dialogueIds: problem.confirmedDialogueIds } : problem;
+  const { link, controls, neighbours } = checkLink(analysis, selected, criteriaHeld(view));
   const conversations: [string, string, string] = ['разговор', 'разговора', 'разговоров'];
   const line = `Ситуации — для проверки проблемы «${problemTitle(problem)}» из разбора логов: ${countText(link.broken.length, conversations)} с нарушением`
     + (controls.length ? ` и ${countText(controls.length, conversations)}, где агент это правило соблюдал, — исправление не должно их сломать.`
       : '. Разговоров, где это правило проверено и соблюдено, в разборе нет: что исправление не сломало его рядом, проверка не покажет.')
     + ' Каждая из них проверяет правило проблемы в точности так, как его оценил разбор.'
-    + (neighbours.length ? ` Ещё ${countText(neighbours.length, conversations)}, где агент соблюдал другие правила, — проверка на регрессии остального: засчитается то, что выполнит нынешняя версия.` : '');
+    + (neighbours.length ? ` Ещё ${countText(neighbours.length, conversations)}, где агент соблюдал другие правила, — проверка на регрессии остального: засчитается то, что выполнит нынешняя версия.` : '')
+    + (problem.knowledgeOnly ? ' Основание — статья базы знаний; в ситуации с нарушением вошли только разговоры, где вы подтвердили вывод судьи.' : '');
   return consentAndPrepare(host, callId, ctx, signal, onUpdate, { task: analysis.task, logsName: analysis.logs.file, libraryImport: subsetImport(batch, link.dialogueIds),
     materials: analysis.sources.map(({ name, content, kind }) => ({ name, content, ...(kind ? { kind } : {}) })), notes: [],
     rules: analysis.sources.map(source => source.name), situations: situations ?? link.dialogueIds.length, mode: analysis.mode, fromAnalysis: { link, line } });

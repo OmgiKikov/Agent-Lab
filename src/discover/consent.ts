@@ -170,7 +170,6 @@ const work = (roles: readonly ('builder' | 'judge')[]): string => roles.includes
 export function analysisConsentText(consent: AnalysisConsent, file: string): { question: string; lines: string[] } {
   const { sample, unjudgeable: skipped, personal } = consent;
   const unread = leftOutTotal(consent.unread);
-  const skippedTotal = skipped.no_customer + skipped.no_agent_reply;
   const providers = new Set(consent.readers.map(reader => reader.provider));
   const kinds = [...personal.cards ? [`номера карт — ${personal.cards}`] : [], ...personal.phones ? [`телефоны — ${personal.phones}`] : [], ...personal.emails ? [`почта — ${personal.emails}`] : []];
   return {
@@ -179,7 +178,8 @@ export function analysisConsentText(consent: AnalysisConsent, file: string): { q
       sample ? `В логах ${countText(consent.conversations, CONVERSATIONS)}; в одну загрузку входит ${sample.taken} из ${sample.usable} прочитанных — по хешу содержимого, без отбора по исходу.`
         : `В логах ${countText(consent.conversations, CONVERSATIONS)}.`,
       ...(unread ? [`Не прочитаны ${countText(unread, CONVERSATIONS)}: ${leftOutWords(consent.unread).join(' · ')}.`] : []),
-      ...(skippedTotal ? [`Нечего оценивать в ${countText(skippedTotal, IN_CONVERSATIONS)}: ${[...skipped.no_customer ? [`нет реплики клиента — ${skipped.no_customer}`] : [], ...skipped.no_agent_reply ? [`нет ответа агента — ${skipped.no_agent_reply}`] : []].join(', ')}.`] : []),
+      ...(skipped.no_customer ? [`В ${countText(skipped.no_customer, IN_CONVERSATIONS)} нет реплики клиента: правила ответа агента там не оценить.`] : []),
+      ...(skipped.no_agent_reply ? [`В ${countText(skipped.no_agent_reply, IN_CONVERSATIONS)} после обращения клиента нет записанного ответа агента. Это отдельный сигнал для проверки: возможны молчание агента, передача человеку или обрыв записи. В оценку правил эти разговоры не войдут.`] : []),
       `Lab разметит темы всех прочитанных разговоров — это покажет, с чем приходят клиенты, — и разберёт до ${countText(consent.analysed, CONVERSATIONS_UP_TO)} из ${consent.judgeable}: места делятся между темами по их доле среди прочитанных разговоров, а места, оставшиеся после округления, получают сначала темы без единого места. Правила темы Lab находит по её разговорам, не больше ${consent.perTopic}; другой разговор темы Lab сначала сверяет с найденным планом и оценивает по правилам того варианта, в котором клиент, — а разговорам, которые ни к одному варианту не подошли, ищет правила отдельно. Частота нарушений будет среди разобранных, а не по всему трафику. Продолжить разбор следующими разговорами можно позже — уже сделанное не оплачивается повторно.`,
       'Правила берутся из ваших материалов, каждое — на дословной цитате; к каждому разговору — только правила его ситуации.',
       consent.recorded.length ? `Вы подтвердили: лог записывает каждый вызов ${consent.recorded.join(', ')} в разговорах, помеченных полными. Если правило требует такой вызов, а его нет, — это нарушение. Отсутствие вызова других инструментов не доказывается.`

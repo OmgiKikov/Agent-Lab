@@ -59,17 +59,18 @@ function analysisScreen(entry: AnalysisEntry, selected: number): Screen {
   const lines = analysisLines(view, { examples: 0, problems: 0 });
   const body: Row[] = [];
   const items: number[] = [];
-  if (view.status !== 'done' && view.status !== 'running') body.push({ text: lines[1] ?? '', tone: 'warning' });
-  if (view.problems.length) body.push({ text: 'Нарушения правил:', tone: 'accent', bold: true });
+  const unfinished = lines.find(line => line.startsWith('Разбор не закончен:'));
+  if (unfinished) body.push({ text: unfinished, tone: 'warning' });
+  if (view.problems.length) body.push({ text: 'Возможные нарушения по оценке судьи:', tone: 'accent', bold: true });
   listed(view).forEach((problem, index) => {
     if (index === view.problems.length) body.push({ text: 'Вы оспорили все примеры — не считаются, ваши отметки сохранены:', tone: 'muted', bold: true });
     items.push(body.length);
     const mine = index === selected;
-    body.push({ text: `${mine ? GLYPH.selected : ' '} ${index + 1}. ${problemTitle(problem)} — ${problem.violations ? problemSize(problem) : `вы оспорили ${problem.disputed}`}`, bold: mine });
+    body.push({ text: `${mine ? GLYPH.selected : ' '} ${index + 1}. ${problemTitle(problem)} — ${problem.violations ? problemSize(problem) : `вы оспорили ${problem.disputed}`}${problem.knowledgeOnly ? ' · по базе знаний, требуется ваша оценка' : ''}`, bold: mine });
   });
   // The rest of the answer as analysisLines words it, without the headline and the problems shown above.
-  const rest = lines.slice(1).filter(line => !(view.status !== 'done' && view.status !== 'running' && line === lines[1]));
-  body.push({ text: '' }, ...rest.map((text): Row => ({ text, tone: 'muted' })), { text: '' }, { text: nextStep(view), tone: 'muted' });
+  const rest = lines.slice(1).filter(line => line !== unfinished);
+  body.push({ text: '' }, ...rest.map((text): Row => ({ text, tone: text.startsWith('Отдельный сигнал:') ? 'warning' : 'muted' })), { text: '' }, { text: nextStep(view), tone: 'muted' });
   return { head: [{ text: headline(view), bold: true, tone: view.problems.length ? 'warning' : 'text' }, { text: `Разбор ${view.id} · ${when(view.createdAt)}`, tone: 'dim' }],
     body, items, foot: listed(view).length ? '↑↓ выбрать · Enter открыть · Esc назад' : 'Esc назад' };
 }
@@ -80,6 +81,7 @@ function problemScreen(entry: AnalysisEntry, key: string, selected: number): Scr
   const problem = listed(entry.view)[index];
   if (!problem) return undefined;
   const body: Row[] = [{ text: problem.violations ? `В ${problemSize(problem)}.` : `Все нарушения вы оспорили (${problem.disputed}): они не считаются.`, tone: 'muted' },
+    ...(problem.knowledgeOnly ? [{ text: 'Основание — только статьи базы знаний. Подтвердите, обязательны ли эти сведения в ответе и допустима ли передача оператору.', tone: 'warning' as const }] : []),
     ...problem.rules.map((rule): Row => ({ text: `Правило: «${clip(rule.quote, 400)}» — ${rule.source}.` })), { text: '' },
     { text: problem.examples.length ? 'Примеры — откройте, чтобы увидеть разговор целиком и сказать, прав ли судья:' : 'Примеров нет.', tone: 'accent', bold: true }];
   const items: number[] = [];
@@ -109,7 +111,9 @@ function exampleScreen(entry: AnalysisEntry, key: string, finding: string): Scre
     { text: '' }, { text: `Разговор ${example.dialogueId} целиком (→ — что процитировал судья):`, tone: 'accent', bold: true },
     ...(dialogue ? conversationLines(dialogue, example.quotes.map(quote => quote.seq)).map((text): Row => ({ text })) : [{ text: 'Логов этого разбора в папке больше нет: разговор не открыть.', tone: 'warning' } as Row]),
   ];
-  return { head: [{ text: `Пример ${index + 1}.${at + 1} · ${problemTitle(problem)}`, bold: true, tone: 'warning' }, { text: 'Прав ли судья? 1 — нарушение есть · 2 — не нарушение (спросим почему) · 3 — не знаю', tone: 'text' }],
+  return { head: [{ text: `Пример ${index + 1}.${at + 1} · ${problemTitle(problem)}`, bold: true, tone: 'warning' },
+    { text: problem.knowledgeOnly ? 'Здесь есть нарушение? 1 да · 2 нет (спросим почему) · 3 не знаю'
+      : 'Прав ли судья? 1 — нарушение есть · 2 — не нарушение (спросим почему) · 3 — не знаю', tone: 'text' }],
     body, items: [], foot: '1 нарушение есть · 2 не нарушение · 3 не знаю · ↑↓ листать · Esc назад' };
 }
 

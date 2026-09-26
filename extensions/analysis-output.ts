@@ -1,5 +1,5 @@
 import type { LogAnalysis } from '../src/discover/schema.js';
-import { analysisLines, coverageLines, exampleLine, headline, limitLines, nextStep, problemSize, problemTitle, trafficLine } from '../src/discover/text.js';
+import { analysisLines, coverageLines, exampleLine, headline, limitLines, nextStep, problemSize, problemTitle, trafficLine, unansweredLine } from '../src/discover/text.js';
 import { analysisView, type AnalysisView } from '../src/discover/view.js';
 import type { ExperimentLab } from '../src/experiment.js';
 import { clip, safeText } from '../src/text.js';
@@ -28,6 +28,7 @@ export function analysisOutput(view: AnalysisView): Record<string, unknown> {
   return {
     analysis: view.id, status: view.status, ...(view.unfinished ? { unfinished: view.unfinished } : {}), file: view.file,
     selected: view.coverage.picked, analysed: view.coverage.processed, notReached: view.coverage.notReached, of: view.coverage.logged, decidedIn: view.coverage.decided,
+    unansweredConversations: view.coverage.unjudgeable.find(item => item.reason === 'no_agent_reply')?.count ?? 0,
     ...(view.coverage.sharedOnly ? { judgedOnSharedRulesOnly: view.coverage.sharedOnly } : {}), ...(view.continues ? { continues: view.continues.analysisId, reusedFindings: view.continues.reused } : {}),
     ...(view.coverage.fitted ? { fittedToTopicPlan: view.coverage.fitted } : {}), ...(view.coverage.ownPlan ? { judgedUnderOwnPlan: view.coverage.ownPlan } : {}),
     // Why the analysis ended short, in the owner's words: said as it is, never as a gap in the owner's rules.
@@ -36,6 +37,7 @@ export function analysisOutput(view: AnalysisView): Record<string, unknown> {
     ...(view.traffic ? { traffic: view.traffic.map(topic => ({ topic: topic.title, share: Math.round(topic.share * 100) / 100 })) } : {}),
     problems: view.problems.map((problem, index) => ({
       number: index + 1, violation: problemTitle(problem), size: problemSize(problem), inConversations: problem.violations, checkedIn: problem.checked, notDecidedIn: problem.unknown,
+      knowledgeOnly: problem.knowledgeOnly,
       rules: problem.rules.map(rule => ({ quote: clip(rule.quote, 400), source: rule.source })), topics: problem.topics,
       examples: problem.examples.slice(0, 3).map((example, place) => ({ example: `${index + 1}.${place + 1}`, conversation: example.dialogueId,
         said: example.quotes.map(quote => ({ by: quote.role, quote: clip(quote.quote, 400) })), ...(example.rationale ? { judge: clip(example.rationale, 600) } : {}),
@@ -49,7 +51,7 @@ export function analysisOutput(view: AnalysisView): Record<string, unknown> {
     limits: limitLines(view), next: nextStep(view),
     instruction: 'This is an analysis of logged conversations (no situation was made, the agent did not run). Tell the owner in 3–6 short Russian sentences: '
       + 'how many conversations were analysed (analysed) of those selected (selected) and of how many in the log; the main violations, each with how often among the conversations it was checked on and one verbatim example; '
-      + 'what could not be decided and why; that the frequency is among the analysed conversations, not all traffic. Do not re-judge, add or soften violations. '
+      + 'what could not be decided and why; that the frequency is among the analysed conversations, not all traffic. A knowledgeOnly finding needs the owner to decide whether these facts were required in that reply and whether a handoff was allowed; present it as a possible issue, never an established breach. If unansweredConversations is positive, name it as a separate signal whose cause needs checking, never as a judged violation. Do not re-judge, add or soften violations. '
       + 'A gap is the owner\'s missing rule only when rulesGap is confirmed; labWorkUnfinished is Lab\'s own work not finishing — never ask the owner to add a rule for it. '
       + 'Offer ONE next step from `next`: to say whether the judge is right about an example (agent_lab_analyze with review {problem, example}; the host asks the owner, you never pass the verdict), '
       + 'to continue with the next conversations (agent_lab_analyze with analysis and more; the host asks the owner), to open it in /agent-lab, '
@@ -62,14 +64,17 @@ export async function analysisAnswer(lab: ExperimentLab, analysis: LogAnalysis):
   const batch = await lab.store.readImport(analysis.logs.importId).catch(() => undefined);
   const view = analysisView(analysis, batch);
   const top = view.problems.slice(0, 3);
+  const lines = analysisLines(view, { examples: 2 });
+  const unanswered = unansweredLine(view);
   const rows = [row(safeText(headline(view)), view.problems.length || view.status !== 'done' ? 'warning' : undefined, true),
-    ...(view.status !== 'done' ? [row(safeText(analysisLines(view)[1] ?? ''), 'warning')] : []),
-    ...top.flatMap((problem, index) => [row(safeText(`${index + 1}. ${problemTitle(problem)} — ${problemSize(problem)}`)),
+    ...(view.status !== 'done' ? [row(safeText(lines.find(line => line.startsWith('Разбор не закончен:')) ?? analysis.message), 'warning')] : []),
+    ...(unanswered ? [row(safeText(unanswered), 'warning')] : []),
+    ...top.flatMap((problem, index) => [row(safeText(`${index + 1}. ${problemTitle(problem)} — ${problemSize(problem)}${problem.knowledgeOnly ? ' · по базе знаний, требуется ваша оценка' : ''}`)),
       ...problem.examples.slice(0, 1).map(example => row(safeText(exampleLine(example)), 'muted', false, 3))]),
     ...(view.problems.length > top.length ? [row(`…и ещё ${view.problems.length - top.length}`, 'muted')] : []),
     row(safeText(nextStep(view)), 'muted')];
   const traffic = trafficLine(view);
-  const feed: Feed = { title: view.status === 'done' ? 'Разбор логов' : 'Разбор логов не закончен', tone: view.status === 'done' ? (view.problems.length ? 'warning' : 'success') : 'warning',
-    rows, more: [...(traffic ? [row(safeText(traffic), 'muted')] : []), ...analysisLines(view, { examples: 2 }).slice(1).map(line => row(safeText(line), 'muted'))], expand: 'весь разбор' };
+  const feed: Feed = { title: view.status === 'done' ? 'Разбор логов' : 'Разбор логов не закончен', tone: view.status === 'done' ? (view.problems.length || unanswered ? 'warning' : 'success') : 'warning',
+    rows, more: [...(traffic ? [row(safeText(traffic), 'muted')] : []), ...lines.slice(1).map(line => row(safeText(line), 'muted'))], expand: 'весь разбор' };
   return { output: analysisOutput(view), feed, note: `Разбор логов · ${stampOf(analysis)}`, stamp: analysis.updatedAt };
 }

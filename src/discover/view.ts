@@ -44,6 +44,8 @@ export interface ProblemView {
   criterion: Criterion;
   duty: { text: string; mustNot: boolean; acceptable?: string; violation?: string };
   rules: { quote: string; source: string }[];
+  /** Every cited rule was classified as knowledge: its facts alone do not say whether the agent must answer instead of handing off. */
+  knowledgeOnly: boolean;
   topics: string[];
   /** Conversations where it was broken (not disputed by the owner), where it was decided at all, and where it was not. */
   violations: number; checked: number; unknown: number;
@@ -56,6 +58,8 @@ export interface ProblemView {
    */
   held: string[];
   confirmed: number; disputed: number;
+  /** Conversations whose violation the owner explicitly confirmed; only these seed a check from knowledge alone. */
+  confirmedDialogueIds: string[];
   examples: Example[];
 }
 export interface AnalysisView {
@@ -130,15 +134,16 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
 
   // Problems: the findings of one criterion over every topic whose plan has it — derived from the plan, never read off
   // a stored hash, so an analysis made before the kernel groups the same way.
-  const groups = new Map<string, { findings: Finding[]; criterion: Criterion; duty: ProblemView['duty']; rules: ProblemView['rules']; topics: Set<string> }>();
+  const groups = new Map<string, { findings: Finding[]; criterion: Criterion; duty: ProblemView['duty']; rules: ProblemView['rules']; knowledgeOnly: boolean; topics: Set<string> }>();
   for (const finding of analysis.findings) {
     const scenario = analysis.scenarios.find(item => item.id === finding.scenarioId);
     const expectation = scenario?.expectations.find(item => item.id === finding.expectationId);
     const criterion = expectation && planCriterion(analysis, expectation);
     if (!scenario || !expectation || !criterion) continue;
     const rules = criterion.requirements.map(requirement => ({ quote: requirement.quote, source: sourceName.get(requirement.sourceId) ?? requirement.sourceId }));
+    const knowledgeOnly = criterion.requirements.every(requirement => analysis.requirements.find(item => item.id === requirement.id)?.kind === 'knowledge');
     const key = criterionHash(criterion);
-    const group = groups.get(key) ?? { findings: [], criterion, rules, topics: new Set<string>(),
+    const group = groups.get(key) ?? { findings: [], criterion, rules, knowledgeOnly, topics: new Set<string>(),
       duty: { text: expectation.text, mustNot: expectation.strength === 'must_not', ...(expectation.acceptable ? { acceptable: expectation.acceptable } : {}), ...(expectation.violation ? { violation: expectation.violation } : {}) } };
     group.findings.push(finding);
     group.topics.add(topicOf.get(finding.scenarioId) ?? scenario.topic);
@@ -171,10 +176,11 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
     };
     const passed = [...new Set(group.findings.filter(held).map(finding => finding.dialogueId))]
       .filter(dialogueId => group.findings.every(finding => finding.dialogueId !== dialogueId || held(finding)));
-    return { key, criterion: group.criterion, duty: group.duty, rules: group.rules, topics: [...group.topics], dialogueIds: [...new Set(violated.map(finding => finding.dialogueId))], held: passed,
+    return { key, criterion: group.criterion, duty: group.duty, rules: group.rules, knowledgeOnly: group.knowledgeOnly, topics: [...group.topics], dialogueIds: [...new Set(violated.map(finding => finding.dialogueId))], held: passed,
       violations: conversations(group.findings, counted), checked: conversations(group.findings, decided),
       unknown: conversations(group.findings, finding => finding.result === 'unknown' && !group.findings.some(other => other.dialogueId === finding.dialogueId && decided(other))),
       confirmed: conversations(group.findings, finding => finding.result === 'fail' && reviews.get(finding.key)?.verdict === 'confirmed'),
+      confirmedDialogueIds: [...new Set(group.findings.filter(finding => finding.result === 'fail' && reviews.get(finding.key)?.verdict === 'confirmed').map(finding => finding.dialogueId))],
       disputed: conversations(group.findings, finding => finding.result === 'fail' && reviews.get(finding.key)?.verdict === 'disputed'), examples };
   });
 

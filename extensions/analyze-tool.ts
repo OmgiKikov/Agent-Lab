@@ -106,12 +106,14 @@ async function review(host: Host, callId: string, ctx: ExtensionContext, directo
   // The whole source conversation, every message as the log holds it: a summary of the evidence never stands in for it.
   const batch = await host.reading(directory).store.readImport(analysis.logs.importId).catch(() => undefined);
   const dialogue = batch?.dialogues.find(item => item.id === example.dialogueId);
-  const body = [`Судья: ${problemTitle(problem)}.`, ...problem.rules.slice(0, 2).map(rule => `Правило: «${clip(rule.quote, 300)}» — ${rule.source}.`), exampleLine(example),
+  const body = [`Судья: ${problemTitle(problem)}.`,
+    ...(problem.knowledgeOnly ? ['Основание — статья базы знаний. Решите для этого обращения: какие сведения агент обязан сообщить и допустима ли передача оператору?'] : []),
+    ...problem.rules.slice(0, 2).map(rule => `Правило: «${clip(rule.quote, 300)}» — ${rule.source}.`), exampleLine(example),
     ...(example.rationale ? [`Почему, по словам судьи: ${clip(example.rationale, 500)}`] : []),
     ...(example.review ? [`Ваша отметка сейчас: ${reviewWord(example.review)}.`] : []),
     '', `Разговор ${example.dialogueId} целиком:`, ...(dialogue ? conversationLines(dialogue, example.quotes.map(quote => quote.seq)) : ['— его нет в логах этого разбора.'])];
   const answers = ['Да, это нарушение', 'Нет, это не нарушение', 'Не знаю', 'Не сейчас'] as const;
-  const picked = await ctx.ui.select(safeText(['Прав ли судья?', '', ...body].join('\n')), [...answers]);
+  const picked = await ctx.ui.select(safeText([problem.knowledgeOnly ? 'Здесь есть нарушение?' : 'Прав ли судья?', '', ...body].join('\n')), [...answers]);
   const verdict = picked === answers[0] ? 'confirmed' : picked === answers[1] ? 'disputed' : picked === answers[2] ? 'unsure' : undefined;
   if (!verdict) return declined(host, callId, 'Отметка не записана: вы не ответили. Ничего не изменено.', 'analyze');
   const note = verdict === 'disputed' ? (await ctx.ui.editor('Почему это не нарушение? Коротко, своими словами.', ''))?.trim() ?? '' : '';

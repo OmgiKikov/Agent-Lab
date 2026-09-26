@@ -134,12 +134,12 @@ export function headline(view: AnalysisView): string {
 }
 
 /**
- * «13 нарушений в 8 разговорах»: each problem counted once in each conversation it was broken in — one rule of the
- * owner may stand behind several problems, so the number is never called a number of rules.
+ * «13 замечаний судьи в 8 разговорах»: each problem counted once in each conversation it was broken in — one rule of the
+ * owner may stand behind several problems, and the owner may still dispute a finding.
  */
 export function violationsWords(view: Pick<AnalysisView, 'problems' | 'violated'>): string {
   const count = view.problems.reduce((sum, problem) => sum + problem.violations, 0);
-  return `${countText(count, ['нарушение', 'нарушения', 'нарушений'])} в ${countText(view.violated, IN_CONVERSATIONS)}`;
+  return `${countText(count, ['замечание судьи', 'замечания судьи', 'замечаний судьи'])} в ${countText(view.violated, IN_CONVERSATIONS)}`;
 }
 
 /**
@@ -173,6 +173,8 @@ export function coverageLines(view: AnalysisView): string[] {
   const { coverage } = view;
   const unread = coverage.logged - coverage.readable;
   const rest = coverage.judgeable - coverage.picked;
+  const noCustomer = coverage.unjudgeable.find(item => item.reason === 'no_customer')?.count ?? 0;
+  const noReply = coverage.unjudgeable.find(item => item.reason === 'no_agent_reply')?.count ?? 0;
   return [
     ...funnelLines(view),
     ...(coverage.sharedOnly ? [`В ${countText(coverage.sharedOnly, IN_CONVERSATIONS)} сверх ${coverage.perTopic} примеров, по которым Lab нашёл правила темы, проверены только общие правила темы — правила отдельных вариантов к ним не прикладывались.`] : []),
@@ -181,9 +183,16 @@ export function coverageLines(view: AnalysisView): string[] {
     ...(view.continues ? [`Это продолжение разбора ${view.continues.analysisId}: там было выбрано ${view.continues.picked}; ${countText(view.continues.reused, ['оценка перенесена', 'оценки перенесены', 'оценок перенесено'])} без вызова модели.`] : []),
     ...(view.undecided.length ? [`Не удалось оценить: ${view.undecided.map(item => `${UNDECIDED[item.reason]} — ${item.count}`).join(', ')}.`] : []),
     ...(rest > 0 ? [`Не разбирались ${countText(rest, CONVERSATIONS)}: ${pickedHow(coverage)}. Их можно разобрать продолжением — сделанное не оплачивается повторно.`] : []),
-    ...(coverage.unjudgeable.length ? [`Нечего оценивать в ${countText(coverage.unjudgeable.reduce((sum, item) => sum + item.count, 0), IN_CONVERSATIONS)}: ${coverage.unjudgeable.map(item => `${item.reason === 'no_customer' ? 'нет реплики клиента' : 'нет ответа агента'} — ${item.count}`).join(', ')}.`] : []),
+    ...(noCustomer ? [`В ${countText(noCustomer, IN_CONVERSATIONS)} нет реплики клиента: правила ответа агента там не оценивались.`] : []),
+    ...(noReply ? [`В ${countText(noReply, IN_CONVERSATIONS)} после обращения клиента нет записанного ответа агента. Проверьте исходный лог: агент мог не ответить, передать разговор человеку или запись могла оборваться. Эти разговоры не входят в оценку правил.`] : []),
     ...(unread > 0 ? [`Не прочитаны ${countText(unread, CONVERSATIONS)} лога.`] : []),
   ];
+}
+
+/** A missing recorded reply is a signal to inspect, not a judged rule violation. */
+export function unansweredLine(view: AnalysisView): string | undefined {
+  const count = view.coverage.unjudgeable.find(item => item.reason === 'no_agent_reply')?.count ?? 0;
+  return count ? `Отдельный сигнал: в ${countText(count, IN_CONVERSATIONS)} нет записанного ответа агента. Причину нужно проверить по исходному логу.` : undefined;
 }
 
 /** Where the customers come with: every read conversation, apart from the violations. */
@@ -211,6 +220,8 @@ export function analysisLines(view: AnalysisView, options: { examples?: number; 
   const examples = options.examples ?? 1;
   const shown = view.problems.slice(0, options.problems ?? 8);
   const lines = [headline(view)];
+  const unanswered = unansweredLine(view);
+  if (unanswered) lines.push(unanswered);
   if (view.status !== 'done' && view.status !== 'running') {
     const why = view.unfinished === 'failed' && view.failure ? FAILED[view.failure] : view.unfinished ? UNFINISHED[view.unfinished] : 'процесс Lab завершился раньше';
     lines.push(`Разбор не закончен: ${why}. Найденное ниже сохранено; продолжение доделает остальное и не заплатит повторно за сделанное.`);
@@ -218,9 +229,11 @@ export function analysisLines(view: AnalysisView, options: { examples?: number; 
   const traffic = trafficLine(view);
   if (traffic) lines.push(traffic);
   if (shown.length) {
-    lines.push('', 'Нарушения правил:');
+    const knowledge = view.problems.filter(problem => problem.knowledgeOnly).reduce((sum, problem) => sum + problem.violations, 0);
+    lines.push('', 'Возможные нарушения по оценке судьи:');
+    if (knowledge) lines.push(`${knowledge} из них основаны только на статьях базы знаний: владелец должен подтвердить, обязательны ли эти сведения в конкретном ответе и допустима ли передача оператору.`);
     shown.forEach((problem, index) => {
-      lines.push(`${index + 1}. ${problemTitle(problem)} — ${problemSize(problem)}.`);
+      lines.push(`${index + 1}. ${problemTitle(problem)} — ${problemSize(problem)}${problem.knowledgeOnly ? ' · обязательность для этого ответа не подтверждена' : ''}.`);
       for (const rule of problem.rules.slice(0, 2)) lines.push(`   Правило: «${clip(rule.quote, 240)}» — ${rule.source}.`);
       for (const example of problem.examples.slice(0, examples)) lines.push(`   ${exampleLine(example)}`);
       if (problem.disputed) lines.push(`   Вы оспорили — ${problem.disputed}; они не считаются.`);
@@ -245,6 +258,7 @@ export function nextStep(view: AnalysisView): string {
   // Only a gap the reviewer confirmed is the owner's to fill; Lab's own unfinished work is repeated by a continuation.
   if (view.gaps.some(gap => gap.rulesGap?.confirmed)) return 'Дальше: добавьте в материалы правило для темы, где проверяющий подтвердил, что его нет, — например, тексты из кода агента, если оно записано там.';
   if (view.gaps.length) return 'Дальше: продолжите разбор — Lab попробует снова темы, где его работа не завершилась; ваши правила менять не нужно.';
+  if (view.coverage.unjudgeable.some(item => item.reason === 'no_agent_reply')) return 'Дальше: проверьте разговоры без записанного ответа агента — это обрыв лога, передача человеку или проблема ответа?';
   return 'Дальше: продолжите разбор следующими разговорами или разберите другую выгрузку.';
 }
 
