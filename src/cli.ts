@@ -9,6 +9,7 @@ import type { CreateOptions, PreparationOptions } from './lab/library.js';
 import { draftHash } from './lab/record.js';
 import { demoInput } from './demo.js';
 import { createInputSchema, isRunnable, materialSources, runnableTarget, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
+import { Stopped, unreadableLines } from './errors.js';
 import { compareRuns } from './comparison.js';
 import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection, type Connection } from './connection.js';
 import { examConnection, examLines } from './exam.js';
@@ -24,7 +25,7 @@ import { htmlReport, jsonReport, markdownReport } from './report.js';
 import { expectationSheet, testPlanLines, trialProofLines } from './quality.js';
 import { ExperimentStore } from './store.js';
 import { buildResultView, exitCodeOf, type ResultView } from './result-view.js';
-import { ANSWER_TEXT, calibrationRows, comparisonRows, judgeCheckText, logQuestionText, MAX_WIDTH, plainText, resultScreen, type ResultRow } from './result-text.js';
+import { ANSWER_TEXT, calibrationRows, comparisonRows, judgeCheckText, logQuestionText, MAX_WIDTH, plainText, resultScreen, whenText, type ResultRow } from './result-text.js';
 import { judgeCheckPlan, judgeCheckSummary } from './judge-check.js';
 import { evidenceBundle, exportArtifacts, importNumbers, readJudgeCheck, resolveVerified } from './artifacts.js';
 import { libraryHash } from './scenario-library.js';
@@ -41,6 +42,7 @@ import { confirmTableImport, planTableReading, proposeReading, proposeTableImpor
 import type { TableProposal } from './spreadsheet/proposal.js';
 import { READING_CALLS } from './spreadsheet/reading-task.js';
 import { importedLine, proposalLines } from './spreadsheet/lines.js';
+import { readReadingFiles } from './spreadsheet/files.js';
 import { importHints, tableChoicesOf } from './cli/import-flags.js';
 import { connectFromCurl, doctorTemplate } from './cli/connect.js';
 import { commandOf, readCommandLine, type Flag, type Flags } from './cli/args.js';
@@ -118,11 +120,14 @@ const IN_CHAT = process.env.AGENT_LAB_SESSION !== undefined;
 const CHAT_ASKS = 'Из чата Agent Lab команда с --yes не выполняется: в чате согласие на расход и решения спрашивает сам чат. '
   + 'Скажите обычными словами, что сделать, — Lab спросит вас. Ничего не записано и не потрачено.';
 
-/** Opens the data folder as its one writer for `work`; Ctrl+C closes it, and the work going on stops with its evidence kept. */
+/**
+ * Opens the data folder as its one writer for `work`. Ctrl+C is the owner's stop: the work going on ends as stopped by
+ * them, with its evidence kept, and any work asked for after it is refused the same way (lab/operation.ts).
+ */
 async function asWriter(directory: string, work: (lab: ExperimentLab) => Promise<void>): Promise<void> {
   const lab = new ExperimentLab(directory);
   await lab.init();
-  const cancel = () => { void lab.close().catch(error => { process.stderr.write(`${safeLine(error.message)}\n`); process.exitCode = 1; }); };
+  const cancel = () => { void lab.close({ stop: 'cancelled' }).catch(error => { process.stderr.write(`${safeLine(error.message)}\n`); process.exitCode = 1; }); };
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
   try { await work(lab); } finally {
     process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
@@ -338,14 +343,24 @@ async function logs({ values, directory }: CommandInput): Promise<void> {
   const lab = new ExperimentLab(directory);
   const importIds = logImports(await lab.get(values.id));
   const said = (version: string | null | undefined) => version === undefined ? 'не указана' : version ?? 'неизвестна';
+  // An import is named the way the owner knows it: its number here, the file a table was read from, when it was loaded.
+  const files = new Map((await readReadingFiles(directory).catch(() => [])).map(item => [item.importId, item.readings.at(-1)?.file.name]));
+  const named = await Promise.all(importIds.map(async (id, index) => {
+    const batch = await lab.store.readImport(id);
+    return { id, text: `${index + 1}. ${files.get(id) ?? 'логи'} · загружены ${whenText(batch.createdAt)} · ${countText(batch.dialogues.length, ['разговор', 'разговора', 'разговоров'])}`,
+      version: said((await lab.store.readLogVersions(id))?.declarations.at(-1)?.command.version) };
+  }));
   if (values['agent-version'] === undefined && !values.unknown) {
-    const rows = await Promise.all(importIds.map(async id => `${id} · ${countText((await lab.store.readImport(id)).dialogues.length, ['разговор', 'разговора', 'разговоров'])}`
-      + ` · версия агента: ${said((await lab.store.readLogVersions(id))?.declarations.at(-1)?.command.version)}`));
-    await writeStdout(`${[...rows.length ? rows : ['У этого прогона нет логов.'], '', 'Указать версию: agent-lab logs --id RUN --agent-version ВЕРСИЯ --yes (или --unknown)'].map(line => safeLine(line)).join('\n')}\n`);
+    const rows = named.map(item => `${item.text} · версия агента: ${item.version}`);
+    await writeStdout(`${[...rows.length ? rows : ['У этого прогона нет логов.'], '',
+      `Указать версию: agent-lab logs --id ${values.id}${named.length > 1 ? ' --import НОМЕР' : ''} --agent-version ВЕРСИЯ --yes (или --unknown)`].map(line => safeLine(line)).join('\n')}\n`);
     return;
   }
-  const importId = values.import ?? (importIds.length === 1 ? importIds[0] : undefined);
-  if (!importId || !importIds.includes(importId)) throw new Error(`Укажите --import: ${importIds.join(', ') || 'у этого прогона нет логов'}.`);
+  // --import: the number of the list above, or an import's own id as scripts give it.
+  const chosen = values.import === undefined ? (importIds.length === 1 ? importIds[0] : undefined)
+    : Number.isInteger(Number(values.import)) ? importIds[Number(values.import) - 1] : importIds.find(id => id === values.import);
+  if (!chosen) throw new Error(named.length ? `Укажите, какие логи: --import НОМЕР — ${named.map(item => item.text).join('; ')}.` : 'У этого прогона нет логов.');
+  const importId = chosen;
   const prepared = await lab.prepareLogVersion({ kind: 'declare_log_version', importId, version: values.unknown ? null : values['agent-version']! }, { via: 'cli-yes' });
   const change = `Версия агента в логах: было «${said(prepared.change.before)}», стало «${said(prepared.change.after)}».`;
   if (!values.yes) { await writeStdout(`${safeLine(change)}\nЗаписать: та же команда с --yes.\n`); return; }
@@ -688,12 +703,26 @@ function preparationFlags(values: Flags): PreparationOptions {
   return values.parallel === undefined ? {} : { parallel: Number(values.parallel) };
 }
 
-/** Prepares `input` to the end, the same way the chat prepares it, within the consent's count and ceiling when there is one. */
+/**
+ * Prepares `input` to the end, the same way the chat prepares it, within the consent's count and ceiling when there is one.
+ * A preparation that a stop cut short says so, with what it kept and how to go on from there.
+ */
 async function prepareDraft(lab: ExperimentLab, input: CreateInput, options: CreateOptions = {}): Promise<string> {
-  const prepared = await lab.create(input, options); await lab.waitForIdle();
+  let prepared: Experiment;
+  try { prepared = await lab.create(input, options); }
+  catch (error) {
+    if (error instanceof Stopped) throw new Error('Подготовка остановлена — она ещё не началась: ничего не записано и не потрачено.');
+    throw error;
+  }
+  await lab.waitForIdle();
   const current = await lab.get(prepared.id);
-  if (current.phase !== 'review') throw new Error(current.error ?? 'Подготовка не завершилась.');
-  return current.id;
+  if (current.phase === 'review' && !current.stop) return current.id;
+  if (!current.stop) throw new Error(current.error ?? 'Подготовка не завершилась.');
+  const why = { cancelled: '', closing: '', time: ': закончилось отведённое ей время', budget: ': закончился согласованный лимит вызовов модели' }[current.stop];
+  const cards = current.librarySnapshot?.formatVersion === 2 ? current.librarySnapshot.cards.length : 0;
+  throw new Error(cards && current.phase === 'review'
+    ? `Подготовка остановлена${why} — готовые ситуации сохранены в черновике (${countText(cards, ['ситуация', 'ситуации', 'ситуаций'])}). Посмотреть: agent-lab cards --id ${current.id}; продолжить с того же места: agent-lab cards --id ${current.id} --resume --yes.`
+    : `Подготовка остановлена${why} — ситуации собрать не успели; записанное сохранено.`);
 }
 
 /** `build`: the consent in the owner's words; only --yes prepares, within the count and the ceiling it states. */
@@ -802,6 +831,39 @@ async function repeat({ values, directory }: CommandInput): Promise<void> {
   });
 }
 
+/**
+ * `status`: what Pi sees — its models by provider, the personal gateway — and what the data folder holds, in the owner's
+ * words; with --json the same as data for a script. Reads only: no lock, nothing written.
+ */
+async function status({ values, directory }: CommandInput): Promise<void> {
+  const seen = await getPiStatus();
+  const store = new ExperimentStore(directory);
+  const records = await store.list();
+  const unreadable = store.diagnostics;
+  if (values.json) {
+    await writeStdout(`${JSON.stringify({ ...seen, folder: { directory, records: records.length, unreadable: unreadable.map(item => ({ id: item.id, newer: item.newer, reason: item.reason })) } }, null, 2)}\n`);
+    return;
+  }
+  const byProvider = new Map<string, number>();
+  for (const model of seen.models) byProvider.set(model.provider, (byProvider.get(model.provider) ?? 0) + 1);
+  const models = seen.models.length
+    ? [`Модели, которые видит Pi: ${countText(seen.models.length, ['модель', 'модели', 'моделей'])} — ${[...byProvider].map(([provider, n]) => `${provider} ${n}`).join(', ')}. Полный список: agent-lab status --json.`]
+    : [];
+  const giga = seen.giga;
+  const gateway = giga.registered ? 'Шлюз моделей (giga): подключён.'
+    : giga.reason ? `Шлюз моделей (giga) настроен, но не подключился: ${giga.reason}`
+    : giga.settingsError ? `Шлюз моделей (giga): ${giga.settingsError}`
+    : giga.unreadableFiles.length ? `Шлюз моделей (giga): не читаются файлы из ${giga.unreadableFiles.join(', ')}.`
+    : giga.configured ? 'Шлюз моделей (giga) настроен.'
+    : giga.missingVariables.length < 3 ? `Шлюз моделей (giga) настроен не полностью: не хватает ${giga.missingVariables.join(', ')}.`
+    : 'Шлюз моделей (giga) не настроен — он нужен только тем, у кого он есть; в Pi его подключает /agent-lab gateway.';
+  const drafts = records.filter(record => !record.trials.length).length;
+  const folder = records.length || unreadable.length
+    ? [`Папка данных ${directory}: ${countText(records.length - drafts, ['прогон', 'прогона', 'прогонов'])}, ${countText(drafts, ['черновик', 'черновика', 'черновиков'])}.`, ...unreadableLines(unreadable)]
+    : [`Папка данных ${directory}: пока пуста.`];
+  await writeStdout(`${[...models, ...(seen.error ? [seen.error] : []), gateway, '', ...folder].map(line => safeLine(line)).join('\n')}\n`);
+}
+
 /** The flags of `import`: the owner's answers about the table, as the chat asks them one at a time. */
 const TABLE_FLAGS: readonly Flag[] = ['file', 'input', 'json', 'yes', 'sheet', 'id-column', 'text-column', 'separator', 'no-separator', 'markers', 'role-column', 'roles',
   'order-column', 'row-order', 'where', 'collapse-repeats', 'keep-repeats'];
@@ -833,7 +895,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   repeat: { help: [['agent-lab repeat --id RUN [--case SCENARIO_ID] [--control SCENARIO_ID]', 'Новый черновик тех же ситуаций']], flags: ['id', 'case', 'control'], run: repeat },
   demo: { help: [['agent-lab demo [--json]', 'Учебный пример целиком, без модели и ключей: итог экраном, с --json — JSON']], flags: ['json'], run: demo },
   summary: { help: [['agent-lab summary --id RUN [--json]', 'Сколько ситуаций агент прошёл, что не измерено и почему']], flags: ['id', 'json'], run: summary },
-  logs: { help: [['agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--import ID] [--yes]', 'Какая версия агента записала логи: только тогда сверка с продом — калибровка']],
+  logs: { help: [['agent-lab logs --id RUN [--agent-version ВЕРСИЯ | --unknown] [--import НОМЕР] [--yes]', 'Какая версия агента записала логи: только тогда сверка с продом — калибровка']],
     flags: ['id', 'agent-version', 'unknown', 'import', 'yes'], run: logs },
   calibration: { help: [['agent-lab calibration --id RUN [--json]', 'Сверка с продом: где синтетика разошлась с разговорами из логов и что это значит'],
     ['agent-lab calibration --id RUN --card N --choice agree|disagree|unsure [--expectation А] [--text «причина»] [--yes] [--json]',
@@ -855,7 +917,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   doctor: { help: [['agent-lab doctor --connection подключение.json --yes', 'Три пробных запроса к агенту: запись, чтение, сброс'],
     ['agent-lab doctor --connection подключение.json [--reply /путь] --yes', 'Агент в своём формате: строение ответа, затем два хода одного разговора']],
   flags: ['connection', 'yes', 'reply', 'output'], run: checkConnection },
-  status: { help: [['agent-lab status', 'Модели и ключи, которые видит Pi']], flags: [], run: async () => { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); } },
+  status: { help: [['agent-lab status [--json]', 'Модели и ключи, которые видит Pi, шлюз моделей и что лежит в папке данных']], flags: ['json'], run: status },
 };
 
 const INTRO = 'Agent Lab — насколько хорош ваш агент: точность на ситуациях из реальных логов и причины провалов.';
