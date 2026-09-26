@@ -411,16 +411,24 @@ Situations come from logs (below), from the owner's rules alone, from a saved su
 
 `agent_lab_analyze` / `agent-lab analyze`: logs and rules → one consent (ceiling; no agent, no situation) → the import's
 topic map (the typical traffic) → seats by each topic's share (`miner/sample.ts allocate`); a topic's first 8 are its
-plan's examples, the rest judged on the plan's shared expectations → a plan per topic (card/plan.ts: expectations on
-verbatim quotes, each a criterion; a tool a rule requires is kept whatever the logs recorded — `channels.byRule`) → the
-log judge on each applicable expectation (the frozen `logged-v2` input, two votes, the channel rule) → problems keyed by
-criterion hash, frequency among the conversations each was decided on, never of all traffic. What a rule requires is
+plan's examples → a plan per topic (card/plan.ts: expectations on verbatim quotes, each a criterion; a tool a rule
+requires is kept whatever the logs recorded — `channels.byRule`) → the topic's other conversations fitted to the plan's
+variations by the planner (`discover/fit.ts`); one no variation fits is never judged by that plan — it gets a plan of its
+own (the topic's `others` group) → the log judge on each expectation of the conversation's variation and the shared ones
+(the frozen `logged-v3` input: `logged-v2` with the situation the expectation is for, so a customer who was never in it
+did not exercise it; two votes, the channel rule) → problems keyed by criterion hash, frequency among the conversations
+each was decided on, never of all traffic. A provider that does not answer for a passing reason ends one step of one
+topic (its plan, the reviewer's check, the fit: `provider_failed`), never the analysis; a lasting refusal ends it with its
+kind (`failure`). A table whose agent's messages hold fenced blocks (```…```) asks the owner whether they are interface
+elements (`interfaceMarkup`); only their yes reads them as «(элемент интерфейса)» (`src/interface-markup.ts`). What a rule requires is
 apart from what the log observes: an incomplete conversation proves nothing of the tools (`channel_unobserved`); a
 complete one without the required call is judged — the call can be found absent — only under the owner's log contract
 (`logs.contract`: the tools the log records every call of), otherwise UNKNOWN `call_unconfirmed`. A topic with no plan is
 Lab's unfinished work, typed (`planIssue`), never the owner's gap; a rules gap is the owner's only when the reviewer
-confirmed it (`rulesGap`). A continuation is a new analysis that carries every finding whose key still holds and selects
-the next conversations. The owner confirms or disputes a finding natively — in the chat or in `/agent-lab` «Разборы
+confirmed it (`rulesGap`). A continuation is a new analysis that carries every complete finding whose key still holds,
+does again what Lab did not finish (a plan, a fit, a judgment) — even when no conversation is left to select — and
+selects the next conversations. Every screen says the way from the log to what was judged in one line, and why each
+selected conversation that was not judged was not (`funnelLines`). The owner confirms or disputes a finding natively — in the chat or in `/agent-lab` «Разборы
 логов», which opens every analysis with its evidence and the whole logged conversation, with no card or run.
 
 ### DISCOVER → VERIFY (optional bridge)

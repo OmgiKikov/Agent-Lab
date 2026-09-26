@@ -16,6 +16,9 @@
  *   F  Lab's own failure is never told as the owner's missing rule; a rules gap only on the reviewer's word (item 3)
  *   G  DISCOVER beyond 8 conversations a topic: bounded first sample, stop, continuation without paying twice (item 4)
  *   H  DISCOVER on its own in /agent-lab: analysis, evidence, whole conversation, the owner's mark, links (item 5)
+ *   I  what the first live analysis of a real agent's logs showed, fixed: the judge told the situation a duty is for,
+ *      one dropped connection never ends the whole analysis, the failure and the next step named, the way from the log
+ *      to what was judged in one line
  *
  * Run from the repository: npx tsx scripts/semantic-proofs.ts
  */
@@ -37,6 +40,7 @@ import { proofBoard } from './proofs/board.js';
 import { proofChannels } from './proofs/channels.js';
 import { claim, cleanUp, failures, folder, preparedCheck, repeatWith, run } from './proofs/common.js';
 import { proofBeyondEight, proofLabFailures } from './proofs/discover-work.js';
+import { proofLiveDefects } from './proofs/live-defects.js';
 import { proofRest } from './proofs/rest.js';
 
 const problemWith = (view: ReturnType<typeof analysisView>, start: string): ProblemView => {
@@ -205,9 +209,10 @@ try {
   await proofLabFailures();
   await proofBeyondEight();
   await proofBoard();
+  await proofLiveDefects();
 } finally {
   await cleanUp();
 }
 const failed = failures();
-console.log(failed ? `\n${failed} claim(s) FAILED` : '\nReport A: all claims PASS — A B C D E F G H. Contract checks on constructed cases; judge quality on real dialogues is report B.');
+console.log(failed ? `\n${failed} claim(s) FAILED` : '\nReport A: all claims PASS — A B C D E F G H I. Contract checks on constructed cases; judge quality on real dialogues is report B.');
 process.exit(failed ? 1 : 0);

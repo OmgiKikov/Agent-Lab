@@ -114,6 +114,7 @@ export async function proofChannels(): Promise<void> {
     `(5) a judge voting pass on the words and find_order's result: f1 ${credulous.finding('f1')?.result}, w1 ${credulous.finding('w1')?.result} (channel rule), r1 ${credulous.finding('r1')?.result}`);
   const audit = await contract.audit('f1');
   const sent = audit ? JSON.parse(audit.input) as ReturnType<typeof logJudgeInput> : undefined;
-  claim('C', new Set(contract.analysis.findings.map(item => item.criterionHash)).size === 1 && sent?.scenario.execution.expectations[0]?.observation === 'tool' && sent.mode === 'logged-v2',
-    'every finding carries one criterion hash; the judge was sent the frozen logged-v2 input with the tool expectation');
+  claim('C', new Set(contract.analysis.findings.map(item => item.criterionHash)).size === 1 && sent?.scenario.execution.expectations[0]?.observation === 'tool' && sent.mode === 'logged-v3'
+    && 'situation' in sent && !!sent.situation.question,
+    `every finding carries one criterion hash; the judge was sent the frozen logged-v3 input with the tool expectation and its situation («${sent && 'situation' in sent ? sent.situation.question : ''}»)`);
 }
