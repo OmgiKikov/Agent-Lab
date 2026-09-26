@@ -3,7 +3,7 @@ import { fingerprint, type Requirement } from '../contracts.js';
 import { text } from '../ids.js';
 import type { CardTopic } from '../miner/schema.js';
 import { countText } from '../plural.js';
-import { basisProposal, citationId, groundingSlip, located, type CallSource, type ProposalCall } from './proposal.js';
+import { basisProposal, citationId, groundingSlip, located, nearestWords, type CallSource, type ProposalCall } from './proposal.js';
 import { dutyLine, dutyNotes, dutySections } from './duty-words.js';
 import type { BusinessScenario, Card, LibraryV2 } from './schema.js';
 
@@ -168,7 +168,7 @@ export function planSlips(proposal: PlanProposal, call: PlanCall): PlanSlip[] {
       const name = `expectations[${i}].basis[${j}]`;
       const at = located(basis, call);
       const grounding = at && groundingSlip(name, at);
-      if (!at) slip('quote', `${name}: the quote is not a verbatim substring of its source. Copy the exact characters of a whole sentence or clause instead of paraphrasing.`);
+      if (!at) slip('quote', `${name}: the quote is not a verbatim substring of its source.${nearestWords(basis, call)} Copy the exact characters of a whole sentence or clause instead of paraphrasing.`);
       else if (grounding) slip('grounding', grounding);
       else if (!call.binds.kinds.includes(basis.kind) && !call.binds.rules.some(rule => rule.sourceId === at.sourceId && rule.quote === at.quote)) {
         slip('rulebook', `${name} is a rule of kind ${basis.kind}, and the owner's rulebook binds the agent only by ${call.binds.kinds.join(', ')}: cite a rule of those kinds, or drop this expectation.`);

@@ -24,7 +24,8 @@ export function valueTokens(text: string): Set<string> {
 }
 /**
  * A model copies a source but normalises its typography: straight quotes for «», a hyphen for a
- * dash, -> for →, е for ё, one space for a line break. Such a quote is still the source's own words.
+ * dash, -> for →, е for ё, one space for a line break, no Markdown emphasis (`**`, `__`, backticks — an agent's prompt
+ * is often written in Markdown). Such a quote is still the source's own words.
  * Find it and hand back the source's exact characters, so every stored quote is verbatim.
  * Words, order and case must match; a paraphrase is still rejected.
  */
@@ -34,9 +35,25 @@ const LOOSE_CHARACTERS: Record<string, string> = {
 };
 /** A list marker after whitespace («- », «• », «1. ») is layout, not words; a model drops it or keeps it inline when it quotes. */
 const LIST_MARKER = /^(?:[-*•–—]|\d{1,2}[.)])\s/u;
+/** How many characters of Markdown emphasis start at `i` — a backtick, or a run of two or more `*` or `_` —; 0 for none. A lone `*` («5 * 3») is a word's character. */
+function emphasisAt(text: string, i: number): number {
+  const char = text[i];
+  if (char === '`') return 1;
+  if (char !== '*' && char !== '_') return 0;
+  let end = i;
+  while (text[end] === char) end++;
+  return end - i >= 2 ? end - i : 0;
+}
 function foldTypography(text: string): { text: string; starts: number[]; ends: number[] } {
   const out: string[] = [], starts: number[] = [], ends: number[] = [];
   for (let i = 0; i < text.length; i++) {
+    const emphasis = emphasisAt(text, i);
+    if (emphasis) {
+      // Layout, not words: it takes no place of its own, and the characters around it keep theirs.
+      if (ends.length) ends[ends.length - 1] = i + emphasis;
+      i += emphasis - 1;
+      continue;
+    }
     const raw = text[i]!;
     let ch = LOOSE_CHARACTERS[raw] ?? raw, width = 1;
     if (raw === '-' && text[i + 1] === '>') { ch = '>'; width = 2; }
@@ -52,6 +69,18 @@ function foldTypography(text: string): { text: string; starts: number[]; ends: n
   }
   return { text: out.join(''), starts, ends };
 }
+/** Where the quoted words start with the emphasis that opens them: «**Абсолютное табу** на» starts at its marks, as its sentence does. */
+function openingEmphasis(content: string, start: number): number {
+  while (start > 0) {
+    const mark = content[start - 1]!;
+    let run = start - 1;
+    while (run > 0 && content[run - 1] === mark) run--;
+    if (!emphasisAt(content, run) || run + emphasisAt(content, run) !== start) break;
+    start = run;
+  }
+  return start;
+}
+
 /**
  * The source's own characters behind a quote, together with the offset the match was actually made
  * at. Callers that need the place (a line number, a sort key) take `offset` from here instead of
@@ -69,7 +98,7 @@ export function verbatimSpanAt(content: string, quote: string): { span: string; 
   for (const candidate of [needle, ...(swapped !== first ? [swapped + needle.slice(1)] : [])]) {
     const at = source.text.indexOf(candidate);
     if (at >= 0) {
-      const start = source.starts[at]!;
+      const start = openingEmphasis(content, source.starts[at]!);
       return { span: content.slice(start, source.ends[at + candidate.length - 1]!), offset: start };
     }
   }
@@ -77,6 +106,33 @@ export function verbatimSpanAt(content: string, quote: string): { span: string; 
 }
 export function verbatimSpan(content: string, quote: string): string | undefined {
   return verbatimSpanAt(content, quote)?.span;
+}
+
+/** The shortest start or end of a quote worth anchoring on: shorter ones are found anywhere. */
+const ANCHOR = 12;
+/**
+ * Where in `content` a quote that is not verbatim most likely stands, as the source writes it: anchored on the longest
+ * start or end of the quote the source holds (typography folded as for a match), and as long as the quote. Only for
+ * telling a model what to copy — never a match: undefined when neither end is found.
+ */
+export function nearestSource(content: string, quote: string): string | undefined {
+  const source = foldTypography(content);
+  const needle = foldTypography(quote).text.trim();
+  if (needle.length < ANCHOR) return undefined;
+  const longest = (piece: (length: number) => string): number => {
+    let low = ANCHOR - 1, high = needle.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (source.text.includes(piece(mid))) low = mid; else high = mid - 1;
+    }
+    return low >= ANCHOR ? low : 0;
+  };
+  const head = longest(length => needle.slice(0, length));
+  const tail = longest(length => needle.slice(needle.length - length));
+  if (!head && !tail) return undefined;
+  const from = head >= tail ? source.text.indexOf(needle.slice(0, head)) : source.text.indexOf(needle.slice(needle.length - tail)) + tail - needle.length;
+  const first = Math.max(0, from), last = Math.min(source.text.length - 1, Math.max(first, from + needle.length - 1));
+  return content.slice(source.starts[first]!, source.ends[last]!);
 }
 
 /** Every place a quote stands in `content` verbatim, as verbatimSpanAt finds one: exact copies first, then typographic ones. */
@@ -88,7 +144,7 @@ function* verbatimSpans(content: string, quote: string): Generator<{ span: strin
   const first = needle[0]!, swapped = first === first.toLowerCase() ? first.toUpperCase() : first.toLowerCase();
   for (const candidate of [needle, ...(swapped !== first ? [swapped + needle.slice(1)] : [])]) {
     for (let at = source.text.indexOf(candidate); at >= 0; at = source.text.indexOf(candidate, at + 1)) {
-      const start = source.starts[at]!;
+      const start = openingEmphasis(content, source.starts[at]!);
       yield { span: content.slice(start, source.ends[at + candidate.length - 1]!), offset: start };
     }
   }

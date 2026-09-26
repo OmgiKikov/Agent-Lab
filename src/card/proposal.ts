@@ -4,7 +4,7 @@ import { text } from '../ids.js';
 import { MODEL_REQUEST_BYTES } from '../limits.js';
 import { requirementKindSchema, type RequirementKind } from '../scenario-contracts.js';
 import { clip } from '../text.js';
-import { enoughWords, quotedClause, type QuotedClause } from '../verbatim.js';
+import { enoughWords, nearestSource, quotedClause, type QuotedClause } from '../verbatim.js';
 import { cardFindings, filledMessage, normalizeText, PLAUSIBLE_VALUE_WORDS, type CardEvidence, type CheckFinding, type LoggedMessage } from './checks.js';
 import { cardSchema, disclosureSchema, toolNameSchema, turnSchema, type BusinessScenario, type Card, type EventRef } from './schema.js';
 import { fillSlip, maskSlots, slotAnswersSchema, slotFills, slotPayload, type FillAnswer, type MaskSlot } from './unmask.js';
@@ -191,6 +191,16 @@ export function located(basis: Pick<Basis, 'sourceId' | 'quote'>, call: Pick<Pro
 }
 
 /**
+ * What the cited source writes where a quote that is not verbatim most likely stands, for the builder to copy: its words
+ * may differ by a letter, a dropped mark or a line break the builder wrote as «\\n». Empty when no end of the quote is found.
+ */
+export function nearestWords(basis: Pick<Basis, 'sourceId' | 'quote'>, call: Pick<ProposalCall, 'sources'>): string {
+  const source = call.sources.find(item => item.id === basis.sourceId);
+  const near = source && nearestSource(source.content, basis.quote);
+  return near ? ` Near it, the source writes exactly: «${clip(near, 400)}» — copy those characters, line breaks and marks included, or quote another sentence.` : '';
+}
+
+/**
  * Why a verbatim quote cannot back a rule, in the builder's terms: it is not a whole clause of its sentence — a quote that
  * starts after «Не» or stops before «, только если…» says what the source does not —, or it is too short to state a rule.
  * The judge reads the whole sentence either way (dutyRequirements); this keeps what the owner reads as the rule honest too.
@@ -282,7 +292,7 @@ function basisSlips(proposal: CardProposal, call: ProposalCall): string[] {
     const grounding = at && groundingSlip(name, at);
     if (!at) {
       const source = call.sources.find(item => item.id === basis.sourceId);
-      slips.push(`${name}: the quote is not a verbatim substring of "${source?.name ?? basis.sourceId}". Copy the exact characters of a whole sentence or clause from the source instead of paraphrasing.`);
+      slips.push(`${name}: the quote is not a verbatim substring of "${source?.name ?? basis.sourceId}".${nearestWords(basis, call)} Copy the exact characters of a whole sentence or clause from the source instead of paraphrasing.`);
     } else if (grounding) slips.push(grounding);
     else if (!call.binds.kinds.includes(basis.kind) && !call.binds.rules.some(rule => rule.sourceId === at.sourceId && rule.quote === at.quote)) {
       slips.push(`${name} is a rule of kind ${basis.kind}, and the owner's rulebook binds the agent only by ${call.binds.kinds.join(', ')}: cite a rule of those kinds, or drop this duty.`);
