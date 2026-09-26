@@ -69,9 +69,6 @@ function meets(expect: Step['expect'], got: ExamTurn): boolean {
   return expect === 'reply' ? got === 'reply' || got === 'buttons' : got === expect;
 }
 
-/** Whether an exam checks the conversation's memory: a path of two or more steps whose later step checks the reply with `contains`. */
-export const examChecksMemory = (exam: Exam): boolean => exam.some(path => path.steps.length >= 2 && path.steps.slice(1).some(step => step.contains !== undefined));
-
 /**
  * Turns among conversations held open together: one message at a time, in path order, round after round. A conversation
  * asks for its turn before each message — which also says its previous message was answered — and leaves when it ends.
@@ -159,7 +156,7 @@ export async function examConnection(target: RunnableTarget, signal: AbortSignal
     finally { turns.leave(index); }
   }));
   signal.throwIfAborted();
-  const status = !paths.every(path => path.passed) ? 'failed' : examChecksMemory(exam) ? 'passed' : 'simple';
+  const status = !paths.every(path => path.passed) ? 'failed' : examShowsMemory(exam) ? 'passed' : 'simple';
   return { checkedAt, status, paths };
 }
 

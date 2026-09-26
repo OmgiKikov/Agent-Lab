@@ -1,5 +1,4 @@
-import { settingsSchema } from './contracts.js';
-import { EXAM_EXPECTATIONS, runnableTargetSchema } from './target-schema.js';
+import { AGENT_TIMEOUT_MS, EXAM_EXPECTATIONS, runnableTargetSchema } from './target-schema.js';
 import { externalReplySchema, REPLY_BYTES, type TurnOutcome } from './targets.js';
 
 /*
@@ -19,7 +18,7 @@ function defaultTimeout(kind: 'command' | 'http'): number {
   const target = runnableTargetSchema.parse(kind === 'command' ? { kind, command: 'agent' } : { kind, url: 'http://localhost/' });
   return target.kind === 'module' ? 0 : target.timeoutMs;
 }
-const defaults = { command: defaultTimeout('command'), http: defaultTimeout('http'), modelCall: settingsSchema.parse({}).timeoutMs };
+const defaults = { command: defaultTimeout('command'), http: defaultTimeout('http'), module: AGENT_TIMEOUT_MS };
 
 /** Every outcome a turn may have (targets.ts TURN_OUTCOMES): the type makes a new one unwritable without its words here. */
 const OUTCOMES: Record<TurnOutcome, string> = {
@@ -46,14 +45,18 @@ export function adapterContract(): AdapterContract {
       command: 'target {kind: "command", command, args, cwd}: Lab starts it once per conversation with Pi\'s environment. stdin gets one JSON line per request — '
         + '{"type": "respond", sessionId, scenarioId, initialState, messages, message, choice?, prompt?, promptHash?} — and at the end {"type": "close", sessionId}, '
         + 'then stdin closes and the process has 2 s to exit. stdout carries exactly one JSON line per request, flushed: the reply. Logs and progress go to stderr: '
-        + `a stdout line that is not JSON is kept as diagnostics, but any JSON line while Lab waits is taken for the reply. No reply within timeoutMs (default ${seconds(defaults.command)}) ends the process group.`,
+        + 'a stdout line that is not JSON is kept as diagnostics; a JSON line when no request is waiting, or a second one for the same request, breaks the protocol and the conversation '
+        + `is not measured (the connection's fault, not the agent's). No reply within timeoutMs (default ${seconds(defaults.command)}) ends the process group.`,
       module: 'target {kind: "module", path, exportName (default "createSession")}: Lab runs the Node module in a process of its own per conversation; '
         + 'createSession({sessionId, scenarioId, initialState, prompt, promptHash}) returns (or resolves to) {respond(message, messages, choice), close?()}, and respond returns the reply. '
-        + `console goes to stderr; never write to process.stdout. Set timeoutMs: without it a reply may take as long as one model call of the run (${seconds(defaults.modelCall)} by default).`,
+        + 'Lab talks to the module over a channel of its own, so whatever it prints is kept as diagnostics and never taken for a reply. '
+        + `A reply must come within timeoutMs (default ${seconds(defaults.module)}).`,
       http: 'target {kind: "http", url, headersEnv, timeoutMs}: POST url with the request as its JSON body (without "type"), headers content-type and accept application/json '
         + 'plus headersEnv {"Header": "ENV_NAME"}, read from the environment at request time and never stored. The reply is the JSON body with status 2xx, '
         + `within timeoutMs (default ${seconds(defaults.http)}). Tell conversations apart by sessionId: a new conversation is a new sessionId.`,
-      curl: 'An HTTP agent with its own request format needs no adapter: the owner pastes a working curl, passed whole to agent_lab_connect; such an agent shows Lab its text only.',
+      curl: 'An HTTP agent with its own request format needs no adapter: the owner pastes a working curl, passed whole to agent_lab_connect. Its request template may also '
+        + 'say where the reply\'s buttons are (buttons: {list, text, value?} as JSON pointers), which values of a status field mean a handoff or no reply '
+        + '(outcome: {status, handoff, noReply}), and send a pressed button with {{choice}}; without them such an agent shows Lab its text only.',
     },
     request: 'initialState {records, writableFields, transientFailures, external?} — apply it before the first reply. messages — the whole conversation so far, the current '
       + 'message last: [{role: "user" | "assistant", content}]. message — the customer\'s words (a pressed button\'s text). choice — only for a press of a button of the '

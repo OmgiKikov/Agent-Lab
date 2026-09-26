@@ -374,10 +374,11 @@ async function logs({ values, directory }: CommandInput): Promise<void> {
 
 /**
  * Runs a check of the agent that Ctrl+C may stop: the signal aborts every session the check opened, and an aborted
- * session ends its agent's process group, so nothing the check started outlives it. Exit code 130, as a shell's.
+ * session ends its agent's process group, so nothing the check started outlives it. The registry of agent groups
+ * (agent-processes.ts) hears the same signal and ends every group it tracks; with this listener present it leaves the
+ * exit to us. Exit code 130, as a shell's.
  */
 async function stoppable(work: (signal: AbortSignal) => Promise<void>): Promise<void> {
-  // TODO(merge): also call the process-group registry's close-all of targets.ts (dialogue package) here once it lands.
   const stop = new AbortController();
   const interrupt = () => stop.abort(new Stopped('cancelled'));
   process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);
