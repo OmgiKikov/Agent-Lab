@@ -1,45 +1,16 @@
-node_modules/
-dist/
-.agent-lab/
-.context/
-.walk/
-.gsd/
-.planning/milestone.lock
-.planning/state.json
-.planning/research/.cache/
-*.tgz
-.env
-.DS_Store
+# LangWatch source and its local databases stay on this computer.
+/langwatch/
+/.local-archive/
+/.agent-lab/
+/node_modules/
+/dist/
+__pycache__/
+/.env
+/.DS_Store
 
-# Real certificates and keys are never committed; the test-only loopback pair lives under test/fixtures.
-/certs/
+# Exports and secrets from real conversations never enter this repository.
+*.xlsx
+*.jsonl
 *.pem
 *.key
-*.cer
-*.crt
 *.p12
-*.pfx
-*.jks
-*.der
-!test/fixtures/*.pem
-!test/fixtures/*.key
-
-# Local pilot evidence and runners depend on material outside this public repository.
-/docs/RELIABILITY.md
-/docs/aigw-audit/
-/docs/acquiring-mode-pilot-*/
-/docs/judge-*/
-/output/
-/test/live/acquiring-pilot.py
-/test/live/judge-controls.ts
-/test/live/judge-goal-scope.ts
-/test/live/judge-pilot.ts
-# exported OpenCode transcripts
-session-*.md
-# What the harnesses write holds production conversations and customer ids: never committed, wherever it lands.
-dialogues.jsonl
-*.meta.json
-.agent-lab-run/
-.cache
-__pycache__/
-.gstack/
