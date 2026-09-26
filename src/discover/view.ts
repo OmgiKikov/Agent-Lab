@@ -155,7 +155,9 @@ export function analysisView(analysis: LogAnalysis, batch?: Pick<ImportBatch, 'd
       && !dialogue.events.some(event => event.type === 'tool' && (event.data as { tool?: unknown } | null)?.tool === tool));
     // The examples: the counted violations first, then those the owner disputed — shown with their mark, never dropped.
     const failed = group.findings.filter(finding => finding.result === 'fail');
-    const examples = [...violated, ...failed.filter(finding => !violated.includes(finding))].slice(0, 5).map((finding): Example => {
+    // One example a conversation: a conversation judged on the criterion twice (under two plans) shows once.
+    const shown = new Set<string>();
+    const examples = [...violated, ...failed.filter(finding => !violated.includes(finding))].filter(finding => !shown.has(finding.dialogueId) && !!shown.add(finding.dialogueId)).slice(0, 5).map((finding): Example => {
       const review = reviews.get(finding.key)?.verdict;
       // One quote an event, in the order of the conversation: the votes may cite the same message twice.
       const quotes = [...finding.evidence].sort((a, b) => a.seq - b.seq).filter((item, index, all) => all.findIndex(other => other.seq === item.seq) === index);

@@ -139,7 +139,8 @@ export async function continuationConsent(store: Pick<ExperimentStore, 'readTopi
   const judgeable = batch.dialogues.filter(dialogue => !unjudgeable(dialogue)).length;
   const picked = earlier.selection.picked.length;
   const available = Math.max(0, Math.min(judgeable, ANALYSIS_TOTAL_LIMIT) - picked);
-  const replannedGroups = draft.topics.filter(group => !group.scenarioId);
+  // A confirmed gap keeps its failure: it is the owner's to fill, and is not planned again.
+  const replannedGroups = draft.topics.filter(group => !group.scenarioId && !group.planFailure);
   // Lab's own unfinished work — a plan, a fit, a judgment — is done by a continuation even when every conversation is selected.
   const unfinished = replannedGroups.length + input.unfitted + input.pendingJobs;
   if (!available && !unfinished) throw new Error(`В разборе уже выбраны и оценены все ${countText(picked, CONVERSATIONS)}, которые можно оценить: продолжать нечем. Разберите другую выгрузку логов.`);

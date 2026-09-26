@@ -11,6 +11,7 @@ import { situationNumber } from '../src/card/view.js';
 import { isRunnable, type Experiment, type Trial } from '../src/contracts.js';
 import { examCanVouch } from '../src/exam.js';
 import { analysisView } from '../src/discover/view.js';
+import { violationsWords } from '../src/discover/text.js';
 import { isRunning } from '../src/phases.js';
 import { detectionLines, detectProject, evidenceText, targetLabel, type ProjectDetection } from '../src/detect.js';
 import type { ExperimentLab } from '../src/experiment.js';
@@ -116,7 +117,7 @@ export function registerResultTools(pi: Pick<ExtensionAPI, 'registerTool'>, host
       if (active) feed.rows.push(row(active.kind === 'analysis' ? `Разбор логов · ${(await active.lab.getAnalysis(active.id)).message}` : progressText(await active.lab.get(active.id)), 'accent'));
       // Analyses of the logs are records of their own: the newest few, so the chat can go on from one.
       const analyses = await reader.listAnalyses().catch(() => []);
-      if (analyses[0] && analyses[0].status !== 'running') feed.rows.push(row(safeText(`Разборов логов: ${analyses.length}; последний — «${analyses[0].logs.file}», ${analysisView(analyses[0]).problems.length ? `нарушений правил — ${analysisView(analyses[0]).problems.length}` : 'нарушений не найдено'}.`), 'muted'));
+      if (analyses[0] && analyses[0].status !== 'running') feed.rows.push(row(safeText(`Разборов логов: ${analyses.length}; последний — «${analyses[0].logs.file}», ${analysisView(analyses[0]).problems.length ? violationsWords(analysisView(analyses[0])) : 'нарушений не найдено'}.`), 'muted'));
       if (decisions) feed.rows.push(row(`Нужно ваше решение: ${decisions}`, 'warning'));
       if (found) {
         const shown = foundRows(found);

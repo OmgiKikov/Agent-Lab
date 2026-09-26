@@ -29,6 +29,9 @@ export function analysisOutput(view: AnalysisView): Record<string, unknown> {
     analysis: view.id, status: view.status, ...(view.unfinished ? { unfinished: view.unfinished } : {}), file: view.file,
     selected: view.coverage.picked, analysed: view.coverage.processed, notReached: view.coverage.notReached, of: view.coverage.logged, decidedIn: view.coverage.decided,
     ...(view.coverage.sharedOnly ? { judgedOnSharedRulesOnly: view.coverage.sharedOnly } : {}), ...(view.continues ? { continues: view.continues.analysisId, reusedFindings: view.continues.reused } : {}),
+    ...(view.coverage.fitted ? { fittedToTopicPlan: view.coverage.fitted } : {}), ...(view.coverage.ownPlan ? { judgedUnderOwnPlan: view.coverage.ownPlan } : {}),
+    // Why the analysis ended short, in the owner's words: said as it is, never as a gap in the owner's rules.
+    ...(view.status !== 'done' && view.status !== 'running' ? { ended: analysisLines(view)[1] } : {}),
     ...(view.recorded ? { logRecordsEveryCallOf: view.recorded } : {}),
     ...(view.traffic ? { traffic: view.traffic.map(topic => ({ topic: topic.title, share: Math.round(topic.share * 100) / 100 })) } : {}),
     problems: view.problems.map((problem, index) => ({

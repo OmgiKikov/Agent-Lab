@@ -66,13 +66,16 @@ export const planCriterion = (analysis: Pick<LogAnalysis, 'requirements'>, expec
 
 /**
  * The sources the judge reads for an analysis: all of them when they fit one request, otherwise the prompts and the
- * articles the expectation's rules cite — every prompt shown as its observable rules only (judge.ts observableSources).
+ * articles the expectation's rules cite — every prompt shown as its observable rules only (judge.ts observableSources),
+ * the rules its scenario cites: never every rule the analysis found in it, so a plan made later — by a continuation —
+ * changes nothing of what the judge read for a finding made before, and its key keeps holding.
  */
-function judgedSources(analysis: Pick<LogAnalysis, 'task' | 'sources' | 'requirements'>, requirementIds: readonly string[]): Source[] {
+function judgedSources(analysis: Pick<LogAnalysis, 'task' | 'sources' | 'requirements'>, requirementIds: readonly string[], scenario: BusinessScenario): Source[] {
   const whole = !workInputIssue({ task: analysis.task, sources: analysis.sources });
   const cited = new Set(analysis.requirements.filter(requirement => requirementIds.includes(requirement.id)).map(requirement => requirement.sourceId));
   const read = whole ? analysis.sources : analysis.sources.filter(source => source.kind === 'prompt' || cited.has(source.id));
-  return observableSources(read, analysis.requirements);
+  const planned = new Set(scenario.expectations.flatMap(expectation => expectation.requirementIds));
+  return observableSources(read, analysis.requirements.filter(requirement => planned.has(requirement.id)));
 }
 
 /**
@@ -120,7 +123,7 @@ export function analysisJob(analysis: Pick<LogAnalysis, 'task' | 'sources' | 're
   const variation = variationId ? scenario.variations.find(item => item.id === variationId) : undefined;
   // The rubric of a card's expectation seen on the tools, as a run and a calibration judge it (card/compile.ts).
   const request: Omit<LogJudgeRequest, 'key'> = { expectation: judged, letter, card, rubric: expectationRubric(judged, letter, card, { toolLog: judged.observation === 'tool' }), requirements,
-    sources: judgedSources(analysis, expectation.requirementIds), importContentHash: batch.contentHash,
+    sources: judgedSources(analysis, expectation.requirementIds, scenario), importContentHash: batch.contentHash,
     dialogue: { observation: dialogue.observation, events: dialogue.events },
     situation: { question: scenario.question, ...(variation ? { circumstances: variation.title } : {}) } };
   // What the judge reads apart from the conversation — the rubric, the rules, the sources — is in the key beside the criterion.

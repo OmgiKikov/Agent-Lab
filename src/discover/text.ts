@@ -129,9 +129,17 @@ export function headline(view: AnalysisView): string {
   const scope = coverage.processed === coverage.picked
     ? `Разобрано ${countText(coverage.processed, CONVERSATIONS)} из ${coverage.logged} в «${view.file}»`
     : `Разобрано ${coverage.processed} из ${countText(coverage.picked, OF_CONVERSATIONS)}, выбранных в «${view.file}» (в логе — ${coverage.logged})`;
-  const found = view.problems.length ? `нарушено правил — ${view.problems.length}, в ${countText(view.violated, IN_CONVERSATIONS)}`
-    : coverage.decided ? 'нарушений правил не найдено' : 'ни одно правило не удалось оценить';
+  const found = view.problems.length ? violationsWords(view) : coverage.decided ? 'нарушений правил не найдено' : 'ни одно правило не удалось оценить';
   return `${scope}: ${found}.`;
+}
+
+/**
+ * «13 нарушений в 8 разговорах»: each problem counted once in each conversation it was broken in — one rule of the
+ * owner may stand behind several problems, so the number is never called a number of rules.
+ */
+export function violationsWords(view: Pick<AnalysisView, 'problems' | 'violated'>): string {
+  const count = view.problems.reduce((sum, problem) => sum + problem.violations, 0);
+  return `${countText(count, ['нарушение', 'нарушения', 'нарушений'])} в ${countText(view.violated, IN_CONVERSATIONS)}`;
 }
 
 /**
