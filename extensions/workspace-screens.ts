@@ -413,7 +413,7 @@ export function progressLines(progress: NonNullable<SpaceData['progress']>, widt
 export function problemsScreen(data: SpaceData, selected: number, width: number): Screen {
   const w = room(width);
   const body: Line[] = [...wsLines([ws('answer', problemsLine(data.problems)),
-    ...(data.problems.length ? [ws('muted', data.problems.every(problem => problem.origin) ? 'У каждой — дословный ответ агента из логов. Прав ли судья, скажите в чате: «пример 1.1 — не нарушение».'
+    ...(data.problems.length ? [ws('muted', data.problems.every(problem => problem.origin) ? 'У каждой — дословный ответ агента из логов. Откройте проблему и нажмите 1: разбор, примеры, разговоры целиком и ваша отметка.'
       : 'У каждой — ситуации и дословные ответы агента. Разовые ошибки — в «Прогонах».')] : [])], w)];
   const items: number[] = [];
   let anchor: number | undefined;
@@ -604,7 +604,7 @@ export function problemScreen(problem: Problem, number: number, width: number): 
     ws('heading', problem.side === 'agent' ? 'Наблюдение' : 'Ситуации'),
     ...(problem.side === 'agent' && problem.observations.length ? problem.observations.map(item => ws('text', problem.origin ? `«${item.quote}» — ${item.title}` : `«${item.quote}» — ситуация «${item.title}»`, 4, { hang: 2 }))
       : problem.situations.map(item => ws('text', item.title, 4, { hang: 2 }))),
-    ...(problem.trialId ? [ws('blank', ''), ws('actions', '1 Открыть разговор')] : []),
+    ...(problem.origin ? [ws('blank', ''), ws('actions', '1 Открыть разбор: примеры и разговоры целиком')] : problem.trialId ? [ws('blank', ''), ws('actions', '1 Открыть разговор')] : []),
   ], w);
   return { head: [], body, foot: [...(problem.trialId ? [{ key: '1–3', text: 'действие' }] : []), { key: 'a', text: 'спросить Lab' }, { key: '↑↓', text: 'листать' }, { key: 'Esc', text: 'назад' }] };
 }
@@ -643,7 +643,8 @@ export function startScreen(selected: number, width: number): Screen {
 }
 
 /** Several agents in one folder (docs/design/ui-spec.md §8.2): each with its version, its latest result and the decisions it waits for. */
-export function agentsScreen(spaces: readonly { space: AgentSpace; result: string | null; decisions: number }[], selected: number, width: number, now: Date): Screen {
+export function agentsScreen(spaces: readonly { space: AgentSpace; result: string | null; decisions: number }[], selected: number, width: number, now: Date,
+  logs?: { count: number; unlinked: number }): Screen {
   const w = room(width);
   const body: Line[] = [];
   spaces.forEach((item, index) => {
@@ -653,8 +654,12 @@ export function agentsScreen(spaces: readonly { space: AgentSpace; result: strin
     body.push(...wsLines([ws(mine ? 'selected' : 'text', `${mine ? '›' : ' '} ${clip(item.space.name, 28).padEnd(28)}${clip(version, 22).padEnd(22)}${item.result && latest ? `${item.result} — ${whenText(latest.createdAt, now)}` : ''}`, 1,
       { clip: true, ...(item.decisions ? { right: { role: 'warning', text: `нужно ваше решение: ${item.decisions}` } } : {}) })], w));
   });
-  const last = spaces.length;
+  // The folder's analyses of logs open on their own: an analysis needs no agent, card or run.
+  const logsRow = logs ? spaces.length : -1;
+  if (logs) body.push(...(spaces.length ? [blank] : []), ...wsLines([ws(selected === logsRow ? 'selected' : 'text', `${selected === logsRow ? '›' : ' '} Разборы логов — ${logs.count}`, 1,
+    { clip: true, ...(logs.unlinked ? { right: { role: 'muted', text: logs.unlinked === logs.count ? 'без агента' : `без агента: ${logs.unlinked}` } } : {}) })], w));
+  const last = spaces.length + (logs ? 1 : 0);
   body.push(blank, ...wsLines([ws(selected === last ? 'selected' : 'text', `${selected === last ? '›' : ' '} Проверить нового агента`)], w));
-  return { head: wsLines([ws('answer', 'Agent Lab'), ws('muted', 'Агенты в этой папке')], w), body, foot: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'Esc', text: 'закрыть' }],
-    anchor: Math.min(selected, last) };
+  return { head: wsLines([ws('answer', 'Agent Lab'), ws('muted', spaces.length ? 'Агенты и разборы логов в этой папке' : 'Разборы логов в этой папке')], w), body,
+    foot: [{ key: '↑↓', text: 'выбрать' }, { key: 'Enter', text: 'открыть' }, { key: 'Esc', text: 'закрыть' }], anchor: Math.min(selected, last) };
 }

@@ -52,15 +52,21 @@ export interface WorkspaceState {
 }
 export const newState = (space?: string): WorkspaceState => ({ ...(space ? { space } : {}), stack: [], selected: {}, details: false, help: false, reading: new Map() });
 
-/** What the workspace shows: the folder's agents, and the chosen agent's workspace when one is open. */
+/**
+ * What the workspace shows: the folder's agents, the chosen agent's workspace when one is open, and the folder's analyses
+ * of logs (`logs`: how many, and how many belong to no agent) — DISCOVER opens on its own, with no card or run.
+ */
 export interface WorkspaceView {
   agents: { space: AgentSpace; result: string | null; decisions: number }[];
   data?: SpaceData;
+  logs?: { count: number; unlinked: number };
 }
 
 /** What the owner asked for; the command does it and opens the workspace again. */
 export type WorkspaceAction =
   | { type: 'close' } | { type: 'new' } | { type: 'demo' }
+  /** «Разборы логов»: the folder's analyses, or one of them open (at a problem of it). */
+  | { type: 'analyses'; analysisId?: string; problemKey?: string }
   /** Open one agent's workspace from the folder's list. */
   | { type: 'space'; key: string }
   | { type: 'decide'; choice: DecisionChoice }
@@ -189,9 +195,11 @@ export class LabWorkspace implements Component {
   private home(): void { this.scroll = 0; this.free = false; }
 
   private get top(): Open | undefined { return this.state.stack.at(-1); }
+  /** The folder's list — agents, «Разборы логов», a new agent — rather than the start: more than one agent, or any analysis. */
+  private get listed(): boolean { return this.view.agents.length > 1 || !!this.view.logs; }
   private listKey(): string {
     const top = this.top;
-    if (!this.view.data) return this.view.agents.length > 1 ? 'agents' : 'start';
+    if (!this.view.data) return this.listed ? 'agents' : 'start';
     if (top?.kind === 'allRuns') return 'allRuns';
     if (top) return `open:${top.kind}`;
     return this.state.step ? `step:${this.state.step}` : `area:${this.state.area}`;
@@ -213,7 +221,7 @@ export class LabWorkspace implements Component {
   private screen(width: number): Screen & { picks?: ResultPick[] } {
     const data = this.view.data && this.view.data.progress ? { ...this.view.data, progress: { ...this.view.data.progress, frame: this.frame } } : this.view.data;
     if (this.state.help) return helpScreen(width);
-    if (!data) return this.view.agents.length > 1 ? agentsScreen(this.view.agents, this.cursor(), width, new Date()) : startScreen(this.cursor(), width);
+    if (!data) return this.listed ? agentsScreen(this.view.agents, this.cursor(), width, new Date(), this.view.logs) : startScreen(this.cursor(), width);
     const top = this.top;
     const place = this.state.step ? { step: this.state.step } : { area: this.state.area ?? 'runs' };
     const withHead = (screen: Screen & { picks?: ResultPick[] }) => ({ ...screen, head: [...header(data, place, width, this.rows() < 28), ...screen.head] });
@@ -264,7 +272,7 @@ export class LabWorkspace implements Component {
   /** How many rows of the current list the cursor can move over, read from the data itself — never from the last drawing. */
   private count(): number {
     const { data } = this.view;
-    if (!data) return this.view.agents.length > 1 ? this.view.agents.length + 1 : 2;
+    if (!data) return this.listed ? this.view.agents.length + (this.view.logs ? 1 : 0) + 1 : 2;
     const top = this.top;
     if (top?.kind === 'allRuns') return data.runs.length;
     if (top?.kind === 'run' || !top && (this.state.area === 'runs' || this.state.step === 'result')) {
@@ -318,9 +326,11 @@ export class LabWorkspace implements Component {
     if (key('down') || input === 'j') { this.setCursor(this.cursor() + 1, count); this.redraw(); return; }
     if (key('up') || input === 'k') { this.setCursor(this.cursor() - 1, count); this.redraw(); return; }
     if (!key('enter')) return;
-    if (this.view.agents.length > 1) {
-      const chosen = this.view.agents[this.cursor()];
-      return this.finish(chosen ? { type: 'space', key: chosen.space.key } : { type: 'new' });
+    if (this.listed) {
+      const cursor = this.cursor();
+      const chosen = this.view.agents[cursor];
+      if (chosen) return this.finish({ type: 'space', key: chosen.space.key });
+      return this.finish(this.view.logs && cursor === this.view.agents.length ? { type: 'analyses' } : { type: 'new' });
     }
     return this.finish({ type: this.cursor() === 0 ? 'new' : 'demo' });
   }
@@ -410,6 +420,8 @@ export class LabWorkspace implements Component {
     }
     if (top?.kind === 'problem') {
       const problem = data.problems.find(item => item.key === top.key);
+      // A problem found in the logs opens in its analysis, at the problem: its examples and their conversations.
+      if (digit === 0 && problem?.origin) return this.finish({ type: 'analyses', analysisId: problem.origin.analysisId, problemKey: problem.key.slice('logs:'.length) });
       if (digit === 0 && problem?.trialId) this.open({ kind: 'judged', runId: problem.runId, trialId: problem.trialId });
       return;
     }
@@ -436,6 +448,7 @@ export class LabWorkspace implements Component {
     }
     if (this.state.area === 'problems') {
       const problem = data.problems[cursor];
+      if (digit === 0 && problem?.origin) return this.finish({ type: 'analyses', analysisId: problem.origin.analysisId, problemKey: problem.key.slice('logs:'.length) });
       if (digit === 0 && problem?.trialId) this.open({ kind: 'judged', runId: problem.runId, trialId: problem.trialId });
       return;
     }

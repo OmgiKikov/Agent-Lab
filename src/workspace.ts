@@ -10,6 +10,7 @@ import { oneLine } from './text.js';
  * names an agent by its own name or by how it is started; ids and paths inside the project never show.
  *
  *   records ──group by the agent they check──► AgentSpace { draft · runs · active }
+ *   analyses of logs ──a record links them (a check made from one, situations from its logs)──► that agent; else no agent
  *
  * A draft prepared before its agent was connected belongs to the one agent of the folder, when there is one.
  * Pure: no I/O.
@@ -102,4 +103,23 @@ export function agentSpaces(records: readonly Experiment[]): AgentSpace[] {
     groups.delete('unconnected');
   }
   return [...groups].map(([key, items]) => space(key, items)).sort((a, b) => newestFirst(a.records[0]!, b.records[0]!));
+}
+
+/**
+ * Which agent's workspace each analysis of the logs belongs to, by a link the records hold — never by being the newest:
+ * a draft or run of the agent made from the analysis (`fromAnalysis`), or situations of the agent prepared from the very
+ * logs the analysis read (the same import's content hash). An analysis with no such link belongs to no agent: it stays
+ * the analysis of its import, under «Разборы логов». With two agents linked, the newest record decides.
+ */
+export function analysisOwners(spaces: readonly AgentSpace[], analyses: readonly { id: string; logs: { contentHash: string } }[]): Map<string, string> {
+  const owners = new Map<string, string>();
+  for (const analysis of analyses) {
+    const linked = spaces.flatMap(space => space.records.filter(record => record.fromAnalysis?.analysisId === analysis.id
+      || record.originalImport?.contentHash === analysis.logs.contentHash
+      || record.librarySnapshot?.formatVersion === 2 && record.librarySnapshot.imports.some(item => item.contentHash === analysis.logs.contentHash))
+      .map(record => ({ key: space.key, record })));
+    const newest = linked.sort((a, b) => newestFirst(a.record, b.record))[0];
+    if (newest) owners.set(analysis.id, newest.key);
+  }
+  return owners;
 }

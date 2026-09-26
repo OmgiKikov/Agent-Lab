@@ -19,10 +19,11 @@ import { decisions, type DecisionChoice } from '../src/inbox.js';
 import { situationCoverage } from '../src/miner/cards.js';
 import { logProblems, recurringProblems } from '../src/problems.js';
 import { analysisView } from '../src/discover/view.js';
+import type { LogAnalysis } from '../src/discover/schema.js';
 import { accuracyParts, loggedTurns, type Turn } from '../src/result-text.js';
 import { buildResultView } from '../src/result-view.js';
 import { plannedTrials } from '../src/run.js';
-import { agentSpaces, type AgentSpace } from '../src/workspace.js';
+import { agentSpaces, analysisOwners, type AgentSpace } from '../src/workspace.js';
 import { safeLine, safeText } from '../src/text.js';
 import { launchLines, progressText, scenarioPlan } from './conversation.ts';
 import { applyRulebookChange, applySituationCommand, logsOf, settle, writer, type DecisionSurface } from './decisions.ts';
@@ -34,6 +35,7 @@ import type { SessionOperation } from './operations.ts';
 import { newState, showWorkspace, type WorkspaceAction, type WorkspaceChanges, type WorkspaceState, type WorkspaceView } from './workspace.ts';
 import { logKey, type SpaceData, type WorkKind } from './workspace-screens.ts';
 import { preparationDetails } from './preparation-progress.ts';
+import { newAnalysisState, showAnalyses, type AnalysisBoardState, type AnalysisBoardView } from './analysis-board.ts';
 
 /*
  * /agent-lab: the loop that loads the agent's workspace from the store, shows it, takes the owner's action and does
@@ -140,8 +142,11 @@ function workProgress(active: Experiment, kind: WorkKind, now: Date): { text: st
 /** Said on the plan of a draft whose agent is not connected yet: how the run will reach it. */
 const UNCONNECTED_NOTE = 'Как его запускать, Lab найдёт в папке проекта или спросит вас перед запуском.';
 
-/** What the workspace shows about one agent, read from the store now; `cwd` names the agent the way the run dialog will. */
-async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionOperation | undefined, now: Date, cwd?: string): Promise<SpaceData> {
+/**
+ * What the workspace shows about one agent, read from the store now; `cwd` names the agent the way the run dialog will;
+ * `analysis`: the newest finished analysis of the logs linked to this agent (workspace.ts analysisOwners), never merely the folder's newest.
+ */
+async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionOperation | undefined, now: Date, cwd?: string, analysis?: LogAnalysis): Promise<SpaceData> {
   const setRecord = space.active ?? space.draft ?? space.runs[0];
   const active = space.active;
   let set: SpaceData['set'];
@@ -176,8 +181,7 @@ async function spaceData(reader: ExperimentLab, space: AgentSpace, job: SessionO
     : setRecord && !setRecord.trials.length && setRecord.preparationProgress ? setRecord : undefined;
   const preparation = preparing ? await preparationDetails(reader.store, preparing, now.getTime()) : undefined;
   const logged = await loggedConversations(reader, runs.find(run => run.view.calibration?.disagreements.length)?.view);
-  // The newest finished analysis of the logs: its violations are problems of the section too.
-  const analysis = (await reader.listAnalyses().catch(() => [])).find(item => item.status !== 'running');
+  // The newest finished analysis of this agent's logs: its violations are problems of the section too.
   const analysed = analysis && analysisView(analysis, await reader.store.readImport(analysis.logs.importId).catch(() => undefined));
   return {
     space, ...(set ? { set } : {}), runs, now, ...(logged.size ? { logged } : {}), ...(preparation ? { preparation: preparation.preparation } : {}),
@@ -228,16 +232,51 @@ function workspaceChanges(reader: ExperimentLab, job: SessionOperation | undefin
 export async function workspaceView(reader: ExperimentLab, state: WorkspaceState, job: SessionOperation | undefined, cwd?: string): Promise<WorkspaceView> {
   const now = new Date();
   const spaces = agentSpaces(await reader.list());
-  // One agent in the folder opens straight into its workspace.
-  if (!state.space && spaces.length === 1) state.space = spaces[0]!.key;
+  // The folder's analyses of logs: each with the agent a record links it to, or none — then it is the analysis of its import.
+  const analyses = await reader.listAnalyses().catch(() => []);
+  const owners = analysisOwners(spaces, analyses);
+  const unlinked = analyses.filter(analysis => !owners.has(analysis.id)).length;
+  const linkedTo = (space: AgentSpace) => analyses.find(analysis => analysis.status !== 'running' && owners.get(analysis.id) === space.key);
+  // One agent in the folder opens straight into its workspace, unless an analysis of no agent waits beside it.
+  if (!state.space && spaces.length === 1 && !unlinked) state.space = spaces[0]!.key;
   const open = spaces.find(space => space.key === state.space);
-  const agents = spaces.length > 1 ? await Promise.all(spaces.map(async space => {
-    const data = space === open ? undefined : await spaceData(reader, space, job, now, cwd);
+  const listed = spaces.length > 1 || analyses.length > 0;
+  const agents = listed ? await Promise.all(spaces.map(async space => {
+    const data = space === open ? undefined : await spaceData(reader, space, job, now, cwd, linkedTo(space));
     return { space, result: space.runs[0] ? accuracyParts(buildResultView(space.runs[0])).value : null, decisions: data?.decisions.length ?? 0 };
   })) : spaces.map(space => ({ space, result: null, decisions: 0 }));
-  const data = open ? await spaceData(reader, open, job, now, cwd) : undefined;
+  const data = open ? await spaceData(reader, open, job, now, cwd, linkedTo(open)) : undefined;
   if (data) for (const agent of agents) if (agent.space === open) agent.decisions = data.decisions.length;
-  return { agents, ...(data ? { data } : {}) };
+  return { agents, ...(data ? { data } : {}), ...(analyses.length ? { logs: { count: analyses.length, unlinked } } : {}) };
+}
+
+/** Every analysis of the folder, newest first, with its view and its import: what «Разборы логов» shows. */
+export async function analysesView(reader: ExperimentLab): Promise<AnalysisBoardView> {
+  const analyses = await reader.listAnalyses().catch(() => []);
+  return { entries: await Promise.all(analyses.map(async analysis => {
+    const batch = await reader.store.readImport(analysis.logs.importId).catch(() => undefined);
+    return { analysis, view: analysisView(analysis, batch), ...(batch ? { batch } : {}) };
+  })) };
+}
+
+/**
+ * «Разборы логов» until the owner goes back: their key on an example is their word on the judge's finding — a dispute with
+ * their reason, asked natively — recorded through the same operation the chat and the command line use. 'close' when the
+ * owner closed the whole board.
+ */
+async function analysesLoop(ctx: ExtensionCommandContext, reading: () => ExperimentLab, writing: ReturnType<typeof writer>, state: AnalysisBoardState): Promise<'back' | 'close'> {
+  while (true) {
+    const action = await showAnalyses(ctx, await analysesView(reading()), state);
+    state.notice = undefined;
+    if (action.type !== 'review') return action.type;
+    try {
+      const note = action.verdict === 'disputed' ? (await ctx.ui.editor('Почему это не нарушение? Коротко, своими словами.', ''))?.trim() : '';
+      if (action.verdict === 'disputed' && !note) { state.notice = { text: 'Отметка не записана: оспорить можно только с причиной.', tone: 'warning' }; continue; }
+      await writing(lab => lab.reviewFinding(action.analysisId, { key: action.key, verdict: action.verdict, note: note ?? '', via: 'pi-confirm' }));
+      state.notice = { text: action.verdict === 'confirmed' ? 'Записано: вы подтвердили нарушение.' : action.verdict === 'disputed' ? 'Записано: вы оспорили вывод судьи — это нарушение больше не считается.'
+        : 'Записано: вы не уверены — остаётся вывод судьи.', tone: 'success' };
+    } catch (error) { state.notice = { text: safeText(inputError(error)), tone: 'error' }; }
+  }
 }
 
 /** Opens a saved report in the system's browser. */
@@ -303,6 +342,11 @@ export function registerBoardCommand(pi: ExtensionAPI, host: LabHost, options: B
             continue;
           }
           if (action.type === 'space') { Object.assign(state, newState(action.key)); continue; }
+          if (action.type === 'analyses') {
+            const opened = action.analysisId ? newAnalysisState({ id: action.analysisId, ...(action.problemKey ? { problemKey: action.problemKey } : {}) }) : newAnalysisState();
+            if (await analysesLoop(ctx, reading, writing, opened) === 'close') break;
+            continue;
+          }
           // The workspace refreshed itself while it was open: the action is done on the records as they are now.
           const data = (await workspaceView(reading(), state, operations.current(directory), ctx.cwd)).data;
           if (!data) continue;
