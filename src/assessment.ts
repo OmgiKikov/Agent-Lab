@@ -175,6 +175,16 @@ export function ragEvidenceComplete(trial: Pick<Trial, 'events'>, scope: 'retrie
 }
 /** The text of an event a quote is taken from: its content, or the decoded text of a retrieved chunk, whose line breaks the JSON envelope escapes. */
 function quotedText(event: TraceEvent, quote: string): string | undefined {
+  // Tool results are serialized as JSON for the judge. A quote that starts just after an escaped newline then looks
+  // like part of the preceding "n" to Intl.Segmenter. Validate its word boundaries in the original string value.
+  const source = (value: unknown): string | undefined => {
+    if (typeof value === 'string') return value.includes(quote) ? value : undefined;
+    if (Array.isArray(value)) return value.map(source).find(found => found !== undefined);
+    if (value && typeof value === 'object') return Object.values(value).map(source).find(found => found !== undefined);
+    return undefined;
+  };
+  const resultText = source(event.result);
+  if (resultText !== undefined) return resultText;
   const content = assessmentEventContent(event);
   if (content.includes(quote)) return content;
   if (event.type !== 'retrieval') return undefined;
