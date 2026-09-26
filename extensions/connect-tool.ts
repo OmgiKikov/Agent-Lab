@@ -169,7 +169,9 @@ async function connect(host: ConnectHost, callId: string, ctx: ExtensionContext,
   if (missing.length) return refused(`Перед проверкой задайте в окружении ${missing.map(variable => variableUse(made, variable)).join(', ')} и перезапустите Pi, затем пришлите curl ещё раз. Ничего не отправлено и не сохранено.`);
 
   // 2. The owner's consent to the test messages, then where the agent's text is.
-  if (await choose(ctx, 'Отправить агенту 2 тестовых сообщения?', [`Адрес: ${shownAddress(target)}`, `Lab напишет «${TOOL_PROBE_OPENING}» и ещё одно сообщение в том же разговоре и прочтёт ответы агента.`,
+  if (await choose(ctx, 'Отправить агенту 2 тестовых сообщения?', [`Адрес: ${shownAddress(target)}`,
+    'Агент должен уже работать по этому адресу: Lab его не запускает. Если он ещё не запущен, запустите его и тогда отправляйте.',
+    `Lab напишет «${TOOL_PROBE_OPENING}» и ещё одно сообщение в том же разговоре и прочтёт ответы агента.`,
     ...(reader ? [`Если в ответе несколько текстовых полей, какое из них ответ клиенту, предложит модель Lab: она прочтёт ответ агента на первое сообщение — до ${READING_ATTEMPTS} вызовов модели.`] : [])],
   ['Отправить', NOT_NOW]) !== 'Отправить')
     return declined('Тестовые сообщения не отправляю: вы отказались. Ничего не сохранено.');

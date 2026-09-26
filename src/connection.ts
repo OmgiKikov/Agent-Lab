@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { addUsage, checkSchema, emptyUsage, experimentSchema, fingerprint, isRunnable, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type RunnableTarget, type Scenario, type Target, type ToolChannel } from './contracts.js';
+import { addUsage, checkSchema, describeCheck, emptyUsage, experimentSchema, fingerprint, isRunnable, runnableTarget, runnableTargetSchema, settingsSchema, targetSchema, worldSchema, type Experiment, type RunnableTarget, type Scenario, type Target, type ToolChannel, type Trial } from './contracts.js';
+import type { Exam } from './target-schema.js';
 import type { Runtime } from './runtime.js';
 import { evaluateTrial } from './evaluation.js';
 import { hasCompleteJudgment, observableSources, scenarioSources, sealJudgeReceipt } from './judge.js';
@@ -12,6 +13,7 @@ import { agentSession, preflightTarget, templateRequest, type TemplateTarget } f
 import { atPointer, bubblePointer, pointerOf, pointerTokens, replyAt, replyStructure, scalarFields, stringFields, type Json, type RequestTemplate } from './http-template.js';
 import { writeFileAtomic } from './fs-atomic.js';
 import { SUITE_FORMAT } from './suite.js';
+import { oneLine } from './text.js';
 
 const step = z.strictObject({ message: z.string().trim().min(1).max(3000), reply: z.string().min(1).max(8000) });
 const probeSchema = z.strictObject({
@@ -118,8 +120,8 @@ export async function doctor(connection: Connection, signal = new AbortControlle
         ({ id: `reset-${recordId}-${i}`, kind: 'state_equals' as const, description: 'Новая сессия восстановила исходное состояние', recordId, field, value }))) : probe.checks)],
   });
   try {
-    const trials = [];
-    for (const reset of [false, true]) trials.push(await evaluateTrial({ runtime, revision, scenario: makeCard(reset), sources: [], requirements: [], repeat: 0,
+    const trials = [], cards = [makeCard(false), makeCard(true)];
+    for (const card of cards) trials.push(await evaluateTrial({ runtime, revision, scenario: card, sources: [], requirements: [], repeat: 0,
       manifestHash: fingerprint(probe), settings, userMode: 'scripted', target: connection.target,
       ctx: { signal: combined, timeoutMs: 60000, beforeCall() { combined.throwIfAborted(); if (++usage.calls > 3) throw new Error('Probe call limit exceeded'); },
         addUsage(u) { addUsage(usage, u); } } }));
@@ -128,11 +130,46 @@ export async function doctor(connection: Connection, signal = new AbortControlle
       && trials.every(t => t.observation?.resetConfirmed === true && t.observation.tools === 'complete' && !!t.observation.version)
       && trials[0]!.observation?.version === trials[1]!.observation?.version;
     return { format: 'agent-lab-doctor-1', passed, createdAt: new Date().toISOString(), target: connection.target, trials,
+      conversations: trials.map((trial, index) => ({ title: cards[index]!.title, passed: trial.outcome === 'pass', problems: probeProblems(cards[index]!, trial) })),
       observability: observabilityLevel(trials),
       message: passed ? 'История и сброс прошли заданную проверку; адаптер сообщил версию и полную трассу в заявленной области инструментов.'
         : 'Проверьте ответы, итоговое состояние, resetConfirmed, eventsComplete и стабильную version.',
       limitation: 'Это проверка заданного поведения. Состояние и полноту событий сообщает адаптер; его реализацию нужно сверять с тестовой системой.' };
   } finally { clearTimeout(timer); }
+}
+
+/** What went wrong in one conversation of the probe, in the owner's words: why it was not measured, or each check it failed and what was there instead. */
+function probeProblems(card: Scenario, trial: Trial): string[] {
+  if (trial.outcome === 'invalid' || trial.outcome === 'cancelled') return [`не измерен: ${oneLine(trial.reason)}`];
+  const reply = trial.events.findLast(event => event.type === 'assistant')?.text;
+  return trial.checks.filter(check => !check.passed).map(check => {
+    const definition = card.checks.find(item => item.id === check.id);
+    if (!definition) return `не выполнено: ${check.description}`;
+    const seen = definition.kind === 'state_equals' ? `, а было ${JSON.stringify(trial.finalState.records[definition.recordId]?.[definition.field]) ?? 'пусто'}`
+      : definition.kind === 'answer_equals' ? `, а агент ответил ${JSON.stringify(reply ?? '')}` : '';
+    return `не выполнено: ${describeCheck(definition)}${seen}`;
+  });
+}
+
+/** Where the adapter must look, by what the probe holds it to: every condition of `doctor`'s verdict, passed or not. */
+export function doctorLines(connection: Connection, result: Awaited<ReturnType<typeof doctor>>): string[] {
+  const probe = probeSchema.parse(connection.probe);
+  const mark = (ok: boolean) => ok ? '✓' : '✗';
+  const observed = result.trials.map(trial => trial.observation);
+  const versions = [...new Set(observed.map(item => item?.version))];
+  const first = result.trials[0]?.events.find(event => event.type === 'assistant')?.text;
+  const seen = result.observability;
+  return [
+    'Пробные разговоры по заданной проверке — без моделей:',
+    ...result.conversations.flatMap(item => [`  ${mark(item.passed)} ${item.title}`, ...item.problems.map(problem => `      ${problem}`)]),
+    `  ${mark(first === probe.write.reply)} Первый ответ ${first === probe.write.reply ? 'как задано' : `${JSON.stringify(first ?? '')}, а задано ${JSON.stringify(probe.write.reply)}`}`,
+    `  ${mark(observed.every(item => item?.resetConfirmed === true))} Адаптер подтвердил, что применил исходное состояние (resetConfirmed), в обоих разговорах`,
+    `  ${mark(observed.every(item => item?.tools === 'complete'))} Журнал инструментов полный (eventsComplete) в обоих разговорах`,
+    `  ${mark(versions.length === 1 && !!versions[0])} Версия агента (version): ${versions.length === 1 ? versions[0] ? `${versions[0]}, одна в обоих разговорах` : 'не названа' : `разная — ${versions.map(version => version ?? 'не названа').join(' и ')}`}`,
+    `Что Lab видит через это подключение: ответы ${mark(seen.reply)} · инструменты ${mark(seen.tools)} · база знаний ${mark(seen.retrievals)} · состояние ${mark(seen.state)}`,
+    result.passed ? 'Проба пройдена.' : 'Проба не пройдена: исправьте в адаптере отмеченное ✗.',
+    `${result.limitation}`,
+  ];
 }
 
 /** The customer's message of the tool probe when the preparation has no logged one: the agent answers it as it would anyone. */
@@ -246,6 +283,33 @@ function replaced(document: Json, pointer: string, value: Json): Json {
   if (Array.isArray(document)) return document.map((item, i) => String(i) === head ? replaced(item, tail, value) : item);
   if (document && typeof document === 'object') return { ...document, [head]: replaced(document[head] ?? null, tail, value) };
   return document;
+}
+
+/** What makes two targets one connection: how Lab reaches the agent, paths as a saved file keeps them — neither its exam nor the stand's test customer. */
+function connectionKey(target: RunnableTarget, base: string): string {
+  const { exam: _exam, customerProfile: _profile, ...reach } = runnableTarget(resolveTarget(portableTarget(target, base), base));
+  return fingerprint(reach);
+}
+/** Whether two targets reach the same agent the same way, whatever exam each carries: an exam is written for a connection, not for a draft. */
+export const sameConnection = (a: RunnableTarget, b: RunnableTarget, base: string): boolean => connectionKey(a, base) === connectionKey(b, base);
+
+/** The project's connection file: its connection, or null when there is none. One Lab cannot read is an error: Lab never overwrites it. */
+export async function projectConnection(file: string): Promise<Connection | null> {
+  try { return await readConnection(file); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Error(`${basename(file)} в папке проекта не читается как подключение Agent Lab: исправьте или уберите его — Lab его не менял.`);
+  }
+}
+
+/**
+ * Writes the exam the owner agreed to into the project's connection file: the connection there keeps everything else
+ * when it reaches this same agent; otherwise `target` with the exam takes its place, as the owner's dialog said. 0600, atomic.
+ */
+export async function saveExam(file: string, target: RunnableTarget, exam: Exam): Promise<void> {
+  const current = await projectConnection(file);
+  const kept = current && sameConnection(current.target, target, dirname(resolve(file))) ? current : undefined;
+  await saveConnection(file, { ...kept ?? { format: CONNECTION_FORMAT }, target: { ...kept?.target ?? target, exam } }, current !== null);
 }
 
 /** Saves a connection file the owner named; `replace` only for an explicit change of that same file. */

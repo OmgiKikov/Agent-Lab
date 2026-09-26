@@ -13,11 +13,12 @@ import { suiteHoldsLogs, suiteSavedText } from './suite.js';
 import { demoInput } from './demo.js';
 import { createInputSchema, isRunnable, materialSources, runnableTarget, SCENARIO_LIMIT, settingsSchema, type CreateInput, type Experiment, type Settings } from './contracts.js';
 import { compareRuns } from './comparison.js';
-import { doctor, listSuites, readConnection, rememberedConnection, rememberConnection, type Connection } from './connection.js';
+import { doctor, doctorLines, listSuites, readConnection, rememberedConnection, rememberConnection, type Connection } from './connection.js';
 import { examConnection, examLines } from './exam.js';
 import { planLines, variationLine, variationsWithout } from './card/plan.js';
 import { gapsLine } from './miner/cards.js';
-import { detectionLines, detectProject, promptLine } from './detect.js';
+import { detectionLines, detectProject, promptLine, targetLabel } from './detect.js';
+import { Stopped } from './errors.js';
 import { readDialogueImport, importDialogues } from './imports.js';
 import { expandMaterials, promptMaterials } from './materials.js';
 import type { PromptCandidate } from './prompt-candidates.js';
@@ -371,35 +372,77 @@ async function logs({ values, directory }: CommandInput): Promise<void> {
   await writeStdout(`${safeLine(change)} Записано: следующая сверка с продом прочтёт её.\n`);
 }
 
+/**
+ * Runs a check of the agent that Ctrl+C may stop: the signal aborts every session the check opened, and an aborted
+ * session ends its agent's process group, so nothing the check started outlives it. Exit code 130, as a shell's.
+ */
+async function stoppable(work: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  // TODO(merge): also call the process-group registry's close-all of targets.ts (dialogue package) here once it lands.
+  const stop = new AbortController();
+  const interrupt = () => stop.abort(new Stopped('cancelled'));
+  process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);
+  try { await work(stop.signal); }
+  catch (error) { if (!stop.signal.aborted) throw error; }
+  finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); }
+  if (!stop.signal.aborted) return;
+  process.stderr.write('Проверка остановлена: процессы агента, которые она запустила, завершены.\n');
+  process.exitCode = 130;
+}
+
+/**
+ * `doctor`: the connection checked in the owner's words — the agent in its own format (the reply's structure, two turns
+ * of one conversation), Lab's probe (write, read, reset) and the connection exam —, what passed, what did not and what
+ * to fix. --json prints the same findings as one JSON document for a script; --output keeps the probe's.
+ */
 async function checkConnection({ values, directory }: CommandInput): Promise<void> {
   const connection = values.connection ? await readConnection(values.connection) : await rememberedConnection(directory);
   const target = connection?.target;
   const exam = target && isRunnable(target) ? target.exam : undefined;
+  const json: Record<string, unknown> = {};
+  const say = (lines: string[]) => { if (!values.json) process.stdout.write(`${lines.map(line => safeLine(line)).join('\n')}\n`); };
   if (connection && target?.kind === 'http' && target.request) {
-    await doctorTemplate({ connection, target: { ...target, request: target.request }, directory, yes: values.yes, file: values.connection && resolve(values.connection), reply: values.reply });
-    if (exam && values.yes && !process.exitCode) await examCommand(connection, directory);
+    await stoppable(async signal => {
+      const check = await doctorTemplate({ connection, target: { ...target, request: target.request! }, directory, yes: values.yes, file: values.connection && resolve(values.connection), reply: values.reply, signal, json: !!values.json });
+      if (check) json.template = check;
+      if (exam && values.yes && !process.exitCode && !signal.aborted) json.exam = await examCommand(connection, directory, signal, say);
+    });
+    if (values.json && process.exitCode !== 130) await writeStdout(`${JSON.stringify(json, null, 2)}\n`);
     return;
   }
   if (!connection?.probe && !exam) throw new Error('Укажите --connection с разделом exam (многоходовые пути экзамена) или с probe.write/read/reset и initialState.');
+  const agent = isRunnable(connection!.target) ? targetLabel(connection!.target, dirname(resolve(values.connection ?? directory))) : '';
   if (!values.yes) {
-    if (exam) { process.stdout.write(`Экзамен подключения: ${countText(exam.length, ['путь', 'пути', 'путей'])}, ${countText(exam.reduce((n, path) => n + path.steps.length, 0), ['сообщение', 'сообщения', 'сообщений'])} агенту, без моделей.\n`); throw new Error('Для пробных разговоров с агентом укажите --yes.'); }
-    process.stdout.write(JSON.stringify({ target: connection!.target, probe: connection!.probe, requests: 3 }, null, 2) + '\n'); throw new Error('Для трёх пробных запросов укажите --yes.');
+    say([`Проверка подключения: ${agent}`, ...connection!.probe ? ['Проба — три запроса агенту: запись, чтение и сброс состояния, без моделей.'] : [],
+      ...exam ? [`Экзамен подключения: ${countText(exam.length, ['путь', 'пути', 'путей'])}, ${countText(exam.reduce((n, path) => n + path.steps.length, 0), ['сообщение', 'сообщения', 'сообщений'])} агенту, без моделей.`] : []]);
+    throw new Error('Чтобы Lab написал агенту, укажите --yes.');
   }
-  if (!connection!.probe) { await examCommand(connection!, directory); return; }
-  const result = await doctor(connection!);
-  if (result.passed && !exam) await rememberConnection(directory, connection!);
-  if (values.output) await writeFile(values.output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  process.stdout.write(JSON.stringify(result, null, 2) + '\n'); process.exitCode = result.passed ? 0 : 2;
-  if (exam && result.passed) await examCommand(connection!, directory);
+  say([`Проверка подключения: ${agent}`, '']);
+  await stoppable(async signal => {
+    if (connection!.probe) {
+      const result = await doctor(connection!, signal);
+      if (signal.aborted) return;
+      if (result.passed && !exam) await rememberConnection(directory, connection!);
+      if (values.output) await writeFile(values.output, JSON.stringify(result, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+      Object.assign(json, result);
+      say(doctorLines(connection!, result));
+      process.exitCode = result.passed ? 0 : 2;
+      if (!result.passed || !exam) return;
+      say(['']);
+    }
+    json.exam = await examCommand(connection!, directory, signal, say);
+  });
+  if (values.json && process.exitCode !== 130) await writeStdout(`${JSON.stringify(json, null, 2)}\n`);
 }
 
 /** The connection exam from the command line: its lines, and the connection remembered only when every path passed. */
-async function examCommand(connection: Connection, directory: string): Promise<void> {
-  const result = await examConnection(runnableTarget(connection.target), new AbortController().signal,
+async function examCommand(connection: Connection, directory: string, signal: AbortSignal, say: (lines: string[]) => void): Promise<unknown> {
+  const result = await examConnection(runnableTarget(connection.target), signal,
     (name, index, of) => process.stderr.write(`Путь ${index + 1} из ${of}: ${safeLine(name)}\n`));
-  for (const line of examLines(result)) process.stdout.write(`${safeLine(line)}\n`);
+  if (signal.aborted) return undefined;
+  say(examLines(result));
   if (result.status === 'passed') await rememberConnection(directory, connection);
   process.exitCode = result.status === 'passed' ? 0 : 2;
+  return result;
 }
 
 async function summary({ values, directory }: CommandInput): Promise<void> {
@@ -904,9 +947,9 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     run: async ({ values }) => { process.stdout.write(JSON.stringify(await listSuites(values.directory ?? '.evals'), null, 2) + '\n'); } },
   connect: { help: [['agent-lab connect --curl запрос.txt|- [--message /путь] [--conversation /путь] [--output connection.json] [--yes]', 'Подключение агента в его собственном формате из команды curl']],
     flags: ['curl', 'message', 'conversation', 'output', 'yes'], run: ({ values }) => connectFromCurl(values) },
-  doctor: { help: [['agent-lab doctor --connection подключение.json --yes', 'Три пробных запроса к агенту: запись, чтение, сброс'],
+  doctor: { help: [['agent-lab doctor --connection подключение.json --yes [--json]', 'Проверка подключения без моделей: пробные запросы (запись, чтение, сброс) и экзамен подключения; что прошло, что нет и что исправить'],
     ['agent-lab doctor --connection подключение.json [--reply /путь] --yes', 'Агент в своём формате: строение ответа, затем два хода одного разговора']],
-  flags: ['connection', 'yes', 'reply', 'output'], run: checkConnection },
+  flags: ['connection', 'yes', 'reply', 'output', 'json'], run: checkConnection },
   status: { help: [['agent-lab status', 'Модели и ключи, которые видит Pi']], flags: [], run: async () => { process.stdout.write(`${JSON.stringify(await getPiStatus(), null, 2)}\n`); } },
 };
 

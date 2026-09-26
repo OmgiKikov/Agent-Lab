@@ -7,7 +7,8 @@ import { judgedScenario } from '../src/card/legacy-v1.js';
 import { AGREED_RATIONALE_PREFIX } from '../src/judge.js';
 import { buildResultView, type ResultView } from '../src/result-view.js';
 import { accuracyParts, comparisonRows, noRuleText, saidText, situationLabel, situationOutcomeText, trialTurns, TURN_HANG, turnText, whenText, type ResultRow } from '../src/result-text.js';
-import { shownAddress } from '../src/connect.js';
+import { CONNECTION_FILE, shownAddress } from '../src/connect.js';
+import { examShowsMemory } from '../src/exam.js';
 import { commandText, folderText, releaseText, targetLabel } from '../src/detect.js';
 import { agentLine, agentOwnName, agentVersion } from '../src/workspace.js';
 import { countText } from '../src/plural.js';
@@ -119,15 +120,33 @@ export function agentLines(record: Experiment, cwd?: string, proposed?: 'model')
   ];
 }
 
+const PATHS: [string, string, string] = ['путь', 'пути', 'путей'];
+
+/**
+ * Whether the run's number will be a percent (exam.ts): the connection's exam — `connection` when the project's
+ * connection file brought it —, else plainly that without one, or with one that never checks the conversation's
+ * memory, the result shows in how many situations the agent coped but no percent. `offered`: the dialog offers to
+ * compose it first.
+ */
+function examLine(target: RunnableTarget, from: 'connection' | undefined, offered: boolean): string {
+  const offer = offered ? ' Его можно сначала составить по коду агента.' : '';
+  if (!target.exam) return `Без экзамена подключения процента не будет — Lab покажет, в скольких ситуациях агент справился, но не долю: не проверено, что через это подключение агент помнит разговор.${offer}`;
+  if (!examShowsMemory(target.exam)) return `Экзамен подключения не проверяет память разговора — процента не будет: нужен путь из двух шагов и больше, где поздний шаг проверяет, что в ответе есть сказанное раньше.${offer}`;
+  return `Экзамен подключения: ${countText(target.exam.length, PATHS)}${from === 'connection' ? ` из ${CONNECTION_FILE}` : ''} — Lab пройдёт его перед прогоном, без модели; не пройден — прогон не запустится.`;
+}
+
 /**
  * The run dialog (docs/design/ui-spec.md §4.6): what runs, the agent — what exactly Lab starts, and where Lab found it —,
- * the judge's ceiling and next to it what the comparison with production costs, the time limit, what stays out.
- * `proposed`: the connection is the chat's model's, not one the owner has.
+ * whether the connection's exam lets the result show a percent, the judge's ceiling and next to it what the comparison
+ * with production costs, the time limit, what stays out. `proposed`: the connection is the chat's model's, not one the
+ * owner has; `exam`: where the connection's exam came from; `offerExam`: the dialog offers to compose one first.
  */
-export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string, extra: { calibration?: string | null; note?: string; proposed?: 'model' } = {}): string[] {
+export function launchLines(record: Experiment, plan: LaunchPlan, cwd?: string,
+  extra: { calibration?: string | null; note?: string; proposed?: 'model'; exam?: 'connection'; offerExam?: boolean } = {}): string[] {
   return [
     `${countText(plan.situations, SITUATIONS)} · ${countText(plan.conversations, CONVERSATIONS)}: клиента играет Lab, ответы агента оценивает судья.`,
     ...agentLines(record, cwd, extra.proposed),
+    ...(isRunnable(record.target) ? [examLine(record.target, extra.exam, !!extra.offerExam)] : []),
     ...(extra.note ? [extra.note] : []),
     ...(record.mode === 'demo' ? ['Учебный пример: без модели и оплаты.'] : [`Судья: по 2 голоса на каждую проверку ответа и клиента — до ${plan.judgePerAttempt} вызовов на попытку, всего до ${plan.judgeCalls}.`,
       ...(extra.calibration ? [`${extra.calibration}.`] : []),
