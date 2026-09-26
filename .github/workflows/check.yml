@@ -36,6 +36,10 @@ jobs:
       - name: Semantic proofs
         if: ${{ !cancelled() }}
         run: npx tsx scripts/semantic-proofs.ts
+      # One business case end to end on the teaching agent through the Pi tools and `agent-lab evaluate` exit codes.
+      - name: Business case
+        if: ${{ !cancelled() }}
+        run: npx tsx scripts/business-case.ts
       - name: Package contents
         if: ${{ !cancelled() }}
         run: npm pack --dry-run
