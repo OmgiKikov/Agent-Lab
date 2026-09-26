@@ -65,6 +65,7 @@ export const prepareParameters = Type.Object({
     }, { ...closed, description: 'Only when the owner named the column whose values choose the conversations to evaluate. Without values the host asks the owner which to keep.' })),
     request: Type.Optional(Type.String({ minLength: 1, maxLength: 500, description: 'The owner\'s own words about which conversations to evaluate, when they did not name the column (e.g. «только те, где отвечал один агент эквайринга»): Lab\'s model finds the column and its values in the table.' })),
     collapseRepeats: Type.Optional(Type.Boolean({ description: 'Only after the owner said what to do with exchanges the export repeated: true — read each once, false — keep them as written.' })),
+    interfaceMarkup: Type.Optional(Type.Boolean({ description: 'Only after the owner said what the fenced blocks (```…```) in the agent\'s messages are: true — interface elements (buttons, transitions) the customer does not read as text, false — text the customer reads.' })),
     encoding: Type.Optional(Type.Union([Type.Literal('utf-8'), Type.Literal('utf-16le'), Type.Literal('windows-1251'), Type.Literal('windows-1252')],
       { description: 'Only for a CSV file, when the owner said its text reads garbled or named its encoding: windows-1251 (Russian Excel), windows-1252 (Western Excel), utf-8, utf-16le.' })),
     answer: Type.Optional(Type.String({ maxLength: 200, description: 'One case per row: the column of the agent\'s logged reply; text is then the customer\'s question.' })),
@@ -77,7 +78,7 @@ export const prepareParameters = Type.Object({
   demo: Type.Optional(Type.Literal(true, { description: 'The built-in teaching example: no model, no keys, one minute.' })),
 }, closed);
 type PrepareParams = { task?: string; logs?: string; withoutLogs?: true; situations?: number; materials?: string[]; prompts?: string[]; rules?: string; fromAnalysis?: { analysis: string; problem: number };
-  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean;
+  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean; interfaceMarkup?: boolean;
     encoding?: Encoding; answer?: string; expected?: { column: string; kind: 'answer' | 'article' | 'code' | 'article_or_code' }[] }; suite?: string; demo?: true };
 
 /**

@@ -82,6 +82,13 @@ export const tableMappingSchema = z.strictObject({
    * of a long sheet. A mapping confirmed before the table has none and keeps reading its import the first way.
    */
   maskVersion: z.union([z.literal(2), z.literal(3)]).optional(),
+  /**
+   * The owner's word on a fenced block in an agent's message (```…```, as the export writes it): `fenced` — an element of
+   * the chat's interface (a button, a transition), read as the mark of one and never as the agent's words
+   * (interface-markup.ts); `text` — words the customer reads, read as written. Absent — not asked (the messages hold no
+   * such block, or the reading was confirmed before the question): read as written.
+   */
+  interfaceMarkup: z.enum(['fenced', 'text']).optional(),
 }).superRefine((mapping, ctx) => {
   const layout = mapping.layout;
   const columns = [...mapping.id ? [mapping.id.index] : [], mapping.text.index, ...layout.kind === 'message_per_row' ? [layout.role.index, ...layout.order ? [layout.order.index] : []] : [],
@@ -119,6 +126,8 @@ export const tableChoicesSchema = z.strictObject({
   order: columnChoice.nullable().optional(),
   where: z.strictObject({ column: columnChoice, values: z.array(cellValue).min(1).max(FILTER_VALUES).optional() }).optional(),
   collapseRepeats: z.boolean().optional(),
+  /** «Вставки в ``` — элементы интерфейса?»: true — read as interface elements, false — as the agent's words. */
+  interfaceMarkup: z.boolean().optional(),
   /** The encoding of a CSV file, when the owner named it: its text read otherwise than Lab guessed. */
   encoding: z.enum(ENCODINGS).optional(),
   /** One case per row: the text column is the customer's message; `answer` the agent's logged reply, null for none. */

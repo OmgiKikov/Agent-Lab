@@ -9,7 +9,7 @@ import { importTable, type TablePreview } from './dialogues.js';
 import { overridden, readExactly } from './exact.js';
 import { rowsShown, tableEvidence } from './evidence.js';
 import { readReadingFiles } from './files.js';
-import { tableChoicesSchema, tableReadingSchema, type TableChoices, type TableMapping, type TableReading } from './mapping.js';
+import { tableChoicesSchema, tableMappingSchema, tableReadingSchema, type TableChoices, type TableMapping, type TableReading } from './mapping.js';
 import { proposeTable, type TableProposal } from './proposal.js';
 import {
   canPropose, proposedReadingSchema, READING_CALLS, readingKey, TABLE_READING_VERSION, type ProposedReading, type TableReader, type TableReadingRequest,
@@ -38,6 +38,47 @@ export async function proposeTableImport(path: string, choices: TableChoices = {
 }
 
 function proposeFrom(workbook: Workbook, file: TableFile, chosen: TableChoices, proposed: ProposedReading | undefined): TableProposal {
+  return withMarkup(readingOf(workbook, file, chosen, proposed), chosen);
+}
+
+/**
+ * A ready reading whose agent's messages hold fenced blocks: the owner is asked whether they are interface elements
+ * until they say, and their yes reads them so (interface-markup.ts). Lab never decides it: the same characters may be
+ * words the customer reads.
+ */
+function withMarkup(proposal: TableProposal, chosen: TableChoices): TableProposal {
+  if (proposal.status !== 'ready' || !proposal.preview.markup) return proposal;
+  if (chosen.interfaceMarkup === undefined) {
+    const of = proposal.preview.selected ?? proposal.preview.dialogues;
+    return { ...proposal, status: 'question', question: { kind: 'markup', ...proposal.preview.markup, of }, found: of } as TableProposal;
+  }
+  return { ...proposal, mapping: tableMappingSchema.parse({ ...proposal.mapping, interfaceMarkup: chosen.interfaceMarkup ? 'fenced' : 'text' }) };
+}
+
+/** Whether the owner has not said how to read the fenced blocks of the agent's messages a mapping of `path` finds. */
+function markupUndecided(bytes: Buffer, file: TableFile, mapping: TableMapping): boolean {
+  return mapping.interfaceMarkup === undefined && !!readWithMapping(bytes, file, mapping).preview.markup;
+}
+
+/**
+ * Whether the owner confirmed how to read `path` — the latest reading they confirmed for this very file — with nothing
+ * left to ask: a reading confirmed before the question of interface elements, of a file whose agent's messages hold them,
+ * is asked that question.
+ */
+export async function readingConfirmed(path: string, directory: string): Promise<boolean> {
+  const { file, bytes } = await readTableFile(path);
+  const confirmed = await latestConfirmed(file, directory);
+  return !!confirmed && !markupUndecided(bytes, file, confirmed.reading.mapping);
+}
+
+/** The latest reading the owner confirmed for `file`, with the import it made. */
+async function latestConfirmed(file: TableFile, directory: string) {
+  return (await readReadingFiles(directory))
+    .flatMap(entry => entry.readings.filter(reading => reading.file.sha256 === file.sha256).map(reading => ({ entry, reading })))
+    .sort((a, b) => b.reading.confirmedAt.localeCompare(a.reading.confirmedAt) || a.entry.importId.localeCompare(b.entry.importId))[0];
+}
+
+function readingOf(workbook: Workbook, file: TableFile, chosen: TableChoices, proposed: ProposedReading | undefined): TableProposal {
   const current = proposed?.file.sha256 === file.sha256 ? proposed : undefined;
   if (current?.outcome.kind === 'read') {
     // The model's verdict on copies is checked while the copies are still its decision, not after the owner decided them.
@@ -153,10 +194,12 @@ async function keptImport(store: Pick<ExperimentStore, 'readImport'>, batch: Imp
  */
 export async function readConfirmedTable(path: string, directory: string): Promise<ImportBatch> {
   const { file, bytes } = await readTableFile(path);
-  const confirmed = (await readReadingFiles(directory))
-    .flatMap(entry => entry.readings.filter(reading => reading.file.sha256 === file.sha256).map(reading => ({ entry, reading })))
-    .sort((a, b) => b.reading.confirmedAt.localeCompare(a.reading.confirmedAt) || a.entry.importId.localeCompare(b.entry.importId))[0];
+  const confirmed = await latestConfirmed(file, directory);
   if (!confirmed) throw new Error(`Как читать таблицу «${file.name}», ещё не подтверждено: посмотрите разметку и подтвердите её (agent-lab import --file ${path}).`);
+  if (markupUndecided(bytes, file, confirmed.reading.mapping)) {
+    throw new Error(`В ответах агента в таблице «${file.name}» есть вставки в тройных обратных кавычках, а как их читать, вы не говорили: это элементы интерфейса (кнопки) или текст для клиента? `
+      + `Скажите: agent-lab import --file ${path} --interface-markup — элементы интерфейса, или --markup-as-text — текст.`);
+  }
   const { batch } = readWithMapping(bytes, file, confirmed.reading.mapping);
   if (batch.id !== confirmed.entry.importId || batch.contentHash !== confirmed.entry.contentHash) {
     throw new Error(`Таблица «${file.name}» прочиталась не так, как при подтверждении. Подтвердите разметку заново.`);

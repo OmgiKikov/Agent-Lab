@@ -49,7 +49,12 @@ export type TableQuestion =
    * В N из M разговоров один и тот же обмен повторяется подряд — убрать повторы? `dialogues` of the `of` conversations
    * considered hold a block of messages again right after itself; `messages` are such copies.
    */
-  | { kind: 'repeats'; dialogues: number; of: number; messages: number };
+  | { kind: 'repeats'; dialogues: number; of: number; messages: number }
+  /**
+   * В ответах агента есть вставки в ``` — это элементы интерфейса? `dialogues` of the `of` conversations considered hold
+   * an agent's message with a fenced block; `messages` are such messages. The answer is the owner's: Lab never decides it.
+   */
+  | { kind: 'markup'; dialogues: number; of: number; messages: number };
 
 interface ProposalBase {
   file: TableFile;

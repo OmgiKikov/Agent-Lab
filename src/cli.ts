@@ -961,14 +961,14 @@ async function status({ values, directory }: CommandInput): Promise<void> {
 
 /** The flags of `import`: the owner's answers about the table, as the chat asks them one at a time. */
 const TABLE_FLAGS: readonly Flag[] = ['file', 'input', 'json', 'yes', 'sheet', 'id-column', 'text-column', 'separator', 'no-separator', 'markers', 'role-column', 'roles',
-  'order-column', 'row-order', 'where', 'collapse-repeats', 'keep-repeats', 'encoding', 'answer-column', 'expected-column', 'no-expected'];
+  'order-column', 'row-order', 'where', 'collapse-repeats', 'keep-repeats', 'interface-markup', 'markup-as-text', 'encoding', 'answer-column', 'expected-column', 'no-expected'];
 const BUILD_FLAGS: readonly Flag[] = ['input', 'dialogues-file', 'roles', 'situations', 'connection', 'parallel', 'yes', 'json', 'prompts-from', 'prompt', 'prompts'];
 
 /** Every command in the order `--help` lists them: first the owner's path, then what scripts and CI use. */
 const COMMANDS: Readonly<Record<string, Command>> = {
   detect: { help: [['agent-lab detect [--directory ПАПКА] [--json]', 'Что Lab нашёл в папке проекта: агента, логи, материалы, промпт']], flags: ['directory', 'json'], run: detect },
-  import: { help: [['agent-lab import --file логи.xlsx|.csv [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--answer-column ОТВЕТ] [--expected-column "КОЛОНКА=ответ|статья|код" | --no-expected] [--encoding windows-1251|windows-1252|utf-8] [--yes] [--json]',
-    'Как читать таблицу логов (.xlsx, .csv): --answer-column — ответ агента при одной ситуации в строке; --expected-column — эталон оценщика; --yes — подтвердить предложенное чтение и загрузку']],
+  import: { help: [['agent-lab import --file логи.xlsx|.csv [--input задача.json] [--where "КОЛОНКА=ЗНАЧЕНИЕ"] [--answer-column ОТВЕТ] [--expected-column "КОЛОНКА=ответ|статья|код" | --no-expected] [--encoding windows-1251|windows-1252|utf-8] [--collapse-repeats | --keep-repeats] [--interface-markup | --markup-as-text] [--yes] [--json]',
+    'Как читать таблицу логов (.xlsx, .csv): --answer-column — ответ агента при одной ситуации в строке; --expected-column — эталон оценщика; --interface-markup — вставки ``` в ответах агента это кнопки и переходы интерфейса, --markup-as-text — клиент читает их как текст; --yes — подтвердить предложенное чтение и загрузку']],
   flags: TABLE_FLAGS, run: importTable },
   build: { help: [['agent-lab build --input задача.json [--dialogues-file логи.jsonl|.xlsx] [--roles client=клиент,operator=агент] [--situations N] [--connection подключение.json] [--parallel 4] [--yes] [--json]',
     'Сколько ситуаций Lab подготовит и сколько вызовов модели это может стоить; --roles — кто пишет под ролями логов, которых Lab не знает; --yes готовит их'],

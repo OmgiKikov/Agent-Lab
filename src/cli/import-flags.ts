@@ -71,6 +71,7 @@ export function tableChoicesOf(values: Record<string, string | boolean | string[
   const separator = text('separator')?.replaceAll('\\n', '\n').replaceAll('\\t', '\t');
   if (separator && values['no-separator']) throw new Error('Выберите одно: --separator ЗНАК или --no-separator.');
   if (values['collapse-repeats'] && values['keep-repeats']) throw new Error('Выберите одно: --collapse-repeats или --keep-repeats.');
+  if (values['interface-markup'] && values['markup-as-text']) throw new Error('Выберите одно: --interface-markup или --markup-as-text.');
   return tableChoicesSchema.parse({
     ...text('sheet') ? { sheet: text('sheet') } : {}, ...text('id-column') ? { id: text('id-column') } : {},
     ...text('text-column') ? { text: text('text-column') } : {}, ...separator ? { separator } : values['no-separator'] ? { separator: null } : {},
@@ -80,6 +81,7 @@ export function tableChoicesOf(values: Record<string, string | boolean | string[
     ...text('order-column') ? { order: text('order-column') } : values['row-order'] ? { order: null } : {},
     ...text('where') ? { where: whereChoice(text('where')!) } : {},
     ...values['collapse-repeats'] ? { collapseRepeats: true } : values['keep-repeats'] ? { collapseRepeats: false } : {},
+    ...values['interface-markup'] ? { interfaceMarkup: true } : values['markup-as-text'] ? { interfaceMarkup: false } : {},
     ...text('encoding') ? { encoding: encodingOf(text('encoding')!) } : {},
     ...text('answer-column') ? { perRow: 'question', answer: text('answer-column') } : {},
     ...text('expected-column') ? { perRow: 'question', expected: [expectedChoice(text('expected-column')!)], expectedDone: true } : values['no-expected'] ? { expected: [], expectedDone: true } : {},
@@ -104,5 +106,6 @@ export function importHints(proposal: TableProposal): string[] {
     case 'expected': return ['Ответ: та же команда с --expected-column "КОЛОНКА=ответ|статья|код" или с --no-expected, если такой колонки нет.'];
     case 'where': return [`Ответ: та же команда с --where "${columnLabel(question.column)}=${question.values[0]?.value ?? ''}" — значение как написано в таблице; несколько — через |. Все разговоры — без --where.`];
     case 'repeats': return ['Ответ: та же команда с --collapse-repeats — убрать повторы, или с --keep-repeats — оставить как написано.'];
+    case 'markup': return ['Ответ: та же команда с --interface-markup — это элементы интерфейса, или с --markup-as-text — клиент видит это как текст.'];
   }
 }

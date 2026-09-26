@@ -2,12 +2,10 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ImportBatch } from '../src/scenario-contracts.js';
 import type { ExperimentStore } from '../src/store.js';
 import { questionAnswers, withAnswer } from '../src/spreadsheet/answers.js';
-import { readReadingFiles } from '../src/spreadsheet/files.js';
-import { confirmTableImport, planTableReading, proposeReading, proposeTableImport, readingConsent } from '../src/spreadsheet/import.js';
+import { confirmTableImport, planTableReading, proposeReading, proposeTableImport, readingConfirmed, readingConsent } from '../src/spreadsheet/import.js';
 import { importedLine, proposalLines } from '../src/spreadsheet/lines.js';
 import type { TableChoices } from '../src/spreadsheet/mapping.js';
 import type { ProposedReading, TableReader } from '../src/spreadsheet/reading-task.js';
-import { readTableFile } from '../src/spreadsheet/workbook.js';
 import { fingerprint } from '../src/contracts.js';
 import { safeLine, safeText } from '../src/text.js';
 import { ask } from './lab-ui.ts';
@@ -30,8 +28,7 @@ export interface TableModel { reader: TableReader; timeoutMs: number; signal?: A
 
 /** Whether the owner has already confirmed a reading of this very file (the same bytes) in the data folder `directory`. */
 export async function confirmedBefore(path: string, directory: string): Promise<boolean> {
-  const { file } = await readTableFile(path);
-  return (await readReadingFiles(directory)).some(entry => entry.readings.some(reading => reading.file.sha256 === file.sha256));
+  return readingConfirmed(path, directory);
 }
 
 /** What Lab's model proposed for `path`: stored before, or asked now after the owner's consent; `declined` when the owner said no, undefined when the table gives the model nothing to choose. */

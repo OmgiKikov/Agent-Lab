@@ -59,6 +59,8 @@ export function questionText(question: TableQuestion, found: number): string {
       + ` — выберите одно или несколько${question.more ? `; ниже ${question.values.length} самых частых` : ''}.`;
     case 'repeats': return `В ${question.dialogues} из ${countText(question.of, CONVERSATIONS_OF)} один и тот же обмен повторяется подряд — убрать повторы?`
       + ` Копий — ${countText(question.messages, MESSAGES)}; каждый обмен останется один раз.`;
+    case 'markup': return `В ${question.dialogues} из ${countText(question.of, CONVERSATIONS_OF)} ответы агента содержат вставки в тройных обратных кавычках (\`\`\` … \`\`\`) — ${countText(question.messages, MESSAGES)}.`
+      + ' Это элементы интерфейса — кнопки и переходы, которые клиент не читает как текст? Тогда Lab прочитает каждую вставку как «(элемент интерфейса)», а не как слова агента.';
   }
 }
 
@@ -110,6 +112,10 @@ function outcomeLines({ mapping, preview, basis }: ReadyProposal): string[] {
   if (repeats) lines.push(mapping.collapseRepeats
     ? `  Повторы убраны: ${countText(repeats.messages, MESSAGES)} в ${countText(repeats.dialogues, CONVERSATIONS_IN)} — каждый обмен остался один раз.`
     : `  В ${countText(repeats.dialogues, CONVERSATIONS_IN)} обмен повторяется подряд (копий — ${countText(repeats.messages, MESSAGES)}); Lab читает их как написано.`);
+  const markup = preview.markup;
+  if (markup) lines.push(mapping.interfaceMarkup
+    ? `  Вставки в \`\`\` в ответах агента (${countText(markup.messages, MESSAGES)}) читаются как элементы интерфейса, а не как слова агента.`
+    : `  Вставки в \`\`\` в ответах агента (${countText(markup.messages, MESSAGES)}) читаются как слова агента.`);
   // The model's verdict is said only while the copies are its decision; the owner's own choice needs no reason.
   const verdict = basis?.kind === 'model' ? basis.repeats : undefined;
   if (repeats && verdict && verdict !== 'none') lines.push(verdict === 'export_copies' ? '  Так решила модель Lab: это копии, которые сделала выгрузка.' : '  Так решила модель Lab: клиенты и правда повторялись.');

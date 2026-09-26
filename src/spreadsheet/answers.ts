@@ -34,6 +34,8 @@ export function questionAnswers(question: TableQuestion): TableAnswer[] {
       return question.values.map((item, index) => ({ label: labels[index]!, choices: { where: { column: columnLabel(question.column), values: [item.value] } } }));
     }
     case 'repeats': return [{ label: 'убрать повторы — каждый обмен один раз', choices: { collapseRepeats: true } }, { label: 'оставить как написано', choices: { collapseRepeats: false } }];
+    case 'markup': return [{ label: 'да — это кнопки и переходы интерфейса, клиент не читает их как текст', choices: { interfaceMarkup: true } },
+      { label: 'нет — клиент видит это как текст', choices: { interfaceMarkup: false } }];
   }
 }
 

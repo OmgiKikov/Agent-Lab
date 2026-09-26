@@ -42,7 +42,7 @@ const WORDS: Readonly<Record<OwnerWork, { not: string; cancelled: string; pick: 
 /** What the owner's request names; every field optional, as the tools' parameters are. */
 export interface OwnerRequest {
   task?: string; logs?: string; withoutLogs?: true; materials?: string[]; prompts?: string[]; rules?: string;
-  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean;
+  table?: { sheet?: string; id?: string; text?: string; where?: { column: string; values?: string[] }; request?: string; collapseRepeats?: boolean; interfaceMarkup?: boolean;
     encoding?: Encoding; answer?: string; expected?: { column: string; kind: 'answer' | 'article' | 'code' | 'article_or_code' }[] };
 }
 
@@ -170,9 +170,9 @@ export async function ownerInputs(host: Pick<LabHost, 'open' | 'feedResult'>, ca
   let libraryImport: ImportBatch | undefined;
   if (logs !== 'rules') {
     if (TABLE_EXTENSIONS.has(extname(logs).toLowerCase())) {
-      const { sheet, id, text, where, request: words, collapseRepeats, encoding, answer, expected } = params.table ?? {};
+      const { sheet, id, text, where, request: words, collapseRepeats, interfaceMarkup, encoding, answer, expected } = params.table ?? {};
       // The owner's corrections, said in words; which conversations to keep is asked natively when no value was named.
-      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }),
+      const choices = { ...(sheet ? { sheet } : {}), ...(id ? { id } : {}), ...(text ? { text } : {}), ...(where ? { where } : {}), ...(collapseRepeats === undefined ? {} : { collapseRepeats }), ...(interfaceMarkup === undefined ? {} : { interfaceMarkup }),
         ...(encoding ? { encoding } : {}), ...(answer ? { perRow: 'question' as const, answer } : {}), ...(expected?.length ? { expected } : {}) };
       if (Object.keys(choices).length || words || !await confirmedBefore(logs, directory)) {
         requireInteractive(ctx, 'Как читать таблицу, решаете вы в интерактивном терминале Pi: откройте Agent Lab там (agent-lab chat) и повторите просьбу. Ничего не прочитано и не потрачено.');
