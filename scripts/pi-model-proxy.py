@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -147,7 +148,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            self.json_response(200, {"status": "ok", "model": MODEL})
+            if not PI_BIN.is_file() or not shutil.which("node"):
+                self.json_response(503, {"status": "unavailable", "reason": "Pi or Node.js is missing"})
+            else:
+                self.json_response(200, {"status": "ok", "model": MODEL})
         elif self.path in {"/v1/models", "/models"}:
             self.json_response(200, {
                 "object": "list",

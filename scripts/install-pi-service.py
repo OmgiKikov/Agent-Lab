@@ -3,6 +3,7 @@
 
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,9 @@ PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
 def main() -> None:
+    node = shutil.which("node")
+    if not node:
+        raise SystemExit("Node.js is required to run Pi")
     LOCAL_HOME.mkdir(parents=True, exist_ok=True)
     LOCAL_HOME.chmod(0o700)
     PLIST.parent.mkdir(parents=True, exist_ok=True)
@@ -28,6 +32,11 @@ def main() -> None:
         "StandardErrorPath": str(LOCAL_HOME / "pi-proxy.log"),
         "EnvironmentVariables": {
             "PI_BIN": str(ROOT / "node_modules" / ".bin" / "pi"),
+            "PATH": os.pathsep.join(
+                dict.fromkeys(
+                    [str(Path(node).parent), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+                )
+            ),
             "PI_JUDGE_MODEL": "gpt-5.6-sol",
             "PI_PROXY_PORT": "11435",
             "PYTHONUNBUFFERED": "1",
