@@ -1,6 +1,5 @@
 import { generateText } from "ai";
 import { getVercelAIModel } from "~/server/modelProviders/utils";
-import type { ZodType } from "zod";
 
 /** Uses the project's configured LangWatch model provider, never a private CLI. */
 export async function structured<T>(
@@ -8,7 +7,7 @@ export async function structured<T>(
   modelId: string,
   system: string,
   payload: unknown,
-  schema: ZodType<T>,
+  schema: { parse(value: unknown): T },
 ): Promise<T> {
   const model = await getVercelAIModel({
     projectId,

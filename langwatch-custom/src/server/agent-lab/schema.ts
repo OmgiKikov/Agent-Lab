@@ -1,3 +1,4 @@
+import type { NativeBatch } from "./workflow";
 import { z } from "zod";
 
 export const sourceSchema = z.object({
@@ -55,6 +56,8 @@ export const startSchema = z.object({
   ownerRules: z.string().max(20000).default(""),
   count: z.number().int().min(1).max(48),
   autoEvaluate: z.boolean().default(false),
+  agentId: z.string().min(1).optional(),
+  repeatCount: z.number().int().min(1).max(10).default(1),
   materials: z
     .array(
       z.object({
@@ -92,6 +95,7 @@ export type Card = {
     judgeModel?: string;
     simulatorModel?: string;
     note?: string;
+    batchId?: string;
   }[];
 };
 export type Analysis = {
@@ -104,6 +108,10 @@ export type Analysis = {
   ownerRules: string;
   materialRefs: Start["materials"];
   autoEvaluate?: boolean;
+  agentId?: string;
+  repeatCount?: number;
+  batches?: NativeBatch[];
+  workflowError?: string;
   generated?: boolean;
   textColumn: string;
   idColumn: string;

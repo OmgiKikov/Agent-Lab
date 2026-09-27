@@ -63,6 +63,11 @@ function mutate(
       const auth = await authorize(c, raw.projectId ?? "", permission);
       if (auth.response) return auth.response;
       const body = schema.parse(raw);
+      // Starting an agent from an analysis also creates native scenarios and simulations.
+      if (body.agentId && permission !== "scenarios:create") {
+        const execution = await authorize(c, body.projectId, "scenarios:create");
+        if (execution.response) return execution.response;
+      }
       return c.json((await handler(body, auth.session!.user.id)) as any);
     } catch (error) {
       return c.json(
@@ -267,8 +272,8 @@ secured.access(access).post(
   "/run-all",
   mutate(
     "scenarios:create",
-    ref.extend({ agentId: z.string(), note: z.string().max(200).default("") }),
-    (b) => lab.runAll(b.projectId, b.id, b.agentId, b.note),
+    ref.extend({ agentId: z.string(), note: z.string().max(200).default(""), repeatCount: z.number().int().min(1).max(10).default(1) }),
+    (b) => lab.runAll(b.projectId, b.id, b.agentId, b.note, b.repeatCount),
   ),
 );
 
@@ -276,3 +281,5 @@ secured.access(access).get(
   "/run-summary/:id",
   query((c, p) => lab.runSummary(p, c.req.param("id")!)),
 );
+
+secured.access(access).post("/resume", mutate("evaluations:create", ref, (b) => lab.resume(b.projectId, b.id)));

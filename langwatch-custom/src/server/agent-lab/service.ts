@@ -5,6 +5,9 @@ import { prisma } from "~/server/db";
 import { getProjectModelProviders } from "~/server/api/routers/modelProviders.utils";
 import { resolveModelForFeature } from "~/server/modelProviders/resolveModelForFeature";
 import { structured, PLAN, JUDGE, CUSTOMER_CARD } from "./model";
+import { messages, evidenceSources, criterionText } from "./evidence";
+import { scheduleBatch, batchSummary, KeyedSerial, assertDispatchKnown } from "./workflow";
+export { messages } from "./evidence";
 import {
   planSchema,
   verdictSchema,
@@ -24,7 +27,7 @@ const directory = path.join(
   "agent-lab",
 );
 const running = new Set<string>();
-const locks = new Map<string, Promise<unknown>>();
+const serial = new KeyedSerial();
 export const hash = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const safe = (id: string) => {
@@ -159,51 +162,8 @@ async function records(projectId: string, datasetId: string) {
     entry: r.entry ?? r,
   }));
 }
-const words = (s: string) =>
-  new Set(
-    s
-      .normalize("NFKC")
-      .toLocaleLowerCase("ru")
-      .match(/[\p{L}\p{N}]{4,}/gu) ?? [],
-  );
-function sourceWindow(s: Source, query: string) {
-  if (s.kind === "prompt" || s.content.length <= 6000)
-    return s.content.slice(0, 20000);
-  const wanted = words(query);
-  const parts = s.content.match(/[\s\S]{1,1600}/g) ?? [];
-  return parts
-    .map((p) => ({ p, n: [...words(p)].filter((w) => wanted.has(w)).length }))
-    .sort((a, b) => b.n - a.n)
-    .slice(0, 3)
-    .map((x) => x.p)
-    .join("\n");
-}
-function inputs(job: Analysis, query: string) {
-  const wanted = words(query);
-  const knowledge = job.sources
-    .filter((s) => s.kind === "knowledge")
-    .map((s) => ({
-      s,
-      n: [...words(s.name + " " + s.content.slice(0, 3000))].filter((w) =>
-        wanted.has(w),
-      ).length,
-    }));
-  return [
-    ...job.sources.filter((s) => s.kind === "prompt"),
-    ...knowledge
-      .sort((a, b) => b.n - a.n)
-      .slice(0, 7)
-      .map((x) => x.s),
-  ].map((s) => ({ ...s, content: sourceWindow(s, query) }));
-}
-export function messages(text: string) {
-  const markers = [...text.matchAll(/\b(CLIENT|AGENT)\b/gi)];
-  return markers.map((m, i) => ({
-    role: m[1]!.toUpperCase() === "CLIENT" ? "user" : "assistant",
-    content: text
-      .slice(m.index! + m[0].length, markers[i + 1]?.index ?? text.length)
-      .trim(),
-  }));
+function inputs(job: Analysis, query: string, rules: Rule[] = []) {
+  return evidenceSources(job.sources, query, rules);
 }
 function customer(text: string) {
   return messages(text)
@@ -217,6 +177,11 @@ function grounded(job: Analysis, rule: Rule) {
 }
 
 export async function start(config: Start, userId: string) {
+  if (config.agentId) {
+    const agents = await api(config.projectId, "/api/agents");
+    if (!(agents.data ?? agents).some((a: any) => a.id === config.agentId && a.type === "http")) throw new Error("Подключённый HTTP агент не найден");
+    config.autoEvaluate = true;
+  }
   const rows = await records(config.projectId, config.datasetId);
   if (!rows.length) throw new Error("Набор пуст");
   if (config.textColumn === config.idColumn)
@@ -285,6 +250,9 @@ export async function start(config: Start, userId: string) {
     task: config.task,
     model: config.model,
     autoEvaluate: config.autoEvaluate,
+    agentId: config.agentId,
+    repeatCount: config.repeatCount,
+    batches: [],
     ownerRules: config.ownerRules,
     materialRefs: config.materials,
     textColumn: config.textColumn,
@@ -424,7 +392,7 @@ async function plan(job: Analysis) {
   }
   await save(job);
 }
-export async function approve(
+async function approveUnlocked(
   projectId: string,
   id: string,
   changes: {
@@ -511,7 +479,7 @@ async function report(job: Analysis, finished = false) {
     },
   });
 }
-export async function evaluate(projectId: string, id: string) {
+async function evaluateUnlocked(projectId: string, id: string) {
   const job = await get(projectId, id);
   if (!["ready", "interrupted"].includes(job.status))
     throw new Error("Разбор ещё не готов или уже оценён");
@@ -568,7 +536,7 @@ async function judge(job: Analysis) {
               {
                 conversation: dialogue.text,
                 rules: observed,
-                sources: inputs(job, customer(dialogue.text)),
+                sources: inputs(job, customer(dialogue.text), observed),
               },
               verdictSchema,
             );
@@ -666,8 +634,18 @@ async function judge(job: Analysis) {
     job.message = "Разбор прервался; сделанные оценки сохранены.";
   }
   await save(job);
+  if (job.status === "done" && job.agentId && !job.batches?.length) {
+    try {
+      await runAll(job.projectId, job.id, job.agentId, "Поручение: разбор логов и проверка агента", job.repeatCount ?? 1);
+    } catch (error) {
+      // Re-read: the queue may have accepted part of the work and persisted its receipt.
+      const current = await get(job.projectId, job.id);
+      current.workflowError = "Прогон не завершён: " + (error instanceof Error ? error.message : String(error));
+      await save(current);
+    }
+  }
 }
-export async function review(
+async function reviewUnlocked(
   projectId: string,
   id: string,
   dialogueId: string,
@@ -697,7 +675,7 @@ export async function review(
   await save(job);
   return view(job);
 }
-export async function propose(
+async function proposeUnlocked(
   projectId: string,
   id: string,
   origin: Card["origin"],
@@ -760,17 +738,7 @@ export async function propose(
     },
     cardProposalSchema,
   );
-  const criteria = rules.map(
-    (r) =>
-      r!.text +
-      "\nУсловие: " +
-      r!.condition +
-      "\nДопустимые ответы: " +
-      r!.acceptable +
-      (r!.observation !== "reply"
-        ? "\nНельзя считать действие выполненным только по словам агента."
-        : ""),
-  );
+  const criteria = rules.map(rule => criterionText(rule!, job.sources));
   const card: Card = {
     id: randomUUID(),
     origin,
@@ -805,7 +773,7 @@ export async function propose(
   }
   return card;
 }
-export async function changeCard(
+async function changeCardUnlocked(
   projectId: string,
   id: string,
   cardId: string,
@@ -832,7 +800,7 @@ export async function accept(
   cardId: string,
   userId: string,
 ) {
-  return exclusive(id + cardId, async () => {
+  return exclusive(id, async () => {
     const job = await get(projectId, id);
     const card = job.cards.find((c) => c.id === cardId);
     if (!card) throw new Error("Карточка не найдена");
@@ -870,14 +838,7 @@ export async function accept(
   });
 }
 async function exclusive<T>(id: string, fn: () => Promise<T>): Promise<T> {
-  const previous = locks.get(id) ?? Promise.resolve();
-  const work = previous.catch(() => {}).then(fn);
-  locks.set(id, work);
-  try {
-    return await work;
-  } finally {
-    if (locks.get(id) === work) locks.delete(id);
-  }
+  return serial.run(id, fn);
 }
 export async function run(
   projectId: string,
@@ -886,8 +847,9 @@ export async function run(
   agentId: string,
   note: string,
 ) {
-  return exclusive(id + cardId, async () => {
+  return exclusive(id, async () => {
     const job = await get(projectId, id);
+    assertDispatchKnown(job);
     const card = job.cards.find((c) => c.id === cardId);
     if (!card?.scenarioId) throw new Error("Сначала сохраните сценарий");
     const agents = await api(projectId, "/api/agents");
@@ -977,7 +939,9 @@ export async function runData(projectId: string, id: string, cardId: string) {
   let comparison: any;
   const [before, after] = runs.slice(-2);
   if (before && after) {
+    const sameBatch = !!before.batchId && before.batchId === after.batchId;
     const comparable =
+      !sameBatch &&
       before.definitionHash === after.definitionHash &&
       typeof before.data.scenarioVersion === "number" &&
       before.data.scenarioVersion === after.data.scenarioVersion &&
@@ -1001,7 +965,9 @@ export async function runData(projectId: string, id: string, cardId: string) {
       comparable,
       before: status(before),
       after: status(after),
-      verdict: !comparable
+      verdict: sameBatch
+        ? "Это повторы одной проверки. Их различие показывает нестабильность, а не исправление агента."
+        : !comparable
         ? "Условия изменились или не зафиксированы — вывод об исправлении не доказан"
         : sameReplies && status(before) !== status(after)
           ? "Ответы агента одинаковые. Различие оценок судьи не доказывает изменение агента"
@@ -1063,14 +1029,7 @@ async function assembleCards(job: Analysis) {
     )
       return;
     const situation = loggedSituation(dialogue.text);
-    const criteria = rules.map(
-      (r) =>
-        r.text +
-        "\nУсловие: " +
-        r.condition +
-        "\nДопустимые ответы: " +
-        r.acceptable,
-    );
+    const criteria = rules.map(rule => criterionText(rule, job.sources));
     const card: Card = {
       id: randomUUID(),
       origin,
@@ -1152,63 +1111,66 @@ async function assembleCards(job: Analysis) {
   }
 }
 
-export async function runAll(
-  projectId: string,
-  id: string,
-  agentId: string,
-  note: string,
-) {
-  const job = await get(projectId, id);
-  const cards = job.cards.filter((c) => c.status === "saved" && c.scenarioId);
-  if (!cards.length) throw new Error("Пока нет готовых проверок");
-  const scheduled = [];
-  const active = [];
-  for (const card of cards) {
-    const last = card.runs.at(-1);
-    if (last) {
-      const data = await api(
-        projectId,
-        "/api/simulation-runs/" + last.id,
-      ).catch((error) => {
-        if (String(error).includes("Simulation run not found"))
-          return { status: "QUEUED" };
-        throw error;
-      });
-      if (["QUEUED", "PENDING", "IN_PROGRESS"].includes(data.status)) {
-        active.push(last.id);
-        continue;
-      }
-    }
-    scheduled.push(await run(projectId, id, card.id, agentId, note));
-  }
-  return { scheduled, active };
+export async function runAll(projectId: string, id: string, agentId: string, note: string, repeats = 1) {
+  return exclusive(id, async () => {
+    const job = await get(projectId, id);
+    if (running.has(id) && job.status !== "done") throw new Error("Подготовка ещё идёт");
+    const batch = await scheduleBatch(job, agentId, repeats, note, {
+      save,
+      api: (url, body) => api(projectId, url, body),
+      models: async () => {
+        const [simulator, judge] = await Promise.all([
+          resolveModelForFeature("scenarios.user_simulator", { prisma, projectId }),
+          resolveModelForFeature("scenarios.judge", { prisma, projectId }),
+        ]);
+        return { simulatorModel: simulator.model, judgeModel: judge.model };
+      },
+      configureSuite: (suiteId, models) => prisma.simulationSuite.update({where:{id:suiteId,projectId},data:models}),
+    });
+    return batch;
+  });
 }
 
 export async function runSummary(projectId: string, id: string) {
   const job = await get(projectId, id);
-  return Promise.all(
-    job.cards
-      .filter((c) => c.status === "saved")
-      .map(async (card) => {
-        const run = card.runs.at(-1);
-        if (!run)
-          return { cardId: card.id, name: card.name, status: "NOT_RUN" };
-        const data = await api(
-          projectId,
-          "/api/simulation-runs/" + run.id,
-        ).catch((error) => {
-          if (String(error).includes("Simulation run not found"))
-            return { status: "QUEUED" };
-          throw error;
-        });
-        return {
-          cardId: card.id,
-          name: card.name,
-          runId: run.id,
-          status: data.status,
-          at: run.at,
-          reason: data.results?.reasoning,
-        };
-      }),
-  );
+  const latest = job.batches?.at(-1);
+  const items = latest ? latest.items : job.cards.filter(c => c.status === "saved").flatMap(card => {
+    const run = card.runs.at(-1);
+    return run ? [{id:run.id,cardId:card.id,scenarioId:card.scenarioId!}] : [{id:"",cardId:card.id,scenarioId:card.scenarioId!}];
+  });
+  const rows = await Promise.all(items.map(async item => {
+    const card = job.cards.find(card => card.id === item.cardId)!;
+    let data: any = {status:"NOT_RUN"};
+    if (item.id) try { data = await api(projectId, "/api/simulation-runs/" + item.id); }
+    catch (error) {
+      data = {status:"QUEUED",results:{reasoning:"Запуск сохранён; результат LangWatch пока недоступен. " + String(error).slice(0,160)}};
+    }
+    return {id:item.id,cardId:item.cardId,name:card.name,runId:item.id,status:data.status,reason:data.results?.reasoning};
+  }));
+  return {rows,batch:latest,summary:latest?batchSummary(latest,rows):undefined};
 }
+
+/** Continue known unfinished work. Completed judgments are never paid for again. */
+export async function resume(projectId: string, id: string) {
+  return exclusive(id, async () => {
+    const job = await get(projectId, id);
+    if (running.has(id)) return view(job);
+    if (!["failed","interrupted"].includes(job.status)) throw new Error("Этот разбор не нуждается в продолжении");
+    job.error=undefined;
+    job.status=job.topics.length?"judging":"planning";
+    running.add(id);
+    await save(job);
+    void (job.topics.length ? judge(job) : plan(job)).finally(()=>running.delete(id));
+    return view(job);
+  });
+}
+
+export const approve = (...args: Parameters<typeof approveUnlocked>) => exclusive(args[1], () => approveUnlocked(...args));
+
+export const evaluate = (...args: Parameters<typeof evaluateUnlocked>) => exclusive(args[1], () => evaluateUnlocked(...args));
+
+export const review = (...args: Parameters<typeof reviewUnlocked>) => exclusive(args[1], () => reviewUnlocked(...args));
+
+export const propose = (...args: Parameters<typeof proposeUnlocked>) => exclusive(args[1], () => proposeUnlocked(...args));
+
+export const changeCard = (...args: Parameters<typeof changeCardUnlocked>) => exclusive(args[1], () => changeCardUnlocked(...args));

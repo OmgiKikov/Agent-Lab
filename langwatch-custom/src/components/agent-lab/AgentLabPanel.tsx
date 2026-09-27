@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
+import { analysisNeedsRefresh } from "~/server/agent-lab/progress";
 import type { Analysis, Card, Rule } from "~/server/agent-lab/schema";
 
 type Catalog = {
@@ -162,6 +163,9 @@ export function AgentLabPanel({
   const [card, setCard] = useState<Card>();
   const [agent, setAgent] = useState("");
   const [note, setNote] = useState("");
+  const [runAfter, setRunAfter] = useState(true);
+  const [repeats, setRepeats] = useState(1);
+  const [batchProgress, setBatchProgress] = useState<any>();
   const [ordinaryId, setOrdinaryId] = useState("");
   const [syntheticTopicId, setSyntheticTopicId] = useState("");
   const [runData, setRunData] = useState<any>();
@@ -233,6 +237,8 @@ export function AgentLabPanel({
     setOwnerRules(next.ownerRules);
     setTask(next.task);
     setCount(next.selected);
+    setRepeats(next.repeatCount ?? 1);
+    if (next.agentId) setAgent(next.agentId);
     setMaterials(
       Object.fromEntries(
         next.materialRefs.map((ref) => [ref.datasetId, ref.kind]),
@@ -241,7 +247,9 @@ export function AgentLabPanel({
     if (!next.model.startsWith("historical/")) setModel(next.model);
     setCard(next.cards.at(-1));
     setRunData(undefined);
+    setBatchProgress(undefined);
     setStep(
+      next.batches?.length ? 4 :
       next.status === "ready" ||
         (!next.autoEvaluate && ["planning", "failed"].includes(next.status))
         ? 2
@@ -303,18 +311,21 @@ export function AgentLabPanel({
     );
   }, [logs, catalog?.datasets]);
   useEffect(() => {
-    if (!open || !job || !["planning", "judging"].includes(job.status)) return;
+    if (!open || !job || !analysisNeedsRefresh(job)) return;
     const interval = setInterval(() => {
       void call<Analysis>("/analysis/" + job.id, projectId)
         .then((j) => {
           setJob(j);
           if (j.status === "ready") setStep(2);
-          if (j.status === "done") setStep(3);
+          if (j.status === "done") {
+            setStep(j.batches?.length ? 4 : 3);
+            if (j.batches?.length) setCard(old => j.cards.find(c => c.id === old?.id) ?? j.cards.find(c => c.status === "saved"));
+          }
         })
         .catch((e) => setError(String(e)));
     }, 3000);
     return () => clearInterval(interval);
-  }, [open, job?.id, job?.status, projectId]);
+  }, [open, job?.id, job?.status, job?.batches?.at(-1)?.status, job?.workflowError, projectId]);
   useEffect(() => {
     if (!open || !card?.runs.length || !job) return;
     let stopped = false;
@@ -346,8 +357,8 @@ export function AgentLabPanel({
     let cancelled = false;
     async function poll() {
       try {
-        const rows = await call<any[]>("/run-summary/" + job!.id, projectId);
-        if (!cancelled) setSuiteResults(rows);
+        const data = await call<any>("/run-summary/" + job!.id, projectId);
+        if (!cancelled) { setSuiteResults(data.rows ?? data); setBatchProgress(data); }
       } catch (e) {
         if (!cancelled) setError(String(e));
       }
@@ -607,8 +618,7 @@ export function AgentLabPanel({
             Проверка агента
           </Text>
           <Text color="fg.muted" fontSize="sm">
-            Найдите проблемы в разговорах и сохраните ситуации для повторной
-            проверки.
+            Логи → правила → ситуации → разговоры с агентом. Все доказательства и результаты остаются в LangWatch.
           </Text>
         </Box>
         {job && (
@@ -629,6 +639,10 @@ export function AgentLabPanel({
           {error}
         </Box>
       )}
+      {job?.workflowError && <Box role="alert" padding={4} marginBottom={4} background="bg.error"><Text>{job.workflowError}</Text><Text fontSize="sm">Разбор и созданные ситуации сохранены. Проверьте Simulations перед повторным запуском.</Text></Box>}
+      {job && ["interrupted","failed"].includes(job.status) && <Box padding={4} marginBottom={4} borderWidth="1px" borderRadius="lg">
+        <Text>{job.message}</Text><Button marginTop={2} loading={busy} onClick={()=>void act(async()=>{const next=await call<Analysis>("/resume",projectId,base);setJob(next);setStep(3);})}>Продолжить с сохранённого места</Button>
+      </Box>}
       {job && (
         <HStack
           borderBottomWidth="1px"
@@ -676,8 +690,7 @@ export function AgentLabPanel({
               Загрузите разговоры с агентом
             </Text>
             <Text color="fg.muted" fontSize="sm" marginTop={1}>
-              Получите список проблем с примерами реальных ответов. Начните с
-              небольшой выборки.
+              Выберите логи и материалы. Lab разберёт обращения, подготовит ситуации и проверит подключённого агента.
             </Text>
             <Select
               label="Разговоры"
@@ -759,7 +772,7 @@ export function AgentLabPanel({
                   </Text>
                   <Text fontSize="sm" color="fg.muted" marginTop={1}>
                     Дайте его промпт или правила работы. Мы предложим критерии,
-                    а вы проверите их перед оценкой.
+                    пометим, что они предложены моделью. Любое правило можно проверить и уточнить.
                   </Text>
                   <Label>Файл с промптом или правилами</Label>
                   <input
@@ -862,6 +875,18 @@ export function AgentLabPanel({
                 />
               </Box>
             </HStack>
+            <Box marginTop={5} borderTopWidth="1px" paddingTop={4}>
+              <label style={{display:"flex",gap:10,alignItems:"center"}}>
+                <input type="checkbox" checked={runAfter} onChange={e=>setRunAfter(e.target.checked)} />
+                <Text fontWeight="semibold">После разбора сразу проверить агента</Text>
+              </label>
+              {runAfter && <HStack align="end" gap={4} flexWrap="wrap" marginTop={3}>
+                <Box flex={1} minWidth="220px"><Select label="Подключённый агент" value={agent} onChange={setAgent} items={catalog?.agents ?? []} /></Box>
+                <Box width="145px"><Label>Повторов ситуации</Label><Input aria-label="Повторов ситуации" type="number" min={1} max={10} value={repeats} onChange={e=>setRepeats(Number(e.target.value))} /></Box>
+              </HStack>}
+              {runAfter && !catalog?.agents.length && <Text fontSize="sm" marginTop={2}>Добавьте HTTP агента в <a href={`/${projectSlug}/agents`}>Agents LangWatch</a> или снимите флажок, чтобы разобрать только логи.</Text>}
+              <Text color="fg.muted" fontSize="xs" marginTop={2}>Разбор и симуляции используют настроенные модели. Подтверждение ошибок владельцем учитывается отдельно от выводов модели.</Text>
+            </Box>
             <details style={{ marginTop: 15 }}>
               <summary style={{ cursor: "pointer" }}>Настройки анализа</summary>
               <Select
@@ -899,6 +924,7 @@ export function AgentLabPanel({
               disabled={
                 !logs ||
                 !model ||
+                (runAfter && (!agent || !Number.isInteger(repeats) || repeats < 1 || repeats > 10)) ||
                 (!ownerRules.trim() && !Object.keys(materials).length)
               }
               onClick={() =>
@@ -912,6 +938,7 @@ export function AgentLabPanel({
                     count,
                     model,
                     autoEvaluate: true,
+                    ...(runAfter ? {agentId:agent,repeatCount:repeats} : {}),
                     materials: Object.entries(materials).map(
                       ([datasetId, kind]) => ({ datasetId, kind }),
                     ),
@@ -922,11 +949,11 @@ export function AgentLabPanel({
                 })
               }
             >
-              Проанализировать разговоры
+              {runAfter ? "Проверить агента от начала до результата" : "Разобрать только логи"}
               <ArrowRight size={17} />
             </Button>
             <Text fontSize="xs" color="fg.muted" marginTop={2}>
-              Автоматически разберём {count} разговоров и соберём проверки.
+              Разберём {count} разговоров и соберём проверки{runAfter ? `, затем запустим по ${repeats} попытке каждой готовой ситуации` : ""}. Закрытие вкладки не остановит работу.
               Тексты и выбранные материалы будут переданы вашей настроенной
               модели.
             </Text>
@@ -1591,17 +1618,19 @@ export function AgentLabPanel({
                     items={catalog?.agents ?? []}
                   />
                 </Box>
+                <Box width="120px"><Label>Повторов</Label><Input aria-label="Повторов в прогоне" type="number" min={1} max={10} value={repeats} onChange={e=>setRepeats(Number(e.target.value))} /></Box>
                 <Button
                   colorPalette="blue"
                   size="lg"
                   loading={busy}
-                  disabled={!agent}
+                  disabled={!agent || !!batchProgress?.summary?.pending || ["dispatching","dispatch_unknown"].includes(batchProgress?.batch?.status)}
                   onClick={() =>
                     void act(async () => {
                       await call("/run-all", projectId, {
                         ...base,
                         agentId: agent,
                         note: note.slice(0, 200),
+                        repeatCount: repeats,
                       });
                       const next = await call<Analysis>(
                         "/analysis/" + job.id,
@@ -1630,9 +1659,17 @@ export function AgentLabPanel({
             </Paper>
           )}
 
-          {!!suiteResults.length && (
+          {(!!suiteResults.length || batchProgress?.batch) && (
             <Paper>
-              <Text fontWeight="semibold">Последние результаты проверок</Text>
+              <Text fontWeight="semibold">Результат прогона</Text>
+              {batchProgress?.summary && <Box marginY={3}>
+                <Text>Измерено {batchProgress.summary.measured} из {batchProgress.summary.planned} запланированных попыток · {batchProgress.batch.repeatCount} повтор(а) каждой ситуации.</Text>
+                {!!batchProgress.summary.schedulingUnknown && <Text color="fg.error">Отправка {batchProgress.summary.schedulingUnknown} попыток не подтверждена. Они могут выполняться: сначала сверьте Simulations.</Text>}
+                {!!batchProgress.summary.notScheduled && <Text color="fg.error">Не поставлено в очередь: {batchProgress.summary.notScheduled}. Эти попытки не считаются успешными.</Text>}
+                <Text fontSize="sm" color="fg.muted">Оценка относится только к этому набору. Судья и поведение синтетического клиента ещё требуют сверки с человеком.</Text>
+                <a href={`/${projectSlug}/simulations`}>Все разговоры и оценки в Simulations ↗</a>
+              </Box>}
+              {batchProgress?.batch?.error && <Text color="fg.error">{batchProgress.batch.error}</Text>}
               <HStack gap={4} flexWrap="wrap" marginTop={2}>
                 <Text fontSize="sm">
                   Пройдены:{" "}
@@ -1657,7 +1694,7 @@ export function AgentLabPanel({
               </HStack>
               {suiteResults.map((row) => (
                 <HStack
-                  key={row.cardId}
+                  key={row.runId || row.cardId}
                   justifyContent="space-between"
                   align="start"
                   paddingY={3}

@@ -56,6 +56,21 @@ def main():
  for source in CUSTOM.rglob('*'):
   if source.is_file() and source.suffix in ('.ts','.tsx','.py'):
    destination=APP/source.relative_to(CUSTOM);destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,destination)
+ queue=APP/'src/server/app-layer/suites/suite-run.service.ts'
+ queue_text=queue.read_text()
+ if 'const queuedItems = items.filter(' not in queue_text:
+  if '    await Promise.allSettled(\n      items.map((item) => {' not in queue_text or '      jobCount: items.length,' not in queue_text:
+   raise RuntimeError('Версия очереди LangWatch изменилась: проверьте контракт принятия запусков')
+  queue_text=queue_text.replace('    await Promise.allSettled(\n      items.map((item) => {','    const enqueued = await Promise.allSettled(\n      items.map((item) => {',1)
+  queue_text=queue_text.replace('    // No explicit job scheduling', '    const queuedItems = items.filter((_, index) => enqueued[index]?.status === "fulfilled");\n\n    // No explicit job scheduling',1)
+  queue_text=queue_text.replace('      jobCount: items.length,','      jobCount: queuedItems.length,',1).replace('      items: items.map((item) => ({','      items: queuedItems.map((item) => ({',1)
+  queue.write_text(queue_text)
+ if 'Native enqueue outcome uncertain' not in queue.read_text():
+  queue_text=queue.read_text()
+  anchor='    const queuedItems = items.filter('
+  if anchor not in queue_text:raise RuntimeError('Не найдена проверка подтверждения очереди')
+  queue_text=queue_text.replace(anchor, '    if (enqueued.some(result => result.status === "rejected")) throw new Error("Native enqueue outcome uncertain: some attempts may have been accepted; inspect Simulations before retrying.");\n'+anchor,1)
+  queue.write_text(queue_text)
  router=APP/'src/server/api-router.ts'
  edit(router,'export function createApiRouter()',"import { app as agentLabApp } from './agent-lab/routes';\n\nexport function createApiRouter()",'import { app as agentLabApp }')
  edit(router,'  const api = new Hono();','  const api = new Hono();\n  api.route("/", agentLabApp);','api.route("/", agentLabApp)')
@@ -73,7 +88,7 @@ def main():
  edit(menu,'      <PageMenuLink','      <PageMenuLink path="/[project]/datasets?agentLab=1" icon={Workflow} label="Анализ агента" project={project} showLabel={showExpanded} />\n      <PageMenuLink','label="Анализ агента"')
  # Remove the old proxy from source. The old files and data remain recoverable.
  start=APP/'src/start.ts';text=start.read_text();text=text.replace("import { handleLocalReview } from './server/local-review-proxy';\n",'').replace('      if (await handleLocalReview(req, res)) return;\n\n','');start.write_text(text)
- stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(CUSTOM.rglob('*')) if p.is_file() and p.suffix in ('.ts','.tsx','.py'))+router.read_bytes()+datasets.read_bytes()+detail.read_bytes()+menu.read_bytes()+experiment.read_bytes()).hexdigest()
+ stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(CUSTOM.rglob('*')) if p.is_file() and p.suffix in ('.ts','.tsx','.py'))+router.read_bytes()+datasets.read_bytes()+detail.read_bytes()+menu.read_bytes()+experiment.read_bytes()+queue.read_bytes()).hexdigest()
  marker=HOME/'native-agent-lab-build-hash'
  if marker.exists() and marker.read_text()==stamp:
   print('Native Agent Lab уже установлен: http://localhost:5560/local-dev-project-se7hbx/datasets?agentLab=1');return
@@ -81,7 +96,7 @@ def main():
  staged=APP/'dist/client-agent-lab-staged'
  subprocess.run([NODE,str(APP/'node_modules/vite/bin/vite.js'),'build','--outDir',str(staged)],cwd=APP,env=ENV,check=True)
  server_sources=[p for p in CUSTOM.rglob('*.ts') if '/server/' in str(p)]
- server_stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(server_sources))+router.read_bytes()+start.read_bytes()).hexdigest()
+ server_stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(server_sources))+router.read_bytes()+start.read_bytes()+queue.read_bytes()).hexdigest()
  server_marker=HOME/'native-agent-lab-server-hash'
  server_changed=not server_marker.exists() or server_marker.read_text()!=server_stamp
  if server_changed:subprocess.run([NODE,'scripts/build-server.mjs'],cwd=APP,env=ENV,check=True)
