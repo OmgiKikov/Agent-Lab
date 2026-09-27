@@ -56,6 +56,7 @@ export const startSchema = z.object({
   ownerRules: z.string().max(20000).default(""),
   count: z.number().int().min(1).max(48),
   autoEvaluate: z.boolean().default(false),
+  purpose: z.enum(["verify", "discover"]).optional(),
   agentId: z.string().min(1).optional(),
   repeatCount: z.number().int().min(1).max(10).default(1),
   materials: z
@@ -87,6 +88,14 @@ export type Card = {
   generated?: boolean;
   confirmedBy?: string;
   confirmedAt?: string;
+  nativeVersion?: number;
+  approvalState?: "confirmed" | "stale" | "unreviewed" | "missing";
+  approval?: {
+    actorId: string;
+    at: string;
+    version?: number;
+    definitionHash: string;
+  };
   runs: {
     id: string;
     agentId: string;
@@ -108,6 +117,7 @@ export type Analysis = {
   ownerRules: string;
   materialRefs: Start["materials"];
   autoEvaluate?: boolean;
+  purpose?: "verify" | "discover";
   agentId?: string;
   repeatCount?: number;
   batches?: NativeBatch[];

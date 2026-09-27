@@ -88,7 +88,8 @@ def main():
  edit(menu,'      <PageMenuLink','      <PageMenuLink path="/[project]/datasets?agentLab=1" icon={Workflow} label="Анализ агента" project={project} showLabel={showExpanded} />\n      <PageMenuLink','label="Анализ агента"')
  # Remove the old proxy from source. The old files and data remain recoverable.
  start=APP/'src/start.ts';text=start.read_text();text=text.replace("import { handleLocalReview } from './server/local-review-proxy';\n",'').replace('      if (await handleLocalReview(req, res)) return;\n\n','');start.write_text(text)
- stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(CUSTOM.rglob('*')) if p.is_file() and p.suffix in ('.ts','.tsx','.py'))+router.read_bytes()+datasets.read_bytes()+detail.read_bytes()+menu.read_bytes()+experiment.read_bytes()+queue.read_bytes()).hexdigest()
+ subprocess.run(['python3',str(ROOT/'scripts/native-contract-patches.py')],check=True)
+ stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(CUSTOM.rglob('*')) if p.is_file() and p.suffix in ('.ts','.tsx','.py'))+router.read_bytes()+datasets.read_bytes()+detail.read_bytes()+menu.read_bytes()+experiment.read_bytes()+(ROOT/'scripts/native-contract-patches.py').read_bytes()+queue.read_bytes()).hexdigest()
  marker=HOME/'native-agent-lab-build-hash'
  if marker.exists() and marker.read_text()==stamp:
   print('Native Agent Lab уже установлен: http://localhost:5560/local-dev-project-se7hbx/datasets?agentLab=1');return
@@ -96,7 +97,7 @@ def main():
  staged=APP/'dist/client-agent-lab-staged'
  subprocess.run([NODE,str(APP/'node_modules/vite/bin/vite.js'),'build','--outDir',str(staged)],cwd=APP,env=ENV,check=True)
  server_sources=[p for p in CUSTOM.rglob('*.ts') if '/server/' in str(p)]
- server_stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(server_sources))+router.read_bytes()+start.read_bytes()+queue.read_bytes()).hexdigest()
+ server_stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(server_sources))+router.read_bytes()+start.read_bytes()+(ROOT/'scripts/native-contract-patches.py').read_bytes()+queue.read_bytes()).hexdigest()
  server_marker=HOME/'native-agent-lab-server-hash'
  server_changed=not server_marker.exists() or server_marker.read_text()!=server_stamp
  if server_changed:subprocess.run([NODE,'scripts/build-server.mjs'],cwd=APP,env=ENV,check=True)

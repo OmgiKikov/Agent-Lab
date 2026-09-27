@@ -6,7 +6,12 @@ import { getProjectModelProviders } from "~/server/api/routers/modelProviders.ut
 import { resolveModelForFeature } from "~/server/modelProviders/resolveModelForFeature";
 import { structured, PLAN, JUDGE, CUSTOMER_CARD } from "./model";
 import { messages, evidenceSources, criterionText } from "./evidence";
-import { scheduleBatch, batchSummary, KeyedSerial, assertDispatchKnown } from "./workflow";
+import {
+  scheduleBatch,
+  batchSummary,
+  KeyedSerial,
+  assertDispatchKnown,
+} from "./workflow";
 export { messages } from "./evidence";
 import {
   planSchema,
@@ -110,7 +115,7 @@ export async function list(projectId: string) {
   return jobs
     .filter((j): j is Analysis => !!j)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .map(({ id, name, status, createdAt, selected, processed, datasetId }) => ({
+    .map(({ id, name, status, createdAt, selected, processed, datasetId, agentId }) => ({
       id,
       name,
       status,
@@ -118,6 +123,7 @@ export async function list(projectId: string) {
       selected,
       processed,
       datasetId,
+      agentId,
     }));
 }
 export async function catalog(projectId: string) {
@@ -179,7 +185,12 @@ function grounded(job: Analysis, rule: Rule) {
 export async function start(config: Start, userId: string) {
   if (config.agentId) {
     const agents = await api(config.projectId, "/api/agents");
-    if (!(agents.data ?? agents).some((a: any) => a.id === config.agentId && a.type === "http")) throw new Error("Подключённый HTTP агент не найден");
+    if (
+      !(agents.data ?? agents).some(
+        (a: any) => a.id === config.agentId && a.type === "http",
+      )
+    )
+      throw new Error("Подключённый HTTP агент не найден");
     config.autoEvaluate = true;
   }
   const rows = await records(config.projectId, config.datasetId);
@@ -250,6 +261,7 @@ export async function start(config: Start, userId: string) {
     task: config.task,
     model: config.model,
     autoEvaluate: config.autoEvaluate,
+    purpose: config.purpose,
     agentId: config.agentId,
     repeatCount: config.repeatCount,
     batches: [],
@@ -379,6 +391,10 @@ async function plan(job: Analysis) {
               rule.text + " " + rule.quote,
             );
         }
+      if (job.purpose === "verify") {
+        await continueVerification(job);
+        return;
+      }
       job.status = "judging";
       job.message = "Проверяем реальные ответы по правилам агента";
       await save(job);
@@ -634,13 +650,26 @@ async function judge(job: Analysis) {
     job.message = "Разбор прервался; сделанные оценки сохранены.";
   }
   await save(job);
-  if (job.status === "done" && job.agentId && !job.batches?.length) {
+  if (
+    job.status === "done" &&
+    job.purpose !== "discover" &&
+    job.agentId &&
+    !job.batches?.length
+  ) {
     try {
-      await runAll(job.projectId, job.id, job.agentId, "Поручение: разбор логов и проверка агента", job.repeatCount ?? 1);
+      await runAll(
+        job.projectId,
+        job.id,
+        job.agentId,
+        "Поручение: разбор логов и проверка агента",
+        job.repeatCount ?? 1,
+      );
     } catch (error) {
       // Re-read: the queue may have accepted part of the work and persisted its receipt.
       const current = await get(job.projectId, job.id);
-      current.workflowError = "Прогон не завершён: " + (error instanceof Error ? error.message : String(error));
+      current.workflowError =
+        "Прогон не завершён: " +
+        (error instanceof Error ? error.message : String(error));
       await save(current);
     }
   }
@@ -738,7 +767,7 @@ async function proposeUnlocked(
     },
     cardProposalSchema,
   );
-  const criteria = rules.map(rule => criterionText(rule!, job.sources));
+  const criteria = rules.map((rule) => criterionText(rule!, job.sources));
   const card: Card = {
     id: randomUUID(),
     origin,
@@ -794,6 +823,9 @@ async function changeCardUnlocked(
   await save(job);
   return card;
 }
+function nativeDefinitionHash(scene: any) {
+  return hash({version: scene.version, situation: scene.situation, criteria: scene.criteria, parameters: scene.parameters ?? [], maxTurns: scene.maxTurns, minTurns: scene.minTurns, simulatorModel: scene.simulatorModel, judgeModel: scene.judgeModel});
+}
 export async function accept(
   projectId: string,
   id: string,
@@ -816,7 +848,17 @@ export async function accept(
       )
     )
       throw new Error("Сначала подтвердите замечание по исходному разговору");
-    if (card.scenarioId) return card;
+    if (card.scenarioId) {
+      const current = await api(projectId, "/api/scenarios/" + card.scenarioId);
+      card.approval = {
+        actorId: userId,
+        at: new Date().toISOString(),
+        version: current.version,
+        definitionHash: nativeDefinitionHash(current),
+      };
+      await save(job);
+      return card;
+    }
     const scenario = await api(projectId, "/api/scenarios", {
       name: card.name,
       situation:
@@ -833,6 +875,16 @@ export async function accept(
     card.status = "saved";
     card.confirmedBy = userId;
     card.confirmedAt = new Date().toISOString();
+    const approvedNative = await api(
+      projectId,
+      "/api/scenarios/" + card.scenarioId,
+    );
+    card.approval = {
+      actorId: userId,
+      at: card.confirmedAt,
+      version: approvedNative.version,
+      definitionHash: nativeDefinitionHash(approvedNative),
+    };
     await save(job);
     return card;
   });
@@ -968,16 +1020,16 @@ export async function runData(projectId: string, id: string, cardId: string) {
       verdict: sameBatch
         ? "Это повторы одной проверки. Их различие показывает нестабильность, а не исправление агента."
         : !comparable
-        ? "Условия изменились или не зафиксированы — вывод об исправлении не доказан"
-        : sameReplies && status(before) !== status(after)
-          ? "Ответы агента одинаковые. Различие оценок судьи не доказывает изменение агента"
-          : status(before) === "FAILED" && status(after) === "SUCCESS"
-            ? "В этой ситуации проблема не воспроизвелась после воспроизведения на baseline"
-            : status(before) === "SUCCESS" && status(after) === "FAILED"
-              ? "Регрессия: ранее сценарий проходил"
-              : status(after) === "ERROR"
-                ? "Новая версия не измерена"
-                : "Нет доказанного исправления",
+          ? "Условия изменились или не зафиксированы — вывод об исправлении не доказан"
+          : sameReplies && status(before) !== status(after)
+            ? "Ответы агента одинаковые. Различие оценок судьи не доказывает изменение агента"
+            : status(before) === "FAILED" && status(after) === "SUCCESS"
+              ? "В этой ситуации проблема не воспроизвелась после воспроизведения на baseline"
+              : status(before) === "SUCCESS" && status(after) === "FAILED"
+                ? "Регрессия: ранее сценарий проходил"
+                : status(after) === "ERROR"
+                  ? "Новая версия не измерена"
+                  : "Нет доказанного исправления",
       limitation:
         "Другие сценарии и обычный трафик этим сравнением не проверяются. Модель судьи и версия агента должны быть зафиксированы в настройках прогона.",
     };
@@ -1010,6 +1062,24 @@ function loggedSituation(text: string) {
     "\nОтвечайте на уточнения естественно. Не перечисляйте все реплики заранее и не добавляйте сведений, которых нет в этой ситуации."
   );
 }
+async function continueVerification(job: Analysis) {
+  try {
+    job.status = "judging";
+    job.message = "Подготавливаем нативные ситуации из обращений";
+    await save(job);
+    await assembleCards(job);
+    job.status = "done";
+    job.message = "Ситуации подготовлены из логов и правил";
+    await save(job);
+    if (job.agentId && !job.batches?.length && job.cards.some(c => c.status === "saved")) {
+      try { await runAll(job.projectId, job.id, job.agentId, "Прямая проверка ситуаций из логов", job.repeatCount ?? 1); }
+      catch (error) { const current = await get(job.projectId, job.id); current.workflowError = String(error); await save(current); }
+    }
+  } catch (error) {
+    job.status = "failed"; job.error = String(error); job.message = "Подготовка прервалась; сохранённые ситуации доступны."; await save(job);
+  }
+}
+
 async function assembleCards(job: Analysis) {
   const add = async (
     origin: "coverage" | "regression",
@@ -1017,20 +1087,12 @@ async function assembleCards(job: Analysis) {
     rules: Rule[],
     name: string,
   ) => {
-    if (
-      !rules.length ||
-      job.cards.some(
-        (c) =>
-          c.origin === origin &&
-          c.dialogueId === dialogue.id &&
-          hash(c.ruleIds.slice().sort()) ===
-            hash(rules.map((r) => r.id).sort()),
-      )
-    )
-      return;
+    if (!rules.length) return;
+    const existing = job.cards.find(c => c.origin === origin && c.dialogueId === dialogue.id && hash(c.ruleIds.slice().sort()) === hash(rules.map(r => r.id).sort()));
+    if (existing && (existing.status === "saved" || origin === "regression")) return;
     const situation = loggedSituation(dialogue.text);
-    const criteria = rules.map(rule => criterionText(rule, job.sources));
-    const card: Card = {
+    const criteria = rules.map((rule) => criterionText(rule, job.sources));
+    const card: Card = existing ?? {
       id: randomUUID(),
       origin,
       dialogueId: dialogue.id,
@@ -1043,10 +1105,11 @@ async function assembleCards(job: Analysis) {
       generated: true,
       runs: [],
     };
-    job.cards.push(card);
+    if (!existing) job.cards.push(card);
     await save(job);
     if (origin === "coverage") {
-      const scenario = await api(job.projectId, "/api/scenarios", {
+      const retainedNative = await prisma.scenario.findFirst({where: {projectId: job.projectId, labels: {has: "card-" + card.id.slice(0, 8)}}, select: {id: true}});
+      const scenario = retainedNative ?? await api(job.projectId, "/api/scenarios", {
         name: card.name,
         situation:
           card.situation +
@@ -1111,21 +1174,35 @@ async function assembleCards(job: Analysis) {
   }
 }
 
-export async function runAll(projectId: string, id: string, agentId: string, note: string, repeats = 1) {
+export async function runAll(
+  projectId: string,
+  id: string,
+  agentId: string,
+  note: string,
+  repeats = 1,
+) {
   return exclusive(id, async () => {
     const job = await get(projectId, id);
-    if (running.has(id) && job.status !== "done") throw new Error("Подготовка ещё идёт");
+    if (running.has(id) && job.status !== "done")
+      throw new Error("Подготовка ещё идёт");
     const batch = await scheduleBatch(job, agentId, repeats, note, {
       save,
       api: (url, body) => api(projectId, url, body),
       models: async () => {
         const [simulator, judge] = await Promise.all([
-          resolveModelForFeature("scenarios.user_simulator", { prisma, projectId }),
+          resolveModelForFeature("scenarios.user_simulator", {
+            prisma,
+            projectId,
+          }),
           resolveModelForFeature("scenarios.judge", { prisma, projectId }),
         ]);
         return { simulatorModel: simulator.model, judgeModel: judge.model };
       },
-      configureSuite: (suiteId, models) => prisma.simulationSuite.update({where:{id:suiteId,projectId},data:models}),
+      configureSuite: (suiteId, models) =>
+        prisma.simulationSuite.update({
+          where: { id: suiteId, projectId },
+          data: models,
+        }),
     });
     return batch;
   });
@@ -1134,20 +1211,48 @@ export async function runAll(projectId: string, id: string, agentId: string, not
 export async function runSummary(projectId: string, id: string) {
   const job = await get(projectId, id);
   const latest = job.batches?.at(-1);
-  const items = latest ? latest.items : job.cards.filter(c => c.status === "saved").flatMap(card => {
-    const run = card.runs.at(-1);
-    return run ? [{id:run.id,cardId:card.id,scenarioId:card.scenarioId!}] : [{id:"",cardId:card.id,scenarioId:card.scenarioId!}];
-  });
-  const rows = await Promise.all(items.map(async item => {
-    const card = job.cards.find(card => card.id === item.cardId)!;
-    let data: any = {status:"NOT_RUN"};
-    if (item.id) try { data = await api(projectId, "/api/simulation-runs/" + item.id); }
-    catch (error) {
-      data = {status:"QUEUED",results:{reasoning:"Запуск сохранён; результат LangWatch пока недоступен. " + String(error).slice(0,160)}};
-    }
-    return {id:item.id,cardId:item.cardId,name:card.name,runId:item.id,status:data.status,reason:data.results?.reasoning};
-  }));
-  return {rows,batch:latest,summary:latest?batchSummary(latest,rows):undefined};
+  const items = latest
+    ? latest.items
+    : job.cards
+        .filter((c) => c.status === "saved")
+        .flatMap((card) => {
+          const run = card.runs.at(-1);
+          return run
+            ? [{ id: run.id, cardId: card.id, scenarioId: card.scenarioId! }]
+            : [{ id: "", cardId: card.id, scenarioId: card.scenarioId! }];
+        });
+  const rows = await Promise.all(
+    items.map(async (item) => {
+      const card = job.cards.find((card) => card.id === item.cardId)!;
+      let data: any = { status: "NOT_RUN" };
+      if (item.id)
+        try {
+          data = await api(projectId, "/api/simulation-runs/" + item.id);
+        } catch (error) {
+          data = {
+            status: "QUEUED",
+            results: {
+              reasoning:
+                "Запуск сохранён; результат LangWatch пока недоступен. " +
+                String(error).slice(0, 160),
+            },
+          };
+        }
+      return {
+        id: item.id,
+        cardId: item.cardId,
+        name: card.name,
+        runId: item.id,
+        status: data.status,
+        reason: data.results?.reasoning,
+      };
+    }),
+  );
+  return {
+    rows,
+    batch: latest,
+    summary: latest ? batchSummary(latest, rows) : undefined,
+  };
 }
 
 /** Continue known unfinished work. Completed judgments are never paid for again. */
@@ -1155,22 +1260,57 @@ export async function resume(projectId: string, id: string) {
   return exclusive(id, async () => {
     const job = await get(projectId, id);
     if (running.has(id)) return view(job);
-    if (!["failed","interrupted"].includes(job.status)) throw new Error("Этот разбор не нуждается в продолжении");
-    job.error=undefined;
-    job.status=job.topics.length?"judging":"planning";
+    if (!["failed", "interrupted"].includes(job.status))
+      throw new Error("Этот разбор не нуждается в продолжении");
+    job.error = undefined;
+    job.status = job.topics.length ? "judging" : "planning";
     running.add(id);
     await save(job);
-    void (job.topics.length ? judge(job) : plan(job)).finally(()=>running.delete(id));
+    void (job.topics.length ? job.purpose === "verify" ? continueVerification(job) : judge(job) : plan(job)).finally(() =>
+      running.delete(id),
+    );
     return view(job);
   });
 }
 
-export const approve = (...args: Parameters<typeof approveUnlocked>) => exclusive(args[1], () => approveUnlocked(...args));
+export const approve = (...args: Parameters<typeof approveUnlocked>) =>
+  exclusive(args[1], () => approveUnlocked(...args));
 
-export const evaluate = (...args: Parameters<typeof evaluateUnlocked>) => exclusive(args[1], () => evaluateUnlocked(...args));
+export const evaluate = (...args: Parameters<typeof evaluateUnlocked>) =>
+  exclusive(args[1], () => evaluateUnlocked(...args));
 
-export const review = (...args: Parameters<typeof reviewUnlocked>) => exclusive(args[1], () => reviewUnlocked(...args));
+export const review = (...args: Parameters<typeof reviewUnlocked>) =>
+  exclusive(args[1], () => reviewUnlocked(...args));
 
-export const propose = (...args: Parameters<typeof proposeUnlocked>) => exclusive(args[1], () => proposeUnlocked(...args));
+export const propose = (...args: Parameters<typeof proposeUnlocked>) =>
+  exclusive(args[1], () => proposeUnlocked(...args));
 
-export const changeCard = (...args: Parameters<typeof changeCardUnlocked>) => exclusive(args[1], () => changeCardUnlocked(...args));
+export const changeCard = (...args: Parameters<typeof changeCardUnlocked>) =>
+  exclusive(args[1], () => changeCardUnlocked(...args));
+
+/** Native scenarios are authoritative after saving; the discovery record is only provenance. */
+export async function nativeView(job: Analysis) {
+  const result = view(job);
+  result.cards = await Promise.all(
+    job.cards.map(async (card) => {
+      if (!card.scenarioId) return card;
+      let current;
+      try { current = await api(job.projectId, "/api/scenarios/" + card.scenarioId); }
+      catch { return {...card, approvalState: "missing" as const}; }
+      const currentHash = nativeDefinitionHash(current);
+      return {
+        ...card,
+        name: current.name,
+        situation: current.situation,
+        criteria: current.criteria,
+        nativeVersion: current.version,
+        approvalState: card.approval
+          ? card.approval.definitionHash === currentHash
+            ? "confirmed"
+            : "stale"
+          : "unreviewed",
+      };
+    }),
+  );
+  return result;
+}

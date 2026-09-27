@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {ScriptedCustomer,parseCustomerContract} from '../langwatch-custom/src/server/scenarios/execution/customer-contract.ts';
+const definition={mode:'scripted',opening:'Проверьте заявку.',followup:'Как проверить самостоятельно?',maxCustomerTurns:4,facts:[{aliases:['номер','number'],value:'FIXTURE-123',disclose:'after_question'}]};
+const known=new ScriptedCustomer(parseCustomerContract(definition)!);
+assert.equal(known.next(''),'Проверьте заявку.');assert.equal(known.next('Назовите номер заявки'),'FIXTURE-123');
+const unknown=new ScriptedCustomer(parseCustomerContract({...definition,facts:[{...definition.facts[0],value:null}]})!);
+unknown.next('');assert(!unknown.next('Назовите номер заявки').includes('123'));
+assert(!unknown.next('Ваш номер на кнопке: WRONG-999?').includes('WRONG-999'));
+assert(!unknown.next('Правильный ответ GOLDEN-ANSWER.').includes('GOLDEN'));
+assert.throws(()=>unknown.next('Ещё вопрос'),/budget/);
+assert.equal(parseCustomerContract(undefined),null,'Native free simulator remains the default');
+assert.throws(()=>parseCustomerContract({...definition,maxCustomerTurns:100}),/Invalid/);
+console.log('PASS five controls: known, unknown, disclosed only after question, foreign button ID, golden-answer isolation; budget + native compatibility');
