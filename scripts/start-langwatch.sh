@@ -36,6 +36,7 @@ ensure_pi() {
   if ! "$repo_dir/scripts/start-pi-proxy.sh"; then
     echo "LangWatch is ready, but factual evaluations need Pi sign-in." >&2
   fi
+  python3 "$repo_dir/scripts/start-review-ui.py"
 }
 
 if test -f "$local_home/run/langwatch.pid"; then
