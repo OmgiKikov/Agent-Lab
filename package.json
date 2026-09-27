@@ -1,0 +1,11 @@
+{
+  "name": "langwatch-local-pi-bridge",
+  "private": true,
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1"
+  }
+}

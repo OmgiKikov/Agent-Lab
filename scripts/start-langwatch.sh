@@ -28,12 +28,20 @@ current_port() {
 }
 
 is_ready() {
-  curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$(current_port)/auth/signin"
+  curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$(current_port)/auth/signin" \
+    >/dev/null 2>&1
+}
+
+ensure_pi() {
+  if ! "$repo_dir/scripts/start-pi-proxy.sh"; then
+    echo "LangWatch is ready, but factual evaluations need Pi sign-in." >&2
+  fi
 }
 
 if test -f "$local_home/run/langwatch.pid"; then
   running_pid="$(cat "$local_home/run/langwatch.pid")"
   if kill -0 "$running_pid" 2>/dev/null && is_ready; then
+    ensure_pi
     echo "LangWatch is already running: http://localhost:$(current_port)"
     exit 0
   fi
@@ -84,5 +92,6 @@ fi
 chmod 600 "$local_home/.env"
 
 "$repo_dir/scripts/seed-local-workspace.sh"
+ensure_pi
 echo "Open LangWatch: http://localhost:$(current_port)"
 wait "$launcher_pid"
