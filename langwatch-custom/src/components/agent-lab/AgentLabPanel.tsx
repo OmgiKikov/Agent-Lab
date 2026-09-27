@@ -7,11 +7,19 @@ import {
   Text,
   Textarea,
   VStack,
-  Drawer,
-  Portal,
   Spinner,
 } from "@chakra-ui/react";
-import { FlaskConical, FileText, ArrowRight, X } from "lucide-react";
+import {
+  FlaskConical,
+  FileText,
+  ArrowRight,
+  X,
+  CheckCircle2,
+  AlertTriangle,
+  ChevronLeft,
+  Upload,
+  Play,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
 import type { Analysis, Card, Rule } from "~/server/agent-lab/schema";
@@ -157,6 +165,7 @@ export function AgentLabPanel({
   const [ordinaryId, setOrdinaryId] = useState("");
   const [syntheticTopicId, setSyntheticTopicId] = useState("");
   const [runData, setRunData] = useState<any>();
+  const [suiteResults, setSuiteResults] = useState<any[]>([]);
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [file, setFile] = useState<File>();
   const [sheets, setSheets] = useState<any[]>();
@@ -185,13 +194,36 @@ export function AgentLabPanel({
     setLogs(
       (value) =>
         value ||
-        next.datasets.find((d) =>
-          d.columnTypes?.some((c) =>
-            ["conversation", "Текст"].includes(c.name),
-          ),
+        next.datasets.find(
+          (d) =>
+            !d.columnTypes.some((c) =>
+              ["findings", "judgments", "analysis_id"].includes(c.name),
+            ) &&
+            d.columnTypes?.some((c) =>
+              ["conversation", "Текст"].includes(c.name),
+            ),
         )?.id ||
         "",
     );
+    const currentId = new URLSearchParams(window.location.search).get("labId");
+    if (!currentId) {
+      const recent = next.jobs.find((j) => !j.name.startsWith("Перенесённый"));
+      if (recent) {
+        const profile = await call<Analysis>(
+          "/analysis/" + recent.id,
+          projectId,
+        );
+        setOwnerRules((old) => old || profile.ownerRules);
+        setTask(profile.task);
+        setMaterials((old) =>
+          Object.keys(old).length
+            ? old
+            : Object.fromEntries(
+                profile.materialRefs.map((r) => [r.datasetId, r.kind]),
+              ),
+        );
+      }
+    }
     return next;
   }
   async function load(id: string) {
@@ -207,9 +239,14 @@ export function AgentLabPanel({
       ),
     );
     if (!next.model.startsWith("historical/")) setModel(next.model);
-    setCard(undefined);
+    setCard(next.cards.at(-1));
     setRunData(undefined);
-    setStep(["ready", "planning", "failed"].includes(next.status) ? 2 : 3);
+    setStep(
+      next.status === "ready" ||
+        (!next.autoEvaluate && ["planning", "failed"].includes(next.status))
+        ? 2
+        : 3,
+    );
     url(next);
     return next;
   }
@@ -234,8 +271,17 @@ export function AgentLabPanel({
       const next = await loadCatalog();
       const id =
         new URLSearchParams(window.location.search).get("labId") ??
-        (analysisPrefix
-          ? next.jobs.find((j) => j.id.startsWith(analysisPrefix))?.id
+        ((analysisPrefix ??
+        new URLSearchParams(window.location.search).get("labPrefix"))
+          ? next.jobs.find((j) =>
+              j.id.startsWith(
+                analysisPrefix ??
+                  new URLSearchParams(window.location.search).get(
+                    "labPrefix",
+                  ) ??
+                  "-",
+              ),
+            )?.id
           : undefined);
       if (id) await load(id);
     });
@@ -295,6 +341,31 @@ export function AgentLabPanel({
       clearInterval(interval);
     };
   }, [open, card?.id, card?.runs.length, job?.id, projectId]);
+  useEffect(() => {
+    if (!open || step !== 4 || !job) return;
+    let cancelled = false;
+    async function poll() {
+      try {
+        const rows = await call<any[]>("/run-summary/" + job!.id, projectId);
+        if (!cancelled) setSuiteResults(rows);
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    }
+    void poll();
+    const interval = setInterval(() => void poll(), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [
+    open,
+    step,
+    job?.id,
+    job?.cards.length,
+    job?.cards.map((c) => c.runs.length).join(","),
+    projectId,
+  ]);
   function updateRule(ruleId: string, change: Partial<Rule>) {
     setJob((old) =>
       old
@@ -410,1048 +481,1536 @@ export function AgentLabPanel({
     job?.dialogues.filter((d) =>
       job.topics.find((t) => t.id === d.topicId)?.rules.some((r) => r.approved),
     ) ?? [];
-  return (
-    <>
-      <Button
-        size="sm"
-        variant="outline"
-        colorPalette="blue"
-        onClick={() => {
-          setOpen(true);
-          url(job);
-        }}
-      >
-        <FlaskConical size={14} />
-        Анализ агента
+  const stateName = (status: string) =>
+    ({
+      planning: "Готовим правила",
+      ready: "Правила ждут проверки",
+      judging: "Анализируем разговоры",
+      done: "Разбор готов",
+      failed: "Разбор не завершён",
+      interrupted: "Разбор прерван",
+    })[status] ?? status;
+  const originName = (origin: Card["origin"]) =>
+    ({
+      coverage: "Из обращения клиента",
+      regression: "Из найденной ошибки",
+      synthetic: "Новая ситуация по правилам",
+    })[origin];
+  const runName = (status: string) =>
+    ({
+      SUCCESS: "Проверка пройдена",
+      FAILED: "Проверка не пройдена",
+      ERROR: "Ошибка запуска",
+      QUEUED: "Ожидает запуска",
+      PENDING: "Ожидает запуска",
+      IN_PROGRESS: "Агент проходит проверку",
+      CANCELLED: "Остановлено",
+      STALLED: "Прогон прерван",
+      NOT_RUN: "Не запускалась",
+    })[status] ?? status;
+  const inProgress = job && ["planning", "judging"].includes(job.status);
+  const materialDatasets =
+    catalog?.datasets.filter(
+      (d) =>
+        d.id !== logs &&
+        d.columnTypes.some((c) =>
+          ["text", "content", "prompt", "instructions"].includes(c.name),
+        ),
+    ) ?? [];
+  const latestReview = (dialogueId: string, ruleId: string) =>
+    job?.reviews
+      .filter((r) => r.dialogueId === dialogueId && r.ruleId === ruleId)
+      .at(-1);
+  const confirmed = patterns.filter(
+    (p) =>
+      latestReview(p.result.dialogueId, p.rule.id)?.decision === "confirmed",
+  ).length;
+  function newAnalysis() {
+    window.location.href = `/${projectSlug}/datasets?agentLab=1&new=1`;
+  }
+  function entry() {
+    const u = new URL(`/${projectSlug}/datasets`, window.location.origin);
+    u.searchParams.set("agentLab", "1");
+    if (datasetId) u.searchParams.set("datasetId", datasetId);
+    if (analysisPrefix) u.searchParams.set("labPrefix", analysisPrefix);
+    window.location.href = u.toString();
+  }
+  async function decide(
+    dialogueId: string,
+    rule: Rule,
+    decision: "confirmed" | "disputed" | "unsure",
+  ) {
+    const key = dialogueId + rule.id;
+    const note =
+      reviewNotes[key]?.trim() ||
+      (decision === "confirmed"
+        ? "Проверено владельцем: ответ в показанном разговоре нарушает принятое правило «" +
+          rule.text +
+          "»."
+        : decision === "unsure"
+          ? "Владелец не может подтвердить нарушение по доступным данным."
+          : "");
+    if (!note)
+      throw new Error(
+        "Чтобы отклонить замечание, укажите в комментарии, почему ответ допустим.",
+      );
+    setJob(
+      await call("/review", projectId, {
+        ...base,
+        dialogueId,
+        ruleId: rule.id,
+        decision,
+        note,
+      }),
+    );
+  }
+  async function promoteFinding(dialogueId: string, rule: Rule) {
+    if (latestReview(dialogueId, rule.id)?.decision !== "confirmed")
+      await decide(dialogueId, rule, "confirmed");
+    const draft = await call<Card>("/propose", projectId, {
+      ...base,
+      origin: "regression",
+      dialogueId,
+      ruleIds: [rule.id],
+    });
+    const saved = await call<Card>("/accept", projectId, {
+      ...base,
+      cardId: draft.id,
+    });
+    setRunData(undefined);
+    setCard(saved);
+    setJob(await call("/analysis/" + job!.id, projectId));
+    setStep(4);
+  }
+  if (!open)
+    return (
+      <Button size="sm" variant="outline" onClick={entry}>
+        <FlaskConical size={15} />
+        Разобрать работу агента
       </Button>
-      <Drawer.Root
-        open={open}
-        onOpenChange={(d) => {
-          setOpen(d.open);
-          if (!d.open) {
-            const u = new URL(window.location.href);
-            u.searchParams.delete("agentLab");
-            u.searchParams.delete("labId");
-            window.history.replaceState(null, "", u);
-          }
-        }}
-        size="full"
+    );
+  return (
+    <Box
+      maxWidth="1120px"
+      width="full"
+      marginX="auto"
+      padding={{ base: 4, md: 7 }}
+    >
+      <HStack
+        justifyContent="space-between"
+        gap={4}
+        marginBottom={5}
+        align="start"
       >
-        <Portal>
-          <Drawer.Backdrop />
-          <Drawer.Positioner>
-            <Drawer.Content>
-              <Drawer.Header borderBottomWidth="1px">
-                <HStack justifyContent="space-between" width="full">
+        <Box>
+          <Text fontSize="2xl" fontWeight="bold">
+            Проверка агента
+          </Text>
+          <Text color="fg.muted" fontSize="sm">
+            Найдите проблемы в разговорах и сохраните ситуации для повторной
+            проверки.
+          </Text>
+        </Box>
+        {job && (
+          <Button variant="outline" size="sm" onClick={newAnalysis}>
+            Новый разбор
+          </Button>
+        )}
+      </HStack>
+      {error && (
+        <Box
+          role="alert"
+          padding={4}
+          marginBottom={4}
+          background="bg.error"
+          color="fg.error"
+          borderRadius="lg"
+        >
+          {error}
+        </Box>
+      )}
+      {job && (
+        <HStack
+          borderBottomWidth="1px"
+          marginBottom={5}
+          paddingBottom={3}
+          gap={2}
+          flexWrap="wrap"
+        >
+          <Button
+            variant={step === 3 || step === 2 ? "solid" : "ghost"}
+            colorPalette="blue"
+            onClick={() =>
+              setStep(
+                job.status === "ready" || job.status === "planning" ? 2 : 3,
+              )
+            }
+          >
+            Разбор разговоров
+          </Button>
+          <Button
+            variant={step === 4 ? "solid" : "ghost"}
+            colorPalette="blue"
+            onClick={() => {
+              setStep(4);
+              if (!card) setCard(job.cards.at(-1));
+            }}
+          >
+            Сохранённые проверки
+            {job.cards.length ? " · " + job.cards.length : ""}
+          </Button>
+          <Badge
+            marginLeft="auto"
+            colorPalette={
+              inProgress ? "blue" : job.status === "done" ? "green" : "gray"
+            }
+          >
+            {stateName(job.status)}
+          </Badge>
+        </HStack>
+      )}
+      {(!job || step === 1) && (
+        <VStack align="stretch" gap={5}>
+          <Paper>
+            <Text fontSize="xl" fontWeight="semibold">
+              Загрузите разговоры с агентом
+            </Text>
+            <Text color="fg.muted" fontSize="sm" marginTop={1}>
+              Получите список проблем с примерами реальных ответов. Начните с
+              небольшой выборки.
+            </Text>
+            <Select
+              label="Разговоры"
+              value={logs}
+              onChange={setLogs}
+              items={(catalog?.datasets ?? [])
+                .filter(
+                  (d) =>
+                    d.columnTypes.some((c) =>
+                      ["conversation", "Текст"].includes(c.name),
+                    ) ||
+                    (d.columnTypes.some((c) => c.name === "text") &&
+                      d.columnTypes.some((c) =>
+                        ["dialogue_id", "Id диалога", "id", "ID"].includes(
+                          c.name,
+                        ),
+                      )),
+                )
+                .map((d) => ({ id: d.id, name: d.name }))}
+            />
+            <details style={{ marginTop: 14 }}>
+              <summary style={{ cursor: "pointer" }}>
+                Загрузить новую выгрузку XLSX
+              </summary>
+              <Box paddingTop={3}>
+                <input
+                  aria-label="Файл XLSX"
+                  type="file"
+                  accept=".xlsx"
+                  onChange={(e) => {
+                    setFile(e.target.files?.[0]);
+                    setSheets(undefined);
+                  }}
+                />
+                {file && (
+                  <Button
+                    size="sm"
+                    marginTop={3}
+                    loading={busy}
+                    onClick={() => void act(() => xlsx(false))}
+                  >
+                    Прочитать файл
+                  </Button>
+                )}
+                {sheets && (
                   <Box>
-                    <Drawer.Title>Анализ агента</Drawer.Title>
+                    <Select
+                      label="Лист с разговорами"
+                      value={sheet}
+                      onChange={setSheet}
+                      items={sheets.map((s, i) => ({
+                        id: String(i),
+                        name: `${s.name} · ${s.rows} разговоров`,
+                      }))}
+                    />
+                    <Button
+                      marginTop={3}
+                      loading={busy}
+                      onClick={() => void act(() => xlsx(true))}
+                    >
+                      Использовать эту выгрузку
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+            </details>
+            <Box borderTopWidth="1px" marginTop={5} paddingTop={4}>
+              <details
+                open={!ownerRules.trim() && !Object.keys(materials).length}
+              >
+                <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                  {ownerRules.trim()
+                    ? "Промпт агента подключён · изменить"
+                    : "Добавить промпт или правила агента"}
+                </summary>
+                <Box paddingTop={3}>
+                  <Text fontWeight="semibold">
+                    По каким правилам должен отвечать агент?
+                  </Text>
+                  <Text fontSize="sm" color="fg.muted" marginTop={1}>
+                    Дайте его промпт или правила работы. Мы предложим критерии,
+                    а вы проверите их перед оценкой.
+                  </Text>
+                  <Label>Файл с промптом или правилами</Label>
+                  <input
+                    aria-label="Файл с правилами"
+                    type="file"
+                    accept=".txt,.md"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void f.text().then(setOwnerRules);
+                    }}
+                  />
+                  {ownerRules && (
+                    <Text color="green.500" fontSize="sm" marginTop={2}>
+                      Правила добавлены ·{" "}
+                      {ownerRules.length.toLocaleString("ru-RU")} символов
+                    </Text>
+                  )}
+                  <details style={{ marginTop: 12 }}>
+                    <summary style={{ cursor: "pointer" }}>
+                      Вставить или изменить текст правил
+                    </summary>
+                    <Textarea
+                      aria-label="Правила или промпт агента"
+                      rows={5}
+                      marginTop={3}
+                      value={ownerRules}
+                      onChange={(e) => setOwnerRules(e.target.value)}
+                      placeholder="Вставьте промпт вашего агента…"
+                    />
+                  </details>
+                  {!!materialDatasets.length && (
+                    <details style={{ marginTop: 12 }}>
+                      <summary style={{ cursor: "pointer" }}>
+                        Добавить базу знаний или сохранённые правила
+                        {Object.keys(materials).length
+                          ? " · выбрано " + Object.keys(materials).length
+                          : ""}
+                      </summary>
+                      <VStack align="stretch" gap={3} marginTop={3}>
+                        {materialDatasets.map((d) => (
+                          <HStack key={d.id}>
+                            <label style={{ flex: 1, fontSize: 14 }}>
+                              <input
+                                type="checkbox"
+                                checked={!!materials[d.id]}
+                                onChange={(e) =>
+                                  setMaterials((old) => {
+                                    const n = { ...old };
+                                    if (e.target.checked) n[d.id] = "knowledge";
+                                    else delete n[d.id];
+                                    return n;
+                                  })
+                                }
+                              />{" "}
+                              {d.name}
+                            </label>
+                            {materials[d.id] && (
+                              <select
+                                aria-label={"Тип материала " + d.name}
+                                style={{ ...fieldStyle, width: 180 }}
+                                value={materials[d.id]}
+                                onChange={(e) =>
+                                  setMaterials((old) => ({
+                                    ...old,
+                                    [d.id]: e.target.value as
+                                      "prompt" | "knowledge",
+                                  }))
+                                }
+                              >
+                                <option value="knowledge">База знаний</option>
+                                <option value="prompt">Правила агента</option>
+                              </select>
+                            )}
+                          </HStack>
+                        ))}
+                      </VStack>
+                    </details>
+                  )}
+                </Box>
+              </details>
+            </Box>
+            <HStack marginTop={5} align="start" gap={4}>
+              <Box flex={1}>
+                <Label>Что делает агент</Label>
+                <Input
+                  aria-label="Что делает агент"
+                  value={task}
+                  onChange={(e) => setTask(e.target.value)}
+                />
+              </Box>
+              <Box width="145px">
+                <Label>Размер выборки</Label>
+                <Input
+                  aria-label="Число разговоров"
+                  type="number"
+                  min={1}
+                  max={48}
+                  value={count}
+                  onChange={(e) => setCount(Number(e.target.value))}
+                />
+              </Box>
+            </HStack>
+            <details style={{ marginTop: 15 }}>
+              <summary style={{ cursor: "pointer" }}>Настройки анализа</summary>
+              <Select
+                label="Модель анализа"
+                value={model}
+                onChange={setModel}
+                items={(catalog?.models ?? []).map((id) => ({ id, name: id }))}
+              />
+              <HStack gap={3}>
+                <Select
+                  label="Колонка ID разговора"
+                  value={idColumn}
+                  onChange={setIdColumn}
+                  items={(
+                    catalog?.datasets.find((d) => d.id === logs)?.columnTypes ??
+                    []
+                  ).map((c) => ({ id: c.name, name: c.name }))}
+                />
+                <Select
+                  label="Колонка текста"
+                  value={textColumn}
+                  onChange={setTextColumn}
+                  items={(
+                    catalog?.datasets.find((d) => d.id === logs)?.columnTypes ??
+                    []
+                  ).map((c) => ({ id: c.name, name: c.name }))}
+                />
+              </HStack>
+            </details>
+            <Button
+              marginTop={5}
+              colorPalette="blue"
+              size="lg"
+              loading={busy}
+              disabled={
+                !logs ||
+                !model ||
+                (!ownerRules.trim() && !Object.keys(materials).length)
+              }
+              onClick={() =>
+                void act(async () => {
+                  const next = await call<Analysis>("/plan", projectId, {
+                    datasetId: logs,
+                    textColumn,
+                    idColumn,
+                    task,
+                    ownerRules,
+                    count,
+                    model,
+                    autoEvaluate: true,
+                    materials: Object.entries(materials).map(
+                      ([datasetId, kind]) => ({ datasetId, kind }),
+                    ),
+                  });
+                  setJob(next);
+                  setStep(3);
+                  url(next);
+                })
+              }
+            >
+              Проанализировать разговоры
+              <ArrowRight size={17} />
+            </Button>
+            <Text fontSize="xs" color="fg.muted" marginTop={2}>
+              Автоматически разберём {count} разговоров и соберём проверки.
+              Тексты и выбранные материалы будут переданы вашей настроенной
+              модели.
+            </Text>
+          </Paper>
+          {!!catalog?.jobs.length && (
+            <Paper>
+              <Text fontWeight="semibold" marginBottom={3}>
+                Предыдущие разборы
+              </Text>
+              {catalog.jobs.map((j) => (
+                <Button
+                  key={j.id}
+                  variant="ghost"
+                  width="full"
+                  height="auto"
+                  padding={3}
+                  justifyContent="space-between"
+                  onClick={() => void act(() => load(j.id))}
+                >
+                  <Text textAlign="left" whiteSpace="normal">
+                    {j.name
+                      .replace(/^Анализ · /, "")
+                      .replace(/^Перенесённый разбор · /, "")}
+                  </Text>
+                  <Badge>
+                    {stateName(j.status)} · {j.processed}/{j.selected}
+                  </Badge>
+                </Button>
+              ))}
+            </Paper>
+          )}
+        </VStack>
+      )}
+      {step === 2 && job && (
+        <VStack align="stretch" gap={4}>
+          <Box>
+            <Text fontSize="xl" fontWeight="semibold">
+              Проверьте правила перед анализом
+            </Text>
+            <Text fontSize="sm" color="fg.muted" marginTop={1}>
+              Отметьте требования, которые относятся к этому агенту. Затем мы
+              проверим его реальные ответы.
+            </Text>
+          </Box>
+          {job.status === "planning" && (
+            <Paper>
+              <HStack>
+                <Spinner />
+                <Text>Читаем разговоры и готовим правила…</Text>
+              </HStack>
+            </Paper>
+          )}
+          {job.error && <Text color="fg.error">{job.error}</Text>}
+          {job.knowledgeGap && (
+            <Text fontSize="sm" color="fg.muted">
+              {job.knowledgeGap}
+            </Text>
+          )}
+          {job.topics.map((topic) => (
+            <Paper key={topic.id}>
+              <Text fontWeight="semibold">
+                {topic.title} · {topic.dialogueIds.length} разговоров
+              </Text>
+              {topic.gap && (
+                <Text fontSize="sm" color="fg.muted" marginTop={2}>
+                  {topic.gap}
+                </Text>
+              )}
+              {topic.rules.map((rule) => (
+                <Box
+                  key={rule.id}
+                  marginTop={4}
+                  borderTopWidth="1px"
+                  paddingTop={4}
+                >
+                  <label
+                    style={{ display: "flex", gap: 10, alignItems: "start" }}
+                  >
+                    <input
+                      type="checkbox"
+                      style={{ marginTop: 5 }}
+                      disabled={job.status !== "ready"}
+                      checked={rule.approved}
+                      onChange={(e) =>
+                        updateRule(rule.id, { approved: e.target.checked })
+                      }
+                    />
+                    <span>{rule.text}</span>
+                  </label>
+                  <Text fontSize="sm" color="fg.muted" marginTop={2}>
+                    Когда: {rule.condition}
+                  </Text>
+                  <details style={{ marginTop: 10 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 14 }}>
+                      Основание и условия правила
+                    </summary>
+                    <Box
+                      background="bg.muted"
+                      borderRadius="md"
+                      padding={3}
+                      marginTop={3}
+                    >
+                      <Text fontSize="sm">«{rule.quote}»</Text>
+                      <Text fontSize="xs" color="fg.muted" marginTop={2}>
+                        {job.sources.find((s) => s.id === rule.sourceId)?.name}
+                      </Text>
+                    </Box>
+                    <Label>Ожидание</Label>
+                    <Textarea
+                      aria-label={"Ожидание " + rule.id}
+                      value={rule.text}
+                      rows={2}
+                      disabled={job.status !== "ready"}
+                      onChange={(e) =>
+                        updateRule(rule.id, { text: e.target.value })
+                      }
+                    />
+                    <Label>Когда применяется</Label>
+                    <Textarea
+                      aria-label={"Условие " + rule.id}
+                      value={rule.condition}
+                      rows={2}
+                      disabled={job.status !== "ready"}
+                      onChange={(e) =>
+                        updateRule(rule.id, { condition: e.target.value })
+                      }
+                    />
+                    <Label>Допустимые ответы и исключения</Label>
+                    <Textarea
+                      aria-label={"Исключения " + rule.id}
+                      value={rule.acceptable}
+                      rows={2}
+                      disabled={job.status !== "ready"}
+                      onChange={(e) =>
+                        updateRule(rule.id, { acceptable: e.target.value })
+                      }
+                    />
+                  </details>
+                </Box>
+              ))}
+            </Paper>
+          ))}
+          {job.status === "ready" && (
+            <Paper>
+              <Button
+                colorPalette="blue"
+                size="lg"
+                disabled={!approved.length}
+                loading={busy}
+                onClick={() =>
+                  void act(async () => {
+                    await approve();
+                    setJob(await call("/evaluate", projectId, base));
+                    setStep(3);
+                  })
+                }
+              >
+                Проверить {job.selected} разговоров по выбранным правилам
+              </Button>
+              <Text fontSize="sm" color="fg.muted" marginTop={3}>
+                Или сразу создайте проверки из обычных обращений, если разбор
+                ошибок сейчас не нужен.
+              </Text>
+              <Button
+                variant="ghost"
+                marginTop={1}
+                disabled={!approved.length}
+                loading={busy}
+                onClick={() =>
+                  void act(async () => {
+                    await approve();
+                    setStep(3);
+                  })
+                }
+              >
+                Создать проверки без оценки логов
+              </Button>
+            </Paper>
+          )}
+        </VStack>
+      )}
+      {step === 3 && job && (
+        <VStack align="stretch" gap={5}>
+          <Box>
+            <Text fontSize="xl" fontWeight="semibold">
+              Что стоит проверить
+            </Text>
+            <Text color="fg.muted" fontSize="sm" marginTop={1}>
+              Проверено {job.processed} из {job.selected} выбранных разговоров.
+              В исходном наборе — {job.total}. Замечания нужно подтвердить по
+              примерам.
+            </Text>
+          </Box>
+          {inProgress && (
+            <Paper>
+              <HStack>
+                <Spinner size="sm" />
+                <Text>
+                  {job.status === "planning"
+                    ? "Находим темы и правила…"
+                    : "Проверяем реальные ответы · " +
+                      job.processed +
+                      "/" +
+                      job.selected}
+                </Text>
+              </HStack>
+            </Paper>
+          )}
+          {job.status === "interrupted" && (
+            <Paper>
+              <Text>Разбор прервался. Готовые оценки сохранены.</Text>
+              {!!approved.length && (
+                <Button
+                  marginTop={3}
+                  colorPalette="blue"
+                  loading={busy}
+                  onClick={() =>
+                    void act(async () =>
+                      setJob(await call("/evaluate", projectId, base)),
+                    )
+                  }
+                >
+                  Продолжить разбор
+                </Button>
+              )}
+            </Paper>
+          )}
+          <HStack align="stretch" gap={3} flexWrap="wrap">
+            {[
+              {
+                n: new Set(patterns.map((p) => p.result.dialogueId)).size,
+                label: "Разговоров с замечаниями",
+                color: "orange.500",
+              },
+              { n: confirmed, label: "Подтверждённых замечаний", color: "fg" },
+              {
+                n: health.reduce((n, t) => n + t.unknown, 0),
+                label: "Разговоров без достаточных данных",
+                color: "fg.muted",
+              },
+            ].map((item) => (
+              <Box
+                key={item.label}
+                flex={1}
+                minWidth="180px"
+                borderWidth="1px"
+                borderRadius="lg"
+                padding={4}
+              >
+                <Text fontSize="3xl" fontWeight="bold" color={item.color}>
+                  {item.n}
+                </Text>
+                <Text fontSize="sm" color="fg.muted">
+                  {item.label}
+                </Text>
+              </Box>
+            ))}
+          </HStack>
+          {!groups.length && !inProgress && (
+            <Paper>
+              <Text fontWeight="semibold">
+                {job.results.length
+                  ? "Подтверждённых оснований для замечаний пока нет"
+                  : "Сначала выберите правила и запустите разбор"}
+              </Text>
+              <Text fontSize="sm" color="fg.muted" marginTop={2}>
+                Это не доказывает, что агент справляется со всеми запросами.
+                Ниже можно сохранить обычные ситуации для проверки.
+              </Text>
+            </Paper>
+          )}
+          {groups.map((group) => (
+            <Paper key={group.ruleId}>
+              <HStack align="start" justifyContent="space-between">
+                <Box>
+                  <Text fontSize="lg" fontWeight="semibold">
+                    {group.items[0]!.verdict.title || group.items[0]!.rule.text}
+                  </Text>
+                  <Text fontSize="sm" color="fg.muted" marginTop={1}>
+                    {group.items.length}{" "}
+                    {group.items.length === 1 ? "пример" : "примеров"} в
+                    выбранных разговорах
+                  </Text>
+                </Box>
+                <Badge colorPalette="orange">Замечание</Badge>
+              </HStack>
+              {group.items.map(({ result, verdict, rule }) => {
+                const review = latestReview(result.dialogueId, rule.id);
+                const ref = result.dialogueId + rule.id;
+                const dialogue = job.dialogues.find(
+                  (d) => d.id === result.dialogueId,
+                );
+                const customerTurns = dialogue
+                  ? dialogue.text.match(/CLIENT\s+([\s\S]*?)(?=\bAGENT\b|$)/gi)
+                  : [];
+                return (
+                  <Box
+                    key={ref}
+                    marginTop={4}
+                    borderTopWidth="1px"
+                    paddingTop={4}
+                  >
                     <Text fontSize="sm" color="fg.muted">
-                      Реальные разговоры → правила → карточки → проверка версии
+                      {review?.decision === "confirmed"
+                        ? "Вы подтвердили ошибку"
+                        : review?.decision === "disputed"
+                          ? "Вы отметили ответ как допустимый"
+                          : review?.decision === "unsure"
+                            ? "Не хватает данных для решения"
+                            : "Посмотрите ответ и решите, нарушено ли правило"}
+                    </Text>
+                    <Box
+                      background="bg.muted"
+                      borderRadius="lg"
+                      padding={4}
+                      marginTop={3}
+                    >
+                      <Text
+                        fontSize="xs"
+                        fontWeight="semibold"
+                        color="fg.muted"
+                      >
+                        КЛИЕНТ
+                      </Text>
+                      <Text marginTop={1}>
+                        {(customerTurns?.length
+                          ? [
+                              ...new Set(
+                                [customerTurns[0]!, customerTurns.at(-1)!].map(
+                                  (t) => t.replace(/^CLIENT\s+/i, ""),
+                                ),
+                              ),
+                            ].join(" → ")
+                          : undefined) ?? "Вопрос в исходном разговоре"}
+                      </Text>
+                      <Text
+                        fontSize="xs"
+                        fontWeight="semibold"
+                        color="fg.muted"
+                        marginTop={4}
+                      >
+                        ОТВЕТ АГЕНТА
+                      </Text>
+                      <Text marginTop={1}>«{verdict.agentQuote}»</Text>
+                    </Box>
+                    <Text marginTop={3} fontSize="sm">
+                      {verdict.reason}
+                    </Text>
+                    <details style={{ marginTop: 12 }}>
+                      <summary style={{ cursor: "pointer", fontSize: 14 }}>
+                        Правило и полный разговор
+                      </summary>
+                      <Box padding={3} marginTop={2}>
+                        <Text fontSize="sm" fontWeight="medium">
+                          Правило: {rule.text}
+                        </Text>
+                        <Text fontSize="sm" color="fg.muted" marginTop={2}>
+                          «{rule.quote}»
+                        </Text>
+                        <Text fontSize="sm" whiteSpace="pre-wrap" marginTop={4}>
+                          {dialogue?.text}
+                        </Text>
+                        <Textarea
+                          aria-label={"Комментарий " + ref}
+                          rows={2}
+                          marginTop={3}
+                          placeholder="Комментарий к решению — обязателен, если ответ допустим"
+                          value={reviewNotes[ref] ?? review?.note ?? ""}
+                          onChange={(e) =>
+                            setReviewNotes((n) => ({
+                              ...n,
+                              [ref]: e.target.value,
+                            }))
+                          }
+                        />
+                      </Box>
+                    </details>
+                    <HStack marginTop={4} gap={2} flexWrap="wrap">
+                      {review?.decision === "confirmed" ? (
+                        <Button
+                          colorPalette="blue"
+                          loading={busy}
+                          onClick={() =>
+                            void act(() =>
+                              promoteFinding(result.dialogueId, rule),
+                            )
+                          }
+                        >
+                          Открыть сохранённую проверку
+                          <ArrowRight size={15} />
+                        </Button>
+                      ) : (
+                        <Button
+                          colorPalette="blue"
+                          disabled={busy || job.status !== "done"}
+                          onClick={() =>
+                            void act(() =>
+                              promoteFinding(result.dialogueId, rule),
+                            )
+                          }
+                        >
+                          Подтвердить и сохранить проверку
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy || job.status !== "done"}
+                        onClick={() =>
+                          void act(() =>
+                            decide(result.dialogueId, rule, "disputed"),
+                          )
+                        }
+                      >
+                        Ответ допустим
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy || job.status !== "done"}
+                        onClick={() =>
+                          void act(() =>
+                            decide(result.dialogueId, rule, "unsure"),
+                          )
+                        }
+                      >
+                        Не хватает данных
+                      </Button>
+                    </HStack>
+                  </Box>
+                );
+              })}
+            </Paper>
+          ))}
+          {job.autoEvaluate ? (
+            <Paper>
+              <Text fontWeight="semibold">
+                {inProgress
+                  ? "Проверки появятся после анализа"
+                  : "Проверки готовы к запуску"}
+              </Text>
+              <Text fontSize="sm" color="fg.muted" marginTop={2}>
+                Готово к запуску:{" "}
+                {job.cards.filter((c) => c.status === "saved").length}. Ситуации
+                из логов и новые варианты сохраняются автоматически. Замечания
+                добавляются после вашего подтверждения.
+              </Text>
+              <Button
+                marginTop={3}
+                colorPalette="blue"
+                disabled={
+                  inProgress || !job.cards.some((c) => c.status === "saved")
+                }
+                onClick={() => {
+                  setStep(4);
+                  setCard(job.cards.find((c) => c.status === "saved"));
+                  setRunData(undefined);
+                }}
+              >
+                Перейти к проверке агента
+                <ArrowRight size={15} />
+              </Button>
+              <details style={{ marginTop: 14 }}>
+                <summary style={{ cursor: "pointer", fontSize: 14 }}>
+                  Добавить синтетическую ситуацию
+                </summary>
+                <Select
+                  label="Тема новой ситуации"
+                  value={
+                    syntheticTopicId ||
+                    job.topics.find((t) => t.rules.some((r) => r.approved))
+                      ?.id ||
+                    ""
+                  }
+                  onChange={setSyntheticTopicId}
+                  items={job.topics
+                    .filter((t) => t.rules.some((r) => r.approved))
+                    .map((t) => ({ id: t.id, name: t.title }))}
+                />
+                <Button
+                  marginTop={3}
+                  disabled={busy || inProgress || !approved.length}
+                  loading={busy}
+                  onClick={() =>
+                    void act(() =>
+                      propose(
+                        "synthetic",
+                        undefined,
+                        (
+                          job.topics.find((t) => t.id === syntheticTopicId) ??
+                          job.topics.find((t) =>
+                            t.rules.some((r) => r.approved),
+                          )
+                        )?.rules
+                          .filter((r) => r.approved)
+                          .map((r) => r.id),
+                      ),
+                    )
+                  }
+                >
+                  Создать новую проверку
+                </Button>
+              </details>
+            </Paper>
+          ) : (
+            <Paper>
+              <Text fontWeight="semibold">Проверяйте и обычные обращения</Text>
+              <Text fontSize="sm" color="fg.muted" marginTop={2}>
+                Сохраните ситуацию из логов или создайте новую по правилам.
+                Затем запустите на ней своего агента.
+              </Text>
+              <Select
+                label="Обращение клиента"
+                value={ordinaryId}
+                onChange={setOrdinaryId}
+                items={ordinary.map((d) => ({
+                  id: d.id,
+                  name:
+                    (job.topics.find((t) => t.id === d.topicId)?.title ??
+                      "Обращение") +
+                    " · " +
+                    d.id.slice(0, 8),
+                }))}
+              />
+              <Button
+                marginTop={3}
+                variant="outline"
+                disabled={!ordinaryId || busy}
+                onClick={() =>
+                  void act(() =>
+                    propose(
+                      "coverage",
+                      ordinaryId,
+                      job.topics
+                        .find(
+                          (t) =>
+                            t.id ===
+                            ordinary.find((d) => d.id === ordinaryId)?.topicId,
+                        )
+                        ?.rules.filter((r) => r.approved)
+                        .map((r) => r.id),
+                    ),
+                  )
+                }
+              >
+                Создать проверку из обращения
+              </Button>
+              <details style={{ marginTop: 18 }}>
+                <summary style={{ cursor: "pointer" }}>
+                  Создать новую ситуацию по правилам
+                </summary>
+                <Select
+                  label="Тема новой ситуации"
+                  value={
+                    syntheticTopicId ||
+                    job.topics.find((t) => t.rules.some((r) => r.approved))
+                      ?.id ||
+                    ""
+                  }
+                  onChange={setSyntheticTopicId}
+                  items={job.topics
+                    .filter((t) => t.rules.some((r) => r.approved))
+                    .map((t) => ({ id: t.id, name: t.title }))}
+                />
+                <Button
+                  marginTop={3}
+                  loading={busy}
+                  disabled={
+                    !approved.length || !["ready", "done"].includes(job.status)
+                  }
+                  onClick={() =>
+                    void act(() =>
+                      propose(
+                        "synthetic",
+                        undefined,
+                        (
+                          job.topics.find((t) => t.id === syntheticTopicId) ??
+                          job.topics.find((t) =>
+                            t.rules.some((r) => r.approved),
+                          )
+                        )?.rules
+                          .filter((r) => r.approved)
+                          .map((r) => r.id),
+                      ),
+                    )
+                  }
+                >
+                  Создать новую проверку
+                </Button>
+              </details>
+            </Paper>
+          )}
+          <details>
+            <summary
+              style={{
+                cursor: "pointer",
+                color: "var(--chakra-colors-fg-muted)",
+                fontSize: 14,
+              }}
+            >
+              Правила, результаты и настройки разбора
+            </summary>
+            <Box padding={4} fontSize="sm">
+              <Text>
+                Модель: {job.model} · проверено {job.processed}/{job.selected} ·
+                запросов к модели: {job.calls}
+              </Text>
+              {job.knowledgeGap && (
+                <Text marginTop={2}>{job.knowledgeGap}</Text>
+              )}
+              {job.exportError && (
+                <Text color="fg.error">{job.exportError}</Text>
+              )}
+              {job.experimentSlug && (
+                <a href={`/${projectSlug}/experiments/${job.experimentSlug}`}>
+                  Таблица оценок в LangWatch ↗
+                </a>
+              )}
+              {health.map((t) => (
+                <Text key={t.id} marginTop={2}>
+                  {t.title}: {t.passed} без замечаний, {t.failed} с замечаниями,{" "}
+                  {t.unknown} без достаточных данных
+                </Text>
+              ))}
+              {job.results.map((r) => (
+                <Box
+                  key={r.dialogueId}
+                  marginTop={3}
+                  borderTopWidth="1px"
+                  paddingTop={3}
+                >
+                  <Text color="fg.muted">Разговор {r.dialogueId}</Text>
+                  {r.rules.map((v) => (
+                    <Text key={v.ruleId}>
+                      {
+                        {
+                          PASS: "Правило соблюдено",
+                          FAIL: "Замечание",
+                          UNKNOWN: "Недостаточно данных",
+                          NOT_APPLICABLE: "Правило не применялось",
+                        }[v.status]
+                      }{" "}
+                      · {v.reason}
+                    </Text>
+                  ))}
+                </Box>
+              ))}
+            </Box>
+          </details>
+        </VStack>
+      )}
+      {step === 4 && job && (
+        <VStack gap={5} align="stretch">
+          {!!job.cards.filter((c) => c.status === "saved").length && (
+            <Paper>
+              <HStack gap={4} align="end" flexWrap="wrap">
+                <Box flex={1} minWidth="200px">
+                  <Select
+                    label="Ваш агент"
+                    value={agent}
+                    onChange={setAgent}
+                    items={catalog?.agents ?? []}
+                  />
+                </Box>
+                <Button
+                  colorPalette="blue"
+                  size="lg"
+                  loading={busy}
+                  disabled={!agent}
+                  onClick={() =>
+                    void act(async () => {
+                      await call("/run-all", projectId, {
+                        ...base,
+                        agentId: agent,
+                        note: note.slice(0, 200),
+                      });
+                      const next = await call<Analysis>(
+                        "/analysis/" + job.id,
+                        projectId,
+                      );
+                      setJob(next);
+                      setCard(next.cards.find((c) => c.status === "saved"));
+                      setRunData(undefined);
+                    })
+                  }
+                >
+                  Проверить агента на{" "}
+                  {job.cards.filter((c) => c.status === "saved").length}{" "}
+                  {job.cards.filter((c) => c.status === "saved").length % 10 ===
+                    1 &&
+                  job.cards.filter((c) => c.status === "saved").length % 100 !==
+                    11
+                    ? "ситуации"
+                    : "ситуациях"}
+                </Button>
+              </HStack>
+              <Text fontSize="xs" color="fg.muted" marginTop={2}>
+                Запустим готовые проверки. Неподтверждённые замечания в этот
+                прогон не попадут.
+              </Text>
+            </Paper>
+          )}
+
+          {!!suiteResults.length && (
+            <Paper>
+              <Text fontWeight="semibold">Последние результаты проверок</Text>
+              <HStack gap={4} flexWrap="wrap" marginTop={2}>
+                <Text fontSize="sm">
+                  Пройдены:{" "}
+                  {suiteResults.filter((r) => r.status === "SUCCESS").length}
+                </Text>
+                <Text fontSize="sm">
+                  Не пройдены:{" "}
+                  {suiteResults.filter((r) => r.status === "FAILED").length}
+                </Text>
+                <Text fontSize="sm">
+                  Ошибки запуска:{" "}
+                  {suiteResults.filter((r) => r.status === "ERROR").length}
+                </Text>
+                <Text fontSize="sm">
+                  В работе:{" "}
+                  {
+                    suiteResults.filter((r) =>
+                      ["QUEUED", "PENDING", "IN_PROGRESS"].includes(r.status),
+                    ).length
+                  }
+                </Text>
+              </HStack>
+              {suiteResults.map((row) => (
+                <HStack
+                  key={row.cardId}
+                  justifyContent="space-between"
+                  align="start"
+                  paddingY={3}
+                  borderBottomWidth="1px"
+                >
+                  <Box flex={1}>
+                    <Text fontSize="sm">{row.name}</Text>
+                    <Text fontSize="xs" color="fg.muted" marginTop={1}>
+                      {runName(row.status)}
                     </Text>
                   </Box>
-                  <Drawer.CloseTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setCard(job.cards.find((c) => c.id === row.cardId));
+                      setRunData(undefined);
+                    }}
+                  >
+                    Результат
+                  </Button>
+                </HStack>
+              ))}
+            </Paper>
+          )}
+          <Box>
+            <Text fontSize="xl" fontWeight="semibold">
+              Сохранённые проверки
+            </Text>
+            <Text fontSize="sm" color="fg.muted" marginTop={1}>
+              Каждая проверка — ситуация клиента и ожидаемое поведение агента.
+              Запустите её снова после изменения агента.
+            </Text>
+          </Box>
+          {!job.cards.length && (
+            <Paper>
+              <Text>Проверок пока нет.</Text>
+              <Button
+                marginTop={3}
+                colorPalette="blue"
+                onClick={() => setStep(3)}
+              >
+                Создать из разговоров
+              </Button>
+            </Paper>
+          )}
+          {!!job.cards.length && (
+            <HStack align="stretch" gap={3} flexWrap="wrap">
+              {job.cards.map((c) => (
+                <Box
+                  key={c.id}
+                  flex={1}
+                  minWidth="210px"
+                  borderWidth="1px"
+                  borderColor={card?.id === c.id ? "blue.500" : "border"}
+                  borderRadius="lg"
+                  padding={4}
+                  background={card?.id === c.id ? "bg.muted" : "bg"}
+                >
+                  <Text fontSize="xs" color="fg.muted">
+                    {originName(c.origin)}
+                  </Text>
+                  <Text fontWeight="semibold" marginTop={2}>
+                    {c.name}
+                  </Text>
+                  <Text fontSize="xs" color="fg.muted" marginTop={2}>
+                    {c.status === "saved" ? "Сохранена" : "Черновик"}
+                    {c.runs.length ? " · прогонов " + c.runs.length : ""}
+                  </Text>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    marginTop={2}
+                    onClick={() => {
+                      setCard(c);
+                      setRunData(undefined);
+                    }}
+                  >
+                    Открыть
+                  </Button>
+                </Box>
+              ))}
+            </HStack>
+          )}
+          {card && (
+            <Paper>
+              <HStack justifyContent="space-between">
+                <Text fontSize="lg" fontWeight="semibold">
+                  {card.name}
+                </Text>
+                <Badge>
+                  {card.status === "saved"
+                    ? "Готова к запуску"
+                    : "Предложенная проверка"}
+                </Badge>
+              </HStack>
+              <Text fontSize="sm" color="fg.muted" marginTop={2}>
+                {originName(card.origin)}
+              </Text>
+              <Box
+                background="bg.muted"
+                borderRadius="lg"
+                padding={4}
+                marginTop={4}
+              >
+                <Text fontSize="xs" fontWeight="semibold" color="fg.muted">
+                  СИТУАЦИЯ КЛИЕНТА
+                </Text>
+                <Text whiteSpace="pre-wrap" marginTop={2}>
+                  {card.situation}
+                </Text>
+                <Text
+                  fontSize="xs"
+                  fontWeight="semibold"
+                  color="fg.muted"
+                  marginTop={4}
+                >
+                  ЧТО ПРОВЕРЯЕМ
+                </Text>
+                {card.criteria.map((criterion, i) => (
+                  <Text
+                    key={i}
+                    fontSize="sm"
+                    whiteSpace="pre-wrap"
+                    marginTop={2}
+                  >
+                    {criterion}
+                  </Text>
+                ))}
+              </Box>
+              {card.status === "draft" && (
+                <details style={{ marginTop: 14 }}>
+                  <summary style={{ cursor: "pointer" }}>
+                    Изменить черновик
+                  </summary>
+                  <Label>Название</Label>
+                  <Input
+                    aria-label="Название проверки"
+                    value={card.name}
+                    onChange={(e) => setCard({ ...card, name: e.target.value })}
+                  />
+                  <Label>Ситуация клиента</Label>
+                  <Textarea
+                    aria-label="Ситуация клиента"
+                    rows={5}
+                    value={card.situation}
+                    onChange={(e) =>
+                      setCard({ ...card, situation: e.target.value })
+                    }
+                  />
+                  {card.criteria.map((criterion, i) => (
+                    <Box key={i}>
+                      <Label>Критерий {i + 1}</Label>
+                      <Textarea
+                        aria-label={"Критерий проверки " + (i + 1)}
+                        rows={3}
+                        value={criterion}
+                        onChange={(e) =>
+                          setCard({
+                            ...card,
+                            criteria: card.criteria.map((v, n) =>
+                              n === i ? e.target.value : v,
+                            ),
+                          })
+                        }
+                      />
+                    </Box>
+                  ))}
+                </details>
+              )}
+              {card.status === "draft" ? (
+                <Button
+                  marginTop={4}
+                  colorPalette="blue"
+                  loading={busy}
+                  onClick={() =>
+                    void act(async () => {
+                      if (card.origin === "regression" && card.dialogueId) {
+                        for (const ruleId of card.ruleIds) {
+                          const rule = job.topics
+                            .flatMap((t) => t.rules)
+                            .find((r) => r.id === ruleId);
+                          if (
+                            rule &&
+                            latestReview(card.dialogueId, ruleId)?.decision !==
+                              "confirmed"
+                          )
+                            await decide(card.dialogueId, rule, "confirmed");
+                        }
+                      }
+                      await call("/card", projectId, {
+                        ...base,
+                        cardId: card.id,
+                        name: card.name,
+                        situation: card.situation,
+                        criteria: card.criteria,
+                      });
+                      setCard(
+                        await call("/accept", projectId, {
+                          ...base,
+                          cardId: card.id,
+                        }),
+                      );
+                      setJob(await call("/analysis/" + job.id, projectId));
+                    })
+                  }
+                >
+                  {card.origin === "regression"
+                    ? "Подтвердить и сохранить проверку"
+                    : "Сохранить проверку"}
+                </Button>
+              ) : (
+                <Box marginTop={4} borderTopWidth="1px" paddingTop={4}>
+                  <Select
+                    label="Какого агента проверяем"
+                    value={agent}
+                    onChange={setAgent}
+                    items={catalog?.agents ?? []}
+                  />
+                  <details style={{ marginTop: 12 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 14 }}>
+                      Версия агента и редактор проверки
+                    </summary>
+                    <Input
+                      aria-label="Версия агента"
+                      marginTop={3}
+                      value={note}
+                      placeholder="Например: текущая версия или номер сборки"
+                      onChange={(e) => setNote(e.target.value)}
+                    />
                     <Button
                       size="sm"
                       variant="ghost"
-                      aria-label="Закрыть анализ агента"
+                      marginTop={2}
+                      onClick={() => nativeScenario(card.scenarioId!)}
                     >
-                      <X size={18} />
+                      Изменить в редакторе LangWatch ↗
                     </Button>
-                  </Drawer.CloseTrigger>
-                </HStack>
-              </Drawer.Header>
-              <Drawer.Body padding={6}>
-                <Box maxWidth="1100px" marginX="auto">
-                  <HStack gap={2} marginBottom={5} flexWrap="wrap">
-                    {[
-                      "Логи и материалы",
-                      "Темы и правила",
-                      "Проблемы и покрытие",
-                      "Карточки и прогоны",
-                    ].map((label, i) => (
-                      <Button
-                        key={label}
-                        size="sm"
-                        variant={step === i + 1 ? "solid" : "outline"}
-                        colorPalette={step === i + 1 ? "blue" : undefined}
-                        disabled={i > 0 && !job}
-                        onClick={() => setStep(i + 1)}
-                      >
-                        {i + 1}. {label}
-                      </Button>
-                    ))}
-                  </HStack>
-                  {error && (
-                    <Box
-                      background="bg.error"
-                      color="fg.error"
-                      padding={4}
-                      borderRadius="md"
-                      marginBottom={4}
-                      role="alert"
-                    >
-                      {error}
-                    </Box>
-                  )}
-                  {job && (
-                    <HStack
-                      marginBottom={4}
-                      justifyContent="space-between"
-                      flexWrap="wrap"
-                    >
-                      <Text fontSize="sm">
-                        {job.message} · выбрано {job.selected} из {job.total} ·
-                        вызовов модели {job.calls}
-                      </Text>
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        onClick={() => {
-                          setJob(undefined);
-                          setCard(undefined);
-                          setStep(1);
-                          url();
-                        }}
-                      >
-                        Новый разбор
-                      </Button>
-                    </HStack>
-                  )}
-                  {step === 1 && (
-                    <VStack gap={4} align="stretch">
-                      <Paper>
-                        <Text fontSize="lg" fontWeight="semibold">
-                          Что проверяем
-                        </Text>
-                        <Select
-                          label="Набор с логами"
-                          value={logs}
-                          onChange={setLogs}
-                          items={catalog?.datasets ?? []}
-                        />
-                        <HStack align="start" gap={4}>
-                          <Select
-                            label="Колонка ID разговора"
-                            value={idColumn}
-                            onChange={setIdColumn}
-                            items={(
-                              catalog?.datasets.find((d) => d.id === logs)
-                                ?.columnTypes ?? []
-                            ).map((c) => ({ id: c.name, name: c.name }))}
-                          />
-                          <Select
-                            label="Колонка текста"
-                            value={textColumn}
-                            onChange={setTextColumn}
-                            items={(
-                              catalog?.datasets.find((d) => d.id === logs)
-                                ?.columnTypes ?? []
-                            ).map((c) => ({ id: c.name, name: c.name }))}
-                          />
-                        </HStack>
-                        <Label>
-                          Загрузить XLSX как обычный набор LangWatch
-                        </Label>
-                        <input
-                          aria-label="Файл XLSX"
-                          type="file"
-                          accept=".xlsx"
-                          onChange={(e) => {
-                            setFile(e.target.files?.[0]);
-                            setSheets(undefined);
-                          }}
-                        />
-                        {file && (
-                          <Button
-                            size="sm"
-                            marginTop={2}
-                            loading={busy}
-                            onClick={() => void act(() => xlsx(false))}
-                          >
-                            Проверить листы
-                          </Button>
-                        )}
-                        {sheets && (
-                          <HStack>
-                            <Select
-                              label="Лист XLSX"
-                              value={sheet}
-                              onChange={setSheet}
-                              items={sheets.map((s, i) => ({
-                                id: String(i),
-                                name: `${s.name} · ${s.rows} строк`,
-                              }))}
-                            />
-                            <Button
-                              marginTop={8}
-                              loading={busy}
-                              onClick={() => void act(() => xlsx(true))}
-                            >
-                              Импортировать в LangWatch
-                            </Button>
-                          </HStack>
-                        )}
-                        <Text fontSize="xs" color="fg.muted" marginTop={2}>
-                          CSV и JSONL загружаются штатной кнопкой Upload
-                          datasets. Текст разговора должен различать CLIENT и
-                          AGENT.
-                        </Text>
-                        <Label>Что делает агент</Label>
-                        <Input
-                          aria-label="Что делает агент"
-                          value={task}
-                          onChange={(e) => setTask(e.target.value)}
-                        />
-                        <Label>Правила или промпт агента</Label>
-                        <Textarea
-                          aria-label="Правила или промпт агента"
-                          rows={4}
-                          value={ownerRules}
-                          onChange={(e) => setOwnerRules(e.target.value)}
-                          placeholder="Можно дать промпт целиком: Lab выделит наблюдаемые правила и сохранит цитаты."
-                        />
-                        <input
-                          aria-label="Файл с правилами"
-                          type="file"
-                          accept=".txt,.md"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) void f.text().then(setOwnerRules);
-                          }}
-                        />
-                        <Label>Материалы в наборах LangWatch</Label>
-                        <VStack
-                          align="stretch"
-                          maxHeight="180px"
-                          overflowY="auto"
-                          gap={2}
-                        >
-                          {catalog?.datasets
-                            .filter((d) => d.id !== logs)
-                            .map((d) => (
-                              <HStack key={d.id}>
-                                <label style={{ flex: 1, fontSize: "14px" }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={!!materials[d.id]}
-                                    onChange={(e) =>
-                                      setMaterials((old) => {
-                                        const next = { ...old };
-                                        if (e.target.checked)
-                                          next[d.id] = "knowledge";
-                                        else delete next[d.id];
-                                        return next;
-                                      })
-                                    }
-                                  />{" "}
-                                  {d.name}
-                                </label>
-                                {materials[d.id] && (
-                                  <select
-                                    aria-label={"Тип материала " + d.name}
-                                    style={{ ...fieldStyle, width: "180px" }}
-                                    value={materials[d.id]}
-                                    onChange={(e) =>
-                                      setMaterials((old) => ({
-                                        ...old,
-                                        [d.id]: e.target.value as
-                                          "prompt" | "knowledge",
-                                      }))
-                                    }
-                                  >
-                                    <option value="knowledge">
-                                      Справочник фактов
-                                    </option>
-                                    <option value="prompt">
-                                      Промпт / правила бота
-                                    </option>
-                                  </select>
-                                )}
-                              </HStack>
-                            ))}
-                        </VStack>
-                        <HStack gap={4} align="start">
-                          <Select
-                            label="Модель анализа"
-                            value={model}
-                            onChange={setModel}
-                            items={(catalog?.models ?? []).map((id) => ({
-                              id,
-                              name: id,
-                            }))}
-                          />
-                          <Box width="150px">
-                            <Label>Разговоров</Label>
-                            <Input
-                              aria-label="Число разговоров"
-                              type="number"
-                              min={1}
-                              max={48}
-                              value={count}
-                              onChange={(e) => setCount(Number(e.target.value))}
-                            />
-                          </Box>
-                        </HStack>
-                        <Text fontSize="sm" color="fg.muted" marginTop={3}>
-                          Сначала один вызов на темы и критерии. После их
-                          принятия — до одного вызова на разговор. Выбранные
-                          тексты и материалы уйдут настроенному провайдеру
-                          модели. Статьи — основание фактов, а не автоматические
-                          обязанности бота.
-                        </Text>
-                        <Button
-                          colorPalette="blue"
-                          marginTop={4}
-                          disabled={!logs || !model}
-                          loading={busy}
-                          onClick={() =>
-                            void act(async () => {
-                              const next = await call<Analysis>(
-                                "/plan",
-                                projectId,
-                                {
-                                  datasetId: logs,
-                                  textColumn,
-                                  idColumn,
-                                  task,
-                                  ownerRules,
-                                  count,
-                                  model,
-                                  materials: Object.entries(materials).map(
-                                    ([datasetId, kind]) => ({
-                                      datasetId,
-                                      kind,
-                                    }),
-                                  ),
-                                },
-                              );
-                              setJob(next);
-                              setStep(2);
-                              url(next);
-                            })
-                          }
-                        >
-                          Найти темы и правила
-                          <ArrowRight size={16} />
-                        </Button>
-                      </Paper>
-                      <Paper>
-                        <Text fontWeight="semibold">Сохранённые разборы</Text>
-                        {catalog?.jobs.map((j) => (
-                          <Button
-                            key={j.id}
-                            size="sm"
-                            variant="ghost"
-                            justifyContent="start"
-                            width="full"
-                            onClick={() => void act(() => load(j.id))}
-                          >
-                            {j.name} · {j.processed}/{j.selected} · {j.status}
-                          </Button>
-                        ))}
-                      </Paper>
-                    </VStack>
-                  )}
-                  {step === 2 && job && (
-                    <VStack gap={4} align="stretch">
-                      {job.status === "planning" && (
-                        <HStack>
-                          <Spinner />
-                          <Text>Нахожу темы и дословные основания правил…</Text>
-                        </HStack>
-                      )}
-                      {job.error && <Text color="fg.error">{job.error}</Text>}
-                      {job.knowledgeGap && (
-                        <Text color="fg.muted">{job.knowledgeGap}</Text>
-                      )}
-                      {job.topics.map((topic) => (
-                        <Paper key={topic.id}>
-                          <Text fontSize="lg" fontWeight="semibold">
-                            {topic.title} · {topic.dialogueIds.length}{" "}
-                            разговоров
-                          </Text>
-                          {topic.gap && (
-                            <Text color="fg.muted">{topic.gap}</Text>
-                          )}
-                          {topic.rules.map((rule) => (
-                            <Box
-                              key={rule.id}
-                              marginTop={4}
-                              borderTopWidth="1px"
-                              paddingTop={3}
-                            >
-                              <label>
-                                <input
-                                  type="checkbox"
-                                  disabled={job.status !== "ready"}
-                                  checked={rule.approved}
-                                  onChange={(e) =>
-                                    updateRule(rule.id, {
-                                      approved: e.target.checked,
-                                    })
-                                  }
-                                />{" "}
-                                Применить это правило к подходящим ситуациям
-                              </label>
-                              <Label>Ожидание</Label>
-                              <Textarea
-                                aria-label={"Ожидание " + rule.id}
-                                value={rule.text}
-                                disabled={job.status !== "ready"}
-                                rows={2}
-                                onChange={(e) =>
-                                  updateRule(rule.id, { text: e.target.value })
-                                }
-                              />
-                              <HStack gap={3} align="start">
-                                <Box flex={1}>
-                                  <Label>Когда применяется</Label>
-                                  <Textarea
-                                    aria-label={"Условие " + rule.id}
-                                    value={rule.condition}
-                                    disabled={job.status !== "ready"}
-                                    rows={2}
-                                    onChange={(e) =>
-                                      updateRule(rule.id, {
-                                        condition: e.target.value,
-                                      })
-                                    }
-                                  />
-                                </Box>
-                                <Box flex={1}>
-                                  <Label>Допустимые пути / исключения</Label>
-                                  <Textarea
-                                    aria-label={"Исключения " + rule.id}
-                                    value={rule.acceptable}
-                                    disabled={job.status !== "ready"}
-                                    rows={2}
-                                    onChange={(e) =>
-                                      updateRule(rule.id, {
-                                        acceptable: e.target.value,
-                                      })
-                                    }
-                                  />
-                                </Box>
-                              </HStack>
-                              <Box
-                                padding={3}
-                                background="bg.muted"
-                                marginTop={2}
-                                borderRadius="md"
-                              >
-                                <Text fontSize="sm">«{rule.quote}»</Text>
-                                <Text fontSize="xs" color="fg.muted">
-                                  {
-                                    job.sources.find(
-                                      (s) => s.id === rule.sourceId,
-                                    )?.name
-                                  }{" "}
-                                  · наблюдение: {rule.observation}
-                                </Text>
-                              </Box>
-                            </Box>
-                          ))}
-                        </Paper>
-                      ))}
-                      {job.status === "ready" && (
-                        <HStack flexWrap="wrap">
-                          <Button
-                            colorPalette="blue"
-                            disabled={!approved.length}
-                            loading={busy}
-                            onClick={() =>
-                              void act(async () => {
-                                await approve();
-                                setJob(
-                                  await call("/evaluate", projectId, base),
-                                );
-                                setStep(3);
-                              })
-                            }
-                          >
-                            Принять правила и оценить логи
-                          </Button>
-                          <Button
-                            variant="outline"
-                            disabled={!approved.length}
-                            loading={busy}
-                            onClick={() =>
-                              void act(async () => {
-                                await approve();
-                                setStep(3);
-                              })
-                            }
-                          >
-                            Принять и собрать обычные ситуации без оценки логов
-                          </Button>
-                        </HStack>
-                      )}
-                    </VStack>
-                  )}
-                  {step === 3 && job && (
-                    <VStack align="stretch" gap={4}>
-                      <Paper>
-                        <Text fontSize="lg" fontWeight="semibold">
-                          Что найдено в реальных разговорах
-                        </Text>
-                        <Text fontSize="sm" color="fg.muted">
-                          Обработано {job.processed} из {job.selected}{" "}
-                          выбранных, всего в наборе {job.total}. Число нарушений
-                          относится к принятым критериям и этой выборке.
-                        </Text>
-                        {job.exportError && (
-                          <Text color="fg.error">{job.exportError}</Text>
-                        )}
-                        {job.experimentSlug && (
-                          <a
-                            href={`/${projectSlug}/experiments/${job.experimentSlug}`}
-                            style={{ color: "var(--chakra-colors-blue-600)" }}
-                          >
-                            Открыть этот запуск в Experiments ↗
-                          </a>
-                        )}
-                        {job.status === "judging" && (
-                          <HStack marginTop={3}>
-                            <Spinner size="sm" />
-                            <Text>Оцениваю записанные разговоры…</Text>
-                          </HStack>
-                        )}
-                        <HStack marginTop={3} gap={5} flexWrap="wrap">
-                          <Text>Замечаний судьи: {patterns.length}</Text>
-                          <Text>
-                            Разговоров с замечаниями:{" "}
-                            {
-                              new Set(patterns.map((p) => p.result.dialogueId))
-                                .size
-                            }
-                          </Text>
-                          <Text>
-                            UNKNOWN:{" "}
-                            {
-                              job.results
-                                .flatMap((r) => r.rules)
-                                .filter((v) => v.status === "UNKNOWN").length
-                            }
-                          </Text>
-                          <Text>
-                            Не применялось:{" "}
-                            {
-                              job.results
-                                .flatMap((r) => r.rules)
-                                .filter((v) => v.status === "NOT_APPLICABLE")
-                                .length
-                            }
-                          </Text>
-                        </HStack>
-                      </Paper>
-                      {health.map((topic) => (
-                        <Paper key={topic.id}>
-                          <Text fontWeight="semibold">
-                            {topic.title} · {topic.processed} / {topic.total}{" "}
-                            разговоров
-                          </Text>
-                          <HStack marginTop={2} gap={4} flexWrap="wrap">
-                            <Badge colorPalette="green">
-                              Без замечаний по принятым правилам: {topic.passed}
-                            </Badge>
-                            <Badge colorPalette="orange">
-                              С замечаниями: {topic.failed}
-                            </Badge>
-                            <Badge>Недостаточно данных: {topic.unknown}</Badge>
-                          </HStack>
-                          <Text fontSize="xs" color="fg.muted" marginTop={2}>
-                            Результат судьи на выбранных разговорах.
-                            Подтверждённые нарушения отмечены в примерах ниже.
-                          </Text>
-                        </Paper>
-                      ))}
-                      {groups.map((group) => (
-                        <Paper key={group.ruleId}>
-                          <Text fontSize="lg" fontWeight="semibold">
-                            {group.items[0]!.verdict.title ||
-                              group.items[0]!.rule.text}
-                          </Text>
-                          <Text fontSize="sm" color="fg.muted">
-                            {group.items.length} примеров по одному правилу.
-                            Одинаковые ID не считаются повторными клиентами.
-                          </Text>
-                          {group.items.map(({ result, verdict, rule }) => {
-                            const review = job.reviews
-                              .filter(
-                                (r) =>
-                                  r.dialogueId === result.dialogueId &&
-                                  r.ruleId === rule.id,
-                              )
-                              .at(-1);
-                            const ref = result.dialogueId + rule.id;
-                            return (
-                              <Box
-                                key={ref}
-                                marginTop={4}
-                                borderTopWidth="1px"
-                                paddingTop={3}
-                              >
-                                <Badge
-                                  colorPalette={
-                                    review?.decision === "confirmed"
-                                      ? "green"
-                                      : review?.decision === "disputed"
-                                        ? "gray"
-                                        : "orange"
-                                  }
-                                >
-                                  {review?.decision === "confirmed"
-                                    ? "Подтверждено"
-                                    : review?.decision === "disputed"
-                                      ? "Отклонено"
-                                      : "Нужна проверка примера"}
-                                </Badge>
-                                <Text marginTop={2}>{verdict.reason}</Text>
-                                <Box
-                                  background="bg.muted"
-                                  padding={3}
-                                  marginY={2}
-                                >
-                                  <Text>Агент: «{verdict.agentQuote}»</Text>
-                                  <Text fontSize="sm" marginTop={2}>
-                                    Правило: «{rule.quote}»
-                                  </Text>
-                                </Box>
-                                <details>
-                                  <summary>
-                                    Открыть весь реальный разговор ·{" "}
-                                    {result.dialogueId}
-                                  </summary>
-                                  <Text
-                                    whiteSpace="pre-wrap"
-                                    fontSize="sm"
-                                    padding={3}
-                                  >
-                                    {
-                                      job.dialogues.find(
-                                        (d) => d.id === result.dialogueId,
-                                      )?.text
-                                    }
-                                  </Text>
-                                </details>
-                                <Textarea
-                                  rows={2}
-                                  aria-label={"Основание " + ref}
-                                  placeholder="Основание решения: почему это нарушение или допустимый ответ"
-                                  value={reviewNotes[ref] ?? review?.note ?? ""}
-                                  onChange={(e) =>
-                                    setReviewNotes((n) => ({
-                                      ...n,
-                                      [ref]: e.target.value,
-                                    }))
-                                  }
-                                />
-                                <HStack marginTop={2} flexWrap="wrap">
-                                  {(
-                                    ["confirmed", "disputed", "unsure"] as const
-                                  ).map((decision, i) => (
-                                    <Button
-                                      key={decision}
-                                      size="sm"
-                                      disabled={busy || job.status !== "done"}
-                                      onClick={() =>
-                                        void act(async () => {
-                                          const note =
-                                            reviewNotes[ref] ??
-                                            review?.note ??
-                                            "";
-                                          if (!note.trim())
-                                            throw new Error(
-                                              "Укажите основание решения",
-                                            );
-                                          setJob(
-                                            await call("/review", projectId, {
-                                              ...base,
-                                              dialogueId: result.dialogueId,
-                                              ruleId: rule.id,
-                                              decision,
-                                              note,
-                                            }),
-                                          );
-                                        })
-                                      }
-                                    >
-                                      {
-                                        [
-                                          "Подтвердить",
-                                          "Отклонить",
-                                          "Не уверен",
-                                        ][i]
-                                      }
-                                    </Button>
-                                  ))}
-                                  {review?.decision === "confirmed" && (
-                                    <Button
-                                      size="sm"
-                                      colorPalette="blue"
-                                      loading={busy}
-                                      onClick={() =>
-                                        void act(() =>
-                                          propose(
-                                            "regression",
-                                            result.dialogueId,
-                                            [rule.id],
-                                          ),
-                                        )
-                                      }
-                                    >
-                                      Сделать регрессионную карточку
-                                    </Button>
-                                  )}
-                                </HStack>
-                              </Box>
-                            );
-                          })}
-                        </Paper>
-                      ))}
-                      <Paper>
-                        <Text fontSize="lg" fontWeight="semibold">
-                          Обычные ситуации и синтетика
-                        </Text>
-                        <Text fontSize="sm" color="fg.muted">
-                          Этот путь работает и без поиска ошибок. Он проверяет
-                          навыки агента на обычных обращениях и новых вариантах
-                          правил.
-                        </Text>
-                        <Select
-                          label="Обычная ситуация из логов"
-                          value={ordinaryId}
-                          onChange={setOrdinaryId}
-                          items={ordinary.map((d) => ({
-                            id: d.id,
-                            name:
-                              job.topics.find((t) => t.id === d.topicId)
-                                ?.title +
-                              " · " +
-                              d.id.slice(0, 8),
-                          }))}
-                        />
-                        <Select
-                          label="Тема для синтетической ситуации"
-                          value={
-                            syntheticTopicId ||
-                            job.topics.find((t) =>
-                              t.rules.some((r) => r.approved),
-                            )?.id ||
-                            ""
-                          }
-                          onChange={setSyntheticTopicId}
-                          items={job.topics
-                            .filter((t) => t.rules.some((r) => r.approved))
-                            .map((t) => ({ id: t.id, name: t.title }))}
-                        />
-                        <HStack marginTop={3} flexWrap="wrap">
-                          <Button
-                            disabled={!ordinaryId || busy}
-                            onClick={() =>
-                              void act(() =>
-                                propose(
-                                  "coverage",
-                                  ordinaryId,
-                                  job.topics
-                                    .find(
-                                      (t) =>
-                                        t.id ===
-                                        ordinary.find(
-                                          (d) => d.id === ordinaryId,
-                                        )?.topicId,
-                                    )
-                                    ?.rules.filter((r) => r.approved)
-                                    .map((r) => r.id),
-                                ),
-                              )
-                            }
-                          >
-                            Собрать карточку из обычного обращения
-                          </Button>
-                          <Button
-                            variant="outline"
-                            disabled={
-                              !approved.length ||
-                              busy ||
-                              !["ready", "done"].includes(job.status)
-                            }
-                            onClick={() =>
-                              void act(() =>
-                                propose(
-                                  "synthetic",
-                                  undefined,
-                                  (
-                                    job.topics.find(
-                                      (t) => t.id === syntheticTopicId,
-                                    ) ??
-                                    job.topics.find((t) =>
-                                      t.rules.some((r) => r.approved),
-                                    )
-                                  )?.rules
-                                    .filter((r) => r.approved)
-                                    .map((r) => r.id),
-                                ),
-                              )
-                            }
-                          >
-                            Предложить синтетическую ситуацию из правил
-                          </Button>
-                        </HStack>
-                      </Paper>
-                      <details>
-                        <summary>Все оценки принятых критериев</summary>
-                        {job.results.map((r) => (
-                          <Box
-                            key={r.dialogueId}
-                            padding={3}
-                            borderBottomWidth="1px"
-                          >
-                            <Text fontWeight="medium">{r.dialogueId}</Text>
-                            {r.rules.map((v) => (
-                              <Text key={v.ruleId} fontSize="sm">
-                                {v.status} · {v.reason}
-                              </Text>
-                            ))}
-                            {!r.rules.length && (
-                              <Text>
-                                Не оценён: нет принятых применимых правил.
-                              </Text>
-                            )}
-                          </Box>
-                        ))}
-                      </details>
-                    </VStack>
-                  )}
-                  {step === 4 && job && (
-                    <VStack gap={4} align="stretch">
-                      <Paper>
-                        <Text fontSize="lg" fontWeight="semibold">
-                          Библиотека карточек этого разбора
-                        </Text>
-                        {job.cards.map((c) => (
-                          <Button
-                            key={c.id}
-                            variant="ghost"
-                            width="full"
-                            justifyContent="start"
-                            onClick={() => {
-                              setCard(c);
-                              setRunData(undefined);
-                            }}
-                          >
-                            {c.origin === "coverage"
-                              ? "Обычное обращение"
-                              : c.origin === "regression"
-                                ? "Регрессия"
-                                : "Синтетика"}{" "}
-                            · {c.name} ·{" "}
-                            {c.status === "saved" ? "в LangWatch" : "черновик"}
-                          </Button>
-                        ))}
-                        {!job.cards.length && (
-                          <Text color="fg.muted">
-                            Создайте карточку из подтверждённой проблемы или
-                            обычного обращения.
-                          </Text>
-                        )}
-                      </Paper>
-                      {card && (
-                        <Paper>
-                          <Badge>
-                            {card.origin === "coverage"
-                              ? "Coverage · обычный трафик"
-                              : card.origin === "regression"
-                                ? "Regression · известная ошибка"
-                                : "Синтетическая ситуация"}
-                          </Badge>
-                          <Label>Название карточки</Label>
-                          <Input
-                            aria-label="Название карточки"
-                            disabled={card.status === "saved"}
-                            value={card.name}
-                            onChange={(e) =>
-                              setCard({ ...card, name: e.target.value })
-                            }
-                          />
-                          <Label>
-                            Мир клиента: цель, исходные факты и поведение
-                          </Label>
-                          <Textarea
-                            aria-label="Мир клиента"
-                            rows={5}
-                            disabled={card.status === "saved"}
-                            value={card.situation}
-                            onChange={(e) =>
-                              setCard({ ...card, situation: e.target.value })
-                            }
-                          />
-                          <Label>Критерии проверки</Label>
-                          {card.criteria.map((criterion, i) => (
-                            <Textarea
-                              key={i}
-                              aria-label={"Критерий карточки " + (i + 1)}
-                              marginBottom={2}
-                              rows={3}
-                              disabled={card.status === "saved"}
-                              value={criterion}
-                              onChange={(e) =>
-                                setCard({
-                                  ...card,
-                                  criteria: card.criteria.map((v, index) =>
-                                    index === i ? e.target.value : v,
-                                  ),
-                                })
-                              }
-                            />
-                          ))}
-                          {card.status === "draft" ? (
-                            <Button
-                              colorPalette="blue"
-                              loading={busy}
-                              onClick={() =>
-                                void act(async () => {
-                                  await call("/card", projectId, {
-                                    ...base,
-                                    cardId: card.id,
-                                    name: card.name,
-                                    situation: card.situation,
-                                    criteria: card.criteria,
-                                  });
-                                  setCard(
-                                    await call("/accept", projectId, {
-                                      ...base,
-                                      cardId: card.id,
-                                    }),
-                                  );
-                                  setJob(
-                                    await call(
-                                      "/analysis/" + job.id,
-                                      projectId,
-                                    ),
-                                  );
-                                })
-                              }
-                            >
-                              Принять и сохранить в Scenarios
-                            </Button>
-                          ) : (
-                            <Button
-                              variant="outline"
-                              onClick={() => nativeScenario(card.scenarioId!)}
-                            >
-                              Открыть штатный редактор сценария LangWatch
-                            </Button>
-                          )}
-                          <Select
-                            label="Агент для прогона"
-                            value={agent}
-                            onChange={setAgent}
-                            items={catalog?.agents ?? []}
-                          />
-                          <Label>Версия / что менялось в агенте</Label>
-                          <Input
-                            aria-label="Версия агента"
-                            value={note}
-                            placeholder="Например: baseline · текущая версия или commit новой версии"
-                            onChange={(e) => setNote(e.target.value)}
-                          />
-                          <Text fontSize="xs" color="fg.muted">
-                            Укажите версию и закрепите модели в плане запуска.
-                            Смена судьи не доказывает улучшение агента. Проверки
-                            инструментов требуют настоящих трасс.
-                          </Text>
-                          <Button
-                            marginTop={3}
-                            colorPalette="blue"
-                            disabled={card.status !== "saved" || !agent}
-                            loading={busy}
-                            onClick={() =>
-                              void act(async () => {
-                                await call("/run", projectId, {
-                                  ...base,
-                                  cardId: card.id,
-                                  agentId: agent,
-                                  note: note.slice(0, 200),
-                                });
-                                const next = await call<Analysis>(
-                                  "/analysis/" + job.id,
-                                  projectId,
-                                );
-                                setJob(next);
-                                setCard(
-                                  next.cards.find((c) => c.id === card.id),
-                                );
-                              })
-                            }
-                          >
-                            Запустить настоящего агента
-                          </Button>
-                        </Paper>
-                      )}
-                      {runData?.comparison && (
-                        <Paper>
-                          <Text fontWeight="semibold">
-                            Сравнение последних двух прогонов
-                          </Text>
-                          <Text>{runData.comparison.verdict}</Text>
-                          <Text fontSize="sm" color="fg.muted">
-                            {runData.comparison.limitation}
-                          </Text>
-                        </Paper>
-                      )}
-                      {runData?.runs?.map((run: any) => (
-                        <Paper key={run.id}>
-                          <HStack justifyContent="space-between">
-                            <Text fontWeight="semibold">
-                              {run.data.status} ·{" "}
-                              {new Date(run.at).toLocaleString("ru-RU")}
-                            </Text>
-                            <a
-                              href={`/${projectSlug}/simulations?drawer.open=scenarioRunDetail&drawer.scenarioRunId=${run.id}`}
-                            >
-                              Полный прогон ↗
-                            </a>
-                          </HStack>
-                          <Text fontSize="sm" color="fg.muted">
-                            {run.note} · судья:{" "}
-                            {run.judgeModel ?? "не зафиксирован"} · клиент:{" "}
-                            {run.simulatorModel ?? "не зафиксирован"}
-                          </Text>
-                          <Text>
-                            {run.data.results?.reasoning ??
-                              "Симулятор разговаривает с агентом…"}
-                          </Text>
-                          {run.data.messages?.map((message: any, i: number) => (
-                            <Box
-                              key={message.id ?? i}
-                              padding={3}
-                              background="bg.muted"
-                              marginTop={2}
-                              borderRadius="md"
-                            >
-                              <Text fontSize="xs" fontWeight="medium">
-                                {message.role === "user"
-                                  ? "Синтетический клиент"
-                                  : "Настоящий агент"}
-                              </Text>
-                              <Text fontSize="sm" whiteSpace="pre-wrap">
-                                {typeof message.content === "string"
-                                  ? message.content
-                                  : JSON.stringify(message.content)}
-                              </Text>
-                            </Box>
-                          ))}
-                        </Paper>
-                      ))}
-                    </VStack>
-                  )}
+                  </details>
+                  <Button
+                    marginTop={4}
+                    size="lg"
+                    colorPalette="blue"
+                    loading={busy}
+                    disabled={
+                      !agent ||
+                      runData?.runs?.some((r: any) =>
+                        ["QUEUED", "PENDING", "IN_PROGRESS"].includes(
+                          r.data.status,
+                        ),
+                      )
+                    }
+                    onClick={() =>
+                      void act(async () => {
+                        await call("/run", projectId, {
+                          ...base,
+                          cardId: card.id,
+                          agentId: agent,
+                          note: note.slice(0, 200),
+                        });
+                        const next = await call<Analysis>(
+                          "/analysis/" + job.id,
+                          projectId,
+                        );
+                        setJob(next);
+                        setCard(next.cards.find((c) => c.id === card.id));
+                      })
+                    }
+                  >
+                    <Play size={16} />
+                    Проверить агента
+                  </Button>
+                  <Text fontSize="xs" color="fg.muted" marginTop={2}>
+                    Симулятор сыграет клиента и отправит сообщения настоящему
+                    агенту.
+                  </Text>
                 </Box>
-              </Drawer.Body>
-            </Drawer.Content>
-          </Drawer.Positioner>
-        </Portal>
-      </Drawer.Root>
-    </>
+              )}
+            </Paper>
+          )}
+          {runData?.comparison && (
+            <Paper>
+              <Text fontWeight="semibold">Что изменилось между прогонами</Text>
+              <Text marginTop={2}>{runData.comparison.verdict}</Text>
+              <Text fontSize="sm" color="fg.muted" marginTop={2}>
+                {runData.comparison.limitation}
+              </Text>
+            </Paper>
+          )}
+          {runData?.runs?.map((run: any) => (
+            <Paper key={run.id}>
+              <HStack justifyContent="space-between" align="start">
+                <Box>
+                  <Text
+                    fontSize="lg"
+                    fontWeight="semibold"
+                    color={
+                      run.data.status === "FAILED"
+                        ? "orange.500"
+                        : run.data.status === "SUCCESS"
+                          ? "green.500"
+                          : "fg"
+                    }
+                  >
+                    {runName(run.data.status)}
+                  </Text>
+                  <Text fontSize="xs" color="fg.muted" marginTop={1}>
+                    {new Date(run.at).toLocaleString("ru-RU")}
+                    {run.note ? " · " + run.note : ""}
+                  </Text>
+                </Box>
+                <a
+                  href={`/${projectSlug}/simulations?drawer.open=scenarioRunDetail&drawer.scenarioRunId=${run.id}`}
+                >
+                  Полный результат ↗
+                </a>
+              </HStack>
+              <Text marginTop={3}>
+                {run.data.results?.reasoning ??
+                  "Ожидаем результат разговора с агентом…"}
+              </Text>
+              <details style={{ marginTop: 15 }}>
+                <summary style={{ cursor: "pointer" }}>
+                  Посмотреть разговор · {run.data.messages?.length ?? 0} реплик
+                </summary>
+                {run.data.messages?.map((m: any, i: number) => (
+                  <Box
+                    key={m.id ?? i}
+                    borderLeftWidth="3px"
+                    borderColor={m.role === "user" ? "blue.500" : "border"}
+                    padding={3}
+                    marginTop={3}
+                    background="bg.muted"
+                  >
+                    <Text fontSize="xs" fontWeight="semibold" color="fg.muted">
+                      {m.role === "user" ? "Клиент-симулятор" : "Ваш агент"}
+                    </Text>
+                    <Text whiteSpace="pre-wrap" fontSize="sm" marginTop={1}>
+                      {typeof m.content === "string"
+                        ? m.content
+                        : JSON.stringify(m.content)}
+                    </Text>
+                  </Box>
+                ))}
+                <Text fontSize="xs" color="fg.muted" marginTop={3}>
+                  Модель клиента: {run.simulatorModel ?? "не сохранена"} ·
+                  модель оценки: {run.judgeModel ?? "не сохранена"}
+                </Text>
+              </details>
+            </Paper>
+          ))}
+        </VStack>
+      )}
+    </Box>
   );
 }

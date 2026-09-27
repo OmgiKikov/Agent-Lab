@@ -262,3 +262,17 @@ secured.access(access).post("/xlsx", async (c) => {
   }
 });
 export const app = secured.hono;
+
+secured.access(access).post(
+  "/run-all",
+  mutate(
+    "scenarios:create",
+    ref.extend({ agentId: z.string(), note: z.string().max(200).default("") }),
+    (b) => lab.runAll(b.projectId, b.id, b.agentId, b.note),
+  ),
+);
+
+secured.access(access).get(
+  "/run-summary/:id",
+  query((c, p) => lab.runSummary(p, c.req.param("id")!)),
+);

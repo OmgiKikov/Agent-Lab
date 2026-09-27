@@ -54,6 +54,7 @@ export const startSchema = z.object({
   task: z.string().min(1).max(3000),
   ownerRules: z.string().max(20000).default(""),
   count: z.number().int().min(1).max(48),
+  autoEvaluate: z.boolean().default(false),
   materials: z
     .array(
       z.object({
@@ -80,6 +81,7 @@ export type Card = {
   definitionHash: string;
   status: "draft" | "saved";
   scenarioId?: string;
+  generated?: boolean;
   confirmedBy?: string;
   confirmedAt?: string;
   runs: {
@@ -101,6 +103,8 @@ export type Analysis = {
   model: string;
   ownerRules: string;
   materialRefs: Start["materials"];
+  autoEvaluate?: boolean;
+  generated?: boolean;
   textColumn: string;
   idColumn: string;
   createdAt: string;

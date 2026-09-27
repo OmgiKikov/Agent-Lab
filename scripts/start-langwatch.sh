@@ -36,6 +36,7 @@ ensure_pi() {
   if ! "$repo_dir/scripts/start-pi-proxy.sh"; then
     echo "LangWatch is ready, but factual evaluations need Pi sign-in." >&2
   fi
+  python3 "$repo_dir/scripts/start-aigw-target.py"
   python3 "$repo_dir/scripts/install-native-agent-lab.py"
 }
 

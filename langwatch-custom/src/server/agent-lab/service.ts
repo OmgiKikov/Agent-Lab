@@ -284,6 +284,7 @@ export async function start(config: Start, userId: string) {
     name: "Анализ · " + config.task.slice(0, 80),
     task: config.task,
     model: config.model,
+    autoEvaluate: config.autoEvaluate,
     ownerRules: config.ownerRules,
     materialRefs: config.materials,
     textColumn: config.textColumn,
@@ -306,6 +307,35 @@ export async function start(config: Start, userId: string) {
   await save(job);
   void plan(job).finally(() => running.delete(job.id));
   return view(job);
+}
+async function ownerRules(job: Analysis) {
+  const folder = path.join(directory, safe(job.projectId));
+  const files = await readdir(folder);
+  const accepted: Rule[] = [];
+  const seen = new Set<string>();
+  for (const filename of files.filter((f) => f.endsWith(".json"))) {
+    const previous = JSON.parse(
+      await readFile(path.join(folder, filename), "utf8"),
+    ) as Analysis;
+    if (
+      previous.id === job.id ||
+      previous.autoEvaluate ||
+      previous.model.startsWith("historical/") ||
+      hash(previous.ownerRules) !== hash(job.ownerRules)
+    )
+      continue;
+    for (const rule of previous.topics
+      .flatMap((t) => t.rules)
+      .filter((r) => r.approved)) {
+      const source = job.sources.find((s) => s.content.includes(rule.quote));
+      const key = hash([rule.quote, rule.condition, rule.acceptable]);
+      if (source && !seen.has(key)) {
+        seen.add(key);
+        accepted.push({ ...rule, sourceId: source.id });
+      }
+    }
+  }
+  return accepted.slice(0, 2);
 }
 async function plan(job: Analysis) {
   try {
@@ -353,6 +383,17 @@ async function plan(job: Analysis) {
         rule.approved = false;
       }
     }
+    const retained = job.autoEvaluate ? await ownerRules(job) : [];
+    for (const topic of proposal.topics)
+      for (const rule of retained) {
+        if (topic.rules.some((r) => r.quote === rule.quote)) continue;
+        topic.rules.unshift({
+          ...rule,
+          id: "owner-" + topic.id + "-" + rule.id,
+          approved: true,
+        });
+        topic.rules = topic.rules.slice(0, 6);
+      }
     job.topics = proposal.topics;
     for (const d of job.dialogues)
       d.topicId = job.topics.find((t) => t.dialogueIds.includes(d.id))?.id;
@@ -361,6 +402,21 @@ async function plan(job: Analysis) {
       "Темы и правила найдены. Проверьте условия и допустимые ответы перед оценкой.";
     if (assigned.size < job.selected)
       job.knowledgeGap = `${job.selected - assigned.size} разговоров не связаны с правилами; они не получат оценку качества.`;
+    if (job.autoEvaluate) {
+      // Imported conversations expose rendered replies, not the transport envelope.
+      for (const topic of job.topics)
+        for (const rule of topic.rules) {
+          rule.approved =
+            !/валидн[а-я]*\s+json|json.?формат|пол[ея]\s+output|\{\{?"output"/iu.test(
+              rule.text + " " + rule.quote,
+            );
+        }
+      job.status = "judging";
+      job.message = "Проверяем реальные ответы по правилам агента";
+      await save(job);
+      await judge(job);
+      return;
+    }
   } catch (error) {
     job.status = "failed";
     job.error = error instanceof Error ? error.message : String(error);
@@ -468,6 +524,10 @@ export async function evaluate(projectId: string, id: string) {
   void judge(job).finally(() => running.delete(job.id));
   return view(job);
 }
+function unseenCondition(rule: Rule) {
+  return /контекст|полезное уточнение невозможно/iu.test(rule.condition);
+}
+
 async function judge(job: Analysis) {
   try {
     const done = new Set(job.results.map((r) => r.dialogueId));
@@ -483,14 +543,17 @@ async function judge(job: Analysis) {
         dialogue.text.length <= 30000 &&
         messages(dialogue.text).some((m) => m.role === "assistant")
       ) {
-        const observed = duties.filter((r) => r.observation === "reply");
+        const observed = duties.filter(
+          (r) => r.observation === "reply" && !unseenCondition(r),
+        );
         judgments = duties
-          .filter((r) => r.observation !== "reply")
+          .filter((r) => r.observation !== "reply" || unseenCondition(r))
           .map((r) => ({
             ruleId: r.id,
             status: "UNKNOWN",
-            reason:
-              "В наборе только реплики. Действия инструментов и состояние не наблюдались.",
+            reason: unseenCondition(r)
+              ? "Не сохранён контекст, переданный агенту. Условие этого правила нельзя доказать по репликам."
+              : "В наборе только реплики. Действия инструментов и состояние не наблюдались.",
             agentQuote: "",
             title: "",
           }));
@@ -575,6 +638,18 @@ async function judge(job: Analysis) {
         await save(job);
       }
     }
+    if (job.autoEvaluate) {
+      job.message = "Собираем проверки из разговоров";
+      await save(job);
+      try {
+        await assembleCards(job);
+      } catch (error) {
+        job.knowledgeGap =
+          (job.knowledgeGap ?? "") +
+          " Часть проверок не сохранена: " +
+          String(error).slice(0, 160);
+      }
+    }
     job.status = "done";
     job.message = "Разбор завершён. Проверьте примеры найденных нарушений.";
     try {
@@ -637,9 +712,19 @@ export async function propose(
     throw new Error(
       "Для новых карточек создайте новый разбор с выбранной моделью. Старые карточки и прогоны сохранены.",
     );
-  const rules = ruleIds.map((r) => checked(job, r));
+  let rules = ruleIds.map((r) => checked(job, r));
   if (!rules.length || rules.some((r) => !r))
     throw new Error("Выберите принятые правила");
+  if (origin !== "regression") {
+    rules = rules.filter(
+      (r) => r!.observation === "reply" && !unseenCondition(r!),
+    );
+    if (!rules.length)
+      throw new Error(
+        "Для этих правил нужны контекст или трассы агента. По одним репликам проверку создать нельзя.",
+      );
+    ruleIds = rules.map((r) => r!.id);
+  }
   const dialogue = dialogueId
     ? job.dialogues.find((d) => d.id === dialogueId)
     : undefined;
@@ -700,6 +785,24 @@ export async function propose(
   };
   job.cards.push(card);
   await save(job);
+  if (origin !== "regression") {
+    const scenario = await api(projectId, "/api/scenarios", {
+      name: card.name,
+      situation: card.situation,
+      criteria: card.criteria,
+      labels: [
+        "agent-lab",
+        origin,
+        "coverage",
+        "generated",
+        "card-" + card.id.slice(0, 8),
+      ],
+    });
+    card.scenarioId = scenario.id;
+    card.status = "saved";
+    card.generated = true;
+    await save(job);
+  }
   return card;
 }
 export async function changeCard(
@@ -733,6 +836,18 @@ export async function accept(
     const job = await get(projectId, id);
     const card = job.cards.find((c) => c.id === cardId);
     if (!card) throw new Error("Карточка не найдена");
+    if (
+      card.origin === "regression" &&
+      card.ruleIds.some(
+        (ruleId) =>
+          job.reviews
+            .filter(
+              (r) => r.dialogueId === card.dialogueId && r.ruleId === ruleId,
+            )
+            .at(-1)?.decision !== "confirmed",
+      )
+    )
+      throw new Error("Сначала подтвердите замечание по исходному разговору");
     if (card.scenarioId) return card;
     const scenario = await api(projectId, "/api/scenarios", {
       name: card.name,
@@ -902,4 +1017,198 @@ export async function runData(projectId: string, id: string, cardId: string) {
     };
   }
   return { runs, comparison };
+}
+
+function loggedSituation(text: string) {
+  const turns = messages(text);
+  const first = turns.find((t) => t.role === "user");
+  const facts = turns.flatMap((t, i) =>
+    t.role === "user" && t !== first
+      ? [
+          turns[i - 1]?.role === "assistant" &&
+          turns[i - 1]!.content.trim().endsWith("?")
+            ? "Если у вас спрашивают «" +
+              turns[i - 1]!.content +
+              "», ответьте «" +
+              t.content +
+              "»."
+            : "В дальнейшем вы говорили: «" + t.content + "».",
+        ]
+      : [],
+  );
+  return (
+    "Вы — клиент из реального обращения. Начните: «" +
+    (first?.content ?? "") +
+    "».\n" +
+    [...new Set(facts)].join("\n") +
+    "\nОтвечайте на уточнения естественно. Не перечисляйте все реплики заранее и не добавляйте сведений, которых нет в этой ситуации."
+  );
+}
+async function assembleCards(job: Analysis) {
+  const add = async (
+    origin: "coverage" | "regression",
+    dialogue: Analysis["dialogues"][number],
+    rules: Rule[],
+    name: string,
+  ) => {
+    if (
+      !rules.length ||
+      job.cards.some(
+        (c) =>
+          c.origin === origin &&
+          c.dialogueId === dialogue.id &&
+          hash(c.ruleIds.slice().sort()) ===
+            hash(rules.map((r) => r.id).sort()),
+      )
+    )
+      return;
+    const situation = loggedSituation(dialogue.text);
+    const criteria = rules.map(
+      (r) =>
+        r.text +
+        "\nУсловие: " +
+        r.condition +
+        "\nДопустимые ответы: " +
+        r.acceptable,
+    );
+    const card: Card = {
+      id: randomUUID(),
+      origin,
+      dialogueId: dialogue.id,
+      ruleIds: rules.map((r) => r.id),
+      name: name.slice(0, 180),
+      situation,
+      criteria,
+      definitionHash: hash({ situation, criteria }),
+      status: "draft",
+      generated: true,
+      runs: [],
+    };
+    job.cards.push(card);
+    await save(job);
+    if (origin === "coverage") {
+      const scenario = await api(job.projectId, "/api/scenarios", {
+        name: card.name,
+        situation:
+          card.situation +
+          "\n\nИсточник: разговор " +
+          dialogue.id +
+          ", набор " +
+          job.datasetId,
+        criteria: card.criteria,
+        labels: [
+          "agent-lab",
+          "coverage",
+          "generated",
+          "card-" + card.id.slice(0, 8),
+        ],
+      });
+      card.scenarioId = scenario.id;
+      card.status = "saved";
+      await save(job);
+    }
+  };
+  for (const topic of job.topics.slice(0, 8)) {
+    const rules = topic.rules.filter(
+      (r) => r.approved && r.observation === "reply" && !unseenCondition(r),
+    );
+    const dialogue = job.dialogues.find((d) => d.topicId === topic.id);
+    if (dialogue)
+      await add(
+        "coverage",
+        dialogue,
+        rules,
+        "Обычное обращение: " + topic.title,
+      );
+  }
+  const grouped = new Map<
+    string,
+    { dialogueId: string; verdict: Verdict; count: number }
+  >();
+  for (const result of job.results)
+    for (const verdict of result.rules) {
+      if (verdict.status !== "FAIL") continue;
+      const old = grouped.get(verdict.ruleId);
+      if (old) old.count++;
+      else
+        grouped.set(verdict.ruleId, {
+          dialogueId: result.dialogueId,
+          verdict,
+          count: 1,
+        });
+    }
+  for (const entry of [...grouped.values()]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)) {
+    const dialogue = job.dialogues.find((d) => d.id === entry.dialogueId);
+    const rule = checked(job, entry.verdict.ruleId);
+    if (dialogue && rule)
+      await add(
+        "regression",
+        dialogue,
+        [rule],
+        entry.verdict.title || rule.text,
+      );
+  }
+}
+
+export async function runAll(
+  projectId: string,
+  id: string,
+  agentId: string,
+  note: string,
+) {
+  const job = await get(projectId, id);
+  const cards = job.cards.filter((c) => c.status === "saved" && c.scenarioId);
+  if (!cards.length) throw new Error("Пока нет готовых проверок");
+  const scheduled = [];
+  const active = [];
+  for (const card of cards) {
+    const last = card.runs.at(-1);
+    if (last) {
+      const data = await api(
+        projectId,
+        "/api/simulation-runs/" + last.id,
+      ).catch((error) => {
+        if (String(error).includes("Simulation run not found"))
+          return { status: "QUEUED" };
+        throw error;
+      });
+      if (["QUEUED", "PENDING", "IN_PROGRESS"].includes(data.status)) {
+        active.push(last.id);
+        continue;
+      }
+    }
+    scheduled.push(await run(projectId, id, card.id, agentId, note));
+  }
+  return { scheduled, active };
+}
+
+export async function runSummary(projectId: string, id: string) {
+  const job = await get(projectId, id);
+  return Promise.all(
+    job.cards
+      .filter((c) => c.status === "saved")
+      .map(async (card) => {
+        const run = card.runs.at(-1);
+        if (!run)
+          return { cardId: card.id, name: card.name, status: "NOT_RUN" };
+        const data = await api(
+          projectId,
+          "/api/simulation-runs/" + run.id,
+        ).catch((error) => {
+          if (String(error).includes("Simulation run not found"))
+            return { status: "QUEUED" };
+          throw error;
+        });
+        return {
+          cardId: card.id,
+          name: card.name,
+          runId: run.id,
+          status: data.status,
+          at: run.at,
+          reason: data.results?.reasoning,
+        };
+      }),
+  );
 }

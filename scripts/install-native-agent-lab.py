@@ -68,6 +68,7 @@ def main():
  experiment=APP/'src/pages/[project]/experiments/[experiment].tsx'
  edit(experiment,'import {',"import { AgentLabPanel } from '~/components/agent-lab/AgentLabPanel';\nimport {",'import { AgentLabPanel }')
  edit(experiment,'    <DashboardLayout>\n      {project && experiment.data', '    <DashboardLayout>\n      {project && String(experimentSlug).startsWith("real-log-analysis-") && <Box padding={4}><AgentLabPanel projectId={project.id} projectSlug={project.slug} analysisPrefix={String(experimentSlug).slice("real-log-analysis-".length)} /></Box>}\n      {project && experiment.data','analysisPrefix={String(experimentSlug)')
+ edit(datasets,'  return (\n    <DashboardLayout>\n      <PageLayout.Header>', '  if (router.query.agentLab === \"1\" && project) return <DashboardLayout><AgentLabPanel projectId={project.id} projectSlug={project.slug} /></DashboardLayout>;\n\n  return (\n    <DashboardLayout>\n      <PageLayout.Header>', 'if (router.query.agentLab === \"1\"')
  menu=APP/'src/components/MainMenu.tsx'
  edit(menu,'      <PageMenuLink','      <PageMenuLink path="/[project]/datasets?agentLab=1" icon={Workflow} label="Анализ агента" project={project} showLabel={showExpanded} />\n      <PageMenuLink','label="Анализ агента"')
  # Remove the old proxy from source. The old files and data remain recoverable.
@@ -79,7 +80,11 @@ def main():
  # Build separately: failed builds never erase the user's running client.
  staged=APP/'dist/client-agent-lab-staged'
  subprocess.run([NODE,str(APP/'node_modules/vite/bin/vite.js'),'build','--outDir',str(staged)],cwd=APP,env=ENV,check=True)
- subprocess.run([NODE,'scripts/build-server.mjs'],cwd=APP,env=ENV,check=True)
+ server_sources=[p for p in CUSTOM.rglob('*.ts') if '/server/' in str(p)]
+ server_stamp=hashlib.sha256(b''.join(p.read_bytes() for p in sorted(server_sources))+router.read_bytes()+start.read_bytes()).hexdigest()
+ server_marker=HOME/'native-agent-lab-server-hash'
+ server_changed=not server_marker.exists() or server_marker.read_text()!=server_stamp
+ if server_changed:subprocess.run([NODE,'scripts/build-server.mjs'],cwd=APP,env=ENV,check=True)
  live=APP/'dist/client'
  for source in staged.rglob('*'):
   if source.is_file() and source.name!='index.html':
@@ -87,6 +92,9 @@ def main():
  shutil.copyfile(staged/'index.html',live/'index.html')
  # Old bookmark opens the native dataset panel; no parallel product remains.
  (live/'agent-review.html').write_text('<!doctype html><html lang="ru"><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/local-dev-project-se7hbx/datasets?agentLab=1"><a href="/local-dev-project-se7hbx/datasets?agentLab=1">Открыть анализ внутри LangWatch</a></html>')
+ if not server_changed:
+  marker.write_text(stamp)
+  print('Интерфейс LangWatch обновлён; API и прогоны продолжают работать.');return
  environment=dict(ENV)
  for line in (HOME/'.env').read_text().splitlines():
   if '=' in line and not line.startswith('#'):
@@ -141,6 +149,7 @@ def main():
   time.sleep(.5)
  else:raise RuntimeError('LangWatch не ответил после перезапуска')
  marker.write_text(stamp)
+ server_marker.write_text(server_stamp)
  print('Native Agent Lab установлен в Datasets, Experiments и Scenarios.')
 
 if __name__=='__main__':main()
