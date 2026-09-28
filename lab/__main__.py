@@ -165,6 +165,7 @@ def main() -> None:
             print(record['targetName'], json.dumps(record['metric'], ensure_ascii=False))
         print('Заметки судьи: python -m lab renote')
     elif args.command == 'renote':
+        import httpx
         from . import store, workshop
         from .discover import verdict_note
         count = 0
@@ -183,6 +184,8 @@ def main() -> None:
                     note = verdict_note(item['status'], f"Сценарий «{title}» · {record['targetName']} ({record['version']})",
                                         item['rules'], item.get('error'), item.get('second'))
                     workshop.annotate(item['runId'], 'issue' if item['status'] == 'FAIL' else 'note', note, replace=True)
+                    mark = {'PASS': '✓', 'FAIL': '✗', 'UNMEASURED': '?'}.get(item['status'], '…')
+                    httpx.patch(f"{workshop.URL}/api/runs/{item['runId']}", json={'name': f'{mark} {title}'[:200]}, timeout=5)
                     count += 1
         print('Заметок судьи обновлено:', count)
     elif args.command == 'bundle':
