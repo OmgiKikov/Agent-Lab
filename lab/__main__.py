@@ -202,6 +202,8 @@ def main() -> None:
             kit.write(root / 'WORK-COMPUTER.md', 'agent-lab-work-kit/README.md')
             kit.write(root / 'run-prod.sh', 'agent-lab-work-kit/run-prod.sh')
             kit.write(root / 'run-prod.bat', 'agent-lab-work-kit/run-prod.bat')
+            if (store.DATA / 'gateway-url.txt').exists():  # the internal gateway address stays out of git
+                kit.write(store.DATA / 'gateway-url.txt', 'agent-lab-work-kit/certs/url.txt')
             kit.writestr('agent-lab-work-kit/certs/README.txt',
                          'url.txt — адрес шлюза моделей (одна строка, например https://…/v2)\n'
                          'сертификат и ключ — .pem/.crt и .key, или один .p12/.pfx (пароль — в password.txt)\n'
