@@ -1,0 +1,22 @@
+{
+  "name": "raindrop-example-ai-sdk-otelv2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^2.0.106",
+    "@opentelemetry/otlp-transformer": "latest",
+    "ai": "^6.0.174",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.0",
+    "raindrop-ai": "0.1.1-otelv2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.7.3"
+  }
+}

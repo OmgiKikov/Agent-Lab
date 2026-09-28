@@ -1,0 +1,3 @@
+raindrop-ai>=0.0.49,<0.1
+openai>=1.50,<2
+aiohttp>=3.10,<4

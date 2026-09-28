@@ -1,0 +1,25 @@
+[package]
+name = "rust-chat"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone crate so `cargo run` from this dir doesn't pull the parent
+# `raindrop-workshop` repo into a phantom workspace.
+[workspace]
+
+[[bin]]
+name = "rust-chat"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+bytes = "1"
+uuid = { version = "1", features = ["v4"] }
+raindrop = { git = "https://github.com/raindrop-ai/raindrop-rust", tag = "v0.0.4", package = "raindrop-ai" }

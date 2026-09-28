@@ -1,0 +1,30 @@
+# Supply-chain hardening for `bun install`. Mirrors the pnpm cooldown in
+# invisible-tools/dawn (`pnpm-workspace.yaml#minimumReleaseAge`).
+#
+# Bun refuses to install package versions younger than 3 days (259200 s).
+# Blocks the typical "publish-and-yank" supply-chain attack pattern, since
+# malicious releases are usually detected and removed within hours. See
+# https://bun.sh/docs/pm/cli/install#minimum-release-age.
+#
+# If a semver range matches only too-young versions, install fails.
+# Workarounds:
+#   - Persistent (audit-friendly): add the package to
+#     `minimumReleaseAgeExcludes` below.
+#   - One-off: `bun add <pkg> --minimum-release-age 0`.
+#
+# CI's `bun install --frozen-lockfile` skips resolution and is unaffected;
+# the cooldown only kicks in on `bun add`, `bun update`, or a non-frozen
+# `bun install`.
+[install]
+minimumReleaseAge = 259200
+# Bun does not yet support wildcards in `minimumReleaseAgeExcludes`
+# (oven-sh/bun#23689), so list our own published packages explicitly so we
+# don't have to wait 3 days to consume our own SDK releases.
+minimumReleaseAgeExcludes = [
+  "raindrop-ai",
+  "@raindrop-ai/ai-sdk",
+  "@raindrop-ai/browser-sdk",
+  "@raindrop-ai/claude-agent-sdk",
+  "@raindrop-ai/opencode-plugin",
+  "@raindrop-ai/pi-agent",
+]

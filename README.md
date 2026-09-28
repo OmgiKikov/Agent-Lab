@@ -14,8 +14,9 @@
 
     sh lab/start.sh
 
-Открывает http://127.0.0.1:5899/lab — раздел Agent Lab внутри Raindrop Workshop
-(`lab/workshop/build.sh` собирает и ставит его, `restore.sh` возвращает обычный Workshop).
+Открывает http://127.0.0.1:5899/lab — раздел Agent Lab внутри Raindrop Workshop.
+Исходники Workshop с разделом Agent Lab — в `workshop/` (Raindrop Workshop 0.1.21, MIT);
+`lab/workshop/build.sh` собирает и ставит интерфейс, `restore.sh` возвращает обычный Workshop.
 
 ## Команды
 

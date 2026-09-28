@@ -39,3 +39,6 @@ __pycache__/
 /latitude-local/
 /.raindrop/
 /langwatch/
+/workshop/node_modules/
+/workshop/app/node_modules/
+/workshop/app/dist/
