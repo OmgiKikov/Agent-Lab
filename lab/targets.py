@@ -22,7 +22,7 @@ from . import store
 
 AGENT_PATH = '/api/v1/ai/agents/agent-ckr-pa-acquiring'
 DEFAULTS = {
-    'prod': {'name': 'Продовый агент', 'kind': 'http', 'profile': 'prod', 'url': os.environ.get('LAB_PROD_URL', ''),
+    'prod': {'name': 'Агент на ИФТ', 'kind': 'http', 'profile': 'prod', 'url': os.environ.get('LAB_PROD_URL', ''),
              'note': 'Ручка в контуре банка, доступна с рабочего компьютера.'},
     'local-http': {'name': 'Локальный агент', 'kind': 'http', 'profile': 'local', 'url': 'http://127.0.0.1:8080' + AGENT_PATH,
                    'note': 'Сервис на этом маке, тот же API. GigaChat настоящий, системы банка на заглушках.'},
