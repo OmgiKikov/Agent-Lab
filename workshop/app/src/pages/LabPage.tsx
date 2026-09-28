@@ -67,6 +67,8 @@ const plural = (n: number, one: string, few: string, many: string) => {
 const when = (iso?: string | null) => iso ? new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
 const titleFont = { fontFamily: '"AlphaLyrae", sans-serif' };
 const DEFAULT_PERSONA = "default";
+/** How a conversation of a run is addressed in the URL: its Workshop trace, or its place in the run when it has none. */
+const itemKey = (i: Item) => i.runId ?? `${i.cardId}~${i.persona ?? DEFAULT_PERSONA}~${i.attempt ?? 1}`;
 const personaName = (state: LabState, id?: string) => state.personas.find(p => p.id === (id ?? DEFAULT_PERSONA))?.name ?? id ?? "";
 function PersonaTag({ state, id }: { state: LabState; id?: string }) {
   return <span className="text-[10px] font-mono px-1.5 py-px rounded whitespace-nowrap" style={{ color: C.fg2, background: "rgba(255,255,255,0.07)" }}>{personaName(state, id)}</span>;
@@ -275,54 +277,6 @@ const passShare = (items: Item[], cardId: string) => {
   const done = items.filter(i => i.cardId === cardId && (i.status === "PASS" || i.status === "FAIL"));
   return done.length ? done.filter(i => i.status === "PASS").length / done.length : null;
 };
-
-/** Scenarios down, customer types across: where the agent breaks, and on whom. Shown when a run has several types. */
-function PersonaMatrix({ state, run, onOpen }: { state: LabState; run: LabRun; onOpen: (runId?: string) => void }) {
-  const items = run.items ?? [];
-  const types = state.personas.filter(p => items.some(i => (i.persona ?? DEFAULT_PERSONA) === p.id));
-  const cards = [...new Map(items.map(i => [i.cardId, i.name])).entries()];
-  const mark = (s: Status) => s === "PASS" ? "✓" : s === "FAIL" ? "✗" : s === "RUNNING" ? "…" : "?";
-  const byType = run.metric?.personas ?? {};
-  return (
-    <Panel className="overflow-x-auto">
-      <table className="w-full text-[12px] border-collapse">
-        <thead>
-          <tr>
-            <th className="text-left font-normal px-4 pt-3 pb-2 align-bottom text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>сценарий · клиент →</th>
-            {types.map(p => (
-              <th key={p.id} className="font-normal px-1.5 pt-3 pb-2 align-bottom min-w-[104px]" title={p.note}>
-                <div className="text-[11px] whitespace-nowrap" style={{ color: C.fg2 }}>{p.name}</div>
-                <div className="text-[15px] mt-0.5" style={{ ...titleFont, color: C.fg5 }}>{byType[p.id]?.accuracy ?? "—"}%</div>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {cards.map(([cardId, name]) => (
-            <tr key={cardId} className="hover:bg-white/[0.02]" style={{ borderTop: `1px solid ${C.border}` }}>
-              <td className="px-4 py-1.5 max-w-0 w-full"><div className="truncate" style={{ color: C.fg4 }} title={name}>{name}</div></td>
-              {types.map(p => {
-                const cell = items.filter(i => i.cardId === cardId && (i.persona ?? DEFAULT_PERSONA) === p.id);
-                return (
-                  <td key={p.id} className="px-1.5 py-1.5">
-                    <div className="flex gap-1">
-                      {cell.map((i, k) => (
-                        <button key={k} onClick={() => onOpen(i.runId)} title={`${p.name}: ${STATUS_TEXT[i.status]} — открыть разговор`}
-                          className="flex-1 h-7 rounded text-[13px] transition-opacity hover:opacity-75"
-                          style={{ color: tone(i.status), background: `${tone(i.status)}1f` }}>{mark(i.status)}</button>
-                      ))}
-                      {!cell.length && <span className="flex-1 h-7" />}
-                    </div>
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Panel>
-  );
-}
 
 /** Accuracy per customer type, and the scenarios the ordinary customer passes but another type fails. */
 function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
@@ -700,122 +654,132 @@ function CardsView({ state, onPick }: { state: LabState; onPick: (id: string) =>
   );
 }
 
-function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; run: LabRun | null; target: string; setTarget: (t: string) => void; onOpen: (runId?: string) => void }) {
+/** A conversation read from the run itself, when Workshop has no trace of it: the messages and the judge's rows. */
+function Conversation({ item }: { item: Item }) {
+  return (
+    <div className="max-w-[860px] mx-auto px-6 py-5 flex flex-col gap-2">
+      {item.conversation.map((m, k) => m.role === "customer"
+        ? <Bubble key={k}>{m.text}</Bubble>
+        : <div key={k} className="self-start max-w-[92%] px-3 py-2 rounded-2xl rounded-bl-md text-[13px] whitespace-pre-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.fg3 }}>{m.text}</div>)}
+      {item.stage && <div className="text-[11px] font-mono" style={{ color: C.fg1 }}>{item.stage}</div>}
+      {item.error && <div className="text-[12px]" style={{ color: C.orange }}>{item.error}</div>}
+      {item.rules.length > 0 && (
+        <Panel className="mt-3">
+          {item.rules.map((r, k) => (
+            <div key={r.ruleId} className="px-4 py-2.5 text-[12px]" style={{ borderTop: k ? `1px solid ${C.border}` : undefined }}>
+              <div className="flex items-start gap-2"><Pill status={r.status}>{RULE_TEXT[r.status] ?? r.status}</Pill><span style={{ color: C.fg4 }}>{r.rule}</span></div>
+              <div className="mt-1 pl-1" style={{ color: C.fg2 }}>{r.reason}</div>
+              {r.agentQuote && <Quote who="агент">«{r.agentQuote}»</Quote>}
+            </div>
+          ))}
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+/** The settings of a new run: agent, customer types, repeats; the button says how many conversations it makes. */
+function NewRun({ state, target, setTarget, onStarted }: { state: LabState; target: string; setTarget: (t: string) => void; onStarted?: () => void }) {
   const deck = state.cards?.cards ?? [];
   const [repeats, setRepeats] = useState(1);
-  const [onlyDisputed, setOnlyDisputed] = useState(false);
   const [types, setTypes] = useState<string[]>([DEFAULT_PERSONA]);
-  const [showList, setShowList] = useState(false);
   const toggleType = (id: string) => setTypes(t => t.includes(id) ? (t.length > 1 ? t.filter(x => x !== id) : t) : [...t, id]);
-  const start = () => api("/api/runs", { target, repeats, personas: types }).catch(e => alert(e.message));
-  const review = (index: number, decision: "agree" | "disagree" | null) =>
-    run && api("/api/review", { run: run.id, index, decision }).catch(e => alert(e.message));
-  const rejudge = () => run && api(`/api/runs/${run.id}/rejudge`, {}).catch(e => alert(e.message));
-  const m = run?.metric;
+  const start = () => api("/api/runs", { target, repeats, personas: types }).then(() => onStarted?.()).catch(e => alert(e.message));
   const total = deck.length * types.length * repeats;
-  const chosenNotes = state.personas.filter(p => types.includes(p.id) && p.id !== DEFAULT_PERSONA);
-  const hasMatrix = new Set((run?.items ?? []).map(i => i.persona ?? DEFAULT_PERSONA)).size > 1;
+  const chosen = state.personas.filter(p => types.includes(p.id) && p.id !== DEFAULT_PERSONA);
   return (
-    <Page
-      title="Прогон"
-      lede="Искусственный клиент начинает с первой реплики из лога и продолжает разговор по ситуации сценария. Судья проверяет каждый разговор по критериям."
-    >
-      <Panel className="mt-5">
-        <SettingRow first label="агент">
-          <div className="flex gap-1.5 flex-wrap">
-            {state.targets.map(t => <Choice key={t.id} on={t.id === target} onClick={() => setTarget(t.id)} title={t.note}>{t.name}</Choice>)}
-          </div>
-        </SettingRow>
-        <SettingRow label="клиенты">
-          <div className="flex gap-1.5 flex-wrap">
-            {state.personas.map(p => <Choice key={p.id} on={types.includes(p.id)} onClick={() => toggleType(p.id)} title={p.note}>{p.name}</Choice>)}
-          </div>
-          <div className="text-[11px] mt-2 leading-relaxed" style={{ color: C.fg1 }}>
-            {chosenNotes.length ? chosenNotes.map(p => `${p.name} — ${p.note}`).join("; ") : "Клиент пишет так, как в логе. Добавьте типы клиентов, чтобы увидеть, где агент ломается от манеры общения."}
-          </div>
-        </SettingRow>
-        <SettingRow label="повторы">
-          <div className="flex gap-1.5">
-            {[1, 2, 3].map(n => <Choice key={n} on={repeats === n} onClick={() => setRepeats(n)}>{n === 1 ? "1 раз" : `${n} раза`}</Choice>)}
-          </div>
-        </SettingRow>
-        <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3" style={{ borderTop: `1px solid ${C.border}` }}>
-          <span className="text-[12px]" style={{ color: C.fg2 }}>
-            {deck.length} {plural(deck.length, "сценарий", "сценария", "сценариев")} × {types.length} {plural(types.length, "клиент", "клиента", "клиентов")}{repeats > 1 ? ` × ${repeats} повтора` : ""} = <b style={{ color: C.fg5 }}>{total} {plural(total, "разговор", "разговора", "разговоров")}</b>
-          </span>
-          <span className="flex items-center gap-3">
-            <JobLine state={state} kind="run" />
-            <Action primary disabled={state.job.running || !deck.length} onClick={start}><Play className="size-3" />запустить</Action>
+    <Panel>
+      <SettingRow first label="агент">
+        <div className="flex gap-1.5 flex-wrap">
+          {state.targets.map(t => <Choice key={t.id} on={t.id === target} onClick={() => setTarget(t.id)} title={t.note}>{t.name}</Choice>)}
+        </div>
+      </SettingRow>
+      <SettingRow label="клиенты">
+        <div className="flex gap-1.5 flex-wrap">
+          {state.personas.map(p => <Choice key={p.id} on={types.includes(p.id)} onClick={() => toggleType(p.id)} title={p.note}>{p.name}</Choice>)}
+        </div>
+        <div className="text-[11px] mt-2 leading-relaxed" style={{ color: C.fg1 }}>
+          {chosen.length ? chosen.map(p => `${p.name} — ${p.note}`).join("; ") : "Клиент пишет так, как в логе. Добавьте типы клиентов, чтобы увидеть, где агент ломается от манеры общения."}
+        </div>
+      </SettingRow>
+      <SettingRow label="повторы">
+        <div className="flex gap-1.5">
+          {[1, 2, 3].map(n => <Choice key={n} on={repeats === n} onClick={() => setRepeats(n)}>{n === 1 ? "1 раз" : `${n} раза`}</Choice>)}
+        </div>
+      </SettingRow>
+      <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3" style={{ borderTop: `1px solid ${C.border}` }}>
+        <span className="text-[12px]" style={{ color: C.fg2 }}>
+          {deck.length} {plural(deck.length, "сценарий", "сценария", "сценариев")} × {types.length} {plural(types.length, "клиент", "клиента", "клиентов")}{repeats > 1 ? ` × ${repeats} повтора` : ""} = <b style={{ color: C.fg5 }}>{total} {plural(total, "разговор", "разговора", "разговоров")}</b>
+        </span>
+        <Action primary disabled={state.job.running || !deck.length} onClick={start}><Play className="size-3" />запустить</Action>
+      </div>
+    </Panel>
+  );
+}
+
+/** A run as Workshop shows runs: scenarios in the list on the left, the chosen conversation here with the judge's note. */
+function RunStage({ state, run, itemId, target, setTarget, onOpen }: { state: LabState; run: LabRun | null; itemId: string | null; target: string; setTarget: (t: string) => void; onOpen: (runId?: string) => void }) {
+  const [creating, setCreating] = useState(false);
+  const items = run?.items ?? [];
+  const selected = items.find(i => itemKey(i) === itemId) ?? items.find(i => i.status !== "RUNNING") ?? items[0];
+  const index = selected ? items.indexOf(selected) : -1;
+  const review = (decision: "agree" | "disagree" | null) =>
+    run && api("/api/review", { run: run.id, index, decision }).catch(e => alert(e.message));
+  if (!run) {
+    return <Page title="Прогон" lede="Искусственный клиент начинает с первой реплики из лога и продолжает разговор по ситуации сценария. Судья проверяет каждый разговор по критериям."><div className="mt-5"><NewRun state={state} target={target} setTarget={setTarget} /></div><div className="mt-3"><JobLine state={state} kind="run" /></div></Page>;
+  }
+  const disputes = items.filter(disputed).length;
+  return (
+    <div className="h-full flex flex-col">
+      <div className="flex-shrink-0 flex items-center gap-3 flex-wrap px-4 py-2.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+        <div className="min-w-0 flex-1">
+          <span className="text-[14px] font-medium" style={{ color: C.fg5 }}>{run.targetName}</span>
+          <span className="text-[12px] ml-2" style={{ color: C.fg1 }}>версия {run.version} · {when(run.startedAt)}{disputes ? ` · спор судей: ${disputes}` : ""}</span>
+        </div>
+        <JobLine state={state} kind="run" />
+        <JobLine state={state} kind="rejudge" />
+        {run.status !== "running" && <Action disabled={state.job.running} onClick={() => api(`/api/runs/${run.id}/rejudge`, {}).catch(e => alert(e.message))}><RotateCcw className="size-3" />переоценить без агента</Action>}
+        <span className="text-[20px] px-1" style={{ ...titleFont, color: C.fg5 }} title="точность прогона">{run.metric?.accuracy ?? "—"}%</span>
+        <Action primary disabled={state.job.running} onClick={() => setCreating(true)}><Play className="size-3" />новый прогон</Action>
+      </div>
+      {run.error && <div className="flex-shrink-0 px-4 py-2 text-[12px]" style={{ color: "#F26B6B", borderBottom: `1px solid ${C.border}` }}>{run.error}</div>}
+      {selected && (
+        <div className="flex-shrink-0 flex items-center gap-2 flex-wrap px-4 py-2" style={{ background: "rgba(255,255,255,0.03)", borderBottom: `1px solid ${C.border}` }}>
+          <Pill status={selected.status}>{STATUS_TEXT[selected.status]}</Pill>
+          <span className="text-[13px] font-medium" style={{ color: C.fg4 }}>{selected.name}</span>
+          <PersonaTag state={state} id={selected.persona} />
+          {selected.attempt && selected.attempt > 1 && <span className="text-[11px] font-mono" style={{ color: C.fg1 }}>повтор {selected.attempt}</span>}
+          {disputed(selected) && <span className="text-[10px] font-mono px-1 rounded" style={{ color: C.orange, background: `${C.orange}14` }}>спор судей: второй судья — {STATUS_TEXT[selected.second!.status as Status]}</span>}
+          <span className="ml-auto inline-flex items-center gap-1.5">
+            {["PASS", "FAIL"].includes(selected.status) && <span className="text-[11px]" style={{ color: C.fg1 }}>судья прав?</span>}
+            {["PASS", "FAIL"].includes(selected.status) && (["agree", "disagree"] as const).map(d => (
+              <button key={d} onClick={() => review(selected.review === d ? null : d)} className="text-[11px] font-mono px-2 py-0.5 rounded"
+                style={{ color: selected.review === d ? "#000" : C.fg2, background: selected.review === d ? (d === "agree" ? C.green : "#F26B6B") : "rgba(255,255,255,0.07)" }}>
+                {d === "agree" ? "верно" : "неверно"}
+              </button>
+            ))}
           </span>
         </div>
-      </Panel>
-      {run && (
-        <>
-          <div className="flex items-end justify-between gap-3 flex-wrap mt-9 mb-3">
-            <div>
-              <div className="text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>результаты</div>
-              <div className="text-[15px] font-medium mt-1" style={{ color: C.fg5 }}>
-                {run.targetName} <span className="text-[12px] font-normal" style={{ color: C.fg1 }}>· версия {run.version} · {when(run.startedAt)}</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <JobLine state={state} kind="rejudge" />
-              {run.items?.some(disputed) && (
-                <label className="inline-flex items-center gap-1.5 text-[11px] font-mono cursor-pointer" style={{ color: C.orange }}>
-                  <input type="checkbox" checked={onlyDisputed} onChange={e => { setOnlyDisputed(e.target.checked); setShowList(true); }} />спор судей ({run.items.filter(disputed).length})
-                </label>
-              )}
-              {run.status !== "running" && <Action disabled={state.job.running} onClick={rejudge}><RotateCcw className="size-3" />переоценить без агента</Action>}
-              <span className="text-[20px]" style={{ ...titleFont, color: C.fg5 }}>{m?.accuracy ?? "—"}%</span>
-            </div>
-          </div>
-          {run.error && <div className="text-[12px] mb-2" style={{ color: "#F26B6B" }}>{run.error}</div>}
-          {hasMatrix && <PersonaMatrix state={state} run={run} onOpen={onOpen} />}
-          {hasMatrix && (
-            <button className="text-[11px] font-mono mt-3 mb-2 inline-flex items-center gap-1 hover:underline" style={{ color: C.fg1 }} onClick={() => setShowList(v => !v)}>
-              <ChevronRight className="size-3 transition-transform" style={{ transform: showList ? "rotate(90deg)" : undefined }} />все разговоры списком
-            </button>
-          )}
-          {(!hasMatrix || showList) && (
-          <Panel>
-            {(run.items ?? []).map((i, index) => {
-              if (onlyDisputed && !disputed(i)) return null;
-              const turns = i.conversation.filter(x => x.role === "agent").length;
-              const handoff = i.conversation.some(x => x.role === "agent" && x.ok === false);
-              const bad = i.rules.find(r => r.status === "FAIL");
-              return (
-                <div key={`${i.cardId}-${i.attempt ?? 1}`} role="button" onClick={() => onOpen(i.runId)}
-                  className="w-full text-left grid grid-cols-[100px_1fr_auto_auto] gap-4 items-center px-4 py-3 transition-colors hover:bg-white/[0.03] cursor-pointer"
-                  style={{ borderTop: index ? `1px solid ${C.border}` : undefined }}>
-                  <Pill status={i.status}>{STATUS_TEXT[i.status]}</Pill>
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-medium truncate" style={{ color: C.fg4 }}>
-                      {i.name}{i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : ""}
-                      {i.persona && i.persona !== DEFAULT_PERSONA && <span className="ml-2 align-middle"><PersonaTag state={state} id={i.persona} /></span>}
-                      {disputed(i) && <span className="ml-2 text-[10px] font-mono px-1 rounded" style={{ color: C.orange, background: `${C.orange}14` }} title={`Второй судья: ${STATUS_TEXT[i.second!.status as Status]}`}>спор судей</span>}
-                    </div>
-                    <div className="text-[11px] truncate" style={{ color: C.fg1 }}>
-                      {i.status === "RUNNING" ? i.stage : bad ? bad.reason : i.error ?? i.topic}{handoff ? " · передан оператору" : ""}
-                    </div>
-                  </div>
-                  <span className="inline-flex gap-1" onClick={e => e.stopPropagation()}>
-                    {["PASS", "FAIL"].includes(i.status) && (["agree", "disagree"] as const).map(d => (
-                      <button key={d} onClick={() => review(index, i.review === d ? null : d)} title={d === "agree" ? "Судья прав" : "Судья ошибся"}
-                        className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-                        style={{ color: i.review === d ? "#000" : C.fg1, background: i.review === d ? (d === "agree" ? C.green : "#F26B6B") : "rgba(255,255,255,0.06)" }}>
-                        {d === "agree" ? "верно" : "неверно"}
-                      </button>
-                    ))}
-                  </span>
-                  <span className="text-[10px] font-mono inline-flex items-center gap-1" style={{ color: C.fg0 }}>{turns} {plural(turns, "ответ", "ответа", "ответов")}<ChevronRight className="size-3" /></span>
-                </div>
-              );
-            })}
-          </Panel>
-          )}
-        </>
       )}
-    </Page>
+      <div className="flex-1 min-h-0 overflow-auto sb">
+        {selected?.runId
+          ? <RunDetail key={selected.runId} runId={selected.runId} />
+          : selected
+            ? <Conversation item={selected} />
+            : <div className="h-full flex items-center justify-center text-[12px]" style={{ color: C.fg1 }}>В прогоне нет разговоров</div>}
+      </div>
+      {creating && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setCreating(false)}>
+          <div className="w-full max-w-[760px]" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[15px] font-medium" style={{ ...titleFont, color: C.fg5 }}>Новый прогон</span>
+              <button className="text-[12px] font-mono hover:underline" style={{ color: C.fg1 }} onClick={() => setCreating(false)}>закрыть</button>
+            </div>
+            <NewRun state={state} target={target} setTarget={setTarget} onStarted={() => { setCreating(false); onOpen(undefined); }} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -964,6 +928,7 @@ export function LabPage() {
     { id: "accuracy", n: "05", title: "точность", icon: Gauge, value: lastScored ? `${lastScored.metric!.accuracy}% · ${lastScored.targetName}` : "—" },
   ];
 
+  const runTypes = step === "run" && run?.items ? state?.personas.filter(p => run.items!.some(i => (i.persona ?? DEFAULT_PERSONA) === p.id)) ?? [] : [];
   const listItems = useMemo(() => {
     if (!state) return null;
     if (step === "logs" && d) {
@@ -979,8 +944,40 @@ export function LabPage() {
         dot={<Dot status={c.origin === "Ошибка из лога" ? "FAIL" : "NOT_APPLICABLE"} />} title={c.name} sub={`${c.origin} · ${c.topic}`} />);
     }
     if (step === "run" && run?.items) {
-      return run.items.map(i => <ListItem key={`${i.cardId}-${i.attempt ?? 1}`} selected={!!i.runId && i.runId === itemId} onClick={() => i.runId && go("run", i.runId)}
-        dot={<Dot status={i.status} pulse={i.status === "RUNNING"} />} title={itemTitle(i, state)} sub={i.status === "RUNNING" ? i.stage : STATUS_TEXT[i.status] + (disputed(i) ? " · спор судей" : "")} />);
+      const items = run.items;
+      const current = items.find(i => itemKey(i) === itemId) ?? items.find(i => i.status !== "RUNNING") ?? items[0];
+      const mark = (st: Status) => st === "PASS" ? "✓" : st === "FAIL" ? "✗" : st === "RUNNING" ? "…" : "?";
+      const legend = runTypes.length > 1
+        ? <div key="legend" className="px-2.5 pb-1 text-[10px] leading-relaxed" style={{ color: C.fg1 }}>значки слева направо: {runTypes.map(p => p.name).join(", ")}</div>
+        : null;
+      return [legend, ...[...new Map(items.map(i => [i.cardId, i.name])).entries()].map(([cardId, name]) => {
+        const own = items.filter(i => i.cardId === cardId);
+        const status: Status = own.some(i => i.status === "RUNNING") ? "RUNNING" : own.some(i => i.status === "FAIL") ? "FAIL" : own.every(i => i.status === "PASS") ? "PASS" : "UNMEASURED";
+        const active = own.includes(current!);
+        return (
+          <div key={cardId} className="px-2.5 py-2 rounded-lg" style={{ background: active ? "rgba(255,255,255,0.06)" : undefined }}>
+            <button className="w-full flex items-center gap-2 text-left" onClick={() => go("run", itemKey(own[0]))}>
+              <Dot status={status} pulse={status === "RUNNING"} />
+              <span className="text-[13px] truncate" style={{ color: C.fg4 }} title={name}>{name}</span>
+            </button>
+            {own.length > 1 && (
+              <div className="flex gap-1 mt-1.5 pl-4 flex-wrap">
+                {own.map(i => {
+                  const on = i === current;
+                  return (
+                    <button key={`${i.persona ?? DEFAULT_PERSONA}-${i.attempt ?? 1}`} onClick={() => go("run", itemKey(i))}
+                      title={`${personaName(state, i.persona)}${i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : ""}: ${STATUS_TEXT[i.status]}`}
+                      className="h-5 min-w-[22px] px-1 rounded text-[11px] transition-colors"
+                      style={{ color: tone(i.status), background: `${tone(i.status)}${on ? "40" : "1a"}`, boxShadow: on ? `inset 0 0 0 1px ${tone(i.status)}` : undefined }}>
+                      {mark(i.status)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })];
     }
     if (step === "accuracy") {
       return state.runs.map(r => <ListItem key={r.id} selected={r.id === run?.id} onClick={() => pickRun(r.id)}
@@ -990,9 +987,9 @@ export function LabPage() {
     return null;
   }, [state, step, itemId, run]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const listTitle = step === "agent" ? "" : step === "logs" ? "разговоры из логов" : step === "cards" ? "сценарии" : step === "run" ? (run ? `${run.targetName} · ${when(run.startedAt)}` : "сценарии") : "прогоны";
+  const listTitle = step === "agent" ? "" : step === "logs" ? "разговоры из логов" : step === "cards" ? "сценарии" : step === "run" ? "сценарии прогона" : "прогоны";
   const card = step === "cards" && itemId ? deck.find(c => c.id === itemId) : undefined;
-  const traceId = (step === "logs" || step === "run") && itemId ? itemId : null;
+  const traceId = step === "logs" && itemId ? itemId : null;
 
   return (
     <div className="h-full flex">
@@ -1051,7 +1048,7 @@ export function LabPage() {
         {state && !traceId && step === "agent" && <AgentView state={state} />}
         {state && !traceId && step === "logs" && <LogsView state={state} onOpen={id => id && go("logs", id)} />}
         {state && !traceId && step === "cards" && (card ? <CardView card={card} state={state} onBack={() => go("cards")} /> : <CardsView state={state} onPick={id => go("cards", id)} />)}
-        {state && !traceId && step === "run" && <RunView state={state} run={run} target={target} setTarget={setTarget} onOpen={id => id && go("run", id)} />}
+        {state && step === "run" && <RunStage state={state} run={run} itemId={itemId} target={target} setTarget={setTarget} onOpen={id => go("run", id)} />}
         {state && !traceId && step === "accuracy" && <AccuracyView state={state} run={run} onPickRun={pickRun} />}
       </div>
     </div>
