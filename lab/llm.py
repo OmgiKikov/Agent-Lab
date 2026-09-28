@@ -133,7 +133,9 @@ def _gateway_client(timeout: float) -> tuple[httpx.AsyncClient, str]:
         raise ModelError('Шлюз моделей не настроен: python -m lab gateway --url … --cert … --key …')
     try:
         context = ssl.create_default_context(cafile=config.get('ca') or None)
-        context.load_cert_chain(config['cert'], config['key'])
+        password_file = CERTS / 'password.txt'
+        password = password_file.read_text().strip() if password_file.exists() else None
+        context.load_cert_chain(config['cert'], config['key'], password=password or None)
     except (OSError, ssl.SSLError) as error:
         raise ModelError(f'Сертификат, ключ или CA шлюза не читаются: {type(error).__name__}') from error
     if config.get('insecure'):
