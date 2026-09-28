@@ -18,25 +18,6 @@ __pycache__/
 /workshop/app/dist/
 .DS_Store
 
-# Earlier experiments (LangWatch, Latitude, review UI, old scripts), kept on this computer only.
-/.agent-lab/
+# Earlier experiments (LangWatch, Latitude, FutureAGI, review UI, old scripts), kept on this computer only.
+/archive/
 /.claude/
-/.gitkeep
-/.local-archive/
-/.raindrop/
-/config/
-/dist/
-/docs/*
-!/docs/demo.md
-/future-agi-local/
-/laminar-local/
-/langwatch/
-/langwatch-custom/
-/latitude-local/
-/node_modules/
-/patches/
-/review-ui/
-/scripts/
-/skills/
-/source-tests/
-/tests/
