@@ -160,8 +160,10 @@ async def auto_models() -> dict:
     if models.get('model'):
         return models
     catalog = await gateway_catalog()
-    glm = sorted((m for m in catalog if 'glm' in m.lower()), reverse=True)
-    main = glm[0] if glm else (catalog[0] if catalog else None)
+    glm = [m for m in catalog if 'glm' in m.lower()]
+    full = [m for m in glm if not any(light in m.lower() for light in ('flash', 'air', 'mini'))]
+    ranked = sorted(full or glm, reverse=True)  # a full model (glm-5.2) over a light one (glm-5.3-flash)
+    main = ranked[0] if ranked else (catalog[0] if catalog else None)
     models = {'model': main, 'second': main}
     store.save('models.json', models)
     return models
