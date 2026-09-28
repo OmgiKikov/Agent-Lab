@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
-import { Check, ExternalLink, LayoutGrid, MessagesSquare, Play, RotateCcw, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, Copy, ExternalLink, LayoutGrid, MessagesSquare, Play, RotateCcw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../api";
 import { count, plural, when } from "../format";
 import { Heatmap } from "../charts/Heatmap";
 import { JobLine } from "../JobLine";
+import { transcript } from "../report";
 import { disputed, itemKey, personaOf, previousOf, scenariosOfRun, typesOfRun } from "../logic";
 import { DEFAULT_PERSONA, HUE, RULE_TEXT, STATUS_TEXT, statusHue } from "../look";
 import { Modal } from "../modal";
@@ -168,6 +169,22 @@ function Conversation({ item, state }: { item: Item; state: LabState }) {
   );
 }
 
+function Kbd({ children }: { children: React.ReactNode }) {
+  return <kbd className="rounded border border-white/15 bg-white/[0.04] px-1.5 font-mono text-[10.5px] leading-4 text-lab-mute">{children}</kbd>;
+}
+
+/** The conversation as text on the clipboard, for a ticket or a chat with the agent's team. */
+function CopyButton({ text }: { text: () => string }) {
+  const { error } = useToast();
+  const [done, setDone] = useState(false);
+  const copy = () => navigator.clipboard.writeText(text()).then(() => { setDone(true); window.setTimeout(() => setDone(false), 1600); }).catch(error);
+  return (
+    <button onClick={copy} className="inline-flex items-center gap-1 text-[12px] text-lab-dim transition-colors hover:text-lab-text">
+      {done ? <Check className="size-3 text-lab-ok" strokeWidth={2.5} /> : <Copy className="size-3" />}{done ? "Скопировано" : "Копировать"}
+    </button>
+  );
+}
+
 function ReviewButtons({ selected, onReview }: { selected: Item; onReview: (d: "agree" | "disagree" | null) => void }) {
   if (!["PASS", "FAIL"].includes(selected.status)) return null;
   return (
@@ -201,6 +218,32 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
   const [view, setView] = useState<"chat" | "matrix">("chat");
   const [compare, setCompare] = useState(false);
   useEffect(() => { if (itemId) setView("chat"); }, [itemId]);
+  const items = useMemo(() => run?.items ?? [], [run]);
+  const selected = items.find(i => itemKey(i) === itemId) ?? items.find(i => i.status !== "RUNNING") ?? items[0];
+
+  // J / K walk the scenarios keeping the customer type, ← / → walk the types (and repeats) of one scenario.
+  // Keys are read by position, so they work on the Russian layout too.
+  useEffect(() => {
+    if (view !== "chat" || creating || !selected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
+      const own = items.filter(i => i.cardId === selected.cardId);
+      let next: Item | undefined;
+      if (e.code === "ArrowRight") next = own[own.indexOf(selected) + 1];
+      else if (e.code === "ArrowLeft") next = own[own.indexOf(selected) - 1];
+      else if (e.code === "KeyJ" || e.code === "KeyK") {
+        const scenarios = scenariosOfRun(items);
+        const at = scenarios.findIndex(s => s.id === selected.cardId);
+        const target = scenarios[at + (e.code === "KeyJ" ? 1 : -1)];
+        if (target) next = items.find(i => i.cardId === target.id && personaOf(i) === personaOf(selected) && i.attempt === selected.attempt) ?? items.find(i => i.cardId === target.id);
+      }
+      if (next) { e.preventDefault(); onOpen(itemKey(next)); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, creating, selected, items, onOpen]);
 
   if (!run) {
     return (
@@ -211,8 +254,6 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
     );
   }
 
-  const items = run.items ?? [];
-  const selected = items.find(i => itemKey(i) === itemId) ?? items.find(i => i.status !== "RUNNING") ?? items[0];
   const index = selected ? items.indexOf(selected) : -1;
   const types = typesOfRun(run, state.personas);
   const disputes = items.filter(disputed).length;
@@ -264,6 +305,10 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
           {types.length > 1 && <PersonaTag personas={state.personas} id={selected.persona} />}
           {selected.attempt && selected.attempt > 1 && <Badge>повтор {selected.attempt}</Badge>}
           <span className="ml-auto flex items-center gap-4">
+            <span className="hidden items-center gap-1.5 text-[11.5px] text-lab-dim min-[1500px]:inline-flex" title="J / K: соседние сценарии, стрелки влево и вправо: типы клиентов и повторы">
+              <Kbd>J</Kbd><Kbd>K</Kbd> сценарии <Kbd>←</Kbd><Kbd>→</Kbd> типы
+            </span>
+            <CopyButton text={() => transcript(selected, state.personas)} />
             {selected.runId && (
               <a href={`/runs/${selected.runId}`} className="inline-flex items-center gap-1 text-[12px] text-lab-dim transition-colors hover:text-lab-text"><ExternalLink className="size-3" />Трейс в Workshop</a>
             )}

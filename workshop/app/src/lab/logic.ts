@@ -56,3 +56,10 @@ export function unitOf(items: Item[]): "сценариев" | "разговор�
   const scenarios = new Set(items.map(i => i.cardId)).size;
   return items.length > scenarios ? "разговоров" : "сценариев";
 }
+
+/** Failed criteria of a run, most frequent first. */
+export function failureReasons(items: Item[]): [string, number][] {
+  const reasons = new Map<string, number>();
+  for (const i of items) for (const r of i.rules) if (r.status === "FAIL") reasons.set(r.rule, (reasons.get(r.rule) ?? 0) + 1);
+  return [...reasons.entries()].sort((a, b) => b[1] - a[1]);
+}

@@ -1,15 +1,16 @@
 import { useMemo, useState } from "react";
 import NumberFlow from "@number-flow/react";
-import { Quote as QuoteIcon, Repeat, ShieldCheck, UserCheck, type LucideIcon } from "lucide-react";
+import { Download, Quote as QuoteIcon, Repeat, ShieldCheck, UserCheck, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Heatmap } from "../charts/Heatmap";
 import { Sparkline } from "../charts/Sparkline";
 import { Trend, type TrendPoint } from "../charts/Trend";
 import { day, pct, plural, when } from "../format";
-import { itemKey, passShare, previousOf, scenariosOfRun, typesOfRun, unitOf } from "../logic";
+import { failureReasons, itemKey, passShare, previousOf, scenariosOfRun, typesOfRun, unitOf } from "../logic";
 import { HUE, type Hue } from "../look";
 import type { Item, LabRun, LabState } from "../types";
 import { useRunDetails } from "../useLab";
+import { download, report } from "../report";
 import { Badge, Button, Delta, Eyebrow, Page, Panel, Section, StackBar, titleFont } from "../ui";
 
 function Trust({ icon: Icon, label, value, sub, ok }: { icon: LucideIcon; label: string; value: string; sub?: string; ok?: boolean }) {
@@ -37,9 +38,7 @@ function Figure({ label, value, sub }: { label: string; value: React.ReactNode; 
 
 /** Most frequent failed criteria of a run. */
 function FailureReasons({ items }: { items: Item[] }) {
-  const reasons = new Map<string, number>();
-  for (const i of items) for (const r of i.rules) if (r.status === "FAIL") reasons.set(r.rule, (reasons.get(r.rule) ?? 0) + 1);
-  const top = [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const top = failureReasons(items).slice(0, 5);
   const max = Math.max(1, ...top.map(t => t[1]));
   return (
     <Panel className="p-6">
@@ -122,7 +121,10 @@ export function AccuracyView({ state, run: selected, onPickRun, onOpen }: { stat
   const best = points.reduce((a, b) => (b.value > a.value ? b : a), points[0]);
 
   return (
-    <Page wide title="Точность агента" lede="Доля разговоров, в которых агент выполнил все критерии сценария. Разговоры со статусом «не измерено» в расчёт не входят.">
+    <Page
+      wide title="Точность агента" lede="Доля разговоров, в которых агент выполнил все критерии сценария. Разговоры со статусом «не измерено» в расчёт не входят."
+      actions={<Button size="sm" icon={Download} title="Точность, матрица и причины провалов одним файлом Markdown" onClick={() => download(`agent-lab-${finished.version}.md`, report(finished, state.personas, previous))}>Скачать отчёт</Button>}
+    >
       <div className="mt-8 grid gap-4 min-[1100px]:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
         <Panel className="p-7">
           <Eyebrow>{finished.targetName} · {finished.version} · {when(finished.startedAt)}</Eyebrow>
