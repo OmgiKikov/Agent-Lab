@@ -1,19 +1,23 @@
 #!/bin/sh
 # Agent Lab: one command for the demo. Idempotent: running services are left alone.
-#   Raindrop Workshop (5899) with the Agent Lab section, the Lab's model bridge (11436),
+#   our Raindrop Workshop build (5899) with the Agent Lab section, the model bridges (11436, 11437),
 #   the Lab service (5901); checks the local acquiring agent (8080) and its mocks (8090).
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-RAINDROP="${RAINDROP_BIN:-$HOME/.raindrop/bin/raindrop}"
+RAINDROP="$ROOT/workshop/build/raindrop"
 export PATH="$HOME/.volta/bin:$HOME/.bun/bin:$HOME/.local/bin:$PATH"
 up() { curl -fsS --max-time 2 "$1" >/dev/null 2>&1; }
 
-# 1. Workshop daemon and the Agent Lab UI inside it.
-up http://127.0.0.1:5899/health || "$RAINDROP" workshop >/dev/null 2>&1 || true
-if ! grep -rqs "agent lab" "$HOME/.raindrop/ui-cache/0.1.21/dist/assets"; then
-  sh lab/workshop/build.sh
+# 1. Workshop: our build from workshop/ with the Agent Lab section. Another Workshop on the port
+#    (a downloaded Raindrop) is stopped; the traces in ~/.raindrop stay.
+[ -x "$RAINDROP" ] || sh lab/workshop/build.sh
+pid="$(curl -fsS --max-time 2 http://127.0.0.1:5899/health 2>/dev/null | sed -n 's/.*"pid":\([0-9]*\).*/\1/p')"
+if [ -n "$pid" ] && ! ps -p "$pid" -o command= | grep -qF "$RAINDROP"; then
+  "$RAINDROP" workshop stop >/dev/null
+  pid=
 fi
+[ -n "$pid" ] || RAINDROP_WORKSHOP_PORT=5899 "$RAINDROP" workshop start >/dev/null
 
 # 2. Python environment of the Lab.
 if [ ! -x lab/.venv/bin/python ]; then

@@ -379,6 +379,12 @@ export async function performUpdate(opts: {
  * CLI entrypoint dispatched from `src/index.ts`.
  */
 export async function runUpdate(rawArgs: string[]): Promise<number> {
+  // Agent Lab builds this binary from its own repository: an upstream release would replace
+  // it with a Workshop that has no Agent Lab section.
+  if (VERSION.includes("agentlab")) {
+    console.error("update: Workshop Agent Lab собирается из репозитория: git pull && sh lab/workshop/build.sh");
+    return 64;
+  }
   const args = parseUpdateArgs(rawArgs);
   const { path: binaryPath, isCompiled } = resolveCurrentBinary();
   if (!isCompiled) {

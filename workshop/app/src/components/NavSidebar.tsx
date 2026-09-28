@@ -23,8 +23,6 @@ const NAV_ITEMS: { id: Page; label: string; path: string; icon: typeof Activity 
   { id: "saved", label: "saved", path: "/saved", icon: Bookmark },
 ];
 
-const WORKSHOP_LOGO_URL = `${__RAINDROP_ASSETS_BASE_URL__}/assets/workshop/${encodeURIComponent(__RAINDROP_VERSION__)}/logo.svg`;
-
 function isNavPathActive(pathname: string, path: string): boolean {
   return pathname === path || pathname.startsWith(`${path}/`);
 }
@@ -52,14 +50,6 @@ function NavSidebarInner() {
                 rel="noopener noreferrer"
               >
                 <RaindropLogo size={10} className="text-white opacity-30 shrink-0 transition-all duration-200 group-hover/logo:opacity-100 group-hover/logo:drop-shadow-[0_0_6px_rgba(255,255,255,0.6)]" />
-                <img
-                  src={WORKSHOP_LOGO_URL}
-                  alt=""
-                  aria-hidden="true"
-                  width={1}
-                  height={1}
-                  style={{ position: "absolute", opacity: 0, pointerEvents: "none" }}
-                />
                 {expanded && (
                   <span
                     className="text-[13px] -ml-px transition-all duration-200 group-hover/logo:!text-white/80"

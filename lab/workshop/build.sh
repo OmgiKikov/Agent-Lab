@@ -1,20 +1,31 @@
 #!/bin/sh
-# Builds our Raindrop Workshop (workshop/: release 0.1.21, MIT, with the Agent Lab section) and installs its UI
-# into the local Workshop daemon, which serves ~/.raindrop/ui-cache/<version>/dist.
-# The original UI is kept in dist.original; lab/workshop/restore.sh puts it back.
+# Builds our Raindrop Workshop from workshop/ (release 0.1.21, MIT, with the Agent Lab section):
+# the UI and the daemon compiled by Bun into one binary, workshop/build/raindrop, which lab/start.sh runs.
+# It keeps the Workshop data in ~/.raindrop. --all also builds Linux and Windows binaries into workshop/build/bun.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SRC="$ROOT/workshop"
-VERSION=0.1.21
 export PATH="$HOME/.bun/bin:$PATH"
+cd "$ROOT/workshop"
 
-(cd "$SRC/app" && bun install >/dev/null && bun x vite build --logLevel warn)
+bun install >/dev/null
+bun x tsc --noEmit
+(cd app && bun x tsc --noEmit)
+RAINDROP_VERSION=0.1.21-agentlab-local bun scripts/build-bun.ts "$@"
 
-CACHE="$HOME/.raindrop/ui-cache/$VERSION"
-[ -d "$CACHE/dist" ] || { echo "Workshop $VERSION UI cache not found: run 'raindrop workshop' once" >&2; exit 1; }
-[ -d "$CACHE/dist.original" ] || cp -R "$CACHE/dist" "$CACHE/dist.original"
-rm -rf "$CACHE/dist.next"
-cp -R "$SRC/app/dist" "$CACHE/dist.next"
-rm -rf "$CACHE/dist"
-mv "$CACHE/dist.next" "$CACHE/dist"
-echo "Agent Lab installed into Workshop: http://127.0.0.1:5899/lab"
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) TARGET=bun-darwin-arm64 ;;
+  Darwin-x86_64) TARGET=bun-darwin-x64 ;;
+  Linux-x86_64) TARGET=bun-linux-x64 ;;
+  Linux-aarch64) TARGET=bun-linux-arm64 ;;
+  *) echo "Unsupported host: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+esac
+cp "build/bun/raindrop-$TARGET" build/raindrop.next
+mv build/raindrop.next build/raindrop
+echo "Workshop built: workshop/build/raindrop"
+
+# A running Workshop keeps the old binary: restart it on the new one.
+if curl -fsS --max-time 2 http://127.0.0.1:5899/health >/dev/null 2>&1; then
+  build/raindrop workshop stop >/dev/null
+  RAINDROP_WORKSHOP_PORT=5899 build/raindrop workshop start >/dev/null
+  echo "Workshop restarted: http://127.0.0.1:5899/lab"
+fi

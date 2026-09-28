@@ -13,6 +13,8 @@
     "forceConsistentCasingInFileNames": true,
     "paths": {
       "*": ["./*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
       "@/*": ["./src/*"]
     }
   },

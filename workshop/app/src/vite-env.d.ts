@@ -16,4 +16,3 @@ declare module "*.svg" {
 }
 
 declare const __RAINDROP_VERSION__: string;
-declare const __RAINDROP_ASSETS_BASE_URL__: string;

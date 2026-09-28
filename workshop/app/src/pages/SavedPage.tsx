@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { RunDetail } from "../components/RunDetail";
 import { C } from "../utils/colors";
 import { tracePath } from "../utils/navigation";
+import type { AnnotationSource } from "../api/annotations";
 
 export interface SavedEvent {
   id: string;
@@ -25,7 +26,7 @@ export interface SavedAnnotationPreview {
   id: string;
   kind: "issue" | "good" | "note";
   note: string | null;
-  source: "user" | "claude-code" | "codex";
+  source: AnnotationSource;
   span_id: string | null;
   created_at: number;
 }
@@ -1005,7 +1006,7 @@ function SavedRunDetail({ event }: { event: SavedEvent }) {
 }
 
 // Inline cloud trace viewer — same as RemoteRunDetail in SearchPage but standalone
-import type { Span, SubAgent } from "../utils/types";
+import type { Run, Span, SubAgent } from "../utils/types";
 
 interface TraceSpan {
   trace_id: string; span_id: string; parent_span_id: string | null;

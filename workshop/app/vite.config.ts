@@ -14,13 +14,11 @@ const rootPackage = JSON.parse(
   readFileSync(path.resolve(__dirname, "../package.json"), "utf8"),
 ) as { version?: string };
 const raindropVersion = process.env.RAINDROP_VERSION || rootPackage.version || "dev";
-const raindropAssetsBaseUrl = (process.env.RAINDROP_ASSETS_BASE_URL || "https://raindrop.sh").replace(/\/+$/, "");
 
 export default defineConfig({
   plugins: [react()],
   define: {
     __RAINDROP_VERSION__: JSON.stringify(raindropVersion),
-    __RAINDROP_ASSETS_BASE_URL__: JSON.stringify(raindropAssetsBaseUrl),
   },
   resolve: {
     alias: {

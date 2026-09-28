@@ -9,6 +9,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@fontsource/barlow": "^5.3.0",
+    "@fontsource/space-mono": "^5.3.0",
     "@number-flow/react": "^0.6.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-separator": "^1.1.8",
