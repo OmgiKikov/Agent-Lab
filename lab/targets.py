@@ -54,7 +54,7 @@ def configs() -> dict:
 def public(key: str, config: dict) -> dict:
     host = urlsplit(config.get('url') or '').hostname or ''
     return {'id': key, 'name': config['name'], 'kind': config['kind'], 'note': config.get('note', ''),
-            'where': host if config['kind'] == 'http' else config.get('repo', ''),
+            'where': host if config['kind'] == 'http' else config.get('repo', '').replace(str(Path.home()), '~'),
             'ready': bool(config.get('url')) or config['kind'] == 'code'}
 
 
