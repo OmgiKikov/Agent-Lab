@@ -11,6 +11,15 @@ from . import discover, llm, store, world
 from .prompts import CARD
 
 LIMIT = 30
+# Applies to every scenario: instructions must come from the knowledge base, not be invented.
+FOLLOWS_KNOWLEDGE = {
+    'id': 'g-knowledge',
+    'text': 'Ответ агента опирается на статьи базы знаний: шаги, разделы, сроки и условия совпадают со статьёй и не выдуманы.',
+    'condition': 'Когда агент даёт инструкцию или сообщает факты.',
+    'acceptable': 'Уточняющий вопрос; «Не могу помочь, информация отсутствует», если в статьях нет ответа.',
+    'quote': 'Используй ТОЛЬКО информацию из контекста.',
+    'observation': 'knowledge',
+}
 # Applies to every scenario: the agent must answer the question that was asked.
 ANSWERS_THE_QUESTION = {
     'id': 'g-answer',
@@ -61,8 +70,9 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: list[dic
     quotes = {store.normalized(r['quote']) for r in rules}
     rules += [r for r in general if store.normalized(r['quote']) not in quotes]
     owner = '\n'.join(src['content'] for src in discover.sources())
-    if store.quote_found(ANSWERS_THE_QUESTION['quote'], owner):
-        rules.append(ANSWERS_THE_QUESTION)
+    for general_rule in (ANSWERS_THE_QUESTION, FOLLOWS_KNOWLEDGE):
+        if store.quote_found(general_rule['quote'], owner):
+            rules.append(general_rule)
     criteria = [{'id': r['id'], 'text': r['text'], 'condition': r.get('condition', ''),
                  'acceptable': r.get('acceptable', ''), 'quote': r['quote'], 'observation': r.get('observation', 'reply')}
                 for r in rules]

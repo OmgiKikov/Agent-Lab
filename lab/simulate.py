@@ -8,7 +8,7 @@ import asyncio
 import time
 import uuid
 
-from . import llm, store, targets, workshop, world
+from . import knowledge, llm, store, targets, workshop, world
 from .discover import checked, verdict_note, verdict_of
 from .prompts import JUDGE_RUN, SIMULATOR
 
@@ -139,9 +139,10 @@ async def verdict(card: dict, conversation: list[dict], endpoint: tuple[str, str
              for m in conversation]
     agent_text = '\n'.join(m['text'] for m in shown if m['role'] == 'AGENT')
     value = await llm.structured(JUDGE_RUN, {'expectations': card['criteria'], 'conversation': shown,
-                                             'toolCallsObserved': any(m.get('events') for m in conversation if m['role'] == 'agent')},
+                                             'toolCallsObserved': any(m.get('events') for m in conversation if m['role'] == 'agent'),
+                                             'knowledge': await asyncio.to_thread(knowledge.retrieved, conversation)},
                                  check=lambda v: v['rules'], endpoint=endpoint)
-    rows = own_words(checked(value.get('rules') or [], card['criteria'], agent_text), conversation)
+    rows = knowledge.guard(own_words(checked(value.get('rules') or [], card['criteria'], agent_text), conversation))
     return rows, verdict_of(rows)
 
 
