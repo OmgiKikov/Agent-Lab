@@ -10,10 +10,5 @@
     "noEmit": true,
     "types": ["bun", "node"]
   },
-  "include": [
-    "src/**/*.ts",
-    "tests/**/*.ts",
-    "scripts/**/*.ts",
-    "app/tests-e2e/**/*.ts"
-  ]
+  "include": ["src/**/*.ts", "scripts/**/*.ts"]
 }

@@ -1,37 +1,38 @@
-"""File storage under lab/data (git-ignored: real conversations never enter the repository)."""
-import json
-import os
-import re
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
+"""JSON files in data/: the Lab's only storage."""
 
-ROOT = Path(__file__).resolve().parent
-DATA = Path(os.environ.get('LAB_DATA', ROOT / 'data'))
+import json
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from .settings import DATA
+
 RUNS = DATA / 'runs'
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec='seconds')
+    return datetime.now(UTC).isoformat(timespec='seconds')
 
 
-def load(name: str, default=None):
+def load(name: str, default: Any = None) -> Any:
     path = DATA / name
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding='utf-8'))
 
 
-def save(name: str, value) -> None:
+def save(name: str, value: Any) -> None:
+    """Atomic write, readable only by the owner (the files hold real conversations)."""
     path = DATA / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    temp = path.with_name(f'{path.name}.{uuid.uuid4().hex}.tmp')
     temp.write_text(json.dumps(value, ensure_ascii=False, indent=1), encoding='utf-8')
     temp.chmod(0o600)
     temp.replace(path)
 
 
 def runs() -> list[dict]:
+    """Every run, newest first."""
     if not RUNS.exists():
         return []
     items = []
@@ -43,17 +44,9 @@ def runs() -> list[dict]:
     return sorted(items, key=lambda r: r.get('startedAt', ''), reverse=True)
 
 
-_MARKUP = re.compile(r'[\*_`#>«»"„“”\[\]]+')
+def run(run_id: str) -> dict | None:
+    return next((r for r in runs() if r['id'] == run_id), None)
 
 
-def normalized(text: str) -> str:
-    text = _MARKUP.sub(' ', (text or '').replace('ё', 'е').replace('Ё', 'Е'))
-    return re.sub(r'\s+', ' ', text).strip().lower()
-
-
-def quote_found(quote: str, text: str) -> bool:
-    """A quote counts only if every meaningful fragment appears verbatim (modulo markup/whitespace)."""
-    haystack = normalized(text)
-    parts = [normalized(p) for p in re.split(r'\.{3}|…', quote or '')]
-    parts = [p for p in parts if p]
-    return bool(parts) and sum(len(p) for p in parts) >= 8 and all(p in haystack for p in parts)
+def save_run(record: dict) -> None:
+    save(f'runs/{record["id"]}.json', record)

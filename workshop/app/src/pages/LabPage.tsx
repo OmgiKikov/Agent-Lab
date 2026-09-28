@@ -1,14 +1,14 @@
 /**
  * Agent Lab inside Raindrop Workshop.
  *
- * logs -> business scenarios -> synthetic customer runs -> one accuracy number.
- * Data and jobs live in the Agent Lab service (lab/server.py, default :5901);
+ * agent -> logs audit -> test cards -> synthetic customer runs -> one accuracy number.
+ * Data and jobs live in the Agent Lab service (lab/api.py, :5901);
  * every conversation is a native Workshop trace, shown here with RunDetail.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import NumberFlow from "@number-flow/react";
-import { ArrowLeft, ChevronRight, FileText, FlaskConical, Gauge, MessagesSquare, Play, Upload } from "lucide-react";
+import { ArrowLeft, Bot, ChevronRight, FileText, FlaskConical, Gauge, MessagesSquare, Play, RotateCcw, Upload } from "lucide-react";
 import { RunDetail } from "../components/RunDetail";
 import { C } from "../utils/colors";
 
@@ -16,7 +16,7 @@ const API = (() => {
   try { return localStorage.getItem("lab.api") || "http://127.0.0.1:5901"; } catch { return "http://127.0.0.1:5901"; }
 })();
 
-type Status = "PASS" | "FAIL" | "UNMEASURED" | "UNKNOWN" | "NOT_APPLICABLE" | "RUNNING" | "PENDING";
+type Status = "PASS" | "FAIL" | "UNMEASURED" | "UNKNOWN" | "NOT_APPLICABLE" | "RUNNING";
 type Rule = { ruleId: string; rule: string; status: Status; reason: string; agentQuote: string; title?: string };
 type Metric = { accuracy: number | null; passed: number; failed: number; unmeasured: number; measured: number; total: number;
   secondJudge?: { model: string; checked: number; agree: number }; repeats?: { scenarios: number; stable: number; attempts: number };
@@ -24,28 +24,35 @@ type Metric = { accuracy: number | null; passed: number; failed: number; unmeasu
 type Message = { role: "customer" | "agent"; text: string; fromLog?: boolean; ok?: boolean; status?: string; seconds?: number };
 type Item = { cardId: string; name: string; topic: string; origin: string; status: Status; stage: string; conversation: Message[]; rules: Rule[]; error: string | null; runId?: string;
   attempt?: number; second?: { model: string; status: string; rules?: Rule[] }; review?: "agree" | "disagree" | null; world?: boolean };
-type LabRun = { id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string; metric: Metric | null; error: string | null; imported?: boolean; judgeLater?: boolean; repeats?: number; items?: Item[] };
+type LabRun = { id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string; metric: Metric | null; error: string | null; repeats?: number; items?: Item[] };
 type Criterion = { id: string; text: string; quote: string; condition?: string; acceptable?: string };
 type World = { organization: { name: string; inn: string; merchantName: string; address: string }; terminals: { nameForClient: string; terminalId: string; stateCode: string }[]; tools: Record<string, unknown> };
 type Card = { id: string; topic: string; name: string; situation: string; opening: string; criteria: Criterion[]; origin: string; sourceDialogueId: string; world?: World | null };
 type LogResult = { dialogueId: string; topicId: string; status: Status; rules: Rule[]; opening: string; runId?: string };
 type Pattern = { rule: string; quote: string; topics: string[]; count: number; titles: string[]; examples: { dialogueId: string; reason: string; agentQuote: string; opening: string; url?: string }[] };
 type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };
+type Settings = { prodUrl: string; epk: string[]; repo: string };
+type Source = { id: string; kind: string; origin: string; chars: number; rules: number };
+type Models = { via: string; main: string | null; second: string | null };
+type Check = { ok: boolean; error?: string; status?: string; text?: string; seconds?: number; version?: string };
 type LabState = {
   job: { kind: string | null; running: boolean; error: string | null; progress: { message?: string; done?: number; total?: number; run?: string } };
   model: string;
+  models: Models;
+  settings: Settings;
+  sources: Source[];
   logs: { total: number };
   discover: null | { sampled: number; model: string; finishedAt: string; rulesSince?: string;
-    sources?: { id: string; kind: string; origin: string; sha256?: string; chars: number; rules: number }[]; topics: { id: string; title: string; rules: Criterion[] }[]; results: LogResult[];
+    topics: { id: string; title: string; rules: Criterion[] }[]; results: LogResult[];
     summary: { checked: number; failed: number; passed: number; unmeasured: number; patterns: Pattern[]; secondJudge?: { model: string; checked: number; agree: number } | null } };
   cards: null | { cards: Card[] };
   runs: LabRun[];
   targets: Target[];
 };
-type Step = "logs" | "cards" | "run" | "accuracy";
+type Step = "agent" | "logs" | "cards" | "run" | "accuracy";
 
-const STEP_LABEL: Record<Step, string> = { logs: "логи", cards: "сценарии", run: "прогон", accuracy: "точность" };
-const STATUS_TEXT: Record<Status, string> = { PASS: "пройден", FAIL: "не пройден", UNMEASURED: "не измерено", UNKNOWN: "нет данных", NOT_APPLICABLE: "не применимо", RUNNING: "идёт", PENDING: "ждёт судью" };
+const STEPS: Step[] = ["agent", "logs", "cards", "run", "accuracy"];
+const STATUS_TEXT: Record<Status, string> = { PASS: "пройден", FAIL: "не пройден", UNMEASURED: "не измерено", UNKNOWN: "нет данных", NOT_APPLICABLE: "не применимо", RUNNING: "идёт" };
 const RULE_TEXT: Record<string, string> = { PASS: "выполнено", FAIL: "нарушено", UNKNOWN: "нет данных", NOT_APPLICABLE: "не применимо" };
 const LOG_TEXT: Record<string, string> = { PASS: "без нарушений", FAIL: "нарушение", UNMEASURED: "нет данных" };
 const tone = (s: Status | string) => s === "PASS" ? C.green : s === "FAIL" ? "#F26B6B" : s === "RUNNING" ? C.accent : s === "NOT_APPLICABLE" ? C.fg0 : C.orange;
@@ -60,9 +67,17 @@ const itemTitle = (i: Item) => i.name + (i.attempt && i.attempt > 1 ? ` · по�
 const disputed = (i: Item) => !!i.second && ["PASS", "FAIL", "UNMEASURED"].includes(i.second.status) && i.second.status !== i.status;
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(API + path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const init = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  return read<T>(await fetch(API + path, init));
+}
+
+async function upload<T>(path: string, file: File): Promise<T> {
+  return read<T>(await fetch(`${API}${path}?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file }));
+}
+
+async function read<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error((data as any).detail || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error((data as { detail?: string }).detail || `HTTP ${response.status}`);
   return data as T;
 }
 
@@ -116,6 +131,32 @@ function Action({ children, onClick, disabled, primary }: { children: React.Reac
 
 function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return <div className={`rounded-lg ${className}`} style={{ background: C.surface, border: `1px solid ${C.border}` }}>{children}</div>;
+}
+
+const inputStyle = { background: "rgba(255,255,255,0.04)", color: C.fg3, border: "1px solid rgba(255,255,255,0.08)" };
+
+function Field({ label, hint, first, children }: { label: string; hint: string; first?: boolean; children: React.ReactNode }) {
+  return (
+    <label className="grid grid-cols-[200px_1fr] gap-4 items-start px-4 py-3" style={{ borderTop: first ? undefined : `1px solid ${C.border}` }}>
+      <span>
+        <span className="block text-[12px]" style={{ color: C.fg4 }}>{label}</span>
+        <span className="block text-[11px] mt-0.5 leading-snug" style={{ color: C.fg0 }}>{hint}</span>
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function CheckResult({ check }: { check?: Check | "pending" }) {
+  if (!check) return null;
+  if (check === "pending") return <span className="text-[11px] font-mono" style={{ color: C.fg1 }}>проверяю…</span>;
+  if (!check.ok) return <span className="text-[11px]" style={{ color: "#F26B6B" }}>{check.error}</span>;
+  return (
+    <span className="text-[11px]" style={{ color: C.green }}>
+      отвечает{check.seconds !== undefined ? ` за ${check.seconds} с` : ""}{check.status ? ` · статус ${check.status}` : ""}
+      {check.text && <span className="block mt-1 line-clamp-3" style={{ color: C.fg2 }}>{check.text}</span>}
+    </span>
+  );
 }
 
 function Quote({ who, children, color }: { who: string; children: React.ReactNode; color?: string }) {
@@ -240,20 +281,145 @@ function Insights({ run, previous }: { run: LabRun; previous: LabRun | null }) {
 
 /* ---------- step views ---------- */
 
+const SOURCE_KIND: Record<string, string> = { tools: "инструменты", knowledge: "база знаний", prompt: "промпт" };
+
+function AgentView({ state }: { state: LabState }) {
+  const saved = state.settings;
+  const [form, setForm] = useState({ prodUrl: saved.prodUrl, epk: saved.epk.join("\n"), repo: saved.repo });
+  const [checks, setChecks] = useState<Record<string, Check | "pending">>({});
+  const dirty = form.prodUrl !== saved.prodUrl || form.epk !== saved.epk.join("\n") || form.repo !== saved.repo;
+  const save = () => api("/api/settings", { prodUrl: form.prodUrl.trim(), epk: form.epk.split(/\s+/).filter(Boolean), repo: form.repo.trim() })
+    .catch(e => alert(e.message));
+  const check = (key: string, path: string) => {
+    setChecks(c => ({ ...c, [key]: "pending" }));
+    api<Check>(path, {}).then(r => setChecks(c => ({ ...c, [key]: r }))).catch(e => setChecks(c => ({ ...c, [key]: { ok: false, error: e.message } })));
+  };
+  const checkModels = () => {
+    for (const role of ["main", "second"] as const) setChecks(c => ({ ...c, [role]: "pending" }));
+    api<{ main: Check; second: Check }>("/api/models/check", {})
+      .then(r => setChecks(c => ({ ...c, main: r.main, second: r.second })))
+      .catch(e => setChecks(c => ({ ...c, main: { ok: false, error: e.message }, second: { ok: false, error: e.message } })));
+  };
+  const withRules = state.sources.filter(src => src.rules > 0 || src.kind !== "prompt");
+  return (
+    <Page title="Агент" lede="Какого агента проверяем, какие модели оценивают и откуда берутся правила проверки. Настройки хранятся на этом компьютере и в репозиторий не попадают.">
+      <Label>подключение</Label>
+      <Panel>
+        <Field first label="Адрес агента на ИФТ" hint="HTTP-ручка агента, доступна из сети банка">
+          <input value={form.prodUrl} onChange={e => setForm({ ...form, prodUrl: e.target.value })} placeholder="http://…/api/v1/ai/agents/…"
+            className="w-full px-2 py-1.5 rounded text-[12px] font-mono outline-none" style={inputStyle} />
+        </Field>
+        <Field label="EPK клиентов" hint="по одному в строке; агент видит данные этих организаций. Пусто — клиент без авторизации">
+          <textarea value={form.epk} onChange={e => setForm({ ...form, epk: e.target.value })} rows={3}
+            className="w-full px-2 py-1.5 rounded text-[12px] font-mono outline-none resize-y" style={inputStyle} />
+        </Field>
+        <Field label="Код агента" hint="репозиторий: из него берутся промпты, инструменты, база знаний и запуск агента">
+          <input value={form.repo} onChange={e => setForm({ ...form, repo: e.target.value })} placeholder="~/Desktop/aigw-local"
+            className="w-full px-2 py-1.5 rounded text-[12px] font-mono outline-none" style={inputStyle} />
+        </Field>
+        <div className="flex items-center gap-3 px-4 py-3" style={{ borderTop: `1px solid ${C.border}` }}>
+          <Action primary disabled={!dirty} onClick={save}>сохранить</Action>
+          {!dirty && <span className="text-[11px] font-mono" style={{ color: C.fg0 }}>сохранено</span>}
+        </div>
+      </Panel>
+
+      <Label>агенты</Label>
+      <div className="grid grid-cols-3 gap-3">
+        {state.targets.map(t => (
+          <Panel key={t.id} className="px-4 py-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[14px] font-medium" style={{ color: C.fg5 }}>{t.name}</span>
+              <span className="text-[9px] font-mono px-1 py-px rounded uppercase" style={{ color: C.fg1, background: "rgba(255,255,255,0.06)" }}>{t.kind === "code" ? "код" : "http"}</span>
+            </div>
+            <div className="text-[10px] font-mono break-all" style={{ color: C.fg0 }}>{t.where || "адрес не задан"}</div>
+            <div className="text-[11px] leading-snug" style={{ color: C.fg1 }}>{t.note}</div>
+            {t.kind === "http" && (
+              <div className="flex flex-col gap-1.5 mt-auto pt-1">
+                <div><Action disabled={!t.ready} onClick={() => check(t.id, `/api/agents/${t.id}/check`)}>проверить связь</Action></div>
+                <CheckResult check={checks[t.id]} />
+              </div>
+            )}
+          </Panel>
+        ))}
+      </div>
+
+      <Label>модели</Label>
+      <Panel>
+        {([["main", "судья и клиент", state.models.main], ["second", "второй судья", state.models.second]] as const).map(([key, role, model], i) => (
+          <div key={key} className="grid grid-cols-[200px_1fr_auto] gap-4 items-center px-4 py-3" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
+            <span className="text-[12px]" style={{ color: C.fg4 }}>{role}</span>
+            <span className="text-[12px] font-mono" style={{ color: C.fg3 }}>{model ?? "новейшая GLM из каталога шлюза"}</span>
+            <CheckResult check={checks[key]} />
+          </div>
+        ))}
+        <div className="flex items-center gap-3 px-4 py-3" style={{ borderTop: `1px solid ${C.border}` }}>
+          <Action onClick={checkModels}>проверить модели</Action>
+          <span className="text-[11px]" style={{ color: C.fg1 }}>через {state.models.via}{state.models.via === "OpenRouter" ? " · сертификаты шлюза банка — в папку certs/" : ""}</span>
+        </div>
+      </Panel>
+
+      <Label right={<JobLine state={state} kind="sources" />}>контекст агента</Label>
+      <div className="flex items-center gap-2 mb-3">
+        <Action primary disabled={state.job.running || !saved.repo} onClick={() => api("/api/sources", {}).catch(e => alert(e.message))}>
+          <Bot className="size-3" />{state.sources.length ? "собрать заново из кода агента" : "собрать из кода агента"}
+        </Action>
+        <span className="text-[11px]" style={{ color: C.fg1 }}>промпты и инструменты агента: из них выделяются правила проверки</span>
+      </div>
+      {state.sources.length > 0 ? (
+        <Panel>
+          {withRules.map((src, i) => (
+            <div key={src.id} className="grid grid-cols-[90px_1fr_auto] gap-3 items-center px-4 py-2 text-[12px]" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
+              <span className="text-[10px] font-mono" style={{ color: C.fg1 }}>{SOURCE_KIND[src.kind] ?? src.kind}</span>
+              <span className="font-mono text-[11px] truncate" style={{ color: C.fg3 }}>{src.origin}</span>
+              <span className="font-mono text-[11px]" style={{ color: C.fg1 }}>{src.rules} {plural(src.rules, "правило", "правила", "правил")} · {Math.round(src.chars / 100) / 10} тыс. зн.</span>
+            </div>
+          ))}
+          <div className="px-4 py-2 text-[11px]" style={{ borderTop: `1px solid ${C.border}`, color: C.fg0 }}>
+            всего источников: {state.sources.length}{withRules.length < state.sources.length ? "; промпты без правил скрыты (классификаторы маршрутизации)" : ""}
+          </div>
+        </Panel>
+      ) : (
+        <Panel className="p-8 text-center text-[12px]"><span style={{ color: C.fg1 }}>Укажите код агента и соберите источники.</span></Panel>
+      )}
+    </Page>
+  );
+}
+
 function LogsView({ state, onOpen }: { state: LabState; onOpen: (runId?: string) => void }) {
   const d = state.discover;
   const [count, setCount] = useState(d?.sampled ?? 60);
+  const fileRef = useRef<HTMLInputElement>(null);
   const run = (replan = false) => api("/api/discover", { count, replan }).catch(e => alert(e.message));
+  const load = async (file?: File) => {
+    if (!file) return;
+    try { await upload("/api/logs", file); } catch (e) { alert((e as Error).message); }
+    if (fileRef.current) fileRef.current.value = "";
+  };
+  const pick = (
+    <>
+      <Action primary={!state.logs.total} disabled={state.job.running} onClick={() => fileRef.current?.click()}><Upload className="size-3" />{state.logs.total ? "новая выгрузка" : "загрузить выгрузку (.xlsx)"}</Action>
+      <input ref={fileRef} type="file" accept=".xlsx,.jsonl" className="hidden" onChange={e => load(e.target.files?.[0])} />
+    </>
+  );
+  if (!state.logs.total) {
+    return (
+      <Page title="Оценка логов" lede="Загрузите выгрузку диалогов чата из Excel (лист «Данные»: «Id диалога» и «Текст» с репликами CLIENT и AGENT). Файл остаётся на этом компьютере." actions={pick}>
+        {null}
+      </Page>
+    );
+  }
   const actions = (
     <>
-      <Action primary onClick={() => run(false)} disabled={state.job.running}><FileText className="size-3" />{d ? "оценить логи заново" : "оценить логи"}</Action>
+      <Action primary onClick={() => run(false)} disabled={state.job.running || !state.sources.length}><FileText className="size-3" />{d ? "оценить логи заново" : "оценить логи"}</Action>
       <select value={count} onChange={e => setCount(+e.target.value)} className="px-2 py-1.5 rounded text-[11px] font-mono outline-none"
         style={{ background: "rgba(255,255,255,0.04)", color: C.fg3, border: "1px solid rgba(255,255,255,0.08)" }}>
         {[20, 40, 60, 100, 200].map(n => <option key={n} value={n}>{n} разговоров</option>)}
       </select>
       {d && <Action onClick={() => { if (confirm("Выделить правила заново? Следующая оценка пойдёт по новым правилам и не будет сравнима с текущей.")) run(true); }} disabled={state.job.running}>новые правила</Action>}
       <span className="text-[11px] font-mono" style={{ color: C.fg0 }}>всего в выгрузке: {state.logs.total}</span>
+      {pick}
       <JobLine state={state} kind="discover" />
+      {!state.sources.length && <span className="text-[11px]" style={{ color: C.orange }}>сначала соберите контекст на шаге «агент»</span>}
     </>
   );
   const lede = "Разговоры из логов проверяются по правилам из системного промпта агента. У каждого правила есть цитата из промпта. Агент при этом не запускается.";
@@ -274,23 +440,6 @@ function LogsView({ state, onOpen }: { state: LabState; onOpen: (runId?: string)
           <span className="font-mono text-[10px] uppercase mr-1.5" style={{ color: C.fg1 }}>второй судья</span>
           согласен с итогом в {s.secondJudge.agree} из {s.secondJudge.checked} разговоров ({pct(s.secondJudge.agree, s.secondJudge.checked)}%)
         </div>
-      )}
-      {!!d.sources?.length && (
-        <>
-          <Label right={<span className="text-[10px] font-mono" style={{ color: C.fg0 }}>python -m lab sources --repo …</span>}>источники правил</Label>
-          <Panel>
-            {d.sources.filter(src => src.rules > 0 || src.kind !== "prompt").map((src, i) => (
-              <div key={src.id} className="grid grid-cols-[90px_1fr_auto] gap-3 items-center px-4 py-2 text-[12px]" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
-                <span className="text-[10px] font-mono" style={{ color: C.fg1 }}>{src.kind === "tools" ? "инструменты" : src.kind === "knowledge" ? "база знаний" : "промпт"}</span>
-                <span className="font-mono text-[11px] truncate" style={{ color: C.fg3 }} title={src.sha256}>{src.origin}</span>
-                <span className="font-mono text-[11px]" style={{ color: C.fg1 }}>{src.rules} {plural(src.rules, "правило", "правила", "правил")} · {Math.round(src.chars / 100) / 10} тыс. зн.</span>
-              </div>
-            ))}
-            <div className="px-4 py-2 text-[11px]" style={{ borderTop: `1px solid ${C.border}`, color: C.fg0 }}>
-              всего источников: {d.sources.length}; промпты без правил скрыты (классификаторы маршрутизации)
-            </div>
-          </Panel>
-        </>
       )}
       <Label>частые нарушения</Label>
       <Panel>
@@ -410,17 +559,12 @@ function CardsView({ state, onPick }: { state: LabState; onPick: (id: string) =>
 
 function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; run: LabRun | null; target: string; setTarget: (t: string) => void; onOpen: (runId?: string) => void }) {
   const deck = state.cards?.cards ?? [];
-  const fileRef = useRef<HTMLInputElement>(null);
   const [repeats, setRepeats] = useState(1);
   const [onlyDisputed, setOnlyDisputed] = useState(false);
   const start = () => api("/api/runs", { target, repeats }).catch(e => alert(e.message));
   const review = (index: number, decision: "agree" | "disagree" | null) =>
     run && api("/api/review", { run: run.id, index, decision }).catch(e => alert(e.message));
-  const importRun = async (file?: File) => {
-    if (!file) return;
-    try { await api("/api/import", JSON.parse(await file.text())); } catch (e: any) { alert(e.message); }
-    if (fileRef.current) fileRef.current.value = "";
-  };
+  const rejudge = () => run && api(`/api/runs/${run.id}/rejudge`, {}).catch(e => alert(e.message));
   const m = run?.metric;
   return (
     <Page
@@ -446,10 +590,11 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
           style={{ background: "rgba(255,255,255,0.04)", color: C.fg3, border: "1px solid rgba(255,255,255,0.08)" }}>
           {[1, 2, 3].map(n => <option key={n} value={n}>{n === 1 ? "каждый сценарий 1 раз" : `каждый сценарий ${n} раза`}</option>)}
         </select>
-        <Action onClick={() => fileRef.current?.click()}><Upload className="size-3" />импорт прогона</Action>
-        <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={e => importRun(e.target.files?.[0])} />
+        {run && run.status !== "running" && (
+          <Action disabled={state.job.running} onClick={rejudge}><RotateCcw className="size-3" />переоценить без агента</Action>
+        )}
         <JobLine state={state} kind="run" />
-        <JobLine state={state} kind="import" />
+        <JobLine state={state} kind="rejudge" />
         {run?.items?.some(disputed) && (
           <label className="inline-flex items-center gap-1.5 text-[11px] font-mono cursor-pointer" style={{ color: C.orange }}>
             <input type="checkbox" checked={onlyDisputed} onChange={e => setOnlyDisputed(e.target.checked)} />только спор судей ({run.items.filter(disputed).length})
@@ -459,7 +604,7 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
       {run && (
         <>
           <Label right={<span className="text-[11px] font-mono" style={{ color: C.fg3 }}>точность {m?.accuracy ?? "—"}%</span>}>
-            {run.targetName} · версия {run.version} · {when(run.startedAt)}{run.imported ? " · импорт с рабочего компьютера" : ""}{run.judgeLater ? " · только первые реплики из логов" : ""}
+            {run.targetName} · версия {run.version} · {when(run.startedAt)}
           </Label>
           {run.error && <div className="text-[12px] mb-2" style={{ color: "#F26B6B" }}>{run.error}</div>}
           <Panel>
@@ -557,7 +702,7 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
             <button key={r.id} onClick={() => onPickRun(r.id)} className="w-full text-left grid grid-cols-[1fr_120px_58px] gap-3 items-center px-4 py-2.5 transition-colors hover:bg-white/[0.03]"
               style={{ borderTop: `1px solid ${C.border}`, background: r.id === run.id ? C.selected : undefined }}>
               <div className="min-w-0">
-                <div className="text-[13px] truncate" style={{ color: C.fg4 }}>{r.targetName}{r.imported ? <span className="text-[10px] font-mono ml-1.5" style={{ color: C.fg0 }}>импорт</span> : null}{r.judgeLater ? <span className="text-[10px] font-mono ml-1.5" style={{ color: C.orange }}>только первые реплики</span> : null}</div>
+                <div className="text-[13px] truncate" style={{ color: C.fg4 }}>{r.targetName}</div>
                 <div className="text-[10px] font-mono truncate" style={{ color: C.fg0 }}>{r.version} · {when(r.startedAt)}</div>
               </div>
               <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${r.metric?.accuracy ?? 0}%`, background: C.fg3 }} /></div>
@@ -598,7 +743,7 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
 export function LabPage() {
   const navigate = useNavigate();
   const params = useParams<{ step?: string; itemId?: string }>();
-  const step: Step = (["logs", "cards", "run", "accuracy"] as Step[]).includes(params.step as Step) ? params.step as Step : "logs";
+  const step: Step = STEPS.includes(params.step as Step) ? params.step as Step : "agent";
   const itemId = params.itemId ? decodeURIComponent(params.itemId) : null;
   const [state, setState] = useState<LabState | null>(null);
   const [offline, setOffline] = useState(false);
@@ -639,10 +784,11 @@ export function LabPage() {
   const deck = state?.cards?.cards ?? [];
   const lastScored = state?.runs.find(r => r.metric && r.metric.accuracy !== null && r.status !== "running");
   const steps: { id: Step; n: string; title: string; value: string; icon: typeof FileText }[] = [
-    { id: "logs", n: "01", title: "логи", icon: FileText, value: d ? `${d.summary.checked} разговоров · ${pct(d.summary.failed, d.summary.checked)}% с нарушениями` : "ещё не оценены" },
-    { id: "cards", n: "02", title: "сценарии", icon: FlaskConical, value: deck.length ? `${deck.length} ${plural(deck.length, "сценарий", "сценария", "сценариев")}` : "ещё не собраны" },
-    { id: "run", n: "03", title: "прогон", icon: MessagesSquare, value: state?.runs.length ? `${state.runs.length} ${plural(state.runs.length, "прогон", "прогона", "прогонов")}` : "ещё не было" },
-    { id: "accuracy", n: "04", title: "точность", icon: Gauge, value: lastScored ? `${lastScored.metric!.accuracy}% · ${lastScored.targetName}` : "—" },
+    { id: "agent", n: "01", title: "агент", icon: Bot, value: state ? `${state.sources.length ? `${state.sources.length} ${plural(state.sources.length, "источник", "источника", "источников")}` : "контекст не собран"} · ${state.models.via}` : "" },
+    { id: "logs", n: "02", title: "логи", icon: FileText, value: d ? `${d.summary.checked} разговоров · ${pct(d.summary.failed, d.summary.checked)}% с нарушениями` : state?.logs.total ? `${state.logs.total} в выгрузке · не оценены` : "выгрузка не загружена" },
+    { id: "cards", n: "03", title: "сценарии", icon: FlaskConical, value: deck.length ? `${deck.length} ${plural(deck.length, "сценарий", "сценария", "сценариев")}` : "ещё не собраны" },
+    { id: "run", n: "04", title: "прогон", icon: MessagesSquare, value: state?.runs.length ? `${state.runs.length} ${plural(state.runs.length, "прогон", "прогона", "прогонов")}` : "ещё не было" },
+    { id: "accuracy", n: "05", title: "точность", icon: Gauge, value: lastScored ? `${lastScored.metric!.accuracy}% · ${lastScored.targetName}` : "—" },
   ];
 
   const listItems = useMemo(() => {
@@ -671,7 +817,7 @@ export function LabPage() {
     return null;
   }, [state, step, itemId, run]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const listTitle = step === "logs" ? "разговоры из логов" : step === "cards" ? "сценарии" : step === "run" ? (run ? `${run.targetName} · ${when(run.startedAt)}` : "сценарии") : "прогоны";
+  const listTitle = step === "agent" ? "" : step === "logs" ? "разговоры из логов" : step === "cards" ? "сценарии" : step === "run" ? (run ? `${run.targetName} · ${when(run.startedAt)}` : "сценарии") : "прогоны";
   const card = step === "cards" && itemId ? deck.find(c => c.id === itemId) : undefined;
   const traceId = (step === "logs" || step === "run") && itemId ? itemId : null;
 
@@ -714,7 +860,7 @@ export function LabPage() {
           <div className="h-full flex items-center justify-center">
             <div className="text-center" style={titleFont}>
               <div className="text-lg" style={{ color: C.fg4 }}>Agent Lab не запущен.</div>
-              <div className="text-[14px] mt-3" style={{ color: C.fg1 }}>Запустите <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-white/90">sh lab/start.sh</code></div>
+              <div className="text-[14px] mt-3" style={{ color: C.fg1 }}>Запустите <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-white/90">sh bin/start.sh</code></div>
             </div>
           </div>
         )}
@@ -729,6 +875,7 @@ export function LabPage() {
             <div className="flex-1 min-h-0 overflow-auto sb"><RunDetail key={traceId} runId={traceId} /></div>
           </div>
         )}
+        {state && !traceId && step === "agent" && <AgentView state={state} />}
         {state && !traceId && step === "logs" && <LogsView state={state} onOpen={id => id && go("logs", id)} />}
         {state && !traceId && step === "cards" && (card ? <CardView card={card} state={state} onBack={() => go("cards")} /> : <CardsView state={state} onPick={id => go("cards", id)} />)}
         {state && !traceId && step === "run" && <RunView state={state} run={run} target={target} setTarget={setTarget} onOpen={id => id && go("run", id)} />}

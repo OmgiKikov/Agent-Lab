@@ -1,4 +1,4 @@
-"""Prompts of the Agent Lab intelligence layer (ported from the native LangWatch Agent Lab)."""
+"""Every prompt the Lab sends to a model: rules from sources, log audit, cards, test data, simulator, judge."""
 
 PLAN = """Find business topics in the given CUSTOMER requests, and explicit expectations grounded in the provided sources.
 Every dialogue ID must be assigned to exactly one topic. Different tasks in one topic may have conditional expectations.
@@ -46,6 +46,17 @@ Preserve only customer facts actually available in the log. Keep the exact openi
 Never leak the desired agent behavior or judge criteria into the customer's situation. Do not copy the agent's answer into the customer's facts.
 State the goal, what the customer knows and does not know, and how they behave. Use no real personal data.
 Use Russian. Return {name:"short business title of the scenario (3-7 words)",situation:"who the customer is, goal, known facts, unknown facts, behavior"}."""
+
+WORLD = """You prepare test data for the mocked business systems behind a bank acquiring support chatbot.
+Input: a customer situation taken from a real conversation, and JSON templates of the systems' responses.
+Return {"organization":{"name","inn","merchantName","address"},"terminals":[{"nameForClient","terminalId","stateCode"}],"tools":{...}}.
+- organization: a fictional company matching the situation (e.g. an АЗС, a shop, a cafe); inn = 10 digits; merchantName = short point-of-sale name; address in Russia.
+- terminals: 1-3 items; terminalId = 8 digits; stateCode ACTIVE or BLOCKED (BLOCKED only if the situation implies a blocked terminal).
+- tools: only tools whose data matters for this situation, from: getLkkTariff, terminalInfoByTidV2, acquiringSettlements, getLkkTransactionList, getServicesListInfoByUcpid, MakeReqToSM2.
+  Each value is the full response with EXACTLY the template's keys and value types; change values and the number of list items only.
+  Make the data consistent with the situation and with the organization/terminals (e.g. two identical successful refunds for a doubled refund).
+- Never copy masked values (# or *) and never use real people's personal data.
+Use Russian for human-readable values."""
 
 SIMULATOR = """Ты играешь клиента банка, который пишет в чат поддержки по эквайрингу. Это тест чат-бота, но ты ведёшь себя как настоящий клиент.
 Твоя ситуация:

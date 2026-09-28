@@ -1,44 +1,42 @@
-# LangWatch source and its local databases stay on this computer.
-/langwatch/
-/.local-archive/
-/.agent-lab/
-/node_modules/
-/dist/
-__pycache__/
-/.env
-/.DS_Store
-
-# Exports and secrets from real conversations never enter this repository.
+# Real bank data never enters this public repository: logs, cards, runs, settings, addresses, certificates.
+/data/
+/certs/
 *.xlsx
 *.jsonl
 *.pem
 *.key
 *.p12
+*.pfx
 
-# Agent Lab demo: local environment and real-conversation data.
-/lab/.venv/
-/lab/data/
-/lab/.workshop-src/
-/certs/
-
-# Earlier experiments (LangWatch, review UI, old scripts): kept on disk, not in the repository.
-/langwatch-custom/
-/source-tests/
-/review-ui/
-/tests/
-/skills/
-/patches/
-/config/
-/.gitkeep
-/scripts/*
-!/scripts/pi-model-proxy.py
-/docs/*
-!/docs/agent-lab-demo.md
-/future-agi-local/
-/laminar-local/
-/latitude-local/
-/.raindrop/
-/langwatch/
+# Environments and build outputs.
+/.venv/
+__pycache__/
+.ruff_cache/
+/bridge/node_modules/
 /workshop/node_modules/
 /workshop/app/node_modules/
 /workshop/app/dist/
+.DS_Store
+
+# Earlier experiments (LangWatch, Latitude, review UI, old scripts), kept on this computer only.
+/.agent-lab/
+/.claude/
+/.gitkeep
+/.local-archive/
+/.raindrop/
+/config/
+/dist/
+/docs/*
+!/docs/demo.md
+/future-agi-local/
+/laminar-local/
+/langwatch/
+/langwatch-custom/
+/latitude-local/
+/node_modules/
+/patches/
+/review-ui/
+/scripts/
+/skills/
+/source-tests/
+/tests/

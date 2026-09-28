@@ -6,18 +6,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import globals from "globals";
 
-const backendTsFiles = [
-  "src/**/*.ts",
-  "tests/**/*.ts",
-  "scripts/**/*.ts",
-  // Playwright e2e specs + fixtures/helpers. They run under node (Playwright
-  // CLI shebang) + bun (for the subprocess DB queries) so they belong with
-  // the backend config (no React, node globals). Without listing them here
-  // they fall through to `eslint.configs.recommended` only — no typescript-
-  // eslint, no `no-floating-promises`, no `no-misused-promises`, so a
-  // missing `await` on a Playwright locator wouldn't be caught at lint.
-  "app/tests-e2e/**/*.ts",
-];
+const backendTsFiles = ["src/**/*.ts", "scripts/**/*.ts"];
 
 const appSrcFiles = ["app/src/**/*.ts", "app/src/**/*.tsx"];
 
@@ -37,7 +26,6 @@ export default defineConfig(
       "coverage/**",
       ".isolated/**",
       ".claude/**",
-      "examples/**",
       "src/**/*.d.ts",
       "**/*.cjs",
       "**/*.config.js",
@@ -147,14 +135,6 @@ export default defineConfig(
     },
     settings: {
       react: { version: "detect" },
-    },
-  },
-  {
-    // Playwright fixture extension requires the `async ({}, use, info) => {}`
-    // shape — destructuring an empty object IS the API. Don't lint it away.
-    files: ["app/tests-e2e/**/*.ts"],
-    rules: {
-      "no-empty-pattern": "off",
     },
   },
 );
