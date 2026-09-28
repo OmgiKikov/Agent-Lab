@@ -76,4 +76,12 @@ if 'pre-line' not in text:
                         '<div style={{ fontSize: 12, color: C.fg, lineHeight: 1.5, whiteSpace: annotation.source === "agent-lab" ? "pre-line" : undefined }}><DeepLinkedText text={annotation.note} /></div>')
     assert 'pre-line' in text, 'trace annotations changed upstream'
     row.write_text(text)
+# The chat button speaks for the product: «Спросить Agent Lab» instead of «Ask Claude Code».
+pane = src / 'components/MessagePane.tsx'
+text = pane.read_text()
+if 'Спросить Agent Lab' not in text:
+    text = text.replace('<span>Ask Claude Code</span>', '<span>Спросить Agent Lab</span>')
+    text = text.replace('title={`Ask ${providerLabel(provider)}`}', 'title="Спросить Agent Lab"')
+    assert 'Спросить Agent Lab' in text, 'message pane changed upstream'
+    pane.write_text(text)
 print('patched', src)
