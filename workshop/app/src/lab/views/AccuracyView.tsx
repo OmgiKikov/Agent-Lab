@@ -90,30 +90,34 @@ function Changes({ run, previous, previousItems }: { run: LabRun; previous: LabR
 }
 
 export function AccuracyView({ state, run: selected, onPickRun, onOpen }: { state: LabState; run: LabRun | null; onPickRun: (id: string) => void; onOpen: (key: string) => void }) {
-  const details = useRunDetails(state.runs);
   const [compare, setCompare] = useState(false);
   const history = useMemo(() => state.runs.filter(r => r.metric && r.metric.total && r.status !== "running"), [state.runs]);
   const deck = state.cards?.cards ?? [];
 
   // While a run is still going, the number shown is the last finished run's.
-  const finished: LabRun | null = selected?.metric?.total && selected.status !== "running" ? selected : history[0] ? details(history[0]) : null;
+  const head = selected?.metric?.total && selected.status !== "running" ? selected : history[0];
+  const sameAgent = useMemo(
+    () => (head ? history.filter(r => r.target === head.target).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1)).slice(-12) : []),
+    [history, head],
+  );
+  const recent = sameAgent.slice(-5);
+  const previous = head ? previousOf(state.runs, head) : null;
+  const details = useRunDetails([...(head ? [head] : []), ...(previous ? [previous] : []), ...recent]);
+  const finished: LabRun | null = head ? (head.items ? head : details(head)) : null;
   if (!finished?.metric || !finished.metric.total) {
     return <Page title="Точность агента" lede={history.length ? "Загружаю прогон…" : "Сначала прогоните сценарии на агенте: точность считается по результатам прогонов."} />;
   }
   const m = finished.metric;
   const items = finished.items ?? [];
-  const previous = previousOf(state.runs, finished);
   const previousItems = previous ? details(previous)?.items ?? null : null;
   const delta = previous?.metric?.accuracy != null && m.accuracy != null ? m.accuracy - previous.metric.accuracy : null;
   const unit = unitOf(items);
   const of = unit === "разговоров" ? plural(m.measured, "разговора", "разговоров", "разговоров") : plural(m.measured, "сценария", "сценариев", "сценариев");
   const types = typesOfRun(finished, state.personas);
 
-  const sameAgent = history.filter(r => r.target === finished.target).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1)).slice(-12);
   const points: TrendPoint[] = sameAgent.map(r => ({
     id: r.id, value: r.metric!.accuracy ?? 0, label: day(r.startedAt), title: `${r.version} · ${when(r.startedAt)}`, sub: `${r.metric!.passed} из ${r.metric!.measured} пройдено`,
   }));
-  const recent = sameAgent.slice(-5);
   const best = points.reduce((a, b) => (b.value > a.value ? b : a), points[0]);
 
   return (
@@ -142,10 +146,10 @@ export function AccuracyView({ state, run: selected, onPickRun, onOpen }: { stat
             <Trust icon={ShieldCheck} label="Второй судья" ok={m.secondJudge ? m.secondJudge.agree / m.secondJudge.checked >= 0.8 : undefined}
               value={m.secondJudge ? `Согласен в ${m.secondJudge.agree} из ${m.secondJudge.checked}` : "Не запускался"} />
             <Trust icon={Repeat} label="Повторы" ok={m.repeats ? m.repeats.stable / m.repeats.scenarios >= 0.8 : undefined}
-              value={m.repeats ? `Одинаковый итог у ${m.repeats.stable} из ${m.repeats.scenarios}` : "Без повторов"} sub={m.repeats ? undefined : "Запустите с повторами, чтобы проверить стабильность"} />
+              value={m.repeats ? `Одинаковый итог у ${m.repeats.stable} из ${m.repeats.scenarios}` : "Не запускались"} sub={m.repeats ? undefined : "Запустите с повторами, чтобы проверить стабильность"} />
             <Trust icon={QuoteIcon} label="Доказательства" ok value="У каждого вердикта есть цитата из ответа агента" />
-            <Trust icon={UserCheck} label="Человек" ok={m.human ? m.human.agree / m.human.reviewed >= 0.8 : undefined}
-              value={m.human ? `Проверено ${m.human.reviewed}, судья прав в ${m.human.agree}` : "Не проверялось"} sub={m.human ? undefined : "Кнопки «Верно» и «Неверно» в прогоне"} />
+            <Trust icon={UserCheck} label="Проверка человеком" ok={m.human ? m.human.agree / m.human.reviewed >= 0.8 : undefined}
+              value={m.human ? `Проверено ${m.human.reviewed}, судья прав в ${m.human.agree}` : "Не проводилась"} sub={m.human ? undefined : "Кнопки «Верно» и «Неверно» в прогоне"} />
           </Panel>
         </Panel>
 

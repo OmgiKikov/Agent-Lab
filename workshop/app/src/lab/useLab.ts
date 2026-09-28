@@ -46,8 +46,9 @@ export function useLab() {
 const finishedRuns = new Map<string, LabRun>();
 
 /**
- * Full data (conversations included) of finished runs, fetched once and kept.
- * The key includes the finish time and the score, so a re-judged run is fetched again.
+ * Full data (conversations included) of the given finished runs, fetched once and kept.
+ * Pass only the runs a screen needs. The key includes the finish time and the score,
+ * so a re-judged run is fetched again.
  */
 export function useRunDetails(runs: LabRun[]) {
   const [, bump] = useState(0);

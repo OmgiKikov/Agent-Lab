@@ -5,7 +5,7 @@ import { Progress } from "./ui";
 import { useToast } from "./toast";
 
 /** What the running job is doing, with a stop button; or how the last one of this kind ended. */
-export function JobLine({ state, kind }: { state: LabState; kind: string }) {
+export function JobLine({ state, kind, bare }: { state: LabState; kind: string; bare?: boolean }) {
   const { error } = useToast();
   const j = state.job;
   if (j.running && j.kind === kind) {
@@ -13,10 +13,10 @@ export function JobLine({ state, kind }: { state: LabState; kind: string }) {
     return (
       <span className="inline-flex items-center gap-3 rounded-lg border border-white/[0.08] bg-white/[0.03] py-1 pl-3 pr-1.5 text-[12px] text-lab-mute">
         <span className="size-2 rounded-full bg-lab-accent pulse-dot" />
-        <span className="max-w-[320px] truncate">{message}</span>
+        <span className={bare ? "max-w-[210px] truncate" : "max-w-[320px] truncate"}>{message}</span>
         {total > 0 && (
           <span className="flex items-center gap-2">
-            <Progress value={(100 * done) / total} className="w-16 rounded-full" />
+            {!bare && <Progress value={(100 * done) / total} className="w-16 rounded-full" />}
             <span className="font-mono text-[11px] text-lab-dim">{done}/{total}</span>
           </span>
         )}

@@ -99,7 +99,7 @@ function Conversation({ item, state }: { item: Item; state: LabState }) {
           </div>
           {second && (
             <div className={cn("mt-2 text-[12.5px]", disputed(item) ? "text-lab-warn" : "text-lab-dim")}>
-              Второй судья {disputed(item) ? `не согласен: ${STATUS_TEXT[second.status as Status]}` : "согласен"}
+              Второй судья {disputed(item) ? `оценил иначе: ${STATUS_TEXT[second.status as Status]}` : "согласен"}
             </div>
           )}
         </div>
@@ -166,7 +166,8 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
   state: LabState; run: LabRun | null; itemId: string | null; target: string; setTarget: (t: string) => void; onOpen: (key?: string) => void;
 }) {
   const { error } = useToast();
-  const details = useRunDetails(state.runs);
+  const previous = run ? previousOf(state.runs, run) : null;
+  const details = useRunDetails(previous ? [previous] : []);
   const [creating, setCreating] = useState(false);
   const [view, setView] = useState<"chat" | "matrix">("chat");
   const [compare, setCompare] = useState(false);
@@ -188,7 +189,6 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
   const disputes = items.filter(disputed).length;
   const job = state.job;
   const live = job.running && job.kind === "run";
-  const previous = previousOf(state.runs, run);
   const previousItems = previous ? details(previous)?.items ?? null : null;
   const review = (decision: "agree" | "disagree" | null) => api("/api/review", { run: run.id, index, decision }).catch(error);
 
@@ -203,7 +203,7 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
               {live && <Badge hue="accent"><span className="size-1.5 rounded-full bg-lab-accent pulse-dot" />идёт</Badge>}
             </div>
             <div className="mt-0.5 text-[12px] text-lab-dim">
-              {when(run.startedAt)} · {count(items.length, "разговор", "разговора", "разговоров")}{disputes ? ` · судьи спорят в ${disputes}` : ""}
+              {when(run.startedAt)} · {count(items.length, "разговор", "разговора", "разговоров")}{disputes ? ` · судьи расходятся в ${disputes} ${plural(disputes, "разговоре", "разговорах", "разговорах")}` : ""}
             </div>
           </div>
           <Segmented value={view} onChange={setView} options={[
@@ -211,8 +211,8 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
             { value: "matrix", label: <><LayoutGrid className="size-3.5" />Матрица</> },
           ]} />
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <JobLine state={state} kind="run" />
-            <JobLine state={state} kind="rejudge" />
+            <JobLine state={state} kind="run" bare />
+            <JobLine state={state} kind="rejudge" bare />
             <span className="mr-1 text-[24px] font-medium leading-none text-lab-ink" style={{ fontFamily: '"AlphaLyrae", sans-serif' }} title="Точность прогона">{run.metric?.accuracy ?? "—"}%</span>
             {run.status !== "running" && (
               <Button size="sm" variant="ghost" icon={RotateCcw} disabled={state.job.running} title="Судья заново оценит те же разговоры, агент при этом не запускается"

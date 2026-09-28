@@ -29,7 +29,7 @@ export function CardView({ card, state, onBack }: { card: Card; state: LabState;
             <Panel className="px-5 py-4 text-[14px] leading-relaxed text-lab-soft">{card.situation}</Panel>
           </Section>
 
-          <Section title={openings.length > 1 ? "Первая реплика у разных типов клиентов" : "Первая реплика клиента"} hint={openings.length > 1 ? "Ситуация та же, меняется только манера писать" : "Взята из реального разговора"}>
+          <Section title={openings.length > 1 ? "Первая реплика у разных типов клиентов" : "Первая реплика клиента"} hint={openings.length > 1 ? "Ситуация та же, меняется только манера письма" : "Взята из реального разговора"}>
             <Panel>
               {openings.map((row, i) => (
                 <Row first={!i} key={row.id} className="grid grid-cols-[170px_1fr] items-start gap-4 px-5 py-3.5">

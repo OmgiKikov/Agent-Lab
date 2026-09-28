@@ -97,7 +97,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
       </div>
       {noSources && (
         <div className="flex w-full items-center gap-2 text-[12.5px] text-lab-warn">
-          <TriangleAlert className="size-3.5" />Судье пока не по чему оценивать.
+          <TriangleAlert className="size-3.5" />Судье пока не на что опереться.
           <button className="underline underline-offset-2 hover:text-lab-ink" onClick={() => onGo("agent")}>Соберите контекст агента</button>
         </div>
       )}
