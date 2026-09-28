@@ -20,10 +20,11 @@ type Status = "PASS" | "FAIL" | "UNMEASURED" | "UNKNOWN" | "NOT_APPLICABLE" | "R
 type Rule = { ruleId: string; rule: string; status: Status; reason: string; agentQuote: string; title?: string };
 type Metric = { accuracy: number | null; passed: number; failed: number; unmeasured: number; measured: number; total: number;
   secondJudge?: { model: string; checked: number; agree: number }; repeats?: { scenarios: number; stable: number; attempts: number };
-  human?: { reviewed: number; agree: number } };
+  human?: { reviewed: number; agree: number };
+  personas?: Record<string, { accuracy: number | null; passed: number; measured: number }> };
 type Message = { role: "customer" | "agent"; text: string; fromLog?: boolean; ok?: boolean; status?: string; seconds?: number };
 type Item = { cardId: string; name: string; topic: string; origin: string; status: Status; stage: string; conversation: Message[]; rules: Rule[]; error: string | null; runId?: string;
-  attempt?: number; second?: { model: string; status: string; rules?: Rule[] }; review?: "agree" | "disagree" | null; world?: boolean };
+  attempt?: number; persona?: string; second?: { model: string; status: string; rules?: Rule[] }; review?: "agree" | "disagree" | null; world?: boolean };
 type LabRun = { id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string; metric: Metric | null; error: string | null; repeats?: number; items?: Item[] };
 type Criterion = { id: string; text: string; quote: string; condition?: string; acceptable?: string };
 type World = { organization: { name: string; inn: string; merchantName: string; address: string }; terminals: { nameForClient: string; terminalId: string; stateCode: string }[]; tools: Record<string, unknown> };
@@ -31,6 +32,7 @@ type Card = { id: string; topic: string; name: string; situation: string; openin
 type LogResult = { dialogueId: string; topicId: string; status: Status; rules: Rule[]; opening: string; runId?: string };
 type Pattern = { rule: string; quote: string; topics: string[]; count: number; titles: string[]; examples: { dialogueId: string; reason: string; agentQuote: string; opening: string; url?: string }[] };
 type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };
+type Persona = { id: string; name: string; note: string };
 type Settings = { prodUrl: string; epk: string[]; repo: string };
 type Source = { id: string; kind: string; origin: string; chars: number; rules: number };
 type Models = { via: string; main: string | null; second: string | null };
@@ -48,6 +50,7 @@ type LabState = {
   cards: null | { cards: Card[] };
   runs: LabRun[];
   targets: Target[];
+  personas: Persona[];
 };
 type Step = "agent" | "logs" | "cards" | "run" | "accuracy";
 
@@ -63,7 +66,11 @@ const plural = (n: number, one: string, few: string, many: string) => {
 };
 const when = (iso?: string | null) => iso ? new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
 const titleFont = { fontFamily: '"AlphaLyrae", sans-serif' };
-const itemTitle = (i: Item) => i.name + (i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : "");
+const DEFAULT_PERSONA = "default";
+const personaName = (state: LabState, id?: string) => state.personas.find(p => p.id === (id ?? DEFAULT_PERSONA))?.name ?? id ?? "";
+const itemTitle = (i: Item, state: LabState) => i.name
+  + (i.persona && i.persona !== DEFAULT_PERSONA ? ` · ${personaName(state, i.persona)}` : "")
+  + (i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : "");
 const disputed = (i: Item) => !!i.second && ["PASS", "FAIL", "UNMEASURED"].includes(i.second.status) && i.second.status !== i.status;
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
@@ -245,6 +252,47 @@ const passShare = (items: Item[], cardId: string) => {
   const done = items.filter(i => i.cardId === cardId && (i.status === "PASS" || i.status === "FAIL"));
   return done.length ? done.filter(i => i.status === "PASS").length / done.length : null;
 };
+
+/** Accuracy per customer type, and the scenarios the ordinary customer passes but another type fails. */
+function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
+  const byType = run.metric?.personas ?? {};
+  const items = run.items ?? [];
+  const breaks: { name: string; types: string[] }[] = [];
+  for (const cardId of [...new Set(items.map(i => i.cardId))]) {
+    const of = (id: string) => items.filter(i => i.cardId === cardId && (i.persona ?? DEFAULT_PERSONA) === id && ["PASS", "FAIL"].includes(i.status));
+    const ordinary = of(DEFAULT_PERSONA);
+    if (!ordinary.length || ordinary.some(i => i.status !== "PASS")) continue;
+    const failing = state.personas.filter(p => p.id !== DEFAULT_PERSONA && of(p.id).some(i => i.status === "FAIL")).map(p => p.name);
+    if (failing.length) breaks.push({ name: items.find(i => i.cardId === cardId)!.name, types: failing });
+  }
+  return (
+    <div className="grid grid-cols-2 gap-3 mt-6">
+      <Panel className="px-4 py-3">
+        <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>по типам клиентов</div>
+        {state.personas.filter(p => byType[p.id]).map(p => {
+          const v = byType[p.id];
+          return (
+            <div key={p.id} className="grid grid-cols-[110px_1fr_44px] gap-3 items-center py-1 text-[12px]" style={{ color: C.fg2 }} title={p.note}>
+              <span style={{ color: C.fg4 }}>{p.name}</span>
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${v.accuracy ?? 0}%`, background: C.fg3 }} /></div>
+              <span className="font-mono text-right" style={{ color: C.fg4 }}>{v.accuracy ?? "—"}%</span>
+            </div>
+          );
+        })}
+        <div className="text-[11px] mt-2" style={{ color: C.fg1 }}>доля разговоров, где агент выполнил все критерии, для каждого типа клиента</div>
+      </Panel>
+      <Panel className="px-4 py-3">
+        <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>ломается от манеры общения</div>
+        {breaks.slice(0, 8).map(b => (
+          <div key={b.name} className="text-[12px] py-1" style={{ color: C.fg2 }}>
+            <span style={{ color: C.fg4 }}>{b.name}</span> <span style={{ color: C.fg1 }}>· обычный клиент проходит, не проходит: </span><span style={{ color: "#F26B6B" }}>{b.types.join(", ")}</span>
+          </div>
+        ))}
+        {!breaks.length && <div className="text-[12px]" style={{ color: C.fg1 }}>Таких сценариев нет: там, где обычный клиент проходит, проходят и остальные.</div>}
+      </Panel>
+    </div>
+  );
+}
 
 /** Top failure reasons of a run and what changed against the previous run of the same agent. */
 function Insights({ run, previous }: { run: LabRun; previous: LabRun | null }) {
@@ -569,7 +617,9 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
   const deck = state.cards?.cards ?? [];
   const [repeats, setRepeats] = useState(1);
   const [onlyDisputed, setOnlyDisputed] = useState(false);
-  const start = () => api("/api/runs", { target, repeats }).catch(e => alert(e.message));
+  const [types, setTypes] = useState<string[]>([DEFAULT_PERSONA]);
+  const toggleType = (id: string) => setTypes(t => t.includes(id) ? (t.length > 1 ? t.filter(x => x !== id) : t) : [...t, id]);
+  const start = () => api("/api/runs", { target, repeats, personas: types }).catch(e => alert(e.message));
   const review = (index: number, decision: "agree" | "disagree" | null) =>
     run && api("/api/review", { run: run.id, index, decision }).catch(e => alert(e.message));
   const rejudge = () => run && api(`/api/runs/${run.id}/rejudge`, {}).catch(e => alert(e.message));
@@ -593,11 +643,12 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
         ))}
       </div>
       <div className="flex items-center gap-2 flex-wrap mt-4">
-        <Action primary disabled={state.job.running || !deck.length} onClick={start}><Play className="size-3" />прогнать {deck.length} {plural(deck.length, "сценарий", "сценария", "сценариев")}</Action>
+        <Action primary disabled={state.job.running || !deck.length} onClick={start}><Play className="size-3" />прогнать {deck.length} {plural(deck.length, "сценарий", "сценария", "сценариев")}{types.length > 1 ? ` × ${types.length} ${plural(types.length, "тип", "типа", "типов")} клиента` : ""}</Action>
         <select value={repeats} onChange={e => setRepeats(+e.target.value)} className="px-2 py-1.5 rounded text-[11px] font-mono outline-none"
           style={{ background: "rgba(255,255,255,0.04)", color: C.fg3, border: "1px solid rgba(255,255,255,0.08)" }}>
           {[1, 2, 3].map(n => <option key={n} value={n}>{n === 1 ? "каждый сценарий 1 раз" : `каждый сценарий ${n} раза`}</option>)}
         </select>
+
         {run && run.status !== "running" && (
           <Action disabled={state.job.running} onClick={rejudge}><RotateCcw className="size-3" />переоценить без агента</Action>
         )}
@@ -608,6 +659,17 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
             <input type="checkbox" checked={onlyDisputed} onChange={e => setOnlyDisputed(e.target.checked)} />только спор судей ({run.items.filter(disputed).length})
           </label>
         )}
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
+        <span className="text-[11px] mr-1" style={{ color: C.fg1 }}>клиент:</span>
+        {state.personas.map(p => {
+          const on = types.includes(p.id);
+          return (
+            <button key={p.id} title={p.note} onClick={() => toggleType(p.id)} className="text-[11px] font-mono px-2 py-1 rounded transition-colors"
+              style={{ color: on ? "#000" : C.fg2, background: on ? C.fg4 : "rgba(255,255,255,0.06)" }}>{p.name}</button>
+          );
+        })}
+        {types.length > 1 && <span className="text-[11px] ml-1" style={{ color: C.fg1 }}>каждый сценарий пройдёт каждый выбранный клиент</span>}
       </div>
       {run && (
         <>
@@ -628,7 +690,7 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
                   <Pill status={i.status}>{STATUS_TEXT[i.status]}</Pill>
                   <div className="min-w-0">
                     <div className="text-[13px] font-medium truncate" style={{ color: C.fg4 }}>
-                      {itemTitle(i)}
+                      {itemTitle(i, state)}
                       {disputed(i) && <span className="ml-2 text-[10px] font-mono px-1 rounded" style={{ color: C.orange, background: `${C.orange}14` }} title={`Второй судья: ${STATUS_TEXT[i.second!.status as Status]}`}>спор судей</span>}
                     </div>
                     <div className="text-[11px] truncate" style={{ color: C.fg1 }}>
@@ -719,6 +781,7 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
           ))}
         </Panel>
       </div>
+      {m.personas && <PersonaBreakdown state={state} run={finished} />}
       <Insights run={finished} previous={history.filter(r => r.id !== finished.id && r.target === finished.target)[0] ? details[history.filter(r => r.id !== finished.id && r.target === finished.target)[0].id] ?? null : null} />
       <Label>итоги по сценариям</Label>
       <Panel className="overflow-x-auto">
@@ -815,7 +878,7 @@ export function LabPage() {
     }
     if (step === "run" && run?.items) {
       return run.items.map(i => <ListItem key={`${i.cardId}-${i.attempt ?? 1}`} selected={!!i.runId && i.runId === itemId} onClick={() => i.runId && go("run", i.runId)}
-        dot={<Dot status={i.status} pulse={i.status === "RUNNING"} />} title={itemTitle(i)} sub={i.status === "RUNNING" ? i.stage : STATUS_TEXT[i.status] + (disputed(i) ? " · спор судей" : "")} />);
+        dot={<Dot status={i.status} pulse={i.status === "RUNNING"} />} title={itemTitle(i, state)} sub={i.status === "RUNNING" ? i.stage : STATUS_TEXT[i.status] + (disputed(i) ? " · спор судей" : "")} />);
     }
     if (step === "accuracy") {
       return state.runs.map(r => <ListItem key={r.id} selected={r.id === run?.id} onClick={() => pickRun(r.id)}

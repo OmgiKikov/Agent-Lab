@@ -8,10 +8,10 @@ import time
 import uuid
 from collections.abc import Callable
 
-from . import agents, cards, judge, llm, store, workshop
+from . import agents, cards, judge, llm, personas, store, workshop
 from .agents import world
 from .metric import metric
-from .prompts import SIMULATOR
+from .prompts import PERSONA_OPENING, SIMULATOR
 from .transcript import for_trace, with_buttons
 
 MAX_AGENT_TURNS = 3
@@ -22,7 +22,12 @@ Progress = Callable[..., None]
 
 
 def title(item: dict) -> str:
-    return item['name'] + (f' · повтор {item["attempt"]}' if item.get('attempt', 1) > 1 else '')
+    persona = item.get('persona') or personas.DEFAULT
+    return (
+        item['name']
+        + (f' · {personas.name(persona)}' if persona != personas.DEFAULT else '')
+        + (f' · повтор {item["attempt"]}' if item.get('attempt', 1) > 1 else '')
+    )
 
 
 def note(run: dict, item: dict) -> str:
@@ -30,7 +35,7 @@ def note(run: dict, item: dict) -> str:
     return judge.note(item['status'], context, item.get('rules') or [], item.get('error'), item.get('second'))
 
 
-async def customer_says(card: dict, conversation: list[dict], details: str = '') -> str:
+async def customer_says(card: dict, conversation: list[dict], details: str = '', persona: str | None = None) -> str:
     """The synthetic customer's next message, or END."""
     transcript = '\n\n'.join(
         ('КЛИЕНТ (это ты): ' if m['role'] == 'customer' else 'АГЕНТ: ') + with_buttons(m) for m in conversation
@@ -42,8 +47,37 @@ async def customer_says(card: dict, conversation: list[dict], details: str = '')
         f'Переписка в чате:\n\n{transcript}\n\n'
         'Напиши следующую реплику клиента в ответ на последнее сообщение агента или [КОНЕЦ].'
     )
-    text = await llm.chat(SIMULATOR.format(situation=card['situation'], profile=profile), request)
+    manner = personas.style(persona)
+    manner = f'Твоя манера общения (она важнее правил о длине и стиле ниже): {manner}' if manner else ''
+    text = await llm.chat(SIMULATOR.format(situation=card['situation'], profile=profile, persona=manner), request)
     return text.strip().strip('"«»').strip()
+
+
+async def prepare_openings(chosen: list[dict], persona_ids: list[str], progress: Progress) -> None:
+    """The logged opening rewritten for every customer type, once per card: later runs reuse the same words,
+    so runs with customer types stay comparable."""
+    missing = [
+        (card, key)
+        for card in chosen
+        for key in persona_ids
+        if key != personas.DEFAULT and not (card.get('openings') or {}).get(key)
+    ]
+    if not missing:
+        return
+    progress(done=0, total=len(missing), message='Переписываю первые реплики под типы клиентов')
+
+    async def rewrite(card: dict, key: str) -> None:
+        text = await llm.chat(PERSONA_OPENING.format(style=personas.style(key)), card['opening'])
+        card.setdefault('openings', {})[key] = text.strip().strip('"«»').strip()
+
+    await asyncio.gather(*(rewrite(card, key) for card, key in missing))
+    cards.remember_openings({card['id']: card['openings'] for card, _ in missing})
+
+
+def opening(card: dict, persona: str) -> str:
+    if persona == personas.DEFAULT:
+        return card['opening']
+    return card['openings'][persona]
 
 
 class Live:
@@ -68,7 +102,11 @@ class Live:
             item.update(runId=self.trace.run_id, url=self.trace.url)
 
     def customer(self, message: dict) -> None:
-        source = 'дословно из лога' if message.get('fromLog') else 'сгенерирована симулятором'
+        source = 'сгенерирована симулятором'
+        if message.get('fromLog'):
+            source = 'дословно из лога'
+        elif message.get('rewritten'):
+            source = f'реплика из лога, переписанная: {personas.name(self.item.get("persona"))} клиент'
         payload = {'ситуация': self.item['situation'], 'реплика': source}
         self.trace.tool('Синтетический клиент', time.time_ns(), payload, message['text'])
         self.history.append({'role': 'user', 'content': message['text']})
@@ -110,10 +148,14 @@ async def play(card: dict, agent: agents.HttpAgent, run: dict, item: dict, chang
     test_data = world.overrides(card.get('world')) if agent.mocked else {}
     details = world.customer_profile(card.get('world')) if test_data else run.get('customer', '')
     item['world'] = bool(test_data)
-    message, from_log = card['opening'], True
+    persona = item.get('persona') or personas.DEFAULT
+    message, from_log = opening(card, persona), persona == personas.DEFAULT
     try:
         for turn in range(1, MAX_AGENT_TURNS + 1):
-            conversation.append({'role': 'customer', 'text': message, 'fromLog': from_log})
+            first_rewritten = turn == 1 and not from_log
+            conversation.append(
+                {'role': 'customer', 'text': message, 'fromLog': from_log, 'rewritten': first_rewritten}
+            )
             await asyncio.to_thread(live.customer, conversation[-1])
             item['stage'] = f'ход {turn}: агент отвечает'
             changed()
@@ -128,7 +170,7 @@ async def play(card: dict, agent: agents.HttpAgent, run: dict, item: dict, chang
                 break  # a service status hands the conversation to a human operator
             item['stage'] = f'ход {turn + 1}: клиент пишет'
             changed()
-            message, from_log = await customer_says(card, conversation, details), False
+            message, from_log = await customer_says(card, conversation, details, persona), False
             if END in message or not message:
                 break
         item['stage'] = 'судья оценивает'
@@ -141,7 +183,7 @@ async def play(card: dict, agent: agents.HttpAgent, run: dict, item: dict, chang
     changed()
 
 
-def new_run(key: str, config: dict, label: str, repeats: int) -> dict:
+def new_run(key: str, config: dict, label: str, repeats: int, persona_ids: list[str]) -> dict:
     return {
         'id': f'{time.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:4]}',
         'target': key,
@@ -158,12 +200,14 @@ def new_run(key: str, config: dict, label: str, repeats: int) -> dict:
         'metric': None,
         'error': None,
         'repeats': repeats,
+        'personas': persona_ids,
     }
 
 
-def new_item(card: dict, attempt: int) -> dict:
+def new_item(card: dict, persona: str, attempt: int) -> dict:
     return {
         'cardId': card['id'],
+        'persona': persona,
         'name': card['name'],
         'topic': card['topic'],
         'attempt': attempt,
@@ -184,16 +228,19 @@ async def run(
     label: str = '',
     progress: Progress = lambda **_: None,
     repeats: int = 1,
+    persona_ids: list[str] | None = None,
 ) -> dict:
-    """Every card (or the chosen ones) against one agent, `repeats` times each."""
+    """Every card (or the chosen ones) against one agent, played by each chosen customer type, `repeats` times."""
     chosen = [c for c in cards.deck() if not card_ids or c['id'] in card_ids]
     if not chosen:
         raise RuntimeError('Нет карточек для прогона')
+    persona_ids = [key for key in personas.PERSONAS if key in (persona_ids or [personas.DEFAULT])] or [personas.DEFAULT]
+    await prepare_openings(chosen, persona_ids, progress)
     config = agents.configs()[key]
     agent = agents.create(key)
-    record = await asyncio.to_thread(new_run, key, config, label, repeats)
-    plan = [(card, attempt) for attempt in range(1, repeats + 1) for card in chosen]
-    record['items'] = [new_item(card, attempt) for card, attempt in plan]
+    record = await asyncio.to_thread(new_run, key, config, label, repeats, persona_ids)
+    plan = [(card, persona, attempt) for attempt in range(1, repeats + 1) for persona in persona_ids for card in chosen]
+    record['items'] = [new_item(card, persona, attempt) for card, persona, attempt in plan]
 
     def changed() -> None:
         record['metric'] = metric([i for i in record['items'] if i['status'] != 'RUNNING'])
@@ -213,7 +260,7 @@ async def run(
             async with gate:
                 await play(card, agent, record, item, changed)
 
-        await asyncio.gather(*(one(card, item) for (card, _), item in zip(plan, record['items'], strict=True)))
+        await asyncio.gather(*(one(card, item) for (card, _, _), item in zip(plan, record['items'], strict=True)))
         record['status'] = 'done'
     except agents.AgentError as error:
         record.update(status='failed', error=str(error))

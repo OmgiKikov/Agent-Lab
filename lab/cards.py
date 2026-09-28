@@ -48,6 +48,14 @@ def deck() -> list[dict]:
     return (store.load(DECK) or {}).get('cards') or []
 
 
+def remember_openings(openings: dict[str, dict[str, str]]) -> None:
+    """Keep the openings rewritten for customer types (simulate.prepare_openings) in the cards."""
+    value = store.load(DECK) or {}
+    for card in value.get('cards') or []:
+        card.setdefault('openings', {}).update(openings.get(card['id'], {}))
+    store.save(DECK, value)
+
+
 def _check(value: dict) -> None:
     if not str(value.get('name') or '').strip() or not str(value.get('situation') or '').strip():
         raise ValueError('empty card')

@@ -11,7 +11,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from . import agents, cards, discover, llm, logs, simulate, store, workshop
+from . import agents, cards, discover, llm, logs, personas, simulate, store, workshop
 from .context import sources
 from .metric import metric
 
@@ -28,7 +28,7 @@ STOPPED = 'Остановлено'
 _task: asyncio.Task | None = None
 RUN_FIELDS = (
     'id', 'target', 'targetName', 'version', 'label', 'startedAt', 'finishedAt', 'status', 'metric', 'error',
-    'model', 'repeats',
+    'model', 'repeats', 'personas',
 )  # fmt: skip
 CHECK_QUESTION = 'Какой процент эквайринга?'
 
@@ -102,6 +102,7 @@ def state() -> dict:
         'cards': store.load(cards.DECK),
         'runs': [{k: r.get(k) for k in RUN_FIELDS} for r in store.runs()],
         'targets': [agents.public(key, config) for key, config in agents.configs().items()],
+        'personas': personas.public(),
     }
 
 
@@ -176,7 +177,10 @@ async def start_run(payload: dict = Body(...)) -> dict:
         raise HTTPException(400, 'Неизвестный агент')
     label = str(payload.get('label') or '')
     repeats = max(1, min(int(payload.get('repeats') or 1), 3))
-    return start('run', lambda progress: simulate.run(key, payload.get('cardIds') or None, label, progress, repeats))
+    chosen = [str(p) for p in payload.get('personas') or [] if str(p) in personas.PERSONAS] or [personas.DEFAULT]
+    return start(
+        'run', lambda progress: simulate.run(key, payload.get('cardIds') or None, label, progress, repeats, chosen)
+    )
 
 
 @app.post('/api/runs/{run_id}/rejudge')
