@@ -50,9 +50,42 @@ def gateway_config() -> dict | None:
     if os.environ.get('AGENT_LAB_GATEWAY_INSECURE'):
         settings['insecure'] = os.environ['AGENT_LAB_GATEWAY_INSECURE'] == '1'
     if not (settings.get('url') and settings.get('cert') and settings.get('key')):
+        settings = _certs_folder() or settings
+    if not (settings.get('url') and settings.get('cert') and settings.get('key')):
         return None
     settings['url'] = re.sub(r'/v[12]$', '', settings['url'].rstrip('/'))
     return settings
+
+
+CERTS = Path(__file__).resolve().parent.parent / 'certs'
+
+
+def _certs_folder() -> dict | None:
+    """Settings from files dropped into certs/: url.txt, a client certificate and key (PEM, or .p12/.pfx with
+    an optional password.txt), and optionally the bank's root certificate named ca*/root*."""
+    if not (CERTS / 'url.txt').exists():
+        return None
+    files = [f for f in CERTS.iterdir() if f.is_file()]
+    text = {f: f.read_text(errors='ignore') for f in files if f.suffix.lower() in ('.pem', '.crt', '.cer', '.key')}
+    is_ca = lambda f: f.stem.lower().startswith(('ca', 'root'))
+    cert = next((f for f, t in text.items() if 'BEGIN CERTIFICATE' in t and not is_ca(f)), None)
+    key = next((f for f, t in text.items() if 'PRIVATE KEY' in t), None)
+    ca = next((f for f, t in text.items() if 'BEGIN CERTIFICATE' in t and is_ca(f)), None)
+    bundle = next((f for f in files if f.suffix.lower() in ('.p12', '.pfx')), None)
+    if (not cert or not key) and bundle:
+        import subprocess
+        out = CERTS / '.converted'
+        out.mkdir(mode=0o700, exist_ok=True)
+        password = (CERTS / 'password.txt').read_text().strip() if (CERTS / 'password.txt').exists() else ''
+        for args, name in ((['-clcerts', '-nokeys'], 'client.pem'), (['-nocerts', '-nodes'], 'client.key')):
+            subprocess.run(['openssl', 'pkcs12', '-in', str(bundle), *args, '-out', str(out / name), '-passin', f'pass:{password}'],
+                           check=True, capture_output=True)
+        (out / 'client.key').chmod(0o600)
+        cert, key = out / 'client.pem', out / 'client.key'
+    if not cert or not key:
+        return None
+    url = (CERTS / 'url.txt').read_text().strip().splitlines()[0].strip()
+    return {'url': url, 'cert': str(cert), 'key': str(key), 'ca': str(ca) if ca else None, 'insecure': False}
 
 
 def _gateway_models() -> dict:
@@ -68,9 +101,9 @@ def _configured() -> bool:
 
 if _configured() and not os.environ.get('LAB_MODEL_URL'):
     BASE_URL = GATEWAY
-    MODEL = os.environ.get('LAB_MODEL') or _gateway_models().get('model') or ''
-    _second = os.environ.get('LAB_SECOND_MODEL') or _gateway_models().get('second') or ''
-    SECOND = (GATEWAY, _second) if _second else None
+    # 'auto': the newest GLM in the gateway's catalog, for the judge, the simulator and the second judge.
+    MODEL = os.environ.get('LAB_MODEL') or _gateway_models().get('model') or 'auto'
+    SECOND = (GATEWAY, os.environ.get('LAB_SECOND_MODEL') or _gateway_models().get('second') or 'auto')
 else:
     BASE_URL = os.environ.get('LAB_MODEL_URL', 'http://127.0.0.1:11436/v1').rstrip('/')
     MODEL = os.environ.get('LAB_MODEL', 'z-ai/glm-5.3')
@@ -119,7 +152,22 @@ async def gateway_catalog() -> list[str]:
             if isinstance(m.get('id'), str) and m.get('type', 'chat') == 'chat']
 
 
+async def auto_models() -> dict:
+    """GLM from the gateway's catalog for the judge, the simulator and the second judge (the newest one)."""
+    models = _gateway_models()
+    if models.get('model'):
+        return models
+    catalog = await gateway_catalog()
+    glm = sorted((m for m in catalog if 'glm' in m.lower()), reverse=True)
+    main = glm[0] if glm else (catalog[0] if catalog else None)
+    models = {'model': main, 'second': main}
+    store.save('models.json', models)
+    return models
+
+
 async def _gateway_chat(model: str, system: str, messages: list[dict], timeout: float) -> str:
+    if model == 'auto':
+        model = (await auto_models())['model']
     if not model:
         raise ModelError('Не выбрана модель шлюза: python -m lab gateway --model …')
     body = {'model': model,

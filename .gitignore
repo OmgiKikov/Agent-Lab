@@ -19,3 +19,4 @@ __pycache__/
 /lab/.venv/
 /lab/data/
 /lab/.workshop-src/
+/certs/
