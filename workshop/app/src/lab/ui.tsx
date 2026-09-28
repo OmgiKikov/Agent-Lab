@@ -63,7 +63,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 const BUTTON_VARIANT = {
   primary: "bg-lab-ink text-black hover:bg-white",
-  secondary: "bg-white/[0.08] text-lab-text hover:bg-white/[0.13]",
+  secondary: "border border-white/[0.14] bg-transparent text-lab-soft hover:bg-white/[0.07] hover:text-lab-ink",
   ghost: "text-lab-mute hover:bg-white/[0.06] hover:text-lab-text",
   danger: "bg-lab-bad/10 text-lab-bad hover:bg-lab-bad/20",
 };
@@ -130,6 +130,44 @@ export function Segmented<T extends string | number>({ value, options, onChange,
         </button>
       ))}
     </div>
+  );
+}
+
+/** Underlined tabs, as in the Workshop's own run view (Overview / Span Tree / Convo). */
+export function Tabs<T extends string>({ value, tabs, onChange }: { value: T; tabs: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
+  return (
+    <div role="tablist" className="flex flex-shrink-0 border-b border-white/[0.06] pl-4">
+      {tabs.map(t => (
+        <button
+          key={t.value} role="tab" aria-selected={t.value === value} onClick={() => onChange(t.value)}
+          className={cn(
+            "-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lab-accent/50",
+            t.value === value ? "border-lab-text text-lab-ink" : "border-transparent text-lab-dim hover:text-lab-soft",
+          )}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** «МЕТКА значение»: the small label chip the Workshop puts before every fact in a run's header. */
+export function Meta({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <span className="rounded bg-white/[0.09] px-1 text-[9px] font-medium uppercase leading-4 tracking-wide text-lab-dim">{label}</span>
+      <span className="text-lab-mute">{children}</span>
+    </span>
+  );
+}
+
+/** A tool the agent called, drawn like the Workshop's tool-call pill. */
+export function ToolPill({ name }: { name: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded border border-white/15 bg-white/[0.08] px-2.5 py-1 text-xs font-medium text-lab-text">
+      <Check className="size-3 text-lab-mute" strokeWidth={2.5} />{name}
+    </span>
   );
 }
 

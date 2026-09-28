@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, ExternalLink, LayoutGrid, MessagesSquare, Play, RotateCcw, Wrench, X } from "lucide-react";
+import { Check, ExternalLink, LayoutGrid, MessagesSquare, Play, RotateCcw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../api";
 import { count, plural, when } from "../format";
@@ -11,7 +11,7 @@ import { Modal } from "../modal";
 import { useToast } from "../toast";
 import type { Item, LabRun, LabState, Message, Rule, Status } from "../types";
 import { useRunDetails } from "../useLab";
-import { Badge, Button, Bubble, Eyebrow, Page, Panel, PersonaCard, PersonaTag, Progress, Quote, Row, Segmented, StatusBadge, StatusMark } from "../ui";
+import { Badge, Button, Bubble, Eyebrow, Meta, Page, Panel, PersonaCard, PersonaTag, Progress, Quote, Row, Segmented, StatusBadge, StatusMark, Tabs, ToolPill } from "../ui";
 
 /** The settings of a new run: agent, customer types, repeats. The button says how many conversations it makes. */
 export function NewRun({ state, target, setTarget, onStarted }: { state: LabState; target: string; setTarget: (t: string) => void; onStarted?: () => void }) {
@@ -69,15 +69,42 @@ function AgentMessage({ m }: { m: Message }) {
         {long && <button className="mt-1.5 text-[12px] text-lab-accent hover:underline" onClick={() => setOpen(v => !v)}>{open ? "Свернуть" : "Показать полностью"}</button>}
       </div>
       {!!m.options?.length && <div className="flex flex-wrap gap-1.5">{m.options.map(o => <span key={o} className="rounded-full border border-white/[0.1] px-2.5 py-0.5 text-[12px] text-lab-mute">{o}</span>)}</div>}
-      {calls.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {calls.map(c => <span key={c} className="inline-flex items-center gap-1.5 rounded-md bg-white/[0.05] px-2 py-1 font-mono text-[11px] text-lab-mute"><Wrench className="size-3 text-lab-dim" />{c}</span>)}
-        </div>
-      )}
+      {calls.length > 0 && <div className="flex flex-wrap gap-1.5">{calls.map(c => <ToolPill key={c} name={c} />)}</div>}
       <div className="px-1 text-[11.5px] text-lab-dim">
         {m.ok === false ? <span className="text-lab-warn">Передал оператору · статус {m.status}</span> : `Ответил за ${m.seconds ?? "—"} с`}
       </div>
     </div>
+  );
+}
+
+/** How long the agent took on each turn and what it called: the Workshop's «trajectory» for one conversation. */
+function Trajectory({ item }: { item: Item }) {
+  const turns = item.conversation.filter(m => m.role === "agent").map((m, i) => ({
+    n: i + 1, seconds: m.seconds ?? 0, handoff: m.ok === false,
+    tools: (m.events ?? []).map(e => e.tool.replace("Система банка · ", "")).filter((t, k, all) => all.indexOf(t) === k),
+  }));
+  if (!turns.some(t => t.seconds > 0) || (turns.length < 2 && !turns.some(t => t.tools.length))) return null;
+  const total = Math.round(turns.reduce((n, t) => n + t.seconds, 0) * 10) / 10;
+  const slowest = Math.max(...turns.map(t => t.seconds), 0.1);
+  return (
+    <Panel className="px-4 py-3">
+      <div className="mb-2.5 flex items-center justify-between">
+        <Eyebrow>Траектория</Eyebrow>
+        <span className="font-mono text-[11px] text-lab-dim">{turns.length} {plural(turns.length, "ход", "хода", "ходов")} · {total} с</span>
+      </div>
+      <div className="space-y-1.5">
+        {turns.map(t => (
+          <div key={t.n} className="grid grid-cols-[52px_1fr_auto] items-center gap-3 text-[11.5px]">
+            <span className="font-mono text-lab-dim">ход {t.n}</span>
+            <div className="flex items-center gap-2">
+              <div className={cn("h-[18px] rounded-full", t.handoff ? "bg-lab-warn/70" : "bg-lab-mute/35")} style={{ width: `${Math.max(4, (100 * t.seconds) / slowest)}%`, maxWidth: "calc(100% - 44px)" }} />
+              <span className="flex-shrink-0 font-mono text-lab-mute">{t.seconds} с</span>
+            </div>
+            <span className="max-w-[260px] truncate font-mono text-lab-dim" title={t.tools.join(", ")}>{t.handoff ? "передал оператору" : t.tools.join(", ")}</span>
+          </div>
+        ))}
+      </div>
+    </Panel>
   );
 }
 
@@ -104,6 +131,8 @@ function Conversation({ item, state }: { item: Item; state: LabState }) {
           )}
         </div>
       </div>
+
+      <Trajectory item={item} />
 
       <div className="flex flex-col gap-4">
         {item.conversation.map((m, k) => m.role === "customer" ? (
@@ -202,14 +231,14 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
               <Badge>{run.version}</Badge>
               {live && <Badge hue="accent"><span className="size-1.5 rounded-full bg-lab-accent pulse-dot" />идёт</Badge>}
             </div>
-            <div className="mt-0.5 text-[12px] text-lab-dim">
-              {when(run.startedAt)} · {count(items.length, "разговор", "разговора", "разговоров")}{disputes ? ` · судьи расходятся в ${disputes} ${plural(disputes, "разговоре", "разговорах", "разговорах")}` : ""}
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[12px]">
+              <Meta label="старт">{when(run.startedAt)}</Meta>
+              <Meta label="разговоров">{items.length}</Meta>
+              {types.length > 1 && <Meta label="типов клиентов">{types.length}</Meta>}
+              {run.repeats && run.repeats > 1 ? <Meta label="повторов">{run.repeats}</Meta> : null}
+              {disputes > 0 && <Meta label="судьи расходятся">{disputes} {plural(disputes, "раз", "раза", "раз")}</Meta>}
             </div>
           </div>
-          <Segmented value={view} onChange={setView} options={[
-            { value: "chat", label: <><MessagesSquare className="size-3.5" />Разговор</> },
-            { value: "matrix", label: <><LayoutGrid className="size-3.5" />Матрица</> },
-          ]} />
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <JobLine state={state} kind="run" bare />
             <JobLine state={state} kind="rejudge" bare />
@@ -222,6 +251,10 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
           </div>
         </div>
         {live && job.progress.total ? <Progress value={(100 * (job.progress.done ?? 0)) / job.progress.total} /> : null}
+        <Tabs value={view} onChange={setView} tabs={[
+          { value: "chat", label: <><MessagesSquare className="size-3.5" />Разговор</> },
+          { value: "matrix", label: <><LayoutGrid className="size-3.5" />Матрица</> },
+        ]} />
         {run.error && <div className="border-t border-white/[0.06] px-6 py-2 text-[12.5px] text-lab-bad">{run.error}</div>}
       </div>
 
