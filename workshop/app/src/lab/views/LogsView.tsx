@@ -79,8 +79,8 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
 
   if (!state.logs.total) {
     return (
-      <Page title="Оценка логов" lede={LEDE}>
-        <div className="mt-8"><DropZone busy={busy} onFile={load} onPick={() => fileRef.current?.click()} /></div>
+      <Page title="оценка логов" lede={LEDE}>
+        <div className="mt-5"><DropZone busy={busy} onFile={load} onPick={() => fileRef.current?.click()} /></div>
         <FormatHint />
         {picker}
       </Page>
@@ -89,7 +89,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
 
   const noSources = !state.sources.length;
   const toolbar = (
-    <div className="mt-6 flex flex-wrap items-center gap-2">
+    <div className="mt-5 flex flex-wrap items-center gap-2">
       <Button variant="primary" icon={FileText} disabled={state.job.running || noSources} onClick={() => run(false)}>{d ? "Оценить заново" : "Оценить логи"}</Button>
       <select value={sample} onChange={e => setSample(+e.target.value)} aria-label="Сколько разговоров оценить" className={cn(inputClass, "w-auto cursor-pointer pr-8")}>
         {[20, 40, 60, 100, 200].map(n => <option key={n} value={n}>{n} {plural(n, "разговор", "разговора", "разговоров")}</option>)}
@@ -101,7 +101,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
         {d && <Button size="sm" variant="ghost" disabled={state.job.running} onClick={() => setConfirm(true)}>Новые правила</Button>}
       </div>
       {noSources && (
-        <div className="flex w-full items-center gap-2 text-[12.5px] text-lab-warn">
+        <div className="flex w-full items-center gap-2 text-[12px] text-lab-warn">
           <TriangleAlert className="size-3.5" />Судье пока не на что опереться.
           <button className="underline underline-offset-2 hover:text-lab-ink" onClick={() => onGo("agent")}>Соберите контекст агента</button>
         </div>
@@ -112,9 +112,9 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
 
   if (!d) {
     return (
-      <Page title="Оценка логов" lede={LEDE}>
+      <Page title="оценка логов" lede={LEDE}>
         {toolbar}
-        <EmptyState className="mt-6" icon={FileText} title={`Выгрузка загружена: ${state.logs.total} ${plural(state.logs.total, "разговор", "разговора", "разговоров")}`}>
+        <EmptyState className="mt-5" icon={FileText} title={`Выгрузка загружена: ${state.logs.total} ${plural(state.logs.total, "разговор", "разговора", "разговоров")}`}>
           Нажмите «Оценить логи»: судья проверит выбранное число разговоров и покажет, какие правила промпта агент нарушает чаще всего.
         </EmptyState>
       </Page>
@@ -136,26 +136,26 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
   const toggle = (i: number) => setOpen(prev => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; });
 
   return (
-    <Page title="Оценка логов" lede={LEDE}>
+    <Page title="оценка логов" lede={LEDE}>
       {toolbar}
       <Confirm open={confirm} onClose={() => setConfirm(false)} onConfirm={() => run(true)} title="Выделить правила заново?" action="Выделить заново">
         Следующая оценка пойдёт по новым правилам, поэтому её нельзя будет сравнить с текущей.
       </Confirm>
 
-      <div className="mt-6 grid gap-4 min-[1100px]:grid-cols-[1.25fr_1fr]">
-        <Panel className="p-6">
+      <div className="mt-5 grid gap-4 min-[1100px]:grid-cols-[1.25fr_1fr]">
+        <Panel className="p-5">
           <Eyebrow>Разговоров с нарушением</Eyebrow>
           <div className="mt-3 flex items-baseline gap-3">
             <span className="text-[60px] font-medium leading-none text-lab-ink" style={titleFont}>{pct(s.failed, s.checked)}<span className="ml-0.5 text-[30px] text-lab-mute">%</span></span>
-            <span className="text-[13.5px] text-lab-mute">{s.failed} из {s.checked} проверенных</span>
+            <span className="text-[13px] text-lab-mute">{s.failed} из {s.checked} проверенных</span>
           </div>
           <StackBar className="mt-5" parts={[{ value: s.passed, hue: "ok" }, { value: s.failed, hue: "bad" }, { value: s.unmeasured, hue: "warn" }]} />
-          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-lab-mute">
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12px] text-lab-mute">
             <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-lab-ok" />без нарушений · {s.passed}</span>
             <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-lab-bad" />с нарушением · {s.failed}</span>
             <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-lab-warn" />нет данных · {s.unmeasured}</span>
           </div>
-          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-white/[0.06] pt-4 text-[12.5px] text-lab-dim">
+          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-white/[0.06] pt-4 text-[12px] text-lab-dim">
             <span>Проверка по {rules} {plural(rules, "правилу", "правилам", "правилам")} в {d.topics.length} {plural(d.topics.length, "теме", "темах", "темах")}</span>
             {s.secondJudge && (
               <Badge hue={s.secondJudge.agree / s.secondJudge.checked >= 0.8 ? "ok" : "warn"} icon={ShieldCheck}>
@@ -165,19 +165,19 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
           </div>
         </Panel>
 
-        <Panel className="p-6">
+        <Panel className="p-5">
           <Eyebrow>Где нарушений больше всего</Eyebrow>
           <div className="mt-4 space-y-3.5">
             {topics.map(t => (
               <div key={t.id}>
                 <div className="flex items-baseline justify-between gap-3 text-[13px]">
                   <span className="min-w-0 truncate text-lab-text" title={t.title}>{t.title}</span>
-                  <span className="flex-shrink-0 font-mono text-[11.5px] text-lab-dim">{t.failed} из {t.checked}</span>
+                  <span className="flex-shrink-0 font-mono text-[11px] text-lab-dim">{t.failed} из {t.checked}</span>
                 </div>
                 <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/[0.07]"><div className="h-full rounded-full bg-lab-bad" style={{ width: `${pct(t.failed, t.checked)}%` }} /></div>
               </div>
             ))}
-            {!topics.length && <div className="text-[12.5px] text-lab-dim">Нет проверенных разговоров по темам</div>}
+            {!topics.length && <div className="text-[12px] text-lab-dim">Нет проверенных разговоров по темам</div>}
           </div>
         </Panel>
       </div>
@@ -194,11 +194,11 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
                 >
                   <div>
                     <div className="text-[28px] font-medium leading-none text-lab-bad" style={titleFont}>{p.count}</div>
-                    <div className="mt-1 text-[11.5px] text-lab-dim">{plural(p.count, "разговор", "разговора", "разговоров")}</div>
+                    <div className="mt-1 text-[11px] text-lab-dim">{plural(p.count, "разговор", "разговора", "разговоров")}</div>
                     <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.07]"><div className="h-full rounded-full bg-lab-bad" style={{ width: `${pct(p.count, top)}%` }} /></div>
                   </div>
                   <div className="min-w-0">
-                    <div className="text-[14.5px] font-medium text-lab-ink">{p.titles[0] || p.rule}</div>
+                    <div className="text-[14px] font-medium text-lab-ink">{p.titles[0] || p.rule}</div>
                     <div className="mt-1 text-[13px] leading-snug text-lab-mute">{p.rule}</div>
                     <div className="mt-2.5 flex flex-wrap gap-1.5">{p.topics.map(t => <Badge key={t}>{t}</Badge>)}</div>
                   </div>
@@ -210,10 +210,10 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
                     {p.examples.slice(0, more.has(i) ? undefined : EXAMPLES_SHOWN).map(ex => {
                       const trace = byDialogue.get(ex.dialogueId)?.runId;
                       return (
-                        <div key={ex.dialogueId} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+                        <div key={ex.dialogueId} className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
                           <Quote who="клиент">{ex.opening}</Quote>
                           {ex.agentQuote && <Quote who="агент" tone="bad">«{ex.agentQuote}»</Quote>}
-                          <div className="mt-3 flex items-start justify-between gap-4 text-[12.5px] leading-snug text-lab-dim">
+                          <div className="mt-3 flex items-start justify-between gap-4 text-[12px] leading-snug text-lab-dim">
                             <span className="min-w-0">{ex.reason}</span>
                             {trace && (
                               <button onClick={() => onOpen(trace)} className="inline-flex flex-shrink-0 items-center gap-0.5 text-lab-accent hover:underline">

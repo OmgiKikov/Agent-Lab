@@ -28,11 +28,6 @@
     --lab-ok: 96 227 109;
     --lab-bad: 242 107 107;
     --lab-warn: 240 173 78;
-    /* Customer types: slots 1-4 of the validated dark categorical palette. */
-    --lab-p1: 57 135 229;
-    --lab-p2: 217 89 38;
-    --lab-p3: 25 158 112;
-    --lab-p4: 201 133 0;
   }
 }
 

@@ -65,16 +65,16 @@ export function AgentView({ state }: { state: LabState }) {
   const hidden = state.sources.length - withRules.length;
   const totalRules = withRules.reduce((n, src) => n + src.rules, 0);
   const kinds = Object.keys(SOURCE).map(kind => ({ kind, rules: withRules.filter(s => s.kind === kind).reduce((n, s) => n + s.rules, 0) })).filter(k => k.rules > 0);
-  const kindHue = { prompt: "p1", tools: "p2", knowledge: "p3" } as const;
+  const kindTone = { prompt: "bg-lab-accent", tools: "bg-lab-accent/55", knowledge: "bg-lab-accent/25" } as const;
 
   return (
     <Page
-      wide title="Агент"
+      wide title="агент"
       lede="Какого агента проверяем, какие модели оценивают его ответы и откуда берутся правила проверки. Настройки хранятся только на этом компьютере и в репозиторий не попадают."
     >
       <div className="grid gap-x-7 min-[1240px]:grid-cols-2">
         <div className="min-w-0">
-          <Section title="Подключение" hint="Куда ходит симулятор клиента и откуда берётся код агента">
+          <Section className="mt-5" title="Подключение" hint="Куда ходит симулятор клиента и откуда берётся код агента">
             <Panel>
               <div className="space-y-5 p-5">
                 <Field label="Адрес агента на ИФТ" hint="HTTP-ручка агента, доступная из сети банка.">
@@ -108,11 +108,11 @@ export function AgentView({ state }: { state: LabState }) {
                 <Row first={!i} key={key} className="px-5 py-4">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <div className="text-[13.5px] font-medium text-lab-text">{role}</div>
+                      <div className="text-[13px] font-medium text-lab-text">{role}</div>
                       <div className="mt-0.5 text-[12px] text-lab-dim">{sub}</div>
                     </div>
                     <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
-                      <span className="rounded-md bg-white/[0.06] px-2 py-1 font-mono text-[11.5px] text-lab-soft">{model ?? "новейшая GLM из каталога"}</span>
+                      <span className="rounded-md bg-white/[0.06] px-2 py-1 font-mono text-[11px] text-lab-soft">{model ?? "новейшая GLM из каталога"}</span>
                       <Verdict check={checks[key]} />
                     </div>
                   </div>
@@ -128,8 +128,8 @@ export function AgentView({ state }: { state: LabState }) {
 
         <div className="min-w-0">
           <Section
-            title="Агенты" hint="С кем можно провести прогон"
-            right={reachable.length > 1 ? <Button size="sm" variant="ghost" onClick={() => reachable.forEach(t => check(t.id, `/api/agents/${t.id}/check`))}>Проверить все</Button> : undefined}
+            className="mt-5" title="Агенты" hint="С кем можно провести прогон"
+            right={reachable.length > 1 ? <Button size="sm" onClick={() => reachable.forEach(t => check(t.id, `/api/agents/${t.id}/check`))}>Проверить все</Button> : undefined}
           >
             <Panel>
               {state.targets.map((t, i) => {
@@ -143,14 +143,14 @@ export function AgentView({ state }: { state: LabState }) {
                           <span className="text-[14px] font-medium text-lab-ink">{t.name}</span>
                           <span className="rounded bg-white/[0.06] px-1.5 py-px font-mono text-[10px] uppercase text-lab-dim">{t.kind === "code" ? "код" : "http"}</span>
                         </div>
-                        <div className="mt-0.5 truncate font-mono text-[11.5px] text-lab-dim">{t.where || "адрес не задан"}</div>
-                        <div className="mt-1.5 text-[12.5px] leading-snug text-lab-mute">{t.note}</div>
+                        <div className="mt-0.5 truncate font-mono text-[11px] text-lab-dim">{t.where || "адрес не задан"}</div>
+                        <div className="mt-1.5 text-[12px] leading-snug text-lab-mute">{t.note}</div>
                         <VerdictDetail check={checks[t.id]} />
                       </div>
                       <div className="flex flex-shrink-0 flex-col items-end gap-2">
                         {!t.ready ? <Badge hue="warn">не настроен</Badge> : <Verdict check={checks[t.id]} />}
                         {t.kind === "http" && t.ready && checks[t.id] !== "pending" && (
-                          <Button size="sm" variant="ghost" onClick={() => check(t.id, `/api/agents/${t.id}/check`)}>{checks[t.id] ? "Ещё раз" : "Проверить связь"}</Button>
+                          <Button size="sm" onClick={() => check(t.id, `/api/agents/${t.id}/check`)}>{checks[t.id] ? "Ещё раз" : "Проверить связь"}</Button>
                         )}
                       </div>
                     </div>
@@ -176,11 +176,11 @@ export function AgentView({ state }: { state: LabState }) {
                     <span className="text-[26px] font-medium leading-none text-lab-ink" style={{ fontFamily: '"AlphaLyrae", sans-serif' }}>{totalRules}</span>
                     <span className="text-[13px] text-lab-mute">{plural(totalRules, "правило", "правила", "правил")} из {withRules.length} {plural(withRules.length, "источника", "источников", "источников")}</span>
                   </div>
-                  <StackBar className="mt-3" parts={kinds.map(k => ({ value: k.rules, hue: kindHue[k.kind as keyof typeof kindHue] }))} />
+                  <StackBar className="mt-3" parts={kinds.map(k => ({ value: k.rules, tone: kindTone[k.kind as keyof typeof kindTone] }))} />
                   <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1">
                     {kinds.map(k => (
                       <span key={k.kind} className="inline-flex items-center gap-1.5 text-[12px] text-lab-mute">
-                        <span className={cn("size-2 rounded-full", { p1: "bg-lab-p1", p2: "bg-lab-p2", p3: "bg-lab-p3" }[kindHue[k.kind as keyof typeof kindHue]])} />{SOURCE[k.kind].label} · {k.rules}
+                        <span className={cn("size-2 rounded-full", kindTone[k.kind as keyof typeof kindTone])} />{SOURCE[k.kind].label} · {k.rules}
                       </span>
                     ))}
                   </div>
@@ -192,13 +192,13 @@ export function AgentView({ state }: { state: LabState }) {
                       <meta.icon className="size-4 flex-shrink-0 text-lab-dim" />
                       <div className="min-w-0 flex-1">
                         <div className="truncate font-mono text-[12px] text-lab-soft" title={src.origin}>{src.origin}</div>
-                        <div className="text-[11.5px] text-lab-dim">{meta.label} · {thousands(src.chars)}</div>
+                        <div className="text-[11px] text-lab-dim">{meta.label} · {thousands(src.chars)}</div>
                       </div>
                       <span className="flex-shrink-0 font-mono text-[12px] text-lab-text">{src.rules} {plural(src.rules, "правило", "правила", "правил")}</span>
                     </Row>
                   );
                 })}
-                {hidden > 0 && <Row className="px-5 py-2.5 text-[11.5px] text-lab-dim">Ещё {hidden} {plural(hidden, "промпт", "промпта", "промптов")} без правил скрыто: это классификаторы маршрутизации.</Row>}
+                {hidden > 0 && <Row className="px-5 py-2.5 text-[11px] text-lab-dim">Ещё {hidden} {plural(hidden, "промпт", "промпта", "промптов")} без правил скрыто: это классификаторы маршрутизации.</Row>}
               </Panel>
             ) : (
               <EmptyState icon={Bot} title="Контекст ещё не собран">Укажите репозиторий с кодом агента и нажмите «Собрать из кода». Из промптов и инструментов выделятся правила проверки.</EmptyState>

@@ -14,7 +14,7 @@ export const titleFont = { fontFamily: '"AlphaLyrae", sans-serif' };
 /* ---------- surfaces ---------- */
 
 export function Panel({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("rounded-xl border border-white/[0.07] bg-lab-surface", className)} {...rest} />;
+  return <div className={cn("rounded-lg border border-white/[0.07] bg-lab-surface", className)} {...rest} />;
 }
 
 /** A row inside a panel, separated from the previous one by a hairline. */
@@ -23,16 +23,16 @@ export function Row({ className, first, ...rest }: HTMLAttributes<HTMLDivElement
 }
 
 export function Eyebrow({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("font-mono text-[10.5px] uppercase tracking-[0.09em] text-lab-dim", className)} {...rest} />;
+  return <div className={cn("font-mono text-[10px] uppercase tracking-[0.09em] text-lab-dim", className)} {...rest} />;
 }
 
 export function Section({ title, hint, right, children, className }: { title: ReactNode; hint?: ReactNode; right?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={cn("mt-9", className)}>
-      <div className="mb-3 flex items-end justify-between gap-4">
+    <section className={cn("mt-7", className)}>
+      <div className="mb-2.5 flex items-end justify-between gap-4">
         <div className="min-w-0">
-          <h2 className="text-[15px] font-medium text-lab-ink">{title}</h2>
-          {hint && <p className="mt-0.5 text-[12px] leading-snug text-lab-dim">{hint}</p>}
+          <h2 className="text-[14px] font-medium text-lab-text">{title}</h2>
+          {hint && <p className="mt-0.5 text-[11px] leading-snug text-lab-dim">{hint}</p>}
         </div>
         {right && <div className="flex flex-shrink-0 items-center gap-2">{right}</div>}
       </div>
@@ -41,13 +41,24 @@ export function Section({ title, hint, right, children, className }: { title: Re
   );
 }
 
+/**
+ * A step's page: a header bar like the Workshop's views (title, one line of what it is, actions on the right),
+ * then the content. The bar stays on top while a long page scrolls, so its actions are always at hand.
+ */
 export function Page({ title, lede, actions, wide, children }: { title: string; lede?: ReactNode; actions?: ReactNode; wide?: boolean; children?: ReactNode }) {
+  const width = wide ? "max-w-[1240px]" : "max-w-[1120px]";
   return (
-    <div className={cn("message-arrive mx-auto px-8 pb-16 pt-9", wide ? "max-w-[1240px]" : "max-w-[1120px]")}>
-      <h1 className="text-[26px] font-medium leading-tight text-lab-ink" style={titleFont}>{title}</h1>
-      {lede && <p className="mt-2 max-w-[660px] text-[13.5px] leading-relaxed text-lab-dim">{lede}</p>}
-      {actions && <div className="mt-5 flex flex-wrap items-center gap-2">{actions}</div>}
-      {children}
+    <div className="message-arrive">
+      <header className="sticky top-0 z-20 border-b border-white/[0.06] bg-black/90 backdrop-blur">
+        <div className={cn("mx-auto flex items-start justify-between gap-6 px-6 py-3", width)}>
+          <div className="min-w-0">
+            <h1 className="text-[16px] font-medium leading-tight text-lab-ink" style={titleFont}>{title}</h1>
+            {lede && <p className="mt-1 max-w-[760px] text-[11px] leading-snug text-lab-dim">{lede}</p>}
+          </div>
+          {actions && <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2 pt-0.5">{actions}</div>}
+        </div>
+      </header>
+      <div className={cn("mx-auto px-6 pb-16 pt-1", width)}>{children}</div>
     </div>
   );
 }
@@ -62,12 +73,13 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const BUTTON_VARIANT = {
-  primary: "bg-lab-ink text-black hover:bg-white",
-  secondary: "border border-white/[0.14] bg-transparent text-lab-soft hover:bg-white/[0.07] hover:text-lab-ink",
-  ghost: "text-lab-mute hover:bg-white/[0.06] hover:text-lab-text",
+  primary: "bg-lab-text text-black hover:bg-white",
+  secondary: "bg-white/10 text-lab-soft hover:bg-white/20",
+  ghost: "text-lab-mute hover:bg-white/10 hover:text-lab-text",
   danger: "bg-lab-bad/10 text-lab-bad hover:bg-lab-bad/20",
 };
 
+/** The Workshop's button: 11px mono on a grey fill (components/Button.tsx); primary is white. */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   { variant = "secondary", size = "md", icon: Icon, loading, className, children, disabled, ...rest }, ref,
 ) {
@@ -76,23 +88,23 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/50 disabled:pointer-events-none disabled:opacity-40",
-        size === "sm" ? "h-8 px-3 text-[12px]" : "h-9 px-4 text-[13px]",
+        "inline-flex flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded font-mono text-[11px] font-medium transition-colors",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50 disabled:pointer-events-none disabled:opacity-40",
+        size === "sm" ? "px-2.5 py-1.5" : "px-3 py-2",
         BUTTON_VARIANT[variant],
         className,
       )}
       {...rest}
     >
-      {loading ? <Loader2 className="size-3.5 animate-spin" /> : Icon && <Icon className="size-3.5" />}
+      {loading ? <Loader2 className="size-3 animate-spin" /> : Icon && <Icon className="size-3" />}
       {children}
     </button>
   );
 });
 
 export const inputClass = cn(
-  "h-9 w-full rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 text-[13px] text-lab-text outline-none transition-colors",
-  "placeholder:text-lab-faint hover:border-white/[0.16] focus:border-lab-accent/60 focus:ring-2 focus:ring-lab-accent/20",
+  "h-8 w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 text-[12px] text-lab-text outline-none transition-colors",
+  "placeholder:text-lab-faint hover:border-white/[0.16] focus:border-white/25 focus:ring-1 focus:ring-white/20",
 );
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { mono?: boolean }>(function Input({ className, mono, ...rest }, ref) {
@@ -106,9 +118,9 @@ export function TextArea({ className, mono, ...rest }: TextareaHTMLAttributes<HT
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-[13px] font-medium text-lab-text">{label}</span>
+      <span className="mb-1.5 block text-[12px] font-medium text-lab-text">{label}</span>
       {children}
-      {hint && <span className="mt-1.5 block text-[12px] leading-snug text-lab-dim">{hint}</span>}
+      {hint && <span className="mt-1.5 block text-[11px] leading-snug text-lab-dim">{hint}</span>}
     </label>
   );
 }
@@ -117,12 +129,12 @@ export function Segmented<T extends string | number>({ value, options, onChange,
   value: T; options: { value: T; label: ReactNode; title?: string }[]; onChange: (v: T) => void; className?: string;
 }) {
   return (
-    <div role="radiogroup" className={cn("inline-flex gap-0.5 rounded-lg border border-white/[0.07] bg-white/[0.04] p-0.5", className)}>
+    <div role="radiogroup" className={cn("inline-flex gap-0.5 rounded-md border border-white/[0.07] bg-white/[0.04] p-0.5", className)}>
       {options.map(o => (
         <button
           key={String(o.value)} role="radio" aria-checked={o.value === value} title={o.title} onClick={() => onChange(o.value)}
           className={cn(
-            "inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/50",
+            "inline-flex h-6 items-center gap-1.5 rounded px-2.5 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50",
             o.value === value ? "bg-white/[0.13] text-lab-ink shadow-sm" : "text-lab-mute hover:text-lab-text",
           )}
         >
@@ -141,7 +153,7 @@ export function Tabs<T extends string>({ value, tabs, onChange }: { value: T; ta
         <button
           key={t.value} role="tab" aria-selected={t.value === value} onClick={() => onChange(t.value)}
           className={cn(
-            "-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lab-accent/50",
+            "-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/50",
             t.value === value ? "border-lab-text text-lab-ink" : "border-transparent text-lab-dim hover:text-lab-soft",
           )}
         >
@@ -177,20 +189,22 @@ export function Chip({ on, onClick, children, count }: { on?: boolean; onClick?:
     <button
       onClick={onClick} aria-pressed={on}
       className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/50",
+        "inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50",
         on ? "border-white/25 bg-white/[0.12] text-lab-ink" : "border-white/[0.08] text-lab-mute hover:border-white/[0.16] hover:text-lab-text",
       )}
     >
       {children}
-      {count !== undefined && <span className={cn("font-mono text-[10.5px]", on ? "text-lab-soft" : "text-lab-dim")}>{count}</span>}
+      {count !== undefined && <span className={cn("font-mono text-[10px]", on ? "text-lab-soft" : "text-lab-dim")}>{count}</span>}
     </button>
   );
 }
 
 /* ---------- status ---------- */
 
-export function Dot({ status, pulse, className }: { status: Status | string; pulse?: boolean; className?: string }) {
-  return <span className={cn("size-2 flex-shrink-0 rounded-full", HUE[statusHue(status)].solid, pulse && "pulse-dot", className)} />;
+/** `quiet`: a pass is grey, so in a long list only failures and gaps stand out. */
+export function Dot({ status, pulse, quiet, className }: { status: Status | string; pulse?: boolean; quiet?: boolean; className?: string }) {
+  const solid = quiet && status === "PASS" ? "bg-white/25" : HUE[statusHue(status)].solid;
+  return <span className={cn("size-2 flex-shrink-0 rounded-full", solid, pulse && "pulse-dot", className)} />;
 }
 
 export function Badge({ hue = "mute", icon: Icon, children, className }: { hue?: Hue; icon?: LucideIcon; children: ReactNode; className?: string }) {
@@ -225,11 +239,12 @@ export function StatusMark({ status, size = 20 }: { status: Status | string; siz
   );
 }
 
-export function StackBar({ parts, className }: { parts: { value: number; hue: Hue }[]; className?: string }) {
+/** Part-to-whole: a status `hue`, or a plain `tone` class when the parts are not statuses. */
+export function StackBar({ parts, className }: { parts: { value: number; hue?: Hue; tone?: string }[]; className?: string }) {
   const shown = parts.filter(p => p.value > 0);
   return (
     <div className={cn("flex h-1.5 gap-[2px] overflow-hidden rounded-full", className)}>
-      {shown.length ? shown.map((p, i) => <div key={i} className={cn("h-full", HUE[p.hue].solid)} style={{ flex: p.value }} />) : <div className="h-full flex-1 bg-white/[0.07]" />}
+      {shown.length ? shown.map((p, i) => <div key={i} className={cn("h-full", p.tone ?? HUE[p.hue ?? "mute"].solid)} style={{ flex: p.value }} />) : <div className="h-full flex-1 bg-white/[0.07]" />}
     </div>
   );
 }
@@ -253,17 +268,17 @@ export function Delta({ value, unit = "п. п.", className }: { value: number; u
 
 export function Stat({ label, value, sub, hue, className }: { label: string; value: ReactNode; sub?: ReactNode; hue?: Hue; className?: string }) {
   return (
-    <Panel className={cn("px-4 py-3.5", className)}>
+    <Panel className={cn("px-4 py-3", className)}>
       <Eyebrow>{label}</Eyebrow>
-      <div className={cn("mt-1.5 text-[28px] font-medium leading-none", hue ? HUE[hue].text : "text-lab-ink")} style={titleFont}>{value}</div>
-      {sub && <div className="mt-2 text-[12px] text-lab-dim">{sub}</div>}
+      <div className={cn("mt-1.5 text-[22px] font-medium leading-none", hue ? HUE[hue].text : "text-lab-ink")} style={titleFont}>{value}</div>
+      {sub && <div className="mt-1.5 text-[11px] text-lab-dim">{sub}</div>}
     </Panel>
   );
 }
 
 export function Quote({ who, tone, children }: { who: string; tone?: "bad" | "ok"; children: ReactNode }) {
   return (
-    <div className={cn("mt-2.5 border-l-2 pl-3 text-[12.5px] leading-relaxed", tone === "bad" ? "border-lab-bad/70 text-[#f3cccc]" : tone === "ok" ? "border-lab-ok/60 text-lab-soft" : "border-white/[0.14] text-lab-mute")}>
+    <div className={cn("mt-2.5 border-l-2 pl-3 text-[12px] leading-relaxed", tone === "bad" ? "border-lab-bad/70 text-[#f3cccc]" : tone === "ok" ? "border-lab-ok/60 text-lab-soft" : "border-white/[0.14] text-lab-mute")}>
       <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.09em] text-lab-dim">{who}</div>
       {children}
     </div>
@@ -278,11 +293,11 @@ export function Bubble({ children, className }: { children: ReactNode; className
 /** `drop` swaps the icon for Raindrop's pixel raindrop, the same one the Workshop's own empty screens use. */
 export function EmptyState({ icon: Icon, drop, title, children, action, className }: { icon?: LucideIcon; drop?: boolean; title: string; children?: ReactNode; action?: ReactNode; className?: string }) {
   return (
-    <div className={cn("flex flex-col items-center rounded-xl border border-dashed border-white/[0.12] px-8 py-12 text-center", className)}>
+    <div className={cn("flex flex-col items-center rounded-lg border border-dashed border-white/[0.12] px-8 py-10 text-center", className)}>
       {drop && <div className="mb-4"><DropPixelGrid px={2} gap={1.5} fillRgb="142,157,166" /></div>}
-      {Icon && !drop && <span className="mb-4 inline-flex size-11 items-center justify-center rounded-xl bg-white/[0.05] text-lab-mute"><Icon className="size-5" /></span>}
-      <div className="text-[15px] font-medium text-lab-ink">{title}</div>
-      {children && <div className="mt-1.5 max-w-[440px] text-[13px] leading-relaxed text-lab-dim">{children}</div>}
+      {Icon && !drop && <span className="mb-4 inline-flex size-11 items-center justify-center rounded-lg bg-white/[0.05] text-lab-mute"><Icon className="size-5" /></span>}
+      <div className="text-[14px] font-medium text-lab-ink">{title}</div>
+      {children && <div className="mt-1.5 max-w-[440px] text-[12px] leading-relaxed text-lab-dim">{children}</div>}
       {action && <div className="mt-5 flex items-center gap-2">{action}</div>}
     </div>
   );
@@ -296,7 +311,7 @@ export function Tip({ text, children, side = "top", className }: { text: ReactNo
       <span
         role="tooltip"
         className={cn(
-          "pointer-events-none absolute left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-[#181b1d] px-2 py-1 text-[11.5px] text-lab-text opacity-0 shadow-xl transition-opacity duration-100",
+          "pointer-events-none absolute left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-[#181b1d] px-2 py-1 text-[11px] text-lab-text opacity-0 shadow-xl transition-opacity duration-100",
           "group-hover/tip:opacity-100 group-focus-within/tip:opacity-100",
           side === "top" ? "bottom-full mb-1.5" : "top-full mt-1.5",
         )}
@@ -310,43 +325,40 @@ export function Tip({ text, children, side = "top", className }: { text: ReactNo
 /* ---------- customer types ---------- */
 
 export function PersonaIcon({ id, size = 24 }: { id?: string; size?: number }) {
-  const { icon: Icon, hue } = personaLook(id);
-  const h = HUE[hue];
+  const { icon: Icon } = personaLook(id);
   return (
-    <span className={cn("inline-flex flex-shrink-0 items-center justify-center rounded-lg", h.bg, h.text)} style={{ width: size, height: size }}>
+    <span className="inline-flex flex-shrink-0 items-center justify-center rounded-md bg-white/[0.07] text-lab-mute" style={{ width: size, height: size }}>
       <Icon style={{ width: size * 0.55, height: size * 0.55 }} />
     </span>
   );
 }
 
 export function PersonaTag({ personas, id }: { personas: Persona[]; id?: string }) {
-  const { icon: Icon, hue } = personaLook(id);
-  const h = HUE[hue];
+  const { icon: Icon } = personaLook(id);
   return (
-    <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border py-0.5 pl-1.5 pr-2.5 text-[11.5px] text-lab-text", h.bg, h.border)}>
-      <Icon className={cn("size-3", h.text)} />{personaName(personas, id)}
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.06] py-0.5 pl-1.5 pr-2.5 text-[11px] text-lab-text">
+      <Icon className="size-3 text-lab-mute" />{personaName(personas, id)}
     </span>
   );
 }
 
 /** A selectable customer type: glyph, name and how this customer writes. */
 export function PersonaCard({ persona, on, onClick }: { persona: Persona; on: boolean; onClick: () => void }) {
-  const h = HUE[personaLook(persona.id).hue];
   return (
     <button
       onClick={onClick} aria-pressed={on}
       className={cn(
-        "flex items-start gap-3 rounded-xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/50",
-        on ? cn(h.bg, h.border) : "border-white/[0.07] bg-white/[0.02] hover:border-white/[0.16] hover:bg-white/[0.04]",
+        "flex items-start gap-3 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50",
+        on ? "border-white/25 bg-white/[0.07]" : "border-white/[0.07] bg-white/[0.02] hover:border-white/[0.16] hover:bg-white/[0.04]",
       )}
     >
-      <PersonaIcon id={persona.id} size={32} />
+      <PersonaIcon id={persona.id} size={28} />
       <span className="min-w-0 flex-1">
         <span className={cn("block text-[13px] font-medium", on ? "text-lab-ink" : "text-lab-soft")}>{persona.name}</span>
-        <span className="mt-0.5 block text-[12px] leading-snug text-lab-dim">{persona.note}</span>
+        <span className="mt-0.5 block text-[11px] leading-snug text-lab-dim">{persona.note}</span>
       </span>
-      <span className={cn("mt-0.5 flex size-[18px] flex-shrink-0 items-center justify-center rounded-full border transition-colors", on ? cn(h.solid, "border-transparent") : "border-white/20")}>
-        {on && <Check className="size-3 text-black" strokeWidth={3} />}
+      <span className={cn("mt-0.5 flex size-4 flex-shrink-0 items-center justify-center rounded-full border transition-colors", on ? "border-transparent bg-lab-text" : "border-white/20")}>
+        {on && <Check className="size-2.5 text-black" strokeWidth={3} />}
       </span>
     </button>
   );

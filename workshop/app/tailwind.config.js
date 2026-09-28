@@ -29,7 +29,7 @@ export default {
       },
       colors: {
         lab: Object.fromEntries(
-          ["bg", "surface", "raised", "ink", "text", "soft", "mute", "dim", "faint", "user", "accent", "ok", "bad", "warn", "p1", "p2", "p3", "p4"]
+          ["bg", "surface", "raised", "ink", "text", "soft", "mute", "dim", "faint", "user", "accent", "ok", "bad", "warn"]
             .map(name => [name, `rgb(var(--lab-${name}) / <alpha-value>)`]),
         ),
         sidebar: {

@@ -39,7 +39,7 @@ export function Confirm({ open, onClose, onConfirm, title, children, action }: {
 }) {
   return (
     <Modal open={open} onClose={onClose} title={title} className="max-w-[460px]">
-      <div className="px-6 pb-5 pt-2 text-[13.5px] leading-relaxed text-lab-mute">{children}</div>
+      <div className="px-6 pb-5 pt-2 text-[13px] leading-relaxed text-lab-mute">{children}</div>
       <div className="flex justify-end gap-2 border-t border-white/[0.06] px-6 py-4">
         <Button variant="ghost" onClick={onClose}>Отмена</Button>
         <Button variant="primary" onClick={() => { onConfirm(); onClose(); }}>{action}</Button>

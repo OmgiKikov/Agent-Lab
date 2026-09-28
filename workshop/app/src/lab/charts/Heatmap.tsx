@@ -1,15 +1,15 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { cellOf, cellShare, type Cell, type CellState } from "../logic";
-import { DEFAULT_PERSONA, HUE, personaLook } from "../look";
+import { DEFAULT_PERSONA } from "../look";
 import type { Item, Persona } from "../types";
 import { PersonaIcon, StatusIcon, Tip } from "../ui";
 
 const CELL: Record<CellState, string> = {
-  PASS: "bg-lab-ok/[0.09] text-lab-ok/80 hover:bg-lab-ok/20",
+  PASS: "bg-white/[0.035] text-lab-faint hover:bg-white/[0.08]",
   FAIL: "bg-lab-bad/20 text-lab-bad hover:bg-lab-bad/30",
   MIXED: "bg-lab-warn/15 text-lab-warn hover:bg-lab-warn/25",
-  UNMEASURED: "bg-white/[0.05] text-lab-dim hover:bg-white/[0.09]",
+  UNMEASURED: "bg-white/[0.035] text-lab-dim hover:bg-white/[0.08]",
   RUNNING: "bg-lab-accent/10 text-lab-accent",
   NONE: "bg-white/[0.02] text-lab-faint",
 };
@@ -21,12 +21,12 @@ function CellView({ cell, delta, broken, label, onOpen }: { cell: Cell; delta: n
     <Tip text={text} className="flex">
       <button
         onClick={onOpen} disabled={!cell.first} aria-label={text}
-        className={cn("relative flex h-10 w-full items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/60", CELL[cell.state])}
+        className={cn("relative flex h-8 w-full items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/60", CELL[cell.state])}
       >
         {cell.state === "MIXED"
           ? <span className="font-mono text-[11.5px] font-medium">{cell.passed}/{cell.done}</span>
           : cell.state === "NONE" ? <span className="text-[13px]">·</span>
-          : <StatusIcon status={cell.state === "UNMEASURED" ? "UNKNOWN" : cell.state} size={15} />}
+          : <StatusIcon status={cell.state === "UNMEASURED" ? "UNKNOWN" : cell.state} size={cell.state === "FAIL" ? 15 : 13} />}
         {broken && <span className="absolute right-1 top-1 size-1.5 rounded-full bg-lab-warn ring-2 ring-[#0a0a0a]" />}
         {delta !== 0 && (
           <span className={cn("absolute bottom-1 right-1 flex size-3.5 items-center justify-center rounded-full text-black", delta > 0 ? "bg-lab-ok" : "bg-lab-bad")}>
@@ -58,13 +58,12 @@ export function Heatmap({ personas, scenarios, items, previous, accuracy, compar
         <div />
         {personas.map(p => {
           const value = accuracy?.[p.id]?.accuracy;
-          const h = HUE[personaLook(p.id).hue];
-          return (
+                    return (
             <div key={p.id} className="flex flex-col items-center gap-1.5 pb-1 text-center">
               <PersonaIcon id={p.id} size={26} />
               <span className="text-[12px] leading-tight text-lab-soft">{p.name}</span>
               <span className="flex w-full items-center gap-1.5">
-                <span className="h-1 flex-1 overflow-hidden rounded-full bg-white/[0.07]"><span className={cn("block h-full rounded-full", h.solid)} style={{ width: `${value ?? 0}%` }} /></span>
+                <span className="h-1 flex-1 overflow-hidden rounded-full bg-white/[0.07]"><span className="block h-full rounded-full bg-lab-mute" style={{ width: `${value ?? 0}%` }} /></span>
                 <span className="w-8 text-right font-mono text-[11px] text-lab-text">{value ?? "—"}%</span>
               </span>
             </div>

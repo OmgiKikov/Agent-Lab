@@ -24,7 +24,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="pointer-events-none fixed right-4 top-4 z-[70] flex w-[360px] flex-col gap-2" aria-live="assertive">
         {items.map(t => (
-          <div key={t.id} role="alert" className="message-arrive pointer-events-auto flex items-start gap-2.5 rounded-xl border border-lab-bad/30 bg-[#150c0c] px-3.5 py-3 shadow-2xl">
+          <div key={t.id} role="alert" className="message-arrive pointer-events-auto flex items-start gap-2.5 rounded-lg border border-lab-bad/30 bg-[#150c0c] px-3.5 py-3 shadow-2xl">
             <CircleAlert className="mt-px size-4 flex-shrink-0 text-lab-bad" />
             <div className="min-w-0 flex-1 text-[13px] leading-snug text-[#f6d6d6]">{t.text}</div>
             <button onClick={() => dismiss(t.id)} aria-label="Закрыть" className="text-lab-dim transition-colors hover:text-lab-text"><X className="size-3.5" /></button>

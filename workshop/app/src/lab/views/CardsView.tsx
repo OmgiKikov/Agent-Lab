@@ -27,13 +27,13 @@ function ScenarioCard({ card, state, onPick }: { card: Card; state: LabState; on
   return (
     <button
       onClick={onPick}
-      className="group flex flex-col gap-3 rounded-xl border border-white/[0.07] bg-lab-surface p-4 text-left transition-all duration-150 hover:-translate-y-px hover:border-white/[0.18] hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/50"
+      className="group flex flex-col gap-3 rounded-lg border border-white/[0.07] bg-lab-surface p-4 text-left transition-all duration-150 hover:-translate-y-px hover:border-white/[0.18] hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/50"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="truncate font-mono text-[11px] text-lab-dim">{card.topic}</span>
         <OriginBadge origin={card.origin} />
       </div>
-      <div className="text-[15.5px] font-medium leading-snug text-lab-ink">{card.name}</div>
+      <div className="text-[14px] font-medium leading-snug text-lab-ink">{card.name}</div>
       <Bubble className="line-clamp-2 self-start">{card.opening}</Bubble>
       <div className="mt-auto flex items-center justify-between pt-1 text-[12px] text-lab-dim">
         <span>{card.criteria.length} {plural(card.criteria.length, "критерий", "критерия", "критериев")}</span>
@@ -70,27 +70,28 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
 
   return (
     <Page
-      wide title="Сценарии"
+      wide title="сценарии"
       lede="Ситуация клиента взята из реального разговора, критерии проверки — из правил промпта. Симулятор клиента критериев не видит."
       actions={<>
         <Button variant="primary" icon={FlaskConical} disabled={state.job.running || !state.discover} onClick={() => api("/api/cards", {}).catch(error)}>{deck.length ? "Собрать заново" : "Собрать сценарии"}</Button>
         <JobLine state={state} kind="cards" />
+        {!state.discover && !state.job.running && <span className="text-[11px] text-lab-dim">Сначала оцените логи</span>}
       </>}
     >
       {deck.length === 0 ? (
-        <EmptyState className="mt-8" drop title="Сценариев пока нет">
+        <EmptyState className="mt-5" drop title="Сценариев пока нет">
           {state.discover ? "Нажмите «Собрать сценарии»: из оценённых логов получатся ситуации клиента с критериями проверки." : "Сначала оцените логи на шаге «Логи», потом соберите из них сценарии."}
         </EmptyState>
       ) : (
         <>
-          <div className="mt-7 grid grid-cols-2 gap-3 min-[1100px]:grid-cols-4">
+          <div className="mt-5 grid grid-cols-2 gap-3 min-[1100px]:grid-cols-4">
             <Stat label="Сценариев" value={deck.length} sub={`в ${topics.length} ${plural(topics.length, "теме", "темах", "темах")}`} />
             <Stat label="Из ошибок в логах" value={fromErrors} sub="агент уже ошибался в таких ситуациях" />
             <Stat label="Покрытие тем" value={deck.length - fromErrors} sub="агент отвечал верно: проверяем, что так и останется" />
             {others.length > 0 && <Stat label="Типы клиентов" value={`${full}/${deck.length}`} sub="сценариев с репликами для всех типов" />}
           </div>
 
-          <div className="mt-7 flex flex-wrap items-center gap-3">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
             <div className="relative w-[260px]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-lab-dim" />
               <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск по названию или реплике" className="pl-9" />
