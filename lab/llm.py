@@ -73,7 +73,7 @@ if _configured() and not os.environ.get('LAB_MODEL_URL'):
     SECOND = (GATEWAY, _second) if _second else None
 else:
     BASE_URL = os.environ.get('LAB_MODEL_URL', 'http://127.0.0.1:11436/v1').rstrip('/')
-    MODEL = os.environ.get('LAB_MODEL', 'anthropic/claude-sonnet-4.6')
+    MODEL = os.environ.get('LAB_MODEL', 'z-ai/glm-5.3')
     # An independent second judge (another vendor's model) re-checks every verdict.
     SECOND = (os.environ.get('LAB_SECOND_URL', 'http://127.0.0.1:11437/v1').rstrip('/'),
               os.environ.get('LAB_SECOND_MODEL', 'openai/gpt-5.2'))
@@ -82,10 +82,15 @@ _semaphore: asyncio.Semaphore | None = None
 model_label = MODEL
 
 
+_gate_loop = None
+
+
 def _gate() -> asyncio.Semaphore:
-    global _semaphore
-    if _semaphore is None:
-        _semaphore = asyncio.Semaphore(CONCURRENCY)
+    """One limiter per event loop (the CLI may run several asyncio.run calls in one process)."""
+    global _semaphore, _gate_loop
+    loop = asyncio.get_running_loop()
+    if _semaphore is None or _gate_loop is not loop:
+        _semaphore, _gate_loop = asyncio.Semaphore(CONCURRENCY), loop
     return _semaphore
 
 

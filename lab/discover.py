@@ -266,7 +266,13 @@ async def run(count: int = 60, progress=lambda **_: None, replan: bool = False) 
     await asyncio.gather(*(one(item) for item in todo))
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     results.sort(key=lambda r: order.get(str(r['dialogueId']), 0))
+    rule_count = {}
+    for topic in topics:
+        for rule in topic['rules']:
+            rule_count[rule.get('sourceId')] = rule_count.get(rule.get('sourceId'), 0) + 1
     value = {'startedAt': started, 'finishedAt': store.now(), 'model': llm.model_label, 'rulesSince': rules_since,
+             'sources': [{'id': s['id'], 'kind': s['kind'], 'origin': s.get('origin', s.get('name')), 'sha256': s.get('sha256'),
+                          'chars': len(s['content']), 'rules': rule_count.get(s['id'], 0)} for s in srcs],
              'sampled': len(dialogues), 'unassigned': len(dialogues) - len(todo), 'droppedRules': dropped,
              'topics': topics, 'results': results, 'summary': summarize(results, topics)}
     store.save('discover.json', value)

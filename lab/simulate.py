@@ -42,6 +42,12 @@ def metric(items: list[dict]) -> dict:
     return value
 
 
+def with_tools(message: dict) -> str:
+    """The agent's reply plus the systems it called in this turn (known only where the mocks record them)."""
+    calls = [e['tool'].replace('Система банка · ', '') + (f" ({e['article']})" if e.get('article') else '') for e in message.get('events') or []]
+    return with_buttons(message) + ('\n[вызовы систем: ' + '; '.join(calls) + ']' if calls else '')
+
+
 def with_buttons(message: dict) -> str:
     options = message.get('options') or []
     return message['text'] + ('\n[Кнопки: ' + ' | '.join(options) + ']' if options else '')
@@ -115,7 +121,7 @@ def own_words(rows: list[dict], conversation: list[dict]) -> list[dict]:
     """Evidence must be the agent's own words. A quote taken from our handoff marker is replaced by the
     agent's service reply itself (the handoff is the evidence); anything else unverifiable becomes UNKNOWN."""
     agents = [m for m in conversation if m['role'] == 'agent']
-    raw = '\n'.join(with_buttons(m) for m in agents)
+    raw = '\n'.join(with_tools(m) for m in agents)
     for row in rows:
         if row['status'] not in ('PASS', 'FAIL') or store.quote_found(row['agentQuote'], raw):
             continue
@@ -128,11 +134,12 @@ def own_words(rows: list[dict], conversation: list[dict]) -> list[dict]:
 
 
 async def verdict(card: dict, conversation: list[dict], endpoint: tuple[str, str] | None = None) -> tuple[list[dict], str]:
-    shown = [{'role': m['role'].upper(), 'text': with_buttons(m) if m.get('ok', True) else
+    shown = [{'role': m['role'].upper(), 'text': with_tools(m) if m.get('ok', True) else
               f"[служебный статус {m['status']}: бот не ответил сам, разговор передан оператору] {m['text']}"}
              for m in conversation]
     agent_text = '\n'.join(m['text'] for m in shown if m['role'] == 'AGENT')
-    value = await llm.structured(JUDGE_RUN, {'expectations': card['criteria'], 'conversation': shown},
+    value = await llm.structured(JUDGE_RUN, {'expectations': card['criteria'], 'conversation': shown,
+                                             'toolCallsObserved': any(m.get('events') for m in conversation if m['role'] == 'agent')},
                                  check=lambda v: v['rules'], endpoint=endpoint)
     rows = own_words(checked(value.get('rules') or [], card['criteria'], agent_text), conversation)
     return rows, verdict_of(rows)
@@ -253,6 +260,28 @@ async def run(target_key: str, card_ids: list[str] | None = None, label: str = '
         record['finishedAt'] = store.now()
         record['model'] = llm.model_label
         changed()
+    return record
+
+
+async def rejudge(record: dict, progress=lambda **_: None) -> dict:
+    """Judge recorded conversations again with the current cards and judges; the agent is not called."""
+    deck = {c['id']: c for c in ((store.load('cards.json') or {}).get('cards') or [])}
+    items = [i for i in record['items'] if i['conversation'] and i['cardId'] in deck and not i.get('error')]
+    done = 0
+
+    async def one(item):
+        nonlocal done
+        try:
+            await judge(deck[item['cardId']], item)
+        except llm.ModelError as error:
+            item.update(status='UNMEASURED', error=str(error))
+        done += 1
+        progress(done=done, total=len(items), message='Переоценка разговоров')
+
+    await asyncio.gather(*(one(i) for i in items))
+    record['metric'] = metric(record['items'])
+    record['rejudgedAt'] = store.now()
+    store.save(f"runs/{record['id']}.json", record)
     return record
 
 

@@ -26,7 +26,7 @@ mkdir -p lab/data
 # 3. Model bridge for the simulator and the judge: its own Pi instance, several calls in parallel.
 if ! up http://127.0.0.1:11436/health; then
   PI_PROXY_PORT=11436 PI_PROXY_CONCURRENCY=6 \
-  PI_JUDGE_PROVIDER="${LAB_PI_PROVIDER:-openrouter}" PI_JUDGE_MODEL="${LAB_PI_MODEL:-anthropic/claude-sonnet-4.6}" \
+  PI_JUDGE_PROVIDER="${LAB_PI_PROVIDER:-openrouter}" PI_JUDGE_MODEL="${LAB_PI_MODEL:-z-ai/glm-5.3}" \
     nohup python3 scripts/pi-model-proxy.py </dev/null >> lab/data/pi-proxy.log 2>&1 &
 fi
 

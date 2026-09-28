@@ -35,7 +35,8 @@ type LabState = {
   job: { kind: string | null; running: boolean; error: string | null; progress: { message?: string; done?: number; total?: number; run?: string } };
   model: string;
   logs: { total: number };
-  discover: null | { sampled: number; model: string; finishedAt: string; rulesSince?: string; topics: { id: string; title: string; rules: Criterion[] }[]; results: LogResult[];
+  discover: null | { sampled: number; model: string; finishedAt: string; rulesSince?: string;
+    sources?: { id: string; kind: string; origin: string; sha256?: string; chars: number; rules: number }[]; topics: { id: string; title: string; rules: Criterion[] }[]; results: LogResult[];
     summary: { checked: number; failed: number; passed: number; unmeasured: number; patterns: Pattern[]; secondJudge?: { model: string; checked: number; agree: number } | null } };
   cards: null | { cards: Card[] };
   runs: LabRun[];
@@ -191,6 +192,52 @@ function Trust({ label, text, ok }: { label: string; text: string; ok?: boolean 
   );
 }
 
+const passShare = (items: Item[], cardId: string) => {
+  const done = items.filter(i => i.cardId === cardId && (i.status === "PASS" || i.status === "FAIL"));
+  return done.length ? done.filter(i => i.status === "PASS").length / done.length : null;
+};
+
+/** Top failure reasons of a run and what changed against the previous run of the same agent. */
+function Insights({ run, previous }: { run: LabRun; previous: LabRun | null }) {
+  const items = run.items ?? [];
+  const reasons = new Map<string, number>();
+  for (const i of items) for (const r of i.rules) if (r.status === "FAIL") reasons.set(r.rule, (reasons.get(r.rule) ?? 0) + 1);
+  const top = [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const cards = [...new Map(items.map(i => [i.cardId, i.name])).entries()];
+  const better: string[] = [], worse: string[] = [];
+  if (previous?.items) for (const [id, name] of cards) {
+    const now = passShare(items, id), before = passShare(previous.items, id);
+    if (now === null || before === null || now === before) continue;
+    (now > before ? better : worse).push(name);
+  }
+  return (
+    <div className="grid grid-cols-2 gap-3 mt-6">
+      <Panel className="px-4 py-3">
+        <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>частые причины провала</div>
+        {top.map(([rule, n]) => (
+          <div key={rule} className="flex gap-3 text-[12px] py-1" style={{ color: C.fg2 }}>
+            <span className="font-mono w-6 text-right flex-shrink-0" style={{ color: "#F26B6B" }}>{n}</span><span>{rule}</span>
+          </div>
+        ))}
+        {!top.length && <div className="text-[12px]" style={{ color: C.fg1 }}>Провалов нет</div>}
+      </Panel>
+      <Panel className="px-4 py-3">
+        <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>
+          {previous ? `против прогона ${when(previous.startedAt)}` : "сравнение с прошлым прогоном"}
+        </div>
+        {!previous && <div className="text-[12px]" style={{ color: C.fg1 }}>Это первый прогон этого агента.</div>}
+        {previous && (
+          <div className="flex flex-col gap-1 text-[12px]" style={{ color: C.fg2 }}>
+            <div><span className="font-mono" style={{ color: C.green }}>лучше: {better.length}</span> {better.slice(0, 4).join(", ")}</div>
+            <div><span className="font-mono" style={{ color: "#F26B6B" }}>хуже: {worse.length}</span> {worse.slice(0, 4).join(", ")}</div>
+            <div style={{ color: C.fg1 }}>без изменений: {cards.length - better.length - worse.length}</div>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
 /* ---------- step views ---------- */
 
 function LogsView({ state, onOpen }: { state: LabState; onOpen: (runId?: string) => void }) {
@@ -227,6 +274,23 @@ function LogsView({ state, onOpen }: { state: LabState; onOpen: (runId?: string)
           <span className="font-mono text-[10px] uppercase mr-1.5" style={{ color: C.fg1 }}>второй судья</span>
           {s.secondJudge.model} согласен с итогом в {s.secondJudge.agree} из {s.secondJudge.checked} разговоров ({pct(s.secondJudge.agree, s.secondJudge.checked)}%)
         </div>
+      )}
+      {!!d.sources?.length && (
+        <>
+          <Label right={<span className="text-[10px] font-mono" style={{ color: C.fg0 }}>python -m lab sources --repo …</span>}>источники правил</Label>
+          <Panel>
+            {d.sources.filter(src => src.rules > 0 || src.kind !== "prompt").map((src, i) => (
+              <div key={src.id} className="grid grid-cols-[90px_1fr_auto] gap-3 items-center px-4 py-2 text-[12px]" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
+                <span className="text-[10px] font-mono" style={{ color: C.fg1 }}>{src.kind === "tools" ? "инструменты" : src.kind === "knowledge" ? "база знаний" : "промпт"}</span>
+                <span className="font-mono text-[11px] truncate" style={{ color: C.fg3 }} title={src.sha256}>{src.origin}</span>
+                <span className="font-mono text-[11px]" style={{ color: C.fg1 }}>{src.rules} {plural(src.rules, "правило", "правила", "правил")} · {Math.round(src.chars / 100) / 10} тыс. зн.</span>
+              </div>
+            ))}
+            <div className="px-4 py-2 text-[11px]" style={{ borderTop: `1px solid ${C.border}`, color: C.fg0 }}>
+              всего источников: {d.sources.length}; промпты без правил скрыты (классификаторы маршрутизации)
+            </div>
+          </Panel>
+        </>
       )}
       <Label>частые нарушения</Label>
       <Panel>
@@ -348,6 +412,7 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
   const deck = state.cards?.cards ?? [];
   const fileRef = useRef<HTMLInputElement>(null);
   const [repeats, setRepeats] = useState(1);
+  const [onlyDisputed, setOnlyDisputed] = useState(false);
   const start = () => api("/api/runs", { target, repeats }).catch(e => alert(e.message));
   const review = (index: number, decision: "agree" | "disagree" | null) =>
     run && api("/api/review", { run: run.id, index, decision }).catch(e => alert(e.message));
@@ -385,6 +450,11 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
         <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={e => importRun(e.target.files?.[0])} />
         <JobLine state={state} kind="run" />
         <JobLine state={state} kind="import" />
+        {run?.items?.some(disputed) && (
+          <label className="inline-flex items-center gap-1.5 text-[11px] font-mono cursor-pointer" style={{ color: C.orange }}>
+            <input type="checkbox" checked={onlyDisputed} onChange={e => setOnlyDisputed(e.target.checked)} />только спор судей ({run.items.filter(disputed).length})
+          </label>
+        )}
       </div>
       {run && (
         <>
@@ -394,6 +464,7 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
           {run.error && <div className="text-[12px] mb-2" style={{ color: "#F26B6B" }}>{run.error}</div>}
           <Panel>
             {(run.items ?? []).map((i, index) => {
+              if (onlyDisputed && !disputed(i)) return null;
               const turns = i.conversation.filter(x => x.role === "agent").length;
               const handoff = i.conversation.some(x => x.role === "agent" && x.ok === false);
               const bad = i.rules.find(r => r.status === "FAIL");
@@ -495,6 +566,7 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
           ))}
         </Panel>
       </div>
+      <Insights run={finished} previous={history.filter(r => r.id !== finished.id && r.target === finished.target)[0] ? details[history.filter(r => r.id !== finished.id && r.target === finished.target)[0].id] ?? null : null} />
       <Label>итоги по сценариям</Label>
       <Panel className="overflow-x-auto">
         <table className="w-full text-[12px]">

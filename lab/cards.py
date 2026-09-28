@@ -14,7 +14,7 @@ LIMIT = 30
 # Applies to every scenario: the agent must answer the question that was asked.
 ANSWERS_THE_QUESTION = {
     'id': 'g-answer',
-    'text': 'Агент отвечает по существу вопроса клиента: даёт инструкцию именно для его задачи или уточняет недостающее, а не отвечает на другую тему.',
+    'text': 'Каждый ответ агента по существу вопроса клиента: инструкция именно для его задачи или уточнение недостающего, без ответов на другую тему.',
     'condition': 'Всегда, когда агент отвечает клиенту.',
     'acceptable': 'Уточняющий вопрос по существу; «Не могу помочь, информация отсутствует», если ответа действительно нет.',
     'quote': 'Твоя главная задача — найти и чётко выдать инструкции для самостоятельного выполнения клиентом',
@@ -57,14 +57,15 @@ def general_rules(analysis: dict) -> list[dict]:
 async def build_card(topic: dict, dialogue: dict, origin: str, general: list[dict] = ()) -> dict:
     customer = [m['content'] for m in dialogue['messages'] if m['role'] == 'user']
     value = await llm.structured(CARD, {'topic': topic['title'], 'customerMessages': customer}, check=_check)
-    rules = [r for r in topic['rules'] if r['observation'] == 'reply']
+    rules = [r for r in topic['rules'] if r['observation'] in ('reply', 'tool')]
     quotes = {store.normalized(r['quote']) for r in rules}
     rules += [r for r in general if store.normalized(r['quote']) not in quotes]
     owner = '\n'.join(src['content'] for src in discover.sources())
     if store.quote_found(ANSWERS_THE_QUESTION['quote'], owner):
         rules.append(ANSWERS_THE_QUESTION)
     criteria = [{'id': r['id'], 'text': r['text'], 'condition': r.get('condition', ''),
-                 'acceptable': r.get('acceptable', ''), 'quote': r['quote']} for r in rules]
+                 'acceptable': r.get('acceptable', ''), 'quote': r['quote'], 'observation': r.get('observation', 'reply')}
+                for r in rules]
     try:
         scenario_world = await world.build(value['situation'], customer)
     except llm.ModelError:

@@ -38,6 +38,11 @@ def main() -> None:
     sub.add_parser('clean')
     sub.add_parser('bundle')
     sub.add_parser('renote')
+    rj = sub.add_parser('rejudge')
+    rj.add_argument('run', nargs='?', help='id прогона; без него — все прогоны')
+    so = sub.add_parser('sources')
+    so.add_argument('--repo', type=Path, help='репозиторий агента: промпты и инструменты из кода')
+    so.add_argument('--file', action='append', default=[], help='файл владельца: путь[:prompt|knowledge]')
     w = sub.add_parser('gateway')
     w.add_argument('--url')
     w.add_argument('--cert', help='клиентский сертификат (PEM)')
@@ -143,6 +148,22 @@ def main() -> None:
                   '| кнопки:', [o.get('text') for o in data.get('suggestions') or [] if isinstance(o, dict)])
         except ValueError:
             print(response.text[:3000])
+    elif args.command == 'sources':
+        from . import sources
+        files = [(Path(v.rsplit(':', 1)[0]).expanduser(), v.rsplit(':', 1)[1] if v.rsplit(':', 1)[-1] in ('prompt', 'knowledge') else 'prompt')
+                 for v in args.file]
+        collected = sources.build(args.repo.expanduser() if args.repo else None, files)
+        for s in collected:
+            print(f"{s['id']:4} {s['kind']:9} {len(s['content']):6} зн.  {s['origin']}")
+        print('Источники сохранены. Правила из них: python -m lab discover --replan')
+    elif args.command == 'rejudge':
+        from . import simulate, store
+        for record in store.runs():
+            if args.run and record['id'] != args.run:
+                continue
+            record = asyncio.run(simulate.rejudge(record))
+            print(record['targetName'], json.dumps(record['metric'], ensure_ascii=False))
+        print('Заметки судьи: python -m lab renote')
     elif args.command == 'renote':
         from . import store, workshop
         from .discover import verdict_note

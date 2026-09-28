@@ -4,7 +4,8 @@ PLAN = """Find business topics in the given CUSTOMER requests, and explicit expe
 Every dialogue ID must be assigned to exactly one topic. Different tasks in one topic may have conditional expectations.
 Topics are the customer's business tasks (e.g. подключение QR, возврат покупки, тарифы эквайринга). Never create a topic about style, formatting or greetings.
 Do not infer topics from incorrect agent answers. No invented policy, deadlines, amounts, facts or source quotes.
-Prompts are behavior rules of the agent; knowledge is factual reference.
+Prompts are behavior rules of the agent (several prompts may come from the agent's code: the answer prompt and classifier prompts that route requests); knowledge is factual reference.
+A source of kind 'tools' lists the agent's business-system tools. Add an expectation with observation 'tool' only when a prompt or the tool list grounds it (e.g. asking about the customer's own rate requires querying its tariff); quote the tool's line from that source.
 Every expectation must cite one source ID and a meaningful EXACT source quote (copy it character by character, at least 20 characters). Preserve exceptions and acceptable alternatives, including allowed handoffs.
 Separate observable reply behavior from tool actions and backend state (tool/state require actual events, replies alone do not prove them).
 Prefer expectations that can be checked from the agent's replies alone and that matter for the customer's outcome.
@@ -32,7 +33,11 @@ FAIL requires a real contradiction of an applicable rule. PASS requires evidence
 A handoff may be allowed: respect rule exceptions and acceptable alternatives. Never force pass/fail. Judge only the AGENT, never the synthetic customer.
 A "[служебный статус ...]" reply means the bot did not answer itself and handed the conversation to a human operator. Such a handoff counts as sending the customer to support/an operator, unless the rule's condition or acceptable explicitly allows a handoff in this situation.
 Each PASS/FAIL must cite a meaningful EXACT substring of the agent's own words in agentQuote (copy it character by character, never the bracketed service marker). Never invent a quote.
-Use Russian. Return {rules:[{ruleId,status:"PASS|FAIL|UNKNOWN|NOT_APPLICABLE",reason,agentQuote}]}.
+Rules with observation "tool" are judged only from the "[вызовы систем: …]" lines; if toolCallsObserved is false, they are UNKNOWN. For them agentQuote is the tool name from that line.
+"Answers the question" is judged on EVERY agent reply: an off-topic or wrong reply fails it even if a later reply is correct.
+First write customerGoal: the exact operation the customer wants (3-8 words). Judge every reply against it: a reply that serves another operation fails "answers the question" even if it is a correct instruction for that other operation.
+Use Russian. Return {customerGoal, rules:[{ruleId,status:"PASS|FAIL|UNKNOWN|NOT_APPLICABLE",reason,agentQuote}]}.
+Not an answer to the question: an instruction for a different operation than the customer asked (e.g. blocking instead of returning equipment, cancelling a refund instead of viewing refunds), an instruction that starts in the middle (e.g. from step 7), text addressed to bank staff (e.g. «рекомендуй», «используй статью», internal systems), or a fragment unrelated to the question.
 reason: one or two short sentences a business owner understands."""
 
 CARD = """Create a reproducible CUSTOMER situation from the provided real CUSTOMER messages of one logged conversation.

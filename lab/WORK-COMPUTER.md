@@ -25,7 +25,18 @@
 
     .venv/bin/python -m lab gateway --model <модель судьи> --second-model <модель второго судьи>
 
-## 3. Проверка продовой ручки
+## 3. Источники правил (по желанию)
+
+В архиве уже лежат источники и правила, по которым собраны сценарии. Если на рабочем компьютере есть
+репозиторий агента, их можно собрать заново прямо из кода — промпты и инструменты:
+
+    .venv/bin/python -m lab sources --repo ~/path/to/aigw-rest-service
+    .venv/bin/python -m lab discover --count 100 --replan
+
+Документы владельца (промпт или статьи базы знаний) добавляются так: `--file путь:prompt` или `--file путь:knowledge`.
+После `--replan` правила новые: прогоны до и после несравнимы.
+
+## 4. Проверка продовой ручки
 
     .venv/bin/python -m lab ping --target prod
 
@@ -33,7 +44,7 @@
 Адрес лежит в `lab/data/targets.json`, другой — через `LAB_PROD_URL=…`. Если ручке нужен сертификат,
 добавьте в `lab/data/targets.json` в раздел `prod`: `"cert": "…pem", "key": "…key", "ca": "…pem"`.
 
-## 4. Прогон
+## 5. Прогон
 
     .venv/bin/python -m lab run --target prod --repeats 2
 
@@ -43,7 +54,7 @@
 
 Можно и заново: `python -m lab discover --count 100` (оценка логов), `python -m lab cards` (сценарии).
 
-## 5. На мак
+## 6. На мак
 
 Файл прогона — в `lab/data/runs/`. Перенесите его на мак: Workshop → agent lab → «прогнали на агенте» →
 «импорт прогона». Разговоры появятся в Workshop, прогон — в истории точности.
