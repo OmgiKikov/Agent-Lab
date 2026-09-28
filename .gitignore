@@ -14,3 +14,8 @@ __pycache__/
 *.pem
 *.key
 *.p12
+
+# Agent Lab demo: local environment and real-conversation data.
+/lab/.venv/
+/lab/data/
+/lab/.workshop-src/

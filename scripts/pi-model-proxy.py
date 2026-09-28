@@ -9,15 +9,17 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import BoundedSemaphore
 
 
 ROOT = Path(__file__).resolve().parent.parent
 PI_BIN = Path(os.environ.get("PI_BIN", ROOT / "node_modules/.bin/pi"))
 PORT = int(os.environ.get("PI_PROXY_PORT", "11435"))
 MODEL = os.environ.get("PI_JUDGE_MODEL", "gpt-5.6-sol")
+PROVIDER = os.environ.get("PI_JUDGE_PROVIDER", "openai-codex")
 LOCAL_TOKEN = os.environ.get("PI_PROXY_TOKEN", "pi-local-bridge")
-RUN_LOCK = Lock()
+# One Pi process at a time by default; a separate instance may allow more (API-key providers).
+RUN_LOCK = BoundedSemaphore(max(1, int(os.environ.get("PI_PROXY_CONCURRENCY", "1"))))
 MAX_BODY_BYTES = 2_000_000
 
 
@@ -103,7 +105,7 @@ def run_pi(request: dict) -> str:
 
     command = [
         str(PI_BIN),
-        "--provider", "openai-codex",
+        "--provider", PROVIDER,
         "--model", MODEL,
         "--thinking", "low",
         "--no-tools",
