@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import NumberFlow from "@number-flow/react";
-import { ArrowLeft, Bot, ChevronRight, FileText, FlaskConical, Gauge, MessagesSquare, Play, RotateCcw, Upload } from "lucide-react";
+import { ArrowLeft, Bot, Check, ChevronRight, CircleHelp, FileText, FlaskConical, Gauge, Keyboard, MessageSquareQuote, MessagesSquare, Play, RotateCcw, Upload, User, Zap, type LucideIcon } from "lucide-react";
 import { RunDetail } from "../components/RunDetail";
 import { C } from "../utils/colors";
 
@@ -71,16 +71,68 @@ const DEFAULT_PERSONA = "default";
 /** How a conversation of a run is addressed in the URL: its Workshop trace, or its place in the run when it has none. */
 const itemKey = (i: Item) => i.runId ?? `${i.cardId}~${i.persona ?? DEFAULT_PERSONA}~${i.attempt ?? 1}`;
 const personaName = (state: LabState, id?: string) => state.personas.find(p => p.id === (id ?? DEFAULT_PERSONA))?.name ?? id ?? "";
-function PersonaTag({ state, id }: { state: LabState; id?: string }) {
-  return <span className="text-[10px] font-mono px-1.5 py-px rounded whitespace-nowrap" style={{ color: C.fg2, background: "rgba(255,255,255,0.07)" }}>{personaName(state, id)}</span>;
+/** Every customer type has its own glyph and hue, so it is recognised at a glance wherever it shows up. */
+const PERSONA_LOOK: Record<string, { icon: LucideIcon; color: string }> = {
+  [DEFAULT_PERSONA]: { icon: User, color: C.fg2 },
+  impatient: { icon: Zap, color: C.orange },
+  confused: { icon: CircleHelp, color: C.cyan },
+  typos: { icon: Keyboard, color: C.purple },
+  no_terms: { icon: MessageSquareQuote, color: C.accent },
+};
+const personaLook = (id?: string) => PERSONA_LOOK[id ?? DEFAULT_PERSONA] ?? { icon: User, color: C.fg2 };
+
+function PersonaIcon({ id, size = 24 }: { id?: string; size?: number }) {
+  const { icon: Icon, color } = personaLook(id);
+  return (
+    <span className="inline-flex items-center justify-center rounded-md flex-shrink-0" style={{ width: size, height: size, color, background: `${color}1a` }}>
+      <Icon style={{ width: size * 0.55, height: size * 0.55 }} />
+    </span>
+  );
 }
 
-/** One option of a choice: agent, customer type, repeats. */
-function Choice({ on, onClick, title, children }: { on: boolean; onClick: () => void; title?: string; children: React.ReactNode }) {
+function PersonaGlyph({ id }: { id?: string }) {
+  const { icon: Icon, color } = personaLook(id);
+  return <Icon className="size-3" style={{ color }} />;
+}
+
+function PersonaTag({ state, id }: { state: LabState; id?: string }) {
+  const { icon: Icon, color } = personaLook(id);
   return (
-    <button onClick={onClick} title={title} className="text-[12px] px-3 py-1.5 rounded-md transition-colors"
-      style={{ color: on ? C.fg5 : C.fg2, background: on ? "rgba(255,255,255,0.12)" : "transparent", border: `1px solid ${on ? "rgba(255,255,255,0.24)" : C.border}` }}>
-      {children}
+    <span className="inline-flex items-center gap-1 text-[11px] pl-1.5 pr-2 py-0.5 rounded-full whitespace-nowrap" style={{ color, background: `${color}14`, border: `1px solid ${color}33` }}>
+      <Icon className="size-3" />{personaName(state, id)}
+    </span>
+  );
+}
+
+/** One option of a segmented control (agent, repeats). */
+function Segmented<T extends string | number>({ value, options, onChange }: { value: T; options: { value: T; label: string; title?: string }[]; onChange: (v: T) => void }) {
+  return (
+    <div className="inline-flex p-0.5 rounded-lg gap-0.5" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}` }}>
+      {options.map(o => (
+        <button key={String(o.value)} onClick={() => onChange(o.value)} title={o.title} className="text-[12px] px-3 py-1 rounded-md transition-colors"
+          style={{ color: o.value === value ? C.fg5 : C.fg2, background: o.value === value ? "rgba(255,255,255,0.12)" : "transparent" }}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A selectable customer type: glyph, name and how this customer writes. */
+function PersonaCard({ persona, on, onClick }: { persona: Persona; on: boolean; onClick: () => void }) {
+  const { color } = personaLook(persona.id);
+  return (
+    <button onClick={onClick} aria-pressed={on} className="relative text-left flex items-start gap-2.5 p-3 rounded-lg transition-colors"
+      style={{ background: on ? `${color}12` : "rgba(255,255,255,0.02)", border: `1px solid ${on ? `${color}66` : C.border}` }}>
+      <PersonaIcon id={persona.id} size={28} />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13px] font-medium" style={{ color: on ? C.fg5 : C.fg3 }}>{persona.name}</span>
+        <span className="block text-[11px] mt-0.5 leading-snug" style={{ color: C.fg1 }}>{persona.note}</span>
+      </span>
+      <span className="size-4 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
+        style={{ background: on ? color : "transparent", border: `1px solid ${on ? color : "rgba(255,255,255,0.18)"}` }}>
+        {on && <Check className="size-2.5" style={{ color: "#000" }} strokeWidth={3} />}
+      </span>
     </button>
   );
 }
@@ -283,12 +335,12 @@ const passShare = (items: Item[], cardId: string) => {
 function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
   const byType = run.metric?.personas ?? {};
   const items = run.items ?? [];
-  const breaks: { name: string; types: string[] }[] = [];
+  const breaks: { name: string; types: Persona[] }[] = [];
   for (const cardId of [...new Set(items.map(i => i.cardId))]) {
     const of = (id: string) => items.filter(i => i.cardId === cardId && (i.persona ?? DEFAULT_PERSONA) === id && ["PASS", "FAIL"].includes(i.status));
     const ordinary = of(DEFAULT_PERSONA);
     if (!ordinary.length || ordinary.some(i => i.status !== "PASS")) continue;
-    const failing = state.personas.filter(p => p.id !== DEFAULT_PERSONA && of(p.id).some(i => i.status === "FAIL")).map(p => p.name);
+    const failing = state.personas.filter(p => p.id !== DEFAULT_PERSONA && of(p.id).some(i => i.status === "FAIL"));
     if (failing.length) breaks.push({ name: items.find(i => i.cardId === cardId)!.name, types: failing });
   }
   return (
@@ -298,9 +350,9 @@ function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
         {state.personas.filter(p => byType[p.id]).map(p => {
           const v = byType[p.id];
           return (
-            <div key={p.id} className="grid grid-cols-[110px_1fr_44px] gap-3 items-center py-1 text-[12px]" style={{ color: C.fg2 }} title={p.note}>
-              <span style={{ color: C.fg4 }}>{p.name}</span>
-              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${v.accuracy ?? 0}%`, background: C.fg3 }} /></div>
+            <div key={p.id} className="grid grid-cols-[140px_1fr_44px] gap-3 items-center py-1 text-[12px]" style={{ color: C.fg2 }} title={p.note}>
+              <span className="inline-flex items-center gap-2" style={{ color: C.fg4 }}><PersonaIcon id={p.id} size={20} />{p.name}</span>
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full rounded-full" style={{ width: `${v.accuracy ?? 0}%`, background: personaLook(p.id).color }} /></div>
               <span className="font-mono text-right" style={{ color: C.fg4 }}>{v.accuracy ?? "—"}%</span>
             </div>
           );
@@ -309,9 +361,11 @@ function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
       </Panel>
       <Panel className="px-4 py-3">
         <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>ломается от манеры общения</div>
+        <div className="text-[11px] -mt-1 mb-2" style={{ color: C.fg1 }}>обычный клиент проходит, эти типы — нет</div>
         {breaks.slice(0, 8).map(b => (
-          <div key={b.name} className="text-[12px] py-1" style={{ color: C.fg2 }}>
-            <span style={{ color: C.fg4 }}>{b.name}</span> <span style={{ color: C.fg1 }}>· обычный клиент проходит, не проходит: </span><span style={{ color: "#F26B6B" }}>{b.types.join(", ")}</span>
+          <div key={b.name} className="flex items-center justify-between gap-3 text-[12px] py-1.5" style={{ color: C.fg4 }}>
+            <span className="min-w-0 truncate" title={b.name}>{b.name}</span>
+            <span className="flex gap-1 flex-shrink-0">{b.types.map(p => <PersonaTag key={p.id} state={state} id={p.id} />)}</span>
           </div>
         ))}
         {!breaks.length && <div className="text-[12px]" style={{ color: C.fg1 }}>Таких сценариев нет: там, где обычный клиент проходит, проходят и остальные.</div>}
@@ -567,9 +621,12 @@ function CardView({ card, state, onBack }: { card: Card; state: LabState; onBack
           <Label>первая реплика у разных клиентов</Label>
           <Panel>
             {[{ id: DEFAULT_PERSONA, text: card.opening }, ...state.personas.filter(p => card.openings?.[p.id]).map(p => ({ id: p.id, text: card.openings![p.id] }))].map((row, i) => (
-              <div key={row.id} className="grid grid-cols-[130px_1fr] gap-4 px-4 py-2.5" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
-                <span className="text-[11px] pt-px" style={{ color: C.fg1 }}>{personaName(state, row.id)}{row.id === DEFAULT_PERSONA ? " · из лога" : ""}</span>
-                <span className="text-[13px] leading-relaxed" style={{ color: C.fg4 }}>{row.text}</span>
+              <div key={row.id} className="grid grid-cols-[150px_1fr] gap-4 px-4 py-3 items-start" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
+                <span className="inline-flex items-center gap-2 text-[12px]" style={{ color: C.fg2 }}>
+                  <PersonaIcon id={row.id} size={22} />
+                  <span>{personaName(state, row.id)}{row.id === DEFAULT_PERSONA && <span className="block text-[10px] font-mono" style={{ color: C.fg0 }}>из лога</span>}</span>
+                </span>
+                <div className="flex"><Bubble>{row.text}</Bubble></div>
               </div>
             ))}
           </Panel>
@@ -732,26 +789,21 @@ function NewRun({ state, target, setTarget, onStarted }: { state: LabState; targ
   const toggleType = (id: string) => setTypes(t => t.includes(id) ? (t.length > 1 ? t.filter(x => x !== id) : t) : [...t, id]);
   const start = () => api("/api/runs", { target, repeats, personas: types }).then(() => onStarted?.()).catch(e => alert(e.message));
   const total = deck.length * types.length * repeats;
-  const chosen = state.personas.filter(p => types.includes(p.id) && p.id !== DEFAULT_PERSONA);
   return (
     <Panel>
       <SettingRow first label="агент">
-        <div className="flex gap-1.5 flex-wrap">
-          {state.targets.map(t => <Choice key={t.id} on={t.id === target} onClick={() => setTarget(t.id)} title={t.note}>{t.name}</Choice>)}
-        </div>
+        <Segmented value={target} onChange={setTarget} options={state.targets.map(t => ({ value: t.id, label: t.name, title: t.note }))} />
       </SettingRow>
       <SettingRow label="клиенты">
-        <div className="flex gap-1.5 flex-wrap">
-          {state.personas.map(p => <Choice key={p.id} on={types.includes(p.id)} onClick={() => toggleType(p.id)} title={p.note}>{p.name}</Choice>)}
+        <div className="grid grid-cols-2 gap-2">
+          {state.personas.map(p => <PersonaCard key={p.id} persona={p} on={types.includes(p.id)} onClick={() => toggleType(p.id)} />)}
         </div>
         <div className="text-[11px] mt-2 leading-relaxed" style={{ color: C.fg1 }}>
-          {chosen.length ? chosen.map(p => `${p.name} — ${p.note}`).join("; ") : "Клиент пишет так, как в логе. Добавьте типы клиентов, чтобы увидеть, где агент ломается от манеры общения."}
+          Тип меняет только манеру письма: цель, факты и вопросы клиента остаются из сценария. Выберите несколько, чтобы увидеть, где агент ломается от манеры общения.
         </div>
       </SettingRow>
       <SettingRow label="повторы">
-        <div className="flex gap-1.5">
-          {[1, 2, 3].map(n => <Choice key={n} on={repeats === n} onClick={() => setRepeats(n)}>{n === 1 ? "1 раз" : `${n} раза`}</Choice>)}
-        </div>
+        <Segmented value={repeats} onChange={setRepeats} options={[1, 2, 3].map(n => ({ value: n, label: n === 1 ? "1 раз" : `${n} раза` }))} />
       </SettingRow>
       <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3" style={{ borderTop: `1px solid ${C.border}` }}>
         <span className="text-[12px]" style={{ color: C.fg2 }}>
@@ -990,10 +1042,8 @@ export function LabPage() {
       const items = run.items;
       const current = items.find(i => itemKey(i) === itemId) ?? items.find(i => i.status !== "RUNNING") ?? items[0];
       const mark = (st: Status) => st === "PASS" ? "✓" : st === "FAIL" ? "✗" : st === "RUNNING" ? "…" : "?";
-      const legend = runTypes.length > 1
-        ? <div key="legend" className="px-2.5 pb-1 text-[10px] leading-relaxed" style={{ color: C.fg1 }}>значки слева направо: {runTypes.map(p => p.name).join(", ")}</div>
-        : null;
-      return [legend, ...[...new Map(items.map(i => [i.cardId, i.name])).entries()].map(([cardId, name]) => {
+      const multi = runTypes.length > 1;
+      return [...new Map(items.map(i => [i.cardId, i.name])).entries()].map(([cardId, name]) => {
         const own = items.filter(i => i.cardId === cardId);
         const status: Status = own.some(i => i.status === "RUNNING") ? "RUNNING" : own.some(i => i.status === "FAIL") ? "FAIL" : own.every(i => i.status === "PASS") ? "PASS" : "UNMEASURED";
         const active = own.includes(current!);
@@ -1010,9 +1060,9 @@ export function LabPage() {
                   return (
                     <button key={`${i.persona ?? DEFAULT_PERSONA}-${i.attempt ?? 1}`} onClick={() => go("run", itemKey(i))}
                       title={`${personaName(state, i.persona)}${i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : ""}: ${STATUS_TEXT[i.status]}`}
-                      className="h-5 min-w-[22px] px-1 rounded text-[11px] transition-colors"
+                      className="h-5 min-w-[22px] px-1 rounded text-[11px] transition-colors inline-flex items-center justify-center gap-1"
                       style={{ color: tone(i.status), background: `${tone(i.status)}${on ? "40" : "1a"}`, boxShadow: on ? `inset 0 0 0 1px ${tone(i.status)}` : undefined }}>
-                      {mark(i.status)}
+                      {multi && <PersonaGlyph id={i.persona} />}{mark(i.status)}
                     </button>
                   );
                 })}
@@ -1020,7 +1070,7 @@ export function LabPage() {
             )}
           </div>
         );
-      })];
+      });
     }
     if (step === "accuracy") {
       return state.runs.map(r => <ListItem key={r.id} selected={r.id === run?.id} onClick={() => pickRun(r.id)}
