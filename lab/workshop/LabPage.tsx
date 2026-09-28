@@ -272,7 +272,7 @@ function LogsView({ state, onOpen }: { state: LabState; onOpen: (runId?: string)
       {s.secondJudge && (
         <div className="mt-3 text-[12px]" style={{ color: C.fg2 }}>
           <span className="font-mono text-[10px] uppercase mr-1.5" style={{ color: C.fg1 }}>второй судья</span>
-          {s.secondJudge.model} согласен с итогом в {s.secondJudge.agree} из {s.secondJudge.checked} разговоров ({pct(s.secondJudge.agree, s.secondJudge.checked)}%)
+          согласен с итогом в {s.secondJudge.agree} из {s.secondJudge.checked} разговоров ({pct(s.secondJudge.agree, s.secondJudge.checked)}%)
         </div>
       )}
       {!!d.sources?.length && (
@@ -543,7 +543,7 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
           <div className="mt-5 pt-4 flex flex-col gap-2" style={{ borderTop: `1px solid ${C.border}` }}>
             <div className="text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>проверка оценки</div>
             <Trust label="второй судья" ok={m.secondJudge ? m.secondJudge.agree / m.secondJudge.checked >= 0.8 : undefined}
-              text={m.secondJudge ? `${m.secondJudge.model} согласен в ${m.secondJudge.agree} из ${m.secondJudge.checked} разговоров` : "не запускался"} />
+              text={m.secondJudge ? `согласен в ${m.secondJudge.agree} из ${m.secondJudge.checked} разговоров` : "не запускался"} />
             <Trust label="повторы" ok={m.repeats ? m.repeats.stable / m.repeats.scenarios >= 0.8 : undefined}
               text={m.repeats ? `у ${m.repeats.stable} из ${m.repeats.scenarios} сценариев одинаковый итог во всех повторах` : "прогон без повторов"} />
             <Trust label="доказательства" ok text="каждый вердикт подтверждён цитатой из ответа агента" />

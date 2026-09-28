@@ -104,7 +104,7 @@ def verdict_note(status: str, context: str, rows: list[dict], error: str | None 
     if second and second.get('status') in ('PASS', 'FAIL', 'UNMEASURED'):
         words = {'PASS': 'пройден', 'FAIL': 'не пройден', 'UNMEASURED': 'не измерено'}
         agree = 'согласен' if second['status'] == status else f"не согласен: по его оценке {words[second['status']]}"
-        lines.append(f"Второй судья ({second.get('model')}): {agree}.")
+        lines.append(f"Второй судья: {agree}.")
     for r in rows:
         lines += ['', f"{mark[r['status']]} {r['rule']}", f"   {r['reason']}"]
         if r['agentQuote']:
