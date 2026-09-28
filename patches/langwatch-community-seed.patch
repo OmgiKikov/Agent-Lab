@@ -1,8 +1,0 @@
-diff --git a/platform/app/scripts/seed-local-admin.ts b/platform/app/scripts/seed-local-admin.ts
-index 00aebaf7..7058d4d7 100644
---- a/platform/app/scripts/seed-local-admin.ts
-+++ b/platform/app/scripts/seed-local-admin.ts
-@@ -30 +29,0 @@ import { prisma } from "../src/server/db";
--import { LOCAL_DEV_ENTERPRISE_LICENSE_KEY } from "./localDevLicense";
-@@ -95 +93,0 @@ async function main() {
--        license: LOCAL_DEV_ENTERPRISE_LICENSE_KEY,

@@ -1,5 +1,5 @@
 {
-  "name": "langwatch-local-pi-bridge",
+  "name": "agent-lab",
   "private": true,
   "version": "1.0.0",
   "engines": {
@@ -7,9 +7,5 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1"
-  },
-  "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "test:native-queue": "node --test tests/native-queue.test.mjs"
   }
 }

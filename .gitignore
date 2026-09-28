@@ -20,3 +20,22 @@ __pycache__/
 /lab/data/
 /lab/.workshop-src/
 /certs/
+
+# Earlier experiments (LangWatch, review UI, old scripts): kept on disk, not in the repository.
+/langwatch-custom/
+/source-tests/
+/review-ui/
+/tests/
+/skills/
+/patches/
+/config/
+/.gitkeep
+/scripts/*
+!/scripts/pi-model-proxy.py
+/docs/*
+!/docs/agent-lab-demo.md
+/future-agi-local/
+/laminar-local/
+/latitude-local/
+/.raindrop/
+/langwatch/
