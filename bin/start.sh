@@ -13,7 +13,32 @@ up() { curl -fsS --max-time 2 "$1" >/dev/null 2>&1; }
 say() { printf '%s\n' "$*"; }
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
-# 1. Workshop, the build matching workshop/ in this checkout.
+# 1. Python environment, reinstalled when pyproject.toml changes.
+command -v uv >/dev/null 2>&1 || fail "Нужен uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
+DEPS="$(cksum < pyproject.toml)"
+if [ ! -x .venv/bin/python ] || [ "$(cat .venv/.deps 2>/dev/null)" != "$DEPS" ]; then
+  say "Ставлю зависимости…"
+  [ -x .venv/bin/python ] || uv venv -q -p 3.12 .venv
+  uv pip install -q -p .venv/bin/python -r pyproject.toml
+  printf '%s\n' "$DEPS" > .venv/.deps
+fi
+
+# A release asset of this repository (it is private): through gh, or with the token git pulls with.
+download() {  # tag, asset, file
+  REPO="$(git remote get-url origin | sed -E 's#^(https://github.com/|git@github.com:)##; s#\.git$##')"
+  if command -v gh >/dev/null 2>&1 && gh release download "$1" -R "$REPO" -p "$2" -O "$3" --clobber 2>/dev/null; then
+    return 0
+  fi
+  token="$(printf 'protocol=https\nhost=github.com\n\n' | GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null | sed -n 's/^password=//p')"
+  [ -n "$token" ] || return 1
+  asset="$(curl -fsSL -H "Authorization: Bearer $token" "https://api.github.com/repos/$REPO/releases/tags/$1" \
+    | .venv/bin/python -c 'import json, sys; print(next(a["id"] for a in json.load(sys.stdin)["assets"] if a["name"] == sys.argv[1]))' "$2")" \
+    || return 1
+  curl -fsSL -H "Authorization: Bearer $token" -H "Accept: application/octet-stream" -o "$3" \
+    "https://api.github.com/repos/$REPO/releases/assets/$asset"
+}
+
+# 2. Workshop, the build matching workshop/ in this checkout.
 RAINDROP="$ROOT/workshop/build/raindrop"
 SOURCE="$(git rev-parse --short=12 HEAD:workshop 2>/dev/null || echo local)"
 if [ ! -x "$RAINDROP" ] || [ "$(cat workshop/build/.source 2>/dev/null)" != "$SOURCE" ]; then
@@ -22,11 +47,9 @@ if [ ! -x "$RAINDROP" ] || [ "$(cat workshop/build/.source 2>/dev/null)" != "$SO
     sh bin/build-workshop.sh >data/workshop-build.log 2>&1 || fail "Workshop не собрался: data/workshop-build.log"
   else
     case "$(uname -m)" in arm64) PLATFORM=darwin-arm64 ;; x86_64) PLATFORM=darwin-x64 ;; *) fail "Нет сборки Workshop для $(uname -m)" ;; esac
-    REPO="$(git remote get-url origin | sed -E 's#^(https://github.com/|git@github.com:)##; s#\.git$##')"
     say "Скачиваю Workshop ($PLATFORM)…"
     mkdir -p workshop/build
-    curl -fsSL -o workshop/build/raindrop.next \
-      "https://github.com/$REPO/releases/download/workshop-$SOURCE/raindrop-$PLATFORM" \
+    download "workshop-$SOURCE" "raindrop-$PLATFORM" workshop/build/raindrop.next \
       || fail "Нет готовой сборки Workshop для этой версии: установите Bun (https://bun.sh) или опубликуйте её: sh bin/release-workshop.sh"
     chmod +x workshop/build/raindrop.next
     mv workshop/build/raindrop.next "$RAINDROP"
@@ -39,16 +62,6 @@ if [ -n "$pid" ] && ! ps -p "$pid" -o command= | grep -qF "$RAINDROP"; then
   pid=
 fi
 [ -n "$pid" ] || RAINDROP_WORKSHOP_PORT=5899 "$RAINDROP" workshop start >/dev/null
-
-# 2. Python environment, reinstalled when pyproject.toml changes.
-command -v uv >/dev/null 2>&1 || fail "Нужен uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
-DEPS="$(cksum < pyproject.toml)"
-if [ ! -x .venv/bin/python ] || [ "$(cat .venv/.deps 2>/dev/null)" != "$DEPS" ]; then
-  say "Ставлю зависимости…"
-  [ -x .venv/bin/python ] || uv venv -q -p 3.12 .venv
-  uv pip install -q -p .venv/bin/python -r pyproject.toml
-  printf '%s\n' "$DEPS" > .venv/.deps
-fi
 
 # 3. Models: the bank's gateway (certificates in certs/) or Pi bridges to OpenRouter.
 if [ -f certs/url.txt ] || [ -f "$HOME/.agent-lab/gateway.json" ] || [ -n "${AGENT_LAB_GATEWAY_URL:-}" ]; then
