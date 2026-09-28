@@ -58,7 +58,22 @@ def public(key: str, config: dict) -> dict:
             'ready': bool(config.get('url')) or config['kind'] == 'code'}
 
 
+EPK_FILE = Path(__file__).resolve().parent.parent / 'epk.txt'
+
+
+def prod_clients() -> tuple[list[str], bool]:
+    """Organizations (EPK ids) to talk as: epk.txt next to run-prod (one per line) or LAB_PROD_EPK_ID (comma-separated).
+    Real ids mean an authorized customer, so the agent can look up the client's own data."""
+    ids = [line.strip() for line in EPK_FILE.read_text(encoding='utf-8').splitlines()
+           if line.strip() and not line.startswith('#')] if EPK_FILE.exists() else []
+    ids = ids or [v.strip() for v in os.environ.get('LAB_PROD_EPK_ID', '').split(',') if v.strip()]
+    authorized = os.environ.get('LAB_PROD_AUTHORIZED', '1' if ids else '0') == '1'
+    return ids or ['org-12345'], authorized
+
+
 def _prod_request(conversation_id: str, text: str) -> tuple[dict, dict]:
+    ids, authorized = prod_clients()
+    epk = ids[sum(conversation_id.encode()) % len(ids)]  # one client per conversation, stable across its turns
     headers = {
         'Content-Type': 'application/json',
         'Request-Id': str(uuid.uuid4()),
@@ -70,9 +85,9 @@ def _prod_request(conversation_id: str, text: str) -> tuple[dict, dict]:
                     'conversation_id': conversation_id, 'reply_with': 'text', 'content': {'user_input': text}},
         'metadata': {'surface_mode': 'NORMAL', 'communication_channel': 'TEXT',
                      'surface': {'code': 'WEB', 'type': 'desktop'},
-                     'organization': {'epk_id': os.environ.get('LAB_PROD_EPK_ID', 'org-12345')},
+                     'organization': {'epk_id': epk},
                      'dialog': {'dialog_id': conversation_id},
-                     'customer_info': {'authorized': False, 'device_info': {'browser': 'Chrome/120.0'}}},
+                     'customer_info': {'authorized': authorized, 'device_info': {'browser': 'Chrome/120.0'}}},
     }
     return headers, body
 
