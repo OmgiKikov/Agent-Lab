@@ -201,7 +201,8 @@ def main() -> None:
                     kit.write(store.DATA / name, f'agent-lab-work-kit/lab/data/{name}')
             kit.write(root / 'WORK-COMPUTER.md', 'agent-lab-work-kit/README.md')
             kit.write(root / 'run-prod.sh', 'agent-lab-work-kit/run-prod.sh')
-            kit.writestr('agent-lab-work-kit/certs/ПОЛОЖИТЕ_СЮДА.txt',
+            kit.write(root / 'run-prod.bat', 'agent-lab-work-kit/run-prod.bat')
+            kit.writestr('agent-lab-work-kit/certs/README.txt',
                          'url.txt — адрес шлюза моделей (одна строка, например https://…/v2)\n'
                          'сертификат и ключ — .pem/.crt и .key, или один .p12/.pfx (пароль — в password.txt)\n'
                          'ca.pem или root.pem — корневой сертификат банка, только если без него не пускает\n')
