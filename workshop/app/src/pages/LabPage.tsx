@@ -68,15 +68,26 @@ const when = (iso?: string | null) => iso ? new Date(iso).toLocaleString("ru-RU"
 const titleFont = { fontFamily: '"AlphaLyrae", sans-serif' };
 const DEFAULT_PERSONA = "default";
 const personaName = (state: LabState, id?: string) => state.personas.find(p => p.id === (id ?? DEFAULT_PERSONA))?.name ?? id ?? "";
-const PERSONA_COLOR: Record<string, string> = { default: "#9aa4ad", impatient: "#e8914a", confused: "#a98ee8", typos: "#4fb8a8", no_terms: "#6aa2e8" };
-const personaColor = (id?: string) => PERSONA_COLOR[id ?? DEFAULT_PERSONA] ?? "#9aa4ad";
-
 function PersonaTag({ state, id }: { state: LabState; id?: string }) {
-  const color = personaColor(id);
+  return <span className="text-[10px] font-mono px-1.5 py-px rounded whitespace-nowrap" style={{ color: C.fg2, background: "rgba(255,255,255,0.07)" }}>{personaName(state, id)}</span>;
+}
+
+/** One option of a choice: agent, customer type, repeats. */
+function Choice({ on, onClick, title, children }: { on: boolean; onClick: () => void; title?: string; children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-px rounded whitespace-nowrap" style={{ color, background: `${color}1f` }}>
-      <span className="size-1.5 rounded-full" style={{ background: color }} />{personaName(state, id)}
-    </span>
+    <button onClick={onClick} title={title} className="text-[12px] px-3 py-1.5 rounded-md transition-colors"
+      style={{ color: on ? C.fg5 : C.fg2, background: on ? "rgba(255,255,255,0.12)" : "transparent", border: `1px solid ${on ? "rgba(255,255,255,0.24)" : C.border}` }}>
+      {children}
+    </button>
+  );
+}
+
+function SettingRow({ label, first, children }: { label: string; first?: boolean; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[110px_1fr] gap-4 items-start px-4 py-3" style={{ borderTop: first ? undefined : `1px solid ${C.border}` }}>
+      <span className="text-[10px] font-mono uppercase tracking-wider pt-2" style={{ color: C.fg0 }}>{label}</span>
+      <div>{children}</div>
+    </div>
   );
 }
 
@@ -269,39 +280,39 @@ const passShare = (items: Item[], cardId: string) => {
 function PersonaMatrix({ state, run, onOpen }: { state: LabState; run: LabRun; onOpen: (runId?: string) => void }) {
   const items = run.items ?? [];
   const types = state.personas.filter(p => items.some(i => (i.persona ?? DEFAULT_PERSONA) === p.id));
-  if (types.length < 2) return null;
   const cards = [...new Map(items.map(i => [i.cardId, i.name])).entries()];
   const mark = (s: Status) => s === "PASS" ? "✓" : s === "FAIL" ? "✗" : s === "RUNNING" ? "…" : "?";
   const byType = run.metric?.personas ?? {};
   return (
-    <Panel className="mb-3 overflow-x-auto">
-      <table className="w-full text-[12px]">
+    <Panel className="overflow-x-auto">
+      <table className="w-full text-[12px] border-collapse">
         <thead>
           <tr>
-            <th className="text-left font-normal px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>сценарий</th>
+            <th className="text-left font-normal px-4 pt-3 pb-2 align-bottom text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>сценарий · клиент →</th>
             {types.map(p => (
-              <th key={p.id} className="font-normal px-2 py-2.5 text-center" title={p.note}>
-                <PersonaTag state={state} id={p.id} />
-                <div className="text-[11px] font-mono mt-1" style={{ color: C.fg3 }}>{byType[p.id]?.accuracy ?? "—"}%</div>
+              <th key={p.id} className="font-normal px-1.5 pt-3 pb-2 align-bottom min-w-[104px]" title={p.note}>
+                <div className="text-[11px] whitespace-nowrap" style={{ color: C.fg2 }}>{p.name}</div>
+                <div className="text-[15px] mt-0.5" style={{ ...titleFont, color: C.fg5 }}>{byType[p.id]?.accuracy ?? "—"}%</div>
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {cards.map(([cardId, name]) => (
-            <tr key={cardId} style={{ borderTop: `1px solid ${C.border}` }}>
-              <td className="px-4 py-2" style={{ color: C.fg4 }}>{name}</td>
+            <tr key={cardId} className="hover:bg-white/[0.02]" style={{ borderTop: `1px solid ${C.border}` }}>
+              <td className="px-4 py-1.5 max-w-0 w-full"><div className="truncate" style={{ color: C.fg4 }} title={name}>{name}</div></td>
               {types.map(p => {
                 const cell = items.filter(i => i.cardId === cardId && (i.persona ?? DEFAULT_PERSONA) === p.id);
                 return (
-                  <td key={p.id} className="px-2 py-1.5 text-center">
-                    <span className="inline-flex gap-1">
+                  <td key={p.id} className="px-1.5 py-1.5">
+                    <div className="flex gap-1">
                       {cell.map((i, k) => (
-                        <button key={k} onClick={() => onOpen(i.runId)} title={`${STATUS_TEXT[i.status]} · открыть разговор`}
-                          className="size-7 rounded font-mono text-[13px] transition-opacity hover:opacity-80"
-                          style={{ color: tone(i.status), background: `${tone(i.status)}22` }}>{mark(i.status)}</button>
+                        <button key={k} onClick={() => onOpen(i.runId)} title={`${p.name}: ${STATUS_TEXT[i.status]} — открыть разговор`}
+                          className="flex-1 h-7 rounded text-[13px] transition-opacity hover:opacity-75"
+                          style={{ color: tone(i.status), background: `${tone(i.status)}1f` }}>{mark(i.status)}</button>
                       ))}
-                    </span>
+                      {!cell.length && <span className="flex-1 h-7" />}
+                    </div>
                   </td>
                 );
               })}
@@ -333,8 +344,8 @@ function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
           const v = byType[p.id];
           return (
             <div key={p.id} className="grid grid-cols-[110px_1fr_44px] gap-3 items-center py-1 text-[12px]" style={{ color: C.fg2 }} title={p.note}>
-              <span><PersonaTag state={state} id={p.id} /></span>
-              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${v.accuracy ?? 0}%`, background: personaColor(p.id) }} /></div>
+              <span style={{ color: C.fg4 }}>{p.name}</span>
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${v.accuracy ?? 0}%`, background: C.fg3 }} /></div>
               <span className="font-mono text-right" style={{ color: C.fg4 }}>{v.accuracy ?? "—"}%</span>
             </div>
           );
@@ -596,19 +607,22 @@ function CardView({ card, state, onBack }: { card: Card; state: LabState; onBack
       <button className="inline-flex items-center gap-1 text-[11px] font-mono mb-4 hover:underline" style={{ color: C.fg1 }} onClick={onBack}><ArrowLeft className="size-3" />все сценарии</button>
       <div className="flex items-center gap-2"><span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{card.topic}</span><Pill status={card.origin === "Ошибка из лога" ? "FAIL" : "NOT_APPLICABLE"}>{card.origin}</Pill></div>
       <div className="text-[21px] font-medium mt-1" style={{ ...titleFont, color: C.fg5 }}>{card.name}</div>
-      <Label>первая реплика клиента (из лога)</Label>
-      <div className="flex flex-col"><Bubble>{card.opening}</Bubble></div>
-      {card.openings && Object.keys(card.openings).length > 0 && (
+      {card.openings && Object.keys(card.openings).length > 0 ? (
         <>
-          <Label>так же спросят другие типы клиентов</Label>
-          <div className="flex flex-col gap-2.5">
-            {state.personas.filter(p => card.openings?.[p.id]).map(p => (
-              <div key={p.id} className="flex flex-col items-end gap-1">
-                <span title={p.note}><PersonaTag state={state} id={p.id} /></span>
-                <Bubble>{card.openings![p.id]}</Bubble>
+          <Label>первая реплика у разных клиентов</Label>
+          <Panel>
+            {[{ id: DEFAULT_PERSONA, text: card.opening }, ...state.personas.filter(p => card.openings?.[p.id]).map(p => ({ id: p.id, text: card.openings![p.id] }))].map((row, i) => (
+              <div key={row.id} className="grid grid-cols-[130px_1fr] gap-4 px-4 py-2.5" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
+                <span className="text-[11px] pt-px" style={{ color: C.fg1 }}>{personaName(state, row.id)}{row.id === DEFAULT_PERSONA ? " · из лога" : ""}</span>
+                <span className="text-[13px] leading-relaxed" style={{ color: C.fg4 }}>{row.text}</span>
               </div>
             ))}
-          </div>
+          </Panel>
+        </>
+      ) : (
+        <>
+          <Label>первая реплика клиента (из лога)</Label>
+          <div className="flex flex-col"><Bubble>{card.opening}</Bubble></div>
         </>
       )}
       <Label>ситуация клиента</Label>
@@ -691,73 +705,78 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
   const [repeats, setRepeats] = useState(1);
   const [onlyDisputed, setOnlyDisputed] = useState(false);
   const [types, setTypes] = useState<string[]>([DEFAULT_PERSONA]);
+  const [showList, setShowList] = useState(false);
   const toggleType = (id: string) => setTypes(t => t.includes(id) ? (t.length > 1 ? t.filter(x => x !== id) : t) : [...t, id]);
   const start = () => api("/api/runs", { target, repeats, personas: types }).catch(e => alert(e.message));
   const review = (index: number, decision: "agree" | "disagree" | null) =>
     run && api("/api/review", { run: run.id, index, decision }).catch(e => alert(e.message));
   const rejudge = () => run && api(`/api/runs/${run.id}/rejudge`, {}).catch(e => alert(e.message));
   const m = run?.metric;
+  const total = deck.length * types.length * repeats;
+  const chosenNotes = state.personas.filter(p => types.includes(p.id) && p.id !== DEFAULT_PERSONA);
+  const hasMatrix = new Set((run?.items ?? []).map(i => i.persona ?? DEFAULT_PERSONA)).size > 1;
   return (
     <Page
       title="Прогон"
-      lede="Симулятор клиента начинает с первой реплики из лога и продолжает разговор по ситуации сценария. Агент отвечает через HTTP или запускается из исходников. Каждый разговор сохраняется, судья проверяет его по критериям."
+      lede="Искусственный клиент начинает с первой реплики из лога и продолжает разговор по ситуации сценария. Судья проверяет каждый разговор по критериям."
     >
-      <div className="grid grid-cols-3 gap-3 mt-5">
-        {state.targets.map(t => (
-          <button key={t.id} onClick={() => setTarget(t.id)} className="text-left rounded-lg px-4 py-3 transition-colors"
-            style={{ background: t.id === target ? C.selected : C.surface, border: `1px solid ${t.id === target ? C.selectedBorder : C.border}` }}>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[14px] font-medium" style={{ color: C.fg5 }}>{t.name}</span>
-              <span className="text-[9px] font-mono px-1 py-px rounded uppercase" style={{ color: C.fg1, background: "rgba(255,255,255,0.06)" }}>{t.kind === "code" ? "код" : "http"}</span>
-            </div>
-            <div className="text-[10px] font-mono mt-1 break-all" style={{ color: C.fg0 }}>{t.where}</div>
-            <div className="text-[11px] mt-2 leading-snug" style={{ color: C.fg1 }}>{t.note}</div>
-          </button>
-        ))}
-      </div>
-      <div className="flex items-center gap-2 flex-wrap mt-4">
-        <Action primary disabled={state.job.running || !deck.length} onClick={start}><Play className="size-3" />прогнать {deck.length} {plural(deck.length, "сценарий", "сценария", "сценариев")}{types.length > 1 ? ` × ${types.length} ${plural(types.length, "тип", "типа", "типов")} клиента` : ""}</Action>
-        <select value={repeats} onChange={e => setRepeats(+e.target.value)} className="px-2 py-1.5 rounded text-[11px] font-mono outline-none"
-          style={{ background: "rgba(255,255,255,0.04)", color: C.fg3, border: "1px solid rgba(255,255,255,0.08)" }}>
-          {[1, 2, 3].map(n => <option key={n} value={n}>{n === 1 ? "каждый сценарий 1 раз" : `каждый сценарий ${n} раза`}</option>)}
-        </select>
-
-        {run && run.status !== "running" && (
-          <Action disabled={state.job.running} onClick={rejudge}><RotateCcw className="size-3" />переоценить без агента</Action>
-        )}
-        <JobLine state={state} kind="run" />
-        <JobLine state={state} kind="rejudge" />
-        {run?.items?.some(disputed) && (
-          <label className="inline-flex items-center gap-1.5 text-[11px] font-mono cursor-pointer" style={{ color: C.orange }}>
-            <input type="checkbox" checked={onlyDisputed} onChange={e => setOnlyDisputed(e.target.checked)} />только спор судей ({run.items.filter(disputed).length})
-          </label>
-        )}
-      </div>
-      <Label right={types.length > 1 ? <span className="text-[11px]" style={{ color: C.fg1 }}>каждый сценарий пройдёт каждый выбранный клиент</span> : undefined}>какие клиенты пишут агенту</Label>
-      <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
-        {state.personas.map(p => {
-          const on = types.includes(p.id);
-          const color = personaColor(p.id);
-          return (
-            <button key={p.id} onClick={() => toggleType(p.id)} className="text-left rounded-lg px-3 py-2.5 transition-colors"
-              style={{ background: on ? `${color}17` : C.surface, border: `1px solid ${on ? color : C.border}` }}>
-              <div className="flex items-center gap-1.5">
-                <span className="size-2 rounded-full" style={{ background: color }} />
-                <span className="text-[13px] font-medium" style={{ color: on ? C.fg5 : C.fg3 }}>{p.name}</span>
-                {on && <span className="ml-auto text-[11px]" style={{ color }}>✓</span>}
-              </div>
-              <div className="text-[11px] mt-1 leading-snug" style={{ color: C.fg1 }}>{p.note}</div>
-            </button>
-          );
-        })}
-      </div>
+      <Panel className="mt-5">
+        <SettingRow first label="агент">
+          <div className="flex gap-1.5 flex-wrap">
+            {state.targets.map(t => <Choice key={t.id} on={t.id === target} onClick={() => setTarget(t.id)} title={t.note}>{t.name}</Choice>)}
+          </div>
+        </SettingRow>
+        <SettingRow label="клиенты">
+          <div className="flex gap-1.5 flex-wrap">
+            {state.personas.map(p => <Choice key={p.id} on={types.includes(p.id)} onClick={() => toggleType(p.id)} title={p.note}>{p.name}</Choice>)}
+          </div>
+          <div className="text-[11px] mt-2 leading-relaxed" style={{ color: C.fg1 }}>
+            {chosenNotes.length ? chosenNotes.map(p => `${p.name} — ${p.note}`).join("; ") : "Клиент пишет так, как в логе. Добавьте типы клиентов, чтобы увидеть, где агент ломается от манеры общения."}
+          </div>
+        </SettingRow>
+        <SettingRow label="повторы">
+          <div className="flex gap-1.5">
+            {[1, 2, 3].map(n => <Choice key={n} on={repeats === n} onClick={() => setRepeats(n)}>{n === 1 ? "1 раз" : `${n} раза`}</Choice>)}
+          </div>
+        </SettingRow>
+        <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3" style={{ borderTop: `1px solid ${C.border}` }}>
+          <span className="text-[12px]" style={{ color: C.fg2 }}>
+            {deck.length} {plural(deck.length, "сценарий", "сценария", "сценариев")} × {types.length} {plural(types.length, "клиент", "клиента", "клиентов")}{repeats > 1 ? ` × ${repeats} повтора` : ""} = <b style={{ color: C.fg5 }}>{total} {plural(total, "разговор", "разговора", "разговоров")}</b>
+          </span>
+          <span className="flex items-center gap-3">
+            <JobLine state={state} kind="run" />
+            <Action primary disabled={state.job.running || !deck.length} onClick={start}><Play className="size-3" />запустить</Action>
+          </span>
+        </div>
+      </Panel>
       {run && (
         <>
-          <Label right={<span className="text-[11px] font-mono" style={{ color: C.fg3 }}>точность {m?.accuracy ?? "—"}%</span>}>
-            {run.targetName} · версия {run.version} · {when(run.startedAt)}
-          </Label>
+          <div className="flex items-end justify-between gap-3 flex-wrap mt-9 mb-3">
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>результаты</div>
+              <div className="text-[15px] font-medium mt-1" style={{ color: C.fg5 }}>
+                {run.targetName} <span className="text-[12px] font-normal" style={{ color: C.fg1 }}>· версия {run.version} · {when(run.startedAt)}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <JobLine state={state} kind="rejudge" />
+              {run.items?.some(disputed) && (
+                <label className="inline-flex items-center gap-1.5 text-[11px] font-mono cursor-pointer" style={{ color: C.orange }}>
+                  <input type="checkbox" checked={onlyDisputed} onChange={e => { setOnlyDisputed(e.target.checked); setShowList(true); }} />спор судей ({run.items.filter(disputed).length})
+                </label>
+              )}
+              {run.status !== "running" && <Action disabled={state.job.running} onClick={rejudge}><RotateCcw className="size-3" />переоценить без агента</Action>}
+              <span className="text-[20px]" style={{ ...titleFont, color: C.fg5 }}>{m?.accuracy ?? "—"}%</span>
+            </div>
+          </div>
           {run.error && <div className="text-[12px] mb-2" style={{ color: "#F26B6B" }}>{run.error}</div>}
-          <PersonaMatrix state={state} run={run} onOpen={onOpen} />
+          {hasMatrix && <PersonaMatrix state={state} run={run} onOpen={onOpen} />}
+          {hasMatrix && (
+            <button className="text-[11px] font-mono mt-3 mb-2 inline-flex items-center gap-1 hover:underline" style={{ color: C.fg1 }} onClick={() => setShowList(v => !v)}>
+              <ChevronRight className="size-3 transition-transform" style={{ transform: showList ? "rotate(90deg)" : undefined }} />все разговоры списком
+            </button>
+          )}
+          {(!hasMatrix || showList) && (
           <Panel>
             {(run.items ?? []).map((i, index) => {
               if (onlyDisputed && !disputed(i)) return null;
@@ -793,6 +812,7 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
               );
             })}
           </Panel>
+          )}
         </>
       )}
     </Page>
