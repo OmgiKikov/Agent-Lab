@@ -5,6 +5,7 @@
 import { forwardRef, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { ArrowDown, ArrowUp, Check, CircleHelp, Loader2, Minus, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DropPixelGrid } from "../components/DropPixelGrid";
 import { HUE, STATUS_TEXT, personaLook, personaName, statusHue, type Hue } from "./look";
 import type { Persona, Status } from "./types";
 
@@ -236,10 +237,12 @@ export function Bubble({ children, className }: { children: ReactNode; className
   return <div className={cn("max-w-full rounded-2xl rounded-br-md bg-lab-user px-3.5 py-2 text-[13px] leading-snug text-lab-text", className)}>{children}</div>;
 }
 
-export function EmptyState({ icon: Icon, title, children, action, className }: { icon?: LucideIcon; title: string; children?: ReactNode; action?: ReactNode; className?: string }) {
+/** `drop` swaps the icon for Raindrop's pixel raindrop, the same one the Workshop's own empty screens use. */
+export function EmptyState({ icon: Icon, drop, title, children, action, className }: { icon?: LucideIcon; drop?: boolean; title: string; children?: ReactNode; action?: ReactNode; className?: string }) {
   return (
     <div className={cn("flex flex-col items-center rounded-xl border border-dashed border-white/[0.12] px-8 py-12 text-center", className)}>
-      {Icon && <span className="mb-4 inline-flex size-11 items-center justify-center rounded-xl bg-white/[0.05] text-lab-mute"><Icon className="size-5" /></span>}
+      {drop && <div className="mb-4"><DropPixelGrid px={2} gap={1.5} fillRgb="142,157,166" /></div>}
+      {Icon && !drop && <span className="mb-4 inline-flex size-11 items-center justify-center rounded-xl bg-white/[0.05] text-lab-mute"><Icon className="size-5" /></span>}
       <div className="text-[15px] font-medium text-lab-ink">{title}</div>
       {children && <div className="mt-1.5 max-w-[440px] text-[13px] leading-relaxed text-lab-dim">{children}</div>}
       {action && <div className="mt-5 flex items-center gap-2">{action}</div>}

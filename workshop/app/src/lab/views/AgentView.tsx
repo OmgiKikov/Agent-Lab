@@ -17,17 +17,25 @@ const SOURCE: Record<string, { label: string; icon: LucideIcon }> = {
 
 type Checks = Record<string, CheckResult | "pending">;
 
+/** The service answers `ok: false` both when the agent is unreachable (with `error`) and when it answers with a non-200 status. */
 function Verdict({ check }: { check?: CheckResult | "pending" }) {
   if (!check) return null;
   if (check === "pending") return <Badge hue="accent"><Loader2 className="size-3 animate-spin" />проверяю…</Badge>;
-  if (!check.ok) return <Badge hue="bad" icon={CircleAlert}>не отвечает</Badge>;
+  if (!check.ok) return check.error ? <Badge hue="bad" icon={CircleAlert}>не отвечает</Badge> : <Badge hue="warn" icon={CircleAlert}>статус {check.status ?? "?"}</Badge>;
   return <Badge hue="ok" icon={Check}>отвечает{check.seconds !== undefined ? ` · ${check.seconds} с` : ""}</Badge>;
 }
 
 function VerdictDetail({ check }: { check?: CheckResult | "pending" }) {
   if (!check || check === "pending") return null;
-  if (!check.ok) return <div className="mt-2 text-[12px] leading-snug text-lab-bad">{check.error}</div>;
-  return check.text ? <div className="mt-2 line-clamp-2 border-l-2 border-white/[0.14] pl-2.5 text-[12px] leading-snug text-lab-mute">{check.text}</div> : null;
+  if (!check.ok) {
+    return check.error
+      ? <div className="mt-2 text-[12px] leading-snug text-lab-bad">{check.error}</div>
+      : <div className="mt-2 text-[12px] leading-snug text-lab-warn">Агент ответил не обычным ответом{check.text ? `: ${check.text}` : ""}. Так бывает, когда разговор передан оператору.</div>;
+  }
+  const version = check.version && check.version !== "не сообщается" ? `Версия ${check.version}. ` : "";
+  return check.text
+    ? <div className="mt-2 line-clamp-2 border-l-2 border-white/[0.14] pl-2.5 text-[12px] leading-snug text-lab-mute">{version}{check.text}</div>
+    : version ? <div className="mt-2 text-[12px] text-lab-dim">{version}</div> : null;
 }
 
 export function AgentView({ state }: { state: LabState }) {

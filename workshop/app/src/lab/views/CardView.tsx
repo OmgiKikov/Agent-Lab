@@ -1,5 +1,7 @@
 import { ArrowLeft } from "lucide-react";
-import { when } from "../format";
+import { plural, when } from "../format";
+import { scenarioStatus } from "../logic";
+import { useRunDetails } from "../useLab";
 import { DEFAULT_PERSONA, personaName } from "../look";
 import type { Card, LabState } from "../types";
 import { Badge, Bubble, Eyebrow, Panel, PersonaIcon, Quote, Row, Section, StatusBadge, titleFont } from "../ui";
@@ -7,7 +9,11 @@ import { OriginBadge } from "./CardsView";
 
 /** One scenario: the situation, how each customer type opens, and what the judge will check. */
 export function CardView({ card, state, onBack }: { card: Card; state: LabState; onBack: () => void }) {
-  const history = state.runs.filter(r => r.items).map(r => ({ run: r, item: r.items!.find(i => i.cardId === card.id) })).filter(x => x.item);
+  // /api/state lists runs without conversations: the few latest are fetched to see how this scenario went.
+  const latest = state.runs.filter(r => r.status !== "running" && r.metric?.total).slice(0, 5);
+  const details = useRunDetails(latest);
+  const history = latest.map(run => ({ run, own: details(run)?.items?.filter(i => i.cardId === card.id) ?? [] })).filter(x => x.own.length);
+  const loading = latest.length > 0 && latest.some(r => !details(r));
   const openings = [
     { id: DEFAULT_PERSONA, text: card.opening },
     ...state.personas.filter(p => card.openings?.[p.id]).map(p => ({ id: p.id, text: card.openings![p.id] })),
@@ -65,17 +71,24 @@ export function CardView({ card, state, onBack }: { card: Card; state: LabState;
           <Section className="mt-8" title="Результаты в прогонах">
             {history.length ? (
               <Panel>
-                {history.map(({ run, item }, i) => (
-                  <Row first={!i} key={run.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-[13px] text-lab-text">{run.targetName}</div>
-                      <div className="font-mono text-[11px] text-lab-dim">{run.version} · {when(run.startedAt)}</div>
-                    </div>
-                    <StatusBadge status={item!.status} />
-                  </Row>
-                ))}
+                {history.map(({ run, own }, i) => {
+                  const done = own.filter(x => x.status === "PASS" || x.status === "FAIL");
+                  const passed = done.filter(x => x.status === "PASS").length;
+                  return (
+                    <Row first={!i} key={run.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-[13px] text-lab-text">{run.targetName}</div>
+                        <div className="font-mono text-[11px] text-lab-dim">{run.version} · {when(run.startedAt)}</div>
+                      </div>
+                      <div className="flex flex-shrink-0 items-center gap-2.5">
+                        {own.length > 1 && <span className="font-mono text-[11.5px] text-lab-dim" title={`${own.length} ${plural(own.length, "разговор", "разговора", "разговоров")}`}>{passed}/{done.length}</span>}
+                        <StatusBadge status={scenarioStatus(own)} />
+                      </div>
+                    </Row>
+                  );
+                })}
               </Panel>
-            ) : <Panel className="px-4 py-4 text-[12.5px] text-lab-dim">Этот сценарий ещё не запускали.</Panel>}
+            ) : <Panel className="px-4 py-4 text-[12.5px] text-lab-dim">{loading ? "Загружаю результаты…" : "Этот сценарий ещё не запускали."}</Panel>}
           </Section>
 
           {card.world && (

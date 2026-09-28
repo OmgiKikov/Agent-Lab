@@ -3,6 +3,7 @@ import NumberFlow from "@number-flow/react";
 import { Quote as QuoteIcon, Repeat, ShieldCheck, UserCheck, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Heatmap } from "../charts/Heatmap";
+import { Sparkline } from "../charts/Sparkline";
 import { Trend, type TrendPoint } from "../charts/Trend";
 import { day, pct, plural, when } from "../format";
 import { itemKey, passShare, previousOf, scenariosOfRun, typesOfRun, unitOf } from "../logic";
@@ -131,6 +132,7 @@ export function AccuracyView({ state, run: selected, onPickRun, onOpen }: { stat
               <span className="ml-1 text-[40px] text-lab-mute">%</span>
             </div>
             {delta !== null && <div className="mb-3 flex items-center gap-2 font-sans"><Delta value={delta} /><span className="text-[12px] text-lab-dim">к {previous!.version}</span></div>}
+            {points.length > 1 && <div className="mb-2 ml-auto"><Sparkline values={points.map(p => p.value)} /></div>}
           </div>
           <p className="mt-3 text-[15px] leading-snug text-lab-text">Агент выполнил все критерии в <b>{m.passed}</b> из <b>{m.measured}</b> {of}</p>
           <StackBar className="mt-5" parts={[{ value: m.passed, hue: "ok" }, { value: m.failed, hue: "bad" }, { value: m.unmeasured, hue: "warn" }]} />

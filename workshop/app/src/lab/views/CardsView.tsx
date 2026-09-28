@@ -9,7 +9,9 @@ import { useToast } from "../toast";
 import type { Card, LabState } from "../types";
 import { Badge, Bubble, Button, Chip, EmptyState, Input, Page, PersonaIcon, Segmented, Stat } from "../ui";
 
+/** How the service names the two kinds of scenarios (lab/cards.py). */
 export const FROM_ERROR = "Ошибка из лога";
+export const COVERAGE = "Покрытие темы";
 
 export function OriginBadge({ origin }: { origin: string }) {
   return (
@@ -49,7 +51,7 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
   const { error } = useToast();
   const deck = useMemo(() => state.cards?.cards ?? [], [state.cards]);
   const [query, setQuery] = useState("");
-  const [origin, setOrigin] = useState<"all" | "errors" | "topics">("all");
+  const [origin, setOrigin] = useState<"all" | "errors" | "coverage">("all");
   const [topic, setTopic] = useState<string | null>(null);
 
   const topics = useMemo(() => {
@@ -71,12 +73,12 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
       wide title="Сценарии"
       lede="Ситуация клиента взята из реального разговора, критерии проверки — из правил промпта. Симулятор клиента критериев не видит."
       actions={<>
-        <Button variant="primary" icon={FlaskConical} disabled={state.job.running || !state.discover} onClick={() => api("/api/cards").catch(error)}>{deck.length ? "Собрать заново" : "Собрать сценарии"}</Button>
+        <Button variant="primary" icon={FlaskConical} disabled={state.job.running || !state.discover} onClick={() => api("/api/cards", {}).catch(error)}>{deck.length ? "Собрать заново" : "Собрать сценарии"}</Button>
         <JobLine state={state} kind="cards" />
       </>}
     >
       {deck.length === 0 ? (
-        <EmptyState className="mt-8" icon={FlaskConical} title="Сценариев пока нет">
+        <EmptyState className="mt-8" drop title="Сценариев пока нет">
           {state.discover ? "Нажмите «Собрать сценарии»: из оценённых логов получатся ситуации клиента с критериями проверки." : "Сначала оцените логи на шаге «Логи», потом соберите из них сценарии."}
         </EmptyState>
       ) : (
@@ -84,7 +86,7 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
           <div className="mt-7 grid grid-cols-2 gap-3 min-[1100px]:grid-cols-4">
             <Stat label="Сценариев" value={deck.length} sub={`в ${topics.length} ${plural(topics.length, "теме", "темах", "темах")}`} />
             <Stat label="Из ошибок в логах" value={fromErrors} sub="агент уже ошибался в таких ситуациях" />
-            <Stat label="По темам логов" value={deck.length - fromErrors} sub="ситуации, где ошибок пока не было" />
+            <Stat label="Покрытие тем" value={deck.length - fromErrors} sub="агент отвечал верно: проверяем, что так и останется" />
             {others.length > 0 && <Stat label="Типы клиентов" value={`${full}/${deck.length}`} sub="сценариев с репликами для всех типов" />}
           </div>
 
@@ -93,7 +95,7 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
               <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-lab-dim" />
               <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск по названию или реплике" className="pl-9" />
             </div>
-            <Segmented value={origin} onChange={setOrigin} options={[{ value: "all", label: "Все" }, { value: "errors", label: "Из ошибок" }, { value: "topics", label: "По темам" }]} />
+            <Segmented value={origin} onChange={setOrigin} options={[{ value: "all", label: "Все" }, { value: "errors", label: "Из ошибок" }, { value: "coverage", label: "Покрытие" }]} />
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
             <Chip on={topic === null} onClick={() => setTopic(null)} count={deck.length}>Все темы</Chip>

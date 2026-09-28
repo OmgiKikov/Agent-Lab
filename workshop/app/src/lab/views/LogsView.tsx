@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
-import { ChevronDown, ChevronRight, FileSpreadsheet, FileText, ShieldCheck, TriangleAlert, Upload } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, ShieldCheck, TriangleAlert, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DropPixelGrid } from "../../components/DropPixelGrid";
 import { api, upload } from "../api";
 import { plural, pct, when } from "../format";
 import { JobLine } from "../JobLine";
@@ -8,6 +9,9 @@ import { Confirm } from "../modal";
 import { useToast } from "../toast";
 import type { LabState, Step } from "../types";
 import { Badge, Button, EmptyState, Eyebrow, inputClass, Page, Panel, Quote, Row, Section, StackBar, titleFont } from "../ui";
+
+/** The service lists every violating conversation of a pattern; show a few, the rest on request. */
+const EXAMPLES_SHOWN = 3;
 
 const LEDE = "Разговоры из выгрузки проверяются по правилам из промпта агента. Сам агент при этом не запускается: судья оценивает только то, что уже было сказано.";
 
@@ -23,7 +27,7 @@ function DropZone({ busy, onFile, onPick }: { busy: boolean; onFile: (f: File) =
         over ? "border-lab-accent/70 bg-lab-accent/[0.06]" : "border-white/[0.16] bg-white/[0.02]",
       )}
     >
-      <span className="mb-5 inline-flex size-14 items-center justify-center rounded-2xl bg-white/[0.06] text-lab-soft"><FileSpreadsheet className="size-7" /></span>
+      <div className="mb-5"><DropPixelGrid px={2} gap={1.5} fillRgb="142,157,166" /></div>
       <div className="text-[18px] font-medium text-lab-ink" style={titleFont}>Перетащите выгрузку сюда</div>
       <div className="mt-2 max-w-[420px] text-[13px] leading-relaxed text-lab-dim">Или выберите файл на компьютере. Он остаётся здесь и никуда не отправляется.</div>
       <Button className="mt-6" variant="primary" icon={Upload} loading={busy} onClick={onPick}>Выбрать файл</Button>
@@ -60,6 +64,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [open, setOpen] = useState<Set<number>>(new Set([0]));
+  const [more, setMore] = useState<Set<number>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const run = (replan = false) => api("/api/discover", { count: sample, replan }).catch(error);
@@ -202,7 +207,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
                 {opened && (
                   <div className="space-y-3 px-5 pb-5 pl-[116px]">
                     <Quote who="в промпте">«{p.quote}»</Quote>
-                    {p.examples.map(ex => {
+                    {p.examples.slice(0, more.has(i) ? undefined : EXAMPLES_SHOWN).map(ex => {
                       const trace = byDialogue.get(ex.dialogueId)?.runId;
                       return (
                         <div key={ex.dialogueId} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
@@ -219,7 +224,9 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
                         </div>
                       );
                     })}
-                    {p.examples.length < p.count && <div className="text-[12px] text-lab-dim">Показано {p.examples.length} из {p.count}. Остальные разговоры — в списке слева, фильтр «Нарушения».</div>}
+                    {p.examples.length > EXAMPLES_SHOWN && !more.has(i) && (
+                      <Button size="sm" variant="ghost" onClick={() => setMore(prev => new Set(prev).add(i))}>Показать ещё {p.examples.length - EXAMPLES_SHOWN}</Button>
+                    )}
                   </div>
                 )}
               </Row>
