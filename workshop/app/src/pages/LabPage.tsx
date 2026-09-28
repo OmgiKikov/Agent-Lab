@@ -28,7 +28,7 @@ type Item = { cardId: string; name: string; topic: string; origin: string; statu
 type LabRun = { id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string; metric: Metric | null; error: string | null; repeats?: number; items?: Item[] };
 type Criterion = { id: string; text: string; quote: string; condition?: string; acceptable?: string };
 type World = { organization: { name: string; inn: string; merchantName: string; address: string }; terminals: { nameForClient: string; terminalId: string; stateCode: string }[]; tools: Record<string, unknown> };
-type Card = { id: string; topic: string; name: string; situation: string; opening: string; criteria: Criterion[]; origin: string; sourceDialogueId: string; world?: World | null };
+type Card = { id: string; topic: string; name: string; situation: string; opening: string; criteria: Criterion[]; origin: string; sourceDialogueId: string; world?: World | null; openings?: Record<string, string> };
 type LogResult = { dialogueId: string; topicId: string; status: Status; rules: Rule[]; opening: string; runId?: string };
 type Pattern = { rule: string; quote: string; topics: string[]; count: number; titles: string[]; examples: { dialogueId: string; reason: string; agentQuote: string; opening: string; url?: string }[] };
 type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };
@@ -68,6 +68,18 @@ const when = (iso?: string | null) => iso ? new Date(iso).toLocaleString("ru-RU"
 const titleFont = { fontFamily: '"AlphaLyrae", sans-serif' };
 const DEFAULT_PERSONA = "default";
 const personaName = (state: LabState, id?: string) => state.personas.find(p => p.id === (id ?? DEFAULT_PERSONA))?.name ?? id ?? "";
+const PERSONA_COLOR: Record<string, string> = { default: "#9aa4ad", impatient: "#e8914a", confused: "#a98ee8", typos: "#4fb8a8", no_terms: "#6aa2e8" };
+const personaColor = (id?: string) => PERSONA_COLOR[id ?? DEFAULT_PERSONA] ?? "#9aa4ad";
+
+function PersonaTag({ state, id }: { state: LabState; id?: string }) {
+  const color = personaColor(id);
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-px rounded whitespace-nowrap" style={{ color, background: `${color}1f` }}>
+      <span className="size-1.5 rounded-full" style={{ background: color }} />{personaName(state, id)}
+    </span>
+  );
+}
+
 const itemTitle = (i: Item, state: LabState) => i.name
   + (i.persona && i.persona !== DEFAULT_PERSONA ? ` · ${personaName(state, i.persona)}` : "")
   + (i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : "");
@@ -253,6 +265,54 @@ const passShare = (items: Item[], cardId: string) => {
   return done.length ? done.filter(i => i.status === "PASS").length / done.length : null;
 };
 
+/** Scenarios down, customer types across: where the agent breaks, and on whom. Shown when a run has several types. */
+function PersonaMatrix({ state, run, onOpen }: { state: LabState; run: LabRun; onOpen: (runId?: string) => void }) {
+  const items = run.items ?? [];
+  const types = state.personas.filter(p => items.some(i => (i.persona ?? DEFAULT_PERSONA) === p.id));
+  if (types.length < 2) return null;
+  const cards = [...new Map(items.map(i => [i.cardId, i.name])).entries()];
+  const mark = (s: Status) => s === "PASS" ? "✓" : s === "FAIL" ? "✗" : s === "RUNNING" ? "…" : "?";
+  const byType = run.metric?.personas ?? {};
+  return (
+    <Panel className="mb-3 overflow-x-auto">
+      <table className="w-full text-[12px]">
+        <thead>
+          <tr>
+            <th className="text-left font-normal px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>сценарий</th>
+            {types.map(p => (
+              <th key={p.id} className="font-normal px-2 py-2.5 text-center" title={p.note}>
+                <PersonaTag state={state} id={p.id} />
+                <div className="text-[11px] font-mono mt-1" style={{ color: C.fg3 }}>{byType[p.id]?.accuracy ?? "—"}%</div>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {cards.map(([cardId, name]) => (
+            <tr key={cardId} style={{ borderTop: `1px solid ${C.border}` }}>
+              <td className="px-4 py-2" style={{ color: C.fg4 }}>{name}</td>
+              {types.map(p => {
+                const cell = items.filter(i => i.cardId === cardId && (i.persona ?? DEFAULT_PERSONA) === p.id);
+                return (
+                  <td key={p.id} className="px-2 py-1.5 text-center">
+                    <span className="inline-flex gap-1">
+                      {cell.map((i, k) => (
+                        <button key={k} onClick={() => onOpen(i.runId)} title={`${STATUS_TEXT[i.status]} · открыть разговор`}
+                          className="size-7 rounded font-mono text-[13px] transition-opacity hover:opacity-80"
+                          style={{ color: tone(i.status), background: `${tone(i.status)}22` }}>{mark(i.status)}</button>
+                      ))}
+                    </span>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+
 /** Accuracy per customer type, and the scenarios the ordinary customer passes but another type fails. */
 function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
   const byType = run.metric?.personas ?? {};
@@ -273,8 +333,8 @@ function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
           const v = byType[p.id];
           return (
             <div key={p.id} className="grid grid-cols-[110px_1fr_44px] gap-3 items-center py-1 text-[12px]" style={{ color: C.fg2 }} title={p.note}>
-              <span style={{ color: C.fg4 }}>{p.name}</span>
-              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${v.accuracy ?? 0}%`, background: C.fg3 }} /></div>
+              <span><PersonaTag state={state} id={p.id} /></span>
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${v.accuracy ?? 0}%`, background: personaColor(p.id) }} /></div>
               <span className="font-mono text-right" style={{ color: C.fg4 }}>{v.accuracy ?? "—"}%</span>
             </div>
           );
@@ -538,6 +598,19 @@ function CardView({ card, state, onBack }: { card: Card; state: LabState; onBack
       <div className="text-[21px] font-medium mt-1" style={{ ...titleFont, color: C.fg5 }}>{card.name}</div>
       <Label>первая реплика клиента (из лога)</Label>
       <div className="flex flex-col"><Bubble>{card.opening}</Bubble></div>
+      {card.openings && Object.keys(card.openings).length > 0 && (
+        <>
+          <Label>так же спросят другие типы клиентов</Label>
+          <div className="flex flex-col gap-2.5">
+            {state.personas.filter(p => card.openings?.[p.id]).map(p => (
+              <div key={p.id} className="flex flex-col items-end gap-1">
+                <span title={p.note}><PersonaTag state={state} id={p.id} /></span>
+                <Bubble>{card.openings![p.id]}</Bubble>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
       <Label>ситуация клиента</Label>
       <div className="text-[13px] leading-relaxed" style={{ color: C.fg3 }}>{card.situation}</div>
       {card.world && (
@@ -660,16 +733,23 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
           </label>
         )}
       </div>
-      <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
-        <span className="text-[11px] mr-1" style={{ color: C.fg1 }}>клиент:</span>
+      <Label right={types.length > 1 ? <span className="text-[11px]" style={{ color: C.fg1 }}>каждый сценарий пройдёт каждый выбранный клиент</span> : undefined}>какие клиенты пишут агенту</Label>
+      <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
         {state.personas.map(p => {
           const on = types.includes(p.id);
+          const color = personaColor(p.id);
           return (
-            <button key={p.id} title={p.note} onClick={() => toggleType(p.id)} className="text-[11px] font-mono px-2 py-1 rounded transition-colors"
-              style={{ color: on ? "#000" : C.fg2, background: on ? C.fg4 : "rgba(255,255,255,0.06)" }}>{p.name}</button>
+            <button key={p.id} onClick={() => toggleType(p.id)} className="text-left rounded-lg px-3 py-2.5 transition-colors"
+              style={{ background: on ? `${color}17` : C.surface, border: `1px solid ${on ? color : C.border}` }}>
+              <div className="flex items-center gap-1.5">
+                <span className="size-2 rounded-full" style={{ background: color }} />
+                <span className="text-[13px] font-medium" style={{ color: on ? C.fg5 : C.fg3 }}>{p.name}</span>
+                {on && <span className="ml-auto text-[11px]" style={{ color }}>✓</span>}
+              </div>
+              <div className="text-[11px] mt-1 leading-snug" style={{ color: C.fg1 }}>{p.note}</div>
+            </button>
           );
         })}
-        {types.length > 1 && <span className="text-[11px] ml-1" style={{ color: C.fg1 }}>каждый сценарий пройдёт каждый выбранный клиент</span>}
       </div>
       {run && (
         <>
@@ -677,6 +757,7 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
             {run.targetName} · версия {run.version} · {when(run.startedAt)}
           </Label>
           {run.error && <div className="text-[12px] mb-2" style={{ color: "#F26B6B" }}>{run.error}</div>}
+          <PersonaMatrix state={state} run={run} onOpen={onOpen} />
           <Panel>
             {(run.items ?? []).map((i, index) => {
               if (onlyDisputed && !disputed(i)) return null;
@@ -690,7 +771,8 @@ function RunView({ state, run, target, setTarget, onOpen }: { state: LabState; r
                   <Pill status={i.status}>{STATUS_TEXT[i.status]}</Pill>
                   <div className="min-w-0">
                     <div className="text-[13px] font-medium truncate" style={{ color: C.fg4 }}>
-                      {itemTitle(i, state)}
+                      {i.name}{i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : ""}
+                      {i.persona && i.persona !== DEFAULT_PERSONA && <span className="ml-2 align-middle"><PersonaTag state={state} id={i.persona} /></span>}
                       {disputed(i) && <span className="ml-2 text-[10px] font-mono px-1 rounded" style={{ color: C.orange, background: `${C.orange}14` }} title={`Второй судья: ${STATUS_TEXT[i.second!.status as Status]}`}>спор судей</span>}
                     </div>
                     <div className="text-[11px] truncate" style={{ color: C.fg1 }}>
