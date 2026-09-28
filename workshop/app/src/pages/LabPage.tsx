@@ -22,7 +22,8 @@ type Metric = { accuracy: number | null; passed: number; failed: number; unmeasu
   secondJudge?: { model: string; checked: number; agree: number }; repeats?: { scenarios: number; stable: number; attempts: number };
   human?: { reviewed: number; agree: number };
   personas?: Record<string, { accuracy: number | null; passed: number; measured: number }> };
-type Message = { role: "customer" | "agent"; text: string; fromLog?: boolean; ok?: boolean; status?: string; seconds?: number };
+type Message = { role: "customer" | "agent"; text: string; fromLog?: boolean; rewritten?: boolean; ok?: boolean; status?: string; seconds?: number;
+  options?: string[]; events?: { tool: string; article?: string }[] };
 type Item = { cardId: string; name: string; topic: string; origin: string; status: Status; stage: string; conversation: Message[]; rules: Rule[]; error: string | null; runId?: string;
   attempt?: number; persona?: string; second?: { model: string; status: string; rules?: Rule[] }; review?: "agree" | "disagree" | null; world?: boolean };
 type LabRun = { id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string; metric: Metric | null; error: string | null; repeats?: number; items?: Item[] };
@@ -654,25 +655,70 @@ function CardsView({ state, onPick }: { state: LabState; onPick: (id: string) =>
   );
 }
 
-/** A conversation read from the run itself, when Workshop has no trace of it: the messages and the judge's rows. */
-function Conversation({ item }: { item: Item }) {
+function AgentMessage({ m }: { m: Message }) {
+  const [open, setOpen] = useState(false);
+  const long = m.text.length > 700;
+  const calls = (m.events ?? []).map(e => e.tool.replace("Система банка · ", "")).filter((t, k, all) => all.indexOf(t) === k);
   return (
-    <div className="max-w-[860px] mx-auto px-6 py-5 flex flex-col gap-2">
-      {item.conversation.map((m, k) => m.role === "customer"
-        ? <Bubble key={k}>{m.text}</Bubble>
-        : <div key={k} className="self-start max-w-[92%] px-3 py-2 rounded-2xl rounded-bl-md text-[13px] whitespace-pre-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.fg3 }}>{m.text}</div>)}
-      {item.stage && <div className="text-[11px] font-mono" style={{ color: C.fg1 }}>{item.stage}</div>}
-      {item.error && <div className="text-[12px]" style={{ color: C.orange }}>{item.error}</div>}
-      {item.rules.length > 0 && (
-        <Panel className="mt-3">
-          {item.rules.map((r, k) => (
-            <div key={r.ruleId} className="px-4 py-2.5 text-[12px]" style={{ borderTop: k ? `1px solid ${C.border}` : undefined }}>
-              <div className="flex items-start gap-2"><Pill status={r.status}>{RULE_TEXT[r.status] ?? r.status}</Pill><span style={{ color: C.fg4 }}>{r.rule}</span></div>
-              <div className="mt-1 pl-1" style={{ color: C.fg2 }}>{r.reason}</div>
-              {r.agentQuote && <Quote who="агент">«{r.agentQuote}»</Quote>}
+    <div className="self-start max-w-[88%] flex flex-col gap-1">
+      <div className="px-3.5 py-2.5 rounded-2xl rounded-bl-md text-[13px] leading-relaxed whitespace-pre-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.fg4 }}>
+        <div style={long && !open ? { maxHeight: 220, overflow: "hidden", maskImage: "linear-gradient(#000 70%, transparent)" } : undefined}>{m.text}</div>
+        {long && <button className="text-[11px] font-mono mt-1 hover:underline" style={{ color: C.fg1 }} onClick={() => setOpen(v => !v)}>{open ? "свернуть" : "показать полностью"}</button>}
+      </div>
+      {!!m.options?.length && <div className="flex gap-1 flex-wrap">{m.options.map(o => <span key={o} className="text-[11px] px-2 py-0.5 rounded-full" style={{ color: C.fg2, border: `1px solid ${C.border}` }}>{o}</span>)}</div>}
+      <div className="text-[10px] font-mono" style={{ color: C.fg0 }}>
+        {m.ok === false ? <span style={{ color: C.orange }}>передал оператору (статус {m.status})</span> : `ответ за ${m.seconds ?? "—"} с`}
+        {calls.length ? ` · вызвал: ${calls.join(", ")}` : ""}
+      </div>
+    </div>
+  );
+}
+
+/** The conversation as it happened, the judge's verdict on top and every criterion below it. */
+function Conversation({ item, state }: { item: Item; state: LabState }) {
+  const order: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
+  const rules = [...item.rules].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+  const lead = rules.find(r => r.status === "FAIL") ?? rules.find(r => r.status === "PASS");
+  const icon = (st: string) => st === "PASS" ? "✓" : st === "FAIL" ? "✗" : st === "NOT_APPLICABLE" ? "–" : "?";
+  return (
+    <div className="max-w-[880px] mx-auto px-6 py-5 flex flex-col gap-5">
+      <div className="flex items-start gap-3">
+        <Pill status={item.status}>{STATUS_TEXT[item.status]}</Pill>
+        <div className="text-[13px] leading-relaxed" style={{ color: C.fg3 }}>
+          {item.status === "RUNNING" ? item.stage : lead?.reason ?? item.error ?? "Судья не нашёл доказательств ни выполнения, ни нарушения."}
+          {item.second && ["PASS", "FAIL", "UNMEASURED"].includes(item.second.status) && (
+            <span className="block text-[11px] mt-1" style={{ color: disputed(item) ? C.orange : C.fg1 }}>
+              второй судья: {disputed(item) ? `не согласен — ${STATUS_TEXT[item.second.status as Status]}` : "согласен"}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-col gap-3">
+        {item.conversation.map((m, k) => m.role === "customer"
+          ? (
+            <div key={k} className="self-end max-w-[80%] flex flex-col items-end gap-1">
+              <div className="px-3.5 py-2 rounded-2xl rounded-br-md text-[13px]" style={{ background: C.user, color: C.fg4 }}>{m.text}</div>
+              {k === 0 && <div className="text-[10px] font-mono" style={{ color: C.fg0 }}>{m.fromLog ? "первая реплика из лога" : m.rewritten ? `реплика из лога, как написал бы: ${personaName(state, item.persona)}` : ""}</div>}
             </div>
-          ))}
-        </Panel>
+          )
+          : <AgentMessage key={k} m={m} />)}
+      </div>
+      {rules.length > 0 && (
+        <div>
+          <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>критерии судьи</div>
+          <Panel>
+            {rules.map((r, k) => (
+              <div key={r.ruleId} className="grid grid-cols-[20px_1fr] gap-2 px-4 py-2.5 text-[12px]" style={{ borderTop: k ? `1px solid ${C.border}` : undefined, opacity: r.status === "NOT_APPLICABLE" ? 0.55 : 1 }}>
+                <span className="font-mono text-[13px]" style={{ color: tone(r.status) }} title={RULE_TEXT[r.status]}>{icon(r.status)}</span>
+                <div>
+                  <div style={{ color: C.fg4 }}>{r.rule}</div>
+                  <div className="mt-0.5" style={{ color: C.fg1 }}>{r.reason}</div>
+                  {r.agentQuote && <Quote who="агент" color={r.status === "FAIL" ? "#F26B6B" : undefined}>«{r.agentQuote}»</Quote>}
+                </div>
+              </div>
+            ))}
+          </Panel>
+        </div>
       )}
     </div>
   );
@@ -745,12 +791,11 @@ function RunStage({ state, run, itemId, target, setTarget, onOpen }: { state: La
       {run.error && <div className="flex-shrink-0 px-4 py-2 text-[12px]" style={{ color: "#F26B6B", borderBottom: `1px solid ${C.border}` }}>{run.error}</div>}
       {selected && (
         <div className="flex-shrink-0 flex items-center gap-2 flex-wrap px-4 py-2" style={{ background: "rgba(255,255,255,0.03)", borderBottom: `1px solid ${C.border}` }}>
-          <Pill status={selected.status}>{STATUS_TEXT[selected.status]}</Pill>
           <span className="text-[13px] font-medium" style={{ color: C.fg4 }}>{selected.name}</span>
-          <PersonaTag state={state} id={selected.persona} />
+          {new Set(items.map(i => i.persona ?? DEFAULT_PERSONA)).size > 1 && <PersonaTag state={state} id={selected.persona} />}
           {selected.attempt && selected.attempt > 1 && <span className="text-[11px] font-mono" style={{ color: C.fg1 }}>повтор {selected.attempt}</span>}
-          {disputed(selected) && <span className="text-[10px] font-mono px-1 rounded" style={{ color: C.orange, background: `${C.orange}14` }}>спор судей: второй судья — {STATUS_TEXT[selected.second!.status as Status]}</span>}
           <span className="ml-auto inline-flex items-center gap-1.5">
+            {selected.runId && <a href={`/runs/${selected.runId}`} className="text-[11px] font-mono mr-3 hover:underline" style={{ color: C.fg1 }}>трейс в Workshop</a>}
             {["PASS", "FAIL"].includes(selected.status) && <span className="text-[11px]" style={{ color: C.fg1 }}>судья прав?</span>}
             {["PASS", "FAIL"].includes(selected.status) && (["agree", "disagree"] as const).map(d => (
               <button key={d} onClick={() => review(selected.review === d ? null : d)} className="text-[11px] font-mono px-2 py-0.5 rounded"
@@ -762,11 +807,9 @@ function RunStage({ state, run, itemId, target, setTarget, onOpen }: { state: La
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-auto sb">
-        {selected?.runId
-          ? <RunDetail key={selected.runId} runId={selected.runId} />
-          : selected
-            ? <Conversation item={selected} />
-            : <div className="h-full flex items-center justify-center text-[12px]" style={{ color: C.fg1 }}>В прогоне нет разговоров</div>}
+        {selected
+          ? <Conversation key={itemKey(selected)} item={selected} state={state} />
+          : <div className="h-full flex items-center justify-center text-[12px]" style={{ color: C.fg1 }}>В прогоне нет разговоров</div>}
       </div>
       {creating && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setCreating(false)}>
