@@ -220,6 +220,12 @@ async def run(
         for item in record['items']:
             if item['status'] == 'RUNNING':
                 item.update(status='UNMEASURED', stage='', error=str(error))
+    except asyncio.CancelledError:
+        record.update(status='stopped', error='Прогон остановлен')
+        for item in record['items']:
+            if item['status'] == 'RUNNING':
+                item.update(status='UNMEASURED', stage='', error='Прогон остановлен до конца разговора')
+        raise
     finally:
         await agent.close()
         record['finishedAt'] = store.now()

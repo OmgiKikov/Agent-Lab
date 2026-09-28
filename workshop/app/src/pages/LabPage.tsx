@@ -207,9 +207,17 @@ function Page({ title, lede, actions, children }: { title: string; lede: string;
 function JobLine({ state, kind }: { state: LabState; kind: string }) {
   const j = state.job;
   if (j.running && j.kind === kind)
-    return <span className="inline-flex items-center gap-2 text-[11px] font-mono" style={{ color: C.fg2 }}><span className="size-2 rounded-full pulse-dot" style={{ background: C.accent }} />{j.progress.message}{j.progress.total ? ` · ${j.progress.done}/${j.progress.total}` : ""}</span>;
+    return (
+      <span className="inline-flex items-center gap-2 text-[11px] font-mono" style={{ color: C.fg2 }}>
+        <span className="size-2 rounded-full pulse-dot" style={{ background: C.accent }} />{j.progress.message}{j.progress.total ? ` · ${j.progress.done}/${j.progress.total}` : ""}
+        <button className="px-1.5 py-0.5 rounded hover:bg-white/10" style={{ color: C.fg3, background: "rgba(255,255,255,0.06)" }}
+          onClick={() => api("/api/job/stop", {}).catch(e => alert(e.message))}>остановить</button>
+      </span>
+    );
   if (!j.running && j.kind === kind && j.error)
-    return <span className="text-[11px] font-mono" style={{ color: "#F26B6B" }}>ошибка: {j.error}</span>;
+    return j.error === "Остановлено"
+      ? <span className="text-[11px] font-mono" style={{ color: C.fg1 }}>остановлено</span>
+      : <span className="text-[11px] font-mono" style={{ color: "#F26B6B" }}>ошибка: {j.error}</span>;
   return null;
 }
 

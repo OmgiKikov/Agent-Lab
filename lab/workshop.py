@@ -234,6 +234,15 @@ def rename(run_id: str, name: str) -> bool:
         return False
 
 
+def conversation_runs(prefix: str) -> list[str]:
+    """Traces whose conversation id starts with prefix (the Lab's log traces are «log-<id>»)."""
+    try:
+        runs = httpx.get(f'{URL}/api/runs', params={'limit': 5000}, timeout=10).json()
+    except (httpx.HTTPError, ValueError):
+        return []
+    return [r['id'] for r in runs if str(r.get('convo_id', '')).startswith(prefix)]
+
+
 def forget(run_id: str) -> None:
     """Remove one Lab trace from Workshop, including its Saved entry."""
     for path in (f'/api/saved-runs/events/{run_id}', f'/api/saved-runs/cache/{run_id}', f'/api/runs/{run_id}'):

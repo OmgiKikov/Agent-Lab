@@ -225,9 +225,6 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     dialogues = sample(count)
     use_workshop = await asyncio.to_thread(workshop.available)
     previous = store.load(RESULT) or {}
-    for result in previous.get('results') or []:
-        if result.get('runId'):
-            await asyncio.to_thread(workshop.forget, result['runId'])
     started = store.now()
     if previous.get('topics') and not replan:
         progress(
@@ -281,4 +278,9 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
         'summary': summarize(results, topics),
     }
     store.save(RESULT, value)
+    # Only now the previous audit's traces go, with any left by an audit that was stopped midway.
+    keep = {r['runId'] for r in results if r.get('runId')}
+    for run_id in await asyncio.to_thread(workshop.conversation_runs, 'log-'):
+        if run_id not in keep:
+            await asyncio.to_thread(workshop.forget, run_id)
     return value

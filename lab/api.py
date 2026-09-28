@@ -24,6 +24,8 @@ app.add_middleware(
     allow_headers=['Content-Type'],
 )
 job: dict = {'kind': None, 'running': False, 'error': None, 'progress': {}}
+STOPPED = 'Остановлено'
+_task: asyncio.Task | None = None
 RUN_FIELDS = (
     'id', 'target', 'targetName', 'version', 'label', 'startedAt', 'finishedAt', 'status', 'metric', 'error',
     'model', 'repeats',
@@ -32,6 +34,7 @@ CHECK_QUESTION = 'Какой процент эквайринга?'
 
 
 def start(kind: str, work: Callable[[Callable[..., None]], Awaitable[object]]) -> dict:
+    global _task
     if job['running']:
         raise HTTPException(409, f'Уже выполняется: {job["kind"]}')
     job.update(kind=kind, running=True, error=None, progress={'message': 'Запускаю…'})
@@ -42,12 +45,23 @@ def start(kind: str, work: Callable[[Callable[..., None]], Awaitable[object]]) -
     async def body() -> None:
         try:
             await work(progress)
+        except asyncio.CancelledError:
+            job['error'] = STOPPED
         except Exception as error:  # shown on the page, never swallowed
             job['error'] = str(error) or type(error).__name__
         finally:
             job['running'] = False
 
-    asyncio.get_running_loop().create_task(body())
+    _task = asyncio.get_running_loop().create_task(body())
+    return {'ok': True}
+
+
+@app.post('/api/job/stop')
+async def stop_job() -> dict:
+    """Stop the running job. What it had finished stays; an unfinished audit or card set is not saved."""
+    if not job['running'] or _task is None:
+        raise HTTPException(409, 'Сейчас ничего не выполняется')
+    _task.cancel()
     return {'ok': True}
 
 
