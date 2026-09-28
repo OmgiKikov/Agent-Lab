@@ -1,4 +1,7 @@
 import type { ModelRuntime, ProviderConfig } from '@earendil-works/pi-coding-agent';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   buildChatRequest, normalizeResponseFormat, parseCatalog, parseChatResponse, type GigaAssistantMessage, type GigaContext, type GigaModel, type GigaOptions, type GigaResponse,
 } from './giga-protocol.js';
@@ -253,6 +256,21 @@ function failed(model: GigaModel, stopReason: 'error' | 'aborted', errorMessage:
 }
 
 /**
+ * The gateway's own words on a refused request, kept on this computer only (0600, beside the gateway's settings): a reply
+ * never carries them, since they may echo the prompt, yet without them a 422 cannot be told from another. The last one
+ * replaces the one before. Undefined when it could not be written: the refusal is reported all the same.
+ */
+async function keepRefusal(status: number, text: string): Promise<string | undefined> {
+  const directory = join(homedir(), '.agent-lab');
+  const file = join(directory, 'giga-refusal.json');
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(file, JSON.stringify({ status, at: new Date().toISOString(), body: text.slice(0, 20_000) }, null, 2) + '\n', { mode: 0o600 });
+    return file;
+  } catch { return undefined; }
+}
+
+/**
  * One chat exchange, reported the way the stream protocol reports every provider's: an answer, or a reply with stopReason
  * `error` — never a throw, which the caller counts as Lab's own defect. A refused request tells its status and headers
  * through `onResponse`, as pi-ai's adapters do for theirs, so a 429 or a 5xx meets the same retry policy (and the
@@ -269,7 +287,8 @@ async function exchange(transport: GigaTransport, model: GigaModel, context: Gig
   }
   if (response.status !== 200) {
     await options.onResponse?.({ status: response.status, headers: response.headers ?? {} }, model);
-    return failed(model, 'error', refusalText(response.status));
+    const kept = REJECTED_STATUSES.has(response.status) ? await keepRefusal(response.status, response.text) : undefined;
+    return failed(model, 'error', `${refusalText(response.status)}${kept ? `; the gateway's own words are in ${kept}` : ''}`);
   }
   let body: GigaResponse;
   try { body = JSON.parse(response.text) as GigaResponse; }

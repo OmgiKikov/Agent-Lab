@@ -43,11 +43,14 @@ function textOf(content: GigaMessage['content']): string {
   return content.filter(part => part.type === 'text').map(part => (part as { text: string }).text).join('\n');
 }
 
-// The gateway expects the result as an object (as the official SDK's recorded calls show), while Pi's tools return text.
-// Text that does not parse is passed on as it is: the gateway decides, not we.
-function toolResult(text: string): unknown {
-  try { return JSON.parse(text); }
-  catch { return text; }
+// The gateway expects the result as an object (as the official SDK's recorded calls show), while Pi's tools return text:
+// JSON of an object goes as that object, anything else — plain text, a list, a number — inside `{ result }`. A bare
+// string here is refused with 422, which ended every conversation at its first tool call.
+function toolResult(text: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : { result: parsed };
+  } catch { return { result: text }; }
 }
 
 /** A call id is built as `${tools_state_id}#${index}`, so the state reads back from the history. */
