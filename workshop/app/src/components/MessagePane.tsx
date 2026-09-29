@@ -183,9 +183,11 @@ function claimNextCloudMcpNudgeChatSlot(): boolean {
 interface MessagePaneProps {
   /** If set, messages sent from the pane will carry this run_id. */
   activeRunId?: string | null;
+  /** Hide the floating «ask» button: the page opens the pane itself (event `workshop:open-message-pane`). */
+  hideLauncher?: boolean;
 }
 
-export function MessagePane({ activeRunId }: MessagePaneProps) {
+export function MessagePane({ activeRunId, hideLauncher }: MessagePaneProps) {
   const [collapsed, setCollapsedState] = useState<boolean>(loadCollapsed);
   const [width, setWidth] = useState<number>(loadWidth);
   const [sessions, setSessions] = useState<ClaudeSessionSummary[]>([]);
@@ -745,6 +747,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   }
 
   if (collapsed) {
+    if (hideLauncher) return null;
     return (
       <FloatingAskButton
         provider={provider}

@@ -17,7 +17,7 @@ export type Item = {
   second?: { model: string; status: string; rules?: Rule[] }; review?: "agree" | "disagree" | null; world?: boolean;
 };
 export type LabRun = {
-  id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string;
+  id: string; target: string; targetName: string; version: string; label?: string; startedAt: string; finishedAt: string | null; status: string;
   metric: Metric | null; error: string | null; repeats?: number; items?: Item[];
 };
 export type Criterion = { id: string; text: string; quote: string; condition?: string; acceptable?: string; sourceId?: string };
@@ -64,4 +64,4 @@ export type LabState = {
   targets: Target[];
   personas: Persona[];
 };
-export type Step = "criteria" | "dialogs" | "judge" | "checks" | "agent" | "logs";
+export type Step = "overview" | "criteria" | "dialogs" | "judge" | "checks" | "agent" | "logs";

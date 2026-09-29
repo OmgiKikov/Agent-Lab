@@ -9,10 +9,26 @@ export const count = (n: number, one: string, few: string, many: string) => `${n
 
 export const pct = (a: number, b: number) => (b ? Math.round((100 * a) / b) : 0);
 
+/** A signed number with a true minus: «+15», «−4», «0». */
+export const signed = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `−${Math.abs(n)}` : "0");
+
+/** Percentage points: «+15 п.п.». */
+export const points = (n: number) => `${signed(n)}\u00a0п.п.`;
+
+/** Thousands separated by a non-breaking space, as Russian typography wants. */
+export const num = (n: number) => n.toLocaleString("ru-RU");
+
 export const when = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+
+/** «29 сентября, 14:02» — for headers, where a date is read, not compared. */
+export const whenLong = (iso?: string | null) =>
+  iso ? new Date(iso).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : "";
 
 export const day = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) : "";
 
 export const thousands = (chars: number) => `${(Math.round(chars / 100) / 10).toLocaleString("ru-RU")} тыс. знаков`;
+
+/** «сценарий» → «Сценарий». */
+export const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);

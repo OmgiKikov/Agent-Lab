@@ -13,21 +13,43 @@
     --sidebar-border: 0 0% 100% / 0.06;
     --sidebar-ring: 216 80% 70%;
 
-    /* Agent Lab: rgb channels, so `bg-lab-ok/15` style alpha works. */
-    --lab-bg: 0 0 0;
-    --lab-surface: 10 10 10;
-    --lab-raised: 17 17 17;
-    --lab-ink: 242 245 247;
-    --lab-text: 225 232 236;
-    --lab-soft: 200 213 220;
-    --lab-mute: 160 172 178;
-    --lab-dim: 125 138 144;
-    --lab-faint: 90 106 114;
-    --lab-user: 13 52 66;
-    --lab-accent: 91 141 239;
-    --lab-ok: 96 227 109;
-    --lab-bad: 242 107 107;
-    --lab-warn: 240 173 78;
+    /* Agent Lab tokens (docs/DESIGN.md). rgb channels, so `bg-lab-ok/15` style alpha works. */
+    /* Surfaces: a near-black canvas, then each step a little lighter. Lightness is elevation. */
+    --lab-canvas: 10 11 13;   /* #0a0b0d */
+    --lab-panel: 15 16 18;    /* #0f1012 sidebar, panels */
+    --lab-card: 20 21 25;     /* #141519 cards */
+    --lab-raised: 26 28 33;   /* #1a1c21 hover, inputs, popovers */
+    --lab-active: 34 36 42;   /* #22242a selected, pressed */
+    /* Text: four steps. faint is for placeholders and disabled only (3.3:1). */
+    --lab-ink: 242 243 245;   /* #f2f3f5 headings, numbers */
+    --lab-text: 197 201 208;  /* #c5c9d0 body */
+    --lab-mute: 141 146 156;  /* #8d929c meta (6.3:1) */
+    --lab-faint: 95 100 109;  /* #5f646d */
+    /* One accent: focus, selection, links, the current version. */
+    --lab-accent: 123 139 255;       /* #7b8bff */
+    --lab-accent-solid: 88 100 240;  /* #5864f0 */
+    /* Status: colour is meaning. Tuned to stay apart for deuteranopia; always paired with a glyph and a word. */
+    --lab-ok: 93 211 158;     /* #5dd39e fixed, better, passed */
+    --lab-bad: 236 91 98;     /* #ec5b62 violation, worse */
+    --lab-warn: 230 172 69;   /* #e6ac45 unsure: no data, judges disagree */
+    --lab-user: 30 36 50;     /* #1e2432 the customer's bubble */
+    /* Aliases of the earlier palette. */
+    --lab-bg: var(--lab-canvas);
+    --lab-surface: var(--lab-panel);
+    --lab-soft: var(--lab-text);
+    --lab-dim: var(--lab-mute);
+  }
+}
+
+@layer components {
+  /* The one focus ring: a gap in the canvas colour, then the accent. Keyboard only. */
+  .lab-focus:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgb(var(--lab-canvas)), 0 0 0 4px rgb(var(--lab-accent) / 0.8);
+  }
+  .lab-focus-inset:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px rgb(var(--lab-accent) / 0.7);
   }
 }
 
@@ -42,11 +64,14 @@ html {
 }
 
 body {
-  background: #000;
+  background: rgb(var(--lab-canvas));
   color: #999;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
+
+::selection { background: rgb(var(--lab-accent) / 0.32); color: rgb(var(--lab-ink)); }
 
 input.secret-input-saved:focus::placeholder {
   color: transparent !important;
@@ -274,7 +299,7 @@ input.secret-input-saved:focus::placeholder {
 *::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 2px; }
 *::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.14); }
 
-pre { white-space: pre-wrap; word-break: break-word; font-family: 'Space Mono', monospace; }
+pre { white-space: pre-wrap; word-break: break-word; font-family: "Geist Mono Variable", ui-monospace, monospace; }
 
 /* Streamdown CSS variable overrides for dark theme */
 .streamdown {

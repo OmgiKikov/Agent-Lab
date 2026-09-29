@@ -43,7 +43,7 @@ function FirstRun({ state, go }: { state: LabState; go: (to: string) => void }) 
 function CriterionRow({ item, scope, onOpen }: { item: Compared; scope: Scope; onOpen: () => void }) {
   const { criterion: c, change } = item;
   const share = rate(c);
-  const both = scope.src === "all" && c.by.log.passed + c.by.log.failed > 0 && c.by.sim.passed + c.by.sim.failed > 0;
+  const both = c.by.log.passed + c.by.log.failed > 0 && c.by.sim.passed + c.by.sim.failed > 0;
   const pct = (t: { passed: number; failed: number }) => Math.round(100 * (rate(t) ?? 0));
   const spark = scope.history(c.key).filter((v): v is number => v !== null);
   const fixed = change === "fixed";
@@ -83,7 +83,7 @@ export function CriteriaView({ state, scope, scopeBar, onCriterion, onJudge, go 
   state: LabState; scope: Scope; scopeBar: React.ReactNode; onCriterion: (key: string) => void; onJudge: () => void; go: (to: string) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const { summary, prevSummary, compared, finished, previous } = scope;
+  const { summary, prevSim: prevSummary, compared, finished, previous } = scope;
   const rank = (c: Compared) => (c.change === "new" ? 0 : c.criterion.failed > 0 ? 1 : c.change === "fixed" ? 2 : 3);
   const rows = useMemo(() => [...compared].sort((a, b) => rank(a) - rank(b) || b.criterion.failed - a.criterion.failed), [compared]);
   const problems = rows.filter(r => r.criterion.failed > 0 || r.change === "fixed");
@@ -102,7 +102,7 @@ export function CriteriaView({ state, scope, scopeBar, onCriterion, onJudge, go 
     );
   }
 
-  const trust = scope.src !== "log" && finished ? trustOf(finished) : null;
+  const trust = finished ? trustOf(finished) : null;
   const delta = prevSummary?.share != null && summary.share != null ? summary.share - prevSummary.share : null;
   const second = state.discover?.summary.secondJudge;
   const points: TrendPoint[] = scope.sameAgent.filter(r => r.metric?.total).map(r => ({ id: r.id, value: r.metric!.accuracy ?? 0, label: r.version, title: `${r.version} · ${when(r.startedAt)}`, sub: `${r.metric!.passed} из ${r.metric!.measured} пройдено` }));

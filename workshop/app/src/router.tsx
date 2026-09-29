@@ -38,6 +38,8 @@ function LegacyHashRedirect() {
 function AppLayout() {
   const [showDisconnectedNotice, setShowDisconnectedNotice] = useState(false);
   const runMatch = useMatch({ path: "/runs/:runId", end: false });
+  // Agent Lab brings its own sidebar and puts the assistant in it: one navigation column, nothing floating over the content.
+  const onLab = !!useMatch({ path: "/lab", end: false });
   const activeRunId = runMatch?.params.runId
     ? decodeURIComponent(runMatch.params.runId)
     : null;
@@ -62,8 +64,8 @@ function AppLayout() {
   return (
     <SidebarProvider defaultOpen={false}>
       <LegacyHashRedirect />
-      <NavSidebar />
-      <SidebarInset>
+      {!onLab && <NavSidebar />}
+      <SidebarInset className={onLab ? "bg-lab-canvas" : undefined}>
         <div className="relative h-screen overflow-hidden">
           <div
             className={`flex h-full transition-all duration-200 ${showDisconnectedNotice ? "pointer-events-none select-none blur-sm opacity-45" : ""}`}
@@ -72,7 +74,7 @@ function AppLayout() {
             <div className="flex-1 min-w-0 overflow-auto">
               <Outlet />
             </div>
-            <MessagePane activeRunId={activeRunId} />
+            <MessagePane activeRunId={activeRunId} hideLauncher={onLab} />
           </div>
           {showDisconnectedNotice && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 px-6">
