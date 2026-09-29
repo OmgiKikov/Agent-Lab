@@ -7,8 +7,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import * as Dialog from "@radix-ui/react-dialog";
 import NumberFlow from "@number-flow/react";
-import { ArrowLeft, Bot, ChevronRight, FileText, FlaskConical, Gauge, MessagesSquare, Play, RotateCcw, Upload } from "lucide-react";
+import {
+  ArrowLeft, Bot, Check, ChevronRight, FileText, FlaskConical, Keyboard, Languages, MessageCircleQuestionMark, Minus, Play, RotateCcw, Timer,
+  Upload, UserRound, X, type LucideIcon,
+} from "lucide-react";
 import { RunDetail } from "../components/RunDetail";
 import { C } from "../utils/colors";
 
@@ -26,14 +30,14 @@ type Message = { role: "customer" | "agent"; text: string; fromLog?: boolean; re
   options?: string[]; events?: { tool: string; article?: string }[] };
 type Item = { cardId: string; name: string; topic: string; origin: string; status: Status; stage: string; conversation: Message[]; rules: Rule[]; error: string | null; runId?: string;
   attempt?: number; persona?: string; second?: { model: string; status: string; rules?: Rule[] }; review?: "agree" | "disagree" | null; world?: boolean };
-type LabRun = { id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string; metric: Metric | null; error: string | null; repeats?: number; items?: Item[] };
+type LabRun = { id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string; metric: Metric | null; error: string | null; repeats?: number; personas?: string[]; items?: Item[] };
 type Criterion = { id: string; text: string; quote: string; condition?: string; acceptable?: string };
 type World = { organization: { name: string; inn: string; merchantName: string; address: string }; terminals: { nameForClient: string; terminalId: string; stateCode: string }[]; tools: Record<string, unknown> };
 type Card = { id: string; topic: string; name: string; situation: string; opening: string; criteria: Criterion[]; origin: string; sourceDialogueId: string; world?: World | null; openings?: Record<string, string> };
 type LogResult = { dialogueId: string; topicId: string; status: Status; rules: Rule[]; opening: string; runId?: string };
 type Pattern = { rule: string; quote: string; topics: string[]; count: number; titles: string[]; examples: { dialogueId: string; reason: string; agentQuote: string; opening: string; url?: string }[] };
 type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };
-type Persona = { id: string; name: string; note: string };
+type Persona = { id: string; name: string; note: string; sample?: string };
 type Settings = { prodUrl: string; epk: string[]; repo: string };
 type Source = { id: string; kind: string; origin: string; chars: number; rules: number };
 type Models = { via: string; main: string | null; second: string | null };
@@ -59,7 +63,9 @@ const STEPS: Step[] = ["agent", "logs", "cards", "run", "accuracy"];
 const STATUS_TEXT: Record<Status, string> = { PASS: "пройден", FAIL: "не пройден", UNMEASURED: "не измерено", UNKNOWN: "нет данных", NOT_APPLICABLE: "не применимо", RUNNING: "идёт" };
 const RULE_TEXT: Record<string, string> = { PASS: "выполнено", FAIL: "нарушено", UNKNOWN: "нет данных", NOT_APPLICABLE: "не применимо" };
 const LOG_TEXT: Record<string, string> = { PASS: "без нарушений", FAIL: "нарушение", UNMEASURED: "нет данных" };
-const tone = (s: Status | string) => s === "PASS" ? C.green : s === "FAIL" ? "#F26B6B" : s === "RUNNING" ? C.accent : s === "NOT_APPLICABLE" ? C.fg0 : C.orange;
+/** Colour means a verdict and nothing else: which customer wrote is a glyph (Avatar), never a colour. */
+const RED = "#F26B6B";
+const tone = (s: Status | string) => s === "PASS" ? C.green : s === "FAIL" ? RED : s === "RUNNING" ? C.accent : s === "NOT_APPLICABLE" ? C.fg0 : C.orange;
 const pct = (a: number, b: number) => (b ? Math.round((100 * a) / b) : 0);
 const plural = (n: number, one: string, few: string, many: string) => {
   const m10 = n % 10, m100 = n % 100;
@@ -67,37 +73,84 @@ const plural = (n: number, one: string, few: string, many: string) => {
 };
 const when = (iso?: string | null) => iso ? new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
 const titleFont = { fontFamily: '"AlphaLyrae", sans-serif' };
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const DEFAULT_PERSONA = "default";
 /** How a conversation of a run is addressed in the URL: its Workshop trace, or its place in the run when it has none. */
 const itemKey = (i: Item) => i.runId ?? `${i.cardId}~${i.persona ?? DEFAULT_PERSONA}~${i.attempt ?? 1}`;
 const personaName = (state: LabState, id?: string) => state.personas.find(p => p.id === (id ?? DEFAULT_PERSONA))?.name ?? id ?? "";
-function PersonaTag({ state, id }: { state: LabState; id?: string }) {
-  return <span className="text-[10px] font-mono px-1.5 py-px rounded whitespace-nowrap" style={{ color: C.fg2, background: "rgba(255,255,255,0.07)" }}>{personaName(state, id)}</span>;
+const disputed = (i: Item) => !!i.second && ["PASS", "FAIL", "UNMEASURED"].includes(i.second.status) && i.second.status !== i.status;
+
+/* ---------- customer types: one glyph per type, the same everywhere ---------- */
+
+const PERSONA_ICON: Record<string, LucideIcon> = {
+  default: UserRound, impatient: Timer, confused: MessageCircleQuestionMark, typos: Keyboard, no_terms: Languages,
+};
+
+/** A customer type's face: the same glyph in a new run, the run's list, the chat, the card and the accuracy. */
+function Avatar({ id, size = 22, color, dim, title }: { id?: string; size?: number; color?: string; dim?: boolean; title?: string }) {
+  const Icon = PERSONA_ICON[id ?? DEFAULT_PERSONA] ?? UserRound;
+  const glyph = Math.round(size * 0.54);
+  return (
+    <span title={title} className="inline-flex items-center justify-center rounded-full flex-shrink-0 transition-opacity"
+      style={{ width: size, height: size, color: color ?? C.fg3, opacity: dim ? 0.4 : 1, background: color ? `${color}1a` : "rgba(255,255,255,0.06)",
+        boxShadow: `inset 0 0 0 1px ${color ? `${color}40` : "rgba(255,255,255,0.10)"}` }}>
+      <Icon style={{ width: glyph, height: glyph }} strokeWidth={1.8} />
+    </span>
+  );
 }
 
-/** One option of a choice: agent, customer type, repeats. */
-function Choice({ on, onClick, title, children }: { on: boolean; onClick: () => void; title?: string; children: React.ReactNode }) {
+/** Several customer types at once, barely overlapping so every glyph stays whole; `ring` is the background they sit on. */
+function AvatarStack({ ids, size = 20, ring = C.surface }: { ids: string[]; size?: number; ring?: string }) {
   return (
-    <button onClick={onClick} title={title} className="text-[12px] px-3 py-1.5 rounded-md transition-colors"
-      style={{ color: on ? C.fg5 : C.fg2, background: on ? "rgba(255,255,255,0.12)" : "transparent", border: `1px solid ${on ? "rgba(255,255,255,0.24)" : C.border}` }}>
-      {children}
+    <span className="inline-flex">
+      {ids.map((id, k) => (
+        <span key={id} className="rounded-full" style={{ marginLeft: k ? -Math.round(size * 0.12) : 0, background: ring, boxShadow: `0 0 0 1.5px ${ring}` }}>
+          <Avatar id={id} size={size} />
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** A verdict as a mark: ✓ and ✗ keep their shapes, so a verdict never rests on red against green alone. */
+function Mark({ status, size = 12 }: { status: Status | string; size?: number }) {
+  const box = { width: size, height: size };
+  if (status === "PASS") return <Check style={box} strokeWidth={2.6} />;
+  if (status === "FAIL") return <X style={box} strokeWidth={2.6} />;
+  if (status === "NOT_APPLICABLE") return <Minus style={box} strokeWidth={2.6} />;
+  if (status === "RUNNING") return <span className="rounded-full pulse-dot" style={{ width: size / 2, height: size / 2, background: "currentColor" }} />;
+  return <span className="font-mono font-bold leading-none" style={{ fontSize: size }}>?</span>;
+}
+
+function StatusIcon({ status, size = 20 }: { status: Status | string; size?: number }) {
+  const color = tone(status);
+  return (
+    <span className="inline-flex items-center justify-center rounded-full flex-shrink-0" style={{ width: size, height: size, color, background: `${color}1f` }}>
+      <Mark status={status} size={Math.round(size * 0.55)} />
+    </span>
+  );
+}
+
+/** One conversation of a run in the list: its verdict; the ring marks the one open on the right. */
+function Cell({ item, on, title, onClick }: { item: Item; on: boolean; title: string; onClick: () => void }) {
+  const color = tone(item.status);
+  return (
+    <button onClick={onClick} title={title} className="size-[22px] rounded-md inline-flex items-center justify-center flex-shrink-0 transition-colors hover:brightness-125"
+      style={{ color, background: `${color}${on ? "3d" : "17"}`, boxShadow: on ? `inset 0 0 0 1px ${color}` : undefined }}>
+      <Mark status={item.status} size={11} />
     </button>
   );
 }
 
-function SettingRow({ label, first, children }: { label: string; first?: boolean; children: React.ReactNode }) {
+/** Where a scenario comes from: a failure found in the logs, or a topic the logs cover. */
+function Origin({ origin }: { origin: string }) {
+  const failure = origin === "Ошибка из лога";
   return (
-    <div className="grid grid-cols-[110px_1fr] gap-4 items-start px-4 py-3" style={{ borderTop: first ? undefined : `1px solid ${C.border}` }}>
-      <span className="text-[10px] font-mono uppercase tracking-wider pt-2" style={{ color: C.fg0 }}>{label}</span>
-      <div>{children}</div>
-    </div>
+    <span className="inline-flex items-center gap-1.5 text-[11px] whitespace-nowrap" style={{ color: failure ? "#f0a8a8" : C.fg1 }}>
+      <span className="size-1.5 rounded-full" style={{ background: failure ? RED : C.fg0 }} />{origin.toLowerCase()}
+    </span>
   );
 }
-
-const itemTitle = (i: Item, state: LabState) => i.name
-  + (i.persona && i.persona !== DEFAULT_PERSONA ? ` · ${personaName(state, i.persona)}` : "")
-  + (i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : "");
-const disputed = (i: Item) => !!i.second && ["PASS", "FAIL", "UNMEASURED"].includes(i.second.status) && i.second.status !== i.status;
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const init = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -141,10 +194,15 @@ function Chip({ label, value }: { label: string; value: React.ReactNode }) {
 function Label({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between mt-6 mb-2">
-      <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>{children}</span>
+      <Caption>{children}</Caption>
       {right}
     </div>
   );
+}
+
+/** The small mono heading of a section or a panel. */
+function Caption({ children }: { children: React.ReactNode }) {
+  return <div className="text-[10px] font-mono uppercase tracking-wider" style={{ color: C.fg0 }}>{children}</div>;
 }
 
 function Action({ children, onClick, disabled, primary }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; primary?: boolean }) {
@@ -183,7 +241,7 @@ function Field({ label, hint, first, children }: { label: string; hint: string; 
 function CheckResult({ check }: { check?: Check | "pending" }) {
   if (!check) return null;
   if (check === "pending") return <span className="text-[11px] font-mono" style={{ color: C.fg1 }}>проверяю…</span>;
-  if (!check.ok) return <span className="text-[11px]" style={{ color: "#F26B6B" }}>{check.error}</span>;
+  if (!check.ok) return <span className="text-[11px]" style={{ color: RED }}>{check.error}</span>;
   return (
     <span className="text-[11px]" style={{ color: C.green }}>
       отвечает{check.seconds !== undefined ? ` за ${check.seconds} с` : ""}{check.status ? ` · статус ${check.status}` : ""}
@@ -250,7 +308,7 @@ function JobLine({ state, kind }: { state: LabState; kind: string }) {
   if (!j.running && j.kind === kind && j.error)
     return j.error === "Остановлено"
       ? <span className="text-[11px] font-mono" style={{ color: C.fg1 }}>остановлено</span>
-      : <span className="text-[11px] font-mono" style={{ color: "#F26B6B" }}>ошибка: {j.error}</span>;
+      : <span className="text-[11px] font-mono" style={{ color: RED }}>ошибка: {j.error}</span>;
   return null;
 }
 
@@ -279,42 +337,68 @@ const passShare = (items: Item[], cardId: string) => {
   return done.length ? done.filter(i => i.status === "PASS").length / done.length : null;
 };
 
-/** Accuracy per customer type, and the scenarios the ordinary customer passes but another type fails. */
-function PersonaBreakdown({ state, run }: { state: LabState; run: LabRun }) {
+/** Accuracy per customer type against the ordinary customer, and the scenarios that only the manner of writing breaks. */
+function PersonaBreakdown({ state, run, onOpen }: { state: LabState; run: LabRun; onOpen: (item: Item) => void }) {
   const byType = run.metric?.personas ?? {};
+  const base = byType[DEFAULT_PERSONA]?.accuracy ?? null;
   const items = run.items ?? [];
-  const breaks: { name: string; types: string[] }[] = [];
+  const breaks: { cardId: string; name: string; failing: Item[] }[] = [];
   for (const cardId of [...new Set(items.map(i => i.cardId))]) {
     const of = (id: string) => items.filter(i => i.cardId === cardId && (i.persona ?? DEFAULT_PERSONA) === id && ["PASS", "FAIL"].includes(i.status));
     const ordinary = of(DEFAULT_PERSONA);
     if (!ordinary.length || ordinary.some(i => i.status !== "PASS")) continue;
-    const failing = state.personas.filter(p => p.id !== DEFAULT_PERSONA && of(p.id).some(i => i.status === "FAIL")).map(p => p.name);
-    if (failing.length) breaks.push({ name: items.find(i => i.cardId === cardId)!.name, types: failing });
+    const failing = state.personas.filter(p => p.id !== DEFAULT_PERSONA).map(p => of(p.id).find(i => i.status === "FAIL")).filter((i): i is Item => !!i);
+    if (failing.length) breaks.push({ cardId, name: items.find(i => i.cardId === cardId)!.name, failing });
   }
+  const signed = (d: number) => d > 0 ? `+${d}` : d < 0 ? `−${-d}` : "±0";
   return (
     <div className="grid grid-cols-2 gap-3 mt-6">
-      <Panel className="px-4 py-3">
-        <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>по типам клиентов</div>
-        {state.personas.filter(p => byType[p.id]).map(p => {
-          const v = byType[p.id];
-          return (
-            <div key={p.id} className="grid grid-cols-[110px_1fr_44px] gap-3 items-center py-1 text-[12px]" style={{ color: C.fg2 }} title={p.note}>
-              <span style={{ color: C.fg4 }}>{p.name}</span>
-              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${v.accuracy ?? 0}%`, background: C.fg3 }} /></div>
-              <span className="font-mono text-right" style={{ color: C.fg4 }}>{v.accuracy ?? "—"}%</span>
-            </div>
-          );
-        })}
-        <div className="text-[11px] mt-2" style={{ color: C.fg1 }}>доля разговоров, где агент выполнил все критерии, для каждого типа клиента</div>
+      <Panel className="px-5 py-4">
+        <Caption>по типам клиентов</Caption>
+        <div className="flex flex-col gap-3.5 mt-3.5">
+          {state.personas.filter(p => byType[p.id]).map(p => {
+            const v = byType[p.id];
+            const ordinary = p.id === DEFAULT_PERSONA;
+            const delta = !ordinary && v.accuracy !== null && base !== null ? v.accuracy - base : null;
+            return (
+              <div key={p.id} className="grid grid-cols-[28px_1fr] gap-3 items-center" title={p.note}>
+                <Avatar id={p.id} size={28} />
+                <div className="min-w-0">
+                  <div className="flex items-baseline gap-2 text-[12px]">
+                    <span style={{ color: C.fg4 }}>{cap(p.name)}</span>
+                    <span className="ml-auto font-mono" style={{ color: C.fg5 }}>{v.accuracy ?? "—"}%</span>
+                    <span className="font-mono text-[11px] w-9 text-right" style={{ color: delta === null ? C.fg0 : delta < 0 ? RED : delta > 0 ? C.green : C.fg1 }}>
+                      {ordinary ? "база" : delta === null ? "" : signed(delta)}
+                    </span>
+                  </div>
+                  <div className="relative h-1.5 rounded-full mt-1.5" style={{ background: "rgba(255,255,255,0.07)" }}>
+                    <div className="h-full rounded-full" style={{ width: `${v.accuracy ?? 0}%`, background: ordinary ? C.fg4 : C.fg1 }} />
+                    {!ordinary && base !== null && <div className="absolute -top-1 -bottom-1 w-px" style={{ left: `${base}%`, background: "rgba(255,255,255,0.5)" }} />}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="text-[11px] mt-4 leading-relaxed" style={{ color: C.fg1 }}>Доля разговоров без нарушений. Справа — разница в пунктах с обычным клиентом, черта на шкале — его уровень.</div>
       </Panel>
-      <Panel className="px-4 py-3">
-        <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>ломается от манеры общения</div>
+      <Panel className="px-5 py-4">
+        <Caption>ломается от манеры общения</Caption>
+        <div className="text-[11px] mt-1.5 mb-2" style={{ color: C.fg1 }}>Обычный клиент проходит сценарий, а эти клиенты — нет. Нажмите на клиента, чтобы открыть разговор.</div>
         {breaks.slice(0, 8).map(b => (
-          <div key={b.name} className="text-[12px] py-1" style={{ color: C.fg2 }}>
-            <span style={{ color: C.fg4 }}>{b.name}</span> <span style={{ color: C.fg1 }}>· обычный клиент проходит, не проходит: </span><span style={{ color: "#F26B6B" }}>{b.types.join(", ")}</span>
+          <div key={b.cardId} className="flex items-center gap-3 py-2" style={{ borderTop: `1px solid ${C.border}` }}>
+            <span className="text-[12px] min-w-0 flex-1 truncate" style={{ color: C.fg4 }} title={b.name}>{b.name}</span>
+            <span className="flex gap-1">
+              {b.failing.map(i => (
+                <button key={itemKey(i)} onClick={() => onOpen(i)} className="rounded-full transition-transform hover:scale-110">
+                  <Avatar id={i.persona} size={24} color={RED} title={`${cap(personaName(state, i.persona))}: не пройден — открыть разговор`} />
+                </button>
+              ))}
+            </span>
           </div>
         ))}
-        {!breaks.length && <div className="text-[12px]" style={{ color: C.fg1 }}>Таких сценариев нет: там, где обычный клиент проходит, проходят и остальные.</div>}
+        {breaks.length > 8 && <div className="text-[11px] pt-1" style={{ color: C.fg0 }}>и ещё {breaks.length - 8} {plural(breaks.length - 8, "сценарий", "сценария", "сценариев")}</div>}
+        {!breaks.length && <div className="text-[12px] mt-2" style={{ color: C.fg1 }}>Таких сценариев нет: где проходит обычный клиент, проходят и остальные.</div>}
       </Panel>
     </div>
   );
@@ -339,7 +423,7 @@ function Insights({ run, previous }: { run: LabRun; previous: LabRun | null }) {
         <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>частые причины провала</div>
         {top.map(([rule, n]) => (
           <div key={rule} className="flex gap-3 text-[12px] py-1" style={{ color: C.fg2 }}>
-            <span className="font-mono w-6 text-right flex-shrink-0" style={{ color: "#F26B6B" }}>{n}</span><span>{rule}</span>
+            <span className="font-mono w-6 text-right flex-shrink-0" style={{ color: RED }}>{n}</span><span>{rule}</span>
           </div>
         ))}
         {!top.length && <div className="text-[12px]" style={{ color: C.fg1 }}>Провалов нет</div>}
@@ -352,7 +436,7 @@ function Insights({ run, previous }: { run: LabRun; previous: LabRun | null }) {
         {previous && (
           <div className="flex flex-col gap-1 text-[12px]" style={{ color: C.fg2 }}>
             <div><span className="font-mono" style={{ color: C.green }}>лучше: {better.length}</span> {better.slice(0, 4).join(", ")}</div>
-            <div><span className="font-mono" style={{ color: "#F26B6B" }}>хуже: {worse.length}</span> {worse.slice(0, 4).join(", ")}</div>
+            <div><span className="font-mono" style={{ color: RED }}>хуже: {worse.length}</span> {worse.slice(0, 4).join(", ")}</div>
             <div style={{ color: C.fg1 }}>без изменений: {cards.length - better.length - worse.length}</div>
           </div>
         )}
@@ -513,7 +597,7 @@ function LogsView({ state, onOpen }: { state: LabState; onOpen: (runId?: string)
     <Page title="Оценка логов" lede={lede} actions={actions}>
       <div className="grid grid-cols-4 gap-3 mt-6">
         <Stat label="проверено" value={s.checked} sub="разговоров из логов" />
-        <Stat label="с нарушением" value={`${pct(s.failed, s.checked)}%`} sub={`${s.failed} ${plural(s.failed, "разговор", "разговора", "разговоров")}`} color="#F26B6B" />
+        <Stat label="с нарушением" value={`${pct(s.failed, s.checked)}%`} sub={`${s.failed} ${plural(s.failed, "разговор", "разговора", "разговоров")}`} color={RED} />
         <Stat label="без нарушений" value={s.passed} sub={`нет данных: ${s.unmeasured}`} color={C.green} />
         <Stat label="правил" value={rules} sub={`в ${d.topics.length} темах`} />
       </div>
@@ -531,7 +615,7 @@ function LogsView({ state, onOpen }: { state: LabState; onOpen: (runId?: string)
           return (
             <div key={i} className="grid grid-cols-[64px_1fr] gap-4 px-4 py-4" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
               <div>
-                <div className="text-[26px] leading-none" style={{ ...titleFont, color: "#F26B6B" }}>{p.count}</div>
+                <div className="text-[26px] leading-none" style={{ ...titleFont, color: RED }}>{p.count}</div>
                 <div className="text-[10px] font-mono mt-1" style={{ color: C.fg0 }}>{plural(p.count, "разговор", "разговора", "разговоров")}</div>
               </div>
               <div className="min-w-0">
@@ -539,7 +623,7 @@ function LogsView({ state, onOpen }: { state: LabState; onOpen: (runId?: string)
                 <div className="text-[12px] mt-0.5" style={{ color: C.fg2 }}>Правило: {p.rule} <span style={{ color: C.fg0 }}>· {p.topics.length > 1 ? `${p.topics.length} темы` : p.topics[0]}</span></div>
                 <Quote who="промпт">«{p.quote}»</Quote>
                 <Quote who="клиент">{ex.opening}</Quote>
-                {ex.agentQuote && <Quote who="агент" color="#F26B6B">«{ex.agentQuote}»</Quote>}
+                {ex.agentQuote && <Quote who="агент" color={RED}>«{ex.agentQuote}»</Quote>}
                 <div className="flex items-center gap-3 mt-2 text-[11px]" style={{ color: C.fg1 }}>
                   <span className="min-w-0">{ex.reason}</span>
                   {trace && <button className="font-mono flex-shrink-0 inline-flex items-center gap-0.5 hover:underline" style={{ color: C.accent }} onClick={() => onOpen(trace)}>открыть разговор<ChevronRight className="size-3" /></button>}
@@ -560,16 +644,22 @@ function CardView({ card, state, onBack }: { card: Card; state: LabState; onBack
   return (
     <div className="max-w-[860px] mx-auto px-8 py-7">
       <button className="inline-flex items-center gap-1 text-[11px] font-mono mb-4 hover:underline" style={{ color: C.fg1 }} onClick={onBack}><ArrowLeft className="size-3" />все сценарии</button>
-      <div className="flex items-center gap-2"><span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{card.topic}</span><Pill status={card.origin === "Ошибка из лога" ? "FAIL" : "NOT_APPLICABLE"}>{card.origin}</Pill></div>
+      <div className="flex items-center gap-3"><span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{card.topic}</span><Origin origin={card.origin} /></div>
       <div className="text-[21px] font-medium mt-1" style={{ ...titleFont, color: C.fg5 }}>{card.name}</div>
       {card.openings && Object.keys(card.openings).length > 0 ? (
         <>
-          <Label>первая реплика у разных клиентов</Label>
-          <Panel>
-            {[{ id: DEFAULT_PERSONA, text: card.opening }, ...state.personas.filter(p => card.openings?.[p.id]).map(p => ({ id: p.id, text: card.openings![p.id] }))].map((row, i) => (
-              <div key={row.id} className="grid grid-cols-[130px_1fr] gap-4 px-4 py-2.5" style={{ borderTop: i ? `1px solid ${C.border}` : undefined }}>
-                <span className="text-[11px] pt-px" style={{ color: C.fg1 }}>{personaName(state, row.id)}{row.id === DEFAULT_PERSONA ? " · из лога" : ""}</span>
-                <span className="text-[13px] leading-relaxed" style={{ color: C.fg4 }}>{row.text}</span>
+          <Label>как начинают разговор разные клиенты</Label>
+          <Panel className="py-1.5">
+            {[{ id: DEFAULT_PERSONA, text: card.opening }, ...state.personas.filter(p => card.openings?.[p.id]).map(p => ({ id: p.id, text: card.openings![p.id] }))].map(row => (
+              <div key={row.id} className="grid grid-cols-[180px_1fr] gap-4 items-start px-4 py-2">
+                <div className="flex items-center gap-2.5 pt-0.5">
+                  <Avatar id={row.id} size={30} />
+                  <div className="min-w-0">
+                    <div className="text-[12px]" style={{ color: C.fg4 }}>{cap(personaName(state, row.id))}</div>
+                    <div className="text-[10px] font-mono" style={{ color: C.fg0 }}>{row.id === DEFAULT_PERSONA ? "дословно из лога" : "в своей манере"}</div>
+                  </div>
+                </div>
+                <div className="justify-self-start px-3.5 py-2 rounded-2xl rounded-tl-md text-[13px] leading-relaxed" style={{ background: C.user, color: C.fg4 }}>{row.text}</div>
               </div>
             ))}
           </Panel>
@@ -641,11 +731,24 @@ function CardsView({ state, onPick }: { state: LabState; onPick: (id: string) =>
             style={{ background: C.surface, border: `1px solid ${C.border}` }}
             onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.16)"; }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}>
-            <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-mono truncate" style={{ color: C.fg0 }}>{c.topic}</span><Pill status={c.origin === "Ошибка из лога" ? "FAIL" : "NOT_APPLICABLE"}>{c.origin}</Pill></div>
+            <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-mono truncate" style={{ color: C.fg0 }}>{c.topic}</span><Origin origin={c.origin} /></div>
             <div className="text-[15px] font-medium" style={{ color: C.fg5 }}>{c.name}</div>
             <Bubble>{c.opening}</Bubble>
-            <div className="flex flex-col gap-1">
-              {c.criteria.map(k => <div key={k.id} className="text-[12px] flex gap-1.5" style={{ color: C.fg2 }}><span style={{ color: C.accent }}>◇</span>{k.text}</div>)}
+            <div className="flex flex-col gap-1.5">
+              {c.criteria.map(k => (
+                <div key={k.id} className="text-[12px] leading-snug flex gap-2" style={{ color: C.fg2 }}>
+                  <span className="mt-[6px] size-1 rounded-full flex-shrink-0" style={{ background: C.fg0 }} /><span className="line-clamp-2">{k.text}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-auto pt-2.5 flex items-center justify-between gap-2" style={{ borderTop: `1px solid ${C.border}` }}>
+              <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{c.criteria.length} {plural(c.criteria.length, "критерий", "критерия", "критериев")}</span>
+              {!!c.openings && Object.keys(c.openings).length > 0 && (
+                <span className="inline-flex items-center gap-2 text-[10px] font-mono" style={{ color: C.fg0 }}>
+                  <AvatarStack ids={[DEFAULT_PERSONA, ...state.personas.filter(p => c.openings?.[p.id]).map(p => p.id)]} size={18} />
+                  голоса клиентов
+                </span>
+              )}
             </div>
           </button>
         ))}
@@ -660,8 +763,8 @@ function AgentMessage({ m }: { m: Message }) {
   const long = m.text.length > 700;
   const calls = (m.events ?? []).map(e => e.tool.replace("Система банка · ", "")).filter((t, k, all) => all.indexOf(t) === k);
   return (
-    <div className="self-start max-w-[88%] flex flex-col gap-1">
-      <div className="px-3.5 py-2.5 rounded-2xl rounded-bl-md text-[13px] leading-relaxed whitespace-pre-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.fg4 }}>
+    <div className="min-w-0 max-w-[84%] flex flex-col gap-1">
+      <div className="px-3.5 py-2.5 rounded-2xl rounded-tl-md text-[13px] leading-relaxed whitespace-pre-wrap" style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.fg4 }}>
         <div style={long && !open ? { maxHeight: 220, overflow: "hidden", maskImage: "linear-gradient(#000 70%, transparent)" } : undefined}>{m.text}</div>
         {long && <button className="text-[11px] font-mono mt-1 hover:underline" style={{ color: C.fg1 }} onClick={() => setOpen(v => !v)}>{open ? "свернуть" : "показать полностью"}</button>}
       </div>
@@ -674,46 +777,63 @@ function AgentMessage({ m }: { m: Message }) {
   );
 }
 
-/** The conversation as it happened, the judge's verdict on top and every criterion below it. */
+/** The conversation as it happened: the verdict on top, the chat with who wrote each message, every criterion below. */
 function Conversation({ item, state }: { item: Item; state: LabState }) {
   const order: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
   const rules = [...item.rules].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
   const lead = rules.find(r => r.status === "FAIL") ?? rules.find(r => r.status === "PASS");
-  const icon = (st: string) => st === "PASS" ? "✓" : st === "FAIL" ? "✗" : st === "NOT_APPLICABLE" ? "–" : "?";
+  const color = tone(item.status);
+  const second = item.second && ["PASS", "FAIL", "UNMEASURED"].includes(item.second.status) ? item.second : null;
+  const who = cap(personaName(state, item.persona));
   return (
-    <div className="max-w-[880px] mx-auto px-6 py-5 flex flex-col gap-5">
-      <div className="flex items-start gap-3">
-        <Pill status={item.status}>{STATUS_TEXT[item.status]}</Pill>
-        <div className="text-[13px] leading-relaxed" style={{ color: C.fg3 }}>
-          {item.status === "RUNNING" ? item.stage : lead?.reason ?? item.error ?? "Судья не нашёл доказательств ни выполнения, ни нарушения."}
-          {item.second && ["PASS", "FAIL", "UNMEASURED"].includes(item.second.status) && (
-            <span className="block text-[11px] mt-1" style={{ color: disputed(item) ? C.orange : C.fg1 }}>
-              второй судья: {disputed(item) ? `не согласен — ${STATUS_TEXT[item.second.status as Status]}` : "согласен"}
-            </span>
+    <div className="max-w-[880px] mx-auto px-6 py-5 flex flex-col gap-6">
+      <div className="flex items-start gap-3 rounded-lg px-4 py-3.5" style={{ background: `${color}0d`, border: `1px solid ${color}2e` }}>
+        <StatusIcon status={item.status} size={26} />
+        <div className="min-w-0 pt-0.5">
+          <div className="text-[13px] font-medium" style={{ color }}>{cap(STATUS_TEXT[item.status])}</div>
+          <div className="text-[13px] leading-relaxed mt-0.5" style={{ color: C.fg3 }}>
+            {item.status === "RUNNING" ? item.stage : lead?.reason ?? item.error ?? "Судья не нашёл доказательств ни выполнения, ни нарушения."}
+          </div>
+          {second && (
+            <div className="flex items-center gap-1.5 text-[11px] mt-2" style={{ color: disputed(item) ? C.orange : C.fg1 }}>
+              <StatusIcon status={second.status} size={15} />
+              второй судья: {disputed(item) ? `не согласен, по его оценке — ${STATUS_TEXT[second.status as Status]}` : "согласен"}
+            </div>
           )}
         </div>
       </div>
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3.5">
         {item.conversation.map((m, k) => m.role === "customer"
           ? (
-            <div key={k} className="self-end max-w-[80%] flex flex-col items-end gap-1">
-              <div className="px-3.5 py-2 rounded-2xl rounded-br-md text-[13px]" style={{ background: C.user, color: C.fg4 }}>{m.text}</div>
-              {k === 0 && <div className="text-[10px] font-mono" style={{ color: C.fg0 }}>{m.fromLog ? "первая реплика из лога" : m.rewritten ? `реплика из лога, как написал бы: ${personaName(state, item.persona)}` : ""}</div>}
+            <div key={k} className="flex items-start justify-end gap-2.5">
+              <div className="min-w-0 max-w-[78%] flex flex-col items-end gap-1">
+                <div className="px-3.5 py-2 rounded-2xl rounded-tr-md text-[13px] leading-relaxed" style={{ background: C.user, color: C.fg4 }}>{m.text}</div>
+                {k === 0 && <div className="text-[10px] font-mono" style={{ color: C.fg0 }}>{who} · {m.fromLog ? "дословно из лога" : m.rewritten ? "реплика из лога в своей манере" : "симулятор клиента"}</div>}
+              </div>
+              <Avatar id={item.persona} size={28} title={who} />
             </div>
           )
-          : <AgentMessage key={k} m={m} />)}
+          : (
+            <div key={k} className="flex items-start gap-2.5">
+              <span className="size-7 rounded-full inline-flex items-center justify-center flex-shrink-0" title="агент"
+                style={{ color: C.fg2, background: "rgba(255,255,255,0.06)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.10)" }}>
+                <Bot className="size-3.5" strokeWidth={1.8} />
+              </span>
+              <AgentMessage m={m} />
+            </div>
+          ))}
       </div>
       {rules.length > 0 && (
         <div>
-          <div className="text-[10px] font-mono uppercase tracking-wider mb-2" style={{ color: C.fg0 }}>критерии судьи</div>
-          <Panel>
+          <Caption>критерии судьи</Caption>
+          <Panel className="mt-2">
             {rules.map((r, k) => (
-              <div key={r.ruleId} className="grid grid-cols-[20px_1fr] gap-2 px-4 py-2.5 text-[12px]" style={{ borderTop: k ? `1px solid ${C.border}` : undefined, opacity: r.status === "NOT_APPLICABLE" ? 0.55 : 1 }}>
-                <span className="font-mono text-[13px]" style={{ color: tone(r.status) }} title={RULE_TEXT[r.status]}>{icon(r.status)}</span>
-                <div>
+              <div key={r.ruleId} className="grid grid-cols-[20px_1fr] gap-3 px-4 py-3 text-[12px]" style={{ borderTop: k ? `1px solid ${C.border}` : undefined, opacity: r.status === "NOT_APPLICABLE" ? 0.55 : 1 }}>
+                <span title={RULE_TEXT[r.status]}><StatusIcon status={r.status} size={20} /></span>
+                <div className="pt-px">
                   <div style={{ color: C.fg4 }}>{r.rule}</div>
                   <div className="mt-0.5" style={{ color: C.fg1 }}>{r.reason}</div>
-                  {r.agentQuote && <Quote who="агент" color={r.status === "FAIL" ? "#F26B6B" : undefined}>«{r.agentQuote}»</Quote>}
+                  {r.agentQuote && <Quote who="агент" color={r.status === "FAIL" ? RED : undefined}>«{r.agentQuote}»</Quote>}
                 </div>
               </div>
             ))}
@@ -724,7 +844,39 @@ function Conversation({ item, state }: { item: Item; state: LabState }) {
   );
 }
 
-/** The settings of a new run: agent, customer types, repeats; the button says how many conversations it makes. */
+/** A checkbox (or, round, a radio) drawn in the Lab's colours. */
+function Tick({ on, round }: { on: boolean; round?: boolean }) {
+  return (
+    <span className={`size-4 flex-shrink-0 inline-flex items-center justify-center transition-colors ${round ? "rounded-full" : "rounded-[5px]"}`}
+      style={{ color: "#000", background: on ? C.fg5 : "transparent", boxShadow: on ? undefined : `inset 0 0 0 1.5px ${C.fg0}` }}>
+      {on && (round ? <span className="size-1.5 rounded-full bg-black" /> : <Check className="size-3" strokeWidth={3} />)}
+    </span>
+  );
+}
+
+/** A customer type to pick for a run: who it is, and a message the way this customer writes it. */
+function PersonaOption({ persona, on, sample, onClick }: { persona: Persona; on: boolean; sample: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} aria-pressed={on} className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors hover:bg-white/[0.03]"
+      style={{ background: on ? "rgba(255,255,255,0.05)" : undefined, border: `1px solid ${on ? "rgba(255,255,255,0.18)" : C.border}` }}>
+      <Tick on={on} />
+      <Avatar id={persona.id} size={34} dim={!on} />
+      <span className="w-[210px] flex-shrink-0 min-w-0">
+        <span className="flex items-center gap-2 text-[13px] font-medium" style={{ color: on ? C.fg5 : C.fg3 }}>
+          {cap(persona.name)}
+          {persona.id === DEFAULT_PERSONA && <span className="text-[9px] font-mono uppercase px-1 py-px rounded" style={{ color: C.fg1, background: "rgba(255,255,255,0.06)" }}>база</span>}
+        </span>
+        <span className="block text-[11px] leading-snug mt-0.5" style={{ color: C.fg1 }}>{persona.note}</span>
+      </span>
+      {sample && (
+        <span className="ml-auto min-w-0 px-3 py-1.5 rounded-2xl rounded-br-md text-[12px] leading-snug line-clamp-2 transition-colors"
+          style={{ background: on ? C.user : "rgba(255,255,255,0.04)", color: on ? C.fg4 : C.fg1 }}>{sample}</span>
+      )}
+    </button>
+  );
+}
+
+/** The settings of a new run: agent, customer types, repeats; the footer says how many conversations it makes. */
 function NewRun({ state, target, setTarget, onStarted }: { state: LabState; target: string; setTarget: (t: string) => void; onStarted?: () => void }) {
   const deck = state.cards?.cards ?? [];
   const [repeats, setRepeats] = useState(1);
@@ -732,34 +884,62 @@ function NewRun({ state, target, setTarget, onStarted }: { state: LabState; targ
   const toggleType = (id: string) => setTypes(t => t.includes(id) ? (t.length > 1 ? t.filter(x => x !== id) : t) : [...t, id]);
   const start = () => api("/api/runs", { target, repeats, personas: types }).then(() => onStarted?.()).catch(e => alert(e.message));
   const total = deck.length * types.length * repeats;
-  const chosen = state.personas.filter(p => types.includes(p.id) && p.id !== DEFAULT_PERSONA);
+  // How each type writes: one scenario's opening in its manner once a run has rewritten it, the type's own example before that.
+  const example = deck.find(c => c.openings && Object.keys(c.openings).length) ?? deck[0];
+  const sample = (p: Persona) => (p.id === DEFAULT_PERSONA ? example?.opening : example?.openings?.[p.id]) ?? p.sample ?? "";
+  const n = (value: number) => <b className="font-medium" style={{ color: C.fg4 }}>{value}</b>;
   return (
-    <Panel>
-      <SettingRow first label="агент">
-        <div className="flex gap-1.5 flex-wrap">
-          {state.targets.map(t => <Choice key={t.id} on={t.id === target} onClick={() => setTarget(t.id)} title={t.note}>{t.name}</Choice>)}
-        </div>
-      </SettingRow>
-      <SettingRow label="клиенты">
-        <div className="flex gap-1.5 flex-wrap">
-          {state.personas.map(p => <Choice key={p.id} on={types.includes(p.id)} onClick={() => toggleType(p.id)} title={p.note}>{p.name}</Choice>)}
-        </div>
-        <div className="text-[11px] mt-2 leading-relaxed" style={{ color: C.fg1 }}>
-          {chosen.length ? chosen.map(p => `${p.name} — ${p.note}`).join("; ") : "Клиент пишет так, как в логе. Добавьте типы клиентов, чтобы увидеть, где агент ломается от манеры общения."}
-        </div>
-      </SettingRow>
-      <SettingRow label="повторы">
-        <div className="flex gap-1.5">
-          {[1, 2, 3].map(n => <Choice key={n} on={repeats === n} onClick={() => setRepeats(n)}>{n === 1 ? "1 раз" : `${n} раза`}</Choice>)}
-        </div>
-      </SettingRow>
-      <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3" style={{ borderTop: `1px solid ${C.border}` }}>
-        <span className="text-[12px]" style={{ color: C.fg2 }}>
-          {deck.length} {plural(deck.length, "сценарий", "сценария", "сценариев")} × {types.length} {plural(types.length, "клиент", "клиента", "клиентов")}{repeats > 1 ? ` × ${repeats} повтора` : ""} = <b style={{ color: C.fg5 }}>{total} {plural(total, "разговор", "разговора", "разговоров")}</b>
+    <>
+      <div className="flex-1 min-h-0 overflow-auto sb px-5 py-4 flex flex-col gap-5">
+        <section>
+          <Caption>агент</Caption>
+          <div className="grid grid-cols-3 gap-2 mt-2">
+            {state.targets.map(t => {
+              const on = t.id === target;
+              return (
+                <button key={t.id} disabled={!t.ready} onClick={() => setTarget(t.id)} title={t.note}
+                  className="text-left rounded-lg px-3 py-2.5 transition-colors hover:bg-white/[0.03] disabled:opacity-40 disabled:cursor-default"
+                  style={{ background: on ? "rgba(255,255,255,0.05)" : undefined, border: `1px solid ${on ? "rgba(255,255,255,0.18)" : C.border}` }}>
+                  <span className="flex items-center gap-2">
+                    <Tick on={on} round />
+                    <span className="text-[13px] font-medium truncate" style={{ color: on ? C.fg5 : C.fg3 }}>{t.name}</span>
+                  </span>
+                  <span className="block text-[10px] font-mono truncate mt-1 pl-6" style={{ color: C.fg0 }}>{t.kind === "code" ? "код" : "http"} · {t.where || "адрес не задан"}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+        <section>
+          <div className="flex items-baseline justify-between gap-3">
+            <Caption>клиенты</Caption>
+            <span className="text-[11px]" style={{ color: C.fg1 }}>каждый сценарий пройдёт каждый выбранный клиент</span>
+          </div>
+          <div className="flex flex-col gap-1.5 mt-2">
+            {state.personas.map(p => <PersonaOption key={p.id} persona={p} on={types.includes(p.id)} sample={sample(p)} onClick={() => toggleType(p.id)} />)}
+          </div>
+        </section>
+        <section className="flex items-center gap-4 flex-wrap">
+          <Caption>повторы</Caption>
+          <div className="inline-flex p-0.5 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}` }}>
+            {[1, 2, 3].map(k => (
+              <button key={k} onClick={() => setRepeats(k)} className="px-3 py-1 rounded-md text-[12px] transition-colors"
+                style={{ background: repeats === k ? "rgba(255,255,255,0.13)" : "transparent", color: repeats === k ? C.fg5 : C.fg1 }}>
+                {k === 1 ? "1 раз" : `${k} раза`}
+              </button>
+            ))}
+          </div>
+          <span className="text-[11px]" style={{ color: C.fg1 }}>одинаковый итог на повторах — оценке можно доверять</span>
+        </section>
+      </div>
+      <div className="flex-shrink-0 flex items-center justify-between gap-3 flex-wrap px-5 py-3.5" style={{ borderTop: `1px solid ${C.border}`, background: "rgba(255,255,255,0.02)" }}>
+        <span className="text-[12px]" style={{ color: C.fg1 }}>
+          {n(deck.length)} {plural(deck.length, "сценарий", "сценария", "сценариев")} × {n(types.length)} {plural(types.length, "клиент", "клиента", "клиентов")}
+          {repeats > 1 && <> × {n(repeats)} повтора</>} = <b className="font-medium" style={{ color: C.fg5 }}>{total} {plural(total, "разговор", "разговора", "разговоров")}</b>
         </span>
         <Action primary disabled={state.job.running || !deck.length} onClick={start}><Play className="size-3" />запустить</Action>
       </div>
-    </Panel>
+    </>
   );
 }
 
@@ -772,15 +952,31 @@ function RunStage({ state, run, itemId, target, setTarget, onOpen }: { state: La
   const review = (decision: "agree" | "disagree" | null) =>
     run && api("/api/review", { run: run.id, index, decision }).catch(e => alert(e.message));
   if (!run) {
-    return <Page title="Прогон" lede="Искусственный клиент начинает с первой реплики из лога и продолжает разговор по ситуации сценария. Судья проверяет каждый разговор по критериям."><div className="mt-5"><NewRun state={state} target={target} setTarget={setTarget} /></div><div className="mt-3"><JobLine state={state} kind="run" /></div></Page>;
+    return (
+      <Page title="Прогон" lede="Искусственный клиент начинает с первой реплики из лога и продолжает разговор по ситуации сценария. Судья проверяет каждый разговор по критериям.">
+        <Panel className="mt-5 flex flex-col overflow-hidden"><NewRun state={state} target={target} setTarget={setTarget} /></Panel>
+        <div className="mt-3"><JobLine state={state} kind="run" /></div>
+      </Page>
+    );
   }
   const disputes = items.filter(disputed).length;
+  const types = state.personas.filter(p => items.some(i => (i.persona ?? DEFAULT_PERSONA) === p.id));
+  const order = (i: Item) => types.findIndex(p => p.id === (i.persona ?? DEFAULT_PERSONA)) * 10 + (i.attempt ?? 1);
+  const siblings = selected ? items.filter(i => i.cardId === selected.cardId).sort((a, b) => order(a) - order(b)) : [];
   return (
     <div className="h-full flex flex-col">
       <div className="flex-shrink-0 flex items-center gap-3 flex-wrap px-4 py-2.5" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <div className="min-w-0 flex-1">
-          <span className="text-[14px] font-medium" style={{ color: C.fg5 }}>{run.targetName}</span>
-          <span className="text-[12px] ml-2" style={{ color: C.fg1 }}>версия {run.version} · {when(run.startedAt)}{disputes ? ` · спор судей: ${disputes}` : ""}</span>
+        <div className="min-w-0 flex-1 flex items-center gap-4">
+          <div className="min-w-0">
+            <div className="text-[14px] font-medium truncate" style={{ color: C.fg5 }}>{run.targetName}</div>
+            <div className="text-[11px] font-mono truncate" style={{ color: C.fg1 }}>версия {run.version} · {when(run.startedAt)}{disputes ? ` · спор судей: ${disputes}` : ""}</div>
+          </div>
+          {types.length > 1 && (
+            <span className="hidden xl:inline-flex items-center gap-2 text-[11px]" style={{ color: C.fg1 }} title={types.map(p => cap(p.name)).join(", ")}>
+              <AvatarStack ids={types.map(p => p.id)} size={20} ring={C.bg} />
+              {types.length} {plural(types.length, "тип клиента", "типа клиентов", "типов клиентов")}
+            </span>
+          )}
         </div>
         <JobLine state={state} kind="run" />
         <JobLine state={state} kind="rejudge" />
@@ -788,22 +984,42 @@ function RunStage({ state, run, itemId, target, setTarget, onOpen }: { state: La
         <span className="text-[20px] px-1" style={{ ...titleFont, color: C.fg5 }} title="точность прогона">{run.metric?.accuracy ?? "—"}%</span>
         <Action primary disabled={state.job.running} onClick={() => setCreating(true)}><Play className="size-3" />новый прогон</Action>
       </div>
-      {run.error && <div className="flex-shrink-0 px-4 py-2 text-[12px]" style={{ color: "#F26B6B", borderBottom: `1px solid ${C.border}` }}>{run.error}</div>}
+      {run.error && <div className="flex-shrink-0 px-4 py-2 text-[12px]" style={{ color: RED, borderBottom: `1px solid ${C.border}` }}>{run.error}</div>}
       {selected && (
-        <div className="flex-shrink-0 flex items-center gap-2 flex-wrap px-4 py-2" style={{ background: "rgba(255,255,255,0.03)", borderBottom: `1px solid ${C.border}` }}>
-          <span className="text-[13px] font-medium" style={{ color: C.fg4 }}>{selected.name}</span>
-          {new Set(items.map(i => i.persona ?? DEFAULT_PERSONA)).size > 1 && <PersonaTag state={state} id={selected.persona} />}
-          {selected.attempt && selected.attempt > 1 && <span className="text-[11px] font-mono" style={{ color: C.fg1 }}>повтор {selected.attempt}</span>}
-          <span className="ml-auto inline-flex items-center gap-1.5">
-            {selected.runId && <a href={`/runs/${selected.runId}`} className="text-[11px] font-mono mr-3 hover:underline" style={{ color: C.fg1 }}>трейс в Workshop</a>}
-            {["PASS", "FAIL"].includes(selected.status) && <span className="text-[11px]" style={{ color: C.fg1 }}>судья прав?</span>}
-            {["PASS", "FAIL"].includes(selected.status) && (["agree", "disagree"] as const).map(d => (
-              <button key={d} onClick={() => review(selected.review === d ? null : d)} className="text-[11px] font-mono px-2 py-0.5 rounded"
-                style={{ color: selected.review === d ? "#000" : C.fg2, background: selected.review === d ? (d === "agree" ? C.green : "#F26B6B") : "rgba(255,255,255,0.07)" }}>
-                {d === "agree" ? "верно" : "неверно"}
-              </button>
-            ))}
-          </span>
+        <div className="flex-shrink-0 flex flex-col gap-2 px-4 py-2.5" style={{ background: "rgba(255,255,255,0.03)", borderBottom: `1px solid ${C.border}` }}>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[13px] font-medium" style={{ color: C.fg4 }}>{selected.name}</span>
+            <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{selected.topic}</span>
+            <span className="ml-auto inline-flex items-center gap-1.5">
+              {selected.runId && <a href={`/runs/${selected.runId}`} className="text-[11px] font-mono mr-3 hover:underline" style={{ color: C.fg1 }}>трейс в Workshop</a>}
+              {["PASS", "FAIL"].includes(selected.status) && <span className="text-[11px] mr-0.5" style={{ color: C.fg1 }}>судья прав?</span>}
+              {["PASS", "FAIL"].includes(selected.status) && (["agree", "disagree"] as const).map(d => {
+                const on = selected.review === d;
+                return (
+                  <button key={d} onClick={() => review(on ? null : d)} className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-md transition-colors"
+                    style={{ color: on ? "#000" : C.fg2, background: on ? (d === "agree" ? C.green : RED) : "rgba(255,255,255,0.07)" }}>
+                    {d === "agree" ? <Check className="size-3" strokeWidth={2.5} /> : <X className="size-3" strokeWidth={2.5} />}{d === "agree" ? "верно" : "неверно"}
+                  </button>
+                );
+              })}
+            </span>
+          </div>
+          {siblings.length > 1 && (
+            <div className="flex gap-1.5 flex-wrap">
+              {siblings.map(i => {
+                const on = i === selected;
+                return (
+                  <button key={itemKey(i)} onClick={() => onOpen(itemKey(i))} title={STATUS_TEXT[i.status]}
+                    className="inline-flex items-center gap-1.5 h-7 pl-1 pr-2.5 rounded-full text-[12px] transition-colors hover:bg-white/[0.05]"
+                    style={{ color: on ? C.fg5 : C.fg2, background: on ? "rgba(255,255,255,0.09)" : undefined, border: `1px solid ${on ? "rgba(255,255,255,0.2)" : C.border}` }}>
+                    <Avatar id={i.persona} size={20} />
+                    {[types.length > 1 ? cap(personaName(state, i.persona)) : "", (run.repeats ?? 1) > 1 ? `повтор ${i.attempt ?? 1}` : ""].filter(Boolean).join(" · ")}
+                    <span className="inline-flex ml-0.5" style={{ color: tone(i.status) }}><Mark status={i.status} size={12} /></span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-auto sb">
@@ -811,22 +1027,30 @@ function RunStage({ state, run, itemId, target, setTarget, onOpen }: { state: La
           ? <Conversation key={itemKey(selected)} item={selected} state={state} />
           : <div className="h-full flex items-center justify-center text-[12px]" style={{ color: C.fg1 }}>В прогоне нет разговоров</div>}
       </div>
-      {creating && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setCreating(false)}>
-          <div className="w-full max-w-[760px]" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[15px] font-medium" style={{ ...titleFont, color: C.fg5 }}>Новый прогон</span>
-              <button className="text-[12px] font-mono hover:underline" style={{ color: C.fg1 }} onClick={() => setCreating(false)}>закрыть</button>
-            </div>
-            <NewRun state={state} target={target} setTarget={setTarget} onStarted={() => { setCreating(false); onOpen(undefined); }} />
-          </div>
-        </div>
-      )}
+      <Dialog.Root open={creating} onOpenChange={setCreating}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 grid place-items-center overflow-y-auto p-4 bg-black/70 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0">
+            <Dialog.Content className="w-full max-w-[780px] max-h-[calc(100vh-32px)] flex flex-col rounded-xl overflow-hidden outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+              style={{ background: C.surface, border: `1px solid ${C.borderLight}`, boxShadow: "0 24px 80px rgba(0,0,0,0.6)" }}>
+              <div className="flex-shrink-0 flex items-start justify-between gap-4 px-5 pt-4 pb-3.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+                <div>
+                  <Dialog.Title className="text-[17px] font-medium" style={{ ...titleFont, color: C.fg5 }}>Новый прогон</Dialog.Title>
+                  <Dialog.Description className="text-[12px] mt-1" style={{ color: C.fg1 }}>
+                    Искусственный клиент проходит каждый сценарий с агентом, судья оценивает каждый разговор.
+                  </Dialog.Description>
+                </div>
+                <Dialog.Close className="p-1 rounded-md transition-colors hover:bg-white/10" style={{ color: C.fg1 }} aria-label="закрыть"><X className="size-4" /></Dialog.Close>
+              </div>
+              <NewRun state={state} target={target} setTarget={setTarget} onStarted={() => { setCreating(false); onOpen(undefined); }} />
+            </Dialog.Content>
+          </Dialog.Overlay>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }
 
-function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; run: LabRun | null; onPickRun: (id: string) => void }) {
+function AccuracyView({ state, run: selected, onPickRun, onOpenItem }: { state: LabState; run: LabRun | null; onPickRun: (id: string) => void; onOpenItem: (runId: string, item: Item) => void }) {
   let run = selected;
   const history = state.runs.filter(r => r.metric && r.metric.total && r.status !== "running");
   const deck = state.cards?.cards ?? [];
@@ -842,6 +1066,12 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
   }
   run = finished;
   const m = finished.metric;
+  // Every recent run as a column: its conversations of a scenario grouped by customer type, repeats side by side.
+  const columns = recent.map(r => {
+    const full = details[r.id];
+    const types = state.personas.filter(p => full?.items?.some(i => (i.persona ?? DEFAULT_PERSONA) === p.id));
+    return { run: r, full, types, width: (r.repeats ?? 1) * 18 + ((r.repeats ?? 1) - 1) };
+  });
   return (
     <Page title="Точность агента" lede="Доля разговоров, в которых агент выполнил все критерии сценария. Разговоры со статусом «не измерено» в расчёт не входят.">
       <div className="grid grid-cols-[1fr_1.35fr] gap-3 mt-6">
@@ -852,12 +1082,12 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
             <span className="text-[44px] ml-1" style={{ color: C.fg2 }}>%</span>
           </div>
           <div className="text-[15px] mt-3" style={{ color: C.fg4 }}>
-            агент выполнил все критерии в <b>{m.passed}</b> из <b>{m.measured}</b> {m.repeats ? plural(m.measured, "разговора", "разговоров", "разговоров") : plural(m.measured, "сценария", "сценариев", "сценариев")}
+            агент выполнил все критерии в <b>{m.passed}</b> из <b>{m.measured}</b> {m.repeats || m.personas ? plural(m.measured, "разговора", "разговоров", "разговоров") : plural(m.measured, "сценария", "сценариев", "сценариев")}
             {m.repeats && <span className="text-[12px]" style={{ color: C.fg1 }}> · {m.repeats.scenarios} сценариев × {m.repeats.attempts} повтора</span>}
           </div>
           <div className="flex h-1.5 rounded-full overflow-hidden mt-5" style={{ background: "rgba(255,255,255,0.06)" }}>
             <div style={{ width: `${pct(m.passed, m.total)}%`, background: C.green }} />
-            <div style={{ width: `${pct(m.failed, m.total)}%`, background: "#F26B6B" }} />
+            <div style={{ width: `${pct(m.failed, m.total)}%`, background: RED }} />
             <div style={{ width: `${pct(m.unmeasured, m.total)}%`, background: C.orange }} />
           </div>
           <div className="flex gap-4 mt-3 flex-wrap">
@@ -882,7 +1112,10 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
               style={{ borderTop: `1px solid ${C.border}`, background: r.id === run.id ? C.selected : undefined }}>
               <div className="min-w-0">
                 <div className="text-[13px] truncate" style={{ color: C.fg4 }}>{r.targetName}</div>
-                <div className="text-[10px] font-mono truncate" style={{ color: C.fg0 }}>{r.version} · {when(r.startedAt)}</div>
+                <div className="flex items-center gap-2 text-[10px] font-mono" style={{ color: C.fg0 }}>
+                  <span className="truncate">{r.version} · {when(r.startedAt)}</span>
+                  {(r.personas?.length ?? 0) > 1 && <span className="flex-shrink-0" title="типы клиентов"><AvatarStack ids={r.personas!} size={18} ring={r.id === run.id ? "#10141c" : C.surface} /></span>}
+                </div>
               </div>
               <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}><div className="h-full" style={{ width: `${r.metric?.accuracy ?? 0}%`, background: C.fg3 }} /></div>
               <div className="text-[15px] text-right" style={{ ...titleFont, color: C.fg5 }}>{r.metric?.accuracy ?? "—"}%</div>
@@ -890,24 +1123,52 @@ function AccuracyView({ state, run: selected, onPickRun }: { state: LabState; ru
           ))}
         </Panel>
       </div>
-      {m.personas && <PersonaBreakdown state={state} run={finished} />}
+      {m.personas && <PersonaBreakdown state={state} run={finished} onOpen={i => onOpenItem(finished.id, i)} />}
       <Insights run={finished} previous={history.filter(r => r.id !== finished.id && r.target === finished.target)[0] ? details[history.filter(r => r.id !== finished.id && r.target === finished.target)[0].id] ?? null : null} />
       <Label>итоги по сценариям</Label>
       <Panel className="overflow-x-auto">
         <table className="w-full text-[12px]">
           <thead>
             <tr style={{ color: C.fg0 }}>
-              <th className="text-left font-mono font-normal text-[10px] px-4 py-2">сценарий</th>
-              {recent.map(r => <th key={r.id} className="font-mono font-normal text-[10px] px-3 py-2 text-center whitespace-nowrap">{r.targetName}<br />{when(r.startedAt)}</th>)}
+              <th className="text-left font-mono font-normal text-[10px] px-4 py-2 align-bottom">сценарий</th>
+              {columns.map(({ run: r, types, width }) => (
+                <th key={r.id} className="font-mono font-normal text-[10px] px-3 py-2 text-center whitespace-nowrap align-bottom">
+                  {r.targetName}<br />{when(r.startedAt)}
+                  {types.length > 1 && (
+                    <span className="flex justify-center gap-1 mt-1.5">
+                      {types.map(p => <span key={p.id} className="flex justify-center" style={{ width }}><Avatar id={p.id} size={18} title={cap(p.name)} /></span>)}
+                    </span>
+                  )}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {deck.map(c => (
               <tr key={c.id} style={{ borderTop: `1px solid ${C.border}` }}>
                 <td className="px-4 py-2" style={{ color: C.fg3 }}>{c.name}</td>
-                {recent.map(r => {
-                  const attempts = details[r.id]?.items?.filter(i => i.cardId === c.id) ?? [];
-                  return <td key={r.id} className="px-3 py-2 text-center">{attempts.length ? attempts.map((item, k) => <span key={k} className="font-mono" style={{ color: tone(item.status) }}>{item.status === "PASS" ? "✓" : item.status === "FAIL" ? "✗" : "?"}</span>) : <span style={{ color: C.fg0 }}>·</span>}</td>;
+                {columns.map(({ run: r, full, types, width }) => {
+                  const own = full?.items?.filter(i => i.cardId === c.id) ?? [];
+                  const groups = (types.length ? types.map(p => p.id) : [DEFAULT_PERSONA])
+                    .map(id => own.filter(i => (i.persona ?? DEFAULT_PERSONA) === id).sort((a, b) => (a.attempt ?? 1) - (b.attempt ?? 1)));
+                  return (
+                    <td key={r.id} className="px-3 py-1.5 text-center">
+                      {own.length ? (
+                        <span className="inline-flex gap-1">
+                          {groups.map((group, g) => (
+                            <span key={g} className="inline-flex justify-center gap-px" style={{ width }}>
+                              {group.map(i => (
+                                <span key={itemKey(i)} className="size-[18px] rounded inline-flex items-center justify-center" style={{ color: tone(i.status), background: `${tone(i.status)}17` }}
+                                  title={`${cap(personaName(state, i.persona))}${(r.repeats ?? 1) > 1 ? ` · повтор ${i.attempt ?? 1}` : ""}: ${STATUS_TEXT[i.status]}`}>
+                                  <Mark status={i.status} size={10} />
+                                </span>
+                              ))}
+                            </span>
+                          ))}
+                        </span>
+                      ) : <span style={{ color: C.fg0 }}>·</span>}
+                    </td>
+                  );
                 })}
               </tr>
             ))}
@@ -959,16 +1220,18 @@ export function LabPage() {
 
   const go = (s: Step, item?: string | null) => navigate(item ? `/lab/${s}/${encodeURIComponent(item)}` : `/lab/${s}`);
   const pickRun = (id: string) => { setRunId(id); api<LabRun>(`/api/runs/${id}`).then(setRun).catch(() => {}); };
+  const openItem = (id: string, item: Item) => { pickRun(id); go("run", itemKey(item)); };
 
   const d = state?.discover;
   const deck = state?.cards?.cards ?? [];
   const lastScored = state?.runs.find(r => r.metric && r.metric.accuracy !== null && r.status !== "running");
-  const steps: { id: Step; n: string; title: string; value: string; icon: typeof FileText }[] = [
-    { id: "agent", n: "01", title: "агент", icon: Bot, value: state ? `${state.sources.length ? `${state.sources.length} ${plural(state.sources.length, "источник", "источника", "источников")}` : "контекст не собран"} · ${state.models.via}` : "" },
-    { id: "logs", n: "02", title: "логи", icon: FileText, value: d ? `${d.summary.checked} разговоров · ${pct(d.summary.failed, d.summary.checked)}% с нарушениями` : state?.logs.total ? `${state.logs.total} в выгрузке · не оценены` : "выгрузка не загружена" },
-    { id: "cards", n: "03", title: "сценарии", icon: FlaskConical, value: deck.length ? `${deck.length} ${plural(deck.length, "сценарий", "сценария", "сценариев")}` : "ещё не собраны" },
-    { id: "run", n: "04", title: "прогон", icon: MessagesSquare, value: state?.runs.length ? `${state.runs.length} ${plural(state.runs.length, "прогон", "прогона", "прогонов")}` : "ещё не было" },
-    { id: "accuracy", n: "05", title: "точность", icon: Gauge, value: lastScored ? `${lastScored.metric!.accuracy}% · ${lastScored.targetName}` : "—" },
+  // The pipeline in the sidebar: a step is done once it has produced what the next one needs.
+  const steps: { id: Step; title: string; value: string; done: boolean }[] = [
+    { id: "agent", title: "агент", done: !!state?.sources.length, value: state ? `${state.sources.length ? `${state.sources.length} ${plural(state.sources.length, "источник", "источника", "источников")}` : "контекст не собран"} · ${state.models.via}` : "" },
+    { id: "logs", title: "логи", done: !!d, value: d ? `${d.summary.checked} разговоров · ${pct(d.summary.failed, d.summary.checked)}% с нарушениями` : state?.logs.total ? `${state.logs.total} в выгрузке · не оценены` : "выгрузка не загружена" },
+    { id: "cards", title: "сценарии", done: deck.length > 0, value: deck.length ? `${deck.length} ${plural(deck.length, "сценарий", "сценария", "сценариев")}` : "ещё не собраны" },
+    { id: "run", title: "прогон", done: !!state?.runs.length, value: state?.runs.length ? `${state.runs.length} ${plural(state.runs.length, "прогон", "прогона", "прогонов")}` : "ещё не было" },
+    { id: "accuracy", title: "точность", done: !!lastScored, value: lastScored ? `${lastScored.metric!.accuracy}% · ${lastScored.targetName}` : "—" },
   ];
 
   const runTypes = step === "run" && run?.items ? state?.personas.filter(p => run.items!.some(i => (i.persona ?? DEFAULT_PERSONA) === p.id)) ?? [] : [];
@@ -989,33 +1252,44 @@ export function LabPage() {
     if (step === "run" && run?.items) {
       const items = run.items;
       const current = items.find(i => itemKey(i) === itemId) ?? items.find(i => i.status !== "RUNNING") ?? items[0];
-      const mark = (st: Status) => st === "PASS" ? "✓" : st === "FAIL" ? "✗" : st === "RUNNING" ? "…" : "?";
-      const legend = runTypes.length > 1
-        ? <div key="legend" className="px-2.5 pb-1 text-[10px] leading-relaxed" style={{ color: C.fg1 }}>значки слева направо: {runTypes.map(p => p.name).join(", ")}</div>
-        : null;
-      return [legend, ...[...new Map(items.map(i => [i.cardId, i.name])).entries()].map(([cardId, name]) => {
+      // Scenarios × customer types: a column per type under its glyph, the repeats of a type side by side in its column.
+      const attempts = Math.max(1, ...items.map(i => i.attempt ?? 1));
+      const byType = runTypes.length > 1;
+      const matrix = byType || attempts > 1;
+      const width = attempts * 22 + (attempts - 1) * 2;
+      const header = matrix ? (
+        <div key="header" className="sticky top-0 z-10 -mx-2 px-[18px] pt-1 pb-2" style={{ background: C.bg }}>
+          <div className="flex gap-1.5 pl-4">
+            {runTypes.map(p => (
+              <div key={p.id} className="flex justify-center gap-0.5" style={{ width }}>
+                {byType
+                  ? <Avatar id={p.id} size={22} dim={!!current && (current.persona ?? DEFAULT_PERSONA) !== p.id} title={`${cap(p.name)}: ${p.note}`} />
+                  : Array.from({ length: attempts }, (_, k) => <span key={k} className="w-[22px] text-center text-[10px] font-mono" style={{ color: C.fg0 }} title={`повтор ${k + 1}`}>{k + 1}</span>)}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null;
+      return [header, ...[...new Map(items.map(i => [i.cardId, i.name])).entries()].map(([cardId, name]) => {
         const own = items.filter(i => i.cardId === cardId);
         const status: Status = own.some(i => i.status === "RUNNING") ? "RUNNING" : own.some(i => i.status === "FAIL") ? "FAIL" : own.every(i => i.status === "PASS") ? "PASS" : "UNMEASURED";
         const active = own.includes(current!);
         return (
-          <div key={cardId} className="px-2.5 py-2 rounded-lg" style={{ background: active ? "rgba(255,255,255,0.06)" : undefined }}>
+          <div key={cardId} className="px-2.5 py-2 rounded-lg transition-colors hover:bg-white/[0.03]" style={{ background: active ? "rgba(255,255,255,0.06)" : undefined }}>
             <button className="w-full flex items-center gap-2 text-left" onClick={() => go("run", itemKey(own[0]))}>
               <Dot status={status} pulse={status === "RUNNING"} />
               <span className="text-[13px] truncate" style={{ color: C.fg4 }} title={name}>{name}</span>
             </button>
-            {own.length > 1 && (
-              <div className="flex gap-1 mt-1.5 pl-4 flex-wrap">
-                {own.map(i => {
-                  const on = i === current;
-                  return (
-                    <button key={`${i.persona ?? DEFAULT_PERSONA}-${i.attempt ?? 1}`} onClick={() => go("run", itemKey(i))}
-                      title={`${personaName(state, i.persona)}${i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : ""}: ${STATUS_TEXT[i.status]}`}
-                      className="h-5 min-w-[22px] px-1 rounded text-[11px] transition-colors"
-                      style={{ color: tone(i.status), background: `${tone(i.status)}${on ? "40" : "1a"}`, boxShadow: on ? `inset 0 0 0 1px ${tone(i.status)}` : undefined }}>
-                      {mark(i.status)}
-                    </button>
-                  );
-                })}
+            {matrix && (
+              <div className="flex gap-1.5 mt-1.5 pl-4">
+                {runTypes.map(p => (
+                  <div key={p.id} className="flex gap-0.5" style={{ width }}>
+                    {own.filter(i => (i.persona ?? DEFAULT_PERSONA) === p.id).sort((a, b) => (a.attempt ?? 1) - (b.attempt ?? 1)).map(i => (
+                      <Cell key={itemKey(i)} item={i} on={i === current} onClick={() => go("run", itemKey(i))}
+                        title={`${cap(p.name)}${attempts > 1 ? ` · повтор ${i.attempt ?? 1}` : ""}: ${STATUS_TEXT[i.status]}`} />
+                    ))}
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -1048,18 +1322,23 @@ export function LabPage() {
           <div className="text-[13px] font-medium" style={{ color: C.fg4 }}>Агент эквайринга</div>
           <div className="text-[11px]" style={{ color: C.fg1 }}>СберБизнес · чат поддержки</div>
         </div>
-        <div className="p-2 space-y-0.5" style={{ borderBottom: `1px solid ${C.border}` }}>
-          {steps.map(s => {
+        <div className="p-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+          {steps.map((s, k) => {
             const active = s.id === step;
             return (
-              <button key={s.id} onClick={() => go(s.id)} className="w-full text-left px-2.5 py-2 rounded-lg transition-all duration-150"
-                style={{ background: active ? "rgba(255,255,255,0.08)" : "transparent", border: active ? "1px solid rgba(255,255,255,0.15)" : "1px solid transparent" }}>
-                <div className="flex items-center gap-2">
-                  <s.icon className="size-3.5 flex-shrink-0" style={{ color: active ? C.fg4 : C.fg0 }} />
-                  <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{s.n}</span>
-                  <span className="text-[13px] font-medium" style={{ color: active ? C.fg5 : C.fg3 }}>{s.title}</span>
-                </div>
-                <div className="text-[10px] font-mono mt-0.5 pl-[22px] truncate" style={{ color: C.fg1 }}>{s.value}</div>
+              <button key={s.id} onClick={() => go(s.id)} className="relative w-full text-left flex items-start gap-3 px-2.5 py-2 rounded-lg transition-colors hover:bg-white/[0.04]"
+                style={{ background: active ? "rgba(255,255,255,0.07)" : undefined }}>
+                {k < steps.length - 1 && <span className="absolute left-[20px] top-[31px] -bottom-[9px] w-px" style={{ background: s.done ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.08)" }} />}
+                <span className="relative mt-px size-[21px] rounded-full flex-shrink-0 inline-flex items-center justify-center text-[10px] font-mono transition-colors"
+                  style={active ? { color: "#000", background: C.fg5 } : s.done
+                    ? { color: C.fg3, background: "#1a1a1a", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.2)" }
+                    : { color: C.fg0, background: C.bg, boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.12)" }}>
+                  {s.done && !active ? <Check className="size-3" strokeWidth={2.6} /> : k + 1}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium leading-[22px]" style={{ color: active ? C.fg5 : C.fg3 }}>{s.title}</span>
+                  <span className="block text-[10px] font-mono truncate" style={{ color: C.fg1 }}>{s.value}</span>
+                </span>
               </button>
             );
           })}
@@ -1092,7 +1371,7 @@ export function LabPage() {
         {state && !traceId && step === "logs" && <LogsView state={state} onOpen={id => id && go("logs", id)} />}
         {state && !traceId && step === "cards" && (card ? <CardView card={card} state={state} onBack={() => go("cards")} /> : <CardsView state={state} onPick={id => go("cards", id)} />)}
         {state && step === "run" && <RunStage state={state} run={run} itemId={itemId} target={target} setTarget={setTarget} onOpen={id => go("run", id)} />}
-        {state && !traceId && step === "accuracy" && <AccuracyView state={state} run={run} onPickRun={pickRun} />}
+        {state && !traceId && step === "accuracy" && <AccuracyView state={state} run={run} onPickRun={pickRun} onOpenItem={openItem} />}
       </div>
     </div>
   );

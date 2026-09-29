@@ -2,6 +2,7 @@
 
 A scenario passed by the ordinary customer and failed by one of these shows where the agent breaks on how people
 write, not on what they ask. A type changes only the manner: the goal, the facts and the questions stay the card's.
+`sample` is how the type writes, shown on the page until the cards have openings rewritten for it.
 """
 
 DEFAULT = 'default'
@@ -10,11 +11,13 @@ PERSONAS: dict[str, dict] = {
     DEFAULT: {
         'name': 'обычный',
         'note': 'пишет как в логе',
+        'sample': 'Какой процент эквайринга у меня сейчас?',
         'style': '',
     },
     'impatient': {
         'name': 'нетерпеливый',
         'note': 'торопится, пишет коротко, злится на уточнения',
+        'sample': 'процент какой? можно просто ответить',
         'style': (
             'Ты торопишься и раздражаешься. Пишешь коротко, без приветствий и вежливых слов. '
             'Длинный ответ или лишний уточняющий вопрос вызывают недовольство («можно просто ответить?», «ну и?»). '
@@ -24,6 +27,7 @@ PERSONAS: dict[str, dict] = {
     'confused': {
         'name': 'растерянный',
         'note': 'путается, переспрашивает, неточно описывает проблему',
+        'sample': 'а это где? я не понял, что нажимать',
         'style': (
             'Ты плохо понимаешь, что тебе нужно сделать, и путаешься. Описываешь проблему неточно и уточняешь по ходу. '
             'Если ответ непонятен, переспрашиваешь простыми словами («а это где?», «я не понял, что нажимать»).'
@@ -32,6 +36,7 @@ PERSONAS: dict[str, dict] = {
     'typos': {
         'name': 'с ошибками',
         'note': 'без заглавных и знаков, с опечатками и сокращениями',
+        'sample': 'скока щас процент за эквайренг',
         'style': (
             'Пишешь как в мессенджере на ходу: без заглавных букв и знаков препинания, с опечатками, сокращениями '
             'и пропущенными буквами («скока», «щас», «тернинал», «эквайренг»). Смысл остаётся понятным.'
@@ -40,6 +45,7 @@ PERSONAS: dict[str, dict] = {
     'no_terms': {
         'name': 'без терминов',
         'note': 'не знает банковских слов, описывает своими',
+        'sample': 'сколько банк берёт, когда в магазине платят картой?',
         'style': (
             'Ты не знаешь банковских терминов и не используешь их, а описываешь всё своими словами: '
             'вместо «эквайринг» — «оплата картой у меня в магазине», вместо «терминал» — «аппарат для карт», '
@@ -50,7 +56,7 @@ PERSONAS: dict[str, dict] = {
 
 
 def public() -> list[dict]:
-    return [{'id': key, 'name': p['name'], 'note': p['note']} for key, p in PERSONAS.items()]
+    return [{'id': key, 'name': p['name'], 'note': p['note'], 'sample': p['sample']} for key, p in PERSONAS.items()]
 
 
 def name(key: str | None) -> str:
