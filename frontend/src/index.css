@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Agent Lab: rgb channels, so `bg-lab-ok/15` style alpha works. */
+    --lab-bg: 0 0 0;
+    --lab-surface: 10 10 10;
+    --lab-raised: 17 17 17;
+    --lab-ink: 242 245 247;
+    --lab-text: 225 232 236;
+    --lab-soft: 200 213 220;
+    --lab-mute: 160 172 178;
+    --lab-dim: 125 138 144;
+    --lab-faint: 90 106 114;
+    --lab-user: 13 52 66;
+    --lab-accent: 91 141 239;
+    --lab-ok: 96 227 109;
+    --lab-bad: 242 107 107;
+    --lab-warn: 240 173 78;
+  }
+}
+
+@font-face {
+  font-family: "AlphaLyrae";
+  src: local("AlphaLyrae-Medium"), url("./assets/fonts/AlphaLyrae-Medium.ttf") format("truetype");
+  font-display: swap;
+}
+
+html { color-scheme: dark; }
+body {
+  background: rgb(var(--lab-bg));
+  color: rgb(var(--lab-dim));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.3} }
+@keyframes message-arrive {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+.message-arrive { animation: message-arrive 140ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .message-arrive, .pulse-dot { animation: none; }
+}
+
+/* Thin scrollbars leave room for the conversations. */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.08) transparent; }
+*::-webkit-scrollbar { width: 4px; height: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 2px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.14); }
+
+pre { white-space: pre-wrap; word-break: break-word; font-family: 'Space Mono', monospace; }

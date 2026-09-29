@@ -1,0 +1,78 @@
+"""One owner for all long-running commands, including log uploads."""
+
+import asyncio
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+Progress = Callable[..., None]
+Work = Callable[[Progress], Awaitable[Any]]
+STOPPED = 'Остановлено'
+
+
+class BusyError(RuntimeError):
+    pass
+
+
+class Jobs:
+    def __init__(self) -> None:
+        self.state: dict = {'kind': None, 'running': False, 'error': None, 'progress': {}}
+        self._task: asyncio.Task | None = None
+
+    def _launch(self, kind: str, work: Work, propagate: bool) -> asyncio.Task:
+        if self.state['running']:
+            raise BusyError(f'Уже выполняется: {self.state["kind"]}')
+        self.state.update(kind=kind, running=True, error=None, progress={'message': 'Запускаю…'})
+
+        def progress(**values: Any) -> None:
+            if not task.cancelling():
+                self.state['progress'] = values
+
+        async def body() -> Any:
+            try:
+                return await work(progress)
+            except asyncio.CancelledError:
+                self.state['error'] = STOPPED
+                if propagate:
+                    raise
+            except Exception as error:
+                self.state['error'] = str(error) or type(error).__name__
+                if propagate:
+                    raise
+            finally:
+                self.state['running'] = False
+
+        task = asyncio.get_running_loop().create_task(body())
+        self._task = task
+        return task
+
+    def start(self, kind: str, work: Work) -> dict:
+        self._launch(kind, work, propagate=False)
+        return {'ok': True}
+
+    async def perform(self, kind: str, work: Work) -> Any:
+        """Await a command while reserving the same owner as background jobs."""
+        task = self._launch(kind, work, propagate=True)
+        try:
+            return await task
+        finally:
+            if self._task is task and task.cancelled() and self.state['running']:
+                self.state.update(running=False, error=STOPPED)
+
+    async def stop(self) -> None:
+        if not self.state['running'] or self._task is None:
+            raise BusyError('Сейчас ничего не выполняется')
+        task = self._task
+        if not task.cancelling():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # A task cancelled before its first instruction never executes body().
+            if self._task is task and self.state['running']:
+                self.state.update(running=False, error=STOPPED)
+
+    async def close(self) -> None:
+        if self.state['running']:
+            await self.stop()

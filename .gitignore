@@ -10,12 +10,13 @@
 
 # Environments and build outputs.
 /.venv/
+/backend/.venv/
+/backend/.test-data/
 __pycache__/
 .ruff_cache/
-/bridge/node_modules/
-/workshop/node_modules/
-/workshop/app/node_modules/
-/workshop/app/dist/
+/backend/bridge/node_modules/
+/frontend/node_modules/
+/frontend/dist/
 .DS_Store
 
 # Earlier experiments (LangWatch, Latitude, FutureAGI, review UI, old scripts), kept on this computer only.
