@@ -1,92 +1,104 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
-import { Check, Copy, ExternalLink, Gavel, LayoutGrid, MessagesSquare, MousePointerClick, Play, RotateCcw, X } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Check, Copy, ExternalLink, MousePointerClick, Play, RotateCcw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../api";
-import { count, plural, when } from "../format";
-import { Heatmap } from "../charts/Heatmap";
-import { JobLine } from "../JobLine";
-import { JudgeCheck } from "./JudgeCheck";
+import { count, plural } from "../format";
 import { splitQuote } from "../findings";
 import { transcript } from "../report";
-import { disputed, itemKey, personaOf, previousOf, scenariosOfRun, typesOfRun } from "../logic";
-import { DEFAULT_PERSONA, HUE, RULE_TEXT, STATUS_TEXT, statusHue } from "../look";
-import { Modal } from "../modal";
+import { disputed, itemKey, personaOf, scenarioStatus, scenariosOfRun, typesOfRun } from "../logic";
+import { DEFAULT_PERSONA, HUE, RULE_TEXT, STATUS_TEXT, personaLook, personaName, statusHue } from "../look";
 import { useToast } from "../toast";
 import type { Item, LabRun, LabState, Message, Rule, Status } from "../types";
-import { useRunDetails } from "../useLab";
-import { Badge, Button, Bubble, Eyebrow, Meta, Page, Panel, PersonaCard, PersonaTag, Progress, Quote, Row, Segmented, StatusBadge, StatusMark, Tabs, ToolPill } from "../ui";
+import { Badge, Bubble, Button, Chip, EmptyState, Field, Input, Kbd, Page, Panel, PersonaCard, PersonaTag, Progress, Segmented, StatusBadge, StatusIcon, StatusMark, ToolPill } from "../ui";
 
-/** The settings of a new run: agent, customer types, repeats. The button says how many conversations it makes. */
+const secondsText = (s?: number) => (s === undefined ? "—" : String(s).replace(".", ","));
+
+/** «Проверить версию»: which agent, who writes to it, how many times, and what changed. The footer says how many dialogues it makes. */
 export function NewRun({ state, target, setTarget, onStarted }: { state: LabState; target: string; setTarget: (t: string) => void; onStarted?: () => void }) {
   const { error } = useToast();
   const deck = state.cards?.cards ?? [];
   const [repeats, setRepeats] = useState(1);
   const [types, setTypes] = useState<string[]>([DEFAULT_PERSONA]);
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
   const toggle = (id: string) => setTypes(t => t.includes(id) ? (t.length > 1 ? t.filter(x => x !== id) : t) : [...t, id]);
-  const start = () => api("/api/runs", { target, repeats, personas: types }).then(() => onStarted?.()).catch(error);
+  const start = () => {
+    setBusy(true);
+    api("/api/runs", { target, repeats, personas: types, label: label.trim() }).then(() => onStarted?.()).catch(error).finally(() => setBusy(false));
+  };
   const total = deck.length * types.length * repeats;
+  const note = state.targets.find(t => t.id === target)?.note;
   return (
     <div>
-      <div className="space-y-6 px-6 py-5">
+      <div className="space-y-6 px-6 pb-6 pt-3">
+        <Field label="Что изменили в этой версии" hint="Подпись версии в списке версий и на графике. Можно оставить пустым.">
+          <Input value={label} onChange={e => setLabel(e.target.value)} maxLength={120} placeholder="Например: тариф запрашивается до ответа о комиссии" />
+        </Field>
         <div>
-          <Eyebrow className="mb-2.5">Агент</Eyebrow>
+          <div className="mb-1.5 text-body font-medium text-lab-ink">Агент</div>
           <Segmented value={target} onChange={setTarget} options={state.targets.map(t => ({ value: t.id, label: t.name, title: t.note }))} />
+          {note && <p className="mt-1.5 text-caption text-lab-mute">{note}</p>}
         </div>
         <div>
-          <Eyebrow>Кто пишет агенту</Eyebrow>
-          <p className="mb-3 mt-1.5 text-[12px] leading-snug text-lab-dim">
+          <div className="text-body font-medium text-lab-ink">Кто пишет агенту</div>
+          <p className="mb-3 mt-0.5 text-caption text-lab-mute">
             {types.length > 1 ? "Меняется только манера письма, суть обращения та же." : "Обычный клиент пишет так же, как в логе. Добавьте другие типы, чтобы проверить, устойчив ли агент к манере письма."}
           </p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             {state.personas.map(p => <PersonaCard key={p.id} persona={p} on={types.includes(p.id)} onClick={() => toggle(p.id)} />)}
           </div>
         </div>
         <div>
-          <Eyebrow>Повторы</Eyebrow>
-          <p className="mb-3 mt-1.5 text-[12px] leading-snug text-lab-dim">Агент отвечает не всегда одинаково. Повторы показывают, насколько результат стабилен.</p>
+          <div className="text-body font-medium text-lab-ink">Повторы</div>
+          <p className="mb-3 mt-0.5 text-caption text-lab-mute">Агент отвечает не всегда одинаково: повторы показывают, стабилен ли ответ, и сужают погрешность числа.</p>
           <Segmented value={repeats} onChange={setRepeats} options={[1, 2, 3].map(n => ({ value: n, label: n === 1 ? "Один раз" : `${n} раза` }))} />
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] bg-white/[0.02] px-6 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-lab-line px-6 py-4">
         {deck.length ? (
-          <span className="text-[13px] text-lab-mute">
-            {count(deck.length, "сценарий", "сценария", "сценариев")} × {types.length} {plural(types.length, "тип", "типа", "типов")} клиентов{repeats > 1 ? ` × ${repeats} повтора` : ""} = <b className="font-semibold text-lab-ink">{count(total, "разговор", "разговора", "разговоров")}</b>
+          <span className="text-body tabular-nums text-lab-mute">
+            {count(deck.length, "сценарий", "сценария", "сценариев")} × {types.length} {plural(types.length, "тип", "типа", "типов")} клиентов{repeats > 1 ? ` × ${count(repeats, "повтор", "повтора", "повторов")}` : ""} = <b className="font-semibold text-lab-ink">{count(total, "диалог", "диалога", "диалогов")}</b>
           </span>
         ) : (
-          <span className="text-[13px] text-lab-warn">Играть пока нечего: сначала соберите сценарии на шаге «Сценарии».</span>
+          <span className="text-body text-lab-warn">Играть пока нечего: сначала соберите сценарии на шаге «Сценарии».</span>
         )}
-        <Button variant="primary" icon={Play} disabled={state.job.running || !deck.length} onClick={start}>Запустить</Button>
+        <Button variant="primary" icon={Play} loading={busy} disabled={state.job.running || !deck.length} onClick={start}>Запустить проверку</Button>
       </div>
     </div>
   );
 }
 
-/** `mark`: the quote the judge cited and why it counts as a violation; drawn in the text and under it. */
+/** One answer of the agent. `mark`: the quote the judge cited and why it is a violation — highlighted in the text and explained under it. */
 export function AgentMessage({ m, mark }: { m: Message; mark?: { quote?: string; reason?: string } }) {
   const [open, setOpen] = useState(false);
   const long = m.text.length > 700;
   const calls = (m.events ?? []).map(e => e.tool.replace("Система банка · ", "")).filter((t, k, all) => all.indexOf(t) === k);
   const parts = mark?.quote ? splitQuote(m.text, mark.quote) : null;
   return (
-    <div className="flex max-w-[86%] flex-col items-start gap-1.5 self-start">
-      <div className="rounded-2xl rounded-bl-md border border-white/[0.08] bg-lab-surface px-4 py-3 text-[13px] leading-relaxed text-lab-text">
-        <div className="whitespace-pre-wrap" style={long && !open ? { maxHeight: 220, overflow: "hidden", maskImage: "linear-gradient(#000 70%, transparent)" } : undefined}>{parts ? <>{parts[0]}<mark className="rounded-sm border-b-2 border-lab-bad bg-lab-bad/15 px-0.5 text-[#f6c9c9]">{parts[1]}</mark>{parts[2]}</> : m.text}</div>
-        {long && <button className="mt-1.5 text-[12px] text-lab-accent hover:underline" onClick={() => setOpen(v => !v)}>{open ? "Свернуть" : "Показать полностью"}</button>}
+    <div className="flex max-w-[88%] flex-col items-start gap-1.5 self-start">
+      <div className={cn("rounded-2xl rounded-bl-md border bg-lab-panel px-4 py-3 text-reading text-lab-text", parts ? "border-lab-bad/30" : "border-lab-line")}>
+        <div className="whitespace-pre-wrap" style={long && !open ? { maxHeight: 220, overflow: "hidden", maskImage: "linear-gradient(#000 70%, transparent)" } : undefined}>
+          {parts ? <>{parts[0]}<mark className="rounded-sm bg-lab-bad/15 px-0.5 text-lab-ink underline decoration-lab-bad decoration-2 underline-offset-4">{parts[1]}</mark>{parts[2]}</> : m.text}
+        </div>
+        {long && <button className="lab-focus mt-1.5 rounded-sm text-body font-medium text-lab-accent transition-colors duration-100 hover:text-lab-ink" onClick={() => setOpen(v => !v)}>{open ? "Свернуть" : "Показать полностью"}</button>}
       </div>
       {parts && mark?.reason && (
-        <div className="max-w-[92%] border-l-2 border-lab-bad py-0.5 pl-3 text-[12px] leading-snug text-[#f3cccc]"><b className="font-semibold">✗ Нарушено.</b> {mark.reason}</div>
+        <div className="flex max-w-full gap-2 pl-1 text-body text-lab-text">
+          <X className="mt-[3px] size-3.5 flex-shrink-0 text-lab-bad" strokeWidth={2.75} />
+          <span><b className="font-semibold text-lab-ink">Нарушено.</b> {mark.reason}</span>
+        </div>
       )}
-      {!!m.options?.length && <div className="flex flex-wrap gap-1.5">{m.options.map(o => <span key={o} className="rounded-full border border-white/[0.1] px-2.5 py-0.5 text-[12px] text-lab-mute">{o}</span>)}</div>}
+      {!!m.options?.length && <div className="flex flex-wrap gap-1.5">{m.options.map(o => <span key={o} className="rounded-full border border-lab-edge px-2.5 py-0.5 text-caption text-lab-mute">{o}</span>)}</div>}
       {calls.length > 0 && <div className="flex flex-wrap gap-1.5">{calls.map(c => <ToolPill key={c} name={c} />)}</div>}
-      <div className="px-1 text-[11px] text-lab-dim">
-        {m.ok === false ? <span className="text-lab-warn">Передал оператору · статус {m.status}</span> : `Ответил за ${m.seconds ?? "—"} с`}
+      <div className="px-1 text-caption text-lab-mute">
+        {m.ok === false ? <span className="text-lab-warn">Передал оператору вместо ответа · статус {m.status}</span> : `Ответил за ${secondsText(m.seconds)} с`}
       </div>
     </div>
   );
 }
 
-/** How long the agent took on each turn and what it called: the Workshop's «trajectory» for one conversation. */
+/** How long the agent took on each turn and what it called: the trajectory of one dialogue. */
 function Trajectory({ item }: { item: Item }) {
   const turns = item.conversation.filter(m => m.role === "agent").map((m, i) => ({
     n: i + 1, seconds: m.seconds ?? 0, handoff: m.ok === false,
@@ -96,50 +108,57 @@ function Trajectory({ item }: { item: Item }) {
   const total = Math.round(turns.reduce((n, t) => n + t.seconds, 0) * 10) / 10;
   const slowest = Math.max(...turns.map(t => t.seconds), 0.1);
   return (
-    <Panel className="px-4 py-3">
-      <div className="mb-2.5 flex items-center justify-between">
-        <Eyebrow>Траектория</Eyebrow>
-        <span className="font-mono text-[11px] text-lab-dim">{turns.length} {plural(turns.length, "ход", "хода", "ходов")} · {total} с</span>
+    <section aria-label="Ходы агента" className="rounded-xl border border-lab-line px-4 py-3">
+      <div className="mb-2.5 flex items-center justify-between gap-3">
+        <span className="text-caption font-medium text-lab-mute">Ходы агента</span>
+        <span className="text-caption tabular-nums text-lab-mute">{count(turns.length, "ход", "хода", "ходов")} · {secondsText(total)} с</span>
       </div>
       <div className="space-y-1.5">
         {turns.map(t => (
-          <div key={t.n} className="grid grid-cols-[52px_1fr_auto] items-center gap-3 text-[11px]">
-            <span className="font-mono text-lab-dim">ход {t.n}</span>
-            <div className="flex items-center gap-2">
-              <div className={cn("h-[18px] rounded-full", t.handoff ? "bg-lab-warn/70" : "bg-lab-mute/35")} style={{ width: `${Math.max(4, (100 * t.seconds) / slowest)}%`, maxWidth: "calc(100% - 44px)" }} />
-              <span className="flex-shrink-0 font-mono text-lab-mute">{t.seconds} с</span>
+          <div key={t.n} className="grid grid-cols-[44px_1fr_minmax(0,220px)] items-center gap-3 text-caption">
+            <span className="tabular-nums text-lab-mute">ход {t.n}</span>
+            <div className="flex min-w-0 items-center gap-2">
+              <div className={cn("h-2 rounded-full", t.handoff ? "bg-lab-warn/70" : "bg-lab-mute/40")} style={{ width: `${Math.max(3, (100 * t.seconds) / slowest)}%`, maxWidth: "calc(100% - 48px)" }} />
+              <span className="flex-shrink-0 tabular-nums text-lab-text">{secondsText(t.seconds)} с</span>
             </div>
-            <span className="max-w-[260px] truncate font-mono text-lab-dim" title={t.tools.join(", ")}>{t.handoff ? "передал оператору" : t.tools.join(", ")}</span>
+            <span className={cn("truncate", t.handoff ? "text-lab-warn" : "text-lab-mute")} title={t.tools.join(", ")}>{t.handoff ? "передал оператору" : t.tools.join(", ")}</span>
           </div>
         ))}
       </div>
-    </Panel>
+    </section>
   );
 }
 
-/** The conversation as it happened; the judge's verdict on top and every criterion below. */
+const VERDICT: Record<string, string> = { PASS: "Судья: без нарушений", FAIL: "Судья: есть нарушение", UNMEASURED: "Судья: нет данных", UNKNOWN: "Судья: нет данных", RUNNING: "Диалог идёт" };
+
+/** The dialogue as it happened: the judge's verdict on top, the conversation, then every criterion the judge checked. */
 export function Conversation({ item, state }: { item: Item; state: LabState }) {
   const order: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
   const rules = [...item.rules].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
   const lead: Rule | undefined = rules.find(r => r.status === "FAIL") ?? rules.find(r => r.status === "PASS");
-  const h = HUE[statusHue(item.status)];
+  const failed = rules.filter(r => r.status === "FAIL");
+  const hue = statusHue(item.status);
   const second = item.second && ["PASS", "FAIL", "UNMEASURED"].includes(item.second.status) ? item.second : null;
+  // The first answer the judge quoted: its quote is drawn right in the text.
+  const markAt = failed.length ? item.conversation.findIndex(m => m.role === "agent" && failed.some(r => splitQuote(m.text, r.agentQuote))) : -1;
+  const markRule = markAt >= 0 ? failed.find(r => splitQuote(item.conversation[markAt].text, r.agentQuote)) : undefined;
   return (
-    <div className="message-arrive mx-auto flex max-w-[880px] flex-col gap-7 px-6 py-6">
-      <div className={cn("flex gap-4 rounded-lg border p-4", h.bg, h.border)}>
-        <StatusMark status={item.status} size={30} />
+    <div className="message-arrive mx-auto flex max-w-[800px] flex-col gap-6 px-6 py-6">
+      <section className={cn("flex gap-3.5 rounded-xl border p-4", HUE[hue].border, item.status === "PASS" ? "bg-lab-panel" : HUE[hue].bg)} aria-label="Вердикт судьи">
+        <StatusMark status={item.status} size={28} />
         <div className="min-w-0">
-          <div className="flex items-center gap-2"><Eyebrow>Вердикт судьи</Eyebrow><StatusBadge status={item.status} /></div>
-          <div className="mt-2 text-[14px] leading-relaxed text-lab-text">
-            {item.status === "RUNNING" ? item.stage : lead?.reason ?? item.error ?? "Судья не нашёл доказательств ни выполнения, ни нарушения."}
+          <div className="text-body font-semibold text-lab-ink">{VERDICT[item.status] ?? STATUS_TEXT[item.status as Status]}{failed.length > 1 ? ` · ${count(failed.length, "критерий", "критерия", "критериев")}` : ""}</div>
+          <div className="mt-1 text-reading text-lab-text">
+            {item.status === "RUNNING" ? item.stage : lead?.reason ?? item.error ?? "Судья не нашёл в диалоге доказательств ни выполнения, ни нарушения."}
           </div>
           {second && (
-            <div className={cn("mt-2 text-[12px]", disputed(item) ? "text-lab-warn" : "text-lab-dim")}>
+            <div className={cn("mt-2 inline-flex items-center gap-1.5 text-body", disputed(item) ? "text-lab-warn" : "text-lab-mute")}>
+              {disputed(item) ? <StatusIcon status="UNKNOWN" size={13} /> : <Check className="size-3.5" strokeWidth={2.5} />}
               Второй судья {disputed(item) ? `оценил иначе: ${STATUS_TEXT[second.status as Status]}` : "согласен"}
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       <Trajectory item={item} />
 
@@ -148,98 +167,146 @@ export function Conversation({ item, state }: { item: Item; state: LabState }) {
           <div key={k} className="flex max-w-[80%] flex-col items-end gap-1 self-end">
             <Bubble>{m.text}</Bubble>
             {k > 0 && item.conversation[k - 1].options?.includes(m.text) && (
-              <div className="inline-flex items-center gap-1 px-1 text-[11px] text-lab-dim"><MousePointerClick className="size-3" />Нажал кнопку</div>
+              <div className="inline-flex items-center gap-1 px-1 text-caption text-lab-mute"><MousePointerClick className="size-3" />Нажал кнопку</div>
             )}
             {k === 0 && (m.fromLog || m.rewritten) && (
-              <div className="px-1 text-[11px] text-lab-dim">
-                {m.fromLog ? "Первая реплика из лога" : `Реплика из лога, переписана под тип «${state.personas.find(p => p.id === personaOf(item))?.name ?? ""}»`}
+              <div className="px-1 text-caption text-lab-mute">
+                {m.fromLog ? "Первая реплика из реального диалога" : `Реплика из реального диалога, переписана под тип «${personaName(state.personas, personaOf(item))}»`}
               </div>
             )}
           </div>
-        ) : <AgentMessage key={k} m={m} />)}
+        ) : <AgentMessage key={k} m={m} mark={k === markAt && markRule ? { quote: markRule.agentQuote, reason: markRule.reason } : undefined} />)}
       </div>
 
       {rules.length > 0 && (
-        <div>
-          <Eyebrow className="mb-2.5">Критерии судьи</Eyebrow>
+        <section aria-label="Критерии судьи">
+          <h3 className="mb-2.5 text-body font-semibold text-lab-ink">Что проверил судья</h3>
           <Panel>
             {rules.map((r, k) => (
-              <Row first={!k} key={r.ruleId} className={cn("flex gap-3.5 px-4 py-3.5", r.status === "NOT_APPLICABLE" && "opacity-55")}>
+              <div key={r.ruleId} className={cn("flex gap-3.5 px-4 py-3.5", k > 0 && "border-t border-lab-line", r.status === "NOT_APPLICABLE" && "opacity-60")}>
                 <span title={RULE_TEXT[r.status]}><StatusMark status={r.status} size={22} /></span>
-                <div className="min-w-0 text-[13px]">
-                  <div className="leading-snug text-lab-text">{r.rule}</div>
-                  <div className="mt-1 leading-snug text-lab-dim">{r.reason}</div>
-                  {r.agentQuote && <Quote who="агент" tone={r.status === "FAIL" ? "bad" : undefined}>«{r.agentQuote}»</Quote>}
+                <div className="min-w-0">
+                  <div className="text-body font-medium text-lab-ink">{r.rule}</div>
+                  <div className="mt-0.5 text-body text-lab-mute">{r.reason}</div>
+                  {r.agentQuote && (
+                    <blockquote className={cn("mt-2 border-l-2 pl-3 text-body", r.status === "FAIL" ? "border-lab-bad/70 text-lab-text" : "border-lab-strong text-lab-mute")}>«{r.agentQuote}»</blockquote>
+                  )}
                 </div>
-              </Row>
+              </div>
             ))}
           </Panel>
-        </div>
+        </section>
       )}
     </div>
   );
 }
 
-function Kbd({ children }: { children: React.ReactNode }) {
-  return <kbd className="rounded border border-white/15 bg-white/[0.04] px-1.5 font-mono text-[10px] leading-4 text-lab-mute">{children}</kbd>;
-}
-
-/** The conversation as text on the clipboard, for a ticket or a chat with the agent's team. */
+/** The dialogue as text on the clipboard, for a ticket or a chat with the agent's team. */
 function CopyButton({ text }: { text: () => string }) {
   const { error } = useToast();
   const [done, setDone] = useState(false);
   const copy = () => navigator.clipboard.writeText(text()).then(() => { setDone(true); window.setTimeout(() => setDone(false), 1600); }).catch(error);
-  return (
-    <button onClick={copy} className="inline-flex items-center gap-1 text-[12px] text-lab-dim transition-colors hover:text-lab-text">
-      {done ? <Check className="size-3 text-lab-ok" strokeWidth={2.5} /> : <Copy className="size-3" />}{done ? "Скопировано" : "Копировать"}
-    </button>
-  );
+  return <Button size="sm" variant="ghost" icon={done ? Check : Copy} onClick={copy}>{done ? "Скопировано" : "Копировать"}</Button>;
 }
 
+/** «Судья прав?» — a person's word on this verdict; it feeds the trust in the number. */
 function ReviewButtons({ selected, onReview }: { selected: Item; onReview: (d: "agree" | "disagree" | null) => void }) {
   if (!["PASS", "FAIL"].includes(selected.status)) return null;
   return (
-    <span className="inline-flex items-center gap-2">
-      <span className="text-[12px] text-lab-dim">Судья прав?</span>
+    <span className="inline-flex items-center gap-1.5">
+      <span className="hidden text-body text-lab-mute lg:inline">Судья прав?</span>
       {(["agree", "disagree"] as const).map(d => {
         const on = selected.review === d;
-        const Icon = d === "agree" ? Check : X;
         return (
-          <button
-            key={d} onClick={() => onReview(on ? null : d)} aria-pressed={on}
-            className={cn(
-              "inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/50",
-              on ? cn(d === "agree" ? "bg-lab-ok" : "bg-lab-bad", "text-black") : "bg-white/[0.07] text-lab-mute hover:bg-white/[0.13] hover:text-lab-text",
-            )}
-          ><Icon className="size-3.5" strokeWidth={2.5} />{d === "agree" ? "Верно" : "Неверно"}</button>
+          <Button
+            key={d} size="sm" variant={on ? (d === "agree" ? "primary" : "danger") : "secondary"} icon={d === "agree" ? Check : X}
+            aria-pressed={on} onClick={() => onReview(on ? null : d)}
+          >{d === "agree" ? "Верно" : "Неверно"}</Button>
         );
       })}
     </span>
   );
 }
 
-/** A run: header with the score and a live bar, then either one conversation or the whole scenario × customer matrix. */
+/** The version's scenarios, each with its customer types and repeats: the list beside a dialogue. */
+function ScenarioList({ state, run, selected, onOpen }: { state: LabState; run: LabRun; selected: Item; onOpen: (key: string) => void }) {
+  const items = run.items ?? [];
+  const [onlyFailed, setOnlyFailed] = useState(false);
+  const multi = typesOfRun(run, state.personas).length > 1;
+  const failed = items.filter(i => i.status === "FAIL").length;
+  const all = scenariosOfRun(items);
+  const scenarios = all.filter(s => !onlyFailed || items.some(i => i.cardId === s.id && i.status === "FAIL"));
+  return (
+    <aside className="hidden w-[288px] flex-shrink-0 flex-col border-r border-lab-line lg:flex" aria-label="Сценарии версии">
+      <div className="px-4 pb-2 pt-4 text-caption font-medium text-lab-mute">Сценарии версии {run.version} · {all.length}</div>
+      {failed > 0 && (
+        <div className="flex gap-1.5 px-3 pb-2">
+          <Chip on={!onlyFailed} onClick={() => setOnlyFailed(false)}>Все</Chip>
+          <Chip on={onlyFailed} onClick={() => setOnlyFailed(true)} count={failed} hue="bad">С нарушениями</Chip>
+        </div>
+      )}
+      <div className="min-h-0 flex-1 space-y-px overflow-auto px-2 pb-3">
+        {scenarios.map(({ id, name }) => {
+          const own = items.filter(i => i.cardId === id);
+          const status = scenarioStatus(own);
+          const active = own.includes(selected);
+          return (
+            <div key={id} className={cn("rounded-lg px-2.5 py-2", active && "bg-lab-active")}>
+              <button className="lab-focus flex w-full items-center gap-2.5 rounded-sm text-left" onClick={() => onOpen(itemKey(own[0]))}>
+                <StatusIcon status={status} size={13} className={cn("flex-shrink-0", status === "PASS" ? "text-lab-faint" : HUE[statusHue(status)].text)} />
+                <span className={cn("min-w-0 flex-1 truncate text-body", active ? "text-lab-ink" : "text-lab-text")} title={name}>{name}</span>
+              </button>
+              {own.length > 1 && (
+                <div className="mt-1.5 flex flex-wrap gap-1 pl-[22px]">
+                  {own.map(i => {
+                    const on = i === selected;
+                    const quiet = i.status === "PASS";
+                    const h = HUE[statusHue(i.status)];
+                    const Icon = personaLook(i.persona).icon;
+                    return (
+                      <button
+                        key={itemKey(i)} onClick={() => onOpen(itemKey(i))}
+                        title={`${personaName(state.personas, i.persona)}${i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : ""}: ${STATUS_TEXT[i.status]}`}
+                        className={cn(
+                          "lab-focus inline-flex h-6 min-w-[28px] items-center justify-center gap-1 rounded-md px-1.5 transition-colors duration-100",
+                          quiet ? "text-lab-mute" : h.text,
+                          on ? cn(quiet ? "bg-lab-raised" : h.bgStrong, "ring-1 ring-current") : cn(quiet ? "bg-white/[0.04] hover:bg-lab-raised" : h.bg),
+                        )}
+                      >
+                        {multi && <Icon className="size-3 opacity-70" />}
+                        <StatusIcon status={i.status} size={11} />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {!scenarios.length && <div className="px-3 py-8 text-center text-body text-lab-mute">Нарушений нет</div>}
+      </div>
+    </aside>
+  );
+}
+
+/** One simulated dialogue of a version, with the version's scenarios beside it. J / K walk the scenarios, ← / → the customer types and repeats. */
 export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
   state: LabState; run: LabRun | null; itemId: string | null; target: string; setTarget: (t: string) => void; onOpen: (key?: string) => void;
 }) {
   const { error } = useToast();
-  const previous = run ? previousOf(state.runs, run) : null;
-  const details = useRunDetails(previous ? [previous] : []);
-  const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
   const location = useLocation();
-  // «?view=judge» opens the judge check (a hash would be read by the Workshop as a trace id).
-  const wantsJudge = new URLSearchParams(location.search).get("view") === "judge";
-  const [view, setView] = useState<"chat" | "matrix" | "judge">(wantsJudge ? "judge" : "chat");
-  useEffect(() => { if (wantsJudge) setView("judge"); }, [wantsJudge]);
-  const [compare, setCompare] = useState(false);
-  useEffect(() => { if (itemId) setView("chat"); }, [itemId]);
+  // Addresses of the earlier layout: the judge check and the matrix have their own screens now.
+  const legacyView = new URLSearchParams(location.search).get("view");
+  useEffect(() => {
+    if (legacyView === "judge") navigate("/lab/judge/check", { replace: true });
+    else if (legacyView === "matrix") navigate("/lab/dialogs?view=map", { replace: true });
+  }, [legacyView, navigate]);
   const items = useMemo(() => run?.items ?? [], [run]);
   const selected = items.find(i => itemKey(i) === itemId) ?? items.find(i => i.status !== "RUNNING") ?? items[0];
 
-  // J / K walk the scenarios keeping the customer type, ← / → walk the types (and repeats) of one scenario.
-  // Keys are read by position, so they work on the Russian layout too.
   useEffect(() => {
-    if (view !== "chat" || creating || !selected) return;
+    if (!selected) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
@@ -251,120 +318,70 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
       else if (e.code === "KeyJ" || e.code === "KeyK") {
         const scenarios = scenariosOfRun(items);
         const at = scenarios.findIndex(s => s.id === selected.cardId);
-        const target = scenarios[at + (e.code === "KeyJ" ? 1 : -1)];
-        if (target) next = items.find(i => i.cardId === target.id && personaOf(i) === personaOf(selected) && i.attempt === selected.attempt) ?? items.find(i => i.cardId === target.id);
+        const to = scenarios[at + (e.code === "KeyJ" ? 1 : -1)];
+        if (to) next = items.find(i => i.cardId === to.id && personaOf(i) === personaOf(selected) && i.attempt === selected.attempt) ?? items.find(i => i.cardId === to.id);
       }
       if (next) { e.preventDefault(); onOpen(itemKey(next)); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, creating, selected, items, onOpen]);
+  }, [selected, items, onOpen]);
 
   if (!run) {
     return (
-      <Page title="разговоры" lede="Искусственный клиент начинает с первой реплики из лога и ведёт разговор по ситуации сценария. Судья проверяет каждый разговор по критериям.">
-        <Panel className="mt-5"><NewRun state={state} target={target} setTarget={setTarget} /></Panel>
-        <div className="mt-3"><JobLine state={state} kind="run" /></div>
+      <Page title="Диалоги" narrow>
+        <EmptyState className="mt-8" title="Версия ещё не проверялась">Симулятор клиента сыграет сценарии с агентом, судья оценит каждый диалог. Настройте проверку и запустите.</EmptyState>
+        <Panel className="mt-4"><NewRun state={state} target={target} setTarget={setTarget} /></Panel>
       </Page>
     );
   }
 
   const index = selected ? items.indexOf(selected) : -1;
   const types = typesOfRun(run, state.personas);
-  const disputes = items.filter(disputed).length;
-  const judgeLeft = items.filter(i => (i.status === "PASS" || i.status === "FAIL") && !i.review).length;
-  const job = state.job;
-  const live = job.running && job.kind === "run";
-  const previousItems = previous ? details(previous)?.items ?? null : null;
+  const live = state.job.running && state.job.kind === "run";
   const review = (decision: "agree" | "disagree" | null) => api("/api/review", { run: run.id, index, decision }).catch(error);
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-shrink-0 border-b border-white/[0.06]">
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-6 py-3.5">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-[14px] font-medium text-lab-ink">{run.targetName}</span>
-              <Badge>{run.version}</Badge>
-              {live && <Badge hue="accent"><span className="size-1.5 rounded-full bg-lab-accent pulse-dot" />идёт</Badge>}
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[12px]">
-              <Meta label="старт">{when(run.startedAt)}</Meta>
-              <Meta label="разговоров">{items.length}</Meta>
-              {types.length > 1 && <Meta label="типов клиентов">{types.length}</Meta>}
-              {run.repeats && run.repeats > 1 ? <Meta label="повторов">{run.repeats}</Meta> : null}
-              {disputes > 0 && <Meta label="судьи расходятся">{disputes} {plural(disputes, "раз", "раза", "раз")}</Meta>}
-            </div>
-          </div>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <JobLine state={state} kind="run" bare />
-            <JobLine state={state} kind="rejudge" bare />
-            <span className="mr-1 text-[24px] font-medium leading-none text-lab-ink" style={{ fontFamily: '"AlphaLyrae", sans-serif' }} title="Точность прогона">{run.metric?.accuracy ?? "—"}%</span>
+      <header className="flex-shrink-0 border-b border-lab-line">
+        <div className="flex h-14 items-center gap-2 px-6">
+          <button onClick={() => navigate("/lab/dialogs")} className="lab-focus -ml-1.5 rounded-md px-1.5 py-1 text-body text-lab-mute transition-colors duration-100 hover:text-lab-ink">Диалоги</button>
+          <span className="text-body text-lab-faint" aria-hidden>/</span>
+          <h1 className="min-w-0 truncate text-body font-semibold text-lab-ink">{selected?.name ?? `Версия ${run.version}`}</h1>
+          {selected && <StatusBadge status={selected.status} />}
+          <div className="ml-auto flex flex-shrink-0 items-center gap-1.5">
+            {selected && <ReviewButtons selected={selected} onReview={review} />}
+            {selected && <CopyButton text={() => transcript(selected, state.personas)} />}
+            {selected?.runId && <a href={`/runs/${selected.runId}`} className="lab-focus hidden h-7 items-center gap-1.5 rounded-md px-2.5 text-caption font-medium text-lab-mute transition-colors duration-100 hover:bg-lab-raised hover:text-lab-ink md:inline-flex"><ExternalLink className="size-3.5" />Трейс</a>}
             {run.status !== "running" && (
-              <Button size="sm" variant="ghost" icon={RotateCcw} disabled={state.job.running} title="Судья заново оценит те же разговоры, агент при этом не запускается"
-                onClick={() => api(`/api/runs/${run.id}/rejudge`, {}).catch(error)}>Переоценить</Button>
+              <Button size="sm" variant="ghost" icon={RotateCcw} disabled={state.job.running} className="hidden md:inline-flex"
+                title="Судья заново оценит те же диалоги; агент при этом не запускается" onClick={() => api(`/api/runs/${run.id}/rejudge`, {}).catch(error)}>Переоценить</Button>
             )}
-            <Button size="sm" variant="primary" icon={Play} disabled={state.job.running} onClick={() => setCreating(true)}>Новый прогон</Button>
           </div>
         </div>
-        {live && job.progress.total ? <Progress value={(100 * (job.progress.done ?? 0)) / job.progress.total} /> : null}
-        <Tabs value={view} onChange={setView} tabs={[
-          { value: "chat", label: <><MessagesSquare className="size-3.5" />Разговор</> },
-          { value: "matrix", label: <><LayoutGrid className="size-3.5" />Матрица</> },
-          { value: "judge", label: <><Gavel className="size-3.5" />Проверка судьи{judgeLeft ? <span className="font-mono text-[10px] text-lab-dim">{judgeLeft}</span> : null}</> },
-        ]} />
-        {run.error && <div className="border-t border-white/[0.06] px-6 py-2 text-[12px] text-lab-bad">{run.error}</div>}
-      </div>
-
-      {view === "chat" && selected && (
-        <div className="flex flex-shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-white/[0.06] bg-white/[0.02] px-6 py-2.5">
-          <span className="text-[13px] font-medium text-lab-text">{selected.name}</span>
-          {types.length > 1 && <PersonaTag personas={state.personas} id={selected.persona} />}
-          {selected.attempt && selected.attempt > 1 && <Badge>повтор {selected.attempt}</Badge>}
-          <span className="ml-auto flex items-center gap-4">
-            <span className="hidden items-center gap-1.5 text-[11px] text-lab-dim min-[1500px]:inline-flex" title="J / K: соседние сценарии, стрелки влево и вправо: типы клиентов и повторы">
-              <Kbd>J</Kbd><Kbd>K</Kbd> сценарии <Kbd>←</Kbd><Kbd>→</Kbd> типы
+        {selected && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-6 pb-3">
+            <Badge>Версия {run.version}</Badge>
+            {types.length > 1 && <PersonaTag personas={state.personas} id={selected.persona} />}
+            {selected.attempt && selected.attempt > 1 ? <Badge>повтор {selected.attempt}</Badge> : null}
+            {disputed(selected) && <Badge hue="warn">судьи расходятся</Badge>}
+            <span className="ml-auto hidden items-center gap-1.5 text-caption text-lab-mute xl:inline-flex">
+              <Kbd>J</Kbd><Kbd>K</Kbd> сценарии<span className="w-2" /><Kbd>←</Kbd><Kbd>→</Kbd> типы и повторы
             </span>
-            <CopyButton text={() => transcript(selected, state.personas)} />
-            {selected.runId && (
-              <a href={`/runs/${selected.runId}`} className="inline-flex items-center gap-1 text-[12px] text-lab-dim transition-colors hover:text-lab-text"><ExternalLink className="size-3" />Трейс в Workshop</a>
-            )}
-            <ReviewButtons selected={selected} onReview={review} />
-          </span>
-        </div>
-      )}
-
-      <div className="min-h-0 flex-1 overflow-auto sb">
-        {view === "judge" ? (
-          <JudgeCheck run={run} state={state} onReview={(index, decision) => api("/api/review", { run: run.id, index, decision }).catch(error)} onOpen={i => onOpen(itemKey(i))} />
-        ) : view === "matrix" ? (
-          <div className="mx-auto max-w-[1000px] px-6 py-6">
-            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-[14px] font-medium text-lab-ink">Сценарий × тип клиента</div>
-                <div className="mt-0.5 text-[12px] text-lab-dim">Нажмите на клетку, чтобы открыть разговор.</div>
-              </div>
-              {previous && (
-                <Button size="sm" variant={compare ? "secondary" : "ghost"} disabled={!previousItems} onClick={() => setCompare(v => !v)}>
-                  {compare ? "Сравнение включено" : `Сравнить с ${previous.version}`}
-                </Button>
-              )}
-            </div>
-            <Panel className="p-5">
-              <Heatmap
-                personas={types} scenarios={scenariosOfRun(items)} items={items} previous={previousItems} previousVersion={previous?.version} compare={compare}
-                onOpen={i => onOpen(itemKey(i))}
-              />
-            </Panel>
           </div>
-        ) : selected
-          ? <Conversation key={itemKey(selected)} item={selected} state={state} />
-          : <div className="flex h-full items-center justify-center text-[13px] text-lab-dim">В прогоне нет разговоров</div>}
-      </div>
+        )}
+        {live && state.job.progress.total ? <Progress value={(100 * (state.job.progress.done ?? 0)) / state.job.progress.total} /> : null}
+        {run.error && <div className="border-t border-lab-line px-6 py-2 text-body text-lab-bad">{run.error}</div>}
+      </header>
 
-      <Modal open={creating} onClose={() => setCreating(false)} title="Новый прогон" description="Выберите агента, кто ему пишет и сколько раз повторить.">
-        <NewRun state={state} target={target} setTarget={setTarget} onStarted={() => { setCreating(false); onOpen(undefined); }} />
-      </Modal>
+      <div className="flex min-h-0 flex-1">
+        {selected && <ScenarioList state={state} run={run} selected={selected} onOpen={key => onOpen(key)} />}
+        <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+          {selected
+            ? <Conversation key={itemKey(selected)} item={selected} state={state} />
+            : <div className="flex h-full items-center justify-center text-body text-lab-mute">В проверке нет диалогов</div>}
+        </div>
+      </div>
     </div>
   );
 }

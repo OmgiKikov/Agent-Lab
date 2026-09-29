@@ -1,12 +1,15 @@
 import { useMemo } from "react";
-import { ShieldCheck } from "lucide-react";
+import { ArrowRight, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ENOUGH_CHECKED, judgeErrors, MIN_CHECKED, TRUST_TEXT, trustOf } from "../findings";
-import { pct, plural } from "../format";
-import { HUE } from "../look";
+import { ENOUGH_CHECKED, judgeErrors, MIN_CHECKED } from "../findings";
+import { count, pct } from "../format";
+import { disputed } from "../logic";
+import { HUE, type Hue } from "../look";
+import { trustStory } from "../story";
+import { wilson } from "../stats";
 import type { Item, LabRun, LabState } from "../types";
 import { useRunContext } from "../useRunContext";
-import { Badge, Button, EmptyState, Eyebrow, Page, Panel, Skeleton, titleFont } from "../ui";
+import { Badge, Button, EmptyState, Kbd, Page, Panel, Section, Skeleton } from "../ui";
 
 /** What can be measured about the customer simulator from the conversations it played. */
 function simulatorFigures(items: Item[]) {
@@ -23,117 +26,156 @@ function simulatorFigures(items: Item[]) {
   return { replies, avgWords: replies ? Math.round((words / replies) * 10) / 10 : null, offered, pressedShare: offered ? pct(pressed, offered) : null };
 }
 
-function Big({ value, unit, label }: { value: string; unit?: string; label: React.ReactNode }) {
+/** Criteria on which the two judges decide differently in the same dialogue: where the judge's instructions are ambiguous. */
+function judgeSplits(items: Item[]) {
+  const by = new Map<string, { rule: string; both: number; split: number }>();
+  for (const item of items) {
+    const second = new Map((item.second?.rules ?? []).map(r => [r.ruleId, r.status]));
+    if (!second.size) continue;
+    for (const r of item.rules) {
+      const other = second.get(r.ruleId);
+      if (!other || (r.status !== "PASS" && r.status !== "FAIL") || (other !== "PASS" && other !== "FAIL")) continue;
+      const row = by.get(r.rule) ?? { rule: r.rule, both: 0, split: 0 };
+      row.both++;
+      if (other !== r.status) row.split++;
+      by.set(r.rule, row);
+    }
+  }
+  return [...by.values()].filter(r => r.split > 0).sort((a, b) => b.split / b.both - a.split / a.both || b.split - a.split);
+}
+
+/** A measure as a bullet bar: the value, a tick at the target, the words for what it means. */
+function Measure({ label, value, share, target, hue, children }: { label: string; value: string; share: number | null; target?: number; hue: Hue; children: React.ReactNode }) {
   return (
-    <div className="mt-2 flex items-end gap-3.5">
-      <div className={value === "—" ? "leading-[0.95] text-lab-faint" : "leading-[0.95] text-lab-ink"} style={{ ...titleFont, fontSize: 56 }}>{value}{unit && <span className="ml-1 text-[24px] text-lab-mute">{unit}</span>}</div>
-      <div className="mb-1.5 text-[12px] leading-snug text-lab-dim">{label}</div>
+    <div className="min-w-0">
+      <div className="text-caption font-medium text-lab-mute">{label}</div>
+      <div className={cn("mt-1 text-title font-semibold tabular-nums", share === null ? "text-lab-faint" : hue === "mute" ? "text-lab-ink" : HUE[hue].text)}>{value}</div>
+      <div className="relative mt-3 h-1.5 rounded-full bg-white/[0.07]" aria-hidden>
+        {share !== null && <div className={cn("h-full rounded-full", hue === "mute" ? "bg-lab-mute" : HUE[hue].solid)} style={{ width: `${Math.max(2, 100 * share)}%` }} />}
+        {target !== undefined && <span className="absolute -top-1 h-3.5 w-px bg-lab-ink/70" style={{ left: `${100 * target}%` }} />}
+      </div>
+      <p className="mt-2 text-caption text-lab-mute">{children}</p>
     </div>
   );
 }
 
+const shareHue = (s: number | null, good = 0.8): Hue => (s === null ? "mute" : s >= good ? "ok" : s >= good - 0.2 ? "warn" : "bad");
+
+/** «Можно ли верить числу?»: the level in words, the three measures behind it, and the way to raise it — a person checking the judge. */
 export function TrustView({ state, run, onJudge }: { state: LabState; run: LabRun | null; onJudge: (runId: string) => void }) {
   const { finished } = useRunContext(state, run);
   const items = useMemo(() => finished?.items ?? [], [finished]);
   const errors = useMemo(() => judgeErrors(items), [items]);
+  const splits = useMemo(() => judgeSplits(items), [items]);
   const sim = useMemo(() => simulatorFigures(items), [items]);
 
   if (!state.runs.length) {
-    return <Page wide title="судья"><EmptyState className="mt-5" drop title="Пока нечего проверять">Судью проверяют по диалогам симулятора. Прогоните его хотя бы раз.</EmptyState></Page>;
+    return <Page title="Доверие"><EmptyState className="mt-10" title="Пока нечего проверять">Доверие к оценке меряется на диалогах симулятора: сверка судьи с человеком, второй судья, повторы. Проверьте версию агента хотя бы раз.</EmptyState></Page>;
   }
-  if (!finished?.metric) return <Page wide title="судья"><Skeleton className="mt-5 h-[320px]" /></Page>;
+  if (!finished?.metric) return <Page title="Доверие"><Skeleton className="mt-12 h-9 w-2/3" /><Skeleton className="mt-8 h-[180px]" /></Page>;
 
   const m = finished.metric;
-  const trust = trustOf(finished);
+  const measured = m.measured;
+  const trust = trustStory(finished, measured ? wilson(m.passed, measured) : null)!;
   const left = items.filter(i => (i.status === "PASS" || i.status === "FAIL") && !i.review).length;
-  const hue = trust.level === "ok" ? "ok" : "warn";
-  const progress = Math.min(100, (100 * trust.reviewed) / ENOUGH_CHECKED);
-  const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
+  const disputes = items.filter(disputed).length;
+  const human = m.human?.reviewed ? m.human.agree / m.human.reviewed : null;
+  const humanShown = (m.human?.reviewed ?? 0) >= MIN_CHECKED ? human : null;
+  const second = m.secondJudge?.checked ? m.secondJudge.agree / m.secondJudge.checked : null;
+  const repeats = m.repeats?.scenarios ? m.repeats.stable / m.repeats.scenarios : null;
+  const hue: Hue = trust.level === "ok" ? "ok" : "warn";
 
   return (
-    <Page
-      wide title="судья"
-      lede="Насколько можно верить цифрам на экране «Критерии»: правильно ли судит судья и похож ли симулятор на настоящих клиентов."
-      actions={<Badge hue={hue} icon={ShieldCheck}>{TRUST_TEXT[trust.level]}</Badge>}
-    >
-      <div className="mt-5 grid gap-4 min-[1100px]:grid-cols-2">
-        <Panel className="p-5">
-          <Eyebrow>судья</Eyebrow>
-          {trust.humanShare === null
-            ? <Big value="—" label={<>процент появится после {MIN_CHECKED} проверок<br />проверено {trust.reviewed}</>} />
-            : <Big value={String(Math.round(trust.humanShare * 100))} unit="%" label={<>судья прав<br />проверено {trust.reviewed} из {m.total}</>} />}
-          <div className="relative mt-4 h-1.5 rounded-full bg-white/[0.07]">
-            <div className="h-full rounded-full bg-lab-mute" style={{ width: `${progress}%` }} />
-            <span className="absolute -top-1 h-3.5 border-l border-dashed border-lab-soft" style={{ left: "100%" }} />
-          </div>
-          <div className="mt-1.5 text-[11px] text-lab-dim">Цель: {ENOUGH_CHECKED} проверенных вердиктов, после этого цифре можно верить. Спорные вердикты идут первыми, поэтому цифра строже, чем на всех разговорах.</div>
+    <Page title="Доверие">
+      <header className="pt-10">
+        <div className="text-body text-lab-mute">Версия {finished.version} · {count(measured, "оценённый диалог", "оценённых диалога", "оценённых диалогов")}</div>
+        <h2 className="mt-3 flex items-start gap-3 text-balance text-display font-semibold text-lab-ink">
+          <span className={cn("mt-0.5 inline-flex size-8 flex-shrink-0 items-center justify-center rounded-full", HUE[hue].bgStrong, HUE[hue].text)}><ShieldCheck className="size-[18px]" /></span>
+          <span>{trust.label}</span>
+        </h2>
+        <p className="mt-3 max-w-[760px] text-pretty text-lead text-lab-text">{trust.reason}</p>
+      </header>
 
-          <Eyebrow className="mb-1 mt-5">где судья ошибается</Eyebrow>
-          {errors.length ? (
-            <table className="w-full text-[12px]">
-              <tbody>
-                {errors.slice(0, 5).map(e => (
-                  <tr key={e.rule} className="border-t border-white/[0.06] first:border-t-0">
-                    <td className="py-2 pr-3 text-lab-text">{e.rule}</td>
-                    <td className="py-2 text-right"><Badge hue={e.wrong / e.checked >= 0.3 ? "bad" : e.wrong ? "warn" : "ok"}>{e.wrong} из {e.checked}</Badge></td>
-                  </tr>
+      <Panel className="mt-8 grid gap-x-8 gap-y-6 p-6 md:grid-cols-3">
+        <Measure label="Судья сверен с человеком" hue={humanShown === null ? "warn" : shareHue(humanShown)} target={0.8} share={humanShown}
+          value={humanShown === null ? "—" : `прав в ${Math.round(100 * humanShown)}%`}>
+          {(m.human?.reviewed ?? 0) < MIN_CHECKED
+            ? `Проверено ${m.human?.reviewed ?? 0} из ${m.total}. Процент появится после ${MIN_CHECKED} проверок, надёжен после ${ENOUGH_CHECKED}.`
+            : `Проверено ${m.human!.reviewed} из ${m.total}; цель — ${ENOUGH_CHECKED} проверок и не меньше 80% верных.`}
+        </Measure>
+        <Measure label="Второй судья согласен" hue={shareHue(second)} target={0.8} share={second}
+          value={second === null ? "—" : `в ${Math.round(100 * second)}%`}>
+          {m.secondJudge?.checked ? `${m.secondJudge.agree} из ${m.secondJudge.checked} диалогов · модель другого вендора` : "Второй судья этих диалогов не проверял."}
+        </Measure>
+        <Measure label="Устойчивость на повторах" hue={shareHue(repeats, 0.9)} target={0.9} share={repeats}
+          value={repeats === null ? "—" : `${m.repeats!.stable} из ${m.repeats!.scenarios}`}>
+          {repeats === null ? "Повторов не было. Добавьте 2–3 повтора при следующей проверке версии." : "Сценарии, где все повторы дали один и тот же результат."}
+        </Measure>
+      </Panel>
+
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Button variant="primary" disabled={!left && !!m.human?.reviewed} onClick={() => onJudge(finished.id)}>
+          {m.human?.reviewed ? `Продолжить сверку · осталось ${left}` : "Сверить судью"}<ArrowRight className="size-3.5" />
+        </Button>
+        <span className="inline-flex items-center gap-1.5 text-body text-lab-mute">Спорные идут первыми · ответ клавишами <Kbd>1</Kbd><Kbd>2</Kbd></span>
+      </div>
+
+      {(errors.length > 0 || splits.length > 0 || disputes > 0) && (
+        <div className="grid gap-x-8 lg:grid-cols-2">
+          <Section title="Где судья ошибается" hint={errors.length ? "По сверке с человеком" : "Появится после сверки с человеком"}>
+            {errors.length ? (
+              <Panel>
+                {errors.slice(0, 6).map((e, k) => (
+                  <div key={e.rule} className={cn("flex items-center gap-3 px-4 py-3", k > 0 && "border-t border-lab-line")}>
+                    <span className="min-w-0 flex-1 text-body text-lab-text">{e.rule}</span>
+                    <Badge hue={e.wrong / e.checked >= 0.3 ? "bad" : e.wrong ? "warn" : "ok"}>{e.wrong ? `неверно ${e.wrong} из ${e.checked}` : `верно ${e.checked} из ${e.checked}`}</Badge>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          ) : <div className="py-2 text-[12px] text-lab-dim">Пока нет проверенных вердиктов: нечего сравнивать.</div>}
+              </Panel>
+            ) : <Panel className="px-4 py-5 text-body text-lab-mute">Ни одного вердикта ещё не сверили — сравнивать не с чем.</Panel>}
+          </Section>
+          <Section title="Где судьи расходятся" hint={disputes ? `${count(disputes, "диалог", "диалога", "диалогов")} с разными вердиктами` : "Судьи решают одинаково"}>
+            {splits.length ? (
+              <Panel>
+                {splits.slice(0, 6).map((r, k) => (
+                  <div key={r.rule} className={cn("flex items-center gap-3 px-4 py-3", k > 0 && "border-t border-lab-line")}>
+                    <span className="min-w-0 flex-1 text-body text-lab-text">{r.rule}</span>
+                    <Badge hue="warn">{r.split} из {r.both}</Badge>
+                  </div>
+                ))}
+              </Panel>
+            ) : <Panel className="px-4 py-5 text-body text-lab-mute">{disputes ? "Судьи расходятся в итоге диалога, но не по отдельным критериям." : "Расхождений нет."}</Panel>}
+          </Section>
+        </div>
+      )}
 
-          {trust.secondShare !== null && (
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2 text-[12px]">
-              <span className="text-lab-mute">Второй судья согласен с первым</span>
-              <span className={cn("font-mono", HUE[trust.secondShare >= 0.8 ? "ok" : "warn"].text)}>{m.secondJudge!.agree} из {m.secondJudge!.checked}</span>
-            </div>
-          )}
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button variant="primary" disabled={!left && trust.reviewed > 0} onClick={() => onJudge(finished.id)}>{trust.reviewed ? `Продолжить проверку · ${left} ${plural(left, "осталась", "осталось", "осталось")}` : "Начать проверку"}</Button>
-          </div>
-        </Panel>
-
-        <Panel className="p-5">
-          <Eyebrow>симулятор клиента</Eyebrow>
-          <p className="mt-2 text-[12px] leading-relaxed text-lab-mute">Хороший симулятор пишет так, что его не отличить от настоящего клиента. Здесь то, что можно измерить по сыгранным им разговорам.</p>
-          <table className="mt-3 w-full text-[12px]">
-            <thead>
-              <tr><th className="pb-1.5 text-left font-mono text-[10px] font-normal uppercase tracking-[0.08em] text-lab-dim">показатель</th><th className="pb-1.5 text-right font-mono text-[10px] font-normal uppercase tracking-[0.08em] text-lab-dim">симулятор</th><th className="pb-1.5 text-right font-mono text-[10px] font-normal uppercase tracking-[0.08em] text-lab-dim">реальные</th></tr>
-            </thead>
-            <tbody>
-              <tr className="border-t border-white/[0.06]"><td className="py-2.5 text-lab-text">Слов в реплике клиента</td><td className="py-2.5 text-right font-mono text-lab-text">{sim.avgWords ?? "—"}</td><td className="py-2.5 text-right text-lab-faint">нет данных</td></tr>
-              <tr className="border-t border-white/[0.06]"><td className="py-2.5 text-lab-text">Нажимают кнопку, если она есть</td><td className="py-2.5 text-right font-mono text-lab-text">{sim.pressedShare === null ? "—" : `${sim.pressedShare}%`}</td><td className="py-2.5 text-right text-lab-faint">нет данных</td></tr>
-              <tr className="border-t border-white/[0.06]"><td className="py-2.5 text-lab-text">Реплик клиента сыграно</td><td className="py-2.5 text-right font-mono text-lab-text">{sim.replies}</td><td className="py-2.5 text-right text-lab-faint">нет данных</td></tr>
-            </tbody>
-          </table>
-          <div className="mt-3 rounded-lg border border-dashed border-white/[0.12] px-4 py-3.5">
-            <div className="text-[12px] font-medium text-lab-text">Слепой тест и сравнение с реальными клиентами</div>
-            <div className="mt-1 text-[11px] leading-snug text-lab-dim">Показать эксперту пары «настоящий разговор» и «симулированный» и посмотреть, узнает ли он симулятор. Пока недоступно: Lab получает из логов только первые реплики клиентов.</div>
-          </div>
-        </Panel>
+      <div className="grid gap-x-8 lg:grid-cols-2">
+        <Section title="Похож ли симулятор на клиентов" hint="Что можно измерить по сыгранным диалогам">
+          <Panel>
+            {([
+              ["Слов в реплике клиента", sim.avgWords === null ? "—" : String(sim.avgWords).replace(".", ",")],
+              ["Нажимает кнопку, если она есть", sim.pressedShare === null ? "—" : `${sim.pressedShare}%`],
+              ["Реплик клиента сыграно", String(sim.replies)],
+            ] as const).map(([label, value], k) => (
+              <div key={label} className={cn("flex items-center justify-between gap-3 px-4 py-3 text-body", k > 0 && "border-t border-lab-line")}>
+                <span className="text-lab-text">{label}</span>
+                <span className="tabular-nums text-lab-ink">{value}</span>
+              </div>
+            ))}
+            <div className="border-t border-lab-line px-4 py-3 text-caption text-lab-mute">Сравнить с настоящими клиентами пока нельзя: из логов берутся только первые реплики.</div>
+          </Panel>
+        </Section>
+        <Section title="Кто оценивал" hint={`Запросы идут через ${state.models.via}`}>
+          <Panel>
+            {([["Судья", state.models.main], ["Второй судья", state.models.second], ["Клиент-симулятор", state.models.main]] as const).map(([role, model], k) => (
+              <div key={role} className={cn("flex items-center justify-between gap-3 px-4 py-3 text-body", k > 0 && "border-t border-lab-line")}>
+                <span className="text-lab-text">{role}</span>
+                <span className="truncate font-mono text-caption text-lab-mute">{model ?? "новейшая из каталога"}</span>
+              </div>
+            ))}
+          </Panel>
+        </Section>
       </div>
-
-      <Panel className="mt-4 flex flex-wrap items-center gap-3.5 px-5 py-3.5">
-        <Badge hue={hue}>{cap(TRUST_TEXT[trust.level])}</Badge>
-        <span className="min-w-0 flex-1 text-[12px] leading-snug text-lab-soft">
-          {trust.level === "pending" ? `Число ${m.accuracy}% можно использовать для сравнения версий, но не как точную оценку. Чтобы снять пометку, проверьте ещё ${Math.max(0, MIN_CHECKED - trust.reviewed)} вердиктов судьи.`
-            : trust.level === "partial" ? `Число ${m.accuracy}% годится для сравнения версий. Чтобы ему верили как оценке, доведите проверку до ${ENOUGH_CHECKED} вердиктов и добейтесь, чтобы судья был прав в 80% и больше.`
-            : `Судья проверен на ${trust.reviewed} вердиктах и прав в ${Math.round((trust.humanShare ?? 0) * 100)}%. Числу ${m.accuracy}% можно верить.`}
-        </span>
-      </Panel>
-
-      <div className="mb-2.5 mt-7">
-        <h2 className="text-[14px] font-medium text-lab-text">Кто оценивал</h2>
-        <p className="mt-0.5 text-[11px] text-lab-dim">Модели этой проверки, через {state.models.via}</p>
-      </div>
-      <Panel className="divide-y divide-white/[0.06]">
-        {([["Судья", state.models.main], ["Второй судья", state.models.second], ["Клиент-симулятор", state.models.main]] as const).map(([role, model]) => (
-          <div key={role} className="flex items-center justify-between gap-3 px-5 py-2.5 text-[12px]">
-            <span className="text-lab-mute">{role}</span>
-            <span className="rounded bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-lab-soft">{model ?? "из каталога"}</span>
-          </div>
-        ))}
-      </Panel>
     </Page>
   );
 }

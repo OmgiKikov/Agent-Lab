@@ -1,4 +1,3 @@
-import { ArrowLeft } from "lucide-react";
 import { api } from "../api";
 import { itemKey } from "../logic";
 import { useToast } from "../toast";
@@ -11,15 +10,18 @@ import { JudgeCheck } from "./JudgeCheck";
 export function JudgeCheckPage({ state, scope, onBack, onOpen }: { state: LabState; scope: Scope; onBack: () => void; onOpen: (key: string) => void }) {
   const { error } = useToast();
   const run = scope.finished;
-  if (!state.runs.length) return <Page wide title="проверка судьи"><EmptyState className="mt-5" drop title="Пока нечего проверять">Судью проверяют по диалогам симулятора. Прогоните его хотя бы раз.</EmptyState></Page>;
-  if (!run?.items) return <Page wide title="проверка судьи"><Skeleton className="mt-5 h-[400px]" /></Page>;
+  const crumb = { label: "Доверие", onClick: onBack };
+  if (!state.runs.length) return <Page title="Сверка судьи" crumb={crumb}><EmptyState className="mt-10" title="Пока нечего сверять">Судью сверяют на диалогах симулятора. Проверьте версию агента хотя бы раз.</EmptyState></Page>;
+  if (!run?.items) return <Page title="Сверка судьи" crumb={crumb}><Skeleton className="mt-10 h-[420px]" /></Page>;
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-shrink-0 items-center gap-3 border-b border-white/[0.06] px-6 py-2.5">
-        <button className="inline-flex items-center gap-1.5 text-[12px] text-lab-mute transition-colors hover:text-lab-text" onClick={onBack}><ArrowLeft className="size-3.5" />Судья</button>
-        <span className="text-[12px] text-lab-dim">{run.targetName} · {run.version}</span>
+      <div className="flex h-14 flex-shrink-0 items-center gap-2 border-b border-lab-line px-6">
+        <button className="lab-focus -ml-1.5 rounded-md px-1.5 py-1 text-body text-lab-mute transition-colors duration-100 hover:text-lab-ink" onClick={onBack}>Доверие</button>
+        <span className="text-body text-lab-faint" aria-hidden>/</span>
+        <h1 className="text-body font-semibold text-lab-ink">Сверка судьи</h1>
+        <span className="ml-auto text-body text-lab-mute">Версия {run.version}</span>
       </div>
-      <div className="sb min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1">
         <JudgeCheck run={run} state={state} onReview={(index, decision) => api("/api/review", { run: run.id, index, decision }).catch(error)} onOpen={i => onOpen(itemKey(i))} />
       </div>
     </div>

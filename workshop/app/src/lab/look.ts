@@ -17,7 +17,8 @@ export const HUE: Record<Hue, { text: string; bg: string; bgStrong: string; bord
 };
 
 export const STATUS_HUE: Record<Status, Hue> = { PASS: "ok", FAIL: "bad", RUNNING: "accent", UNMEASURED: "warn", UNKNOWN: "warn", NOT_APPLICABLE: "mute" };
-export const STATUS_TEXT: Record<Status, string> = { PASS: "пройден", FAIL: "провален", UNMEASURED: "не измерен", UNKNOWN: "нет данных", NOT_APPLICABLE: "не применим", RUNNING: "идёт" };
+/** A dialogue's verdict in words: what the judge found, not a test result. */
+export const STATUS_TEXT: Record<Status, string> = { PASS: "без нарушений", FAIL: "нарушение", UNMEASURED: "нет данных", UNKNOWN: "нет данных", NOT_APPLICABLE: "не применим", RUNNING: "идёт" };
 export const RULE_TEXT: Record<string, string> = { PASS: "выполнено", FAIL: "нарушено", UNKNOWN: "нет данных", NOT_APPLICABLE: "не применимо" };
 export const LOG_TEXT: Record<string, string> = { PASS: "без нарушений", FAIL: "нарушение", UNMEASURED: "нет данных" };
 export const statusHue = (status: Status | string): Hue => STATUS_HUE[status as Status] ?? "warn";
