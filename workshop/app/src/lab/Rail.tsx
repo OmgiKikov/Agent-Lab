@@ -1,10 +1,10 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ArrowRight, Check, Loader2, Search } from "lucide-react";
+import { Loader2, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { when } from "./format";
 import { itemKey, scenarioStatus, scenariosOfRun, typesOfRun } from "./logic";
 import { AGENT_SUBTITLE, AGENT_TITLE, HUE, LOG_TEXT, STATUS_TEXT, personaLook, personaName, statusHue } from "./look";
-import { buildSteps } from "./steps";
+import type { NavItem } from "./nav";
 import type { LabRun, LabState, Status, Step } from "./types";
 import { Badge, Chip, Dot, Eyebrow, StatusIcon } from "./ui";
 
@@ -31,59 +31,28 @@ function ListItem({ selected, onClick, lead, title, sub, right, disabled }: { se
   );
 }
 
-function Stepper({ state, step, go }: { state: LabState | null; step: Step; go: Go }) {
-  const steps = buildSteps(state);
-  const next = steps.find(s => !s.done)?.id;
-  return (
-    <nav className="px-2.5 pb-3" aria-label="Шаги проверки">
-      {steps.map((s, i) => {
-        const active = s.id === step;
-        return (
-          <div key={s.id} className="relative">
-            {i < steps.length - 1 && <span className="absolute left-[19px] top-[30px] h-[calc(100%-20px)] w-px bg-white/[0.09]" />}
-            <button
-              onClick={() => go(s.id)} aria-current={active ? "step" : undefined}
-              className={cn("relative flex w-full items-start gap-3 rounded-lg border px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50", active ? "border-white/15 bg-white/[0.08]" : "border-transparent hover:bg-white/[0.04]")}
-            >
-              <span className={cn(
-                "relative z-10 mt-px flex size-5 flex-shrink-0 items-center justify-center rounded-full border font-mono text-[10px]",
-                s.busy ? "border-lab-accent/50 bg-black text-lab-accent"
-                  : active ? "border-white/60 bg-black text-lab-ink"
-                  : s.done ? "border-white/15 bg-black text-lab-dim" : "border-white/15 bg-black text-lab-dim",
-              )}>
-                {s.busy ? <Loader2 className="size-3 animate-spin" /> : s.done && !active ? <Check className="size-3" strokeWidth={2.5} /> : i + 1}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2">
-                  <span className={cn("text-[13px] font-medium", active ? "text-lab-ink" : s.done ? "text-lab-mute" : "text-lab-soft")}>{s.title}</span>
-                  {next === s.id && !active && <Badge hue="accent">дальше</Badge>}
-                </span>
-                <span className="mt-0.5 block truncate text-[11px] text-lab-dim">{s.value}</span>
-              </span>
-            </button>
-          </div>
-        );
-      })}
-    </nav>
-  );
-}
-
-function NextStep({ state, step, go }: { state: LabState | null; step: Step; go: Go }) {
-  const next = buildSteps(state).find(s => !s.done);
-  if (!next || next.id === step) return null;
-  return (
-    <div className="border-t border-white/[0.06] p-3">
+function Nav({ items, step, go }: { items: NavItem[]; step: Step; go: Go }) {
+  const main = items.filter(i => i.id !== "connect");
+  const connect = items.find(i => i.id === "connect")!;
+  const row = (i: NavItem) => {
+    const active = i.id === step;
+    return (
       <button
-        onClick={() => go(next.id)}
-        className="group flex w-full items-center gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5 text-left transition-colors hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50"
+        key={i.id} onClick={() => go(i.id)} aria-current={active ? "page" : undefined}
+        className={cn("flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-1.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50", active ? "border-white/15 bg-white/[0.08] text-lab-ink" : "border-transparent text-lab-mute hover:bg-white/[0.04] hover:text-lab-text")}
       >
-        <span className="min-w-0 flex-1">
-          <span className="block font-mono text-[10px] uppercase tracking-[0.09em] text-lab-accent">дальше</span>
-          <span className="mt-0.5 block text-[12px] font-medium text-lab-ink">{next.cta}</span>
-        </span>
-        <ArrowRight className="size-3.5 flex-shrink-0 text-lab-dim transition-transform group-hover:translate-x-0.5 group-hover:text-lab-text" />
+        {i.busy ? <Loader2 className="size-[15px] flex-shrink-0 animate-spin text-lab-accent" /> : <i.icon className="size-[15px] flex-shrink-0" />}
+        <span className="min-w-0 flex-1 truncate">{i.title}</span>
+        {i.badge && <span className={cn("flex-shrink-0 font-mono text-[10px]", i.hot ? "rounded-full bg-lab-bad px-1.5 font-bold leading-4 text-black" : "text-lab-dim")}>{i.badge}</span>}
       </button>
-    </div>
+    );
+  };
+  return (
+    <nav className="space-y-0.5 px-2.5 pb-3" aria-label="Разделы">
+      {main.map(row)}
+      <div className="my-2 border-t border-white/[0.06]" />
+      {row(connect)}
+    </nav>
   );
 }
 
@@ -91,7 +60,7 @@ const LOG_FILTERS: { id: string; label: string }[] = [
   { id: "all", label: "Все" }, { id: "FAIL", label: "Нарушения" }, { id: "PASS", label: "Без нарушений" }, { id: "UNMEASURED", label: "Нет данных" },
 ];
 
-function LogsList({ state, itemId, go }: { state: LabState; itemId: string | null; go: Go }) {
+function LogsList({ state, itemId, onTrace }: { state: LabState; itemId: string | null; onTrace: (id: string) => void }) {
   const d = state.discover!;
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
@@ -121,7 +90,7 @@ function LogsList({ state, itemId, go }: { state: LabState; itemId: string | nul
           const fail = r.rules.find(x => x.status === "FAIL");
           const topic = d.topics.find(t => t.id === r.topicId)?.title ?? "";
           return (
-            <ListItem key={r.dialogueId} selected={!!r.runId && r.runId === itemId} disabled={!r.runId} onClick={() => r.runId && go("logs", r.runId)}
+            <ListItem key={r.dialogueId} selected={!!r.runId && r.runId === itemId} disabled={!r.runId} onClick={() => r.runId && onTrace(r.runId)}
               lead={<Dot status={r.status} quiet />} title={r.opening} sub={fail?.title || `${LOG_TEXT[r.status] ?? ""} · ${topic}`} />
           );
         })}
@@ -153,7 +122,7 @@ function RunList({ state, run, itemId, go }: { state: LabState; run: LabRun; ite
           const active = own.includes(current);
           return (
             <div key={id} className={cn("rounded-lg border px-2.5 py-2 transition-colors", active ? "border-white/[0.12] bg-white/[0.06]" : "border-transparent")}>
-              <button className="flex w-full items-center gap-2.5 text-left focus-visible:outline-none" onClick={() => go("run", itemKey(own[0]))}>
+              <button className="flex w-full items-center gap-2.5 text-left focus-visible:outline-none" onClick={() => go("runs", itemKey(own[0]))}>
                 <Dot status={status} pulse={status === "RUNNING"} quiet />
                 <span className="min-w-0 flex-1 truncate text-[13px] text-lab-text" title={name}>{name}</span>
               </button>
@@ -166,7 +135,7 @@ function RunList({ state, run, itemId, go }: { state: LabState; run: LabRun; ite
                     const Icon = personaLook(i.persona).icon;
                     return (
                       <button
-                        key={itemKey(i)} onClick={() => go("run", itemKey(i))}
+                        key={itemKey(i)} onClick={() => go("runs", itemKey(i))}
                         title={`${personaName(state.personas, i.persona)}${i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : ""}: ${STATUS_TEXT[i.status]}`}
                         className={cn("inline-flex h-6 min-w-[28px] items-center justify-center gap-1 rounded-md px-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50", quiet ? "text-lab-dim" : h.text, on ? cn(quiet ? "bg-white/[0.12]" : h.bgStrong, "ring-1 ring-current") : cn(quiet ? "bg-white/[0.04] hover:bg-white/[0.09]" : h.bg, !quiet && "hover:brightness-125"))}
                       >
@@ -186,46 +155,29 @@ function RunList({ state, run, itemId, go }: { state: LabState; run: LabRun; ite
   );
 }
 
-const shortDate = (r: LabRun) => `${r.version} · ${when(r.startedAt)}`;
-
-function AccuracyList({ state, run, onPickRun }: { state: LabState; run: LabRun | null; onPickRun: (id: string) => void }) {
-  return (
-    <div className="min-h-0 flex-1 space-y-0.5 overflow-auto px-2 pb-2 sb">
-      {state.runs.map(r => (
-        <ListItem
-          key={r.id} selected={r.id === run?.id} onClick={() => onPickRun(r.id)}
-          lead={<Dot status={r.status === "running" ? "RUNNING" : "NOT_APPLICABLE"} pulse={r.status === "running"} />}
-          title={r.targetName} sub={shortDate(r)}
-          right={<span className="mt-px font-mono text-[13px] text-lab-ink">{r.metric?.accuracy ?? "—"}%</span>}
-        />
-      ))}
-    </div>
-  );
-}
-
 function CardsList({ state, itemId, go }: { state: LabState; itemId: string | null; go: Go }) {
   return (
     <div className="min-h-0 flex-1 space-y-0.5 overflow-auto px-2 pb-2 sb">
       {(state.cards?.cards ?? []).map(c => (
-        <ListItem key={c.id} selected={c.id === itemId} onClick={() => go("cards", c.id)} lead={<Dot status={c.origin === "Ошибка из лога" ? "FAIL" : "NOT_APPLICABLE"} />} title={c.name} sub={c.topic} />
+        <ListItem key={c.id} selected={c.id === itemId} onClick={() => go("checks", c.id)} lead={<Dot status={c.origin === "Ошибка из лога" ? "FAIL" : "NOT_APPLICABLE"} />} title={c.name} sub={c.topic} />
       ))}
     </div>
   );
 }
 
-const LIST_TITLE: Record<Step, string> = { agent: "", logs: "Разговоры из логов", cards: "Сценарии", run: "Сценарии прогона", accuracy: "Прогоны" };
+const LIST_TITLE: Partial<Record<Step, string>> = { runs: "Сценарии проверки", checks: "Сценарии", connect: "Разговоры из логов" };
 
-/** The left column: where you are, what is next, and the list that belongs to the current step. */
-export function Rail({ state, offline, step, itemId, run, go, onPickRun, onPalette }: {
-  state: LabState | null; offline: boolean; step: Step; itemId: string | null; run: LabRun | null; go: Go; onPickRun: (id: string) => void; onPalette: () => void;
+/** The left column: the sections, and the list that belongs to the one you are in. */
+export function Rail({ state, offline, step, itemId, run, go, nav, tab, onTrace, onPalette }: {
+  state: LabState | null; offline: boolean; step: Step; itemId: string | null; run: LabRun | null; go: Go; nav: NavItem[]; tab: string;
+  onTrace: (id: string) => void; onPalette: () => void;
 }) {
-  const showLogs = step === "logs" && state?.discover;
-  const showRun = step === "run" && state && run?.items;
-  const showAccuracy = step === "accuracy" && state && state.runs.length > 0;
-  const showCards = step === "cards" && !!itemId && !!state?.cards;
-  const hasList = !!(showLogs || showRun || showAccuracy || showCards);
+  const showLogs = step === "connect" && tab === "logs" && !!state?.discover;
+  const showRun = step === "runs" && !!state && !!run?.items;
+  const showCards = step === "checks" && !!itemId && !!state?.cards;
+  const hasList = showLogs || showRun || showCards;
   return (
-    <aside className="flex w-[292px] flex-shrink-0 flex-col border-r border-white/[0.06]">
+    <aside className="flex w-[268px] flex-shrink-0 flex-col border-r border-white/[0.06]">
       <div className="px-4 pb-3 pt-3">
         <div className="flex items-center justify-between gap-3">
           <span className="flex items-center gap-2 font-mono text-[10px] text-lab-dim">
@@ -246,18 +198,16 @@ export function Rail({ state, offline, step, itemId, run, go, onPickRun, onPalet
           <kbd className="ml-auto rounded border border-white/15 px-1 font-mono text-[10px] leading-4">⌘K</kbd>
         </button>
       </div>
-      <Stepper state={state} step={step} go={go} />
+      <Nav items={nav} step={step} go={go} />
       {hasList && (
         <div className="flex min-h-0 flex-1 flex-col border-t border-white/[0.06] pt-3">
           <Eyebrow className="px-4 pb-2">{LIST_TITLE[step]}</Eyebrow>
-          {showLogs && <LogsList state={state!} itemId={itemId} go={go} />}
+          {showLogs && <LogsList state={state!} itemId={itemId} onTrace={onTrace} />}
           {showRun && <RunList state={state!} run={run!} itemId={itemId} go={go} />}
-          {showAccuracy && <AccuracyList state={state!} run={run} onPickRun={onPickRun} />}
           {showCards && <CardsList state={state!} itemId={itemId} go={go} />}
         </div>
       )}
       {!hasList && <div className="flex-1" />}
-      <NextStep state={state} step={step} go={go} />
     </aside>
   );
 }

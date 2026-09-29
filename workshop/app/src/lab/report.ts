@@ -59,3 +59,18 @@ export function download(name: string, text: string, type = "text/markdown") {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/** A finding as text for a ticket or for the person who edits the agent's prompt. */
+export function findingReport(f: { title: string; rule: string; count: number; measured: number; items: Item[] }, personas: Persona[], promptQuote?: string): string {
+  const lines = [`# ${f.title}`, "", `Нарушено в ${f.count} из ${f.measured} разговоров.`, ""];
+  if (f.rule !== f.title) lines.push(`Правило: ${f.rule}`, "");
+  if (promptQuote) lines.push(`В промпте: «${promptQuote}»`, "");
+  lines.push("## Примеры", "");
+  for (const item of f.items.slice(0, 5)) {
+    const rule = item.rules.find(r => r.status === "FAIL");
+    lines.push(`- ${item.conversation[0]?.text ?? ""} (${personaName(personas, item.persona)})`);
+    if (rule?.agentQuote) lines.push(`  Агент: «${rule.agentQuote}»`);
+    if (rule?.reason) lines.push(`  Почему нарушение: ${rule.reason}`);
+  }
+  return lines.join("\n");
+}

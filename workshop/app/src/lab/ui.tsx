@@ -45,7 +45,7 @@ export function Section({ title, hint, right, children, className }: { title: Re
  * A step's page: a header bar like the Workshop's views (title, one line of what it is, actions on the right),
  * then the content. The bar stays on top while a long page scrolls, so its actions are always at hand.
  */
-export function Page({ title, lede, actions, wide, children }: { title: string; lede?: ReactNode; actions?: ReactNode; wide?: boolean; children?: ReactNode }) {
+export function Page({ title, lede, actions, wide, nav, children }: { title: string; lede?: ReactNode; actions?: ReactNode; wide?: boolean; nav?: ReactNode; children?: ReactNode }) {
   const width = wide ? "max-w-[1240px]" : "max-w-[1120px]";
   return (
     <div className="message-arrive">
@@ -57,6 +57,7 @@ export function Page({ title, lede, actions, wide, children }: { title: string; 
           </div>
           {actions && <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2 pt-0.5">{actions}</div>}
         </div>
+        {nav && <div className={cn("mx-auto px-6", width)}>{nav}</div>}
       </header>
       <div className={cn("mx-auto px-6 pb-16 pt-1", width)}>{children}</div>
     </div>
@@ -146,9 +147,9 @@ export function Segmented<T extends string | number>({ value, options, onChange,
 }
 
 /** Underlined tabs, as in the Workshop's own run view (Overview / Span Tree / Convo). */
-export function Tabs<T extends string>({ value, tabs, onChange }: { value: T; tabs: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
+export function Tabs<T extends string>({ value, tabs, onChange, flush }: { value: T; tabs: { value: T; label: ReactNode }[]; onChange: (v: T) => void; flush?: boolean }) {
   return (
-    <div role="tablist" className="flex flex-shrink-0 border-b border-white/[0.06] pl-4">
+    <div role="tablist" className={cn("flex flex-shrink-0", flush ? "-ml-3" : "border-b border-white/[0.06] pl-4")}>
       {tabs.map(t => (
         <button
           key={t.value} role="tab" aria-selected={t.value === value} onClick={() => onChange(t.value)}

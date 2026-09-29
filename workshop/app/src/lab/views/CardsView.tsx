@@ -70,8 +70,8 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
 
   return (
     <Page
-      wide title="сценарии"
-      lede="Ситуация клиента взята из реального разговора, критерии проверки — из правил промпта. Симулятор клиента критериев не видит."
+      wide title="набор проверок"
+      lede="Сценарии, которые симулятор играет за клиента при каждой проверке агента. Ситуация взята из реального разговора, критерии из правил промпта; симулятор их не видит."
       actions={<>
         <Button variant="primary" icon={FlaskConical} disabled={state.job.running || !state.discover} onClick={() => api("/api/cards", {}).catch(error)}>{deck.length ? "Собрать заново" : "Собрать сценарии"}</Button>
         <JobLine state={state} kind="cards" />

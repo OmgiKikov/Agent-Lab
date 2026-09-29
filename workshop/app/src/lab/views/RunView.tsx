@@ -7,6 +7,7 @@ import { count, plural, when } from "../format";
 import { Heatmap } from "../charts/Heatmap";
 import { JobLine } from "../JobLine";
 import { JudgeCheck } from "./JudgeCheck";
+import { splitQuote } from "../findings";
 import { transcript } from "../report";
 import { disputed, itemKey, personaOf, previousOf, scenariosOfRun, typesOfRun } from "../logic";
 import { DEFAULT_PERSONA, HUE, RULE_TEXT, STATUS_TEXT, statusHue } from "../look";
@@ -61,16 +62,21 @@ export function NewRun({ state, target, setTarget, onStarted }: { state: LabStat
   );
 }
 
-function AgentMessage({ m }: { m: Message }) {
+/** `mark`: the quote the judge cited and why it counts as a violation; drawn in the text and under it. */
+export function AgentMessage({ m, mark }: { m: Message; mark?: { quote?: string; reason?: string } }) {
   const [open, setOpen] = useState(false);
   const long = m.text.length > 700;
   const calls = (m.events ?? []).map(e => e.tool.replace("Система банка · ", "")).filter((t, k, all) => all.indexOf(t) === k);
+  const parts = mark?.quote ? splitQuote(m.text, mark.quote) : null;
   return (
     <div className="flex max-w-[86%] flex-col items-start gap-1.5 self-start">
       <div className="rounded-2xl rounded-bl-md border border-white/[0.08] bg-lab-surface px-4 py-3 text-[13px] leading-relaxed text-lab-text">
-        <div className="whitespace-pre-wrap" style={long && !open ? { maxHeight: 220, overflow: "hidden", maskImage: "linear-gradient(#000 70%, transparent)" } : undefined}>{m.text}</div>
+        <div className="whitespace-pre-wrap" style={long && !open ? { maxHeight: 220, overflow: "hidden", maskImage: "linear-gradient(#000 70%, transparent)" } : undefined}>{parts ? <>{parts[0]}<mark className="rounded-sm border-b-2 border-lab-bad bg-lab-bad/15 px-0.5 text-[#f6c9c9]">{parts[1]}</mark>{parts[2]}</> : m.text}</div>
         {long && <button className="mt-1.5 text-[12px] text-lab-accent hover:underline" onClick={() => setOpen(v => !v)}>{open ? "Свернуть" : "Показать полностью"}</button>}
       </div>
+      {parts && mark?.reason && (
+        <div className="max-w-[92%] border-l-2 border-lab-bad py-0.5 pl-3 text-[12px] leading-snug text-[#f3cccc]"><b className="font-semibold">✗ Нарушено.</b> {mark.reason}</div>
+      )}
       {!!m.options?.length && <div className="flex flex-wrap gap-1.5">{m.options.map(o => <span key={o} className="rounded-full border border-white/[0.1] px-2.5 py-0.5 text-[12px] text-lab-mute">{o}</span>)}</div>}
       {calls.length > 0 && <div className="flex flex-wrap gap-1.5">{calls.map(c => <ToolPill key={c} name={c} />)}</div>}
       <div className="px-1 text-[11px] text-lab-dim">
@@ -256,7 +262,7 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
 
   if (!run) {
     return (
-      <Page title="прогон" lede="Искусственный клиент начинает с первой реплики из лога и ведёт разговор по ситуации сценария. Судья проверяет каждый разговор по критериям.">
+      <Page title="разговоры" lede="Искусственный клиент начинает с первой реплики из лога и ведёт разговор по ситуации сценария. Судья проверяет каждый разговор по критериям.">
         <Panel className="mt-5"><NewRun state={state} target={target} setTarget={setTarget} /></Panel>
         <div className="mt-3"><JobLine state={state} kind="run" /></div>
       </Page>

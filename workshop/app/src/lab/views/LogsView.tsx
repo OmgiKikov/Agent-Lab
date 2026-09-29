@@ -7,7 +7,7 @@ import { plural, pct, when } from "../format";
 import { JobLine } from "../JobLine";
 import { Confirm } from "../modal";
 import { useToast } from "../toast";
-import type { LabState, Step } from "../types";
+import type { LabState } from "../types";
 import { Badge, Button, EmptyState, Eyebrow, inputClass, Page, Panel, Quote, Row, Section, StackBar, titleFont } from "../ui";
 
 /** The service lists every violating conversation of a pattern; show a few, the rest on request. */
@@ -57,7 +57,7 @@ function FormatHint() {
   );
 }
 
-export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (runId?: string) => void; onGo: (step: Step) => void }) {
+export function LogsView({ state, onOpen, onGo, nav }: { state: LabState; onOpen: (runId: string) => void; onGo: () => void; nav?: React.ReactNode }) {
   const { error } = useToast();
   const d = state.discover;
   const [sample, setSample] = useState(d?.sampled ?? 60);
@@ -79,7 +79,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
 
   if (!state.logs.total) {
     return (
-      <Page title="оценка логов" lede={LEDE}>
+      <Page title="подключение" lede={LEDE} nav={nav}>
         <div className="mt-5"><DropZone busy={busy} onFile={load} onPick={() => fileRef.current?.click()} /></div>
         <FormatHint />
         {picker}
@@ -103,7 +103,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
       {noSources && (
         <div className="flex w-full items-center gap-2 text-[12px] text-lab-warn">
           <TriangleAlert className="size-3.5" />Судье пока не на что опереться.
-          <button className="underline underline-offset-2 hover:text-lab-ink" onClick={() => onGo("agent")}>Соберите контекст агента</button>
+          <button className="underline underline-offset-2 hover:text-lab-ink" onClick={onGo}>Соберите контекст агента</button>
         </div>
       )}
       {picker}
@@ -112,7 +112,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
 
   if (!d) {
     return (
-      <Page title="оценка логов" lede={LEDE}>
+      <Page title="подключение" lede={LEDE} nav={nav}>
         {toolbar}
         <EmptyState className="mt-5" icon={FileText} title={`Выгрузка загружена: ${state.logs.total} ${plural(state.logs.total, "разговор", "разговора", "разговоров")}`}>
           Нажмите «Оценить логи»: судья проверит выбранное число разговоров и покажет, какие правила промпта агент нарушает чаще всего.
@@ -136,7 +136,7 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
   const toggle = (i: number) => setOpen(prev => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; });
 
   return (
-    <Page title="оценка логов" lede={LEDE}>
+    <Page title="подключение" lede={LEDE} nav={nav}>
       {toolbar}
       <Confirm open={confirm} onClose={() => setConfirm(false)} onConfirm={() => run(true)} title="Выделить правила заново?" action="Выделить заново">
         Следующая оценка пойдёт по новым правилам, поэтому её нельзя будет сравнить с текущей.
