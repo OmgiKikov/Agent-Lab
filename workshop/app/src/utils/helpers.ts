@@ -3,22 +3,24 @@ const INACTIVE_MS = 30_000;
 // run that completes between sidebar glances doesn't appear inert.
 const AFTERGLOW_MS = 3_000;
 
+/** A duration in Russian units with a decimal comma: «410 мс», «2,7 с», «1,5 мин». */
 export function fmt(ms: number | null | undefined): string {
-  if (!ms || ms < 1) return "<1ms";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
+  if (!ms || ms < 1) return "<1\u00a0мс";
+  if (ms < 1000) return `${Math.round(ms)}\u00a0мс`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1).replace(".", ",")}\u00a0с`;
+  return `${(ms / 60000).toFixed(1).replace(".", ",")}\u00a0мин`;
 }
 
+/** How long ago, in Russian: «только что», «40 с назад», «5 мин назад», «3 ч назад», «4 дн. назад», «5 мес. назад», «2 г. назад». */
 export function ago(t: number): string {
   const d = Date.now() - t;
-  if (d < 5000) return "just now";
-  if (d < 60000) return `${Math.floor(d / 1000)}s ago`;
-  if (d < 3600000) return `${Math.floor(d / 60000)}m ago`;
-  if (d < 86400000) return `${Math.floor(d / 3600000)}h ago`;
-  if (d < 2592000000) return `${Math.floor(d / 86400000)}d ago`;
-  if (d < 31536000000) return `${Math.floor(d / 2592000000)}mo ago`;
-  return `${Math.floor(d / 31536000000)}y ago`;
+  if (d < 5000) return "только что";
+  if (d < 60000) return `${Math.floor(d / 1000)}\u00a0с назад`;
+  if (d < 3600000) return `${Math.floor(d / 60000)}\u00a0мин назад`;
+  if (d < 86400000) return `${Math.floor(d / 3600000)}\u00a0ч назад`;
+  if (d < 2592000000) return `${Math.floor(d / 86400000)}\u00a0дн. назад`;
+  if (d < 31536000000) return `${Math.floor(d / 2592000000)}\u00a0мес. назад`;
+  return `${Math.floor(d / 31536000000)}\u00a0г. назад`;
 }
 
 export function isActive(run: { last_updated_at: number; finished?: number | null }): boolean {

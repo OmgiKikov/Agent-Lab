@@ -7,8 +7,10 @@ import {
   useMatch,
   useNavigate,
 } from "react-router-dom";
-import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
-import { NavSidebar } from "./components/NavSidebar";
+import { Menu } from "lucide-react";
+import { LabProvider } from "./lab/LabContext";
+import { Sidebar } from "./lab/Sidebar";
+import { LabMark } from "./lab/ui";
 import { MessagePane } from "./components/MessagePane";
 import { RunsPage } from "./pages/RunsPage";
 import { LabPage } from "./pages/LabPage";
@@ -37,8 +39,10 @@ function LegacyHashRedirect() {
 
 function AppLayout() {
   const [showDisconnectedNotice, setShowDisconnectedNotice] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const location = useLocation();
   const runMatch = useMatch({ path: "/runs/:runId", end: false });
-  // Agent Lab brings its own sidebar and puts the assistant in it: one navigation column, nothing floating over the content.
+  // The Lab does not need the Workshop to work: only the trace pages wait for it.
   const onLab = !!useMatch({ path: "/lab", end: false });
   const activeRunId = runMatch?.params.runId
     ? decodeURIComponent(runMatch.params.runId)
@@ -60,38 +64,48 @@ function AppLayout() {
   useEffect(() => {
     sendWorkshopMessage({ type: "ui_view", run_id: activeRunId });
   }, [activeRunId]);
+  useEffect(() => { setMenu(false); }, [location.pathname]);
 
+  const blocked = showDisconnectedNotice && !onLab;
   return (
-    <SidebarProvider defaultOpen={false}>
+    <LabProvider>
       <LegacyHashRedirect />
-      {!onLab && <NavSidebar />}
-      <SidebarInset className={onLab ? "bg-lab-canvas" : undefined}>
-        <div className="relative h-screen overflow-hidden">
+      {/* One product: the same navigation column on every page, the assistant opens from it, nothing floats over the content. */}
+      <div className="flex h-svh overflow-hidden bg-lab-canvas text-lab-text">
+        <Sidebar className="hidden md:flex" />
+        {menu && (
+          <div className="fixed inset-0 z-50 flex md:hidden">
+            <Sidebar className="shadow-pop" onNavigate={() => setMenu(false)} />
+            <button className="flex-1 bg-black/60" aria-label="Закрыть меню" onClick={() => setMenu(false)} />
+          </div>
+        )}
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          <div className="flex h-12 flex-shrink-0 items-center gap-2 border-b border-lab-line px-3 md:hidden">
+            <button onClick={() => setMenu(true)} aria-label="Меню" className="lab-focus inline-flex size-8 items-center justify-center rounded-md text-lab-mute hover:bg-lab-raised hover:text-lab-ink"><Menu className="size-4" /></button>
+            <LabMark size={18} className="text-lab-ink" /><span className="text-body font-semibold text-lab-ink">Agent Lab</span>
+          </div>
           <div
-            className={`flex h-full transition-all duration-200 ${showDisconnectedNotice ? "pointer-events-none select-none blur-sm opacity-45" : ""}`}
-            aria-hidden={showDisconnectedNotice}
+            className={`flex min-h-0 flex-1 transition-[filter,opacity] duration-200 ${blocked ? "pointer-events-none select-none opacity-40 blur-sm" : ""}`}
+            aria-hidden={blocked}
           >
-            <div className="flex-1 min-w-0 overflow-auto">
+            <div className="min-w-0 flex-1 overflow-auto">
               <Outlet />
             </div>
-            <MessagePane activeRunId={activeRunId} hideLauncher={onLab} />
+            <MessagePane activeRunId={activeRunId} hideLauncher />
           </div>
-          {showDisconnectedNotice && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 px-6">
-              <div
-                className="flex min-h-[180px] w-[520px] max-w-full flex-col items-center justify-center rounded-[10px] border border-white/10 bg-zinc-950/90 px-9 py-6 text-center shadow-2xl shadow-black/50 backdrop-blur"
-                style={{ fontFamily: '"AlphaLyrae", sans-serif' }}
-              >
-                <div className="text-lg font-medium text-white/90">Workshop isn&apos;t running.</div>
-                <div className="mt-4 text-[15px] leading-relaxed text-white/62">
-                  Run <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-white/90">raindrop workshop</code> from your terminal to resume.
-                </div>
+          {blocked && (
+            <div className="absolute inset-0 z-40 flex items-center justify-center px-6">
+              <div className="w-[460px] max-w-full rounded-xl border border-lab-edge bg-lab-raised px-8 py-7 text-center shadow-pop">
+                <div className="text-title font-semibold text-lab-ink">Workshop не запущен</div>
+                <p className="mt-2 text-reading text-lab-text">
+                  Трейсы хранит Workshop. Запустите его вместе с Agent Lab командой <code className="rounded-md bg-lab-active px-1.5 py-0.5 font-mono text-body text-lab-ink">sh bin/start.sh</code> — страница подключится сама.
+                </p>
               </div>
             </div>
           )}
         </div>
-      </SidebarInset>
-    </SidebarProvider>
+      </div>
+    </LabProvider>
   );
 }
 
@@ -100,7 +114,7 @@ export const router = createBrowserRouter([
     path: "/",
     element: <AppLayout />,
     children: [
-      { index: true, element: <Navigate to="/lab" replace /> },
+      { index: true, element: <Navigate to="/lab/overview" replace /> },
       { path: "lab", element: <LabPage /> },
       { path: "lab/:step", element: <LabPage /> },
       { path: "lab/:step/:itemId", element: <LabPage /> },
@@ -120,7 +134,7 @@ export const router = createBrowserRouter([
       { path: "saved/:runId", element: <SavedPage /> },
       { path: "saved", element: <SavedPage /> },
       { path: "settings", element: <SettingsPage /> },
-      { path: "*", element: <Navigate to="/runs" replace /> },
+      { path: "*", element: <Navigate to="/lab/overview" replace /> },
     ],
   },
 ]);

@@ -1,18 +1,18 @@
-import { Activity, Check, Loader2, Search, Sparkles, Square } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Activity, Bookmark, Check, Loader2, Search, Settings, Sparkles, Square, type LucideIcon } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { useWorkshopConnected } from "@/hooks/use-workshop-ws";
 import { api } from "./api";
+import { useLabContext } from "./LabContext";
 import { AGENT_SUBTITLE, AGENT_TITLE } from "./look";
-import { NAV_GROUP_TITLE, type NavGroup, type NavItem } from "./nav";
+import type { NavItem } from "./nav";
 import { useToast } from "./toast";
-import type { LabState, Step } from "./types";
+import type { LabState } from "./types";
 import { Kbd, LabMark } from "./ui";
-
-type Go = (step: Step, item?: string | null) => void;
 
 const JOB_TITLE: Record<string, string> = { run: "Идёт проверка версии", rejudge: "Судья переоценивает", discover: "Судья читает логи", cards: "Собираются сценарии", sources: "Читается код агента" };
 
-/** The running job, visible from every screen: what it does, how far it is, and a way to stop it. */
+/** The running job, visible from every page: what it does, how far it is, and a way to stop it. */
 function JobCard({ state }: { state: LabState }) {
   const { error } = useToast();
   const j = state.job;
@@ -24,7 +24,7 @@ function JobCard({ state }: { state: LabState }) {
       <div className="flex items-center gap-2 text-body font-medium text-lab-ink">
         <Loader2 className="size-3.5 animate-spin text-lab-accent" />
         <span className="min-w-0 flex-1 truncate">{JOB_TITLE[j.kind ?? ""] ?? "Идёт работа"}</span>
-        {share !== null && <span className="tabular-nums text-caption text-lab-mute">{done}/{total}</span>}
+        {share !== null && <span className="text-caption tabular-nums text-lab-mute">{done}/{total}</span>}
       </div>
       {message && <div className="mt-1 line-clamp-2 text-caption text-lab-mute">{message}</div>}
       {share !== null && (
@@ -39,53 +39,85 @@ function JobCard({ state }: { state: LabState }) {
   );
 }
 
-function NavRow({ item, active, go }: { item: NavItem; active: boolean; go: Go }) {
-  const setup = item.group === "setup";
+type Row = { key: string; title: string; icon: LucideIcon; to: string; active: boolean; badge?: string; hot?: boolean; busy?: boolean; setup?: { n: number; done?: boolean } };
+
+function NavRow({ row, onGo }: { row: Row; onGo: (to: string) => void }) {
   return (
     <button
-      onClick={() => go(item.id)} aria-current={active ? "page" : undefined}
+      onClick={() => onGo(row.to)} aria-current={row.active ? "page" : undefined}
       className={cn(
         "lab-focus-inset group flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-body transition-colors duration-100",
-        active ? "bg-lab-active text-lab-ink" : "text-lab-mute hover:bg-lab-raised hover:text-lab-ink",
+        row.active ? "bg-lab-active text-lab-ink" : "text-lab-mute hover:bg-lab-raised hover:text-lab-ink",
       )}
     >
-      {item.busy ? <Loader2 className="size-4 flex-shrink-0 animate-spin text-lab-accent" />
-        : setup ? (
+      {row.busy ? <Loader2 className="size-4 flex-shrink-0 animate-spin text-lab-accent" />
+        : row.setup ? (
           <span className={cn("flex size-4 flex-shrink-0 items-center justify-center rounded-full text-micro font-semibold tabular-nums",
-            item.done ? "bg-lab-ok/15 text-lab-ok" : active ? "bg-lab-ink text-lab-canvas" : "border border-lab-strong text-lab-mute")}>
-            {item.done ? <Check className="size-2.5" strokeWidth={3} /> : item.n}
+            row.setup.done ? "bg-lab-ok/15 text-lab-ok" : row.active ? "bg-lab-ink text-lab-canvas" : "border border-lab-strong text-lab-mute")}>
+            {row.setup.done ? <Check className="size-2.5" strokeWidth={3} /> : row.setup.n}
           </span>
-        ) : <item.icon className={cn("size-4 flex-shrink-0", active ? "text-lab-ink" : "text-lab-mute group-hover:text-lab-text")} />}
-      <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
-      {item.badge && (
-        <span className={cn("flex-shrink-0 tabular-nums text-caption", item.hot ? "font-semibold text-lab-bad" : "text-lab-warn")} title={item.hot ? "Нарушаются" : "Ждёт проверки"}>{item.badge}</span>
-      )}
+        ) : <row.icon className={cn("size-4 flex-shrink-0", row.active ? "text-lab-ink" : "text-lab-mute group-hover:text-lab-text")} />}
+      <span className="min-w-0 flex-1 truncate font-medium">{row.title}</span>
+      {row.badge && <span className={cn("flex-shrink-0 text-caption tabular-nums", row.hot ? "font-semibold text-lab-bad" : "text-lab-warn")} title={row.hot ? "Нарушаются" : "Ждёт проверки"}>{row.badge}</span>}
     </button>
   );
 }
 
-/** The one navigation column: the product, the agent under test, the answer, the preparation, and the job at work. */
-export function Sidebar({ state, offline, step, go, nav, onPalette, className }: {
-  state: LabState | null; offline: boolean; step: Step; go: Go; nav: NavItem[]; onPalette: () => void; className?: string;
-}) {
-  const groups = (["main", "setup"] as NavGroup[]).map(g => ({ id: g, items: nav.filter(i => i.group === g) }));
-  const setupDone = nav.filter(i => i.group === "setup" && i.done).length;
+function Group({ title, aside, rows, onGo }: { title?: string; aside?: string; rows: Row[]; onGo: (to: string) => void }) {
   return (
-    <aside className={cn("flex w-[232px] flex-shrink-0 flex-col border-r border-lab-line bg-lab-panel", className)} aria-label="Agent Lab">
-      <div className="flex h-14 items-center gap-2.5 px-4">
+    <div className="mt-6 first:mt-0">
+      {title && (
+        <div className="mb-1 flex items-center justify-between px-2.5">
+          <span className="text-caption font-medium text-lab-mute">{title}</span>
+          {aside && <span className="text-caption tabular-nums text-lab-faint">{aside}</span>}
+        </div>
+      )}
+      <div className="space-y-px">{rows.map(r => <NavRow key={r.key} row={r} onGo={onGo} />)}</div>
+    </div>
+  );
+}
+
+const WORKSHOP: { key: string; title: string; icon: LucideIcon; to: string }[] = [
+  { key: "runs", title: "Все трейсы", icon: Activity, to: "/runs" },
+  { key: "search", title: "Поиск", icon: Search, to: "/search" },
+  { key: "saved", title: "Сохранённые", icon: Bookmark, to: "/saved" },
+];
+
+/**
+ * The app's one navigation column, on every page: the product and the agent under test, the answer (the Lab's sections),
+ * the preparation as numbered steps, the trace viewer, the job at work, and the way to the assistant and the settings.
+ */
+export function Sidebar({ className, onNavigate }: { className?: string; onNavigate?: () => void }) {
+  const { state, offline, nav, openPalette } = useLabContext();
+  const workshop = useWorkshopConnected();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const onGo = (to: string) => { navigate(to); onNavigate?.(); };
+  const labStep = pathname.startsWith("/lab") ? (pathname.split("/")[2] || "overview") : null;
+  const row = (i: NavItem): Row => ({
+    key: i.id, title: i.title, icon: i.icon, to: `/lab/${i.id}`, active: labStep === i.id, badge: i.badge, hot: i.hot, busy: i.busy,
+    setup: i.group === "setup" ? { n: i.n ?? 0, done: i.done } : undefined,
+  });
+  const main = nav.filter(i => i.group === "main").map(row);
+  const setup = nav.filter(i => i.group === "setup").map(row);
+  const setupDone = setup.filter(r => r.setup?.done).length;
+  const tools: Row[] = WORKSHOP.map(w => ({ ...w, active: pathname === w.to || pathname.startsWith(`${w.to}/`) }));
+
+  return (
+    <aside className={cn("flex w-[232px] flex-shrink-0 flex-col border-r border-lab-line bg-lab-panel", className)} aria-label="Навигация">
+      <button onClick={() => onGo("/lab/overview")} className="lab-focus-inset flex h-14 flex-shrink-0 items-center gap-2.5 px-4 text-left">
         <LabMark size={20} className="text-lab-ink" />
         <span className="text-body font-semibold tracking-tight text-lab-ink">Agent Lab</span>
-        <span className={cn("ml-auto size-1.5 rounded-full", offline ? "bg-lab-bad" : "bg-lab-ok")} title={offline ? "Сервис Agent Lab не отвечает" : "Сервис Agent Lab на связи"} />
-      </div>
+      </button>
 
       <div className="px-3">
-        <div className="rounded-lg px-2 pb-3 pt-1">
+        <div className="px-2 pb-3 pt-1">
           <div className="text-caption text-lab-mute">Проверяем</div>
           <div className="mt-0.5 truncate text-body font-medium text-lab-ink">{AGENT_TITLE}</div>
           <div className="truncate text-caption text-lab-mute">{AGENT_SUBTITLE}</div>
         </div>
         <button
-          onClick={onPalette}
+          onClick={() => { openPalette(); onNavigate?.(); }}
           className="lab-focus flex h-8 w-full items-center gap-2 rounded-md border border-lab-edge bg-lab-canvas/60 px-2.5 text-left text-body text-lab-mute transition-colors duration-100 hover:border-lab-strong hover:text-lab-text"
         >
           <Search className="size-3.5" />Поиск и команды
@@ -93,38 +125,32 @@ export function Sidebar({ state, offline, step, go, nav, onPalette, className }:
         </button>
       </div>
 
-      <nav className="mt-4 flex-1 overflow-y-auto px-3" aria-label="Разделы">
-        {groups.map((g, k) => (
-          <div key={g.id} className={cn(k > 0 && "mt-6")}>
-            {NAV_GROUP_TITLE[g.id] && (
-              <div className="mb-1 flex items-center justify-between px-2.5">
-                <span className="text-caption font-medium text-lab-mute">{NAV_GROUP_TITLE[g.id]}</span>
-                {g.id === "setup" && <span className="tabular-nums text-caption text-lab-faint">{setupDone} из {g.items.length}</span>}
-              </div>
-            )}
-            <div className="space-y-px">{g.items.map(i => <NavRow key={i.id} item={i} active={i.id === step} go={go} />)}</div>
-          </div>
-        ))}
+      <nav className="mt-5 min-h-0 flex-1 overflow-y-auto px-3 pb-3" aria-label="Разделы">
+        <Group rows={main} onGo={onGo} />
+        <Group title="Подготовка" aside={setup.length ? `${setupDone} из ${setup.length}` : undefined} rows={setup} onGo={onGo} />
+        <Group title="Трейсы" rows={tools} onGo={onGo} />
       </nav>
 
       {state && <JobCard state={state} />}
 
       <div className="border-t border-lab-line px-3 py-2">
         <button
-          onClick={() => window.dispatchEvent(new Event("workshop:open-message-pane"))}
+          onClick={() => { window.dispatchEvent(new Event("workshop:open-message-pane")); onNavigate?.(); }}
           className="lab-focus-inset flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-body text-lab-mute transition-colors duration-100 hover:bg-lab-raised hover:text-lab-ink"
         >
           <Sparkles className="size-4" />Спросить ассистента
         </button>
-        <Link
-          to="/runs"
-          className="lab-focus-inset flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-body text-lab-mute transition-colors duration-100 hover:bg-lab-raised hover:text-lab-ink"
-        >
-          <Activity className="size-4" />Трейсы Workshop
-        </Link>
-        {state?.model && <div className="truncate px-2.5 pb-1 pt-2 font-mono text-micro text-lab-faint" title={`Модель судьи и клиента: ${state.model}`}>{state.model}</div>}
+        <NavRow row={{ key: "settings", title: "Настройки", icon: Settings, to: "/settings", active: pathname === "/settings" }} onGo={onGo} />
+        <div className="flex items-center gap-3 px-2.5 pb-1 pt-2 text-caption text-lab-faint">
+          <span className="inline-flex items-center gap-1.5" title={offline ? "Сервис Agent Lab не отвечает" : "Сервис Agent Lab на связи"}>
+            <span className={cn("size-1.5 rounded-full", offline ? "bg-lab-bad" : state ? "bg-lab-ok" : "bg-lab-faint")} />Lab
+          </span>
+          <span className="inline-flex items-center gap-1.5" title={workshop ? "Workshop на связи: трейсы пишутся" : "Workshop не отвечает: трейсы недоступны"}>
+            <span className={cn("size-1.5 rounded-full", workshop ? "bg-lab-ok" : "bg-lab-bad")} />Workshop
+          </span>
+          {state?.model && <span className="ml-auto min-w-0 truncate font-mono text-micro" title={`Модель судьи и клиента: ${state.model}`}>{state.model}</span>}
+        </div>
       </div>
     </aside>
   );
 }
-
