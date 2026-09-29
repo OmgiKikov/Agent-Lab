@@ -2,24 +2,24 @@ import { useMemo, useState } from "react";
 import { FlaskConical, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../api";
-import { plural } from "../format";
+import { count, plural } from "../format";
 import { JobLine } from "../JobLine";
+import { useLabContext } from "../LabContext";
 import { DEFAULT_PERSONA, personaName } from "../look";
+import { NextStep, SetupSteps } from "../Setup";
 import { useToast } from "../toast";
 import type { Card, LabState } from "../types";
-import { Badge, Bubble, Button, Chip, EmptyState, Input, Page, PersonaIcon, Segmented, Stat } from "../ui";
+import { Badge, Bubble, Button, Chip, EmptyState, Input, Page, PersonaIcon, Segmented } from "../ui";
 
 /** How the service names the two kinds of scenarios (lab/cards.py). */
 export const FROM_ERROR = "Ошибка из лога";
 export const COVERAGE = "Покрытие темы";
 
+/** Where a scenario comes from: a violation the agent already made in a real dialogue, or a topic it handled well. */
 export function OriginBadge({ origin }: { origin: string }) {
-  return (
-    <Badge hue="mute">
-      {origin === FROM_ERROR && <span className="size-1.5 rounded-full bg-lab-bad" />}
-      {origin}
-    </Badge>
-  );
+  return origin === FROM_ERROR
+    ? <Badge hue="bad" title="Агент уже ошибался в такой ситуации">из ошибки</Badge>
+    : <Badge title="Агент отвечал верно: проверяем, что так и останется">покрытие темы</Badge>;
 }
 
 function ScenarioCard({ card, state, onPick }: { card: Card; state: LabState; onPick: () => void }) {
@@ -27,16 +27,16 @@ function ScenarioCard({ card, state, onPick }: { card: Card; state: LabState; on
   return (
     <button
       onClick={onPick}
-      className="group flex flex-col gap-3 rounded-lg border border-white/[0.07] bg-lab-surface p-4 text-left transition-all duration-150 hover:-translate-y-px hover:border-white/[0.18] hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lab-accent/50"
+      className="lab-focus group flex flex-col gap-3 rounded-xl border border-lab-line bg-lab-panel p-4 text-left transition-colors duration-100 hover:border-lab-edge hover:bg-lab-card"
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="truncate font-mono text-[11px] text-lab-dim">{card.topic}</span>
+        <span className="min-w-0 truncate text-caption text-lab-mute">{card.topic}</span>
         <OriginBadge origin={card.origin} />
       </div>
-      <div className="text-[14px] font-medium leading-snug text-lab-ink">{card.name}</div>
+      <div className="text-reading font-semibold text-lab-ink">{card.name}</div>
       <Bubble className="line-clamp-2 self-start">{card.opening}</Bubble>
-      <div className="mt-auto flex items-center justify-between pt-1 text-[12px] text-lab-dim">
-        <span>{card.criteria.length} {plural(card.criteria.length, "критерий", "критерия", "критериев")}</span>
+      <div className="mt-auto flex items-center justify-between pt-1 text-caption text-lab-mute">
+        <span>{count(card.criteria.length, "критерий", "критерия", "критериев")}</span>
         {covered.length > 0 && (
           <span className="flex items-center gap-1" title={`Есть реплики: ${covered.map(p => personaName(state.personas, p.id)).join(", ")}`}>
             {covered.map(p => <PersonaIcon key={p.id} id={p.id} size={20} />)}
@@ -47,8 +47,10 @@ function ScenarioCard({ card, state, onPick }: { card: Card; state: LabState; on
   );
 }
 
+/** Step 3: the situations the customer simulator plays with every version of the agent. */
 export function CardsView({ state, onPick }: { state: LabState; onPick: (id: string) => void }) {
   const { error } = useToast();
+  const { openNewRun } = useLabContext();
   const deck = useMemo(() => state.cards?.cards ?? [], [state.cards]);
   const [query, setQuery] = useState("");
   const [origin, setOrigin] = useState<"all" | "errors" | "coverage">("all");
@@ -68,33 +70,31 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
     (!topic || c.topic === topic) &&
     (!q || c.name.toLowerCase().includes(q) || c.opening.toLowerCase().includes(q)));
 
+  const actions = (
+    <>
+      <JobLine state={state} kind="cards" bare />
+      <Button size="sm" variant={deck.length ? "secondary" : "primary"} icon={FlaskConical} disabled={state.job.running || !state.discover} onClick={() => api("/api/cards", {}).catch(error)}
+        title={!state.discover ? "Сначала оцените реальные диалоги на шаге «Логи»" : undefined}>
+        {deck.length ? "Собрать заново" : "Собрать сценарии"}
+      </Button>
+    </>
+  );
+  const lede = deck.length
+    ? `${count(deck.length, "сценарий", "сценария", "сценариев")} в ${count(topics.length, "теме", "темах", "темах")}: ${fromErrors} — из ошибок, которые агент уже делал в реальных диалогах, ${deck.length - fromErrors} — покрытие тем, где он отвечал верно.${others.length ? ` Реплики для всех типов клиентов есть у ${full} из ${deck.length}.` : ""}`
+    : state.discover ? "Сценариев пока нет. Соберите их: из оценённых диалогов получатся ситуации клиента с критериями проверки." : "Сценарии собираются из оценённых реальных диалогов. Сначала пройдите шаг «Логи».";
+
   return (
-    <Page
-      wide title="набор проверок"
-      lede="Сценарии, которые симулятор играет за клиента при каждой проверке агента. Ситуация взята из реального разговора, критерии из правил промпта; симулятор их не видит."
-      actions={<>
-        <Button variant="primary" icon={FlaskConical} disabled={state.job.running || !state.discover} onClick={() => api("/api/cards", {}).catch(error)}>{deck.length ? "Собрать заново" : "Собрать сценарии"}</Button>
-        <JobLine state={state} kind="cards" />
-        {!state.discover && !state.job.running && <span className="text-[11px] text-lab-dim">Сначала оцените логи</span>}
-      </>}
-    >
+    <Page title="Сценарии" count={deck.length || undefined} bare wide nav={<SetupSteps state={state} current="checks" />} actions={actions} lede={lede}>
       {deck.length === 0 ? (
-        <EmptyState className="mt-5" drop title="Сценариев пока нет">
-          {state.discover ? "Нажмите «Собрать сценарии»: из оценённых логов получатся ситуации клиента с критериями проверки." : "Сначала оцените логи на шаге «Логи», потом соберите из них сценарии."}
+        <EmptyState className="mt-6" icon={FlaskConical} title="Сценариев пока нет">
+          {state.discover ? "Нажмите «Собрать сценарии»: ситуация берётся из реального диалога, критерии — из промптов агента, симулятор их не видит." : "Оцените реальные диалоги на шаге «Логи», потом соберите из них сценарии."}
         </EmptyState>
       ) : (
         <>
-          <div className="mt-5 grid grid-cols-2 gap-3 min-[1100px]:grid-cols-4">
-            <Stat label="Сценариев" value={deck.length} sub={`в ${topics.length} ${plural(topics.length, "теме", "темах", "темах")}`} />
-            <Stat label="Из ошибок в логах" value={fromErrors} sub="агент уже ошибался в таких ситуациях" />
-            <Stat label="Покрытие тем" value={deck.length - fromErrors} sub="агент отвечал верно: проверяем, что так и останется" />
-            {others.length > 0 && <Stat label="Типы клиентов" value={`${full}/${deck.length}`} sub="сценариев с репликами для всех типов" />}
-          </div>
-
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <div className="relative w-[260px]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-lab-dim" />
-              <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск по названию или реплике" className="pl-9" />
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <div className="relative w-full sm:w-[260px]">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-lab-mute" />
+              <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск по названию или реплике" aria-label="Поиск по сценариям" className="pl-8" />
             </div>
             <Segmented value={origin} onChange={setOrigin} options={[{ value: "all", label: "Все" }, { value: "errors", label: "Из ошибок" }, { value: "coverage", label: "Покрытие" }]} />
           </div>
@@ -103,10 +103,15 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
             {topics.map(([name, n]) => <Chip key={name} on={topic === name} onClick={() => setTopic(topic === name ? null : name)} count={n}>{name}</Chip>)}
           </div>
 
-          <div className="mt-5 grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+          <div className="mt-5 grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
             {shown.map(c => <ScenarioCard key={c.id} card={c} state={state} onPick={() => onPick(c.id)} />)}
           </div>
-          {!shown.length && <div className={cn("mt-10 text-center text-[13px] text-lab-dim")}>Под фильтр ничего не подошло</div>}
+          {!shown.length && <div className={cn("mt-10 text-center text-body text-lab-mute")}>Под эти условия сценариев нет</div>}
+          <NextStep
+            done={state.runs.length > 0} title="Проверьте версию агента"
+            hint={`Симулятор сыграет ${plural(deck.length, "этот сценарий", "эти сценарии", "эти сценарии")} с агентом, судья оценит каждый диалог — появится вердикт по версии.`}
+            to="/lab/overview" cta={state.runs.length ? "К сводке" : "Проверить версию"} onClick={state.runs.length ? undefined : openNewRun}
+          />
         </>
       )}
     </Page>

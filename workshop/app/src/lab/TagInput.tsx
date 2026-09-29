@@ -23,23 +23,23 @@ export function TagInput({ value, onChange, placeholder, label }: { value: strin
     <div
       onClick={() => input.current?.focus()}
       className={cn(
-        "flex min-h-9 w-full cursor-text flex-wrap items-center gap-1.5 rounded-lg border border-white/[0.09] bg-white/[0.04] px-2 py-1.5 transition-colors",
-        "hover:border-white/[0.16] focus-within:border-lab-accent/60 focus-within:ring-2 focus-within:ring-lab-accent/20",
+        "flex min-h-8 w-full cursor-text flex-wrap items-center gap-1.5 rounded-md border border-lab-edge bg-lab-canvas px-1.5 py-1 transition-colors duration-100",
+        "hover:border-lab-strong focus-within:border-lab-accent/60 focus-within:ring-2 focus-within:ring-lab-accent/20",
       )}
     >
       {value.map(tag => (
-        <span key={tag} className="inline-flex items-center gap-1 rounded-md bg-white/[0.09] py-0.5 pl-2 pr-1 font-mono text-[12px] text-lab-text">
+        <span key={tag} className="inline-flex h-6 items-center gap-1 rounded-md bg-lab-active pl-2 pr-1 font-mono text-caption text-lab-ink">
           {tag}
           <button
             type="button" aria-label={`Убрать ${tag}`} onClick={e => { e.stopPropagation(); onChange(value.filter(t => t !== tag)); }}
-            className="rounded p-0.5 text-lab-dim transition-colors hover:bg-white/10 hover:text-lab-text"
+            className="lab-focus rounded-sm p-0.5 text-lab-mute transition-colors duration-100 hover:bg-lab-raised hover:text-lab-ink"
           ><X className="size-3" /></button>
         </span>
       ))}
       <input
         ref={input} value={draft} aria-label={label} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} onPaste={onPaste} onBlur={() => add(draft)}
         placeholder={value.length ? "" : placeholder}
-        className="min-w-[120px] flex-1 bg-transparent px-1 font-mono text-[12px] text-lab-text outline-none placeholder:text-lab-faint"
+        className="h-6 min-w-[120px] flex-1 bg-transparent px-1 font-mono text-caption text-lab-ink outline-none placeholder:font-sans placeholder:text-body placeholder:text-lab-faint"
       />
     </div>
   );
