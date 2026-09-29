@@ -12,6 +12,22 @@
     --sidebar-accent-foreground: 200 10% 85%;
     --sidebar-border: 0 0% 100% / 0.06;
     --sidebar-ring: 216 80% 70%;
+
+    /* Agent Lab: rgb channels, so `bg-lab-ok/15` style alpha works. */
+    --lab-bg: 0 0 0;
+    --lab-surface: 10 10 10;
+    --lab-raised: 17 17 17;
+    --lab-ink: 242 245 247;
+    --lab-text: 225 232 236;
+    --lab-soft: 200 213 220;
+    --lab-mute: 160 172 178;
+    --lab-dim: 125 138 144;
+    --lab-faint: 90 106 114;
+    --lab-user: 13 52 66;
+    --lab-accent: 91 141 239;
+    --lab-ok: 96 227 109;
+    --lab-bad: 242 107 107;
+    --lab-warn: 240 173 78;
   }
 }
 

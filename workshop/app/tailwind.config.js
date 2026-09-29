@@ -28,6 +28,10 @@ export default {
         primary: "var(--primary)",
       },
       colors: {
+        lab: Object.fromEntries(
+          ["bg", "surface", "raised", "ink", "text", "soft", "mute", "dim", "faint", "user", "accent", "ok", "bad", "warn"]
+            .map(name => [name, `rgb(var(--lab-${name}) / <alpha-value>)`]),
+        ),
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
