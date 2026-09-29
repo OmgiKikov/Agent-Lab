@@ -6,10 +6,10 @@ PI_PROXY_PORT, PI_JUDGE_PROVIDER, PI_JUDGE_MODEL, PI_PROXY_CONCURRENCY, PI_PROXY
 """
 
 import json
+import logging
 import os
 import shutil
 import subprocess
-import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +24,7 @@ TOKEN = os.environ.get('PI_PROXY_TOKEN', 'pi-local-bridge')
 SLOTS = BoundedSemaphore(max(1, int(os.environ.get('PI_PROXY_CONCURRENCY', '1'))))
 MAX_BODY = 2_000_000
 TIMEOUT = 240
+logger = logging.getLogger(__name__)
 
 
 def text_of(content: object) -> str:
@@ -118,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
             self.error(400, str(error))
             return
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
-            print(f'Pi request failed: {error}', file=sys.stderr, flush=True)
+            logger.error('Pi request failed: %s', error)
             self.error(502, 'Pi model request failed')
             return
         self.reply(
@@ -132,11 +133,12 @@ class Handler(BaseHTTPRequestHandler):
                 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0},
             },
         )
-        print(f'Pi answered in {time.monotonic() - started:.1f}s', flush=True)
+        logger.info('Pi answered in %.1fs', time.monotonic() - started)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     if not PI_BIN.is_file():
         raise SystemExit(f'Pi is missing: {PI_BIN} (npm ci in bridge/)')
-    print(f'Pi model bridge on http://127.0.0.1:{PORT}/v1 · {PROVIDER} {MODEL}', flush=True)
+    logger.info('Pi model bridge on http://127.0.0.1:%s/v1 · %s %s', PORT, PROVIDER, MODEL)
     ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()

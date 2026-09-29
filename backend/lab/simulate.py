@@ -158,7 +158,6 @@ async def run(
     plan = [(card, persona, attempt) for attempt in range(1, repeats + 1) for persona in persona_ids for card in chosen]
     record['items'] = [new_item(card, persona, attempt) for card, persona, attempt in plan]
     store.create_run(record)
-    agent = None
 
     def changed(index: int) -> None:
         store.update_item(record['id'], index, record['items'][index])
@@ -168,19 +167,18 @@ async def run(
     progress(run=record['id'], done=0, total=len(plan), message=f'Запускаю: {config["name"]}')
     try:
         await prepare_openings(chosen, persona_ids, progress)
-        agent = agents.create(key)
-        await agent.open()
-        record['version'] = agent.version
-        store.update_run(record['id'], version=agent.version)
-        gate = asyncio.Semaphore(PARALLEL)
+        async with agents.session(agents.create(key)) as agent:
+            record['version'] = agent.version
+            store.update_run(record['id'], version=agent.version)
+            gate = asyncio.Semaphore(PARALLEL)
 
-        async def one(card: dict, index: int) -> None:
-            async with gate:
-                await play(card, agent, record, record['items'][index], lambda: changed(index))
+            async def one(card: dict, index: int) -> None:
+                async with gate:
+                    await play(card, agent, record, record['items'][index], lambda: changed(index))
 
-        async with asyncio.TaskGroup() as group:
-            for index, (card, _, _) in enumerate(plan):
-                group.create_task(one(card, index))
+            async with asyncio.TaskGroup() as group:
+                for index, (card, _, _) in enumerate(plan):
+                    group.create_task(one(card, index))
         record['status'] = 'done'
     except asyncio.CancelledError:
         record.update(status='stopped', error='Прогон остановлен')
@@ -188,35 +186,17 @@ async def run(
     except Exception as error:
         record.update(status='failed', error=_error_message(error))
     finally:
-        # TaskGroup has joined every conversation before the agent is closed.
-        cancelled_during_close = False
-        try:
-            if agent is not None:
-                close_task = asyncio.create_task(agent.close())
-                while not close_task.done():
-                    try:
-                        await asyncio.shield(close_task)
-                    except asyncio.CancelledError:
-                        cancelled_during_close = True
-                        record.update(status='stopped', error='Прогон остановлен')
-                close_task.result()
-        except Exception as error:
-            if record['status'] != 'stopped':
-                record.update(status='failed', error=_error_message(error))
-        finally:
-            for index, item in enumerate(record['items']):
-                if item['status'] == 'RUNNING':
-                    item.update(status='UNMEASURED', stage='', error=record['error'])
-                    changed(index)
-            store.update_run(
-                record['id'],
-                status=record['status'],
-                error=record['error'],
-                finishedAt=store.now(),
-                model=llm.models_used(record['items']),
-            )
-        if cancelled_during_close:
-            raise asyncio.CancelledError
+        for index, item in enumerate(record['items']):
+            if item['status'] == 'RUNNING':
+                item.update(status='UNMEASURED', stage='', error=record['error'])
+                changed(index)
+        store.update_run(
+            record['id'],
+            status=record['status'],
+            error=record['error'],
+            finishedAt=store.now(),
+            model=llm.models_used(record['items']),
+        )
     return store.run(record['id'])
 
 

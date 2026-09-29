@@ -4,7 +4,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -128,6 +128,35 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/settings', json={'repo': '/new/agent'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(api.agents.settings()['repo'], '/new/agent')
+
+    async def test_agent_check_uses_session_and_closes_before_returning(self) -> None:
+        agent = api.agents.HttpAgent({'url': 'http://unused.test', 'profile': 'prod'})
+        reply = {'text': 'answer', 'status': '200', 'ok': True, 'options': []}
+        with (
+            patch.object(api.agents, 'create', return_value=agent),
+            patch.object(agent, 'open', new=AsyncMock()) as opened,
+            patch.object(agent, 'say', new=AsyncMock(return_value=reply)),
+            patch.object(agent, 'close', new=AsyncMock()) as closed,
+        ):
+            response = await self.client.post('/api/agents/prod/check')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['text'], 'answer')
+        opened.assert_awaited_once()
+        closed.assert_awaited_once()
+
+    async def test_agent_check_open_failure_still_closes(self) -> None:
+        agent = api.agents.HttpAgent({'url': 'http://unused.test', 'profile': 'prod'})
+        with (
+            patch.object(api.agents, 'create', return_value=agent),
+            patch.object(agent, 'open', new=AsyncMock(side_effect=api.agents.AgentError('not reachable'))),
+            patch.object(agent, 'say', new=AsyncMock()) as said,
+            patch.object(agent, 'close', new=AsyncMock()) as closed,
+        ):
+            response = await self.client.post('/api/agents/prod/check')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'ok': False, 'error': 'not reachable'})
+        said.assert_not_awaited()
+        closed.assert_awaited_once()
 
     async def test_malformed_commands_are_validation_errors(self) -> None:
         for route, payload in (

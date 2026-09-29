@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from . import agents, cards, discover, llm, logs, personas, simulate, store
 from .context import sources
-from .jobs import BusyError, Jobs, Work
+from .jobs import BusyError, Jobs, Progress, Work
 
 jobs = Jobs()
 
@@ -128,13 +128,11 @@ async def check_agent(key: str) -> dict:
     if isinstance(agent, agents.CodeAgent):
         raise HTTPException(400, 'Агент из исходников запускается только на время прогона')
     try:
-        await agent.open()
-        reply = await agent.say(str(uuid.uuid4()), CHECK_QUESTION)
+        async with agents.session(agent):
+            reply = await agent.say(str(uuid.uuid4()), CHECK_QUESTION)
         return {'ok': True, 'question': CHECK_QUESTION, 'version': agent.version, **reply}
     except agents.AgentError as error:
         return {'ok': False, 'error': str(error)}
-    finally:
-        await agent.close()
 
 
 @app.post('/api/models/check')
@@ -145,7 +143,7 @@ async def check_models() -> dict:
 
 @app.post('/api/sources')
 async def collect_sources() -> dict:
-    async def work(progress) -> list[dict]:
+    async def work(progress: Progress) -> list[dict]:
         collected = await asyncio.to_thread(sources.collect, agents.repo())
         store.replace_inputs(sources.FILE, collected)
         return collected
@@ -155,7 +153,7 @@ async def collect_sources() -> dict:
 
 @app.post('/api/logs')
 async def upload_logs(request: Request, name: str) -> dict:
-    async def work(progress) -> int:
+    async def work(progress: Progress) -> int:
         dialogues = await asyncio.to_thread(logs.prepare, name, await request.body())
         return logs.commit(dialogues)
 
@@ -194,7 +192,7 @@ def run_detail(run_id: str) -> dict:
 async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -> dict:
     payload = payload or DiscoverCommand()
 
-    async def work(progress) -> dict:
+    async def work(progress: Progress) -> dict:
         result = await discover.run(payload.count, progress, payload.replan)
         store.save(discover.RESULT, result)
         return result
@@ -204,7 +202,7 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 
 @app.post('/api/cards')
 async def start_cards() -> dict:
-    async def work(progress) -> list[dict]:
+    async def work(progress: Progress) -> list[dict]:
         deck = await cards.run(progress)
         store.save(cards.DECK, {'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck})
         return deck

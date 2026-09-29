@@ -8,6 +8,14 @@ from lab.context import knowledge, sources
 
 
 class ContextTests(unittest.TestCase):
+    def test_context_resolves_repository_once(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(
+                knowledge.agents, 'repo', side_effect=[Path(folder), AssertionError('second lookup')]
+            ) as repo:
+                self.assertEqual(knowledge.retrieved([{'role': 'agent', 'text': 'Короткий ответ'}]), [])
+            self.assertEqual(repo.call_count, 1)
+
     def test_article_edits_at_same_path_are_visible_to_next_evaluation(self):
         with tempfile.TemporaryDirectory() as folder:
             repo = Path(folder)

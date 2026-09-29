@@ -26,9 +26,8 @@ def _recompute_verdict(value: dict) -> tuple[int, int]:
     return changed, reset
 
 
-def migrate(source: Path) -> dict[str, int]:
-    if not source.is_dir():
-        raise ValueError(f'Нет папки с данными: {source}')
+def _load_documents(source: Path) -> dict:
+    """Read legacy documents and normalize the optional log export before any database write."""
     documents = {path.name: json.loads(path.read_text(encoding='utf-8')) for path in sorted(source.glob('*.json'))}
     log_file = source / 'logs.jsonl'
     if logs.FILE in documents:
@@ -37,6 +36,13 @@ def migrate(source: Path) -> dict[str, int]:
     elif log_file.exists():
         log_data = log_file.read_bytes()
         documents[logs.FILE] = logs.prepare('logs.jsonl', log_data) if log_data.strip() else []
+    return documents
+
+
+def migrate(source: Path) -> dict[str, int]:
+    if not source.is_dir():
+        raise ValueError(f'Нет папки с данными: {source}')
+    documents = _load_documents(source)
     records = [json.loads(path.read_text(encoding='utf-8')) for path in sorted((source / 'runs').glob('*.json'))]
     recomputed, reset_reviews = 0, 0
     for record in records:

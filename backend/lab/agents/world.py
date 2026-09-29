@@ -54,7 +54,7 @@ def templates() -> dict | None:
     return shapes
 
 
-def conforms(value, shape) -> bool:
+def conforms(value: object, shape: object) -> bool:
     """Same keys and value types as the template; lists may change length."""
     if isinstance(shape, dict):
         return isinstance(value, dict) and set(value) == set(shape) and all(conforms(value[k], shape[k]) for k in shape)
@@ -71,7 +71,7 @@ def conforms(value, shape) -> bool:
     return isinstance(value, str)
 
 
-def _digits(value, n: int) -> str:
+def _digits(value: object, n: int) -> str:
     text = ''.join(ch for ch in str(value) if ch.isdigit())
     return text[:n] if len(text) >= n else ''.join(random.choice('123456789') for _ in range(n))
 
@@ -113,6 +113,12 @@ async def build(situation: str, customer: list[str]) -> dict | None:
     shapes = templates()
     if shapes is None:
         return None
+
+    def parse(value: dict) -> dict:
+        if not isinstance(value.get('organization'), dict) or not isinstance(value.get('terminals'), list):
+            raise ValueError('world needs an organization and terminal list')
+        return value
+
     answer = await llm.structured(
         WORLD,
         {
@@ -120,7 +126,7 @@ async def build(situation: str, customer: list[str]) -> dict | None:
             'customerMessages': customer,
             'templates': {name: shapes[name] for name in SCENARIO_TOOLS if name in shapes},
         },
-        check=lambda v: v['organization'] and v['terminals'],
+        parse=parse,
     )
     return normalize(answer.value, shapes)
 

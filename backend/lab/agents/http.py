@@ -102,7 +102,7 @@ def read_reply(data: object, http_status: int) -> dict:
 
 
 class HttpAgent:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict) -> None:
         self.url = config.get('url') or ''
         self.profile = config.get('profile', 'prod')
         self.epk = config.get('epk') or []

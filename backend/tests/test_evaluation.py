@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from lab import cards, discover, judge, llm, quotes
+from lab.judge_reply import RuleReply
 from lab.metric import metric
 
 
@@ -44,15 +45,24 @@ class EvaluationTests(unittest.TestCase):
     def test_observation_needs_its_own_evidence(self):
         for observation in ('tool', 'state', 'knowledge'):
             with self.subTest(observation=observation):
-                rows = judge.checked([verdict()], [criterion(observation=observation)], 'Вернуть терминал в банк')
+                rows = judge.checked(
+                    [RuleReply.model_validate(verdict())],
+                    [criterion(observation=observation)],
+                    'Вернуть терминал в банк',
+                )
                 self.assertEqual(rows[0]['status'], 'UNKNOWN')
                 self.assertEqual(rows[0]['agentQuote'], '')
-        rows = judge.checked([verdict(status='NOT_APPLICABLE')], [criterion(observation='tool')], '')
+        rows = judge.checked(
+            [RuleReply.model_validate(verdict(status='NOT_APPLICABLE'))], [criterion(observation='tool')], ''
+        )
         self.assertEqual(rows[0]['status'], 'NOT_APPLICABLE')
 
     def test_tool_evidence_cannot_ground_a_reply_criterion(self):
         rows = judge.checked(
-            [verdict(quote='getLkkTariff')], [criterion()], 'Нужен номер терминала', tools='getLkkTariff'
+            [RuleReply.model_validate(verdict(quote='getLkkTariff'))],
+            [criterion()],
+            'Нужен номер терминала',
+            tools='getLkkTariff',
         )
         self.assertEqual(rows[0]['status'], 'UNKNOWN')
 
@@ -71,6 +81,55 @@ class EvaluationTests(unittest.TestCase):
 
 
 class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_both_judges_share_prepared_evidence_and_next_evaluation_refreshes_it(self):
+        payloads = []
+        first = [{'article': 'first', 'text': 'Первая версия статьи'}]
+        second = [{'article': 'second', 'text': 'Вторая версия статьи'}]
+
+        async def model(system, messages, **kwargs):
+            payloads.append(json.loads(messages)['knowledge'])
+            return completion({'customerGoal': 'Вернуть терминал', 'rules': [verdict()]})
+
+        with (
+            patch.object(judge.knowledge, 'retrieved', side_effect=[first, second]) as retrieve,
+            patch.object(llm, 'chat', model),
+        ):
+            for _ in range(2):
+                item = {'conversation': [{'role': 'agent', 'text': 'Вернуть терминал в банк'}]}
+                await judge.evaluate({'criteria': [criterion()]}, item)
+                self.assertEqual(item['status'], 'PASS')
+            self.assertEqual(retrieve.call_count, 2)
+        self.assertEqual(payloads, [first, first, second, second])
+
+    async def test_missing_customer_goal_is_retried_for_run_only(self):
+        without_goal = {'rules': [verdict()]}
+        with_goal = dict(without_goal, customerGoal='Вернуть терминал')
+        with (
+            patch.object(llm, 'chat', AsyncMock(side_effect=[completion(without_goal), completion(with_goal)])) as chat,
+            patch.object(judge.knowledge, 'retrieved', return_value=[]),
+        ):
+            result = await judge.run_verdict(
+                {'criteria': [criterion()]}, [{'role': 'agent', 'text': 'Вернуть терминал в банк'}]
+            )
+        self.assertEqual(chat.await_count, 2)
+        self.assertEqual(result.status, 'PASS')
+
+    async def test_failed_second_judge_preserves_primary_verdict_and_shared_evidence(self):
+        async def model(system, messages, *, endpoint=None, **kwargs):
+            if endpoint is not None:
+                raise llm.ModelError('second judge unavailable')
+            return completion({'customerGoal': 'Вернуть терминал', 'rules': [verdict()]})
+
+        with (
+            patch.object(llm, 'chat', model),
+            patch.object(judge.knowledge, 'retrieved', return_value=[]) as retrieve,
+        ):
+            item = {'conversation': [{'role': 'agent', 'text': 'Вернуть терминал в банк'}]}
+            await judge.evaluate({'criteria': [criterion()]}, item)
+        self.assertEqual(retrieve.call_count, 1)
+        self.assertEqual(item['status'], 'PASS')
+        self.assertEqual(item['second']['status'], 'ERROR')
+
     async def test_topic_planning_retries_missing_and_duplicated_assignments(self):
         dialogue = {'id': 'stable', 'messages': [{'role': 'user', 'content': 'Вернуть терминал'}]}
         source = {'id': 's1', 'content': 'Вернуть терминал в банк'}
@@ -105,8 +164,10 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             {'rules': [dict(verdict(), ruleId='other')]},
             {'rules': [dict(verdict(), status='MAYBE')]},
             {'rules': [dict(verdict(), reason=1)]},
+            {'rules': [dict(verdict(), reason='  ')]},
             {'rules': [dict(verdict(), agentQuote=None)]},
             {'rules': [dict(verdict(), agentQuote='')]},
+            {'rules': [dict(verdict(), agentQuote='  ')]},
             {'rules': [dict(verdict(), title=[])]},
         ]
         for answer in invalid:
@@ -135,7 +196,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             llm, 'chat', AsyncMock(side_effect=[llm.Answer('[]', 'broken'), completion({'ready': True})])
         ) as chat:
-            answer = await llm.structured('System', {})
+            answer = await llm.structured('System', {}, parse=lambda value: value)
         self.assertEqual(answer.value, {'ready': True})
         self.assertEqual(answer.model, 'actual-main')
         self.assertEqual(chat.await_count, 2)
@@ -180,7 +241,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_primary_joins_second_judge_and_keeps_model_error_contract(self):
         cancelled = asyncio.Event()
 
-        async def model(card, conversation, endpoint=None):
+        async def model(system, messages, *, endpoint=None, **kwargs):
             if endpoint is None:
                 await asyncio.sleep(0)
                 raise llm.ModelError('failed')
@@ -190,8 +251,12 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
                 cancelled.set()
 
         item = {'conversation': []}
-        with patch.object(judge, 'run_verdict', model), self.assertRaises(llm.ModelError):
-            await judge.evaluate({}, item)
+        with (
+            patch.object(llm, 'chat', model),
+            patch.object(judge.knowledge, 'retrieved', return_value=[]),
+            self.assertRaises(llm.ModelError),
+        ):
+            await judge.evaluate({'criteria': []}, item)
         self.assertTrue(cancelled.is_set())
         self.assertNotIn('status', item)
 

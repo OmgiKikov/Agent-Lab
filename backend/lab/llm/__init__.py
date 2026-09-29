@@ -164,11 +164,11 @@ def parse_json(text: str) -> dict:
 async def structured(
     system: str,
     payload: dict,
-    check: Callable[[dict], object] | None = None,
+    parse: Callable[[dict], T],
     attempts: int = 2,
     endpoint: Endpoint | None = None,
-) -> Answer[dict]:
-    """A JSON answer; retried once on malformed output or a failed check."""
+) -> Answer[T]:
+    """Parse a JSON reply once into the caller's type; retry malformed output or a rejected reply."""
     prompt = json.dumps(payload, ensure_ascii=False)
     system += (
         '\nReturn only a valid JSON object. '
@@ -178,9 +178,7 @@ async def structured(
     for _ in range(attempts):
         try:
             answer = await chat(system, prompt, json_mode=True, endpoint=endpoint)
-            value = parse_json(answer.value)
-            if check and check(value) is False:
-                raise ValueError('structured answer did not satisfy its contract')
+            value = parse(parse_json(answer.value))
             return Answer(value, answer.model)
         except (ModelError, ValueError, KeyError, TypeError, httpx.HTTPError) as error:
             last = error

@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from .. import store
 from .http import AGENT_PATH, AgentError, HttpAgent
+from .session import session
 from .source import CodeAgent
 
 SETTINGS = 'settings.json'
@@ -99,4 +100,15 @@ def create(key: str) -> HttpAgent:
     return CodeAgent(config) if config['kind'] == 'code' else HttpAgent(config)
 
 
-__all__ = ['STAND_CUSTOMER', 'AgentError', 'CodeAgent', 'HttpAgent', 'configs', 'create', 'public', 'repo', 'settings']
+__all__ = [
+    'STAND_CUSTOMER',
+    'AgentError',
+    'CodeAgent',
+    'HttpAgent',
+    'configs',
+    'create',
+    'public',
+    'repo',
+    'session',
+    'settings',
+]

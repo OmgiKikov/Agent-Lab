@@ -56,10 +56,11 @@ def remember_openings(openings: dict[str, dict[str, str]]) -> None:
     store.save(DECK, value)
 
 
-def _check(value: dict) -> None:
+def _parse_card(value: dict) -> dict:
     for field in ('name', 'situation'):
         if not isinstance(value.get(field), str) or not value[field].strip():
             raise ValueError(f'card needs {field}')
+    return value
 
 
 def pick(analysis: dict) -> list[tuple[dict, dict, str]]:
@@ -92,7 +93,7 @@ def general_rules(analysis: dict) -> list[dict]:
 
 async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence[dict] = ()) -> dict:
     customer = [m['content'] for m in dialogue['messages'] if m['role'] == 'user']
-    answer = await llm.structured(CARD, {'topic': topic['title'], 'customerMessages': customer}, check=_check)
+    answer = await llm.structured(CARD, {'topic': topic['title'], 'customerMessages': customer}, parse=_parse_card)
     value = answer.value
     rules = [r for r in topic['rules'] if r['observation'] in ('reply', 'tool')]
     seen = {quotes.normalized(r['quote']) for r in rules}

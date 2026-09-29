@@ -65,7 +65,7 @@ def ground(topics: list[dict], srcs: list[dict]) -> tuple[list[dict], int]:
     return grounded, dropped
 
 
-def _check_topics(value: dict, dialogues: list[dict]) -> None:
+def _parse_topics(value: dict, dialogues: list[dict]) -> dict:
     topics = value.get('topics')
     if not isinstance(topics, list) or not topics:
         raise ValueError('expected business topics')
@@ -89,13 +89,14 @@ def _check_topics(value: dict, dialogues: list[dict]) -> None:
         raise ValueError('conversation assignment must be an ID')
     if len(assignments) != len(expected) or set(assignments) != expected:
         raise ValueError('assign every conversation exactly once')
+    return value
 
 
 async def plan_topics(srcs: list[dict], dialogues: list[dict]) -> tuple[list[dict], int]:
     """New topics and rules from the sources; every sampled conversation is put into one topic."""
 
     payload = {'task': TASK, 'sources': srcs, 'dialogues': requests(dialogues)}
-    answer = await llm.structured(PLAN, payload, check=lambda value: _check_topics(value, dialogues))
+    answer = await llm.structured(PLAN, payload, parse=lambda value: _parse_topics(value, dialogues))
     plan = answer.value
     topics, dropped = ground(plan['topics'], srcs)
     topics = [t for t in topics if t['rules']]
@@ -114,7 +115,7 @@ async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
         payload = {'topics': [{'id': t['id'], 'title': t['title']} for t in topics], 'dialogues': requests(new)}
         real, ids = short_ids(new), {t['id'] for t in topics}
 
-        def check(value: dict) -> None:
+        def parse(value: dict) -> dict:
             assignments = value.get('assignments')
             if not isinstance(assignments, list) or len(assignments) != len(real):
                 raise ValueError('assign every new conversation exactly once')
@@ -128,8 +129,9 @@ async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
                 if not isinstance(topic_id, str) or topic_id not in ids:
                     raise ValueError('unknown topic assignment')
                 seen.add(dialogue_id)
+            return value
 
-        answer = await llm.structured(ASSIGN, payload, check=check)
+        answer = await llm.structured(ASSIGN, payload, parse=parse)
         value = answer.value
         for a in value['assignments']:
             if a.get('topicId') in ids and str(a.get('dialogueId')) in real:

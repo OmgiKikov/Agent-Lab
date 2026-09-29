@@ -18,10 +18,6 @@ MAX_ARTICLES = 5
 MIN_TEXT = 40
 
 
-def articles() -> dict:
-    return _articles(agents.repo())
-
-
 def _articles(repo: Path) -> dict:
     try:
         data = json.loads((repo / KB).read_text(encoding='utf-8'))
@@ -35,10 +31,6 @@ def _articles(repo: Path) -> dict:
 
 def _norm(text: str) -> str:
     return re.sub(r'\s+', ' ', re.sub(r'[«»"*#_`]', '', text.replace('ё', 'е'))).strip().lower()
-
-
-def ready_answers() -> list[tuple[str, str, str]]:
-    return _ready_answers(agents.repo())
 
 
 def _ready_answers(repo: Path) -> list[tuple[str, str, str]]:
@@ -57,13 +49,13 @@ def _ready_answers(repo: Path) -> list[tuple[str, str, str]]:
     return found
 
 
-def matching_answers(reply: str, answers: list[tuple[str, str, str]] | None = None) -> list[tuple[str, str]]:
+def _matching_answers(reply: str, answers: list[tuple[str, str, str]]) -> list[tuple[str, str]]:
     """Ready answers that contain at least half of the reply's substantial lines."""
     lines = [_norm(line) for line in reply.splitlines() if len(line.strip()) >= 30]
     if not lines:
         return []
     hits = []
-    for origin, text, normalized in ready_answers() if answers is None else answers:
+    for origin, text, normalized in answers:
         shared = sum(1 for line in lines if line in normalized)
         if shared >= (len(lines) + 1) // 2:
             hits.append((shared, origin, text))
@@ -71,17 +63,18 @@ def matching_answers(reply: str, answers: list[tuple[str, str, str]] | None = No
 
 
 def retrieved(conversation: list[dict]) -> list[dict]:
-    kb, seen = articles(), []
+    repo = agents.repo()
+    kb, seen = _articles(repo), []
     for message in conversation:
         for event in message.get('events') or []:
             article = event.get('article')
             if article and article in kb and article not in seen:
                 seen.append(article)
     found = [{'article': a, 'title': kb[a]['title'], 'text': kb[a]['text']} for a in seen[:MAX_ARTICLES]]
-    ready, answers = {}, ready_answers()
+    ready, answers = {}, _ready_answers(repo)
     for message in conversation:
         if message['role'] == 'agent':
-            for origin, text in matching_answers(message['text'], answers):
+            for origin, text in _matching_answers(message['text'], answers):
                 ready.setdefault(origin, text)
     found += [
         {

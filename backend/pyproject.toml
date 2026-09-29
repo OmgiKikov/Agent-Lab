@@ -23,13 +23,25 @@ include = ["lab/**/*.py", "bridge/**/*.py", "tests/**/*.py"]
 quote-style = "single"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF"]
+select = [
+    "E", "F", "W", "I",
+    "B", "UP", "SIM", "C4", "RUF",
+    "C90", "PIE", "LOG", "T20",
+    "ANN001", "ANN201", "ANN202", "ANN204",
+]
 # Cyrillic text in strings and comments is intended.
 ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Body"]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
 [tool.ruff.lint.per-file-ignores]
 # Prompts are prose: one sentence per line.
 "lab/prompts.py" = ["E501"]
+# CLI stdout is a machine-readable migration report.
+"lab/migrate.py" = ["T201"]
+# Flexible mock/fixture call signatures are not exported production contracts.
+"tests/**/*.py" = ["ANN001", "ANN201", "ANN202", "ANN204"]

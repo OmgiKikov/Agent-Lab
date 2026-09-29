@@ -27,7 +27,7 @@ def free_port(preferred: int) -> int:
 
 
 class CodeAgent(HttpAgent):
-    def __init__(self, config: dict):
+    def __init__(self, config: dict) -> None:
         self.port = free_port(int(config.get('port', 8081)))
         super().__init__({**config, 'url': f'http://127.0.0.1:{self.port}{AGENT_PATH}', 'profile': 'local'})
         self.repo = Path(config['repo']).expanduser()

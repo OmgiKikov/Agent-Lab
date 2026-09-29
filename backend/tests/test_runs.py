@@ -164,6 +164,20 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['finishedAt'])
         self.assertTrue(self.agent.closed)
 
+    async def test_close_failure_is_a_finished_failed_run(self) -> None:
+        async def evaluate(scenario: dict, item: dict) -> None:
+            item.update(status='PASS')
+
+        with (
+            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(self.agent, 'close', new=AsyncMock(side_effect=RuntimeError('cannot close process'))),
+        ):
+            result = await simulate.run('test')
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['error'], 'cannot close process')
+        self.assertEqual(result['items'][0]['status'], 'PASS')
+        self.assertTrue(result['finishedAt'])
+
     async def test_stop_during_close_waits_for_cleanup_and_persists_terminal_run(self) -> None:
         entered, release = asyncio.Event(), asyncio.Event()
         close_cancelled = []
@@ -200,6 +214,36 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['finishedAt'])
         self.assertTrue(self.agent.closed)
         self.assertEqual(close_cancelled, [])
+
+    async def test_repeated_stop_joins_agent_cleanup_before_releasing_job(self) -> None:
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def close() -> None:
+            entered.set()
+            await release.wait()
+            self.agent.closed = True
+
+        async def evaluate(scenario: dict, item: dict) -> None:
+            item.update(status='PASS')
+
+        jobs = Jobs()
+        with (
+            patch.object(self.agent, 'close', side_effect=close),
+            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+        ):
+            jobs.start('run', lambda progress: simulate.run('test', progress=progress))
+            await entered.wait()
+            stopping = [asyncio.create_task(jobs.stop()), asyncio.create_task(jobs.stop())]
+            await asyncio.sleep(0)
+            self.assertTrue(jobs.state['running'])
+            self.assertTrue(all(not stop.done() for stop in stopping))
+            release.set()
+            await asyncio.gather(*stopping)
+        self.assertFalse(jobs.state['running'])
+        self.assertTrue(self.agent.closed)
+        result = store.runs()[0]
+        self.assertEqual(result['status'], 'stopped')
+        self.assertTrue(result['finishedAt'])
 
     async def test_rejudge_retries_previous_model_failure_and_clears_error(self) -> None:
         source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])

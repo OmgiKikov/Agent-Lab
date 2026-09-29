@@ -1,9 +1,10 @@
 """One Python process serves the Lab's HTTP routes and the built frontend."""
 
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .api import app
@@ -11,7 +12,7 @@ from .settings import FRONTEND
 
 
 @app.middleware('http')
-async def local_browser_commands(request: Request, call_next):
+async def local_browser_commands(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """Other browser tabs cannot launch model work on this local application."""
     origin = request.headers.get('origin')
     if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and origin:

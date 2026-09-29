@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from lab import judge, llm
+from lab.judge_reply import JudgeReply
 
 Client = httpx.AsyncClient
 
@@ -19,6 +20,16 @@ def json_response(value):
 
 
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_structured_returns_parsed_reply_without_leaving_an_untyped_dictionary(self):
+        value = {'rules': [{'ruleId': 'r', 'status': 'UNKNOWN', 'reason': 'Нет доказательств', 'agentQuote': ''}]}
+        with patch.object(llm, 'chat', AsyncMock(return_value=llm.Answer(json.dumps(value), 'actual-model'))):
+            answer = await llm.structured('system', {}, parse=JudgeReply.model_validate)
+        self.assertIsInstance(answer.value, JudgeReply)
+        self.assertEqual(answer.value.rules[0].rule_id, 'r')
+        self.assertEqual(answer.value.rules[0].status, 'UNKNOWN')
+        self.assertEqual(answer.value.rules[0].title, '')
+        self.assertEqual(answer.model, 'actual-model')
+
     async def test_openai_malformed_envelopes_are_model_errors_for_plain_chat(self):
         invalid = [
             [],
@@ -59,14 +70,16 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             return json_response({'choices': [{'message': {'content': '{"ready":true}'}}], 'model': 'actual-model'})
 
         with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
-            result = await llm.structured('system', {}, endpoint=('http://provider/v1', 'requested-alias'))
+            result = await llm.structured(
+                'system', {}, parse=lambda value: value, endpoint=('http://provider/v1', 'requested-alias')
+            )
         self.assertEqual(len(calls), 2)
         self.assertEqual(result, llm.Answer({'ready': True}, 'actual-model'))
 
     async def test_unfinished_code_fence_is_retried(self):
         replies = [llm.Answer('```json', 'bad'), llm.Answer('{"ready":true}', 'good')]
         with patch.object(llm, 'chat', AsyncMock(side_effect=replies)) as chat:
-            result = await llm.structured('system', {})
+            result = await llm.structured('system', {}, parse=lambda value: value)
         self.assertEqual(chat.await_count, 2)
         self.assertEqual(result.model, 'good')
 
