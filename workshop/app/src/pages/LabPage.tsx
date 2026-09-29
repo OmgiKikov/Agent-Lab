@@ -69,7 +69,7 @@ export function LabPage() {
           {state && !traceId && step === "logs" && <LogsView state={state} onOpen={id => id && go("logs", id)} onGo={go} />}
           {state && !traceId && step === "cards" && (card ? <CardView card={card} state={state} onBack={() => go("cards")} /> : <CardsView state={state} onPick={id => go("cards", id)} />)}
           {state && step === "run" && <RunView state={state} run={run} itemId={itemId} target={target} setTarget={setTarget} onOpen={id => go("run", id)} />}
-          {state && !traceId && step === "accuracy" && <AccuracyView state={state} run={run} onPickRun={pickRun} onOpen={key => go("run", key)} />}
+          {state && !traceId && step === "accuracy" && <AccuracyView state={state} run={run} onPickRun={pickRun} onOpen={key => go("run", key)} onCheckJudge={id => { pickRun(id); navigate("/lab/run?view=judge"); }} />}
         </main>
       </div>
     </ToastProvider>

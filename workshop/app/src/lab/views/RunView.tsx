@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Copy, ExternalLink, LayoutGrid, MessagesSquare, Play, RotateCcw, X } from "lucide-react";
+import { useLocation } from "react-router-dom";
+import { Check, Copy, ExternalLink, Gavel, LayoutGrid, MessagesSquare, MousePointerClick, Play, RotateCcw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../api";
 import { count, plural, when } from "../format";
 import { Heatmap } from "../charts/Heatmap";
 import { JobLine } from "../JobLine";
+import { JudgeCheck } from "./JudgeCheck";
 import { transcript } from "../report";
 import { disputed, itemKey, personaOf, previousOf, scenariosOfRun, typesOfRun } from "../logic";
 import { DEFAULT_PERSONA, HUE, RULE_TEXT, STATUS_TEXT, statusHue } from "../look";
@@ -110,7 +112,7 @@ function Trajectory({ item }: { item: Item }) {
 }
 
 /** The conversation as it happened; the judge's verdict on top and every criterion below. */
-function Conversation({ item, state }: { item: Item; state: LabState }) {
+export function Conversation({ item, state }: { item: Item; state: LabState }) {
   const order: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
   const rules = [...item.rules].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
   const lead: Rule | undefined = rules.find(r => r.status === "FAIL") ?? rules.find(r => r.status === "PASS");
@@ -139,6 +141,9 @@ function Conversation({ item, state }: { item: Item; state: LabState }) {
         {item.conversation.map((m, k) => m.role === "customer" ? (
           <div key={k} className="flex max-w-[80%] flex-col items-end gap-1 self-end">
             <Bubble>{m.text}</Bubble>
+            {k > 0 && item.conversation[k - 1].options?.includes(m.text) && (
+              <div className="inline-flex items-center gap-1 px-1 text-[11px] text-lab-dim"><MousePointerClick className="size-3" />Нажал кнопку</div>
+            )}
             {k === 0 && (m.fromLog || m.rewritten) && (
               <div className="px-1 text-[11px] text-lab-dim">
                 {m.fromLog ? "Первая реплика из лога" : `Реплика из лога, переписана под тип «${state.personas.find(p => p.id === personaOf(item))?.name ?? ""}»`}
@@ -215,7 +220,11 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
   const previous = run ? previousOf(state.runs, run) : null;
   const details = useRunDetails(previous ? [previous] : []);
   const [creating, setCreating] = useState(false);
-  const [view, setView] = useState<"chat" | "matrix">("chat");
+  const location = useLocation();
+  // «?view=judge» opens the judge check (a hash would be read by the Workshop as a trace id).
+  const wantsJudge = new URLSearchParams(location.search).get("view") === "judge";
+  const [view, setView] = useState<"chat" | "matrix" | "judge">(wantsJudge ? "judge" : "chat");
+  useEffect(() => { if (wantsJudge) setView("judge"); }, [wantsJudge]);
   const [compare, setCompare] = useState(false);
   useEffect(() => { if (itemId) setView("chat"); }, [itemId]);
   const items = useMemo(() => run?.items ?? [], [run]);
@@ -257,6 +266,7 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
   const index = selected ? items.indexOf(selected) : -1;
   const types = typesOfRun(run, state.personas);
   const disputes = items.filter(disputed).length;
+  const judgeLeft = items.filter(i => (i.status === "PASS" || i.status === "FAIL") && !i.review).length;
   const job = state.job;
   const live = job.running && job.kind === "run";
   const previousItems = previous ? details(previous)?.items ?? null : null;
@@ -295,6 +305,7 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
         <Tabs value={view} onChange={setView} tabs={[
           { value: "chat", label: <><MessagesSquare className="size-3.5" />Разговор</> },
           { value: "matrix", label: <><LayoutGrid className="size-3.5" />Матрица</> },
+          { value: "judge", label: <><Gavel className="size-3.5" />Проверка судьи{judgeLeft ? <span className="font-mono text-[10px] text-lab-dim">{judgeLeft}</span> : null}</> },
         ]} />
         {run.error && <div className="border-t border-white/[0.06] px-6 py-2 text-[12px] text-lab-bad">{run.error}</div>}
       </div>
@@ -318,7 +329,9 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
       )}
 
       <div className="min-h-0 flex-1 overflow-auto sb">
-        {view === "matrix" ? (
+        {view === "judge" ? (
+          <JudgeCheck run={run} state={state} onReview={(index, decision) => api("/api/review", { run: run.id, index, decision }).catch(error)} onOpen={i => onOpen(itemKey(i))} />
+        ) : view === "matrix" ? (
           <div className="mx-auto max-w-[1000px] px-6 py-6">
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
               <div>

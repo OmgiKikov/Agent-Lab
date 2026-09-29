@@ -13,7 +13,7 @@ import type { Item, LabRun, LabState } from "../types";
 import { useRunDetails } from "../useLab";
 import { Badge, Button, Delta, Eyebrow, Page, Panel, Section, StackBar, titleFont } from "../ui";
 
-function Trust({ icon: Icon, label, value, sub, ok }: { icon: LucideIcon; label: string; value: string; sub?: string; ok?: boolean }) {
+function Trust({ icon: Icon, label, value, sub, ok, action }: { icon: LucideIcon; label: string; value: string; sub?: string; ok?: boolean; action?: React.ReactNode }) {
   const hue: Hue = ok === undefined ? "mute" : ok ? "ok" : "warn";
   return (
     <div className="flex items-start gap-3 px-4 py-2.5">
@@ -22,6 +22,7 @@ function Trust({ icon: Icon, label, value, sub, ok }: { icon: LucideIcon; label:
         <div className="text-[12px] leading-snug text-lab-text"><span className="text-lab-dim">{label}.</span> {value}</div>
         {sub && <div className="mt-0.5 text-[11px] leading-snug text-lab-dim">{sub}</div>}
       </div>
+      {action && <div className="ml-auto flex-shrink-0">{action}</div>}
     </div>
   );
 }
@@ -90,7 +91,7 @@ function WhatToFix({ items, previous, previousItems }: { items: Item[]; previous
   );
 }
 
-export function AccuracyView({ state, run: selected, onPickRun, onOpen }: { state: LabState; run: LabRun | null; onPickRun: (id: string) => void; onOpen: (key: string) => void }) {
+export function AccuracyView({ state, run: selected, onPickRun, onOpen, onCheckJudge }: { state: LabState; run: LabRun | null; onPickRun: (id: string) => void; onOpen: (key: string) => void; onCheckJudge: (runId: string) => void }) {
   const [compare, setCompare] = useState(false);
   const history = useMemo(() => state.runs.filter(r => r.metric && r.metric.total && r.status !== "running"), [state.runs]);
   const deck = state.cards?.cards ?? [];
@@ -194,7 +195,8 @@ export function AccuracyView({ state, run: selected, onPickRun, onOpen }: { stat
               value={m.repeats ? `Одинаковый итог у ${m.repeats.stable} из ${m.repeats.scenarios}` : "Не запускались"} sub={m.repeats ? undefined : "Запустите с повторами, чтобы проверить стабильность"} />
             <Trust icon={QuoteIcon} label="Доказательства" ok value="У каждого вердикта есть цитата из ответа агента" />
             <Trust icon={UserCheck} label="Проверка человеком" ok={m.human ? m.human.agree / m.human.reviewed >= 0.8 : undefined}
-              value={m.human ? `Проверено ${m.human.reviewed}, судья прав в ${m.human.agree}` : "Не проводилась"} sub={m.human ? undefined : "Кнопки «Верно» и «Неверно» в прогоне"} />
+              value={m.human ? `Проверено ${m.human.reviewed}, судья прав в ${m.human.agree}` : "Не проводилась"} sub={m.human ? undefined : "Без неё неизвестно, насколько прав судья"}
+              action={<Button size="sm" onClick={() => onCheckJudge(finished.id)}>{m.human ? "Продолжить" : "Проверить судью"}</Button>} />
           </Panel>
         </div>
       </div>
