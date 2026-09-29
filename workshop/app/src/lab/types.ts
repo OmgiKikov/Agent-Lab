@@ -64,4 +64,4 @@ export type LabState = {
   targets: Target[];
   personas: Persona[];
 };
-export type Step = "health" | "findings" | "trust" | "checks" | "versions" | "runs" | "connect";
+export type Step = "health" | "findings" | "trust" | "checks" | "versions" | "runs" | "agent" | "logs";

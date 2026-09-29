@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { when } from "./format";
 import { itemKey, scenarioStatus, scenariosOfRun, typesOfRun } from "./logic";
 import { AGENT_SUBTITLE, AGENT_TITLE, HUE, LOG_TEXT, STATUS_TEXT, personaLook, personaName, statusHue } from "./look";
-import type { NavItem } from "./nav";
+import { NAV_GROUP_TITLE, type NavGroup, type NavItem } from "./nav";
 import type { LabRun, LabState, Status, Step } from "./types";
 import { Badge, Chip, Dot, Eyebrow, StatusIcon } from "./ui";
 
@@ -32,8 +32,7 @@ function ListItem({ selected, onClick, lead, title, sub, right, disabled }: { se
 }
 
 function Nav({ items, step, go }: { items: NavItem[]; step: Step; go: Go }) {
-  const main = items.filter(i => i.id !== "connect");
-  const connect = items.find(i => i.id === "connect")!;
+  const groups = (["agent", "simulator"] as NavGroup[]).map(g => ({ id: g, items: items.filter(i => i.group === g) }));
   const row = (i: NavItem) => {
     const active = i.id === step;
     return (
@@ -49,9 +48,12 @@ function Nav({ items, step, go }: { items: NavItem[]; step: Step; go: Go }) {
   };
   return (
     <nav className="space-y-0.5 px-2.5 pb-3" aria-label="Разделы">
-      {main.map(row)}
-      <div className="my-2 border-t border-white/[0.06]" />
-      {row(connect)}
+      {groups.map((g, k) => (
+        <div key={g.id} className={cn(k > 0 && "mt-3 border-t border-white/[0.06] pt-3")}>
+          <Eyebrow className="px-2.5 pb-1.5">{NAV_GROUP_TITLE[g.id]}</Eyebrow>
+          <div className="space-y-0.5">{g.items.map(row)}</div>
+        </div>
+      ))}
     </nav>
   );
 }
@@ -165,14 +167,14 @@ function CardsList({ state, itemId, go }: { state: LabState; itemId: string | nu
   );
 }
 
-const LIST_TITLE: Partial<Record<Step, string>> = { runs: "Сценарии проверки", checks: "Сценарии", connect: "Разговоры из логов" };
+const LIST_TITLE: Partial<Record<Step, string>> = { runs: "Сценарии проверки", checks: "Сценарии", logs: "Разговоры из логов" };
 
 /** The left column: the sections, and the list that belongs to the one you are in. */
-export function Rail({ state, offline, step, itemId, run, go, nav, tab, onTrace, onPalette }: {
-  state: LabState | null; offline: boolean; step: Step; itemId: string | null; run: LabRun | null; go: Go; nav: NavItem[]; tab: string;
+export function Rail({ state, offline, step, itemId, run, go, nav, onTrace, onPalette }: {
+  state: LabState | null; offline: boolean; step: Step; itemId: string | null; run: LabRun | null; go: Go; nav: NavItem[];
   onTrace: (id: string) => void; onPalette: () => void;
 }) {
-  const showLogs = step === "connect" && tab === "logs" && !!state?.discover;
+  const showLogs = step === "logs" && !!state?.discover;
   const showRun = step === "runs" && !!state && !!run?.items;
   const showCards = step === "checks" && !!itemId && !!state?.cards;
   const hasList = showLogs || showRun || showCards;

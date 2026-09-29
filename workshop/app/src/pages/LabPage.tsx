@@ -1,8 +1,8 @@
 /**
  * Agent Lab inside Raindrop Workshop.
  *
- * Health of the agent, what is broken in it (findings), how far the number can be trusted, the set of checks,
- * versions side by side, the conversations, and the connection to the agent and its logs.
+ * First the agent (its prompts, tools and the rules taken from them) and its real logs run through the judge;
+ * then the simulated customer: the set of checks, conversations, health, findings, versions and how far the number can be trusted.
  * Data and jobs live in the Agent Lab service (lab/api.py, :5901); this page only routes between the screens in ../lab.
  */
 import { useEffect, useMemo, useState } from "react";
@@ -20,7 +20,8 @@ import { useLab } from "../lab/useLab";
 import { useRunContext } from "../lab/useRunContext";
 import { CardView } from "../lab/views/CardView";
 import { CardsView } from "../lab/views/CardsView";
-import { ConnectView, type ConnectTab } from "../lab/views/ConnectView";
+import { AgentView } from "../lab/views/AgentView";
+import { LogsView } from "../lab/views/LogsView";
 import { FindingsView, FindingView } from "../lab/views/FindingsView";
 import { HealthView } from "../lab/views/HealthView";
 import { NewRun, RunView } from "../lab/views/RunView";
@@ -30,21 +31,20 @@ import { VersionsView } from "../lab/views/VersionsView";
 const readTarget = () => { try { return localStorage.getItem("lab.target") || "local-http"; } catch { return "local-http"; } };
 
 /** Where an address of the earlier layout (/lab/logs/…, /lab/run/…) lives now. */
-function legacyTarget(step: string, item: string | null): string | null {
+function legacyTarget(step: string, item: string | null, search: string): string | null {
   const base = LEGACY[step];
   if (!base) return null;
-  if (!item) return base;
-  const id = encodeURIComponent(item);
-  return step === "logs" ? `/lab/connect/${id}?tab=logs` : step === "run" ? `/lab/runs/${id}` : step === "cards" ? `/lab/checks/${id}` : base;
+  const id = item ? encodeURIComponent(item) : "";
+  if (step === "connect") return new URLSearchParams(search).get("tab") === "logs" ? `/lab/logs${id ? `/${id}` : ""}` : base;
+  return !id ? base : step === "run" ? `/lab/runs/${id}` : step === "cards" ? `/lab/checks/${id}` : base;
 }
 
 export function LabPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const params = useParams<{ step?: string; itemId?: string }>();
-  const step: Step = STEPS.includes(params.step as Step) ? params.step as Step : "health";
+  const step: Step = STEPS.includes(params.step as Step) ? params.step as Step : "agent";
   const itemId = params.itemId ? decodeURIComponent(params.itemId) : null;
-  const tab: ConnectTab = new URLSearchParams(location.search).get("tab") === "logs" ? "logs" : "agent";
   const { state, offline, run, pickRun } = useLab();
   const [target, setTargetState] = useState(readTarget);
   const setTarget = (t: string) => { setTargetState(t); try { localStorage.setItem("lab.target", t); } catch { /* ignore */ } };
@@ -67,16 +67,16 @@ export function LabPage() {
   const go = (s: Step, item?: string | null) => navigate(item ? `/lab/${s}/${encodeURIComponent(item)}` : `/lab/${s}`);
   const goJudge = (runId?: string) => { if (runId) pickRun(runId); navigate("/lab/runs?view=judge"); };
   const card = step === "checks" && itemId ? state?.cards?.cards.find(c => c.id === itemId) : undefined;
-  const traceId = step === "connect" && itemId ? itemId : null;
-  const openTrace = (id: string) => navigate(`/lab/connect/${encodeURIComponent(id)}?tab=logs`);
+  const traceId = step === "logs" && itemId ? itemId : null;
+  const openTrace = (id: string) => navigate(`/lab/logs/${encodeURIComponent(id)}`);
 
-  const legacy = params.step ? legacyTarget(params.step, itemId) : null;
+  const legacy = params.step ? legacyTarget(params.step, itemId, location.search) : null;
   if (legacy) return <Navigate to={legacy} replace />;
 
   return (
     <ToastProvider>
       <div className="flex h-full">
-        <Rail state={state} offline={offline} step={step} itemId={itemId} run={run} go={go} nav={nav} tab={tab} onTrace={openTrace} onPalette={() => setPalette(true)} />
+        <Rail state={state} offline={offline} step={step} itemId={itemId} run={run} go={go} nav={nav} onTrace={openTrace} onPalette={() => setPalette(true)} />
         <CommandPalette open={palette} onClose={() => setPalette(false)} state={state} go={go} onPickRun={pickRun} onJudge={() => goJudge(finished?.id)} extra={extra} findings={paletteFindings} />
 
         <main className="sb relative min-w-0 flex-1 overflow-auto">
@@ -92,7 +92,7 @@ export function LabPage() {
           {state && traceId && (
             <div className="flex h-full flex-col">
               <div className="flex flex-shrink-0 items-center gap-3 border-b border-white/[0.06] bg-white/[0.02] px-5 py-2.5">
-                <button className="inline-flex items-center gap-1.5 text-[12px] text-lab-mute transition-colors hover:text-lab-text" onClick={() => navigate("/lab/connect?tab=logs")}>
+                <button className="inline-flex items-center gap-1.5 text-[12px] text-lab-mute transition-colors hover:text-lab-text" onClick={() => navigate("/lab/logs")}>
                   <ArrowLeft className="size-3.5" />Назад к логам
                 </button>
                 <span className="text-[12px] text-lab-dim">Разговор из лога. Вердикт судьи в заметке сверху.</span>
@@ -106,7 +106,8 @@ export function LabPage() {
           {state && step === "checks" && (card ? <CardView card={card} state={state} onBack={() => go("checks")} /> : <CardsView state={state} onPick={id => go("checks", id)} />)}
           {state && step === "versions" && <VersionsView state={state} run={run} onFinding={key => go("findings", key)} />}
           {state && step === "runs" && <RunView state={state} run={run} itemId={itemId} target={target} setTarget={setTarget} onOpen={id => go("runs", id)} />}
-          {state && !traceId && step === "connect" && <ConnectView state={state} tab={tab} onTab={t => navigate(t === "logs" ? "/lab/connect?tab=logs" : "/lab/connect")} onOpenTrace={openTrace} go={navigate} />}
+          {state && step === "agent" && <AgentView state={state} />}
+          {state && !traceId && step === "logs" && <LogsView state={state} onOpen={openTrace} onGo={() => go("agent")} />}
         </main>
       </div>
       {state && (

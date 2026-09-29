@@ -57,7 +57,7 @@ function FormatHint() {
   );
 }
 
-export function LogsView({ state, onOpen, onGo, nav }: { state: LabState; onOpen: (runId: string) => void; onGo: () => void; nav?: React.ReactNode }) {
+export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (runId: string) => void; onGo: () => void }) {
   const { error } = useToast();
   const d = state.discover;
   const [sample, setSample] = useState(d?.sampled ?? 60);
@@ -79,7 +79,7 @@ export function LogsView({ state, onOpen, onGo, nav }: { state: LabState; onOpen
 
   if (!state.logs.total) {
     return (
-      <Page title="подключение" lede={LEDE} nav={nav}>
+      <Page title="логи" lede={LEDE}>
         <div className="mt-5"><DropZone busy={busy} onFile={load} onPick={() => fileRef.current?.click()} /></div>
         <FormatHint />
         {picker}
@@ -112,7 +112,7 @@ export function LogsView({ state, onOpen, onGo, nav }: { state: LabState; onOpen
 
   if (!d) {
     return (
-      <Page title="подключение" lede={LEDE} nav={nav}>
+      <Page title="логи" lede={LEDE}>
         {toolbar}
         <EmptyState className="mt-5" icon={FileText} title={`Выгрузка загружена: ${state.logs.total} ${plural(state.logs.total, "разговор", "разговора", "разговоров")}`}>
           Нажмите «Оценить логи»: судья проверит выбранное число разговоров и покажет, какие правила промпта агент нарушает чаще всего.
@@ -136,7 +136,7 @@ export function LogsView({ state, onOpen, onGo, nav }: { state: LabState; onOpen
   const toggle = (i: number) => setOpen(prev => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; });
 
   return (
-    <Page title="подключение" lede={LEDE} nav={nav}>
+    <Page title="логи" lede={LEDE}>
       {toolbar}
       <Confirm open={confirm} onClose={() => setConfirm(false)} onConfirm={() => run(true)} title="Выделить правила заново?" action="Выделить заново">
         Следующая оценка пойдёт по новым правилам, поэтому её нельзя будет сравнить с текущей.

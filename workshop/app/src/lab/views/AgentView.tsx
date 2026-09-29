@@ -38,7 +38,7 @@ function VerdictDetail({ check }: { check?: CheckResult | "pending" }) {
     : version ? <div className="mt-2 text-[12px] text-lab-dim">{version}</div> : null;
 }
 
-export function AgentView({ state, nav }: { state: LabState; nav?: React.ReactNode }) {
+export function AgentView({ state }: { state: LabState }) {
   const { error } = useToast();
   const saved = state.settings;
   const [base, setBase] = useState(saved);
@@ -69,8 +69,8 @@ export function AgentView({ state, nav }: { state: LabState; nav?: React.ReactNo
 
   return (
     <Page
-      wide title="подключение" nav={nav}
-      lede="Какого агента проверяем, какие модели оценивают его ответы и откуда берутся правила проверки. Настройки хранятся только на этом компьютере и в репозиторий не попадают."
+      wide title="агент"
+      lede="Какого агента проверяем, откуда берутся его промпты и инструменты и какие правила из них получаются. Настройки хранятся только на этом компьютере и в репозиторий не попадают."
     >
       <div className="grid gap-x-7 min-[1240px]:grid-cols-2">
         <div className="min-w-0">
