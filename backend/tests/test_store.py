@@ -29,9 +29,10 @@ class StoreTests(unittest.TestCase):
 
     def test_producer_patch_preserves_review_and_recomputes_metric(self) -> None:
         stale = record()
+        stale['items'][0].update(status='PASS', rules=[{'status': 'PASS'}])
         store.create_run(stale)
         store.set_review('run-1', 0, 'disagree')
-        stale['items'][0].update(status='PASS')
+        stale['items'][0].update(stage='finished')
         result = store.update_item('run-1', 0, stale['items'][0])
         self.assertEqual(result['items'][0]['review'], 'disagree')
         self.assertEqual(result['metric']['accuracy'], 100)
@@ -40,7 +41,9 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(result['updatedAt'])
 
     def test_concurrent_review_and_progress_do_not_overwrite_each_other(self) -> None:
-        store.create_run(record())
+        source = record()
+        source['items'][0]['status'] = 'PASS'
+        store.create_run(source)
 
         def progress() -> None:
             for index in range(12):
@@ -70,7 +73,7 @@ class StoreTests(unittest.TestCase):
         (legacy / 'runs').mkdir(parents=True)
         source = record()
         source.update(status='done')
-        source['items'][0].update(status='PASS', review='disagree')
+        source['items'][0].update(status='PASS', rules=[{'status': 'PASS'}], review='disagree')
         run_file = legacy / 'runs' / 'run-1.json'
         original = json.dumps(source)
         run_file.write_text(original)
@@ -85,11 +88,11 @@ class StoreTests(unittest.TestCase):
             + '\n'
         )
         self.assertIsNone(store.run('run-1'))
-        self.assertEqual(migrate(legacy), {'documents': 2, 'runs': 1, 'recomputedVerdicts': 1})
+        self.assertEqual(migrate(legacy), {'documents': 2, 'runs': 1, 'recomputedVerdicts': 0, 'resetReviews': 0})
         self.assertEqual(store.load('logs.json')[0]['id'], 'dialogue-1')
         self.assertEqual(store.run('run-1')['items'][0]['review'], 'disagree')
         store.set_review('run-1', 0, 'agree')
-        self.assertEqual(migrate(legacy), {'documents': 0, 'runs': 0, 'recomputedVerdicts': 1})
+        self.assertEqual(migrate(legacy), {'documents': 0, 'runs': 0, 'recomputedVerdicts': 0, 'resetReviews': 0})
         self.assertEqual(store.run('run-1')['items'][0]['review'], 'agree')
         self.assertEqual(run_file.read_text(), original)
 
@@ -138,13 +141,54 @@ class StoreTests(unittest.TestCase):
         result = store.run('run-1')
         self.assertEqual(result['items'][0]['status'], 'UNMEASURED')
         self.assertEqual(result['items'][0]['rules'], rows)
-        self.assertEqual(result['items'][0]['review'], 'disagree')
+        self.assertIsNone(result['items'][0]['review'])
+        self.assertEqual(report['resetReviews'], 1)
         self.assertIsNone(result['metric']['accuracy'])
         self.assertEqual(store.load('logs.json')[0]['id'], '7')
         analysis = store.load('discover.json')
         self.assertEqual(analysis['results'][0]['status'], 'UNMEASURED')
         self.assertEqual(analysis['summary']['unmeasured'], 1)
         self.assertEqual((legacy / 'runs' / 'run-1.json').read_text(), original)
+
+    def test_changed_primary_judgment_clears_old_confirmation(self) -> None:
+        source = record()
+        source['items'][0].update(status='FAIL', rules=[{'status': 'FAIL'}])
+        store.create_run(source)
+        store.set_review('run-1', 0, 'agree')
+        result = store.update_item('run-1', 0, {'status': 'PASS', 'rules': [{'status': 'PASS'}]})
+        self.assertIsNone(result['items'][0]['review'])
+        self.assertNotIn('human', result['metric'])
+
+    def test_changed_criterion_without_changed_aggregate_also_clears_confirmation(self) -> None:
+        source = record()
+        source['items'][0].update(status='FAIL', rules=[{'ruleId': 'r1', 'status': 'FAIL'}])
+        store.create_run(source)
+        store.set_review('run-1', 0, 'agree')
+        result = store.update_item('run-1', 0, {'rules': [{'ruleId': 'r2', 'status': 'FAIL'}]})
+        self.assertIsNone(result['items'][0]['review'])
+
+    def test_repeated_import_cannot_restore_invalidated_audit_or_scenarios(self) -> None:
+        legacy = self.path / 'legacy'
+        legacy.mkdir()
+        old_log = {
+            'id': '7',
+            'messages': [{'role': 'user', 'content': 'question'}, {'role': 'assistant', 'content': 'old answer'}],
+        }
+        (legacy / 'logs.jsonl').write_text(json.dumps(old_log))
+        audit = {'topics': [], 'results': [{'dialogueId': '7', 'status': 'PASS', 'rules': [{'status': 'PASS'}]}]}
+        (legacy / 'discover.json').write_text(json.dumps(audit))
+        (legacy / 'cards.json').write_text('{"cards":[{"id":"old"}]}')
+        migrate(legacy)
+        new_log = {
+            'id': '7',
+            'messages': [{'role': 'user', 'content': 'question'}, {'role': 'assistant', 'content': 'new answer'}],
+        }
+        store.replace_inputs('logs.json', [new_log])
+        report = migrate(legacy)
+        self.assertEqual(report['documents'], 0)
+        self.assertEqual(store.load('logs.json'), [new_log])
+        self.assertIsNone(store.load('discover.json'))
+        self.assertIsNone(store.load('cards.json'))
 
 
 if __name__ == '__main__':

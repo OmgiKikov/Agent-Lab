@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Check, Copy, Gavel, LayoutGrid, MessagesSquare, Play, RotateCcw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { post } from "../api";
@@ -117,7 +117,7 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
   const [compare, setCompare] = useState(false);
   useEffect(() => { if (itemId) setView("chat"); }, [itemId]);
   const items = useMemo(() => run?.items ?? [], [run]);
-  const selected = items.find(i => itemKey(i) === itemId) ?? items.find(i => i.status !== "RUNNING") ?? items[0];
+  const selected = itemId ? items.find(i => itemKey(i) === itemId) : items.find(i => i.status !== "RUNNING") ?? items[0];
 
   // J / K walk the scenarios keeping the customer type, ← / → walk the types (and repeats) of one scenario.
   // Keys are read by position, so they work on the Russian layout too.
@@ -151,6 +151,8 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
       </Page>
     );
   }
+
+  if (itemId && !selected) return <Page title="разговор"><Panel className="mt-5 p-5 text-[13px] text-lab-dim">Разговор не найден в выбранном прогоне. <Link className="text-lab-accent hover:underline" to={`/lab/dialogs?run=${encodeURIComponent(run.id)}`}>Все диалоги</Link></Panel></Page>;
 
   const index = selected ? items.indexOf(selected) : -1;
   const types = typesOfRun(run, state.personas);

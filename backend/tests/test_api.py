@@ -111,6 +111,24 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(api.jobs.state['running'])
 
+    async def test_settings_cannot_change_under_an_active_job(self) -> None:
+        store.save(api.agents.SETTINGS, {'repo': '/old/agent'})
+        entered = asyncio.Event()
+
+        async def work(progress) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        api.jobs.start('run', work)
+        await entered.wait()
+        response = await self.client.post('/api/settings', json={'repo': '/new/agent'})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(api.agents.settings()['repo'], '/old/agent')
+        await self.client.post('/api/job/stop')
+        response = await self.client.post('/api/settings', json={'repo': '/new/agent'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(api.agents.settings()['repo'], '/new/agent')
+
     async def test_malformed_commands_are_validation_errors(self) -> None:
         for route, payload in (
             ('/api/discover', {'count': 'invalid'}),

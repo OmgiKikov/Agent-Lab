@@ -1,11 +1,28 @@
 """One Python process serves the Lab's HTTP routes and the built frontend."""
 
-from fastapi import HTTPException
-from fastapi.responses import FileResponse
+from urllib.parse import urlsplit
+
+from fastapi import HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import app
 from .settings import FRONTEND
+
+
+@app.middleware('http')
+async def local_browser_commands(request: Request, call_next):
+    """Other browser tabs cannot launch model work on this local application."""
+    origin = request.headers.get('origin')
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and origin:
+        try:
+            source = urlsplit(origin)
+            allowed = source.scheme in ('http', 'https') and source.hostname in ('127.0.0.1', 'localhost', '::1')
+        except ValueError:
+            allowed = False
+        if not allowed:
+            return JSONResponse({'detail': 'Запрос из внешней страницы отклонён'}, status_code=403)
+    return await call_next(request)
 
 
 @app.get('/health')

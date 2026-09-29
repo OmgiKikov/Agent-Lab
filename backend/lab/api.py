@@ -97,7 +97,7 @@ def state() -> dict:
         analysis['summary'] = discover.summarize(analysis['results'], analysis['topics'])
     return {
         'job': jobs.state,
-        'model': llm.model_label,
+        'model': llm.MODEL,
         'models': llm.describe(),
         'settings': agents.settings(),
         'sources': source_summary(),
@@ -111,7 +111,9 @@ def state() -> dict:
 
 
 @app.post('/api/settings')
-def save_settings(payload: SettingsCommand) -> dict:
+async def save_settings(payload: SettingsCommand) -> dict:
+    if jobs.state['running']:
+        raise HTTPException(409, f'Настройки нельзя менять, пока выполняется: {jobs.state["kind"]}')
     try:
         return agents.save_settings(payload.model_dump(exclude_unset=True))
     except ValueError as error:
@@ -204,7 +206,7 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 async def start_cards() -> dict:
     async def work(progress) -> list[dict]:
         deck = await cards.run(progress)
-        store.save(cards.DECK, {'createdAt': store.now(), 'model': llm.model_label, 'cards': deck})
+        store.save(cards.DECK, {'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck})
         return deck
 
     return start('cards', work)

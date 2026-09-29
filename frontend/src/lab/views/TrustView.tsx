@@ -46,6 +46,8 @@ export function TrustView({ state, run, onJudge }: { state: LabState; run: LabRu
   const m = finished.metric;
   const trust = trustOf(finished);
   const left = items.filter(i => (i.status === "PASS" || i.status === "FAIL") && !i.review).length;
+  const judgeModels = [...new Set(items.map(i => i.model).filter((model): model is string => !!model))].join(", ");
+  const secondModels = [...new Set(items.map(i => i.second?.model).filter((model): model is string => !!model))].join(", ");
   const hue = trust.level === "ok" ? "ok" : "warn";
   const progress = Math.min(100, (100 * trust.reviewed) / ENOUGH_CHECKED);
   const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
@@ -124,13 +126,13 @@ export function TrustView({ state, run, onJudge }: { state: LabState; run: LabRu
 
       <div className="mb-2.5 mt-7">
         <h2 className="text-[14px] font-medium text-lab-text">Кто оценивал</h2>
-        <p className="mt-0.5 text-[11px] text-lab-dim">Модели этой проверки, через {state.models.via}</p>
+        <p className="mt-0.5 text-[11px] text-lab-dim">Модели, которыми оценён этот прогон</p>
       </div>
       <Panel className="divide-y divide-white/[0.06]">
-        {([["Судья", state.models.main], ["Второй судья", state.models.second], ["Клиент-симулятор", state.models.main]] as const).map(([role, model]) => (
+        {([["Судья", judgeModels], ["Второй судья", secondModels], ["Клиент-симулятор", ""]] as const).map(([role, model]) => (
           <div key={role} className="flex items-center justify-between gap-3 px-5 py-2.5 text-[12px]">
             <span className="text-lab-mute">{role}</span>
-            <span className="rounded bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-lab-soft">{model ?? "из каталога"}</span>
+            <span className="rounded bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-lab-soft">{model || "не записана"}</span>
           </div>
         ))}
       </Panel>

@@ -5,19 +5,22 @@ LAB_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$LAB_ROOT"
 export PATH="$HOME/.volta/bin:$HOME/.bun/bin:$HOME/.local/bin:$PATH"
 command -v uv >/dev/null 2>&1 || { echo "Установите uv: https://docs.astral.sh/uv/" >&2; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo "Для сборки интерфейса нужен Node.js 22.12+ с npm." >&2; exit 1; }
-uv sync --project backend
+command -v npm >/dev/null 2>&1 || { echo "Для сборки интерфейса нужен Node.js 22.19+ с npm." >&2; exit 1; }
+uv sync --locked --project backend
 (cd frontend && npm ci --silent && npm run build)
 LAB_PYTHON="$LAB_ROOT/backend/.venv/bin/python"
 LAB_RUNTIME="${LAB_DATA:-$LAB_ROOT/data}"
 mkdir -p "$LAB_RUNTIME"
 chmod 700 "$LAB_RUNTIME"
 LAB_OWNED_PIDS=""
-cleanup() { for process_id in $LAB_OWNED_PIDS; do kill "$process_id" 2>/dev/null || true; done; }
+cleanup() {
+  for process_id in $LAB_OWNED_PIDS; do kill "$process_id" 2>/dev/null || true; done
+  for process_id in $LAB_OWNED_PIDS; do wait "$process_id" 2>/dev/null || true; done
+}
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-if [ -n "${LAB_MODEL_URL:-}" ] || [ -n "${AGENT_LAB_GATEWAY_URL:-}" ] || [ -f certs/url.txt ] || [ -f "${AGENT_LAB_GATEWAY_FILE:-$HOME/.agent-lab/gateway.json}" ]; then
+if [ -n "${LAB_MODEL_URL:-}" ] || (cd backend && "$LAB_PYTHON" -c 'import sys; from lab.llm.gateway import configured; sys.exit(0 if configured() else 1)'); then
   echo "Модели: настроенный endpoint или шлюз банка"
 else
   (cd backend/bridge && npm ci --silent)

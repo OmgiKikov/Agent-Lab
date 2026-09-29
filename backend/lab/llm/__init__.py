@@ -4,7 +4,7 @@ Two backends, chosen at start:
 - the bank's model gateway (gateway.py) when its certificates are in certs/: the work computer;
 - an OpenAI-compatible endpoint otherwise: the Pi bridges to OpenRouter started by bin/start.sh.
   LAB_MODEL_URL / LAB_MODEL_KEY / LAB_MODEL; the second judge LAB_SECOND_URL / LAB_SECOND_MODEL.
-The second judge, another vendor's model, re-checks every verdict of the main one.
+A second configured judge call re-checks every verdict; its actual model is recorded in that result.
 """
 
 import asyncio
@@ -12,6 +12,8 @@ import json
 import os
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Generic, TypeVar
 
 import httpx
 
@@ -38,7 +40,16 @@ MODEL = MAIN[1]
 API_KEY = os.environ.get('LAB_MODEL_KEY', os.environ.get('PI_PROXY_TOKEN', 'pi-local-bridge'))
 CONCURRENCY = int(os.environ.get('LAB_MODEL_CONCURRENCY', '6'))
 
-model_label = MODEL  # the model that actually answered the last main call
+T = TypeVar('T')
+
+
+@dataclass(frozen=True)
+class Answer(Generic[T]):
+    """A completed call: its value and the model that produced it, kept together across concurrent calls."""
+
+    value: T
+    model: str
+
 
 _gate: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 
@@ -59,8 +70,7 @@ async def chat(
     json_mode: bool = False,
     timeout: float = 240,
     endpoint: Endpoint | None = None,
-) -> str:
-    global model_label
+) -> Answer[str]:
     base, model = endpoint or MAIN
     if isinstance(messages, str):
         messages = [{'role': 'user', 'content': messages}]
@@ -72,12 +82,10 @@ async def chat(
                 text, label = await _openai_chat(base, model, system, messages, json_mode, timeout)
     except httpx.HTTPError as error:
         raise ModelError(f'Модель недоступна: {type(error).__name__}') from error
-    if endpoint is None:
-        model_label = label
     text = text.strip()
     if not text:
         raise ModelError('Модель вернула пустой ответ')
-    return text
+    return Answer(text, label)
 
 
 async def _openai_chat(
@@ -92,8 +100,28 @@ async def _openai_chat(
         )
     if response.status_code != 200:
         raise ModelError(f'Модель не ответила: HTTP {response.status_code}')
-    data = response.json()
-    return data['choices'][0]['message'].get('content') or '', data.get('model') or model
+    try:
+        data = response.json()
+    except ValueError as error:
+        raise ModelError('Модель вернула не JSON') from error
+    if not isinstance(data, dict) or not isinstance(data.get('choices'), list) or not data['choices']:
+        raise ModelError('В ответе модели нет choices')
+    choice = data['choices'][0]
+    if not isinstance(choice, dict) or not isinstance(choice.get('message'), dict):
+        raise ModelError('В ответе модели нет объекта message')
+    text = choice['message'].get('content')
+    if not isinstance(text, str):
+        raise ModelError('Текст ответа модели должен быть строкой')
+    label = data.get('model', model)
+    if not isinstance(label, str) or not label.strip():
+        raise ModelError('Имя ответившей модели должно быть строкой')
+    return text, label
+
+
+def models_used(records: list[dict]) -> str:
+    """Actual models recorded by a completed operation; configured model when no call completed."""
+    names = dict.fromkeys(record['model'] for record in records if record.get('model'))
+    return ', '.join(names) or MODEL
 
 
 def describe() -> dict:
@@ -118,6 +146,8 @@ async def check(endpoint: Endpoint) -> dict:
 def parse_json(text: str) -> dict:
     text = text.strip()
     if text.startswith('```'):
+        if '\n' not in text:
+            raise ValueError('unfinished JSON code fence')
         text = text.split('\n', 1)[1].rsplit('```', 1)[0].strip()
     try:
         value = json.loads(text)
@@ -137,7 +167,7 @@ async def structured(
     check: Callable[[dict], object] | None = None,
     attempts: int = 2,
     endpoint: Endpoint | None = None,
-) -> dict:
+) -> Answer[dict]:
     """A JSON answer; retried once on malformed output or a failed check."""
     prompt = json.dumps(payload, ensure_ascii=False)
     system += (
@@ -147,10 +177,11 @@ async def structured(
     last: Exception | None = None
     for _ in range(attempts):
         try:
-            value = parse_json(await chat(system, prompt, json_mode=True, endpoint=endpoint))
+            answer = await chat(system, prompt, json_mode=True, endpoint=endpoint)
+            value = parse_json(answer.value)
             if check and check(value) is False:
                 raise ValueError('structured answer did not satisfy its contract')
-            return value
+            return Answer(value, answer.model)
         except (ModelError, ValueError, KeyError, TypeError, httpx.HTTPError) as error:
             last = error
     raise ModelError(f'Не удалось получить ответ модели: {type(last).__name__}: {str(last)[:200]}')
@@ -161,11 +192,13 @@ __all__ = [
     'MAIN',
     'MODEL',
     'SECOND',
+    'Answer',
     'Endpoint',
     'ModelError',
     'chat',
     'check',
     'describe',
     'gateway',
+    'models_used',
     'structured',
 ]

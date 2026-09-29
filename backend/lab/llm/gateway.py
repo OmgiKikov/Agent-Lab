@@ -149,8 +149,16 @@ async def catalog() -> list[str]:
         response = await client.get(base + '/v1/models')
     if response.status_code != 200:
         raise ModelError(f'Шлюз не отдал каталог моделей: HTTP {response.status_code}')
-    models = response.json().get('data') or []
-    return [m['id'] for m in models if isinstance(m.get('id'), str) and m.get('type', 'chat') == 'chat']
+    try:
+        data = response.json()
+    except ValueError as error:
+        raise ModelError('Шлюз вернул каталог не в JSON') from error
+    if not isinstance(data, dict) or not isinstance(data.get('data'), list):
+        raise ModelError('В каталоге шлюза нет списка data')
+    models = data['data']
+    if not all(isinstance(model, dict) and isinstance(model.get('id'), str) for model in models):
+        raise ModelError('Неверный формат записи модели в каталоге шлюза')
+    return [model['id'] for model in models if model.get('type', 'chat') == 'chat']
 
 
 def chosen_models() -> dict:
@@ -192,5 +200,21 @@ async def chat(model: str, system: str, messages: list[dict], timeout: float) ->
         response = await client.post(base + '/v2/chat/completions', json=body)
     if response.status_code != 200:
         raise ModelError(f'Шлюз моделей ответил HTTP {response.status_code}')
-    answer = next((m for m in response.json().get('messages') or [] if m.get('role') == 'assistant'), {})
-    return ''.join(part.get('text') or '' for part in answer.get('content') or []), model
+    try:
+        data = response.json()
+    except ValueError as error:
+        raise ModelError('Шлюз вернул ответ не в JSON') from error
+    if not isinstance(data, dict) or not isinstance(data.get('messages'), list):
+        raise ModelError('В ответе шлюза нет списка messages')
+    if not all(isinstance(message, dict) for message in data['messages']):
+        raise ModelError('Неверный формат сообщения шлюза')
+    answer = next((message for message in data['messages'] if message.get('role') == 'assistant'), None)
+    if answer is None or not isinstance(answer.get('content'), list):
+        raise ModelError('В ответе шлюза нет текста assistant')
+    parts = answer['content']
+    if not all(isinstance(part, dict) and isinstance(part.get('text'), str) for part in parts):
+        raise ModelError('Текст ответа шлюза должен быть строкой')
+    label = data.get('model', model)
+    if not isinstance(label, str) or not label.strip():
+        raise ModelError('Имя ответившей модели шлюза должно быть строкой')
+    return ''.join(part['text'] for part in parts), label

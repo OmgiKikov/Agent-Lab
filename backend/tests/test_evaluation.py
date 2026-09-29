@@ -7,6 +7,10 @@ from lab import cards, discover, judge, llm, quotes
 from lab.metric import metric
 
 
+def completion(value):
+    return llm.Answer(json.dumps(value), 'actual-main')
+
+
 def criterion(rule_id='r1', observation='reply'):
     return {'id': rule_id, 'text': 'Помочь клиенту', 'observation': observation}
 
@@ -76,7 +80,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(assigned=assigned):
                 bad = {'topics': [dict(topic, dialogueIds=assigned)]}
                 good = {'topics': [topic]}
-                with patch.object(llm, 'chat', AsyncMock(side_effect=[json.dumps(bad), json.dumps(good)])) as chat:
+                with patch.object(llm, 'chat', AsyncMock(side_effect=[completion(bad), completion(good)])) as chat:
                     topics, dropped = await discover.plan_topics([source], [dialogue])
                 self.assertEqual(chat.await_count, 2)
                 self.assertEqual(topics[0]['dialogueIds'], ['stable'])
@@ -87,7 +91,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         previous = {'topics': [{'id': 't1', 'title': 'Возврат', 'rules': []}], 'results': []}
         bad = {'assignments': [{'dialogueId': 'd1', 'topicId': 'unknown'}]}
         good = {'assignments': [{'dialogueId': 'd1', 'topicId': 't1'}]}
-        with patch.object(llm, 'chat', AsyncMock(side_effect=[json.dumps(bad), json.dumps(good)])) as chat:
+        with patch.object(llm, 'chat', AsyncMock(side_effect=[completion(bad), completion(good)])) as chat:
             topics = await discover.keep_topics(previous, [dialogue])
         self.assertEqual(chat.await_count, 2)
         self.assertEqual(topics[0]['dialogueIds'], ['stable'])
@@ -107,30 +111,33 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         ]
         for answer in invalid:
             with self.subTest(answer=answer):
-                chat = AsyncMock(side_effect=[json.dumps(answer), json.dumps(valid)])
+                chat = AsyncMock(side_effect=[completion(answer), completion(valid)])
                 with patch.object(llm, 'chat', chat):
-                    rows, status = await judge.log_verdict(
+                    result = await judge.log_verdict(
                         [criterion()], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}]
                     )
                 self.assertEqual(chat.await_count, 2)
-                self.assertEqual(status, 'PASS')
-                self.assertEqual(rows[0]['ruleId'], 'r1')
+                self.assertEqual(result.status, 'PASS')
+                self.assertEqual(result.rows[0]['ruleId'], 'r1')
 
     async def test_duplicate_verdict_ids_are_retried(self):
         answer = {'rules': [verdict(), verdict()]}
         valid = {'rules': [verdict(), verdict('r2')]}
-        with patch.object(llm, 'chat', AsyncMock(side_effect=[json.dumps(answer), json.dumps(valid)])) as chat:
-            rows, status = await judge.log_verdict(
+        with patch.object(llm, 'chat', AsyncMock(side_effect=[completion(answer), completion(valid)])) as chat:
+            result = await judge.log_verdict(
                 [criterion(), criterion('r2')], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}]
             )
         self.assertEqual(chat.await_count, 2)
-        self.assertEqual([row['ruleId'] for row in rows], ['r1', 'r2'])
-        self.assertEqual(status, 'PASS')
+        self.assertEqual([row['ruleId'] for row in result.rows], ['r1', 'r2'])
+        self.assertEqual(result.status, 'PASS')
 
     async def test_structured_retries_non_object_json(self):
-        with patch.object(llm, 'chat', AsyncMock(side_effect=['[]', '{"ready": true}'])) as chat:
+        with patch.object(
+            llm, 'chat', AsyncMock(side_effect=[llm.Answer('[]', 'broken'), completion({'ready': True})])
+        ) as chat:
             answer = await llm.structured('System', {})
-        self.assertEqual(answer, {'ready': True})
+        self.assertEqual(answer.value, {'ready': True})
+        self.assertEqual(answer.model, 'actual-main')
         self.assertEqual(chat.await_count, 2)
 
     async def test_run_rejects_tool_claim_in_answer_and_accepts_recorded_call(self):
@@ -139,36 +146,36 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         for events, expected in (([], 'UNMEASURED'), ([{'tool': 'Система банка · getLkkTariff'}], 'PASS')):
             with (
                 self.subTest(events=events),
-                patch.object(llm, 'chat', AsyncMock(return_value=json.dumps(answer))),
+                patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
                 patch.object(judge.knowledge, 'retrieved', return_value=[]),
             ):
-                _, status = await judge.run_verdict(card, [{'role': 'agent', 'text': 'getLkkTariff', 'events': events}])
-            self.assertEqual(status, expected)
+                result = await judge.run_verdict(card, [{'role': 'agent', 'text': 'getLkkTariff', 'events': events}])
+            self.assertEqual(result.status, expected)
 
     async def test_generated_handoff_marker_cannot_replace_missing_reply_evidence(self):
         answer = {'customerGoal': 'Вернуть терминал', 'rules': [verdict(quote='разговор передан оператору')]}
         with (
-            patch.object(llm, 'chat', AsyncMock(return_value=json.dumps(answer))),
+            patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
             patch.object(judge.knowledge, 'retrieved', return_value=[]),
         ):
-            _, status = await judge.run_verdict(
+            result = await judge.run_verdict(
                 {'criteria': [criterion()]}, [{'role': 'agent', 'text': 'Нет ответа', 'ok': False, 'status': 500}]
             )
-        self.assertEqual(status, 'UNMEASURED')
+        self.assertEqual(result.status, 'UNMEASURED')
 
     async def test_knowledge_needs_supplied_articles(self):
         answer = {'customerGoal': 'Вернуть терминал', 'rules': [verdict(status='FAIL')]}
         for articles, expected in (([], 'UNMEASURED'), ([{'article': 'a', 'text': 'Вернуть терминал в банк'}], 'FAIL')):
             with (
                 self.subTest(articles=articles),
-                patch.object(llm, 'chat', AsyncMock(return_value=json.dumps(answer))),
+                patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
                 patch.object(judge.knowledge, 'retrieved', return_value=articles),
             ):
-                _, status = await judge.run_verdict(
+                result = await judge.run_verdict(
                     {'criteria': [criterion(observation='knowledge')]},
                     [{'role': 'agent', 'text': 'Вернуть терминал в банк'}],
                 )
-            self.assertEqual(status, expected)
+            self.assertEqual(result.status, expected)
 
     async def test_failed_primary_joins_second_judge_and_keeps_model_error_contract(self):
         cancelled = asyncio.Event()
@@ -211,9 +218,10 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
     async def test_card_generation_does_not_commit(self):
         with (
             patch.object(cards.store, 'load', return_value={'topics': [], 'results': []}),
-            patch.object(cards.logs, 'load', return_value=[]),
+            patch.object(cards, 'pick', return_value=[({}, {}, 'Coverage')]),
+            patch.object(cards, 'build_card', AsyncMock(return_value={'id': 'card', 'model': 'actual-main'})),
             patch.object(cards.store, 'save') as save,
         ):
             result = await cards.run()
-        self.assertEqual(result, [])
+        self.assertEqual(result, [{'id': 'card', 'model': 'actual-main'}])
         save.assert_not_called()

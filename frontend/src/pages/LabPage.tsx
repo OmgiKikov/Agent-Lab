@@ -49,7 +49,7 @@ export function LabPage() {
   const params = useParams<{ step?: string; itemId?: string }>();
   const step: Step = STEPS.includes(params.step as Step) ? params.step as Step : "criteria";
   const itemId = params.itemId ?? null;
-  const { state, offline, run, pickRun, runError, retryRun, refresh, runLoading, runSummary } = useLab();
+  const { state, offline, run, runId, pickRun, runError, retryRun, refresh, runLoading, runSummary } = useLab();
   const [target, setTargetState] = useState(readTarget);
   const setTarget = (t: string) => { setTargetState(t); try { localStorage.setItem("lab.target", t); } catch { /* ignore */ } };
   const [newRun, setNewRun] = useState(false);
@@ -61,7 +61,8 @@ export function LabPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const scope = useScope(state, run ?? runSummary);
+  const unavailableRun = !!runId && !runSummary && !run;
+  const scope = useScope(unavailableRun ? null : state, run ?? runSummary);
   const { finished } = scope;
   const trustLevel = finished ? trustOf(finished).level : null;
   const broken = scope.criteria.filter(c => c.failed > 0).length;
@@ -69,14 +70,16 @@ export function LabPage() {
   const nav = useMemo(() => buildNav(state, extra), [state, extra]);
   const paletteCriteria = useMemo(() => scope.criteria.map(c => ({ key: c.key, title: c.title, failed: c.failed })), [scope.criteria]);
 
-  const go = (s: Step, item?: string | null) => navigate(item ? `/lab/${s}/${encodeURIComponent(item)}` : `/lab/${s}`);
-  const goJudge = (runId?: string) => { if (runId) pickRun(runId); navigate("/lab/judge/check"); };
+  const runSearch = runId ? `?run=${encodeURIComponent(runId)}` : "";
+  const go = (s: Step, item?: string | null) => navigate({ pathname: item ? `/lab/${s}/${encodeURIComponent(item)}` : `/lab/${s}`, search: runSearch });
+  const openRun = (id: string) => navigate({ pathname: "/lab/dialogs", search: `?run=${encodeURIComponent(id)}` });
+  const goJudge = (id = runId) => navigate({ pathname: "/lab/judge/check", search: id ? `?run=${encodeURIComponent(id)}` : "" });
   const card = step === "checks" && itemId ? state?.cards?.cards.find(c => c.id === itemId) : undefined;
   const openLog = (id: string) => go("logs", id);
   const goBack = (fallback: string) => (location.key !== "default" ? navigate(-1) : navigate(fallback));
 
   const legacy = params.step ? legacyTarget(params.step, itemId, location.search) : null;
-  if (legacy) return <Navigate to={legacy} replace />;
+  if (legacy) return <Navigate to={{ pathname: legacy, search: location.search }} replace />;
 
   const scopeBar = <ScopeBar scope={scope} onPick={pickRun} onAdd={() => setAdding(true)} />;
 
@@ -84,7 +87,7 @@ export function LabPage() {
     <ToastProvider>
       <div className="flex h-full">
         <Rail state={state} offline={offline} step={step} itemId={itemId} run={run ?? scope.finished} go={go} nav={nav} onPalette={() => setPalette(true)} />
-        <CommandPalette open={palette} onClose={() => setPalette(false)} state={state} go={go} onPickRun={pickRun} onJudge={() => goJudge(finished?.id)} extra={extra} criteria={paletteCriteria} />
+        <CommandPalette open={palette} onClose={() => setPalette(false)} state={state} go={go} onPickRun={openRun} onJudge={() => goJudge(finished?.id)} extra={extra} criteria={paletteCriteria} />
 
         <main className="sb relative min-w-0 flex-1 overflow-auto">
           {state && offline && (
@@ -95,10 +98,12 @@ export function LabPage() {
           )}
           {state && (runError || scope.error) && (
             <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-lab-bad/20 bg-lab-bad/10 px-6 py-3 text-[12px] text-lab-bad">
-              <span>Не удалось загрузить результаты прогона.</span>
+              <span>{runError?.message ?? "Не удалось загрузить результаты прогона."}</span>
               <Button size="sm" icon={RotateCcw} onClick={() => { void retryRun(); scope.retry(); }}>Повторить</Button>
+              {unavailableRun && <Button size="sm" onClick={() => navigate("/lab/dialogs")}>К доступным прогонам</Button>}
             </div>
           )}
+          {state && unavailableRun && runLoading && <div className="flex h-full items-center justify-center text-lab-dim"><Loader2 className="size-5 animate-spin" aria-label="Загружаю прогон" /></div>}
           {!offline && !state && <div className="flex h-full items-center justify-center text-lab-dim"><Loader2 className="size-5 animate-spin" /></div>}
           {offline && !state && (
             <div className="flex h-full items-center justify-center">
@@ -109,14 +114,14 @@ export function LabPage() {
               </div>
             </div>
           )}
-          {state && step === "criteria" && (itemId
+          {state && !unavailableRun && step === "criteria" && (itemId
             ? <CriterionView state={state} scope={scope} criterionKey={itemId} scopeBar={scopeBar} onBack={() => go("criteria")} onLog={openLog} go={navigate} />
             : <CriteriaView state={state} scope={scope} scopeBar={scopeBar} onCriterion={key => go("criteria", key)} onJudge={() => goJudge(finished?.id)} go={navigate} />)}
-          {state && step === "dialogs" && !itemId && <DialogsView state={state} scope={scope} scopeBar={scopeBar} onOpen={d => d.origin === "sim" ? go("dialogs", d.key) : openLog(d.dialogueId!)} />}
-          {state && step === "dialogs" && itemId && !runError && (runLoading
+          {state && !unavailableRun && step === "dialogs" && !itemId && <DialogsView state={state} scope={scope} scopeBar={scopeBar} onOpen={d => d.origin === "sim" ? go("dialogs", d.key) : openLog(d.dialogueId!)} />}
+          {state && !unavailableRun && step === "dialogs" && itemId && !runError && (runLoading
             ? <div className="flex h-full items-center justify-center text-lab-dim"><Loader2 className="size-5 animate-spin" aria-label="Загружаю прогон" /></div>
-            : <RunView state={state} run={run ?? scope.finished} itemId={itemId} target={target} setTarget={setTarget} onOpen={key => go("dialogs", key)} />)}
-          {state && step === "judge" && (itemId === "check"
+            : <RunView state={state} run={run ?? scope.finished} itemId={itemId} target={target} setTarget={setTarget} onOpen={key => key ? go("dialogs", key) : navigate("/lab/dialogs")} />)}
+          {state && !unavailableRun && step === "judge" && (itemId === "check"
             ? <JudgeCheckPage state={state} scope={scope} onBack={() => go("judge")} onOpen={key => go("dialogs", key)} />
             : <TrustView state={state} run={scope.finished ?? run} onJudge={goJudge} />)}
           {state && step === "agent" && <AgentView state={state} />}

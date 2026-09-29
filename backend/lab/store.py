@@ -59,7 +59,11 @@ def replace_inputs(name: str, value: Any) -> None:
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
             (name, _json(value)),
         )
-        connection.execute('DELETE FROM documents WHERE name IN (?, ?)', ('discover.json', 'cards.json'))
+        # Keep the names: a repeated legacy import must not resurrect intentionally cleared results.
+        connection.executemany(
+            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+            [('discover.json', 'null'), ('cards.json', 'null')],
+        )
 
 
 def runs() -> list[dict]:
@@ -102,9 +106,17 @@ def update_run(run_id: str, **fields: Any) -> dict:
 
 
 def update_item(run_id: str, index: int, fields: dict) -> dict:
-    """A producer owns conversation/evaluation fields; a human owns review."""
+    """Keep human confirmation through progress, but never attach it to a changed judgment."""
     patch = {key: value for key, value in fields.items() if key != 'review'}
-    return _mutate_run(run_id, lambda record: record['items'][index].update(patch))
+
+    def mutate(record: dict) -> None:
+        item = record['items'][index]
+        changed = any(key in patch and patch[key] != item.get(key) for key in ('status', 'rules'))
+        item.update(patch)
+        if changed:
+            item['review'] = None
+
+    return _mutate_run(run_id, mutate)
 
 
 def set_review(run_id: str, index: int, decision: str | None) -> dict:

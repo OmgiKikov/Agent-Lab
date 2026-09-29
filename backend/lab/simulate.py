@@ -4,6 +4,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Callable
+from copy import deepcopy
 
 from . import agents, cards, judge, llm, personas, store
 from .agents import world
@@ -30,8 +31,8 @@ async def customer_says(card: dict, conversation: list[dict], details: str = '',
     )
     manner = personas.style(persona)
     manner = f'Твоя манера общения (она важнее правил о длине и стиле ниже): {manner}' if manner else ''
-    text = await llm.chat(SIMULATOR.format(situation=card['situation'], profile=profile, persona=manner), request)
-    return text.strip().strip('"«»').strip()
+    answer = await llm.chat(SIMULATOR.format(situation=card['situation'], profile=profile, persona=manner), request)
+    return answer.value.strip().strip('"«»').strip()
 
 
 async def prepare_openings(chosen: list[dict], persona_ids: list[str], progress: Progress) -> None:
@@ -47,8 +48,8 @@ async def prepare_openings(chosen: list[dict], persona_ids: list[str], progress:
     progress(done=0, total=len(missing), message='Переписываю первые реплики под типы клиентов')
 
     async def rewrite(card: dict, key: str) -> None:
-        text = await llm.chat(PERSONA_OPENING.format(style=personas.style(key)), card['opening'])
-        card.setdefault('openings', {})[key] = text.strip().strip('"«»').strip()
+        answer = await llm.chat(PERSONA_OPENING.format(style=personas.style(key)), card['opening'])
+        card.setdefault('openings', {})[key] = answer.value.strip().strip('"«»').strip()
 
     async with asyncio.TaskGroup() as group:
         for card, key in missing:
@@ -124,6 +125,7 @@ def new_item(card: dict, persona: str, attempt: int) -> dict:
         'attempt': attempt,
         'origin': card['origin'],
         'situation': card['situation'],
+        'criteria': deepcopy(card['criteria']),
         'status': 'RUNNING',
         'stage': 'в очереди',
         'conversationId': str(uuid.uuid4()),
@@ -211,7 +213,7 @@ async def run(
                 status=record['status'],
                 error=record['error'],
                 finishedAt=store.now(),
-                model=llm.model_label,
+                model=llm.models_used(record['items']),
             )
         if cancelled_during_close:
             raise asyncio.CancelledError
@@ -219,20 +221,31 @@ async def run(
 
 
 async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
-    """Patch evaluations only. Concurrent human reviews remain owned by the reviewer."""
-    by_id = {card['id']: card for card in cards.deck()}
+    """Rejudge the recorded conversation against the criteria frozen when it was played."""
     items = [
         (index, item)
         for index, item in enumerate(record['items'])
-        if item['cardId'] in by_id
-        and any(message['role'] == 'agent' and message.get('text') for message in item['conversation'])
+        if any(message['role'] == 'agent' and message.get('text') for message in item['conversation'])
     ]
+    if not items:
+        raise RuntimeError('В прогоне нет записанных ответов агента для переоценки')
+    legacy = [(index, item) for index, item in items if not isinstance(item.get('criteria'), list)]
+    if legacy:
+        by_id = {card['id']: card for card in cards.deck()}
+        for _, item in legacy:
+            card = by_id.get(item['cardId'])
+            if card is None:
+                raise RuntimeError(
+                    'В старом прогоне не сохранены критерии, а исходной карточки больше нет. '
+                    'Запустите новый прогон с текущими сценариями.'
+                )
+            item['criteria'] = deepcopy(card['criteria'])
     done = 0
 
     async def one(index: int, item: dict) -> None:
         nonlocal done
         try:
-            await judge.evaluate(by_id[item['cardId']], item)
+            await judge.evaluate(item, item)
             item['error'] = None
         except llm.ModelError as error:
             item.update(status='UNMEASURED', error=str(error), rules=[], second=None)
@@ -243,4 +256,4 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
     async with asyncio.TaskGroup() as group:
         for index, item in items:
             group.create_task(one(index, item))
-    return store.update_run(record['id'], rejudgedAt=store.now())
+    return store.update_run(record['id'], rejudgedAt=store.now(), model=llm.models_used(record['items']))

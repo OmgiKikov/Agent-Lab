@@ -113,7 +113,7 @@ async def build(situation: str, customer: list[str]) -> dict | None:
     shapes = templates()
     if shapes is None:
         return None
-    raw = await llm.structured(
+    answer = await llm.structured(
         WORLD,
         {
             'situation': situation,
@@ -122,7 +122,7 @@ async def build(situation: str, customer: list[str]) -> dict | None:
         },
         check=lambda v: v['organization'] and v['terminals'],
     )
-    return normalize(raw, shapes)
+    return normalize(answer.value, shapes)
 
 
 def overrides(world: dict | None) -> dict:

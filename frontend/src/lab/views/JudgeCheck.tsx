@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, ShieldCheck, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pct, plural } from "../format";
-import { disputed } from "../logic";
+import { disputed, itemKey } from "../logic";
 import type { Item, LabRun, LabState } from "../types";
 import { Badge, Button, Eyebrow, PersonaTag } from "../ui";
 import { Conversation } from "./Conversation";
@@ -21,21 +21,26 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
   run: LabRun; state: LabState; onReview: (index: number, decision: Decision | null) => Promise<unknown>; onOpen: (item: Item) => void;
 }) {
   const items = run.items ?? [];
-  // The order is fixed when the check opens, so answering does not reshuffle the queue.
+  // Verdict changes rebuild eligibility; ordinary review refreshes keep the order and selection.
+  const eligibility = items.map(i => `${i.conversationId ?? itemKey(i)}:${i.status}:${i.second?.status ?? ""}`).join("|");
   const queue = useMemo(() => {
     const rank = (i: Item) => (disputed(i) ? 0 : i.status === "FAIL" ? 1 : 2) + (i.review ? 10 : 0);
-    return items.map((item, index) => ({ item, index })).filter(x => x.item.status === "PASS" || x.item.status === "FAIL")
-      .sort((a, b) => rank(a.item) - rank(b.item) || a.index - b.index).map(x => x.index);
-  }, [run.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    return items.map((item, index) => ({ item, index, key: `${run.id}:${item.conversationId ?? itemKey(item)}` }))
+      .filter(x => x.item.status === "PASS" || x.item.status === "FAIL")
+      .sort((a, b) => rank(a.item) - rank(b.item) || a.index - b.index)
+      .map(({ index, key }) => ({ index, key }));
+  }, [run.id, eligibility]); // eslint-disable-line react-hooks/exhaustive-deps
   const [saving, setSaving] = useState(false);
   const { error } = useToast();
   const decisionOf = (index: number) => items[index]?.review ?? null;
-  const [at, setAt] = useState(() => Math.max(0, queue.findIndex(i => !items[i]?.review)));
+  const [selectedKey, setSelectedKey] = useState(() => queue.find(x => !items[x.index]?.review)?.key ?? queue[0]?.key);
+  const at = Math.max(0, queue.findIndex(x => x.key === selectedKey));
+  const select = (position: number) => setSelectedKey(queue[position]?.key);
 
-  const reviewed = queue.filter(i => decisionOf(i));
-  const agree = reviewed.filter(i => decisionOf(i) === "agree").length;
+  const reviewed = queue.filter(x => decisionOf(x.index));
+  const agree = reviewed.filter(x => decisionOf(x.index) === "agree").length;
   const done = queue.length > 0 && reviewed.length === queue.length;
-  const index = queue[Math.min(at, queue.length - 1)];
+  const index = queue[at]?.index;
   const item = items[index];
 
   const decide = (decision: Decision) => {
@@ -43,7 +48,7 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
     const next = decisionOf(index) === decision ? null : decision;
     setSaving(true);
     onReview(index, next)
-      .then(() => { if (next) setAt(a => Math.min(a + 1, queue.length - 1)); })
+      .then(() => { if (next) setSelectedKey(current => current === selectedKey ? queue[Math.min(at + 1, queue.length - 1)]?.key : current); })
       .catch(error)
       .finally(() => setSaving(false));
   };
@@ -55,8 +60,8 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
       if (el && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
       if (e.code === "Digit1") decide("agree");
       else if (e.code === "Digit2") decide("disagree");
-      else if (e.code === "ArrowRight") setAt(a => Math.min(a + 1, queue.length - 1));
-      else if (e.code === "ArrowLeft") setAt(a => Math.max(a - 1, 0));
+      else if (e.code === "ArrowRight") select(Math.min(at + 1, queue.length - 1));
+      else if (e.code === "ArrowLeft") select(Math.max(at - 1, 0));
       else return;
       e.preventDefault();
     };
@@ -86,10 +91,10 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
           </div>
         </div>
         <div className="mx-auto mt-3 flex max-w-[880px] gap-[2px]">
-          {queue.map((i, k) => {
-            const d = decisionOf(i);
+          {queue.map((entry, k) => {
+            const d = decisionOf(entry.index);
             return (
-              <button key={i} onClick={() => setAt(k)} aria-label={`Разговор ${k + 1}`}
+              <button key={entry.key} onClick={() => select(k)} aria-label={`Разговор ${k + 1}`}
                 className={cn("h-1.5 flex-1 rounded-full transition-colors", d === "agree" ? "bg-lab-mute" : d === "disagree" ? "bg-lab-bad" : "bg-white/[0.08] hover:bg-white/20", k === at && "ring-1 ring-white/70 ring-offset-1 ring-offset-black")} />
             );
           })}
@@ -116,13 +121,13 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
       </div>
 
       <div className="sb min-h-0 flex-1 overflow-auto">
-        <Conversation key={index} item={item} state={state} />
+        <Conversation key={queue[at].key} item={item} state={state} />
       </div>
 
       <div className="flex-shrink-0 border-t border-white/[0.08] bg-black/95 px-6 py-3">
         <div className="mx-auto flex max-w-[880px] items-center gap-2">
-          <Button size="sm" variant="ghost" icon={ArrowLeft} disabled={at === 0} onClick={() => setAt(a => a - 1)}>Назад</Button>
-          <Button size="sm" variant="ghost" onClick={() => setAt(a => Math.min(a + 1, queue.length - 1))} disabled={at >= queue.length - 1}>Пропустить<ArrowRight className="size-3" /></Button>
+          <Button size="sm" variant="ghost" icon={ArrowLeft} disabled={at === 0} onClick={() => select(at - 1)}>Назад</Button>
+          <Button size="sm" variant="ghost" onClick={() => select(Math.min(at + 1, queue.length - 1))} disabled={at >= queue.length - 1}>Пропустить<ArrowRight className="size-3" /></Button>
           <div className="flex flex-1 items-center justify-center gap-2 pr-16">
             <Eyebrow className="mr-2">вердикт «{item.status === "PASS" ? "пройден" : "провален"}» верный?</Eyebrow>
             <Button variant={decision === "agree" ? "primary" : "secondary"} icon={Check} disabled={saving} onClick={() => decide("agree")}>Верно <kbd className="ml-1 opacity-50">1</kbd></Button>

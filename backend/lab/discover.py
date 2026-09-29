@@ -95,7 +95,8 @@ async def plan_topics(srcs: list[dict], dialogues: list[dict]) -> tuple[list[dic
     """New topics and rules from the sources; every sampled conversation is put into one topic."""
 
     payload = {'task': TASK, 'sources': srcs, 'dialogues': requests(dialogues)}
-    plan = await llm.structured(PLAN, payload, check=lambda value: _check_topics(value, dialogues))
+    answer = await llm.structured(PLAN, payload, check=lambda value: _check_topics(value, dialogues))
+    plan = answer.value
     topics, dropped = ground(plan['topics'], srcs)
     topics = [t for t in topics if t['rules']]
     real = short_ids(dialogues)
@@ -128,7 +129,8 @@ async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
                     raise ValueError('unknown topic assignment')
                 seen.add(dialogue_id)
 
-        value = await llm.structured(ASSIGN, payload, check=check)
+        answer = await llm.structured(ASSIGN, payload, check=check)
+        value = answer.value
         for a in value['assignments']:
             if a.get('topicId') in ids and str(a.get('dialogueId')) in real:
                 known[real[str(a['dialogueId'])]] = a['topicId']
@@ -137,21 +139,15 @@ async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
     return topics
 
 
-def note(topic: dict, result: dict) -> str:
-    context = f'Записанный разговор из логов · тема «{topic["title"]}»'
-    return judge.note(
-        result['status'], context, result['rules'], result.get('error'), result.get('second'), recorded=True
-    )
-
-
 async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
     rules, shown = topic['rules'], conversation(dialogue)
     try:
-        rows, status = await judge.log_verdict(rules, shown)
+        verdict = await judge.log_verdict(rules, shown)
+        rows, status, model = verdict.rows, verdict.status, verdict.model
         second, error = await judge.second_opinion(judge.log_verdict, rules, shown), None
     except llm.ModelError as exc:
         rows = judge.checked([], rules, '')
-        status, second, error = judge.verdict_of(rows), None, str(exc)
+        status, second, error, model = judge.verdict_of(rows), None, str(exc), None
     result = {
         'dialogueId': dialogue['id'],
         'topicId': topic['id'],
@@ -160,6 +156,7 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
         'second': second,
         'opening': dialogue['messages'][0]['content'],
         'error': error,
+        'model': model,
     }
     return result
 
@@ -264,7 +261,7 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     value = {
         'startedAt': started,
         'finishedAt': store.now(),
-        'model': llm.model_label,
+        'model': llm.models_used(results),
         'rulesSince': rules_since,
         'sources': [
             {

@@ -13,7 +13,7 @@ export type Message = {
 };
 export type Item = {
   cardId: string; name: string; topic: string; origin: string; status: Status; stage: string; conversation: Message[]; rules: Rule[];
-  error: string | null; runId?: string; attempt?: number; persona?: string;
+  error: string | null; conversationId?: string; model?: string; runId?: string; attempt?: number; persona?: string;
   second?: { model: string; status: string; rules?: Rule[] }; review?: "agree" | "disagree" | null; world?: boolean;
 };
 export type LabRun = {
@@ -29,7 +29,7 @@ export type World = {
 };
 export type Card = {
   id: string; topic: string; name: string; situation: string; opening: string; criteria: Criterion[]; origin: string;
-  sourceDialogueId: string; world?: World | null; openings?: Record<string, string>;
+  sourceDialogueId: string; model?: string; world?: World | null; openings?: Record<string, string>;
 };
 export type LogResult = { dialogueId: string; topicId: string; status: Status; rules: Rule[]; opening: string; second?: Item["second"]; error?: string | null };
 export type LogDialogue = { id: string; messages: { role: "user" | "assistant"; content: string }[]; evaluation: LogResult | null };

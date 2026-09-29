@@ -30,7 +30,7 @@ export function CommandPalette({ open, onClose, state, go, onPickRun, onJudge, e
     for (const c of state.cards?.cards ?? []) out.push({ id: `card-${c.id}`, group: "Сценарии", label: c.name, sub: c.topic, icon: NAV_ICON.checks, run: () => go("checks", c.id) });
     for (const r of state.runs) out.push({
       id: `run-${r.id}`, group: "Версии", label: `${r.targetName} · ${r.version}`, sub: `${r.metric?.accuracy ?? "—"}% · ${when(r.startedAt)}`, icon: NAV_ICON.dialogs,
-      run: () => { onPickRun(r.id); go("dialogs"); },
+      run: () => onPickRun(r.id),
     });
     return out;
   }, [state, go, onPickRun, onJudge, extra, criteria]);

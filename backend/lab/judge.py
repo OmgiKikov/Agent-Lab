@@ -7,6 +7,7 @@ otherwise. A PASS or FAIL must be grounded in the evidence named by the rule's o
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from . import llm, quotes
 from .context import knowledge
@@ -14,10 +15,14 @@ from .prompts import JUDGE_LOG, JUDGE_RUN
 from .transcript import for_judge, tool_calls, with_buttons
 
 STATUSES = {'PASS', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE'}
-MARKS = {'PASS': '✓', 'FAIL': '✗', 'UNKNOWN': '?', 'NOT_APPLICABLE': '–', 'UNMEASURED': '?'}
 NO_QUOTE = 'Цитата судьи не найдена в ответах агента; вывод не засчитан. '
 
-Verdict = tuple[list[dict], str]  # rows per rule, verdict of the conversation
+
+@dataclass(frozen=True)
+class Verdict:
+    rows: list[dict]
+    status: str
+    model: str
 
 
 def verdict_of(rows: list[dict]) -> str:
@@ -98,14 +103,14 @@ def checked(
 async def log_verdict(rules: list[dict], shown: list[dict], endpoint: llm.Endpoint | None = None) -> Verdict:
     """A recorded conversation from the logs; shown = [{'role': 'CUSTOMER' | 'AGENT', 'text'}]."""
     agent_text = '\n'.join(m['text'] for m in shown if m['role'] == 'AGENT')
-    value = await llm.structured(
+    answer = await llm.structured(
         JUDGE_LOG,
         {'expectations': rules, 'conversation': shown},
         check=lambda value: _check_answer(value, rules),
         endpoint=endpoint,
     )
-    rows = checked(value.get('rules') or [], rules, agent_text)
-    return rows, verdict_of(rows)
+    rows = checked(answer.value['rules'], rules, agent_text)
+    return Verdict(rows, verdict_of(rows), answer.model)
 
 
 async def run_verdict(card: dict, conversation: list[dict], endpoint: llm.Endpoint | None = None) -> Verdict:
@@ -121,23 +126,25 @@ async def run_verdict(card: dict, conversation: list[dict], endpoint: llm.Endpoi
         'toolCallsObserved': bool(calls),
         'knowledge': retrieved,
     }
-    value = await llm.structured(
+    answer = await llm.structured(
         JUDGE_RUN,
         payload,
         check=lambda answer: _check_answer(answer, card['criteria'], customer_goal=True),
         endpoint=endpoint,
     )
-    rows = checked(value['rules'], card['criteria'], agent_text, tools=calls, knowledge_available=bool(retrieved))
-    return rows, verdict_of(rows)
+    rows = checked(
+        answer.value['rules'], card['criteria'], agent_text, tools=calls, knowledge_available=bool(retrieved)
+    )
+    return Verdict(rows, verdict_of(rows), answer.model)
 
 
 async def second_opinion(verdict: Callable[..., Awaitable[Verdict]], *args) -> dict:
-    """The same verdict by the second judge: another vendor's model, the same rules and evidence checks."""
+    """Another configured judge call, with the same rules and evidence checks; model identity comes from its call."""
     try:
-        rows, status = await verdict(*args, endpoint=llm.SECOND)
+        result = await verdict(*args, endpoint=llm.SECOND)
     except llm.ModelError as error:
         return {'model': llm.SECOND[1], 'status': 'ERROR', 'error': str(error)}
-    return {'model': llm.SECOND[1], 'status': status, 'rules': rows}
+    return {'model': result.model, 'status': result.status, 'rules': result.rows}
 
 
 async def evaluate(card: dict, item: dict) -> None:
@@ -148,34 +155,6 @@ async def evaluate(card: dict, item: dict) -> None:
             secondary = tasks.create_task(second_opinion(run_verdict, card, item['conversation']))
     except* llm.ModelError as errors:
         raise llm.ModelError(str(errors.exceptions[0])) from errors
-    item['rules'], item['status'] = primary.result()
+    result = primary.result()
+    item.update(rules=result.rows, status=result.status, model=result.model)
     item['second'] = secondary.result()
-
-
-def note(
-    status: str,
-    context: str,
-    rows: list[dict],
-    error: str | None = None,
-    second: dict | None = None,
-    recorded: bool = False,
-) -> str:
-    """The judge's explanation for a person: the reason first, then every criterion with the agent's quote."""
-    if status == 'FAIL':
-        fail = next(r for r in rows if r['status'] == 'FAIL')
-        head = ('Нарушение: ' if recorded else 'Не пройден: ') + fail['reason']
-    elif status == 'PASS':
-        passed = next(r for r in rows if r['status'] == 'PASS')
-        head = ('Без нарушений: ' if recorded else 'Пройден: ') + passed['reason']
-    else:
-        head = 'Не измерено: ' + (error or 'не все применимые критерии подтверждены доказательствами.')
-    lines = [head, '', context]
-    if second and second.get('status') in ('PASS', 'FAIL', 'UNMEASURED'):
-        words = {'PASS': 'пройден', 'FAIL': 'не пройден', 'UNMEASURED': 'не измерено'}
-        agree = 'согласен' if second['status'] == status else f'не согласен: по его оценке {words[second["status"]]}'
-        lines.append(f'Второй судья: {agree}.')
-    for row in rows:
-        lines += ['', f'{MARKS[row["status"]]} {row["rule"]}', f'   {row["reason"]}']
-        if row['agentQuote']:
-            lines.append(f'   Цитата агента: «{row["agentQuote"]}»')
-    return '\n'.join(lines)

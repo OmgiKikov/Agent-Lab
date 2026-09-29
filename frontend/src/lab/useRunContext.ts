@@ -8,8 +8,8 @@ import { useRunDetails } from "./useLab";
  * and the few runs around them. Full data of these is fetched once and kept.
  */
 export function useRunContext(state: LabState | null, selected: LabRun | null, baseId?: string | null) {
-  const history = useMemo(() => (state?.runs ?? []).filter(r => r.metric && r.metric.total && r.status !== "running"), [state?.runs]);
-  const head = selected?.metric?.total && selected.status !== "running" ? selected : history[0] ?? null;
+  const history = useMemo(() => (state?.runs ?? []).filter(r => r.metric && r.status !== "running"), [state?.runs]);
+  const head = selected && selected.status !== "running" ? selected : history[0] ?? null;
   const sameAgent = useMemo(
     () => (head ? history.filter(r => r.target === head.target).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1)).slice(-12) : []),
     [history, head],

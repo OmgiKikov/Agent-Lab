@@ -56,11 +56,15 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         entered, release = asyncio.Event(), asyncio.Event()
 
         async def evaluate(scenario: dict, item: dict) -> None:
-            entered.set()
-            await release.wait()
-            item.update(status='PASS', rules=[])
+            if scenario['id'] == 'card-2':
+                entered.set()
+                await release.wait()
+            item.update(status='PASS', rules=[], model=f'actual-judge-{scenario["id"]}')
 
-        with patch.object(simulate.judge, 'evaluate', side_effect=evaluate):
+        with (
+            patch.object(simulate.cards, 'deck', return_value=[card(), card('card-2')]),
+            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+        ):
             task = asyncio.create_task(simulate.run('test'))
             await entered.wait()
             run_id = store.runs()[0]['id']
@@ -72,6 +76,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.agent.closed)
         self.assertEqual(result['items'][0]['review'], 'disagree')
         self.assertEqual(result['metric']['human']['agree'], 0)
+        self.assertIn('actual-judge-card-1', result['model'])
+        self.assertIn('actual-judge-card-2', result['model'])
 
     async def test_rejudge_patches_a_current_record_instead_of_stale_snapshot(self) -> None:
         source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
@@ -84,7 +90,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         async def evaluate(scenario: dict, item: dict) -> None:
             entered.set()
             await release.wait()
-            item.update(status='PASS')
+            item.update(status='FAIL')
 
         with patch.object(simulate.judge, 'evaluate', side_effect=evaluate):
             task = asyncio.create_task(simulate.rejudge(stale))
@@ -92,7 +98,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             store.set_review(source['id'], 0, 'disagree')
             release.set()
             result = await task
-        self.assertEqual(result['items'][0]['status'], 'PASS')
+        self.assertEqual(result['items'][0]['status'], 'FAIL')
         self.assertEqual(result['items'][0]['review'], 'disagree')
         self.assertTrue(result['rejudgedAt'])
 
@@ -215,7 +221,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         judge.assert_awaited_once()
         self.assertEqual(result['items'][0]['status'], 'PASS')
         self.assertIsNone(result['items'][0]['error'])
-        self.assertEqual(result['items'][0]['review'], 'disagree')
+        self.assertIsNone(result['items'][0]['review'])
 
     async def test_failed_rejudge_does_not_show_old_successful_rules(self) -> None:
         source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
@@ -228,6 +234,96 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['items'][0]['status'], 'UNMEASURED')
         self.assertEqual(result['items'][0]['rules'], [])
         self.assertIsNone(result['metric']['accuracy'])
+
+    async def test_rejudge_keeps_frozen_criteria_after_inputs_replace_and_deck_changes(self) -> None:
+        frozen = card()
+        frozen['criteria'] = [{'id': 'original', 'text': 'Original rule'}]
+        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulate.new_item(frozen, 'default', 1)
+        frozen['criteria'][0]['text'] = 'Edited later'
+        item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], review='agree')
+        source.update(items=[item], status='done')
+        store.create_run(source)
+        store.replace_inputs('logs.json', [])
+        observed = []
+
+        async def evaluate(scenario: dict, item: dict) -> None:
+            observed.extend(scenario['criteria'])
+            item.update(status='PASS', rules=[{'status': 'PASS'}])
+
+        with (
+            patch.object(simulate.cards, 'deck', return_value=[]),
+            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+        ):
+            result = await simulate.rejudge(store.run(source['id']))
+        self.assertEqual(observed, [{'id': 'original', 'text': 'Original rule'}])
+        self.assertEqual(result['items'][0]['status'], 'PASS')
+        self.assertIsNone(result['items'][0]['review'])
+        self.assertTrue(result['rejudgedAt'])
+
+    async def test_legacy_rejudge_uses_matching_original_card_and_saves_criteria(self) -> None:
+        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulate.new_item(card(), 'default', 1)
+        del item['criteria']
+        item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}])
+        source.update(items=[item], status='done')
+        store.create_run(source)
+        original = card()
+        original['criteria'] = [{'id': 'old', 'text': 'Old rule'}]
+
+        async def evaluate(scenario: dict, item: dict) -> None:
+            self.assertEqual(scenario['criteria'], original['criteria'])
+            item.update(status='PASS')
+
+        with (
+            patch.object(simulate.cards, 'deck', return_value=[original]),
+            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+        ):
+            result = await simulate.rejudge(store.run(source['id']))
+        self.assertEqual(result['items'][0]['criteria'], original['criteria'])
+
+    async def test_legacy_rejudge_without_original_criteria_fails_without_false_completion(self) -> None:
+        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulate.new_item(card(), 'default', 1)
+        del item['criteria']
+        item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}])
+        source.update(items=[item], status='done')
+        store.create_run(source)
+        with (
+            patch.object(simulate.cards, 'deck', return_value=[]),
+            patch.object(simulate.judge, 'evaluate') as judge,
+            self.assertRaisesRegex(RuntimeError, 'не сохранены критерии'),
+        ):
+            await simulate.rejudge(store.run(source['id']))
+        judge.assert_not_awaited()
+        self.assertNotIn('rejudgedAt', store.run(source['id']))
+
+    async def test_rejudge_without_agent_answers_fails_without_false_completion(self) -> None:
+        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        source.update(items=[simulate.new_item(card(), 'default', 1)], status='stopped')
+        store.create_run(source)
+        with self.assertRaisesRegex(RuntimeError, 'нет записанных ответов'):
+            await simulate.rejudge(store.run(source['id']))
+        self.assertNotIn('rejudgedAt', store.run(source['id']))
+
+    async def test_customer_messages_and_cached_openings_consume_labelled_model_answers(self) -> None:
+        scenario = card()
+        store.save(simulate.cards.DECK, {'cards': [scenario]})
+        with patch.object(
+            simulate.llm,
+            'chat',
+            side_effect=[
+                simulate.llm.Answer(' "next question" ', 'actual-customer'),
+                simulate.llm.Answer(' "rewritten opening" ', 'actual-customer'),
+            ],
+        ) as chat:
+            message = await simulate.customer_says(scenario, [{'role': 'agent', 'text': 'answer'}])
+            await simulate.prepare_openings([scenario], ['impatient'], lambda **values: None)
+            cached = store.load(simulate.cards.DECK)['cards']
+            await simulate.prepare_openings(cached, ['impatient'], lambda **values: None)
+        self.assertEqual(message, 'next question')
+        self.assertEqual(cached[0]['openings']['impatient'], 'rewritten opening')
+        self.assertEqual(chat.await_count, 2)
 
 
 if __name__ == '__main__':

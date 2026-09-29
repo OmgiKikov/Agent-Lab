@@ -71,12 +71,12 @@ def pick(analysis: dict) -> list[tuple[dict, dict, str]]:
             continue
         results = [r for r in analysis['results'] if r['topicId'] == topic['id'] and str(r['dialogueId']) in by_id]
         failed = [r for r in results if r['status'] == 'FAIL']
-        passed = [r for r in results if r['status'] == 'PASS']
+        coverage = [r for r in results if r['status'] in ('PASS', 'UNMEASURED')]
         for n in range(2):
             if n < len(failed):
                 rounds[2 * n].append((topic, by_id[str(failed[n]['dialogueId'])], 'Ошибка из лога'))
-            if n < len(passed):
-                rounds[2 * n + 1].append((topic, by_id[str(passed[n]['dialogueId'])], 'Покрытие темы'))
+            if n < len(coverage):
+                rounds[2 * n + 1].append((topic, by_id[str(coverage[n]['dialogueId'])], 'Покрытие темы'))
     return [chosen for group in rounds for chosen in group][:LIMIT]
 
 
@@ -92,7 +92,8 @@ def general_rules(analysis: dict) -> list[dict]:
 
 async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence[dict] = ()) -> dict:
     customer = [m['content'] for m in dialogue['messages'] if m['role'] == 'user']
-    value = await llm.structured(CARD, {'topic': topic['title'], 'customerMessages': customer}, check=_check)
+    answer = await llm.structured(CARD, {'topic': topic['title'], 'customerMessages': customer}, check=_check)
+    value = answer.value
     rules = [r for r in topic['rules'] if r['observation'] in ('reply', 'tool')]
     seen = {quotes.normalized(r['quote']) for r in rules}
     rules += [r for r in general if quotes.normalized(r['quote']) not in seen]
@@ -125,6 +126,7 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
         'world': test_data,
     }
     card['id'] = hashlib.sha256(json.dumps(card, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
+    card['model'] = answer.model
     return card
 
 
@@ -133,14 +135,13 @@ async def run(progress: Callable[..., None] = lambda **_: None) -> list[dict]:
     if not analysis:
         raise RuntimeError('Сначала оцените логи')
     picks = pick(analysis)
+    if not picks:
+        raise RuntimeError('Нет разговоров с проверяемыми правилами для сборки сценариев')
     general = general_rules(analysis)
     done = []
 
-    async def one(topic: dict, dialogue: dict, origin: str) -> dict | None:
-        try:
-            card = await build_card(topic, dialogue, origin, general)
-        except llm.ModelError:
-            card = None
+    async def one(topic: dict, dialogue: dict, origin: str) -> dict:
+        card = await build_card(topic, dialogue, origin, general)
         done.append(card)
         progress(
             stage='cards', done=len(done), total=len(picks), message=f'Готово сценариев: {len(done)} из {len(picks)}'
@@ -148,6 +149,9 @@ async def run(progress: Callable[..., None] = lambda **_: None) -> list[dict]:
         return card
 
     progress(stage='cards', done=0, total=len(picks), message='Собираю сценарии')
-    async with asyncio.TaskGroup() as tasks:
-        pending = [tasks.create_task(one(*pick)) for pick in picks]
-    return [task.result() for task in pending if task.result() is not None]
+    try:
+        async with asyncio.TaskGroup() as tasks:
+            pending = [tasks.create_task(one(*pick)) for pick in picks]
+    except* llm.ModelError as errors:
+        raise llm.ModelError(str(errors.exceptions[0])) from errors
+    return [task.result() for task in pending]
