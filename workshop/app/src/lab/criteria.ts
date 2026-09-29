@@ -75,16 +75,20 @@ export function deriveCriteria(dialogs: Dialog[], provenance?: Map<string, { quo
   return [...found.values()].sort((a, b) => b.failed - a.failed || (rate(a) ?? 1) - (rate(b) ?? 1) || b.passed - a.passed);
 }
 
-/** The criteria against those of the previous version: new (broken now, not before), still broken, fixed. Without a previous version there is no verdict. */
-export function compareCriteria(current: Criterion[], previous: Criterion[] | null): Compared[] {
+/**
+ * The criteria against those of the previous version: new (broken now, not before), still broken, fixed. Without a previous version there is no verdict.
+ * `failedNow` says which violations count for the version: the simulator's, since the real logs are the same for every version.
+ */
+export function compareCriteria(current: Criterion[], previous: Criterion[] | null, failedNow: (c: Criterion) => number = c => c.failed): Compared[] {
   if (!previous) return current.map(criterion => ({ criterion, change: null, before: 0 }));
   const before = new Map(previous.map(c => [c.key, c]));
   const out: Compared[] = current.map(criterion => {
     const was = before.get(criterion.key)?.failed ?? 0;
-    return { criterion, before: was, change: criterion.failed > 0 ? (was > 0 ? "remains" : "new") : was > 0 ? "fixed" : null };
+    const is = failedNow(criterion);
+    return { criterion, before: was, change: is > 0 ? (was > 0 ? "remains" : "new") : was > 0 ? "fixed" : null };
   });
-  const now = new Set(current.map(c => c.key));
-  for (const c of previous) if (c.failed > 0 && !now.has(c.key)) out.push({ criterion: { ...c, passed: 0, failed: 0, failing: [], passing: [], by: { log: { passed: 0, failed: 0 }, sim: { passed: 0, failed: 0 } } }, change: "fixed", before: c.failed });
+  const present = new Set(current.map(c => c.key));
+  for (const c of previous) if (c.failed > 0 && !present.has(c.key)) out.push({ criterion: { ...c, passed: 0, failed: 0, failing: [], passing: [], by: { log: { passed: 0, failed: 0 }, sim: { passed: 0, failed: 0 } } }, change: "fixed", before: c.failed });
   return out;
 }
 

@@ -352,8 +352,7 @@ export function RunView({ state, run, itemId, target, setTarget, onOpen }: {
             </div>
             <Panel className="p-5">
               <Heatmap
-                personas={types} scenarios={scenariosOfRun(items)} items={items} previous={previousItems} compare={compare}
-                accuracy={run.metric?.personas ?? (types.length === 1 ? { [types[0].id]: { accuracy: run.metric?.accuracy ?? null } } : undefined)}
+                personas={types} scenarios={scenariosOfRun(items)} items={items} previous={previousItems} previousVersion={previous?.version} compare={compare}
                 onOpen={i => onOpen(itemKey(i))}
               />
             </Panel>

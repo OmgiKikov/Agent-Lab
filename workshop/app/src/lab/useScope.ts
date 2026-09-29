@@ -29,9 +29,10 @@ export function useScope(state: LabState | null, run: LabRun | null) {
 
   const comparing = !!previous && !!previousItems;
   const criteria = useMemo(() => deriveCriteria(dialogs, provenance), [dialogs, provenance]);
+  // A version changes only what the simulator sees: the change of a criterion is counted on simulated dialogues, both sides.
   const compared = useMemo(
-    () => compareCriteria(criteria, comparing ? deriveCriteria([...prevSims, ...logs], provenance) : null),
-    [criteria, comparing, logs, prevSims, provenance],
+    () => compareCriteria(criteria, comparing ? deriveCriteria(prevSims, provenance) : null, c => c.by.sim.failed),
+    [criteria, comparing, prevSims, provenance],
   );
 
   const sim = useMemo(() => summarize(sims), [sims]);
