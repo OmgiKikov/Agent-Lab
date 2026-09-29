@@ -164,11 +164,11 @@ export function FindingView({ state, run, findingKey, onBack, go }: { state: Lab
             </Panel>
           )}
           <Panel className="p-4">
-            <div className="text-[14px] font-medium text-lab-text">Что делать дальше</div>
-            <p className="mt-1.5 text-[11px] leading-snug text-lab-dim">Поправьте агента, потом проверьте только те {cardIds.length} {plural(cardIds.length, "сценарий", "сценария", "сценариев")}, где это случилось.</p>
+            <div className="text-[14px] font-medium text-lab-text">После правки</div>
+            <p className="mt-1.5 text-[11px] leading-snug text-lab-dim">Агента правите вы сами. Когда поправите, перепроверьте только те {cardIds.length} {plural(cardIds.length, "сценарий", "сценария", "сценариев")}, где это случилось.</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="primary" icon={Play} disabled={state.job.running} onClick={check}>Проверить исправление</Button>
-              <Button icon={copied ? Check : Copy} onClick={copy}>{copied ? "Скопировано" : "Копировать для правки"}</Button>
+              <Button variant="primary" icon={Play} disabled={state.job.running} onClick={check}>Перепроверить эти сценарии</Button>
+              <Button icon={copied ? Check : Copy} onClick={copy}>{copied ? "Скопировано" : "Скопировать описание"}</Button>
             </div>
           </Panel>
         </div>
