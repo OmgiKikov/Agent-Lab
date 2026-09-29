@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronDown, ChevronRight, FileText, ShieldCheck, TriangleAlert, Upload } from "lucide-react";
+import { FileText, ShieldCheck, TriangleAlert, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DropPixelGrid } from "../../components/DropPixelGrid";
 import { api, upload } from "../api";
@@ -8,12 +8,9 @@ import { JobLine } from "../JobLine";
 import { Confirm } from "../modal";
 import { useToast } from "../toast";
 import type { LabState } from "../types";
-import { Badge, Button, EmptyState, Eyebrow, inputClass, Page, Panel, Quote, Row, Section, StackBar, titleFont } from "../ui";
+import { Badge, Button, EmptyState, Eyebrow, inputClass, Page, Panel, titleFont } from "../ui";
 
-/** The service lists every violating conversation of a pattern; show a few, the rest on request. */
-const EXAMPLES_SHOWN = 3;
-
-const LEDE = "Разговоры из выгрузки проверяются по правилам из промпта агента. Сам агент при этом не запускается: судья оценивает только то, что уже было сказано.";
+const LEDE = "Настоящие разговоры из выгрузки чата. Судья проверяет их по критериям агента; сам агент при этом не запускается, судья оценивает только то, что уже было сказано.";
 
 function DropZone({ busy, onFile, onPick }: { busy: boolean; onFile: (f: File) => void; onPick: () => void }) {
   const [over, setOver] = useState(false);
@@ -57,14 +54,12 @@ function FormatHint() {
   );
 }
 
-export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (runId: string) => void; onGo: () => void }) {
+export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: () => void; onCriteria: () => void }) {
   const { error } = useToast();
   const d = state.discover;
   const [sample, setSample] = useState(d?.sampled ?? 60);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  const [open, setOpen] = useState<Set<number>>(new Set([0]));
-  const [more, setMore] = useState<Set<number>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const run = (replan = false) => api("/api/discover", { count: sample, replan }).catch(error);
@@ -123,122 +118,52 @@ export function LogsView({ state, onOpen, onGo }: { state: LabState; onOpen: (ru
 
   const s = d.summary;
   const rules = d.topics.reduce((n, t) => n + t.rules.length, 0);
-  const byDialogue = new Map(d.results.map(r => [r.dialogueId, r]));
-  const topics = d.topics
-    .map(t => {
-      const own = d.results.filter(r => r.topicId === t.id && (r.status === "PASS" || r.status === "FAIL"));
-      return { id: t.id, title: t.title, checked: own.length, failed: own.filter(r => r.status === "FAIL").length };
-    })
-    .filter(t => t.checked)
-    .sort((a, b) => b.failed / b.checked - a.failed / a.checked || b.failed - a.failed)
-    .slice(0, 6);
-  const top = Math.max(1, ...s.patterns.map(p => p.count));
-  const toggle = (i: number) => setOpen(prev => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; });
-
+  const topics = d.topics.map(t => {
+    const own = d.results.filter(r => r.topicId === t.id && (r.status === "PASS" || r.status === "FAIL"));
+    return { id: t.id, title: t.title, rules: t.rules.length, checked: own.length, failed: own.filter(r => r.status === "FAIL").length };
+  }).sort((a, b) => (b.checked ? b.failed / b.checked : 0) - (a.checked ? a.failed / a.checked : 0));
   return (
     <Page title="логи" lede={LEDE}>
       {toolbar}
       <Confirm open={confirm} onClose={() => setConfirm(false)} onConfirm={() => run(true)} title="Выделить правила заново?" action="Выделить заново">
         Следующая оценка пойдёт по новым правилам, поэтому её нельзя будет сравнить с текущей.
       </Confirm>
-
-      <div className="mt-5 grid gap-4 min-[1100px]:grid-cols-[1.25fr_1fr]">
-        <Panel className="p-5">
-          <Eyebrow>Разговоров с нарушением</Eyebrow>
-          <div className="mt-3 flex items-baseline gap-3">
-            <span className="text-[60px] font-medium leading-none text-lab-ink" style={titleFont}>{pct(s.failed, s.checked)}<span className="ml-0.5 text-[30px] text-lab-mute">%</span></span>
-            <span className="text-[13px] text-lab-mute">{s.failed} из {s.checked} проверенных</span>
+      <Panel className="mt-5 overflow-hidden">
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-3 px-5 py-4">
+          <div>
+            <div className="text-[28px] font-medium leading-none text-lab-ink" style={titleFont}>{s.checked}<span className="ml-1.5 text-[14px] text-lab-mute">из {state.logs.total}</span></div>
+            <div className="mt-1 text-[11px] text-lab-dim">{plural(s.checked, "разговор оценён", "разговора оценено", "разговоров оценено")} · {when(d.finishedAt)}</div>
           </div>
-          <StackBar className="mt-5" parts={[{ value: s.passed, hue: "ok" }, { value: s.failed, hue: "bad" }, { value: s.unmeasured, hue: "warn" }]} />
-          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12px] text-lab-mute">
-            <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-lab-ok" />без нарушений · {s.passed}</span>
-            <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-lab-bad" />с нарушением · {s.failed}</span>
-            <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-lab-warn" />нет данных · {s.unmeasured}</span>
+          <div>
+            <div className={cn("text-[28px] font-medium leading-none", s.failed ? "text-lab-bad" : "text-lab-ink")} style={titleFont}>{s.failed}</div>
+            <div className="mt-1 text-[11px] text-lab-dim">{plural(s.failed, "с нарушением", "с нарушениями", "с нарушениями")}</div>
           </div>
-          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-white/[0.06] pt-4 text-[12px] text-lab-dim">
-            <span>Проверка по {rules} {plural(rules, "правилу", "правилам", "правилам")} в {d.topics.length} {plural(d.topics.length, "теме", "темах", "темах")}</span>
-            {s.secondJudge && (
-              <Badge hue={s.secondJudge.agree / s.secondJudge.checked >= 0.8 ? "ok" : "warn"} icon={ShieldCheck}>
-                второй судья согласен в {pct(s.secondJudge.agree, s.secondJudge.checked)}%
-              </Badge>
-            )}
+          <div>
+            <div className="text-[28px] font-medium leading-none text-lab-ink" style={titleFont}>{rules}</div>
+            <div className="mt-1 text-[11px] text-lab-dim">{plural(rules, "критерий", "критерия", "критериев")} в {d.topics.length} {plural(d.topics.length, "теме", "темах", "темах")}</div>
           </div>
-        </Panel>
-
-        <Panel className="p-5">
-          <Eyebrow>Где нарушений больше всего</Eyebrow>
-          <div className="mt-4 space-y-3.5">
-            {topics.map(t => (
-              <div key={t.id}>
-                <div className="flex items-baseline justify-between gap-3 text-[13px]">
-                  <span className="min-w-0 truncate text-lab-text" title={t.title}>{t.title}</span>
-                  <span className="flex-shrink-0 font-mono text-[11px] text-lab-dim">{t.failed} из {t.checked}</span>
-                </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/[0.07]"><div className="h-full rounded-full bg-lab-bad" style={{ width: `${pct(t.failed, t.checked)}%` }} /></div>
-              </div>
-            ))}
-            {!topics.length && <div className="text-[12px] text-lab-dim">Нет проверенных разговоров по темам</div>}
-          </div>
-        </Panel>
+          {s.secondJudge && <Badge hue="ok" icon={ShieldCheck}>второй судья согласен в {pct(s.secondJudge.agree, s.secondJudge.checked)}</Badge>}
+          <Button className="ml-auto" variant="primary" onClick={onCriteria}>Открыть критерии</Button>
+        </div>
+      </Panel>
+      <div className="mb-2.5 mt-7">
+        <h2 className="text-[14px] font-medium text-lab-text">Темы и критерии</h2>
+        <p className="mt-0.5 text-[11px] text-lab-dim">Каждый разговор попадает в одну тему и проверяется по её критериям. Что именно нарушается, смотрите на экранах «Критерии» и «Диалоги»: там логи и симулятор считаются вместе.</p>
       </div>
-
-      <Section title="Частые нарушения" hint="Правила промпта, которые агент нарушает чаще всего. Раскройте строку, чтобы увидеть примеры.">
-        <Panel>
-          {s.patterns.map((p, i) => {
-            const opened = open.has(i);
-            return (
-              <Row first={!i} key={i}>
-                <button
-                  onClick={() => toggle(i)} aria-expanded={opened}
-                  className="grid w-full grid-cols-[76px_1fr_auto] items-start gap-5 px-5 py-4 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lab-accent/50"
-                >
-                  <div>
-                    <div className="text-[28px] font-medium leading-none text-lab-bad" style={titleFont}>{p.count}</div>
-                    <div className="mt-1 text-[11px] text-lab-dim">{plural(p.count, "разговор", "разговора", "разговоров")}</div>
-                    <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.07]"><div className="h-full rounded-full bg-lab-bad" style={{ width: `${pct(p.count, top)}%` }} /></div>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-[14px] font-medium text-lab-ink">{p.titles[0] || p.rule}</div>
-                    <div className="mt-1 text-[13px] leading-snug text-lab-mute">{p.rule}</div>
-                    <div className="mt-2.5 flex flex-wrap gap-1.5">{p.topics.map(t => <Badge key={t}>{t}</Badge>)}</div>
-                  </div>
-                  <ChevronDown className={cn("mt-1 size-4 text-lab-dim transition-transform", opened && "rotate-180")} />
-                </button>
-                {opened && (
-                  <div className="space-y-3 px-5 pb-5 pl-[116px]">
-                    <Quote who="в промпте">«{p.quote}»</Quote>
-                    {p.examples.slice(0, more.has(i) ? undefined : EXAMPLES_SHOWN).map(ex => {
-                      const trace = byDialogue.get(ex.dialogueId)?.runId;
-                      return (
-                        <div key={ex.dialogueId} className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-                          <Quote who="клиент">{ex.opening}</Quote>
-                          {ex.agentQuote && <Quote who="агент" tone="bad">«{ex.agentQuote}»</Quote>}
-                          <div className="mt-3 flex items-start justify-between gap-4 text-[12px] leading-snug text-lab-dim">
-                            <span className="min-w-0">{ex.reason}</span>
-                            {trace && (
-                              <button onClick={() => onOpen(trace)} className="inline-flex flex-shrink-0 items-center gap-0.5 text-lab-accent hover:underline">
-                                Открыть разговор<ChevronRight className="size-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {p.examples.length > EXAMPLES_SHOWN && !more.has(i) && (
-                      <Button size="sm" variant="ghost" onClick={() => setMore(prev => new Set(prev).add(i))}>Показать ещё {p.examples.length - EXAMPLES_SHOWN}</Button>
-                    )}
-                  </div>
-                )}
-              </Row>
-            );
-          })}
-          {!s.patterns.length && <div className="p-10 text-center text-[13px] text-lab-dim">Нарушений не найдено</div>}
-        </Panel>
-      </Section>
-
-      <p className="mt-5 text-[12px] leading-relaxed text-lab-dim">
-        Судья {d.model}. Вердикт засчитывается, только если есть цитата из ответа агента. Правила от {when(d.rulesSince ?? d.finishedAt)}, оценка от {when(d.finishedAt)}.
-      </p>
+      <Panel className="overflow-hidden">
+        {topics.map(t => (
+          <div key={t.id} className="flex items-center gap-4 border-t border-white/[0.06] px-5 py-3 first:border-t-0">
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] text-lab-text">{t.title}</div>
+              <div className="mt-0.5 text-[11px] text-lab-dim">{t.rules} {plural(t.rules, "критерий", "критерия", "критериев")}</div>
+            </div>
+            <div className="hidden w-[140px] min-[820px]:block">
+              <div className="h-1 overflow-hidden rounded-full bg-white/[0.07]"><div className="h-full rounded-full bg-lab-bad" style={{ width: `${t.checked ? (100 * t.failed) / t.checked : 0}%` }} /></div>
+            </div>
+            <div className="w-[120px] text-right font-mono text-[11px] text-lab-dim">{t.checked ? <>нарушений <span className={t.failed ? "text-lab-bad" : "text-lab-mute"}>{t.failed}</span> из {t.checked}</> : "не проверялась"}</div>
+          </div>
+        ))}
+      </Panel>
     </Page>
   );
 }

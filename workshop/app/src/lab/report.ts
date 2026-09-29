@@ -1,6 +1,7 @@
 import { cellOf, failureReasons, scenariosOfRun, typesOfRun, unitOf } from "./logic";
 import { STATUS_TEXT, personaName } from "./look";
 import type { Cell } from "./logic";
+import { KIND_LABEL, normRule, type Criterion } from "./criteria";
 import type { Item, LabRun, Persona } from "./types";
 import { plural } from "./format";
 
@@ -60,15 +61,16 @@ export function download(name: string, text: string, type = "text/markdown") {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** A finding as text for a ticket or for the person who edits the agent's prompt. */
-export function findingReport(f: { title: string; rule: string; count: number; measured: number; items: Item[] }, personas: Persona[], promptQuote?: string): string {
-  const lines = [`# ${f.title}`, "", `Нарушено в ${f.count} из ${f.measured} разговоров.`, ""];
-  if (f.rule !== f.title) lines.push(`Правило: ${f.rule}`, "");
-  if (promptQuote) lines.push(`В промпте: «${promptQuote}»`, "");
+/** A criterion as text for a ticket or for the person who edits the agent's prompt. */
+export function criterionReport(c: Criterion, personas: Persona[]): string {
+  const total = c.passed + c.failed;
+  const lines = [`# ${c.title}`, "", `Нарушено в ${c.failed} из ${total} диалогов.`, ""];
+  if (c.rule !== c.title) lines.push(`Критерий: ${c.rule}`, "");
+  if (c.quote) lines.push(`В источнике${c.kind ? ` (${KIND_LABEL[c.kind] ?? c.kind})` : ""}: «${c.quote}»`, "");
   lines.push("## Примеры", "");
-  for (const item of f.items.slice(0, 5)) {
-    const rule = item.rules.find(r => r.status === "FAIL");
-    lines.push(`- ${item.conversation[0]?.text ?? ""} (${personaName(personas, item.persona)})`);
+  for (const d of c.failing.slice(0, 5)) {
+    const rule = d.rules.find(r => normRule(r.rule) === c.key && r.status === "FAIL");
+    lines.push(`- ${d.opening} (${d.origin === "log" ? "лог" : `симулятор, ${personaName(personas, d.persona)}`})`);
     if (rule?.agentQuote) lines.push(`  Агент: «${rule.agentQuote}»`);
     if (rule?.reason) lines.push(`  Почему нарушение: ${rule.reason}`);
   }

@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { pct, plural } from "../format";
 import { disputed } from "../logic";
 import type { Item, LabRun, LabState } from "../types";
-import { Badge, Button, Eyebrow, Panel, PersonaTag } from "../ui";
+import { Badge, Button, Eyebrow, PersonaTag } from "../ui";
 import { Conversation } from "./RunView";
 
 type Decision = "agree" | "disagree";

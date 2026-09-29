@@ -39,9 +39,9 @@ export function TrustView({ state, run, onJudge }: { state: LabState; run: LabRu
   const sim = useMemo(() => simulatorFigures(items), [items]);
 
   if (!state.runs.length) {
-    return <Page wide title="доверие к оценке"><EmptyState className="mt-5" drop title="Пока нечего проверять">Доверие считается по результатам проверки агента. Запустите первую.</EmptyState></Page>;
+    return <Page wide title="судья"><EmptyState className="mt-5" drop title="Пока нечего проверять">Судью проверяют по диалогам симулятора. Прогоните его хотя бы раз.</EmptyState></Page>;
   }
-  if (!finished?.metric) return <Page wide title="доверие к оценке"><Skeleton className="mt-5 h-[320px]" /></Page>;
+  if (!finished?.metric) return <Page wide title="судья"><Skeleton className="mt-5 h-[320px]" /></Page>;
 
   const m = finished.metric;
   const trust = trustOf(finished);
@@ -52,8 +52,8 @@ export function TrustView({ state, run, onJudge }: { state: LabState; run: LabRu
 
   return (
     <Page
-      wide title="доверие к оценке"
-      lede="Насколько можно верить числу на главной: правильно ли судит судья и похож ли симулятор на настоящих клиентов."
+      wide title="судья"
+      lede="Насколько можно верить цифрам на экране «Критерии»: правильно ли судит судья и похож ли симулятор на настоящих клиентов."
       actions={<Badge hue={hue} icon={ShieldCheck}>{TRUST_TEXT[trust.level]}</Badge>}
     >
       <div className="mt-5 grid gap-4 min-[1100px]:grid-cols-2">

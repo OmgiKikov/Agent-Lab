@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CornerDownLeft, Gavel, Search, type LucideIcon } from "lucide-react";
+import { CornerDownLeft, Search, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { when } from "./format";
 import { NAV_ICON, buildNav, type NavExtra } from "./nav";
@@ -12,9 +12,9 @@ type Entry = { id: string; group: string; label: string; sub?: string; icon: Luc
  * ⌘K: jump to any step, scenario or run without touching the mouse.
  * The same shortcut opens it everywhere in Agent Lab.
  */
-export function CommandPalette({ open, onClose, state, go, onPickRun, onJudge, extra, findings }: {
+export function CommandPalette({ open, onClose, state, go, onPickRun, onJudge, extra, criteria }: {
   open: boolean; onClose: () => void; state: LabState | null; go: (step: Step, item?: string | null) => void;
-  onPickRun: (id: string) => void; onJudge: () => void; extra: NavExtra; findings: { key: string; title: string; count: number }[];
+  onPickRun: (id: string) => void; onJudge: () => void; extra: NavExtra; criteria: { key: string; title: string; failed: number }[];
 }) {
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
@@ -25,15 +25,15 @@ export function CommandPalette({ open, onClose, state, go, onPickRun, onJudge, e
   const entries = useMemo<Entry[]>(() => {
     if (!state) return [];
     const out: Entry[] = buildNav(state, extra).map(n => ({ id: `nav-${n.id}`, group: "Разделы", label: n.title, icon: n.icon, run: () => go(n.id) }));
-    out.push({ id: "judge", group: "Действия", label: "Проверить судью", sub: "Пройти вердикты последней проверки", icon: NAV_ICON.trust, run: onJudge });
-    for (const f of findings) out.push({ id: `finding-${f.key}`, group: "Находки", label: f.title, sub: `${f.count} разговоров`, icon: NAV_ICON.findings, run: () => go("findings", f.key) });
+    out.push({ id: "judge", group: "Действия", label: "Проверить судью", sub: "Пройти вердикты последней проверки", icon: NAV_ICON.judge, run: onJudge });
+    for (const c of criteria) out.push({ id: `criterion-${c.key}`, group: "Критерии", label: c.title, sub: c.failed ? `нарушено в ${c.failed} диалогах` : "выполняется", icon: NAV_ICON.criteria, run: () => go("criteria", c.key) });
     for (const c of state.cards?.cards ?? []) out.push({ id: `card-${c.id}`, group: "Сценарии", label: c.name, sub: c.topic, icon: NAV_ICON.checks, run: () => go("checks", c.id) });
     for (const r of state.runs) out.push({
-      id: `run-${r.id}`, group: "Проверки", label: `${r.targetName} · ${r.version}`, sub: `${r.metric?.accuracy ?? "—"}% · ${when(r.startedAt)}`, icon: NAV_ICON.runs,
-      run: () => { onPickRun(r.id); go("runs"); },
+      id: `run-${r.id}`, group: "Версии", label: `${r.targetName} · ${r.version}`, sub: `${r.metric?.accuracy ?? "—"}% · ${when(r.startedAt)}`, icon: NAV_ICON.dialogs,
+      run: () => { onPickRun(r.id); go("dialogs"); },
     });
     return out;
-  }, [state, go, onPickRun, onJudge, extra, findings]);
+  }, [state, go, onPickRun, onJudge, extra, criteria]);
 
   const q = query.trim().toLowerCase();
   const shown = useMemo(() => entries.filter(e => !q || `${e.label} ${e.sub ?? ""}`.toLowerCase().includes(q)).slice(0, 40), [entries, q]);
@@ -59,7 +59,7 @@ export function CommandPalette({ open, onClose, state, go, onPickRun, onJudge, e
           <div className="flex items-center gap-2.5 border-b border-white/[0.07] px-4">
             <Search className="size-4 flex-shrink-0 text-lab-dim" />
             <input
-              autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Куда перейти: шаг, сценарий, прогон"
+              autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Куда перейти: критерий, сценарий, версия"
               className="h-12 w-full bg-transparent text-[14px] text-lab-ink outline-none placeholder:text-lab-faint"
             />
             <kbd className="rounded border border-white/15 px-1.5 font-mono text-[10px] leading-4 text-lab-dim">esc</kbd>

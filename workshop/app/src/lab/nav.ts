@@ -1,21 +1,23 @@
-import { Activity, Bot, FileText, FlaskConical, GitBranch, MessagesSquare, ShieldCheck, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Bot, FileText, FlaskConical, ListChecks, MessagesSquare, ShieldCheck, type LucideIcon } from "lucide-react";
 import type { LabState, Step } from "./types";
 
-export const STEPS: Step[] = ["agent", "logs", "checks", "runs", "health", "findings", "versions", "trust"];
+export const STEPS: Step[] = ["criteria", "dialogs", "judge", "agent", "logs", "checks"];
 
 /** Addresses of the earlier layouts keep working. */
-export const LEGACY: Record<string, string> = { connect: "/lab/agent", cards: "/lab/checks", run: "/lab/runs", accuracy: "/lab/health" };
+export const LEGACY: Record<string, string> = {
+  health: "/lab/criteria", findings: "/lab/criteria", versions: "/lab/criteria", accuracy: "/lab/criteria",
+  trust: "/lab/judge", runs: "/lab/dialogs", run: "/lab/dialogs", cards: "/lab/checks", connect: "/lab/agent",
+};
 
-/** The agent and its logs come first; everything about the simulated customer follows. */
-export type NavGroup = "agent" | "simulator";
+/** The three things the Lab is about, then where the dialogues come from. */
+export type NavGroup = "main" | "sources";
 export type NavItem = { id: Step; title: string; icon: LucideIcon; group: NavGroup; badge?: string; hot?: boolean; busy: boolean };
-export const NAV_GROUP_TITLE: Record<NavGroup, string> = { agent: "Агент и логи", simulator: "Симулятор клиента" };
+export const NAV_GROUP_TITLE: Record<NavGroup, string | null> = { main: null, sources: "Откуда диалоги" };
 
-/** What the badges of the navigation say; derived from the latest run by the page. */
-export type NavExtra = { findings?: number; trustPending?: boolean; version?: string };
+/** What the badges of the navigation say; derived by the page. */
+export type NavExtra = { broken?: number; dialogs?: number; trustPending?: boolean };
 
-const ICON: Record<Step, LucideIcon> = { health: Activity, findings: TriangleAlert, trust: ShieldCheck, checks: FlaskConical, versions: GitBranch, runs: MessagesSquare, agent: Bot, logs: FileText };
-export const NAV_ICON = ICON;
+export const NAV_ICON: Record<Step, LucideIcon> = { criteria: ListChecks, dialogs: MessagesSquare, judge: ShieldCheck, agent: Bot, logs: FileText, checks: FlaskConical };
 
 export function buildNav(state: LabState | null, extra: NavExtra): NavItem[] {
   const job = state?.job.running ? state.job.kind : null;
@@ -23,25 +25,22 @@ export function buildNav(state: LabState | null, extra: NavExtra): NavItem[] {
   const sources = state?.sources.length ?? 0;
   const logs = state?.logs.total ?? 0;
   return [
-    { id: "agent", title: "Агент", icon: ICON.agent, group: "agent", busy: job === "sources", badge: sources ? String(sources) : undefined },
-    { id: "logs", title: "Логи", icon: ICON.logs, group: "agent", busy: job === "discover", badge: logs ? String(logs) : undefined },
-    { id: "checks", title: "Набор проверок", icon: ICON.checks, group: "simulator", busy: job === "cards", badge: cards ? String(cards) : undefined },
-    { id: "runs", title: "Разговоры", icon: ICON.runs, group: "simulator", busy: job === "run", badge: state?.runs.length ? String(state.runs.length) : undefined },
-    { id: "health", title: "Здоровье", icon: ICON.health, group: "simulator", busy: false },
-    { id: "findings", title: "Находки", icon: ICON.findings, group: "simulator", busy: false, badge: extra.findings ? String(extra.findings) : undefined, hot: !!extra.findings },
-    { id: "versions", title: "Версии", icon: ICON.versions, group: "simulator", busy: false, badge: extra.version },
-    { id: "trust", title: "Доверие", icon: ICON.trust, group: "simulator", busy: job === "rejudge", badge: extra.trustPending ? "!" : undefined },
+    { id: "criteria", title: "Критерии", icon: NAV_ICON.criteria, group: "main", busy: false, badge: extra.broken ? String(extra.broken) : undefined, hot: !!extra.broken },
+    { id: "dialogs", title: "Диалоги", icon: NAV_ICON.dialogs, group: "main", busy: job === "run", badge: extra.dialogs ? String(extra.dialogs) : undefined },
+    { id: "judge", title: "Судья", icon: NAV_ICON.judge, group: "main", busy: job === "rejudge", badge: extra.trustPending ? "!" : undefined },
+    { id: "agent", title: "Агент", icon: NAV_ICON.agent, group: "sources", busy: job === "sources", badge: sources ? String(sources) : undefined },
+    { id: "logs", title: "Логи", icon: NAV_ICON.logs, group: "sources", busy: job === "discover", badge: logs ? String(logs) : undefined },
+    { id: "checks", title: "Сценарии симулятора", icon: NAV_ICON.checks, group: "sources", busy: job === "cards", badge: cards ? String(cards) : undefined },
   ];
 }
 
 export type SetupStep = { label: string; hint: string; done: boolean; to: string; cta: string };
 
-/** The first-run checklist: what is still to do before the first number appears. */
+/** The first-run path: what is left to do before the first criterion has evidence. */
 export function setupSteps(state: LabState): SetupStep[] {
   return [
-    { label: "Подключите агента", hint: "Адрес агента и репозиторий: из них берутся правила проверки.", done: state.sources.length > 0, to: "/lab/agent", cta: "Подключить" },
-    { label: "Загрузите и оцените логи", hint: "Судья найдёт, что агент уже нарушал в реальных разговорах.", done: !!state.discover, to: "/lab/logs", cta: "К логам" },
-    { label: "Соберите набор проверок", hint: "Из оценённых логов получатся сценарии для симулятора клиента.", done: (state.cards?.cards.length ?? 0) > 0, to: "/lab/checks", cta: "К проверкам" },
-    { label: "Проверьте агента", hint: "Симулятор сыграет сценарии, судья оценит разговоры.", done: state.runs.length > 0, to: "/lab/runs", cta: "Запустить" },
+    { label: "Подключите агента", hint: "Адрес агента и репозиторий: из них берутся его промпты, инструменты и критерии.", done: state.sources.length > 0, to: "/lab/agent", cta: "Подключить" },
+    { label: "Загрузите и оцените логи", hint: "Судья проверит настоящие разговоры по критериям и покажет, что агент уже нарушал.", done: !!state.discover, to: "/lab/logs", cta: "К логам" },
+    { label: "Прогоните симулятор клиента", hint: "Тот же набор критериев проверяется на разговорах, которых в логах ещё нет.", done: state.runs.length > 0, to: "/lab/checks", cta: "К сценариям" },
   ];
 }

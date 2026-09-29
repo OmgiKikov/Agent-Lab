@@ -1,12 +1,11 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Loader2, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { when } from "./format";
 import { itemKey, scenarioStatus, scenariosOfRun, typesOfRun } from "./logic";
-import { AGENT_SUBTITLE, AGENT_TITLE, HUE, LOG_TEXT, STATUS_TEXT, personaLook, personaName, statusHue } from "./look";
+import { AGENT_SUBTITLE, AGENT_TITLE, HUE, STATUS_TEXT, personaLook, personaName, statusHue } from "./look";
 import { NAV_GROUP_TITLE, type NavGroup, type NavItem } from "./nav";
-import type { LabRun, LabState, Status, Step } from "./types";
-import { Badge, Chip, Dot, Eyebrow, StatusIcon } from "./ui";
+import type { LabRun, LabState, Step } from "./types";
+import { Chip, Dot, Eyebrow, StatusIcon } from "./ui";
 
 type Go = (step: Step, item?: string | null) => void;
 
@@ -32,7 +31,7 @@ function ListItem({ selected, onClick, lead, title, sub, right, disabled }: { se
 }
 
 function Nav({ items, step, go }: { items: NavItem[]; step: Step; go: Go }) {
-  const groups = (["agent", "simulator"] as NavGroup[]).map(g => ({ id: g, items: items.filter(i => i.group === g) }));
+  const groups = (["main", "sources"] as NavGroup[]).map(g => ({ id: g, items: items.filter(i => i.group === g) }));
   const row = (i: NavItem) => {
     const active = i.id === step;
     return (
@@ -50,55 +49,11 @@ function Nav({ items, step, go }: { items: NavItem[]; step: Step; go: Go }) {
     <nav className="space-y-0.5 px-2.5 pb-3" aria-label="Разделы">
       {groups.map((g, k) => (
         <div key={g.id} className={cn(k > 0 && "mt-3 border-t border-white/[0.06] pt-3")}>
-          <Eyebrow className="px-2.5 pb-1.5">{NAV_GROUP_TITLE[g.id]}</Eyebrow>
+          {NAV_GROUP_TITLE[g.id] && <Eyebrow className="px-2.5 pb-1.5">{NAV_GROUP_TITLE[g.id]}</Eyebrow>}
           <div className="space-y-0.5">{g.items.map(row)}</div>
         </div>
       ))}
     </nav>
-  );
-}
-
-const LOG_FILTERS: { id: string; label: string }[] = [
-  { id: "all", label: "Все" }, { id: "FAIL", label: "Нарушения" }, { id: "PASS", label: "Без нарушений" }, { id: "UNMEASURED", label: "Нет данных" },
-];
-
-function LogsList({ state, itemId, onTrace }: { state: LabState; itemId: string | null; onTrace: (id: string) => void }) {
-  const d = state.discover!;
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("all");
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { all: d.results.length };
-    for (const r of d.results) c[r.status] = (c[r.status] ?? 0) + 1;
-    return c;
-  }, [d]);
-  const q = query.trim().toLowerCase();
-  const rows = d.results.filter(r => (filter === "all" || r.status === filter) && (!q || r.opening.toLowerCase().includes(q)));
-  return (
-    <>
-      <div className="space-y-2.5 px-3 pb-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-lab-dim" />
-          <input
-            value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск по первой реплике"
-            className="h-8 w-full rounded-lg border border-white/[0.08] bg-white/[0.04] pl-8 pr-2 text-[12px] text-lab-text outline-none placeholder:text-lab-faint focus:border-lab-accent/60 focus:ring-2 focus:ring-lab-accent/20"
-          />
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {LOG_FILTERS.filter(f => f.id === "all" || counts[f.id]).map(f => <Chip key={f.id} on={filter === f.id} onClick={() => setFilter(f.id)} count={counts[f.id]}>{f.label}</Chip>)}
-        </div>
-      </div>
-      <div className="min-h-0 flex-1 space-y-0.5 overflow-auto px-2 pb-2 sb">
-        {rows.map(r => {
-          const fail = r.rules.find(x => x.status === "FAIL");
-          const topic = d.topics.find(t => t.id === r.topicId)?.title ?? "";
-          return (
-            <ListItem key={r.dialogueId} selected={!!r.runId && r.runId === itemId} disabled={!r.runId} onClick={() => r.runId && onTrace(r.runId)}
-              lead={<Dot status={r.status} quiet />} title={r.opening} sub={fail?.title || `${LOG_TEXT[r.status] ?? ""} · ${topic}`} />
-          );
-        })}
-        {!rows.length && <div className="px-3 py-6 text-center text-[12px] text-lab-dim">Ничего не нашлось</div>}
-      </div>
-    </>
   );
 }
 
@@ -124,7 +79,7 @@ function RunList({ state, run, itemId, go }: { state: LabState; run: LabRun; ite
           const active = own.includes(current);
           return (
             <div key={id} className={cn("rounded-lg border px-2.5 py-2 transition-colors", active ? "border-white/[0.12] bg-white/[0.06]" : "border-transparent")}>
-              <button className="flex w-full items-center gap-2.5 text-left focus-visible:outline-none" onClick={() => go("runs", itemKey(own[0]))}>
+              <button className="flex w-full items-center gap-2.5 text-left focus-visible:outline-none" onClick={() => go("dialogs", itemKey(own[0]))}>
                 <Dot status={status} pulse={status === "RUNNING"} quiet />
                 <span className="min-w-0 flex-1 truncate text-[13px] text-lab-text" title={name}>{name}</span>
               </button>
@@ -137,7 +92,7 @@ function RunList({ state, run, itemId, go }: { state: LabState; run: LabRun; ite
                     const Icon = personaLook(i.persona).icon;
                     return (
                       <button
-                        key={itemKey(i)} onClick={() => go("runs", itemKey(i))}
+                        key={itemKey(i)} onClick={() => go("dialogs", itemKey(i))}
                         title={`${personaName(state.personas, i.persona)}${i.attempt && i.attempt > 1 ? ` · повтор ${i.attempt}` : ""}: ${STATUS_TEXT[i.status]}`}
                         className={cn("inline-flex h-6 min-w-[28px] items-center justify-center gap-1 rounded-md px-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50", quiet ? "text-lab-dim" : h.text, on ? cn(quiet ? "bg-white/[0.12]" : h.bgStrong, "ring-1 ring-current") : cn(quiet ? "bg-white/[0.04] hover:bg-white/[0.09]" : h.bg, !quiet && "hover:brightness-125"))}
                       >
@@ -167,17 +122,16 @@ function CardsList({ state, itemId, go }: { state: LabState; itemId: string | nu
   );
 }
 
-const LIST_TITLE: Partial<Record<Step, string>> = { runs: "Сценарии проверки", checks: "Сценарии", logs: "Разговоры из логов" };
+const LIST_TITLE: Partial<Record<Step, string>> = { dialogs: "Сценарии проверки", checks: "Сценарии" };
 
 /** The left column: the sections, and the list that belongs to the one you are in. */
-export function Rail({ state, offline, step, itemId, run, go, nav, onTrace, onPalette }: {
+export function Rail({ state, offline, step, itemId, run, go, nav, onPalette }: {
   state: LabState | null; offline: boolean; step: Step; itemId: string | null; run: LabRun | null; go: Go; nav: NavItem[];
-  onTrace: (id: string) => void; onPalette: () => void;
+  onPalette: () => void;
 }) {
-  const showLogs = step === "logs" && !!state?.discover;
-  const showRun = step === "runs" && !!state && !!run?.items;
+  const showRun = step === "dialogs" && !!itemId && !!state && !!run?.items?.some(i => itemKey(i) === itemId);
   const showCards = step === "checks" && !!itemId && !!state?.cards;
-  const hasList = showLogs || showRun || showCards;
+  const hasList = showRun || showCards;
   return (
     <aside className="flex w-[268px] flex-shrink-0 flex-col border-r border-white/[0.06]">
       <div className="px-4 pb-3 pt-3">
@@ -204,7 +158,6 @@ export function Rail({ state, offline, step, itemId, run, go, nav, onTrace, onPa
       {hasList && (
         <div className="flex min-h-0 flex-1 flex-col border-t border-white/[0.06] pt-3">
           <Eyebrow className="px-4 pb-2">{LIST_TITLE[step]}</Eyebrow>
-          {showLogs && <LogsList state={state!} itemId={itemId} onTrace={onTrace} />}
           {showRun && <RunList state={state!} run={run!} itemId={itemId} go={go} />}
           {showCards && <CardsList state={state!} itemId={itemId} go={go} />}
         </div>

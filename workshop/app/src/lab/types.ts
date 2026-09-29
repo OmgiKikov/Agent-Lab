@@ -20,7 +20,7 @@ export type LabRun = {
   id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string;
   metric: Metric | null; error: string | null; repeats?: number; items?: Item[];
 };
-export type Criterion = { id: string; text: string; quote: string; condition?: string; acceptable?: string };
+export type Criterion = { id: string; text: string; quote: string; condition?: string; acceptable?: string; sourceId?: string };
 export type World = {
   organization: { name: string; inn: string; merchantName: string; address: string };
   terminals: { nameForClient: string; terminalId: string; stateCode: string }[];
@@ -64,4 +64,4 @@ export type LabState = {
   targets: Target[];
   personas: Persona[];
 };
-export type Step = "health" | "findings" | "trust" | "checks" | "versions" | "runs" | "agent" | "logs";
+export type Step = "criteria" | "dialogs" | "judge" | "checks" | "agent" | "logs";
