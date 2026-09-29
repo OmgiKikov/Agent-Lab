@@ -49,6 +49,7 @@ Workshop, поднимает модели и Agent Lab. Нужны [uv](https://
     bridge/       мост OpenAI → Pi для OpenRouter
     workshop/     Workshop: сервер и интерфейс, наш форк Raindrop Workshop (MIT), раздел agent lab
     docs/demo.md  шпаргалка к демо
+    docs/DESIGN.md  как выглядит и говорит интерфейс: парадигма, словарь, экраны, токены — читать перед правками фронтенда
 
 Данные — логи, карточки, прогоны, настройки, адреса — лежат в `data/`, сертификаты в `certs/`;
 в репозиторий они не попадают. Трейсы Workshop — в `~/.raindrop/`.
