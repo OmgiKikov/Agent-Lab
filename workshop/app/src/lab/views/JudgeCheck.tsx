@@ -8,6 +8,8 @@ import { Badge, Button, Eyebrow, Panel, PersonaTag } from "../ui";
 import { Conversation } from "./RunView";
 
 type Decision = "agree" | "disagree";
+/** Below this many answers a percentage says nothing, so it is not shown. */
+const MIN_CHECKED = 10;
 
 /**
  * Calibrating the judge: a person goes through the verdicts one by one and says whether the judge is right.
@@ -58,7 +60,7 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
   });
 
   if (!queue.length) return <div className="flex h-full items-center justify-center text-[13px] text-lab-dim">В прогоне нет оценённых разговоров</div>;
-  const share = reviewed.length ? pct(agree, reviewed.length) : null;
+  const share = reviewed.length >= MIN_CHECKED ? pct(agree, reviewed.length) : null;
   const decision = decisionOf(index);
 
   return (
@@ -68,12 +70,14 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[14px] font-medium text-lab-ink"><ShieldCheck className="size-4 text-lab-mute" />Прав ли судья?</div>
             <div className="mt-0.5 text-[11px] leading-snug text-lab-dim">
-              Прочитайте разговор и вердикт. Сначала идут спорные, где второй судья не согласен, потом провалы. Точности агента можно верить настолько, насколько прав судья.
+              Прочитайте разговор и вердикт. Сначала идут спорные, где второй судья не согласен, потом провалы. Первыми идут трудные случаи, поэтому цифра строже, чем на всех разговорах. Точности агента можно верить настолько, насколько прав судья.
             </div>
           </div>
           <div className="text-right">
             <div className="text-[22px] font-medium leading-none text-lab-ink" style={{ fontFamily: '"AlphaLyrae", sans-serif' }}>{share === null ? "—" : `${share}%`}</div>
-            <div className="mt-1 text-[11px] text-lab-dim">судья прав · проверено {reviewed.length} из {queue.length}</div>
+            <div className="mt-1 text-[11px] text-lab-dim">
+              {share === null ? `нужно ещё ${MIN_CHECKED - reviewed.length}: пока мало данных` : `судья прав · проверено ${reviewed.length} из ${queue.length}`}
+            </div>
           </div>
         </div>
         <div className="mx-auto mt-3 flex max-w-[880px] gap-[2px]">

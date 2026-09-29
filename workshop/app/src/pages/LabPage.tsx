@@ -6,10 +6,11 @@
  * every conversation is a native Workshop trace, shown here with RunDetail.
  * The screens live in ../lab: this page only routes between them.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { RunDetail } from "../components/RunDetail";
+import { CommandPalette } from "../lab/CommandPalette";
 import { Rail } from "../lab/Rail";
 import { STEPS } from "../lab/steps";
 import { ToastProvider } from "../lab/toast";
@@ -33,6 +34,13 @@ export function LabPage() {
   const [target, setTargetState] = useState(readTarget);
   const setTarget = (t: string) => { setTargetState(t); try { localStorage.setItem("lab.target", t); } catch { /* ignore */ } };
 
+  const [palette, setPalette] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.code === "KeyK") { e.preventDefault(); setPalette(o => !o); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const go = (s: Step, item?: string | null) => navigate(item ? `/lab/${s}/${encodeURIComponent(item)}` : `/lab/${s}`);
   const card = step === "cards" && itemId ? state?.cards?.cards.find(c => c.id === itemId) : undefined;
   const traceId = step === "logs" && itemId ? itemId : null;
@@ -40,7 +48,8 @@ export function LabPage() {
   return (
     <ToastProvider>
       <div className="flex h-full">
-        <Rail state={state} offline={offline} step={step} itemId={itemId} run={run} go={go} onPickRun={pickRun} />
+        <Rail state={state} offline={offline} step={step} itemId={itemId} run={run} go={go} onPickRun={pickRun} onPalette={() => setPalette(true)} />
+        <CommandPalette open={palette} onClose={() => setPalette(false)} state={state} go={go} onPickRun={pickRun} onJudge={() => navigate("/lab/run?view=judge")} />
 
         <main className="sb relative min-w-0 flex-1 overflow-auto">
           {!offline && !state && (

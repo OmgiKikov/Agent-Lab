@@ -216,8 +216,8 @@ function CardsList({ state, itemId, go }: { state: LabState; itemId: string | nu
 const LIST_TITLE: Record<Step, string> = { agent: "", logs: "Разговоры из логов", cards: "Сценарии", run: "Сценарии прогона", accuracy: "Прогоны" };
 
 /** The left column: where you are, what is next, and the list that belongs to the current step. */
-export function Rail({ state, offline, step, itemId, run, go, onPickRun }: {
-  state: LabState | null; offline: boolean; step: Step; itemId: string | null; run: LabRun | null; go: Go; onPickRun: (id: string) => void;
+export function Rail({ state, offline, step, itemId, run, go, onPickRun, onPalette }: {
+  state: LabState | null; offline: boolean; step: Step; itemId: string | null; run: LabRun | null; go: Go; onPickRun: (id: string) => void; onPalette: () => void;
 }) {
   const showLogs = step === "logs" && state?.discover;
   const showRun = step === "run" && state && run?.items;
@@ -236,6 +236,15 @@ export function Rail({ state, offline, step, itemId, run, go, onPickRun }: {
         </div>
         <div className="mt-2.5 text-[14px] font-medium leading-tight text-lab-ink">{AGENT_TITLE}</div>
         <div className="mt-0.5 text-[11px] text-lab-dim">{AGENT_SUBTITLE}</div>
+      </div>
+      <div className="px-3 pb-3">
+        <button
+          onClick={onPalette}
+          className="flex h-8 w-full items-center gap-2 rounded-md border border-white/[0.08] bg-white/[0.03] px-2.5 text-left text-[12px] text-lab-dim transition-colors hover:border-white/[0.16] hover:text-lab-mute focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50"
+        >
+          <Search className="size-3.5" />Быстрый переход
+          <kbd className="ml-auto rounded border border-white/15 px-1 font-mono text-[10px] leading-4">⌘K</kbd>
+        </button>
       </div>
       <Stepper state={state} step={step} go={go} />
       {hasList && (

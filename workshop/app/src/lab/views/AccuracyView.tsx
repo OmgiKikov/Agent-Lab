@@ -11,7 +11,7 @@ import { HUE, type Hue } from "../look";
 import { download, report } from "../report";
 import type { Item, LabRun, LabState } from "../types";
 import { useRunDetails } from "../useLab";
-import { Badge, Button, Delta, Eyebrow, Page, Panel, Section, StackBar, titleFont } from "../ui";
+import { Button, Delta, EmptyState, Eyebrow, Page, Panel, Section, Skeleton, StackBar, titleFont } from "../ui";
 
 function Trust({ icon: Icon, label, value, sub, ok, action }: { icon: LucideIcon; label: string; value: string; sub?: string; ok?: boolean; action?: React.ReactNode }) {
   const hue: Hue = ok === undefined ? "mute" : ok ? "ok" : "warn";
@@ -107,7 +107,17 @@ export function AccuracyView({ state, run: selected, onPickRun, onOpen, onCheckJ
   const details = useRunDetails([...(head ? [head] : []), ...(previous ? [previous] : []), ...recent]);
   const finished: LabRun | null = head ? (head.items ? head : details(head)) : null;
   if (!finished?.metric || !finished.metric.total) {
-    return <Page title="точность агента" lede={history.length ? "Загружаю прогон…" : "Сначала прогоните сценарии на агенте: точность считается по результатам прогонов."} />;
+    return (
+      <Page wide title="точность агента" lede={history.length ? "Загружаю прогон…" : "Точность считается по результатам прогонов."}>
+        {history.length > 0 ? (
+          <div className="mt-5 grid gap-4 min-[1100px]:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+            <Skeleton className="h-[250px]" /><Skeleton className="h-[250px]" /><Skeleton className="h-[300px] min-[1100px]:col-span-2" />
+          </div>
+        ) : (
+          <EmptyState className="mt-5" drop title="Точности пока нет">Запустите прогон на шаге «прогон»: по его результатам появится число, причины провалов и матрица.</EmptyState>
+        )}
+      </Page>
+    );
   }
   const m = finished.metric;
   const items = finished.items ?? [];
@@ -197,6 +207,19 @@ export function AccuracyView({ state, run: selected, onPickRun, onOpen, onCheckJ
             <Trust icon={UserCheck} label="Проверка человеком" ok={m.human ? m.human.agree / m.human.reviewed >= 0.8 : undefined}
               value={m.human ? `Проверено ${m.human.reviewed}, судья прав в ${m.human.agree}` : "Не проводилась"} sub={m.human ? undefined : "Без неё неизвестно, насколько прав судья"}
               action={<Button size="sm" onClick={() => onCheckJudge(finished.id)}>{m.human ? "Продолжить" : "Проверить судью"}</Button>} />
+          </Panel>
+
+          <div className="mb-2.5 mt-5">
+            <div className="text-[14px] font-medium text-lab-text">Кто оценивал</div>
+            <div className="mt-0.5 text-[11px] text-lab-dim">Модели этой проверки, через {state.models.via}</div>
+          </div>
+          <Panel className="divide-y divide-white/[0.06]">
+            {([["Судья", state.models.main], ["Второй судья", state.models.second], ["Клиент-симулятор", state.models.main]] as const).map(([role, model]) => (
+              <div key={role} className="flex items-center justify-between gap-3 px-4 py-2.5 text-[12px]">
+                <span className="text-lab-mute">{role}</span>
+                <span className="rounded bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-lab-soft">{model ?? "из каталога"}</span>
+              </div>
+            ))}
           </Panel>
         </div>
       </div>

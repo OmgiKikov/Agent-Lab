@@ -119,7 +119,7 @@ export function Conversation({ item, state }: { item: Item; state: LabState }) {
   const h = HUE[statusHue(item.status)];
   const second = item.second && ["PASS", "FAIL", "UNMEASURED"].includes(item.second.status) ? item.second : null;
   return (
-    <div className="mx-auto flex max-w-[880px] flex-col gap-7 px-6 py-6">
+    <div className="message-arrive mx-auto flex max-w-[880px] flex-col gap-7 px-6 py-6">
       <div className={cn("flex gap-4 rounded-lg border p-4", h.bg, h.border)}>
         <StatusMark status={item.status} size={30} />
         <div className="min-w-0">

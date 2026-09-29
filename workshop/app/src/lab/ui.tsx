@@ -266,6 +266,11 @@ export function Delta({ value, unit = "п. п.", className }: { value: number; u
 
 /* ---------- content ---------- */
 
+/** Placeholder of a block that is still loading. */
+export function Skeleton({ className }: { className?: string }) {
+  return <div className={cn("animate-pulse rounded-lg bg-white/[0.05]", className)} />;
+}
+
 export function Stat({ label, value, sub, hue, className }: { label: string; value: ReactNode; sub?: ReactNode; hue?: Hue; className?: string }) {
   return (
     <Panel className={cn("px-4 py-3", className)}>
