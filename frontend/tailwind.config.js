@@ -11,8 +11,22 @@ export default {
       },
       colors: {
         lab: Object.fromEntries(
-          ["bg", "surface", "raised", "ink", "text", "soft", "mute", "dim", "faint", "user", "accent", "ok", "bad", "warn"]
-            .map(name => [name, `rgb(var(--lab-${name}) / <alpha-value>)`]),
+          [
+            "bg",
+            "surface",
+            "raised",
+            "ink",
+            "text",
+            "soft",
+            "mute",
+            "dim",
+            "faint",
+            "user",
+            "accent",
+            "ok",
+            "bad",
+            "warn",
+          ].map((name) => [name, `rgb(var(--lab-${name}) / <alpha-value>)`]),
         ),
       },
     },

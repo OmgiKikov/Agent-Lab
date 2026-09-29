@@ -21,21 +21,28 @@ function refresh() {
 }
 
 export async function post<T>(path: string, body?: unknown): Promise<T> {
-  const result = await read<T>(await fetch(API + path, {
-    method: "POST",
-    ...(body === undefined ? {} : {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+  const result = await read<T>(
+    await fetch(API + path, {
+      method: "POST",
+      ...(body === undefined
+        ? {}
+        : {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }),
     }),
-  }));
+  );
   refresh();
   return result;
 }
 
 export async function upload<T>(path: string, file: File): Promise<T> {
-  const result = await read<T>(await fetch(`${API}${path}?name=${encodeURIComponent(file.name)}`, {
-    method: "POST", body: file,
-  }));
+  const result = await read<T>(
+    await fetch(`${API}${path}?name=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      body: file,
+    }),
+  );
   refresh();
   return result;
 }

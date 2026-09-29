@@ -66,12 +66,7 @@ interface DropPixelGridProps {
   className?: string;
 }
 
-export function DropPixelGrid({
-  px = 3,
-  gap = 2,
-  fillRgb = "200,210,220",
-  className,
-}: DropPixelGridProps = {}) {
+export function DropPixelGrid({ px = 3, gap = 2, fillRgb = "200,210,220", className }: DropPixelGridProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef(0);
 
@@ -136,10 +131,7 @@ export function DropPixelGrid({
         const { p1, s1, p2, s2, drift } = seeds[i];
         const inShape = DROP_MASK[i] === 1;
 
-        const noise =
-          Math.sin(t * s1 + p1) * 0.4 +
-          Math.sin(t * s2 + p2) * 0.3 +
-          0.3;
+        const noise = Math.sin(t * s1 + p1) * 0.4 + Math.sin(t * s2 + p2) * 0.3 + 0.3;
 
         const rain = rainMap[i];
 
@@ -166,20 +158,19 @@ export function DropPixelGrid({
     return () => cancelAnimationFrame(rafRef.current);
   }, [px, gap, fillRgb]);
 
-  return (
-    <canvas
-      ref={canvasRef}
-      className={className}
-      aria-label="Raindrop"
-    />
-  );
+  return <canvas ref={canvasRef} className={className} aria-label="Raindrop" />;
 }
 
 function isEdge(idx: number): boolean {
   const c = idx % DROP_S;
   const r = (idx - c) / DROP_S;
   if (DROP_MASK[idx] !== 1) return false;
-  for (const [dc, dr] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+  for (const [dc, dr] of [
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1],
+  ] as const) {
     const nc = c + dc;
     const nr = r + dr;
     if (nc < 0 || nc >= DROP_S || nr < 0 || nr >= DROP_S) return true;

@@ -20,13 +20,18 @@ export function JobLine({ state, kind, bare }: { state: LabState; kind: string; 
         {total > 0 && (
           <span className="flex items-center gap-2">
             {!bare && <Progress value={(100 * done) / total} className="w-16 rounded-full" />}
-            <span className="font-mono text-[11px] text-lab-dim">{done}/{total}</span>
+            <span className="font-mono text-[11px] text-lab-dim">
+              {done}/{total}
+            </span>
           </span>
         )}
         <button
           onClick={() => post("/api/job/stop").catch(error)}
           className="inline-flex h-6 items-center gap-1 rounded-md bg-white/[0.07] px-2 text-[11px] text-lab-soft transition-colors hover:bg-white/[0.13]"
-        ><Square className="size-2.5 fill-current" />Остановить</button>
+        >
+          <Square className="size-2.5 fill-current" />
+          Остановить
+        </button>
       </span>
     );
   }
@@ -35,7 +40,13 @@ export function JobLine({ state, kind, bare }: { state: LabState; kind: string; 
     return (
       <span className={`inline-flex items-center gap-2 text-[11px] ${stopped ? "text-lab-dim" : "text-lab-bad"}`}>
         {stopped ? "Остановлено" : `Ошибка: ${j.error}`}
-        <button onClick={() => setDismissed(endKey)} aria-label="Скрыть" className="rounded p-0.5 text-lab-dim transition-colors hover:bg-white/10 hover:text-lab-text"><X className="size-3" /></button>
+        <button
+          onClick={() => setDismissed(endKey)}
+          aria-label="Скрыть"
+          className="rounded p-0.5 text-lab-dim transition-colors hover:bg-white/10 hover:text-lab-text"
+        >
+          <X className="size-3" />
+        </button>
       </span>
     );
   }

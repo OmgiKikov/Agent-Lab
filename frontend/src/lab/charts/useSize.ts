@@ -8,7 +8,7 @@ export function useSize<T extends HTMLElement>() {
     const el = ref.current;
     if (!el) return;
     setSize({ width: el.clientWidth, height: el.clientHeight });
-    const observer = new ResizeObserver(entries => {
+    const observer = new ResizeObserver((entries) => {
       const box = entries[0].contentRect;
       setSize({ width: Math.round(box.width), height: Math.round(box.height) });
     });

@@ -24,11 +24,15 @@
 
 @font-face {
   font-family: "AlphaLyrae";
-  src: local("AlphaLyrae-Medium"), url("./assets/fonts/AlphaLyrae-Medium.ttf") format("truetype");
+  src:
+    local("AlphaLyrae-Medium"),
+    url("./assets/fonts/AlphaLyrae-Medium.ttf") format("truetype");
   font-display: swap;
 }
 
-html { color-scheme: dark; }
+html {
+  color-scheme: dark;
+}
 body {
   background: rgb(var(--lab-bg));
   color: rgb(var(--lab-dim));
@@ -36,22 +40,60 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.3} }
-@keyframes message-arrive {
-  from { opacity: 0; transform: translateY(3px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
-.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
-.message-arrive { animation: message-arrive 140ms ease-out both; }
+@keyframes message-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+.message-arrive {
+  animation: message-arrive 140ms ease-out both;
+}
 @media (prefers-reduced-motion: reduce) {
-  .message-arrive, .pulse-dot { animation: none; }
+  .message-arrive,
+  .pulse-dot {
+    animation: none;
+  }
 }
 
 /* Thin scrollbars leave room for the conversations. */
-* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.08) transparent; }
-*::-webkit-scrollbar { width: 4px; height: 4px; }
-*::-webkit-scrollbar-track { background: transparent; }
-*::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 2px; }
-*::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.14); }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+}
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
 
-pre { white-space: pre-wrap; word-break: break-word; font-family: 'Space Mono', monospace; }
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Space Mono", monospace;
+}
