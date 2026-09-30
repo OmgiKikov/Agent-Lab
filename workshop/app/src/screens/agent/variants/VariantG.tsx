@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ArrowRight, Check, Clock, Database, FileText, Globe, Search, X } from "lucide-react";
-import { plural } from "../../../lab/format";
+import { ArrowRight, Check, ChevronDown, Clock, Database, FileText, Globe, RotateCcw, Search, X } from "lucide-react";
+import { plural, thousands } from "../../../lab/format";
 import { useSource, type RuleEntry } from "../../../lab/problems";
 import type { Source } from "../../../lab/types";
 import { cn } from "@/lib/utils";
@@ -40,26 +40,6 @@ function Mark({ n, on, size = 20 }: { n: number; on?: boolean; size?: number }) 
   return (
     <span style={{ width: size, height: size }} className={cn("inline-flex flex-shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold tabular-nums",
       on ? "border-[rgba(232,145,45,0.9)] bg-[rgb(92,62,30)] text-[rgb(255,222,184)]" : "border-[rgba(232,145,45,0.44)] bg-[rgb(60,44,32)] text-[rgb(255,212,163)]")}>{n}</span>
-  );
-}
-
-/** A few lines of a prompt with the criteria marked where they are written. */
-function PromptExcerpt({ source, marks, chars = 900, className }: { source: Source; marks: { quote: string; n: number }[]; chars?: number; className?: string }) {
-  const { data } = useSource(source.id);
-  if (!data) return <Skeleton className="h-40" />;
-  const clean = data.content.replace(/\*\*/g, "").replace(/^#{2,}\s*/gm, "");
-  const found = marks.map(m => ({ ...m, at: clean.indexOf(m.quote.replace(/\*\*/g, "").slice(0, 30)) })).filter(m => m.at >= 0).sort((a, b) => a.at - b.at);
-  const start = Math.max(0, (found[0]?.at ?? 0) - 160);
-  const text = clean.slice(start, start + chars);
-  const pieces = segments(text, marks.map(m => ({ quote: m.quote.replace(/\*\*/g, ""), n: m.n })));
-  return (
-    <div className={cn("whitespace-pre-line text-[12px] leading-[20px] text-lab-mute", className)}>
-      {start > 0 && "…"}
-      {pieces.map((p, i) => p.n
-        ? <span key={i}><mark className="rounded-[2px] bg-[rgba(232,145,45,0.17)] px-0.5 text-lab-text">{p.text}</mark><span className="ml-1 inline-block translate-y-[-1px] align-middle"><Mark n={p.n} size={18} /></span></span>
-        : <span key={i}>{p.text}</span>)}
-      …
-    </div>
   );
 }
 
@@ -153,6 +133,104 @@ function Inspector({ c, source, marksOf, onClose, onPrompt }: { c: Crit; source?
   );
 }
 
+// ─── Parts of the agent: cards and a floating inspector ─────────────────────
+
+type Tool = { name: string; env: string; where: string[] };
+type Part = { id: string; kind: "prompt" | "tool"; source?: Source; tool?: Tool; ns: number[] };
+type PartFilter = null | "prompt" | "tool" | "rules";
+
+/** The prompt's first real sentence, as a person would describe it: no headings, no markdown. */
+function firstSentence(content: string) {
+  const line = content.replace(/\*\*/g, "").split("\n").map(l => l.trim()).find(l => l && !/^#{1,}\s/.test(l) && /[А-Яа-яA-Za-z]{3}/.test(l)) ?? "";
+  const cut = line.search(/[.!?](\s|$)/);
+  return cut > 20 ? line.slice(0, cut + 1) : line;
+}
+
+/** Criteria numbers overlapping like a stack of avatars: which rules come from this part. */
+function MarkStack({ ns, max = 4 }: { ns: number[]; max?: number }) {
+  if (!ns.length) return <span className="text-[11px] text-lab-faint">без критериев</span>;
+  return (
+    <span className="flex items-center">
+      {ns.slice(0, max).map((n, i) => <span key={n} className={cn("rounded-full ring-2 ring-[rgb(35,35,35)]", i > 0 && "-ml-1.5")}><Mark n={n} /></span>)}
+      {ns.length > max && <span className="ml-1 text-[11px] text-[rgb(255,196,130)]">+{ns.length - max}</span>}
+    </span>
+  );
+}
+
+function PartCard({ x, on, onOpen }: { x: Part; on: boolean; onOpen: () => void }) {
+  const { data } = useSource(x.source?.id);
+  const f = x.source ? fileOf(x.source) : null;
+  return (
+    <button type="button" onClick={onOpen}
+      className={cn("group relative flex min-h-[150px] flex-col rounded-[10px] border bg-[rgb(35,35,35)] p-4 text-left transition-[border-color,transform,box-shadow]",
+        on ? "border-[rgba(232,145,45,0.55)] shadow-[0_0_0_3px_rgba(232,145,45,0.12)]" : "border-white/[0.08] hover:-translate-y-px hover:border-white/[0.18]")}>
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">{x.kind === "prompt" ? <Pill icon={FileText}>Промпт</Pill> : <Pill icon={Database}>Система банка</Pill>}</div>
+        <MarkStack ns={x.ns} />
+      </div>
+      <div className="mt-3 truncate font-mono text-[13px] text-lab-ink">
+        {x.kind === "prompt" && f ? <>{f.file.replace(/\.py$/, "")}<span className="text-lab-faint">.py</span></> : x.tool?.name}
+      </div>
+      <p className="mt-1 line-clamp-2 text-[12px] leading-[18px] text-lab-dim">
+        {x.kind === "prompt" ? (data ? firstSentence(data.content) : "…") : x.tool?.where.length ? `Вызывается в ${x.tool.where.join(", ")}` : x.tool?.env}
+      </p>
+      <div className="mt-auto flex items-center gap-2 pt-3 text-[11.5px] text-lab-dim">
+        {x.kind === "prompt" && x.source ? <>{thousands(x.source.chars)}{f?.line && <span className="text-lab-faint">· строка {f.line}</span>}</> : <span className="truncate font-mono text-[10.5px] text-lab-faint">{x.tool?.env}</span>}
+      </div>
+    </button>
+  );
+}
+
+function PartInspector({ x, crits, marks, onClose, onCriterion }: { x: Part; crits: Crit[]; marks: { quote: string; n: number }[]; onClose: () => void; onCriterion: (id: string) => void }) {
+  const { data, isLoading } = useSource(x.source?.id);
+  const mine = crits.filter(c => x.ns.includes(c.n));
+  const f = x.source ? fileOf(x.source) : null;
+  const clean = data ? data.content.replace(/\*\*/g, "") : "";
+  const pieces = data ? segments(clean, marks.map(m => ({ quote: m.quote.replace(/\*\*/g, ""), n: m.n }))) : [];
+  return (
+    <aside className={cn("absolute bottom-3 right-3 top-3 z-30 flex w-[520px] flex-col overflow-hidden rounded-[14px] bg-[rgb(29,29,29)]", DEEP, "animate-in fade-in-0 slide-in-from-right-4")}>
+      <div className="flex items-center gap-2 border-b border-white/[0.08] px-4 py-2.5">
+        {x.kind === "prompt" ? <Pill icon={FileText}>Промпт</Pill> : <Pill icon={Database}>Система банка</Pill>}
+        <button type="button" onClick={onClose} aria-label="Закрыть" className="ml-auto rounded-md p-1 text-lab-dim hover:bg-white/[0.08] hover:text-lab-text"><X className="size-4" /></button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto px-5 pb-8 pt-4">
+        <h2 className="break-all font-mono text-[16px] leading-[22px] text-lab-ink">{x.kind === "prompt" ? f?.file : x.tool?.name}</h2>
+        <p className="mt-1 break-all font-mono text-[11px] text-lab-dim">{x.kind === "prompt" ? x.source?.origin : x.tool?.env}</p>
+        <div className="mt-5 text-[11px] text-lab-dim">{mine.length ? `Критерии отсюда · ${mine.length}` : "Критериев отсюда нет"}</div>
+        {mine.length > 0 && (
+          <div className="mt-2 overflow-hidden rounded-[10px] border border-white/[0.08]">
+            {mine.map(c => (
+              <button key={c.r.id} type="button" onClick={() => onCriterion(c.r.id)} className="flex w-full items-center gap-2.5 border-b border-white/[0.06] bg-[rgb(35,35,35)] px-3 py-2 text-left last:border-b-0 hover:bg-[rgb(40,40,40)]">
+                <Mark n={c.n} /><span className="min-w-0 flex-1 truncate text-[12.5px] text-lab-text">{nameOf(c.r)}</span><ArrowRight className="size-3 text-lab-faint" />
+              </button>
+            ))}
+          </div>
+        )}
+        {x.kind === "tool" && x.tool && (
+          <>
+            <div className="mt-5 text-[11px] text-lab-dim">Где вызывается</div>
+            <div className="mt-2 flex flex-wrap gap-1.5">{x.tool.where.map(w => <Pill key={w} mono className="rounded-md">{w}</Pill>)}</div>
+          </>
+        )}
+        {x.kind === "prompt" && (
+          <>
+            <div className="mt-6 text-[11px] text-lab-dim">Текст промпта</div>
+            <div className="mt-2 rounded-[12px] border border-white/[0.08] bg-[rgb(33,33,33)] px-4 py-3.5">
+              {isLoading || !data ? <Skeleton className="h-64" /> : (
+                <div className="whitespace-pre-wrap text-[12.5px] leading-[20px] text-lab-mute">
+                  {pieces.map((p, i) => p.n
+                    ? <span key={i}><mark className="rounded-[2px] bg-[rgba(232,145,45,0.2)] px-0.5 text-lab-text">{p.text}</mark><span className="ml-1 inline-block translate-y-[-1px] align-middle"><Mark n={p.n} size={18} /></span></span>
+                    : <span key={i}>{p.text.split(/(^#{2,}\s.*$)/m).map((t, j) => /^#{2,}\s/.test(t) ? <span key={j} className="font-semibold text-lab-soft">{t.replace(/^#{2,}\s*/, "")}</span> : t)}</span>)}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 // ─── Page ───────────────────────────────────────────────────────────────────
 
 export function VariantG() {
@@ -173,17 +251,20 @@ export function VariantG() {
     return { crits: list.map((c, i) => ({ ...c, n: i + 1 })) as Crit[], topics };
   }, [a.rules]);
 
+  const [pid, setPid] = useParam("p");
+  const [partFilter, setPartFilter] = useState<PartFilter>(null);
   if (!a.state) return <div className="p-6"><Skeleton className="h-64" /></div>;
   const criteria = tab === "criteria";
+  const parts: Part[] = [
+    ...a.prompts.map(s => ({ id: s.id, kind: "prompt" as const, source: s, ns: crits.filter(c => c.r.rule.sourceId === s.id).map(c => c.n) })),
+    ...a.tools.map(t => ({ id: `tool:${t.name}`, kind: "tool" as const, tool: t, ns: crits.filter(c => `${c.r.rule.text} ${c.r.rule.acceptable}`.includes(t.name)).map(c => c.n) })),
+  ];
+  const part = parts.find(x => x.id === pid) ?? null;
   const chosen = crits.find(c => c.r.id === rid) ?? null;
   const q = query.trim().toLowerCase();
   const shown = crits.filter(c => (!filter || (filter === "every" ? c.every : !c.every && c.r.topics.includes(filter))) && (!q || `${nameOf(c.r)} ${c.r.rule.text}`.toLowerCase().includes(q)));
   const marksOf = (s: Source) => crits.filter(c => c.r.rule.sourceId === s.id).map(c => ({ quote: c.r.rule.quote, n: c.n }));
-  const top = a.prompts.find(s => s.rules > 0);
-  const byTopic = topics.map(t => ({ ...t, n: crits.filter(c => c.r.topics.includes(t.topic)).length }));
-  const maxN = Math.max(1, ...byTopic.map(t => t.n));
   const checked = !!memory.last;
-  const fromPrompts = new Set(crits.map(c => c.r.rule.sourceId).filter(Boolean)).size;
 
   return (
     <div className="flex h-full flex-col">
@@ -198,90 +279,49 @@ export function VariantG() {
       </header>
 
       {!criteria ? (
-        <div className="min-h-0 flex-1 overflow-auto">
-          <div className="relative mx-auto max-w-[1180px] px-8 pb-24 pt-10 xl:h-[720px]">
-            {/* Layer 1 — the prompt, as a stack of sheets, behind on the right */}
-            {top && (
-              <button type="button" onClick={() => setOpen(top)} className="group mb-6 block w-full text-left xl:absolute xl:right-8 xl:top-8 xl:mb-0 xl:w-[520px]">
-                <Stack depth={2}>
-                  <div className="rounded-[12px] border border-white/[0.09] bg-[rgb(31,31,31)] px-5 pb-5 pt-4 transition-colors group-hover:border-white/[0.16]">
-                    <div className="flex items-center gap-2 text-[11px] text-lab-dim">
-                      <FileText className="size-3" /><span className="font-mono text-lab-soft">{fileOf(top).file}</span>
-                      <span className="ml-auto">промпт 1 из {a.prompts.length}</span>
-                    </div>
-                    <PromptExcerpt source={top} marks={marksOf(top)} chars={760} className="mt-3 max-h-[300px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]" />
-                  </div>
-                </Stack>
-              </button>
-            )}
-
-            {/* Layer 2 — the agent */}
-            <div className={cn("relative z-10 rounded-[14px] bg-[rgb(35,35,35)] p-6 xl:w-[600px]", DEEP)}>
-              <div className="flex flex-wrap gap-1.5">
-                <button type="button" onClick={() => setConnecting(true)} title={checked ? "Отвечал при последней проверке" : "Ещё не проверялся"}>
-                  <Pill dot={checked ? "#74b98e" : "#8e969b"} className={checked ? "border-lab-ok/30 bg-lab-ok/[0.1] text-lab-ok" : undefined}>{a.way ?? "Не подключён"}</Pill>
-                </button>
-                <Pill icon={Globe}>СберБизнес</Pill>
-                <Pill>Чат поддержки</Pill>
-              </div>
-              <h1 className="mt-4 text-[26px] font-medium leading-[32px] tracking-[-0.6px] text-lab-ink">Агент эквайринга</h1>
-              <p className="mt-1.5 text-[13px] leading-[20px] text-lab-dim">Отвечает клиентам СберБизнеса про эквайринг: тарифы, терминалы, возвраты, зачисления.</p>
-              <div className="mt-5 grid grid-cols-3 overflow-hidden rounded-[6px] border border-white/[0.08]">
-                {[
-                  { label: "Промпты", value: a.prompts.length, go: () => top && setOpen(top) },
-                  { label: "Системы банка", value: a.tools.length },
-                  { label: "Критерии", value: crits.length, go: () => setTab("criteria") },
-                ].map((s, i) => (
-                  <button key={s.label} type="button" onClick={s.go} disabled={!s.go} className={cn("px-3 py-2 text-left enabled:hover:bg-white/[0.03]", i > 0 && "border-l border-white/[0.08]")}>
-                    <div className="text-[10px] text-lab-mute">{s.label}</div>
-                    <div className="text-[17px] font-semibold leading-[24px] text-lab-ink">{s.value}</div>
+        <div className="relative min-h-0 flex-1">
+          <div className="h-full overflow-auto">
+            <div className={cn("px-6 pb-16 pt-6 transition-[padding]", part ? "xl:pr-[548px]" : "")}>
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-[20px] font-medium tracking-[-0.4px] text-lab-ink">Из чего он сделан</h1>
+                <span className="text-[12px] text-lab-dim">промпты и системы банка, прочитанные из его кода</span>
+                <div className="ml-auto flex items-center gap-2">
+                  <button type="button" onClick={() => setConnecting(true)} title={checked ? "Отвечал при последней проверке" : "Ещё не проверялся"}
+                    className={cn("inline-flex h-8 items-center gap-2 rounded-lg border px-2.5 text-[12px] transition-colors", checked ? "border-lab-ok/30 bg-lab-ok/[0.08] text-lab-ok hover:border-lab-ok/50" : "border-white/[0.1] bg-white/[0.03] text-lab-soft hover:border-white/[0.2]")}>
+                    <span className={cn("size-1.5 rounded-full", checked ? "bg-lab-ok" : "bg-lab-dim")} />{a.way ?? "Не подключён"}<ChevronDown className="size-3.5 opacity-70" />
                   </button>
-                ))}
-              </div>
-              <div className="mt-5 text-[11px] text-lab-dim">Системы банка, которые он вызывает</div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {a.tools.map(t => <Pill key={t.name} mono icon={Database} className="rounded-md" title={t.env}>{t.name}</Pill>)}
-              </div>
-              <div className="mt-5 flex items-center gap-3 border-t border-white/[0.07] pt-4 text-[11px] text-lab-dim">
-                <button type="button" onClick={() => setConnecting(true)} className="text-lab-mute hover:text-lab-ink">Подключение</button>
-                <span className="text-lab-faint">·</span>
-                <button type="button" onClick={a.read} disabled={a.busy || !a.repo} className="text-lab-mute hover:text-lab-ink disabled:opacity-40">Прочитать код заново</button>
-                <span className="text-lab-faint">·</span>
-                <span className="truncate font-mono">{a.repo || "папка с кодом не указана"}</span>
-              </div>
-            </div>
-
-            {/* Layer 3 — the criteria, floating over the seam, like Raindrop's Slack card */}
-            <div className={cn("relative z-20 mt-6 overflow-hidden rounded-[12px] bg-[rgb(38,38,38)] xl:absolute xl:left-[590px] xl:top-[410px] xl:mt-0 xl:w-[440px]", DEEP)}>
-              <div className="flex gap-3 p-4">
-                <span className="w-[3px] flex-shrink-0 rounded-full bg-[rgb(232,145,45)]" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[15px] font-semibold text-[rgb(255,196,130)]">{crits.length} {plural(crits.length, "критерий", "критерия", "критериев")}</div>
-                  <div className="mt-0.5 text-[11px] text-lab-dim">из {fromPrompts} {plural(fromPrompts, "источника", "источников", "источников")} · {topics.length} {plural(topics.length, "тема", "темы", "тем")} разговоров</div>
-                  <div className="mt-3 space-y-1.5">
-                    {crits.slice(0, 3).map(c => (
-                      <button key={c.r.id} type="button" onClick={() => { setTab("criteria"); setRid(c.r.id); }} className="flex w-full items-center gap-2 text-left text-[12px] text-lab-text hover:text-lab-ink">
-                        <Mark n={c.n} size={18} /><span className="truncate">{nameOf(c.r)}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mt-3 rounded-[8px] border border-white/[0.08] px-3 pb-2 pt-2.5">
-                    <div className="flex items-center justify-between text-[10px] text-lab-mute"><span>Критерии по темам</span><span className="text-[rgb(255,196,130)]">больше всего: {shortTopic(byTopic.find(t => t.n === maxN)?.topic ?? "")} · {maxN}</span></div>
-                    <div className="mt-2 flex h-[54px] items-end gap-[6px]">
-                      {byTopic.map(t => (
-                        <span key={t.topic} title={`${t.topic}: ${t.n}`} className="flex-1 rounded-[2px]"
-                          style={{ height: `${Math.max(8, (100 * t.n) / maxN)}%`, background: t.n === maxN ? "rgba(249,115,22,0.8)" : "rgba(255,255,255,0.16)" }} />
-                      ))}
-                    </div>
-                  </div>
-                  <button type="button" onClick={() => setTab("criteria")}
-                    className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-[rgb(96,190,160)] px-3 text-[12px] font-medium text-black hover:bg-[rgb(112,204,174)]">
-                    Открыть критерии<ArrowRight className="size-3.5" />
+                  <button type="button" onClick={a.read} disabled={a.busy || !a.repo} title={a.repo}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 text-[12px] text-lab-soft transition-colors hover:border-white/[0.2] hover:text-lab-ink disabled:opacity-40">
+                    <RotateCcw className="size-3.5" />Прочитать код заново
                   </button>
                 </div>
               </div>
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                {[
+                  { key: null as PartFilter, label: "Всё", n: parts.length },
+                  { key: "prompt" as PartFilter, label: "Промпты", n: a.prompts.length, icon: FileText },
+                  { key: "tool" as PartFilter, label: "Системы банка", n: a.tools.length, icon: Database },
+                  { key: "rules" as PartFilter, label: "С критериями", n: parts.filter(x => x.ns.length).length, mark: true },
+                ].map(o => {
+                  const on = partFilter === o.key;
+                  return (
+                    <button key={o.label} type="button" onClick={() => setPartFilter(on ? null : o.key)}
+                      className={cn("inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12px] transition-colors", on ? "border-white/[0.3] bg-white/[0.1] text-lab-ink" : "border-white/[0.08] text-lab-mute hover:border-white/[0.16] hover:text-lab-text")}>
+                      {o.icon && <o.icon className="size-3" />}
+                      {o.mark && <span className="size-1.5 rounded-full bg-[rgb(232,145,45)]" />}
+                      {o.label}<span className="text-lab-dim">{o.n}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-5 grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+                {parts.filter(x => !partFilter || (partFilter === "rules" ? x.ns.length > 0 : x.kind === partFilter)).map(x => (
+                  <PartCard key={x.id} x={x} on={x.id === pid} onOpen={() => setPid(x.id === pid ? null : x.id)} />
+                ))}
+              </div>
             </div>
           </div>
+          {part && <PartInspector key={part.id} x={part} crits={crits} marks={part.source ? marksOf(part.source) : []} onClose={() => setPid(null)} onCriterion={id => { setPid(null); setTab("criteria"); setRid(id); }} />}
         </div>
       ) : (
         <div className="relative min-h-0 flex-1">
@@ -297,7 +337,7 @@ export function VariantG() {
               </div>
               <div className="mt-4 flex flex-wrap gap-1.5">
                 {[{ key: null as string | null, label: "Все", n: crits.length }, { key: "every", label: EVERY, n: crits.filter(c => c.every).length },
-                  ...byTopic.map(t => ({ key: t.topic, label: shortTopic(t.topic), n: crits.filter(c => !c.every && c.r.topics.includes(t.topic)).length, hue: t.hue }))].map(o => {
+                  ...topics.map(t => ({ key: t.topic, label: shortTopic(t.topic), n: crits.filter(c => !c.every && c.r.topics.includes(t.topic)).length, hue: t.hue }))].map(o => {
                   const on = filter === o.key;
                   return (
                     <button key={o.label} type="button" onClick={() => setFilter(on ? null : o.key)}

@@ -33,7 +33,8 @@ export function useAgent() {
   return useMemo(() => {
     const sources = [...(state?.sources ?? [])].sort((a, b) => b.rules - a.rules || b.chars - a.chars);
     const prompts = sources.filter(s => s.kind === "prompt");
-    const tools = toolsText.split("\n").map(l => /^(\w+) \((\w+)\)/.exec(l.trim())).flatMap(m => (m ? [{ name: m[1], env: m[2] }] : []));
+    const tools = toolsText.split("\n").map(l => /^(\w+) \((\w+)\)(?:\s*—\s*вызывается в:\s*(.*))?/.exec(l.trim()))
+      .flatMap(m => (m ? [{ name: m[1], env: m[2], where: (m[3] ?? "").split(",").map(w => w.trim().split("/").pop() ?? "").filter(Boolean) }] : []));
     const rules = data?.rules ?? [];
     const bySource = new Map<string, RuleEntry[]>();
     for (const r of rules) if (r.rule.sourceId) bySource.set(r.rule.sourceId, [...(bySource.get(r.rule.sourceId) ?? []), r]);
