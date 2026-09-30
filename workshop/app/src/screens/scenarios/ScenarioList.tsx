@@ -2,7 +2,7 @@ import { Search } from "lucide-react";
 import { plural } from "../../lab/format";
 import { FROM_LOG } from "../../lab/runs";
 import type { Card } from "../../lab/types";
-import { ListRow } from "../../ui/ListRow";
+import { IssueRow } from "../../ui/IssueRow";
 import { Menu } from "../../ui/Menu";
 
 export type Origin = "all" | "errors" | "coverage";
@@ -36,12 +36,11 @@ export function ScenarioList({ cards, selectedId, onPick, query, onQuery, origin
             {topic} · {list.length} {plural(list.length, "сценарий", "сценария", "сценариев")}
           </div>
           {list.map(c => (
-            <ListRow key={c.id} selected={c.id === selectedId} onClick={() => onPick(c.id)}>
-              <div title={c.name} className="truncate text-small font-medium text-lab-ink">{c.name}</div>
-              <div className="mt-0.5 truncate text-meta text-lab-dim">
-                {c.origin === FROM_LOG ? "ошибка из лога" : "покрытие темы"} · {c.criteria.length} {plural(c.criteria.length, "критерий", "критерия", "критериев")}
-              </div>
-            </ListRow>
+            <IssueRow
+              key={c.id} selected={c.id === selectedId} onClick={() => onPick(c.id)} title={c.name} sub={c.situation}
+              tags={[c.origin === FROM_LOG ? "из лога" : "покрытие"]} tone="mute"
+              stats={[{ value: c.criteria.length, label: plural(c.criteria.length, "критерий", "критерия", "критериев") }]}
+            />
           ))}
         </div>
       ))}

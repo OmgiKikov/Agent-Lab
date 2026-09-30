@@ -5,7 +5,7 @@ import { when } from "../../lab/format";
 import type { DialogRow, Source } from "../../lab/dialogs";
 import { personaName } from "../../lab/look";
 import type { Persona } from "../../lab/types";
-import { ListRow } from "../../ui/ListRow";
+import { IssueRow } from "../../ui/IssueRow";
 import { Menu } from "../../ui/Menu";
 
 export type Verdict = "all" | "fail" | "pass" | "none" | "disputed";
@@ -25,31 +25,23 @@ export function matchesRow(r: DialogRow, source: SourceFilter, verdict: Verdict,
 const SOURCE: Record<Source, string> = { log: "лог", sim: "симуляция", trace: "трейс" };
 
 function Mark({ row }: { row: DialogRow }) {
-  if (row.source === "trace") return <span className="mt-1.5 size-1.5 flex-shrink-0 rounded-full bg-white/20" />;
+  if (row.source === "trace") return <span className="size-1.5 flex-shrink-0 rounded-full bg-white/20" />;
   const tone = row.status === "FAIL" ? "bg-lab-bad" : row.status === "PASS" ? "bg-white/25" : "bg-lab-warn";
-  return <span className={cn("mt-1.5 size-1.5 flex-shrink-0 rounded-full", tone)} title={row.status === "FAIL" ? "нарушение" : row.status === "PASS" ? "без обнаруженных нарушений" : "не оценён"} />;
+  return <span className={cn("size-1.5 flex-shrink-0 rounded-full", tone)} title={row.status === "FAIL" ? "нарушение" : row.status === "PASS" ? "без обнаруженных нарушений" : "не оценён"} />;
 }
 
 /** One row; memo keeps a long list from re-rendering when only the selection or the query box changes. */
 const Row = memo(function Row({ row, selected, onPick, personas }: { row: DialogRow; selected: boolean; onPick: (key: string) => void; personas: Persona[] }) {
   const who = row.source === "sim" ? [personaName(personas, row.persona), row.attempt && row.attempt > 1 ? `повтор ${row.attempt}` : ""].filter(Boolean).join(" · ") : "";
+  const judged = row.rules.filter(r => r.status === "FAIL" || r.status === "PASS").length;
+  const where = [row.topic, who].filter(Boolean).join(" · ");
   return (
-    <ListRow selected={selected} onClick={() => onPick(row.key)}>
-      <div className="flex gap-3">
-        <Mark row={row} />
-        <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 text-small text-lab-ink">{row.title}</div>
-          <div className="mt-1 truncate text-meta text-lab-dim">{[row.topic, who].filter(Boolean).join(" · ")}</div>
-          {row.fails.length > 0 && <div className="mt-0.5 truncate text-meta text-lab-bad">{row.fails[0]}{row.fails.length > 1 && ` и ещё ${row.fails.length - 1}`}</div>}
-          {row.status === "UNMEASURED" && <div className="mt-0.5 text-meta text-lab-warn">не оценён</div>}
-          {row.disputed && <div className="mt-0.5 text-meta text-lab-warn">судьи расходятся</div>}
-        </div>
-        <div className="flex-shrink-0 text-right text-meta text-lab-dim">
-          <div>{SOURCE[row.source]}</div>
-          {row.when && <div className="mt-0.5">{when(row.when)}</div>}
-        </div>
-      </div>
-    </ListRow>
+    <IssueRow
+      selected={selected} onClick={() => onPick(row.key)} lead={<Mark row={row} />} title={row.title}
+      tags={row.status === "UNMEASURED" ? ["не оценён"] : row.disputed ? ["судьи расходятся"] : SOURCE[row.source] === "трейс" ? ["трейс"] : undefined}
+      sub={row.fails.length ? <span className="text-lab-bad">{row.fails[0]}{row.fails.length > 1 && ` и ещё ${row.fails.length - 1}`}</span> : where}
+      stats={judged ? [{ value: row.fails.length, of: `из ${judged}`, share: row.fails.length / judged, title: `нарушено ${row.fails.length} из ${judged} критериев` }] : []}
+    />
   );
 });
 

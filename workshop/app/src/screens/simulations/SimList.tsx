@@ -1,7 +1,7 @@
 import { plural, when } from "../../lab/format";
 import { isRunning, runTitle, runTypes } from "../../lab/runs";
 import type { LabRun, LabState } from "../../lab/types";
-import { ListRow } from "../../ui/ListRow";
+import { IssueRow } from "../../ui/IssueRow";
 
 /** A run: which agent and version, when, how many dialogues, which customer types, how many repeats. Nothing of the verdicts. */
 function RunRow({ run, state, selected, onClick }: { run: LabRun; state: LabState; selected: boolean; onClick: () => void }) {
@@ -10,20 +10,15 @@ function RunRow({ run, state, selected, onClick }: { run: LabRun; state: LabStat
   const total = run.metric?.total;
   const meta = [
     when(run.startedAt),
-    total !== undefined ? `${total} ${plural(total, "диалог", "диалога", "диалогов")}` : null,
     runTypes(run, state).join(", "),
     run.repeats && run.repeats > 1 ? `повторы ×${run.repeats}` : null,
   ].filter(Boolean).join(" · ");
   return (
-    <ListRow selected={selected} onClick={onClick}>
-      <div className="flex items-center gap-2">
-        <span title={runTitle(run)} className="min-w-0 flex-1 truncate text-small font-medium text-lab-ink">{runTitle(run)}</span>
-        {live && <span className="flex flex-shrink-0 items-center gap-1.5 text-meta text-lab-accent"><span className="pulse-dot size-1.5 rounded-full bg-lab-accent" />{job?.total ? `${job.done ?? 0} из ${job.total}` : "идёт"}</span>}
-        {run.status === "failed" && <span className="flex-shrink-0 text-meta text-lab-bad">прервался</span>}
-        {run.status === "stopped" && <span className="flex-shrink-0 text-meta text-lab-warn">остановлен</span>}
-      </div>
-      <div className="mt-0.5 truncate text-meta text-lab-dim">{meta}</div>
-    </ListRow>
+    <IssueRow
+      selected={selected} onClick={onClick} tone="mute" title={runTitle(run)} sub={meta}
+      tags={live ? [job?.total ? `идёт ${job.done ?? 0} из ${job.total}` : "идёт"] : run.status === "failed" ? ["прервался"] : run.status === "stopped" ? ["остановлен"] : undefined}
+      stats={total !== undefined ? [{ value: total, label: plural(total, "диалог", "диалога", "диалогов"), share: live && job?.total ? (job.done ?? 0) / job.total : undefined }] : []}
+    />
   );
 }
 

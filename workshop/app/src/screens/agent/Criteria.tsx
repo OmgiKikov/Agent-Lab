@@ -9,28 +9,30 @@ import { useKeys } from "../../shell/keys";
 import { useLabState } from "../../shell/LabProvider";
 import { Button } from "../../ui/Button";
 import { EmptyState, Skeleton } from "../../ui/EmptyState";
-import { Facts, type Fact } from "../../ui/Facts";
+import { Summary, type Stat } from "../../ui/Summary";
 import { Modal } from "../../ui/Modal";
 import { Split } from "../../ui/Split";
 import { useToast } from "../../ui/toast";
 import { RuleDetail } from "../rules/RuleDetail";
 import { RuleList, matchesRule, type RuleFilter } from "../rules/RuleList";
 
-/** Where the criteria come from and how far the verdicts can be trusted, as one line of run meta. */
-function Summary({ data, state }: { data: Problems; state: LabState }) {
+/** How many criteria there are and how far the verdicts can be trusted: big numbers, the first three filter the list. */
+function CriteriaSummary({ data, state, filter, onFilter }: { data: Problems; state: LabState; filter: RuleFilter; onFilter: (f: RuleFilter) => void }) {
   const files = new Set(data.rules.map(r => r.rule.origin)).size;
   const logJudge = state.discover?.summary.secondJudge;
-  const run = data.sim ? state.runs.find(r => r.id === data.sim?.runId) : undefined;
-  const simJudge = run?.metric?.secondJudge;
   const people = decisions(data);
   const checked = people.agree + people.disagree;
-  const facts: Fact[] = [
-    { label: "Источников", value: String(files) },
-    ...(data.log?.rulesSince ? [{ label: "Зафиксированы", value: day(data.log.rulesSince) }] : []),
-    ...(logJudge ? [{ label: "Второй судья", value: `согласен в ${logJudge.agree} из ${logJudge.checked} (логи)${simJudge ? ` · ${simJudge.agree} из ${simJudge.checked} (симуляция)` : ""}` }] : []),
-    { label: "Люди", value: checked ? `проверили ${checked}: верно ${people.agree}, неверно ${people.disagree}` : "не проверяли" },
+  const violated = data.rules.filter(r => matchesRule(r, "violated", "")).length;
+  const disputed = data.rules.filter(r => matchesRule(r, "disputed", "")).length;
+  const stats: Stat[] = [
+    { label: "Критериев", value: data.rules.length, active: filter === "all", onClick: () => onFilter("all"), title: data.log?.rulesSince ? `Зафиксированы ${day(data.log.rulesSince)}` : undefined },
+    { label: "Нарушаются", value: violated, of: `из ${data.rules.length}`, active: filter === "violated", onClick: () => onFilter("violated") },
+    ...(disputed ? [{ label: "Судьи расходятся", value: disputed, of: `из ${data.rules.length}`, active: filter === "disputed", onClick: () => onFilter("disputed") }] : []),
+    ...(logJudge ? [{ label: "Второй судья согласен", value: logJudge.agree, of: `из ${logJudge.checked} в логах` }] : []),
+    { label: "Проверено людьми", value: checked, of: checked ? `верно ${people.agree}` : "" },
+    { label: "Источников", value: files },
   ];
-  return <Facts facts={facts} className="flex-shrink-0 border-b border-white/[0.06] px-4 py-2" />;
+  return <Summary stats={stats} />;
 }
 
 /** «Извлечь заново»: new criteria from the code; the old ones stop counting, so it asks first. */
@@ -106,7 +108,7 @@ export function Criteria() {
   }
   return (
     <div className="flex h-full flex-col">
-      <Summary data={data} state={state} />
+      <CriteriaSummary data={data} state={state} filter={filter} onFilter={setFilter} />
       <Split
         showDetail={!!id}
         list={<RuleList rules={shown} selectedId={id} filter={filter} onFilter={setFilter} query={query} onQuery={setQuery} onPick={k => open(k)} />}

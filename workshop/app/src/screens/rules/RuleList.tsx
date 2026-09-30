@@ -1,6 +1,6 @@
 import { ChevronDown, Search } from "lucide-react";
 import type { RuleEntry } from "../../lab/problems";
-import { ListRow } from "../../ui/ListRow";
+import { IssueRow } from "../../ui/IssueRow";
 import { Menu } from "../../ui/Menu";
 import { Label } from "../../ui/Label";
 
@@ -20,16 +20,6 @@ export function matchesRule(r: RuleEntry, filter: RuleFilter, query: string) {
 }
 
 const fileOf = (origin: string) => origin.split("/").pop() || origin || "без источника";
-
-function Counts({ label, side }: { label: string; side: RuleEntry["log"] }) {
-  if (!side.failed && !side.passed && !side.unknown) return null;
-  return (
-    <span>
-      {label}: {side.failed > 0 && <span className="text-lab-bad">нарушено {side.failed}</span>}
-      {side.failed > 0 && " · "}выполнено {side.passed}{side.unknown > 0 && ` · не проверено ${side.unknown}`}
-    </span>
-  );
-}
 
 /** The criteria grouped by the file they are quoted from; violated ones marked, counts in the logs and the run. */
 export function RuleList({ rules, selectedId, filter, onFilter, query, onQuery, onPick }: {
@@ -57,20 +47,17 @@ export function RuleList({ rules, selectedId, filter, onFilter, query, onQuery, 
           </div>
           {list.map(r => {
             const violated = r.log.failed + r.sim.failed > 0;
+            const stat = (label: string, side: RuleEntry["log"]) => {
+              const total = side.failed + side.passed;
+              return total ? { value: side.failed, of: `из ${total}`, label, share: side.failed / total, title: `${label}: нарушено ${side.failed} из ${total}` } : null;
+            };
             return (
-              <ListRow key={r.id} selected={r.id === selectedId} onClick={() => onPick(r.id)}>
-                <div className="flex gap-3">
-                  <span className={violated ? "mt-2 size-1.5 flex-shrink-0 rounded-full bg-lab-bad" : "mt-2 size-1.5 flex-shrink-0 rounded-full bg-white/20"} aria-label={violated ? "нарушается" : "не нарушается"} />
-                  <div className="min-w-0 flex-1">
-                    <div className="line-clamp-2 text-small text-lab-ink">{r.rule.text}</div>
-                    <div className="mt-1 flex flex-col gap-0.5 text-meta text-lab-dim">
-                      <Counts label="логи" side={r.log} />
-                      <Counts label="симуляция" side={r.sim} />
-                      {!r.log.failed && !r.log.passed && !r.log.unknown && !r.sim.failed && !r.sim.passed && !r.sim.unknown && <span>вердиктов пока нет</span>}
-                    </div>
-                  </div>
-                </div>
-              </ListRow>
+              <IssueRow
+                key={r.id} selected={r.id === selectedId} onClick={() => onPick(r.id)}
+                lead={<span className={violated ? "size-1.5 flex-shrink-0 rounded-full bg-lab-bad" : "size-1.5 flex-shrink-0 rounded-full bg-white/20"} aria-label={violated ? "нарушается" : "не нарушается"} />}
+                title={r.rule.text} sub={r.rule.condition || undefined}
+                stats={[stat("логи", r.log), stat("прогон", r.sim)].filter((x): x is NonNullable<typeof x> => !!x)}
+              />
             );
           })}
         </div>
