@@ -2,6 +2,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { plural } from "../lab/format";
 import { segments, splitQuote } from "./highlight";
+import { VerdictChip } from "./VerdictChip";
 
 export type Turn = { role: "customer" | "agent"; text: string; events?: { tool: string }[]; ok?: boolean; status?: string };
 
@@ -14,7 +15,7 @@ export function visible(text: string): { text: string; buttons: string[] } {
   const clean = text.replace(CONTROL, (_, code: string) => { buttons.push(code); return ""; }).trim();
   return { text: clean, buttons };
 }
-export type Mark = { quote: string; n: number };
+export type Mark = { quote: string; n: number; label?: string };
 
 /** The number that ties the judge's quote in the conversation to its explanation. */
 export function MarkNumber({ n, active, onActive }: { n: number; active?: boolean; onActive?: (n: number | null, pin?: boolean) => void }) {
@@ -43,6 +44,15 @@ function AgentTurn({ turn, marks, hover, onHover, active, onActive }: { turn: Tu
           </span>
         ) : <span key={i}>{piece.text}</span>))}
       </div>
+      {pieces.some(p => p.n) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {marks.filter(m => m.label && pieces.some(p => p.n === m.n)).map(m => (
+            <span key={m.n} className="flex min-w-0 items-center gap-1.5" onMouseEnter={() => onActive?.(m.n)} onMouseLeave={() => onActive?.(null)}>
+              <MarkNumber n={m.n} active={active === m.n} onActive={onActive} /><VerdictChip label={m.label!} status="FAIL" />
+            </span>
+          ))}
+        </div>
+      )}
       {buttons.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {buttons.map((code, i) => (

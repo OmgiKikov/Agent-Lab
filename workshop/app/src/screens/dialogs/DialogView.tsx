@@ -15,6 +15,7 @@ import { Conversation, MarkNumber, type Mark } from "../../ui/Conversation";
 import { Skeleton } from "../../ui/EmptyState";
 import { Label } from "../../ui/Label";
 import { Tabs } from "../../ui/Tabs";
+import { VerdictChip } from "../../ui/VerdictChip";
 import { ReviewButtons } from "../verdicts/Example";
 
 type Tab = "talk" | "rules" | "trace" | "details";
@@ -85,7 +86,8 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
   const rules = [...row.rules].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
   const fails = rules.filter(r => r.status === "FAIL" && r.agentQuote);
   const numbers = new Map(fails.map((r, i) => [r.ruleId, i + 1]));
-  const marks: Mark[] = fails.map((r, i) => ({ quote: r.agentQuote, n: i + 1 }));
+  const marks: Mark[] = fails.map((r, i) => ({ quote: r.agentQuote, n: i + 1, label: r.title || r.rule }));
+  const kept = rules.filter(r => r.status === "PASS").length;
   const verdict = row.status ? VERDICT[row.status] : undefined;
   const who = row.source === "sim" ? [row.name, `клиент: ${personaName(state?.personas ?? [], row.persona)}`, row.attempt && row.attempt > 1 ? `повтор ${row.attempt}` : ""].filter(Boolean).join(" · ") : "";
   const mark = (n: number | null, pin?: boolean) => {
@@ -115,6 +117,12 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
         {verdict && <><span className="text-lab-faint">·</span><span className={cn("inline-flex items-center gap-1", verdict.tone)}><verdict.icon className="size-3.5" strokeWidth={2.5} />{verdict.word}</span></>}
         {row.disputed && <><span className="text-lab-faint">·</span><span className="text-lab-warn">судьи расходятся</span></>}
       </div>
+      {(fails.length > 0 || kept > 0) && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {rules.filter(r => r.status === "FAIL").map(r => <VerdictChip key={r.ruleId} label={r.title || r.rule} status="FAIL" className="max-w-[320px]" />)}
+          {kept > 0 && <VerdictChip label={`${kept} из ${rules.filter(r => r.status === "PASS" || r.status === "FAIL").length} критериев`} status="PASS" />}
+        </div>
+      )}
       <Tabs className="mt-6" value={tab} onChange={setTab}
         tabs={TABS.filter(t => t.value !== "trace" || row.traceId).map(t => ({ ...t, count: t.value === "rules" ? row.rules.length : undefined }))} />
       {tab === "talk" && (
