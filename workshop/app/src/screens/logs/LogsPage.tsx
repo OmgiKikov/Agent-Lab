@@ -10,7 +10,8 @@ import { useLabState } from "../../shell/LabProvider";
 import { LINKS } from "../../shell/links";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
-import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { ChainSteps, FirstRun } from "../../shell/FirstRun";
 import { Summary, type Stat } from "../../ui/Summary";
 import { Tabs } from "../../ui/Tabs";
 import { Dropzone, UploadButton } from "../dialogs/UploadLogs";
@@ -66,14 +67,20 @@ export function LogsPage() {
       />
       {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div>
         : !state.sources.length && !assessed ? (
-          <EmptyState drop title="Агент ещё не подключён" className="flex-1">
-            Критерии оценки берутся из кода агента. <Link to={LINKS.agent} className={link}>Открыть «Агент»</Link>
-          </EmptyState>
+          <FirstRun here="logs" title="Логи покажут, где агент нарушает свои критерии"
+            action={<Link to={LINKS.agent}><Button variant="primary">Подключить агента</Button></Link>}
+            hints={[{ title: "1. Агент", text: "Сначала прочитайте его код: критерии берутся оттуда." }, { title: "2. Загрузить логи", text: "Excel-выгрузка чата или .jsonl." }, { title: "3. Оценить", text: "Судья проверит каждый диалог по каждому критерию." }]}>
+            Реальные диалоги, оценённые по критериям из кода агента, без запуска агента.
+          </FirstRun>
         )
-        : !logs?.total ? <Dropzone />
+        : !logs?.total ? <div className="flex flex-1 flex-col"><div className="pt-8"><ChainSteps here="logs" /></div><Dropzone /></div>
         : !assessed ? (
           <>
-            <EmptyState drop title="Логи ещё не оценены" className="flex-1" action={<Button variant="primary" icon={Play} onClick={() => setAssess(true)} disabled={busy}>Оценить логи</Button>} />
+            <FirstRun here="logs" title="Логи загружены, осталось их оценить"
+              action={<Button variant="primary" icon={Play} onClick={() => setAssess(true)} disabled={busy}>Оценить логи</Button>}
+              hints={[{ title: "Что оценивается", text: "Выборка диалогов: каждый по каждому критерию." }, { title: "Что получится", text: "Нарушения со ссылкой на диалог и слова агента." }, { title: "Что дальше", text: "Из нарушений соберутся сценарии для прогона." }]}>
+              Судья прочитает диалоги и отметит, какие критерии агент нарушил.
+            </FirstRun>
           </>
         ) : (
           <>

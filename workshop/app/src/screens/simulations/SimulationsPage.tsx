@@ -9,6 +9,7 @@ import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { FirstRun } from "../../shell/FirstRun";
 import { Summary } from "../../ui/Summary";
 import { Split } from "../../ui/Split";
 import { PlayDialog } from "./PlayDialog";
@@ -68,9 +69,10 @@ export function SimulationsPage() {
     <Button variant="primary" icon={Play} onClick={() => setPlay({ preset: null })} disabled={busy || !cards.length}
       title={busy ? "Сейчас идёт другая задача" : !cards.length ? "Сначала соберите сценарии" : undefined}>Сыграть</Button>
   );
+  const hints = [{ title: "Клиенты-симуляторы", text: "Играют сценарии в чате с агентом, обычные и трудные." }, { title: "Трейсы", text: "Каждый диалог остаётся в Workshop со всеми вызовами." }, { title: "Что дальше", text: "Судья оценит диалоги: это блок «Результаты»." }];
   const empty = cards.length
-    ? <EmptyState drop title="Прогонов пока нет" action={playButton} />
-    : <EmptyState drop title="Сначала нужны сценарии" action={<Link to="/scenarios" className={link}>Открыть сценарии</Link>} />;
+    ? <FirstRun here="simulations" title="Ещё ни одного прогона" action={playButton} hints={hints}>Выберите сценарии и типы клиентов, агент ответит на каждый.</FirstRun>
+    : <FirstRun here="simulations" title="Для прогона нужны сценарии" action={<Link to="/scenarios"><Button variant="primary">Открыть сценарии</Button></Link>} hints={hints}>Сценарии собираются из оценённых логов.</FirstRun>;
 
   return (
     <div className="flex h-full flex-col">

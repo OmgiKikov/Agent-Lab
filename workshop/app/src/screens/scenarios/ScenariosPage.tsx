@@ -10,6 +10,7 @@ import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { FirstRun } from "../../shell/FirstRun";
 import { Summary } from "../../ui/Summary";
 import { Split } from "../../ui/Split";
 import { useToast } from "../../ui/toast";
@@ -17,7 +18,6 @@ import { inOrigin, ScenarioList, type Origin } from "./ScenarioList";
 import { ScenarioDetail } from "./ScenarioDetail";
 
 const wide = () => window.matchMedia("(min-width: 1024px)").matches;
-const link = "text-small text-lab-ink underline underline-offset-4";
 
 /** Сценарии: the business-scenario cards built from the assessed logs, for the synthetic customers to play. */
 export function ScenariosPage() {
@@ -54,9 +54,14 @@ export function ScenariosPage() {
   const fromErrors = cards.filter(c => c.origin === FROM_LOG).length;
   const topics = new Set(cards.map(c => c.topic)).size;
 
+  const hints = [{ title: "Из ошибок логов", text: "Диалог, где агент нарушил критерий, становится сценарием." }, { title: "Покрытие тем", text: "По сценарию на тему, чтобы проверить и то, что работает." }, { title: "Что дальше", text: "Клиенты-симуляторы сыграют сценарии с агентом." }];
   const empty = !state?.discover
-    ? <EmptyState drop title="Сначала нужна оценка логов">Сценарии собираются из оценённых логов. <Link to="/logs" className={link}>Открыть логи</Link></EmptyState>
-    : <EmptyState drop title="Сценариев пока нет" action={<Button variant="primary" icon={Hammer} disabled={busy} onClick={build}>Собрать сценарии</Button>} />;
+    ? <FirstRun here="scenarios" title="Сценарии собираются из оценённых логов" action={<Link to="/logs"><Button variant="primary">Открыть логи</Button></Link>} hints={hints}>
+        Сначала оцените логи: по их нарушениям строятся карточки для синтетических клиентов.
+      </FirstRun>
+    : <FirstRun here="scenarios" title="Сценариев пока нет" action={<Button variant="primary" icon={Hammer} disabled={busy} onClick={build}>Собрать сценарии</Button>} hints={hints}>
+        Карточка описывает ситуацию, первую реплику клиента и критерии, по которым судья проверит ответ.
+      </FirstRun>;
 
   return (
     <div className="flex h-full flex-col">

@@ -10,7 +10,8 @@ import { JobStrip } from "../../shell/Activity";
 import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
-import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { FirstRun } from "../../shell/FirstRun";
 import { Summary, type Stat } from "../../ui/Summary";
 import { Menu } from "../../ui/Menu";
 import { Tabs } from "../../ui/Tabs";
@@ -67,7 +68,10 @@ export function ResultsPage() {
         below={<JobStrip kinds={["rejudge"]} />}
       />
       {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : !run ? (
-        <EmptyState drop title="Завершённых прогонов нет" action={<Link to="/simulations"><Button variant="primary">Сыграть</Button></Link>}>Результаты появятся после первого прогона.</EmptyState>
+        <FirstRun here="results" title="Результаты появятся после первого прогона" action={<Link to="/simulations"><Button variant="primary">Открыть прогоны</Button></Link>}
+          hints={[{ title: "Нарушения", text: "Критерии, которые агент нарушил в диалогах прогона." }, { title: "Проверка", text: "Верно или неверно: вы подтверждаете решения судьи." }, { title: "По типам клиентов", text: "Кто из клиентов чаще приводит агента к нарушению." }]}>
+          Здесь судья оценит диалоги прогона по тем же критериям, что и логи.
+        </FirstRun>
       ) : (
         <>
           <Summary stats={stats} />
