@@ -5,7 +5,6 @@ import { count } from "../format";
 import { disputed } from "../logic";
 import type { Hue } from "../look";
 import { trustStory } from "../story";
-import { wilson } from "../stats";
 import type { Item, LabRun, LabState } from "../types";
 import { useRunContext } from "../useRunContext";
 import { Button, EmptyState, Kbd, Label, Page, Section, Skeleton, Stat, Strip, Verdict } from "../ui";
@@ -58,7 +57,7 @@ export function TrustView({ state, run, onJudge }: { state: LabState; run: LabRu
   if (!finished?.metric) return <Page title="Судья" icon={Scale}><Skeleton className="mt-10 h-5 w-32" /><Skeleton className="mt-4 h-9 w-2/3" /><Skeleton className="mt-8 h-[104px]" /></Page>;
 
   const m = finished.metric;
-  const trust = trustStory(finished, m.measured ? wilson(m.passed, m.measured) : null)!;
+  const trust = trustStory(finished)!;
   const left = items.filter(i => (i.status === "PASS" || i.status === "FAIL") && !i.review).length;
   const disputes = items.filter(disputed).length;
   const reviewed = m.human?.reviewed ?? 0;

@@ -34,7 +34,7 @@ function CellView({ cell, delta, broken, label, previous, onOpen }: { cell: Cell
   const text = [
     `${label}: ${CELL_TEXT[cell.state]}${cell.total > 1 && cell.done ? ` (${cell.passed} из ${cell.done})` : ""}`,
     broken ? "обычный клиент проходит, этот тип нет" : "",
-    delta && previous ? `в ${previous} было ${delta > 0 ? "хуже" : "лучше"}` : "",
+    delta && previous ? `в ${previous} нарушений здесь было ${delta > 0 ? "больше" : "меньше"}` : "",
   ].filter(Boolean).join(". ");
   return (
     <Tip text={text} className="flex">
@@ -148,7 +148,7 @@ export function Heatmap({ personas, scenarios, items, previous, previousVersion,
           <span className="inline-flex items-center gap-2">
             <span className="flex size-4 items-center justify-center rounded-full bg-lab-ok text-lab-canvas"><ArrowUp className="size-2.5" strokeWidth={3} /></span>
             <span className="-ml-1 flex size-4 items-center justify-center rounded-full bg-lab-bad text-lab-canvas"><ArrowDown className="size-2.5" strokeWidth={3} /></span>
-            лучше или хуже, чем в {previousVersion ?? "прошлой версии"}. По одному-двум диалогам это ещё не доказательство
+            нарушений меньше или больше, чем в {previousVersion ?? "прошлой версии"}
           </span>
         )}
       </div>

@@ -7,62 +7,71 @@ import { count, plural, whenLong } from "../format";
 import { useLabContext } from "../LabContext";
 import { HUE, type Hue } from "../look";
 import { setupSteps } from "../nav";
-import { attentionOf, trustStory, VERDICT_CHIP, verdictOf } from "../story";
+import { logsHeadline, trustStory } from "../story";
 import type { LabState } from "../types";
 import type { Scope } from "../useScope";
 import { VersionSwitch } from "../VersionSwitch";
-import { Button, Label, LabMark, LinkButton, Page, Section, Skeleton, Stat, Strip, TrendBars, Verdict } from "../ui";
+import { Button, Label, LabMark, LinkButton, Page, Section, Skeleton, Stat, Strip, TrendBars } from "../ui";
 
 type Go = (to: string) => void;
 
-/** The answer, in one line: the verdict chip, the headline, by how much, and what was changed in this version. */
+/**
+ * What was checked: the change and when. A checked version speaks through the service's numbers right below;
+ * before any version, one sentence about the real logs.
+ */
 function Headline({ scope }: { scope: Scope }) {
-  const verdict = verdictOf(scope);
-  const chip = VERDICT_CHIP[verdict.kind];
   const run = scope.finished;
+  if (!run) {
+    const h = logsHeadline(scope);
+    return (
+      <header className="pt-10">
+        <h2 className="max-w-[860px] text-balance text-display font-medium text-lab-ink">{h.headline}</h2>
+        <p className="mt-2 max-w-[760px] text-pretty text-lead text-lab-soft">{h.detail}</p>
+      </header>
+    );
+  }
   return (
-    <header className="pt-10">
-      <Verdict hue={chip.hue} solid={chip.hue !== "mute"}>{chip.text}</Verdict>
-      <h2 className="mt-4 max-w-[860px] text-balance text-display font-medium text-lab-ink">{verdict.headline}</h2>
-      <p className="mt-2 max-w-[760px] text-pretty text-lead text-lab-soft">{verdict.detail}</p>
-      {run && (
-        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-caption text-lab-mute">
-          {run.label && <span className="inline-flex min-w-0 items-center gap-2"><Label>Что изменили</Label><span className="truncate text-lab-text">{run.label}</span></span>}
-          <span className="inline-flex items-center gap-2"><Label>Проверка</Label>{whenLong(run.startedAt)} · {run.targetName}</span>
-        </div>
-      )}
+    <header className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-8 text-caption text-lab-mute">
+      {run.label && <span className="inline-flex min-w-0 items-center gap-2"><Label>Что изменили</Label><span className="truncate text-lab-text">{run.label}</span></span>}
+      <span className="inline-flex items-center gap-2"><Label>Проверка</Label>{whenLong(run.startedAt)} · {run.targetName}</span>
     </header>
   );
 }
 
-/** The numbers behind the verdict in one strip; each is a way to its evidence. */
+/**
+ * The service's numbers (lab/metric.py): the version's share of dialogues without violations and, beside it, the previous
+ * version's own number. They are not compared or judged here; each number is a way to its evidence.
+ */
 function Numbers({ scope, go }: { scope: Scope; go: Go }) {
-  const { finished, previous, change, compared, interval } = scope;
-  const logsOnly = !scope.sims.length;
-  const s = logsOnly ? scope.log : scope.sim;
-  const trust = trustStory(finished, interval);
+  const { finished, previous, compared } = scope;
+  const m = finished?.metric;
+  const logsOnly = !finished;
+  const before = previous?.metric;
+  const trust = trustStory(finished);
   const fresh = compared.filter(c => c.change === "new").length;
   const fixed = compared.filter(c => c.change === "fixed").length;
   const broken = compared.filter(c => (logsOnly ? c.criterion.by.log.failed : c.criterion.by.sim.failed) > 0).length;
   const history = scope.sameAgent.filter(r => r.metric?.accuracy !== null && r.metric?.accuracy !== undefined).map(r => r.metric!.accuracy!);
-  const noise = change && (change.direction === "likely-better" || change.direction === "likely-worse" || change.direction === "same");
-  const changeHue: Hue = !change ? "mute" : change.direction === "better" ? "ok" : change.direction === "worse" ? "bad" : "mute";
-  const half = interval ? Math.round((100 * (interval[1] - interval[0])) / 2) : null;
-  const human = finished?.metric?.human;
+  const human = m?.human;
   const humanShare = human && human.reviewed >= 10 ? Math.round((100 * human.agree) / human.reviewed) : null;
   const scroll = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const dialogs = (n: number) => count(n, "диалога", "диалогов", "диалогов");
 
   return (
-    <Strip className="mt-8">
-      <Stat label={logsOnly ? "Реальные без нарушений" : "Без нарушений"} value={s.share === null ? "—" : `${s.share}%`}
-        sub={<>{s.clean} из {count(s.measured, "диалога", "диалогов", "диалогов")}{half !== null && !logsOnly ? ` · ±${half}\u00a0п.п.` : ""}</>}
-        onClick={() => go(logsOnly ? "/lab/logs" : "/lab/dialogs")}>
-        {history.length > 1 && !logsOnly && <Sparkline values={history} width={96} height={20} className="mt-2" />}
-      </Stat>
-      {change && previous && (
-        <Stat label={`К ${previous.version}`} hue={changeHue}
-          value={change.delta === 0 ? "0" : `${change.delta > 0 ? "+" : "−"}${Math.abs(change.delta)}\u00a0п.п.`}
-          sub={noise ? "в пределах шума" : `${scope.prevSim?.share ?? "—"}% → ${s.share}%`} />
+    <Strip className={logsOnly ? "mt-8" : "mt-4"}>
+      {m ? (
+        <Stat label="Без нарушений" value={m.accuracy === null ? "—" : `${m.accuracy}%`}
+          sub={<>{m.passed} из {dialogs(m.measured)}{m.unmeasured ? ` · ещё ${m.unmeasured} без оценки` : ""}</>}
+          onClick={() => go("/lab/dialogs")}>
+          {history.length > 1 && <Sparkline values={history} width={96} height={20} className="mt-2" />}
+        </Stat>
+      ) : (
+        <Stat label="Реальные без нарушений" value={scope.log.share === null ? "—" : `${scope.log.share}%`}
+          sub={`${scope.log.clean} из ${dialogs(scope.log.measured)}`} onClick={() => go("/lab/logs")} />
+      )}
+      {previous && before && (
+        <Stat label={`В ${previous.version}`} hue="mute" value={before.accuracy === null ? "—" : `${before.accuracy}%`}
+          sub={`${before.passed} из ${dialogs(before.measured)}`} />
       )}
       {scope.comparing ? (
         <>
@@ -75,26 +84,9 @@ function Numbers({ scope, go }: { scope: Scope; go: Go }) {
       {trust && (
         <Stat label="Судья прав" hue={trust.level === "ok" ? "ok" : humanShare === null ? "warn" : undefined}
           value={humanShare === null ? "—" : `${humanShare}%`}
-          sub={humanShare === null ? `сверено ${human?.reviewed ?? 0} из 10 нужных` : `сверено ${human?.reviewed ?? 0} из ${finished?.metric?.total ?? 0}`} onClick={() => go("/lab/judge")} />
+          sub={humanShare === null ? `сверено ${human?.reviewed ?? 0} из 10 нужных` : `сверено ${human?.reviewed ?? 0} из ${m?.total ?? 0}`} onClick={() => go("/lab/judge")} />
       )}
     </Strip>
-  );
-}
-
-/** At most two lines the numbers do not say: where to look next. */
-function Attention({ scope, state, go }: { scope: Scope; state: LabState; go: Go }) {
-  const list = attentionOf(scope, state);
-  if (!list.length) return null;
-  return (
-    <div className="mt-3 space-y-1">
-      {list.map(o => (
-        <button key={o.id} onClick={() => o.to && go(o.to)} className="lab-focus group flex w-full items-start gap-2.5 rounded-md px-1 py-1 text-left">
-          <span className={cn("mt-[7px] size-1.5 flex-shrink-0 rounded-full", HUE[o.hue].solid)} />
-          <span className="min-w-0 flex-1 text-body text-lab-soft transition-colors duration-100 group-hover:text-lab-ink">{o.text}</span>
-          {o.cta && <span className="mt-px inline-flex flex-shrink-0 items-center gap-1 text-caption text-lab-mute group-hover:text-lab-ink">{o.cta}<ArrowRight className="size-3" /></span>}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -202,7 +194,7 @@ function RealLogs({ scope, state, go }: { scope: Scope; state: LabState; go: Go 
   );
 }
 
-/** First run: what the Lab does in one sentence, and the three steps to the first verdict, the next one lit. */
+/** First run: what the Lab does in one sentence, and the three steps to the first check, the next one lit. */
 function FirstRun({ state, go }: { state: LabState; go: Go }) {
   const steps = setupSteps(state);
   const next = steps.findIndex(s => !s.done);
@@ -210,7 +202,7 @@ function FirstRun({ state, go }: { state: LabState; go: Go }) {
     <div className="mx-auto max-w-[640px] pt-16">
       <div className="lab-dots flex h-28 items-center justify-center rounded-lg border border-lab-line"><LabMark size={40} className="text-lab-ink" /></div>
       <h2 className="mt-8 text-balance text-display font-medium text-lab-ink">Проверьте первую версию агента.</h2>
-      <p className="mt-2 text-pretty text-lead text-lab-soft">Критерии берутся из промптов агента. Симулятор клиента играет с ним диалоги, судья подтверждает каждое нарушение цитатой. Три шага до первого вердикта.</p>
+      <p className="mt-2 text-pretty text-lead text-lab-soft">Критерии берутся из промптов агента. Симулятор клиента играет с ним диалоги, судья подтверждает каждое нарушение цитатой. Три шага до первой проверки.</p>
       <ol className="mt-8 divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">
         {steps.map((s, i) => {
           const current = i === next;
@@ -232,7 +224,7 @@ function FirstRun({ state, go }: { state: LabState; go: Go }) {
   );
 }
 
-/** The version's verdict: the first thing a person opening the Lab sees, and what breaks in it, worst first. */
+/** The checked version: the service's numbers first, then what breaks in it, worst first. */
 export function OverviewView({ state, scope, go, onPick }: { state: LabState; scope: Scope; go: Go; onPick: (id: string) => void; onRun?: () => void }) {
   const { openNewRun } = useLabContext();
   const title = scope.finished
@@ -242,8 +234,8 @@ export function OverviewView({ state, scope, go, onPick }: { state: LabState; sc
   if (!scope.ready) {
     return (
       <Page title="Версия" icon={FlaskConical} noContext>
-        <Skeleton className="mt-10 h-5 w-24" /><Skeleton className="mt-4 h-9 w-2/3" /><Skeleton className="mt-3 h-5 w-1/2" />
-        <Skeleton className="mt-8 h-[104px]" />
+        <Skeleton className="mt-8 h-4 w-1/2" />
+        <Skeleton className="mt-4 h-[104px]" />
         <Skeleton className="mt-10 h-4 w-40" /><Skeleton className="mt-3 h-[196px]" />
       </Page>
     );
@@ -252,12 +244,11 @@ export function OverviewView({ state, scope, go, onPick }: { state: LabState; sc
     <Page title={title} icon={FlaskConical} noContext>
       <Headline scope={scope} />
       <Numbers scope={scope} go={go} />
-      <Attention scope={scope} state={state} go={go} />
       <Criteria scope={scope} go={go} />
       <RealLogs scope={scope} state={state} go={go} />
       {!scope.sims.length && state.cards?.cards.length ? (
         <div className="mt-10 flex flex-wrap items-center gap-3 rounded-lg border border-lab-line px-4 py-3">
-          <span className="min-w-0 flex-1 text-body text-lab-soft">Сценарии готовы: проверьте версию агента на симуляторе, чтобы получить вердикт и сравнивать версии.</span>
+          <span className="min-w-0 flex-1 text-body text-lab-soft">Сценарии готовы: проверьте версию агента на симуляторе — судья оценит каждый её диалог.</span>
           <Button variant="primary" size="sm" onClick={openNewRun}>Проверить версию</Button>
         </div>
       ) : null}

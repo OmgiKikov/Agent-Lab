@@ -6,10 +6,9 @@
  * No inline hex, no arbitrary text sizes, mono only for labels (`Label`), identifiers and code.
  */
 import { createContext, forwardRef, useContext, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
-import { ArrowDown, ArrowUp, Check, CircleHelp, Equal, Loader2, Minus, X, type LucideIcon } from "lucide-react";
+import { Check, CircleHelp, Loader2, Minus, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HUE, STATUS_TEXT, personaLook, personaName, statusHue, type Hue } from "./look";
-import type { Direction } from "./stats";
 import type { Persona, Status } from "./types";
 
 /* ---------- type ---------- */
@@ -382,42 +381,9 @@ export function TrendBars({ values, labels, height = 20, className, hue = "bad" 
   );
 }
 
-const DIRECTION_ICON: Record<Direction, LucideIcon> = { better: ArrowUp, "likely-better": ArrowUp, same: Equal, "likely-worse": ArrowDown, worse: ArrowDown };
-const DIRECTION_WORD: Record<Direction, string> = {
-  better: "лучше", "likely-better": "в пределах шума", same: "без изменений", "likely-worse": "в пределах шума", worse: "хуже",
-};
-
-/**
- * A change against the previous version: «▲ +15 п.п.». Coloured only when the change is real (`direction` better / worse);
- * a change within the noise is grey and says so on hover. Without a direction the change is shown grey.
- */
-export function Delta({ value, unit = "п.п.", direction, className }: { value: number; unit?: string; direction?: Direction; className?: string }) {
-  const d: Direction = direction ?? (value > 0 ? "likely-better" : value < 0 ? "likely-worse" : "same");
-  const hue: Hue = d === "better" ? "ok" : d === "worse" ? "bad" : "mute";
-  if (!value) return <Badge hue="mute" icon={Equal} className={className}>без изменений</Badge>;
-  return (
-    <Badge hue={hue} icon={DIRECTION_ICON[d]} className={className} title={DIRECTION_WORD[d]}>
-      {value > 0 ? "+" : "−"}{Math.abs(value)} {unit}
-    </Badge>
-  );
-}
-
-/**
- * A share with its 95% interval: the track is 0–100%, the band is where the true share probably lies, the tick is the measured share.
- * Values are fractions (0–1).
- */
-export function IntervalBar({ value, low, high, className }: { value: number; low: number; high: number; className?: string }) {
-  return (
-    <div className={cn("relative h-1.5 w-full rounded-sm bg-white/[0.06]", className)} aria-hidden>
-      <div className="absolute inset-y-0 rounded-sm bg-white/[0.16]" style={{ left: `${100 * low}%`, width: `${100 * Math.max(0.005, high - low)}%` }} />
-      <div className="absolute -top-1 h-3.5 w-[2px] -translate-x-1/2 rounded-full bg-lab-ink" style={{ left: `${100 * value}%` }} />
-    </div>
-  );
-}
-
 /* ---------- numbers ---------- */
 
-/** Raindrop's metric strip: one surface, the metrics side by side, each a label, a value and one line of context. It never wraps: it scrolls. */
+/** Raindrop's metric strip: one surface, the metrics side by side, each a label, a value and one line of context. On a narrow screen it wraps. */
 export function Strip({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div className={cn("overflow-hidden rounded-lg border border-lab-line bg-lab-panel", className)}>

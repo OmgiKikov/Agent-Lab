@@ -42,7 +42,7 @@ export function NewRun({ state, target, setTarget, onStarted }: { state: LabStat
         <div>
           <Label className="mb-2">Повторы</Label>
           <Segmented value={repeats} onChange={setRepeats} options={[1, 2, 3].map(n => ({ value: n, label: n === 1 ? "Один раз" : `${n} раза` }))} />
-          <p className="mt-1.5 text-caption text-lab-mute">Повторы показывают, стабилен ли ответ, и сужают погрешность.</p>
+          <p className="mt-1.5 text-caption text-lab-mute">Повторы показывают, одинаково ли агент отвечает на один и тот же сценарий.</p>
         </div>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-lab-line px-6 py-4">

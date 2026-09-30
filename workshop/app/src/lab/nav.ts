@@ -36,7 +36,7 @@ export const STEP_TITLE: Record<Step, string> = {
 
 /** What each place answers, for tooltips and ⌘K. */
 export const STEP_HINT: Record<Step, string> = {
-  overview: "Стала ли версия лучше и что сломалось",
+  overview: "Сколько диалогов без нарушений и что нарушается",
   criteria: "Что агент обязан делать",
   dialogs: "Доказательства: каждый диалог с вердиктом",
   judge: "Можно ли верить оценке",
@@ -66,7 +66,7 @@ export function setupSteps(state: LabState): SetupStep[] {
   return [
     { id: "agent", label: "Подключите агента", hint: "Адрес агента и его код.", gives: "критерии из промптов и инструментов", done: state.sources.length > 0, to: "/lab/agent", cta: "Подключить агента" },
     { id: "logs", label: "Оцените реальные диалоги", hint: "Выгрузка чата из Excel.", gives: "нарушения в реальных диалогах", done: !!state.discover, to: "/lab/logs", cta: "Загрузить логи" },
-    { id: "checks", label: "Соберите сценарии", hint: "Ситуации клиентов из логов.", gives: "вердикт по каждой версии", done: state.runs.length > 0, to: "/lab/checks", cta: "Собрать сценарии" },
+    { id: "checks", label: "Соберите сценарии", hint: "Ситуации клиентов из логов.", gives: "оценку каждой версии агента", done: state.runs.length > 0, to: "/lab/checks", cta: "Собрать сценарии" },
   ];
 }
 
