@@ -1,0 +1,9 @@
+{
+  "name": "conductor-playground",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix workshop/app run dev -- --host 0.0.0.0",
+    "build": "npm --prefix workshop/app run build",
+    "start": "npm --prefix workshop/app run dev -- --host 0.0.0.0"
+  }
+}
