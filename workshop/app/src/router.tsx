@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "./shell/AppShell";
+import { AgentPage } from "./screens/agent/AgentPage";
 import { RunsPage } from "./pages/RunsPage";
 import { LabPage } from "./pages/LabPage";
 import { SearchPage } from "./pages/SearchPage";
@@ -27,6 +28,7 @@ export const router = createBrowserRouter([
       { path: "simulations", element: <SimulationsPage /> },
       { path: "simulations/runs/:runId", element: <SimulationsPage /> },
       { path: "simulations/scenarios/:scenarioId", element: <SimulationsPage /> },
+      { path: "agent", element: <AgentPage /> },
       { path: "lab/dialogs", element: <Navigate to="/dialogs?source=sim" replace /> },
       { path: "lab/dialogs/:itemId", element: <Navigate to="/dialogs?source=sim" replace /> },
       { path: "lab/logs", element: <Navigate to="/dialogs?source=log" replace /> },

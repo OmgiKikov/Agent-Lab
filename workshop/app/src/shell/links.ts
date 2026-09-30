@@ -9,7 +9,7 @@ export const LINKS = {
   review: "/review",
   simulations: "/simulations",
   scenarios: "/simulations?mode=scenarios",
-  agent: "/lab/agent",
+  agent: "/agent",
   logs: "/dialogs",
   settings: "/settings",
   trace: (traceId: string) => `/runs/${encodeURIComponent(traceId)}`,
