@@ -88,8 +88,8 @@ export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: (
 
   const actions = (
     <>
-      <Button size="sm" variant="ghost" icon={Upload} loading={busy} disabled={state.job.running} onClick={() => fileRef.current?.click()}>Новая выгрузка</Button>
-      {d && <Button size="sm" variant="ghost" disabled={state.job.running} onClick={() => setConfirm(true)} title="Выделить критерии из источников заново">Новые критерии</Button>}
+      <Button size="sm" variant="ghost" icon={Upload} loading={busy} collapse disabled={state.job.running} onClick={() => fileRef.current?.click()} title="Загрузить новую выгрузку">Новая выгрузка</Button>
+      {d && <Button size="sm" variant="ghost" className="max-sm:hidden" disabled={state.job.running} onClick={() => setConfirm(true)} title="Выделить критерии из источников заново">Новые критерии</Button>}
     </>
   );
   const evaluate = <Button variant={d ? "secondary" : "primary"} icon={FileText} disabled={state.job.running || noSources} onClick={() => run(false)}>{d ? "Оценить заново" : "Оценить логи"}</Button>;

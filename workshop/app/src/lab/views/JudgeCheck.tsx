@@ -118,14 +118,14 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
       </div>
 
       <div className="flex-shrink-0 border-t border-lab-line bg-lab-panel px-6 py-3">
-        <div className="mx-auto flex max-w-[800px] flex-wrap items-center gap-2">
-          <Button size="sm" variant="ghost" icon={ArrowLeft} disabled={at === 0} onClick={() => setAt(a => a - 1)}>Назад</Button>
-          <span className="mx-auto flex flex-wrap items-center justify-center gap-2">
-            <span className="text-body text-lab-mute">Вердикт «{verdictWord}» верный?</span>
+        <div className="mx-auto flex max-w-[800px] items-center gap-2">
+          <Button size="sm" variant="ghost" icon={ArrowLeft} collapse disabled={at === 0} onClick={() => setAt(a => a - 1)}>Назад</Button>
+          <span className="mx-auto flex items-center justify-center gap-2">
+            <span className="text-body text-lab-mute max-sm:hidden">Вердикт «{verdictWord}» верный?</span>
             <Button variant={decision === "agree" ? "primary" : "secondary"} icon={Check} kbd="1" onClick={() => decide("agree")} aria-pressed={decision === "agree"}>Верно</Button>
             <Button variant={decision === "disagree" ? "danger" : "secondary"} icon={X} kbd="2" onClick={() => decide("disagree")} aria-pressed={decision === "disagree"}>Неверно</Button>
           </span>
-          <Button size="sm" variant="ghost" onClick={() => setAt(a => Math.min(a + 1, queue.length - 1))} disabled={at >= queue.length - 1}>Пропустить<ArrowRight className="size-3.5" /></Button>
+          <Button size="sm" variant="ghost" onClick={() => setAt(a => Math.min(a + 1, queue.length - 1))} disabled={at >= queue.length - 1} title="Пропустить"><span className="max-sm:sr-only">Пропустить</span><ArrowRight className="size-3.5" /></Button>
         </div>
       </div>
     </div>

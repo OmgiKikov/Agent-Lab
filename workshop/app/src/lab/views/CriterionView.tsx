@@ -151,9 +151,9 @@ function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: Lab
   return (
     <Page
       crumb={{ label: back, onClick: onBack }} title={c.title} full
-      actions={<Button size="sm" variant="ghost" icon={copied ? Check : Copy} onClick={copy}>{copied ? "Скопировано" : "Копировать"}</Button>}
+      actions={<Button size="sm" variant="ghost" icon={copied ? Check : Copy} collapse onClick={copy}>{copied ? "Скопировано" : "Копировать"}</Button>}
       primary={cardIds.length > 0 && scope.finished
-        ? <Button variant="primary" icon={Play} loading={busy} disabled={state.job.running} title={state.job.running ? "Сейчас идёт другая работа" : "Поправили агента? Перепроверьте только эти сценарии"} onClick={recheck}>Перепроверить {count(cardIds.length, "сценарий", "сценария", "сценариев")}</Button>
+        ? <Button variant="primary" icon={Play} loading={busy} collapse disabled={state.job.running} title={state.job.running ? "Сейчас идёт другая работа" : "Поправили агента? Перепроверьте только эти сценарии"} onClick={recheck}>Перепроверить {count(cardIds.length, "сценарий", "сценария", "сценариев")}</Button>
         : undefined}
     >
       <div className="mx-auto grid max-w-[1280px] gap-x-12 gap-y-10 pt-8 lg:grid-cols-[360px_minmax(0,1fr)]">

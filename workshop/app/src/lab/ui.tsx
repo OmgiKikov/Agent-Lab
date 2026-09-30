@@ -91,7 +91,7 @@ export function Page({ title, icon: Icon, count, crumb, lede, actions, primary, 
           <div className="flex min-w-0 flex-1 items-center gap-2">
             {crumb && (
               <>
-                <button onClick={crumb.onClick} className="lab-focus -ml-1.5 min-w-0 truncate rounded-md px-1.5 py-1 text-body text-lab-mute transition-colors duration-100 hover:text-lab-ink">{crumb.label}</button>
+                <button onClick={crumb.onClick} className="lab-focus -ml-1.5 max-w-[45%] flex-shrink-0 truncate rounded-md px-1.5 py-1 text-body text-lab-mute transition-colors duration-100 hover:text-lab-ink">{crumb.label}</button>
                 <span className="text-body text-lab-faint" aria-hidden>/</span>
               </>
             )}
@@ -101,7 +101,8 @@ export function Page({ title, icon: Icon, count, crumb, lede, actions, primary, 
           </div>
           <div className="flex flex-shrink-0 items-center gap-1.5">
             {actions}
-            {!bare && !noContext && chrome.context}
+            {/* On a phone the header has room for the page's own actions only: the version is switched on the version page. */}
+            {!bare && !noContext && chrome.context && <div className="hidden md:block">{chrome.context}</div>}
             {main}
           </div>
         </div>
@@ -126,6 +127,8 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   loading?: boolean;
   /** A keyboard shortcut shown inside the button, e.g. "1". */
   kbd?: string;
+  /** On a phone only the icon stays: the label goes to screen readers. For header buttons that would not fit. */
+  collapse?: boolean;
 };
 
 /** Raindrop's buttons: outlined and quiet; the one primary is light, like its «Ask Claude Code» tab. */
@@ -141,7 +144,7 @@ const BUTTON_SIZE = { sm: "h-7 gap-1.5 px-2.5 text-caption", md: "h-8 gap-1.5 px
 
 /** Sans, sentence case, verb first. One primary per region. */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = "secondary", size = "md", icon: Icon, loading, kbd, className, children, disabled, ...rest }, ref,
+  { variant = "secondary", size = "md", icon: Icon, loading, kbd, collapse, className, children, disabled, ...rest }, ref,
 ) {
   return (
     <button
@@ -155,8 +158,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       {...rest}
     >
       {loading ? <Loader2 className="size-3.5 animate-spin" /> : Icon && <Icon className={size === "lg" ? "size-4" : "size-3.5"} />}
-      {children}
-      {kbd && <kbd className={cn("ml-0.5 font-mono text-micro", variant === "primary" ? "text-black/45" : "text-lab-faint")}>{kbd}</kbd>}
+      {collapse ? <span className="max-sm:sr-only">{children}</span> : children}
+      {kbd && <kbd className={cn("ml-0.5 font-mono text-micro max-sm:hidden", variant === "primary" ? "text-black/45" : "text-lab-faint")}>{kbd}</kbd>}
     </button>
   );
 });
@@ -417,8 +420,9 @@ export function IntervalBar({ value, low, high, className }: { value: number; lo
 /** Raindrop's metric strip: one surface, the metrics side by side, each a label, a value and one line of context. It never wraps: it scrolls. */
 export function Strip({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("overflow-x-auto rounded-lg border border-lab-line bg-lab-panel", className)}>
-      <div className="flex min-w-max divide-x divide-lab-line">{children}</div>
+    <div className={cn("overflow-hidden rounded-lg border border-lab-line bg-lab-panel", className)}>
+      {/* The 1px gaps show the hairline through: the dividers stay right however the cells wrap. */}
+      <div className="flex flex-wrap gap-px bg-lab-line [&>*]:bg-lab-panel">{children}</div>
     </div>
   );
 }
@@ -437,7 +441,7 @@ export function Stat({ label, value, sub, hue, onClick, className, children }: {
   );
   const box = "flex min-w-[150px] flex-1 flex-col items-start justify-start px-5 py-4 text-left";
   return onClick
-    ? <button onClick={onClick} className={cn("lab-focus-inset group transition-colors duration-100 hover:bg-white/[0.03]", box, className)}>{body}</button>
+    ? <button onClick={onClick} className={cn("lab-focus-inset group transition-colors duration-100 hover:bg-lab-card", box, className)}>{body}</button>
     : <div className={cn(box, className)}>{body}</div>;
 }
 

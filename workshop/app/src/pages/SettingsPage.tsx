@@ -32,20 +32,20 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="h-full flex">
-      <div className="w-48 flex-shrink-0 p-6 pr-0">
+    <div className="h-full flex flex-col md:flex-row">
+      <div className="flex-shrink-0 px-5 pt-5 md:w-48 md:p-6 md:pr-0">
         <h1
-          className="text-[22px] mb-6 pl-3"
+          className="text-[22px] mb-4 pl-3 md:mb-6"
           style={{ fontFamily: '"AlphaLyrae", "Commissioner Variable", sans-serif', color: C.fg4 }}
         >
           настройки
         </h1>
-        <nav className="flex flex-col gap-0.5">
+        <nav className="flex gap-0.5 overflow-x-auto md:flex-col">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               onClick={() => setTab(id)}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all duration-150"
+              className="flex flex-shrink-0 items-center gap-2.5 whitespace-nowrap px-3 py-2 rounded-lg text-left transition-all duration-150"
               style={{
                 color: tab === id ? C.fg4 : C.fg0,
                 background: tab === id ? "rgba(255,255,255,0.06)" : "transparent",
@@ -58,7 +58,7 @@ export function SettingsPage() {
         </nav>
       </div>
 
-      <div className="flex-1 overflow-auto sb p-6 pl-8">
+      <div className="min-h-0 flex-1 overflow-auto sb p-5 md:p-6 md:pl-8">
         <div className="max-w-xl pb-16">
           {sectionMap[tab]()}
         </div>

@@ -774,7 +774,7 @@ export function SavedPage() {
   return (
     <div className="h-full flex relative">
 
-      <div className={`w-80 flex-shrink-0 flex flex-col ${isEmpty ? "opacity-40 pointer-events-none" : ""}`} style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className={`w-full md:w-80 flex-shrink-0 flex-col ${selectedEvent ? "hidden md:flex" : "flex"} ${isEmpty ? "opacity-40 pointer-events-none" : ""}`} style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="p-3 space-y-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="flex items-center justify-between">
             <div className="text-[14px]" style={{ fontFamily: '"AlphaLyrae", "Commissioner Variable", sans-serif', color: C.fg3 }}>Сохранённые трейсы</div>
@@ -816,8 +816,13 @@ export function SavedPage() {
       </div>
 
 
-      <div className={`flex-1 min-w-0 overflow-hidden ${isEmpty ? "opacity-40" : ""}`}>
-        {selectedEvent && <SavedRunDetail key={selectedEvent.id} event={selectedEvent} />}
+      <div className={`flex-1 min-w-0 overflow-hidden flex-col ${selectedEvent ? "flex" : "hidden md:flex"} ${isEmpty ? "opacity-40" : ""}`}>
+        {selectedEvent && (
+          <button className="md:hidden flex-shrink-0 px-4 py-2 text-left text-[12px]" style={{ color: C.fg1, borderBottom: `1px solid ${C.border}` }} onClick={() => navigate("/saved")}>
+            ← Все сохранённые
+          </button>
+        )}
+        {selectedEvent && <div className="min-h-0 flex-1"><SavedRunDetail key={selectedEvent.id} event={selectedEvent} /></div>}
         {!selectedEvent && !isEmpty && (
           <div className="h-full flex items-center justify-center">
             <div className="text-center space-y-2">

@@ -263,12 +263,12 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
 
   return (
     <div className="flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: C.fg1 }}>
-      {model && <><Badge label="модель" copyValue={model} /><span>{model}</span><Dot /></>}
+      {model && <><span className="inline-flex items-center gap-1.5 whitespace-nowrap"><Badge label="модель" copyValue={model} /><span>{model}</span></span><Dot /></>}
       {stats.tools > 0 && <><span><NumberFlow value={stats.tools} /> {ruPlural(stats.tools, "инструмент", "инструмента", "инструментов")}</span><Dot /></>}
       {(stats.agents ?? 0) > 0 && <><span><NumberFlow value={stats.agents!} /> {ruPlural(stats.agents!, "субагент", "субагента", "субагентов")}</span><Dot /></>}
       {stats.errors > 0 && spans && <><ErrorsTooltip spans={spans} /><Dot /></>}
       {stats.errors > 0 && !spans && <><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> {ruPlural(stats.errors, "ошибка", "ошибки", "ошибок")}</span><Dot /></>}
-      <Badge label="длительность" /><span>{durMin > 0 ? <><NumberFlow value={durMin} />&nbsp;мин <NumberFlow value={durRemSec} />&nbsp;с</> : <><NumberFlow value={durSec} />&nbsp;с</>}</span>
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><Badge label="длительность" /><span>{durMin > 0 ? <><NumberFlow value={durMin} />&nbsp;мин <NumberFlow value={durRemSec} />&nbsp;с</> : <><NumberFlow value={durSec} />&nbsp;с</>}</span></span>
       {(inTok > 0 || outTok > 0) && <><Dot /><Badge label="токены" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> вход / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> выход</span></>}
       {(() => {
         const totalCost = breakdown.reduce((sum, b) => sum + (b.breakdown?.totalCost ?? 0), 0);
@@ -596,7 +596,7 @@ function ViewHeader({
         </div>
       ) : (
         <>
-          <div className="flex items-center mb-1 justify-between gap-3">
+          <div className="flex flex-wrap items-center mb-1 justify-between gap-x-3 gap-y-2">
             <div className="flex items-center gap-2 min-w-0">
               <div className={`w-2 h-2 rounded-full flex-shrink-0 ${active ? "pulse-dot" : ""}`} style={{ background: active ? C.green : "rgba(255,255,255,0.18)" }} title={active ? "Идёт" : "Готово"} />
               {onFork && !active ? (
@@ -624,7 +624,7 @@ function ViewHeader({
                       title="Добавить заметку к трейсу"
                     >
                       <Pencil className="h-3 w-3" />
-                      Заметка
+                      <span className="max-sm:sr-only">Заметка</span>
                     </button>
                     {annotationPopoverOpen && (
                       <AnnotationCreatePopover
@@ -647,7 +647,7 @@ function ViewHeader({
                   title="Разобрать с Claude Code"
                 >
                   <MessageCircle className="h-3 w-3" />
-                  Разобрать
+                  <span className="max-sm:sr-only">Разобрать</span>
                 </button>
                 {onDownload && (
                   <button
@@ -657,7 +657,7 @@ function ViewHeader({
                     title="Скачать трейс в JSON"
                   >
                     <Download className="h-3 w-3" />
-                    Скачать
+                    <span className="max-sm:sr-only">Скачать</span>
                   </button>
                 )}
                 <button
@@ -672,7 +672,7 @@ function ViewHeader({
                   title={isSaved ? "Сменить папку или убрать из сохранённых" : "Сохранить трейс"}
                 >
                   <Bookmark className="h-3 w-3" style={isSaved ? { fill: C.green } : {}} />
-                  {isSaved ? "Сохранено" : "Сохранить"}
+                  <span className="max-sm:sr-only">{isSaved ? "Сохранено" : "Сохранить"}</span>
                 </button>
                 {savePopoverOpen && (
                   <SavePopover
@@ -702,7 +702,7 @@ function ViewHeader({
                       }}
                     >
                       <RotateCcw className="h-3 w-3" />
-                      Повторить
+                      <span className="max-sm:sr-only">Повторить</span>
                     </button>
                     <button
                       className="flex items-center justify-center px-1.5 transition-colors hover:bg-white/10"
@@ -817,11 +817,11 @@ function ViewHeader({
             <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
             {run && (run.id || run.user_id || run.convo_id) && (
               <>
-                <Dot />
-                <span className="flex items-center gap-1.5" style={{ color: C.fg1 }}>
-                  {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="пользователь" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
-                  {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="диалог" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
-                  <span className="inline-flex items-center gap-1" title={run.id}><Badge label="трейс" copyValue={run.id} />{run.id.slice(0, 8)}</span>
+                <span className="max-sm:hidden"><Dot /></span>
+                <span className="flex flex-wrap items-center gap-1.5" style={{ color: C.fg1 }}>
+                  {run.user_id && <span className="inline-flex items-center gap-1 whitespace-nowrap" title={run.user_id}><Badge label="пользователь" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
+                  {run.convo_id && <span className="inline-flex items-center gap-1 whitespace-nowrap" title={run.convo_id}><Badge label="диалог" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap" title={run.id}><Badge label="трейс" copyValue={run.id} />{run.id.slice(0, 8)}</span>
                 </span>
               </>
             )}

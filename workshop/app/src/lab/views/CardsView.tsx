@@ -27,16 +27,19 @@ function ScenarioRow({ card, state, onPick }: { card: Card; state: LabState; onP
   const covered = state.personas.filter(p => p.id !== DEFAULT_PERSONA && card.openings?.[p.id]);
   return (
     <button onClick={onPick} className="lab-focus-inset group flex w-full items-center gap-4 px-4 py-3 text-left transition-colors duration-100 hover:bg-white/[0.03]">
-      <span className="w-[92px] flex-shrink-0"><OriginBadge origin={card.origin} /></span>
+      <span className="w-[92px] flex-shrink-0 max-sm:hidden"><OriginBadge origin={card.origin} /></span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-reading text-lab-ink">{card.name}</span>
-        <span className="mt-0.5 block truncate text-caption text-lab-mute">«{card.opening}»</span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-2">
+          <span className="flex-shrink-0 sm:hidden"><OriginBadge origin={card.origin} /></span>
+          <span className="truncate text-caption text-lab-mute">«{card.opening}»</span>
+        </span>
       </span>
       <span className="hidden w-[180px] flex-shrink-0 truncate text-caption text-lab-mute lg:block" title={card.topic}>{card.topic}</span>
       <span className="hidden w-[84px] flex-shrink-0 items-center justify-end gap-1 sm:flex" title={covered.length ? `Есть реплики: ${covered.map(p => personaName(state.personas, p.id)).join(", ")}` : undefined}>
         {covered.slice(0, 4).map(p => <PersonaIcon key={p.id} id={p.id} size={18} />)}
       </span>
-      <span className="w-[80px] flex-shrink-0 text-right text-caption tabular-nums text-lab-mute">{count(card.criteria.length, "критерий", "критерия", "критериев")}</span>
+      <span className="w-[80px] flex-shrink-0 text-right text-caption tabular-nums text-lab-mute max-sm:hidden">{count(card.criteria.length, "критерий", "критерия", "критериев")}</span>
       <ArrowRight className="size-3.5 flex-shrink-0 text-lab-faint transition-colors duration-100 group-hover:text-lab-mute" />
     </button>
   );
