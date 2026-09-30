@@ -4,34 +4,48 @@ import { ArrowLeft, Copy, MessageSquare } from "lucide-react";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
 import { problemMarkdown, sourceLabel } from "../../lab/problemReport";
-import { useReview, type Decision, type Example, type RuleEntry } from "../../lab/problems";
+import { useReview, type Decision, type RuleEntry } from "../../lab/problems";
+import { humansOf, secondOf } from "../../lab/problemStats";
+import { cn } from "@/lib/utils";
 import { useKeys } from "../../shell/keys";
 import { viewLink } from "../../shell/links";
 import { useShell } from "../../shell/ShellContext";
 import { Button } from "../../ui/Button";
-import { Facts, type Fact } from "../../ui/Facts";
-import { Label } from "../../ui/Label";
+import { Chip } from "../../ui/Chip";
+import { Details, Tag, type Detail } from "../../ui/Details";
+import { Tiles, type Tile } from "../../ui/Tiles";
+import { TwoCol } from "../../ui/TwoCol";
 import { Quote } from "../../ui/Quote";
 import { useToast } from "../../ui/toast";
 import { modeOf, orderExamples, type EvidenceMode } from "../verdicts/EvidenceBar";
-import { Evidence } from "./Evidence";
+import { ExamplePane } from "../verdicts/ExamplePane";
 import { Reproduce } from "./Reproduce";
 import { SourceDrawer } from "./SourceDrawer";
 
-const share = (side: { failed: number; passed: number }) => `${side.failed} из ${side.failed + side.passed}`;
 const wide = () => window.matchMedia("(min-width: 1024px)").matches;
 
-/** The second judge on the violations of one side: how many he checked and agreed with. */
-function secondFact(examples: Example[]): string {
-  const judged = examples.filter(e => e.status === "FAIL" && e.second);
-  if (!judged.length) return "не проверял";
-  const agree = judged.filter(e => e.second === "agree").length;
-  const whole = judged.filter(e => e.secondScope === "dialogue").length;
-  const scope = whole === judged.length ? " · по диалогу целиком" : whole ? ` · ${whole} по диалогу целиком` : "";
-  return `согласен в ${agree} из ${judged.length}${scope}`;
+/** How the dialogues of one side divide: violated, fulfilled, and those the judge could not tell. One bar, every part counted. */
+function Split3({ side }: { side: { failed: number; passed: number; unknown: number } }) {
+  const total = side.failed + side.passed + side.unknown;
+  const part = (n: number) => `${total ? (100 * n) / total : 0}%`;
+  return (
+    <section className="mt-6">
+      <h2 className="text-heading font-semibold text-lab-ink">Диалоги</h2>
+      <div className="mt-2.5 flex h-2 overflow-hidden rounded-full bg-white/[0.08]" role="img" aria-label={`нарушено ${side.failed}, выполнено ${side.passed}, не проверено ${side.unknown}`}>
+        <div className="bg-lab-bad" style={{ width: part(side.failed) }} />
+        <div className="bg-white/40" style={{ width: part(side.passed) }} />
+        <div className="bg-lab-warn/70" style={{ width: part(side.unknown) }} />
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-meta text-lab-mute">
+        <span><span className="mr-1 inline-block size-1.5 rounded-full bg-lab-bad" />нарушено {side.failed}</span>
+        <span><span className="mr-1 inline-block size-1.5 rounded-full bg-white/40" />без нарушений {side.passed}</span>
+        {side.unknown > 0 && <span><span className="mr-1 inline-block size-1.5 rounded-full bg-lab-warn/70" />не проверено {side.unknown}</span>}
+      </div>
+    </section>
+  );
 }
 
-/** One problem of one source, read top to bottom as an argument: what is wrong, what the code requires, the proof, what is unknown, what next. */
+/** One problem of one source as Raindrop's issue page: the criterion on the left with its numbers, the proof on the right. */
 export function ProblemDetail({ p, source, runId, onBack }: { p: RuleEntry; source: "log" | "sim"; runId?: string | null; onBack: () => void }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -40,6 +54,7 @@ export function ProblemDetail({ p, source, runId, onBack }: { p: RuleEntry; sour
   const review = useReview();
   const [sourceOpen, setSourceOpen] = useState(false);
   const [hover, setHover] = useState(false);
+  const [more, setMore] = useState(false);
   const side = p[source];
   const mode = modeOf(params.get("ev"));
   const violations = orderExamples(side.examples.filter(e => e.status === "FAIL"), mode);
@@ -60,47 +75,44 @@ export function ProblemDetail({ p, source, runId, onBack }: { p: RuleEntry; sour
     KeyC: copy,
     Escape: () => { if (!wide()) onBack(); },
   });
-  const humans = violations.filter(e => e.review);
-  const agreed = humans.filter(e => e.review === "agree").length;
-  const facts: Fact[] = [
-    { label: source === "log" ? "В логах" : "В симуляции", value: share(side), onClick: () => navigate(viewLink(source, runId, "dialogs", { v: "fail", rule: p.id })), title: "Открыть диалоги, где критерий нарушен" },
-    { label: "Второй судья", value: secondFact(side.examples), onClick: violations.some(e => e.second === "disagree") ? () => navigate(viewLink(source, runId, "review", { queue: "disputed", rule: p.id })) : undefined, title: "Открыть вердикты, где судьи расходятся" },
-    ...(side.unknown ? [{ label: "Не проверено", value: `в ${side.unknown} ${plural(side.unknown, "диалоге", "диалогах", "диалогах")}`, title: "Судья не нашёл доказательств ни выполнения, ни нарушения" }] : []),
-    { label: "Люди", value: humans.length ? `верно ${agreed} · неверно ${humans.length - agreed}` : "не проверяли", onClick: () => navigate(viewLink(source, runId, "review", { queue: "unchecked", rule: p.id })), title: "Проверить нарушения этого критерия" },
+  const humans = humansOf(side);
+  const second = secondOf(side.examples);
+  const total = side.failed + side.passed;
+  const to = (view: "dialogs" | "review", extra: Record<string, string>) => navigate(viewLink(source, runId, view, extra));
+  const tiles: Tile[] = [
+    { label: source === "log" ? "В логах" : "В прогоне", value: side.failed, of: `из ${total}`, onClick: () => to("dialogs", { v: "fail", rule: p.id }), title: "Открыть диалоги, где критерий нарушен" },
+    { label: "Без оценки", value: side.unknown, of: side.unknown ? plural(side.unknown, "диалог", "диалога", "диалогов") : undefined, title: "Судья не нашёл доказательств ни выполнения, ни нарушения" },
+    { label: "Второй судья", value: second.checked ? second.agree : "—", of: second.checked ? `из ${second.checked}` : undefined, onClick: violations.some(e => e.second === "disagree") ? () => to("review", { queue: "disputed", rule: p.id }) : undefined, title: second.checked ? `Согласен в ${second.agree} из ${second.checked} нарушений${second.whole ? `, ${second.whole} оценил по диалогу целиком` : ""}` : "Не проверял" },
+    { label: "Люди", value: humans.checked || "—", of: humans.checked ? `из ${humans.of}` : undefined, onClick: () => to("review", { queue: "unchecked", rule: p.id }), title: humans.checked ? `верно ${humans.agree}, неверно ${humans.checked - humans.agree}` : "Проверить нарушения этого критерия" },
   ];
-  return (
-    <article className="message-arrive mx-auto max-w-[760px] px-6 pb-16 pt-5 lg:px-8">
-      <button type="button" onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-small text-lab-mute transition-colors hover:text-lab-text lg:hidden">
-        <ArrowLeft className="size-3.5" />Нарушения
-      </button>
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
-        <h1 className="min-w-0 flex-1 text-page font-medium text-lab-ink">{p.title}</h1>
-        <div className="flex flex-shrink-0 gap-2">
-          <Button size="sm" icon={Copy} kbd="C" onClick={copy}>Скопировать</Button>
-          <Button size="sm" icon={MessageSquare} onClick={() => shell.openAsk(example?.traceId ?? null)}>Спросить</Button>
-        </div>
+  const details: Detail[] = [
+    { label: "Критерий", value: <Link to={`/agent?tab=criteria&c=${encodeURIComponent(p.id)}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-ink">открыть целиком</Link> },
+    { label: "Источник", value: p.rule.origin ? <button type="button" onClick={p.rule.sourceId ? () => setSourceOpen(true) : undefined} className="break-all text-left font-mono text-meta underline decoration-white/20 underline-offset-2 hover:text-lab-ink">{p.rule.origin}</button> : sourceLabel(p.rule.kind) },
+    ...(p.topics.length ? [{ label: plural(p.topics.length, "Тема", "Темы", "Темы"), value: <span className="flex flex-wrap gap-1.5">{p.topics.map(t => <Tag key={t}>{t}</Tag>)}</span> }] : []),
+    ...(p.rule.condition ? [{ label: "Когда", value: p.rule.condition }] : []),
+    ...(p.rule.acceptable ? [{ label: "Допустимо", value: p.rule.acceptable }] : []),
+    ...(humans.checked ? [{ label: "Люди", value: `верно ${humans.agree} · неверно ${humans.checked - humans.agree}` }] : []),
+  ];
+  const left = (
+    <>
+      <button type="button" onClick={onBack} className="mb-3 inline-flex items-center gap-1.5 text-small text-lab-mute transition-colors hover:text-lab-text lg:hidden"><ArrowLeft className="size-3.5" />Нарушения</button>
+      <Chip tone="bad">Нарушение {source === "log" ? "в логах" : "в прогоне"}</Chip>
+      <h1 className="mt-2.5 text-title font-medium text-lab-ink">{p.title}</h1>
+      <p className={cn("mt-2 text-small text-lab-mute", !more && "line-clamp-3")}>{p.rule.text}</p>
+      {p.rule.text.length > 150 && <button type="button" onClick={() => setMore(m => !m)} className="text-small text-lab-soft underline decoration-white/20 underline-offset-2 hover:text-lab-ink">{more ? "свернуть" : "…ещё"}</button>}
+      <div className="mt-3 flex gap-2">
+        <Button size="sm" icon={Copy} kbd="C" onClick={copy}>Скопировать</Button>
+        <Button size="sm" icon={MessageSquare} onClick={() => shell.openAsk(example?.traceId ?? null)}>Спросить</Button>
       </div>
-      {p.topics.length > 0 && <p className="mt-1 text-meta text-lab-dim">{plural(p.topics.length, "Тема", "Темы", "Темы")}: {p.topics.join(" · ")}</p>}
-      <Facts className="mt-4" facts={facts} />
+      <Tiles className="mt-4" tiles={tiles} />
+      <Details rows={details} />
       <section className="mt-6">
-        <Quote label={sourceLabel(p.rule.kind)} origin={p.rule.origin || undefined} onOrigin={p.rule.sourceId ? () => setSourceOpen(true) : undefined} hover={hover} onHover={setHover}>
-          {p.rule.quote}
-        </Quote>
-        <details className="group mt-2 pl-[18px] text-small">
-          <summary className="cursor-pointer list-none text-lab-dim transition-colors hover:text-lab-text">Подробнее о критерии</summary>
-          <dl className="mt-2 space-y-1">
-          <div>
-            <dt className="inline text-lab-dim">Как судья понимает критерий: </dt><dd className="inline text-lab-mute">{p.rule.text}</dd>
-            <Link to={`/agent?tab=criteria&c=${encodeURIComponent(p.id)}`} className="ml-2 whitespace-nowrap text-lab-dim underline decoration-white/20 underline-offset-4 transition-colors hover:text-lab-text">критерий целиком</Link>
-          </div>
-          {p.rule.condition && <div><dt className="inline text-lab-dim">Когда применяется: </dt><dd className="inline text-lab-mute">{p.rule.condition}</dd></div>}
-          {p.rule.acceptable && <div><dt className="inline text-lab-dim">Что допустимо: </dt><dd className="inline text-lab-mute">{p.rule.acceptable}</dd></div>}
-          </dl>
-        </details>
+        <Quote label={sourceLabel(p.rule.kind)} hover={hover} onHover={setHover}>{p.rule.quote}</Quote>
       </section>
-      <Evidence list={violations} mode={mode} onMode={setMode} at={at} onAt={setAt} hover={hover} onHover={setHover} onDecide={decide} />
+      <Split3 side={side} />
       {source === "log" && <Reproduce p={p} />}
       <SourceDrawer open={sourceOpen} onClose={() => setSourceOpen(false)} sourceId={p.rule.sourceId} origin={p.rule.origin} quote={p.rule.quote} />
-    </article>
+    </>
   );
+  return <TwoCol left={left} right={<ExamplePane list={violations} mode={mode} onMode={setMode} at={at} onAt={setAt} hover={hover} onHover={setHover} onDecide={decide} />} />;
 }

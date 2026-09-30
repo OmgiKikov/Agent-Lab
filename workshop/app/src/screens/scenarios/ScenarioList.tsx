@@ -22,7 +22,7 @@ export function ScenarioList({ cards, selectedId, onPick, query, onQuery, origin
   const groups = [...shown.reduce((m, c) => m.set(c.topic, [...(m.get(c.topic) ?? []), c]), new Map<string, Card[]>())];
   return (
     <div>
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/[0.06] bg-lab-surface px-3 py-2">
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/[0.08] bg-lab-surface px-3 py-2">
         <label className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-white/[0.08] px-2 text-meta text-lab-dim focus-within:border-white/25">
           <Search aria-hidden className="size-3.5 flex-shrink-0" />
           <input value={query} onChange={e => onQuery(e.target.value)} placeholder="Найти сценарий…" name="q" autoComplete="off" aria-label="Найти сценарий" className="min-w-0 flex-1 bg-transparent text-lab-text outline-none placeholder:text-lab-faint" />
@@ -32,7 +32,7 @@ export function ScenarioList({ cards, selectedId, onPick, query, onQuery, origin
       </div>
       {groups.map(([topic, list]) => (
         <div key={topic}>
-          <div className="border-b border-white/[0.06] bg-lab-bg px-3 py-1.5 text-meta font-medium text-lab-dim">
+          <div className="border-b border-white/[0.08] bg-lab-bg px-3 py-1.5 text-meta font-medium text-lab-dim">
             {topic} · {list.length} {plural(list.length, "сценарий", "сценария", "сценариев")}
           </div>
           {list.map(c => (

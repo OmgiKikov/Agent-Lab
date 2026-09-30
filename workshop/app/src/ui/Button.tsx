@@ -12,8 +12,8 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 const VARIANT = {
   primary: "border-transparent bg-lab-ink text-black hover:bg-white",
-  outline: "border-white/[0.12] text-lab-soft hover:border-white/25 hover:bg-white/[0.05] hover:text-lab-ink",
-  ghost: "border-transparent text-lab-mute hover:bg-white/[0.06] hover:text-lab-text",
+  outline: "border-white/[0.15] bg-[rgb(40,40,40)] text-lab-text hover:border-white/25 hover:bg-[rgb(48,48,48)] hover:text-lab-ink",
+  ghost: "border-transparent text-lab-mute hover:bg-white/[0.08] hover:text-lab-text",
 };
 
 /** The button of Raindrop's trace header: 11px mono, outlined, an icon and a word; one light primary per screen. The key is in its tooltip. */
@@ -24,9 +24,9 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
     <button
       ref={ref} type={type} disabled={disabled || loading} title={kbd ? `${title ?? (typeof children === "string" ? children : "")} (${kbd})`.trim() : title}
       className={cn(
-        "inline-flex flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded border text-body transition-colors",
+        "inline-flex flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[5px] border text-body transition-colors",
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-lab-accent disabled:pointer-events-none disabled:opacity-40",
-        size === "sm" ? "h-7 px-2.5" : "h-8 px-3",
+        size === "sm" ? "h-7 px-2.5" : "h-[30px] px-3",
         !children && (size === "sm" ? "w-7 px-0" : "w-8 px-0"),
         VARIANT[variant], className,
       )}

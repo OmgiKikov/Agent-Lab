@@ -51,7 +51,7 @@ function Way({ target }: { target: Target }) {
   };
   const Icon = target.kind === "code" ? Code : Globe;
   return (
-    <div className="border-b border-white/[0.06] py-4">
+    <div className="border-b border-white/[0.08] py-4">
       <div className="flex items-start gap-3">
         <Icon className="mt-0.5 size-4 flex-shrink-0 text-lab-dim" />
         <div className="min-w-0 flex-1">

@@ -41,7 +41,7 @@ export function TypesView({ run, items, hrefOf }: { run: LabRun; items: Item[]; 
           const done = measuredOf(own);
           const skipped = own.length - done.length;
           return (
-            <section key={t.id} className="rounded-lg border border-white/[0.07] bg-lab-surface p-4">
+            <section key={t.id} className="rounded-lg border border-white/[0.08] bg-lab-surface p-4">
               <div className="text-body font-medium text-lab-ink">{t.name}</div>
               <div className="mb-3 text-meta text-lab-dim">{own.length} диалогов{skipped > 0 && `, без оценки ${skipped}`}</div>
               {done.length ? <Pair failed={done.filter(i => i.status === "FAIL").length} measured={done.length} /> : <p className="text-meta text-lab-dim">Оценённых диалогов нет</p>}
@@ -52,7 +52,7 @@ export function TypesView({ run, items, hrefOf }: { run: LabRun; items: Item[]; 
       <Label className="mt-10">По сценариям</Label>
       <div className="mt-2">
         {scenarios.map(s => (
-          <div key={s.id} className="border-b border-white/[0.06] py-3">
+          <div key={s.id} className="border-b border-white/[0.08] py-3">
             <Link to={`/scenarios?s=${encodeURIComponent(s.id)}`} className="text-body text-lab-ink hover:underline hover:decoration-white/40 hover:underline-offset-4">{s.name}</Link>
             <div className={cn("mt-2 grid gap-x-8 gap-y-3", types.length > 1 && "md:grid-cols-2")}>
               {types.map(t => {

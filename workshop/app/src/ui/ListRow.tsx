@@ -9,7 +9,7 @@ export function ListRow({ selected, onClick, children, className }: { selected: 
     <button
       ref={ref} type="button" onClick={onClick} aria-current={selected ? "true" : undefined}
       className={cn(
-        "block w-full border-b border-white/[0.06] px-4 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-lab-accent",
+        "block w-full border-b border-white/[0.08] px-4 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-lab-accent",
         selected ? "bg-lab-active" : "hover:bg-lab-hover",
         className,
       )}

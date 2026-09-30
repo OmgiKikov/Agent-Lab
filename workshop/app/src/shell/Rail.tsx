@@ -41,7 +41,7 @@ export function Rail({ logs, results }: { logs: number; results: number }) {
   ];
   const bottom: Item[] = [{ to: LINKS.settings, label: "Настройки", icon: Settings, match: ["/settings"] }];
   return (
-    <nav aria-label="Блоки" className="flex w-12 flex-shrink-0 flex-col items-center gap-1 border-r border-white/[0.06] bg-lab-surface py-3">
+    <nav aria-label="Блоки" className="flex w-12 flex-shrink-0 flex-col items-center gap-1 border-r border-white/[0.08] bg-lab-surface py-3">
       <NavLink to={LINKS.logs} aria-label="На главную" className="mb-3 rounded-md p-1 text-lab-soft transition-colors hover:text-lab-ink">
         <RaindropLogo size={18} />
       </NavLink>

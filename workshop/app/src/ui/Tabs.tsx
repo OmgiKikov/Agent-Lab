@@ -6,7 +6,7 @@ export function Tabs<T extends string>({ value, tabs, onChange, className, end }
   value: T; tabs: { value: T; label: ReactNode; count?: number }[]; onChange: (v: T) => void; className?: string; end?: ReactNode;
 }) {
   return (
-    <div className={cn("flex items-center border-b border-white/[0.06]", className)}>
+    <div className={cn("flex items-center border-b border-white/[0.08]", className)}>
     <div role="tablist" className="flex min-w-0 flex-1 overflow-x-auto">
       {tabs.map(t => (
         <button

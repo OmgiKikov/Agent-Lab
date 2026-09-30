@@ -2,6 +2,7 @@ import { useSearchParams } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { FileDown, Play } from "lucide-react";
 import { day } from "../../lab/format";
+import { logRows } from "../../lab/dialogs";
 import { download, problemsReport } from "../../lab/problemReport";
 import { useProblems } from "../../lab/problems";
 import { humanChecked } from "../../lab/verdicts";
@@ -13,7 +14,7 @@ import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { ChainSteps, FirstRun } from "../../shell/FirstRun";
 import { Summary, type Stat } from "../../ui/Summary";
-import { Tabs } from "../../ui/Tabs";
+import { PillTabs } from "../../ui/PillTabs";
 import { Dropzone, UploadButton } from "../dialogs/UploadLogs";
 import { DialogsView } from "../dialogs/DialogsView";
 import { AssessDialog } from "../problems/AssessDialog";
@@ -55,10 +56,15 @@ export function LogsPage() {
     ...(log.unassessed ? [{ label: "Без оценки", value: log.unassessed, of: "диалогов", active: tab === "dialogs" && v === "none", onClick: () => go("dialogs", "none"), title: "Судья не смог оценить" }] : []),
     { label: "Проверено людьми", value: people?.checked ?? 0, of: `из ${people?.of ?? 0}`, active: tab === "review", onClick: () => go("review") },
   ] : [];
+  const tabName = { problems: "Нарушения", dialogs: "Диалоги", review: "Проверка" }[tab];
+  const openId = tab === "problems" ? params.get("p") : tab === "dialogs" ? params.get("d") : null;
+  const openTitle = !openId ? null : tab === "problems" ? data?.rules.find(r => r.id === openId)?.title : state && logRows(state).find(r => r.key === openId)?.title;
+  const back = (t: Tab) => { const n = new URLSearchParams(params); for (const k of ["p", "d", "dt", "example", "ev"]) n.delete(k); if (t === "problems") n.delete("tab"); return `/logs${n.toString() ? `?${n}` : ""}`; };
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={[{ label: "Логи", to: "/logs" }, ...(logs?.total && assessed ? [{ label: { problems: "Нарушения", dialogs: "Диалоги", review: "Проверка" }[tab] }] : [])]}
+        crumbs={[{ label: "Логи", to: "/logs" }, ...(logs?.total && assessed ? [{ label: tabName, to: openId ? back(tab) : undefined }] : []), ...(openTitle ? [{ label: openTitle }] : [])]}
+        meta={!openId && tab === "problems" && log ? `${violated} из ${data!.rules.length} критериев нарушаются` : undefined}
         actions={<>
           <UploadButton variant="outline" />
           <Button variant="primary" icon={Play} onClick={() => setAssess(true)} disabled={!state?.sources.length || !logs?.total || busy} title={busy ? "Сейчас идёт другая задача" : undefined}>Оценить логи</Button>
@@ -84,14 +90,19 @@ export function LogsPage() {
           </>
         ) : (
           <>
-            <Summary stats={stats} />
-            <Tabs<Tab> className="flex-shrink-0 px-4" value={tab} onChange={setTab}
-              end={log && data && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download("otchet-logi.md", problemsReport(data, window.location.origin, "log"))}>Отчёт</Button>}
-              tabs={[
-              { value: "problems", label: "Нарушения", count: violated },
-              { value: "dialogs", label: "Диалоги", count: log?.assessed },
-              { value: "review", label: "Проверка" },
-            ]} />
+            {!openId && (
+              <>
+                <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-white/[0.08] px-3 py-[7px]">
+                  <PillTabs<Tab> value={tab} onChange={setTab} tabs={[
+                    { value: "problems", label: "Нарушения", count: violated },
+                    { value: "dialogs", label: "Диалоги", count: log?.assessed },
+                    { value: "review", label: "Проверка" },
+                  ]} />
+                  {log && data && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download("otchet-logi.md", problemsReport(data, window.location.origin, "log"))}>Отчёт</Button>}
+                </div>
+                {tab !== "review" && <Summary stats={stats} />}
+              </>
+            )}
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {tab === "problems" ? <ProblemsView source="log" /> : tab === "dialogs" ? <DialogsView source="log" /> : <ReviewView source="log" />}
             </div>

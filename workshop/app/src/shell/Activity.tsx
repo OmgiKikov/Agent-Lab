@@ -80,7 +80,7 @@ export function JobStrip({ kinds }: { kinds: string[] }) {
   if (job.running) {
     const { done = 0, total = 0, message } = job.progress;
     return (
-      <div className="border-t border-white/[0.06]">
+      <div className="border-t border-white/[0.08]">
         <div className="flex h-8 items-center gap-3 px-4 text-meta text-lab-mute">
           <span className="pulse-dot size-1.5 rounded-full bg-lab-accent" />
           <span className="min-w-0 flex-1 truncate">{message}</span>
@@ -89,7 +89,7 @@ export function JobStrip({ kinds }: { kinds: string[] }) {
             <Square className="size-2.5 fill-current" />Остановить
           </button>
         </div>
-        <div className="h-px bg-white/[0.06]">
+        <div className="h-px bg-white/[0.08]">
           <div className="h-px bg-lab-accent transition-[width] duration-500" style={{ width: `${total ? (100 * done) / total : 6}%` }} />
         </div>
       </div>

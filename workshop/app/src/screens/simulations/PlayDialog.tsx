@@ -93,7 +93,7 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
           {pick === "chosen" && (
             <div className="mt-2 max-h-[200px] overflow-auto rounded-md border border-white/[0.08]">
               {cards.map(c => (
-                <label key={c.id} className="flex cursor-pointer items-start gap-2.5 border-b border-white/[0.06] px-3 py-2 last:border-0 hover:bg-lab-hover">
+                <label key={c.id} className="flex cursor-pointer items-start gap-2.5 border-b border-white/[0.08] px-3 py-2 last:border-0 hover:bg-lab-hover">
                   <input type="checkbox" checked={chosen.has(c.id)} onChange={() => setChosen(s => toggle(s, c.id))} className="mt-0.5 accent-white" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-small text-lab-text">{c.name}</span>

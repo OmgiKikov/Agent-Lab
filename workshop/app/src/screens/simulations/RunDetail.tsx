@@ -25,7 +25,7 @@ function DialogRows({ items, onOpen }: { items: Item[]; onOpen: (i: number) => v
       {items.map((item, index) => {
         const who = [many || item.persona ? personaName(personas, item.persona) : "", item.attempt && item.attempt > 1 ? `повтор ${item.attempt}` : ""].filter(Boolean);
         return (
-          <button key={index} type="button" onClick={() => onOpen(index)} className="flex w-full gap-3 border-b border-white/[0.06] px-1 py-2 text-left transition-colors hover:bg-lab-hover">
+          <button key={index} type="button" onClick={() => onOpen(index)} className="flex w-full gap-3 border-b border-white/[0.08] px-1 py-2 text-left transition-colors hover:bg-lab-hover">
             <Sign status={item.status} className="mt-0.5" />
             <div className="min-w-0 flex-1">
               <div title={item.name} className="truncate text-small text-lab-ink">{item.name}</div>

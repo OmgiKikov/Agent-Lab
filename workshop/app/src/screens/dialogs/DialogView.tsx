@@ -43,7 +43,7 @@ function RuleRow({ row, rule, n, decided, onDecide }: { row: DialogRow; rule: Ru
   const shown = decided !== undefined ? { ...example, review: decided, reviewScope: decided ? ("rule" as const) : null } : example;
   const judged = rule.status === "FAIL" || rule.status === "PASS";
   return (
-    <div className="border-b border-white/[0.06] py-4">
+    <div className="border-b border-white/[0.08] py-4">
       <div className="flex items-start gap-3">
         <span className={cn("mt-0.5 inline-flex items-center gap-1 whitespace-nowrap text-meta", look.tone)}><look.icon className="size-3.5" strokeWidth={2.5} />{look.word}</span>
         <div className={cn("min-w-0 flex-1 text-small", rule.status === "NOT_APPLICABLE" ? "text-lab-dim" : "text-lab-ink")}>{rule.rule}</div>
@@ -140,7 +140,7 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
                 return (
                   <div
                     key={r.ruleId} onMouseEnter={() => setActive(n)} onMouseLeave={() => setActive(null)} onClick={() => jump(n)}
-                    className={cn("flex cursor-pointer gap-3 rounded-lg border px-3 py-2.5 text-small text-lab-text transition-colors", on ? "border-lab-mark/50 bg-lab-mark/[0.06]" : "border-white/[0.07] hover:border-white/15")}
+                    className={cn("flex cursor-pointer gap-3 rounded-lg border px-3 py-2.5 text-small text-lab-text transition-colors", on ? "border-lab-mark/50 bg-lab-mark/[0.06]" : "border-white/[0.08] hover:border-white/15")}
                   >
                     <MarkNumber n={n} active={on} />
                     <span><span className="text-lab-ink">{r.title || r.rule}</span><span className="block text-lab-mute">{r.reason}</span></span>
@@ -160,7 +160,7 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
       )}
       {tab === "trace" && row.traceId && <div className="-mx-6 mt-4 lg:-mx-8"><RunDetail key={row.traceId} runId={row.traceId} /></div>}
       {tab === "details" && (
-        <pre className="mt-5 overflow-auto rounded-lg border border-white/[0.07] bg-lab-surface p-4 font-mono text-meta text-lab-mute">
+        <pre className="mt-5 overflow-auto rounded-lg border border-white/[0.08] bg-lab-surface p-4 font-mono text-meta text-lab-mute">
           {JSON.stringify({ источник: row.source, диалог: row.dialogueId, прогон: row.runId, номер: row.index, трейс: row.traceId, вердикт: row.status, второй_судья: row.second, критерии: row.rules }, null, 2)}
         </pre>
       )}

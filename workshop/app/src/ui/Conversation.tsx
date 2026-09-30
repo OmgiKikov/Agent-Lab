@@ -21,7 +21,7 @@ export type Mark = { quote: string; n: number; label?: string };
 
 /** The number that ties the judge's quote in the conversation to its explanation. */
 export function MarkNumber({ n, active, onActive }: { n: number; active?: boolean; onActive?: (n: number | null, pin?: boolean) => void }) {
-  const look = cn("inline-flex size-4 flex-shrink-0 items-center justify-center rounded-full bg-lab-mark text-micro font-medium text-black transition-shadow", active && "ring-2 ring-lab-mark/50");
+  const look = cn("inline-flex size-[22px] flex-shrink-0 items-center justify-center rounded-full border border-lab-mark/[0.44] bg-[rgb(60,44,32)] text-meta font-semibold text-[rgb(255,212,163)] transition-shadow", active && "ring-2 ring-lab-mark/40");
   return onActive
     ? <button type="button" aria-label={`Нарушение ${n}`} onMouseEnter={() => onActive(n)} onMouseLeave={() => onActive(null)} onClick={() => onActive(n, true)} className={look}>{n}</button>
     : <span className={look}>{n}</span>;
@@ -38,7 +38,7 @@ function ToolRow({ call, seconds }: { call: ToolCall; seconds?: number }) {
     <details className="group w-full max-w-[560px]">
       <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-1 py-0.5 text-meta text-lab-dim transition-colors hover:text-lab-text [&::-webkit-details-marker]:hidden">
         <Wrench aria-hidden className="size-3.5 flex-shrink-0" />
-        <span className="text-body text-lab-mute">{name}</span>
+        <span className="text-small font-medium text-lab-soft">{name}</span>
         {(call.seconds ?? seconds) !== undefined && <span title={call.seconds === undefined ? "Время всего ответа агента: время каждого вызова отдельно не записано" : undefined}>· {secs((call.seconds ?? seconds)!)}</span>}
         {detail && <ChevronDown aria-hidden className="size-3.5 transition-transform group-open:rotate-180" />}
       </summary>
@@ -73,7 +73,7 @@ function AgentTurn({ turn, marks, hover, onHover, active, onActive }: { turn: Tu
           <span key={i} id={onActive ? `mark-${piece.n}` : undefined}>
             <mark
               onMouseEnter={() => { onHover?.(true); onActive?.(piece.n!); }} onMouseLeave={() => { onHover?.(false); onActive?.(null); }}
-              className={cn("rounded-sm border-b-2 border-lab-mark px-0.5 text-lab-ink transition-colors", hover || active === piece.n ? "bg-lab-mark/[0.34]" : "bg-lab-mark/[0.18]")}
+              className={cn("rounded-sm px-0.5 py-px text-lab-ink transition-colors", hover || active === piece.n ? "bg-lab-mark/[0.34]" : "bg-lab-mark/[0.17]")}
             >
               {piece.text}
             </mark>
@@ -127,7 +127,7 @@ export function Conversation({ turns, mark, marks, hover, onHover, active, onAct
       {turns.slice(from).map((t, i) => {
         const index = i + from;
         return t.role === "customer"
-          ? <div key={index} className="max-w-[85%] self-end whitespace-pre-wrap rounded-2xl rounded-br-md bg-lab-user px-3.5 py-2 text-read text-lab-text">{t.text}</div>
+          ? <div key={index} className="max-w-[85%] self-end whitespace-pre-wrap rounded-[10px] border border-[rgb(75_180_200/0.11)] bg-lab-user px-[11px] py-2 text-read text-[rgb(212,224,230)]">{t.text}</div>
           : <AgentTurn key={index} turn={t} marks={all} hover={hover} onHover={onHover} active={active} onActive={onActive} />;
       })}
     </div>

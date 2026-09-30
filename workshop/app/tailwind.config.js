@@ -23,6 +23,8 @@ export default {
         title: ["20px", "26px"],
         page: ["20px", "26px"],
         count: ["20px", "26px"],
+        stat: ["16px", "22px"],
+        heading: ["13px", "19px"],
         default: "12px",
         message: "14px",
         header: "21px",

@@ -59,7 +59,7 @@ export function DialogList({ rows, all, selected, verdict, onVerdict, query, onQ
   const count = (v: Verdict) => all.filter(r => matchesRow(r, "all", v, "", null)).length;
   return (
     <div>
-      <div className="sticky top-0 z-10 space-y-2 border-b border-white/[0.06] bg-lab-surface px-3 py-2">
+      <div className="sticky top-0 z-10 space-y-2 border-b border-white/[0.08] bg-lab-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <Menu
             trigger={<span className="inline-flex h-6 items-center gap-1 rounded border border-white/[0.08] px-2 text-meta text-lab-text hover:border-white/25">{VERDICTS.find(v => v.value === verdict)?.label}<ChevronDown className="size-3 text-lab-dim" /></span>}

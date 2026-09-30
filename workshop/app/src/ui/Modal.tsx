@@ -13,7 +13,7 @@ export function Modal({ open, onClose, title, children, footer }: { open: boolea
         >
           <Dialog.Title className="px-5 pt-5 text-body font-medium text-lab-ink">{title}</Dialog.Title>
           <div className="px-5 pb-5 pt-3">{children}</div>
-          <div className="flex justify-end gap-2 border-t border-white/[0.06] px-5 py-3">{footer}</div>
+          <div className="flex justify-end gap-2 border-t border-white/[0.08] px-5 py-3">{footer}</div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

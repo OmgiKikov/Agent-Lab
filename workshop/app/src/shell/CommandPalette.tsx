@@ -78,7 +78,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           className="fixed left-1/2 top-[16%] z-50 w-[calc(100vw-32px)] max-w-[600px] -translate-x-1/2 overflow-hidden rounded-xl border border-white/10 bg-lab-surface shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <Dialog.Title className="sr-only">Найти</Dialog.Title>
-          <div className="flex items-center gap-2.5 border-b border-white/[0.07] px-4">
+          <div className="flex items-center gap-2.5 border-b border-white/[0.08] px-4">
             <Search aria-hidden className="size-4 flex-shrink-0 text-lab-dim" />
             <input
               autoFocus name="palette" autoComplete="off" spellCheck={false} aria-label="Поиск по блокам и действиям" value={query} onChange={e => { setQuery(e.target.value); setAt(0); }} placeholder="Блок, нарушение, критерий, прогон или действие"

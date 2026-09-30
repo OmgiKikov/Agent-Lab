@@ -30,7 +30,7 @@ export function RuleList({ rules, selectedId, filter, onFilter, query, onQuery, 
   for (const r of rules) groups.set(r.rule.origin, [...(groups.get(r.rule.origin) ?? []), r]);
   return (
     <div>
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/[0.06] bg-lab-surface px-3 py-2">
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/[0.08] bg-lab-surface px-3 py-2">
         <Menu
           trigger={<span className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-meta text-lab-dim hover:text-lab-text">{FILTER[filter]}<ChevronDown className="size-3" /></span>}
           items={(Object.keys(FILTER) as RuleFilter[]).map(f => ({ key: f, label: FILTER[f], on: f === filter, run: () => onFilter(f) }))}
@@ -42,7 +42,7 @@ export function RuleList({ rules, selectedId, filter, onFilter, query, onQuery, 
       </div>
       {[...groups.entries()].map(([origin, list]) => (
         <div key={origin}>
-          <div className="border-b border-white/[0.06] bg-lab-bg/60 px-4 py-2" title={origin}>
+          <div className="border-b border-white/[0.08] bg-lab-bg/60 px-4 py-2" title={origin}>
             <Label className="truncate">{fileOf(origin)}{list[0].rule.kind === "tools" && " · инструменты"}</Label>
           </div>
           {list.map(r => {

@@ -43,7 +43,7 @@ export function ConversationBox({ view, example, hover, onHover, className }: {
   view: ExampleView; example: Example; hover?: boolean; onHover?: (on: boolean) => void; className?: string;
 }) {
   return (
-    <div className={cn("rounded-lg border border-white/[0.07] bg-lab-surface p-4", className)}>
+    <div className={cn(className)}>
       {view.loading ? <Skeleton className="h-28" />
         : view.error ? <p className="text-small text-lab-bad">Не удалось загрузить разговор: {view.error instanceof Error ? view.error.message : String(view.error)}</p>
         : view.turns ? <Conversation turns={view.turns} mark={view.marked ? { quote: example.agentQuote, n: 1 } : undefined} hover={hover} onHover={onHover} />

@@ -79,9 +79,9 @@ function ModelsSection({ state }: { state: LabState }) {
       id="models" title="Модели" description={`Запросы идут через ${state.models.via}.${state.models.via === "OpenRouter" ? " Сертификаты шлюза банка кладутся в папку certs/." : ""}`}
       action={<Button icon={ShieldCheck} loading={checks === "pending"} onClick={check}>Проверить модели</Button>}
     >
-      <div className="border-t border-white/[0.06]">
+      <div className="border-t border-white/[0.08]">
         {rows.map(r => (
-          <div key={r.role} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-white/[0.06] py-3">
+          <div key={r.role} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-white/[0.08] py-3">
             <span className="w-40 flex-shrink-0 text-small text-lab-mute">{r.label}</span>
             <span className="min-w-0 flex-1 truncate font-mono text-small text-lab-text">{r.model ?? "не задана"}</span>
             <span className="text-meta">{result(r.role)}</span>
@@ -180,17 +180,17 @@ function AgentEndpointsSection() {
       />
 
       {Object.keys(agents).length > 0 && (
-        <div className="border-t border-white/[0.06]">
+        <div className="border-t border-white/[0.08]">
           {Object.entries(agents).map(([name, config]) => {
             const status = health[name] ?? "checking";
             return (
-              <div key={name} className="group flex items-center gap-3 border-b border-white/[0.06] py-2.5">
+              <div key={name} className="group flex items-center gap-3 border-b border-white/[0.08] py-2.5">
                 <span className="min-w-[80px] text-small font-medium text-lab-text">{name}</span>
                 <span title={config.url} className="min-w-0 flex-1 truncate font-mono text-meta text-lab-dim">{config.url}</span>
                 <span className={cn("flex-shrink-0 text-meta", status === "online" ? "text-lab-ok" : status === "checking" ? "text-lab-dim" : "text-lab-bad")}>
                   {status === "online" ? "✓ на связи" : status === "checking" ? "проверяю…" : "✗ нет связи"}
                 </span>
-                <button type="button" aria-label="Удалить" className="rounded p-1 text-lab-dim opacity-0 transition-opacity hover:bg-white/[0.06] group-hover:opacity-100" onClick={() => removeAgent(name)}>
+                <button type="button" aria-label="Удалить" className="rounded p-1 text-lab-dim opacity-0 transition-opacity hover:bg-white/[0.08] group-hover:opacity-100" onClick={() => removeAgent(name)}>
                   <Trash2 className="size-3.5" />
                 </button>
               </div>
@@ -303,7 +303,7 @@ function KeysSection() {
 function DaemonQueryKeyStatus({ status }: { status: SecretStatus | null }) {
   const configured = status?.configured === true;
   return (
-    <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3">
+    <div className="flex items-center justify-between gap-3 border-t border-white/[0.08] pt-3">
       <span className="text-small text-lab-text">Raindrop Cloud MCP</span>
       <span className={cn("font-mono text-meta", configured ? "text-lab-ok" : "text-lab-dim")}>
         {status === null ? "проверяю…" : configured ? "✓ включён" : "не подключён"}
@@ -327,7 +327,7 @@ function AssistantSection() {
 
   return (
     <SectionBlock id="assistant" title="Ассистент" description="«Спросить» (⌘J) работает через Claude Code или Codex на этом компьютере.">
-      <div className="flex items-center justify-between gap-4 border-t border-white/[0.06] pt-3">
+      <div className="flex items-center justify-between gap-4 border-t border-white/[0.08] pt-3">
         <div className="min-w-0">
           <div className="text-small text-lab-text">Выбор ассистента</div>
           <div className="mt-0.5 text-meta text-lab-dim">Снова показать экран, где выбирается Claude Code или Codex.</div>

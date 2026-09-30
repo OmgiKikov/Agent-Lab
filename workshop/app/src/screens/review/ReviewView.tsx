@@ -71,7 +71,7 @@ export function ReviewView({ source, runId }: { source: "log" | "sim"; runId?: s
   const answeredAt = (k: string) => answered[k] ?? (byKey.get(k)?.example.review ?? null);
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-white/[0.06] px-4 py-2">
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-white/[0.08] px-4 py-2">
         <Segmented value={queue} onChange={setQueue} options={QUEUES.map(q => ({ value: q, label: QUEUE_TITLE[q], count: counts[q] }))} />
         {rule && <span className="flex min-w-0 items-center gap-1 text-meta text-lab-dim"><span title={rule.rule.text} className="truncate">критерий: {rule.rule.text}</span><button type="button" onClick={() => setParams(prev => { const n = new URLSearchParams(prev); n.delete("rule"); return n; }, { replace: true })} aria-label="Снять отбор по критерию" className="hover:text-lab-text"><X className="size-3" /></button></span>}
         <div className="ml-auto flex items-center gap-2">
@@ -110,7 +110,7 @@ export function ReviewView({ source, runId }: { source: "log" | "sim"; runId?: s
           <div className="mx-auto max-w-[760px] px-6 pb-16 pt-6">
             <Label>Критерий</Label>
             <p className="mt-1 text-title text-lab-ink">{current.rule.title}</p>
-            <div className="mt-4 rounded-lg border border-white/[0.07] bg-lab-surface p-4" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+            <div className="mt-4 rounded-lg border border-white/[0.08] bg-lab-surface p-4" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
               <Label className={cn(judged?.tone)}>{judged?.word}</Label>
               <div className="mt-2 text-body"><JudgeNote example={current.example} marked={view.marked} verdict={false} hover={hover} onHover={setHover} /></div>
               <div className="mt-5 flex flex-wrap items-center gap-2">

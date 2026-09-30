@@ -22,7 +22,7 @@ function SourceText({ source, rules, onClose }: { source: Source | null; rules: 
   return (
     <Drawer open={!!source} onClose={onClose} title={source?.origin ?? ""} sub={source ? `${KIND[source.kind] ?? source.kind} · ${thousands(source.chars)} · ${source.rules} ${plural(source.rules, "критерий", "критерия", "критериев")}` : undefined}>
       {rules.length > 0 && (
-        <div className="border-b border-white/[0.06] px-5 py-4">
+        <div className="border-b border-white/[0.08] px-5 py-4">
           <Label className="mb-2">Критерии из этого источника</Label>
           <ol className="space-y-2">
             {rules.map((r, i) => (
@@ -74,7 +74,7 @@ export function Code({ state, openId, onOpen }: { state: LabState; openId: strin
         {total} {plural(total, "критерий", "критерия", "критериев")} из {sources.filter(s => s.rules).length} {plural(sources.filter(s => s.rules).length, "источника", "источников", "источников")};
         всего прочитано {sources.length} {plural(sources.length, "источник", "источника", "источников")}.
       </p>
-      <div className="mt-4 border-t border-white/[0.06]">
+      <div className="mt-4 border-t border-white/[0.08]">
         {sources.map(s => {
           const Icon = s.kind === "tools" ? Wrench : FileText;
           return (

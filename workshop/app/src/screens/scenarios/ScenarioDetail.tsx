@@ -77,7 +77,7 @@ export function ScenarioDetail({ card, state, onBack, onPlay }: { card: Card; st
           {world.terminals.length > 0 && (
             <div className="mt-3">
               {world.terminals.map(t => (
-                <div key={t.terminalId} className="flex items-baseline gap-4 border-b border-white/[0.06] py-1.5 text-small">
+                <div key={t.terminalId} className="flex items-baseline gap-4 border-b border-white/[0.08] py-1.5 text-small">
                   <span className="min-w-0 flex-1 text-lab-text">{t.nameForClient}</span>
                   <span className="font-mono text-meta text-lab-dim">{t.terminalId}</span>
                   <span className="font-mono text-meta text-lab-dim">{t.stateCode}</span>

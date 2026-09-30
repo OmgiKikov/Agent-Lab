@@ -26,7 +26,7 @@ export function Menu({ trigger, items, align = "left" }: { trigger: ReactNode; i
           {items.map(i => (
             <button
               key={i.key} type="button" role="menuitemradio" aria-checked={!!i.on} onClick={() => { setOpen(false); i.run(); }}
-              className="flex w-full items-start gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.06]"
+              className="flex w-full items-start gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.08]"
             >
               <Check className={cn("mt-0.5 size-3.5 flex-shrink-0 text-lab-ink", !i.on && "invisible")} />
               <span className="min-w-0">

@@ -49,7 +49,7 @@ export function RunMatrix({ run, items, hrefOf, scores }: { run: LabRun; items: 
           </thead>
           <tbody>
             {scenarios.map(s => (
-              <tr key={s.id} className="border-b border-white/[0.06]">
+              <tr key={s.id} className="border-b border-white/[0.08]">
                 <td className="max-w-[360px] py-2.5 pr-4 text-small text-lab-ink">
                   <Link to={`/scenarios?s=${encodeURIComponent(s.id)}`} className="hover:underline hover:decoration-white/40 hover:underline-offset-4">{s.name}</Link>
                 </td>

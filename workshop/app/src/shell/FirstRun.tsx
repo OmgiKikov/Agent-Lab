@@ -52,7 +52,7 @@ export function FirstRun({ here, title, action, hints, children }: {
       {hints && (
         <div className="mt-10 grid w-full max-w-[720px] gap-3 text-left sm:grid-cols-3">
           {hints.map(h => (
-            <div key={h.title} className="rounded-lg border border-white/[0.07] bg-lab-surface p-3.5">
+            <div key={h.title} className="rounded-lg border border-white/[0.08] bg-lab-surface p-3.5">
               <div className="text-body text-lab-ink">{h.title}</div>
               <div className="mt-1 text-meta text-lab-dim">{h.text}</div>
             </div>
