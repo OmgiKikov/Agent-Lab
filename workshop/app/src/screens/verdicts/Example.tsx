@@ -66,12 +66,12 @@ export function ReviewButtons({ example, onDecide }: { example: Example; onDecid
 const WORD: Record<Example["status"], string> = { FAIL: "нарушено", PASS: "выполнено", UNKNOWN: "не проверено" };
 
 /** The judge's explanation under the conversation, the second judge, and a person's decision. */
-export function JudgeNote({ example, marked, onDecide, verdict = true }: { example: Example; marked: boolean; onDecide?: (d: Decision) => void; verdict?: boolean }) {
+export function JudgeNote({ example, marked, onDecide, verdict = true, hover, onHover }: { example: Example; marked: boolean; onDecide?: (d: Decision) => void; verdict?: boolean; hover?: boolean; onHover?: (on: boolean) => void }) {
   const { state } = useLabState();
   const judged = example.status !== "UNKNOWN";
   return (
     <div className="flex gap-3">
-      <span className={cn("mt-1", !marked && "invisible")}><MarkNumber n={1} /></span>
+      <span className={cn("mt-1", !marked && "invisible")}><MarkNumber n={1} active={hover} onActive={onHover && (n => onHover(n !== null))} /></span>
       <div className="min-w-0 flex-1 space-y-1.5">
         {!marked && example.agentQuote && <p className="text-small text-lab-mute">Судья ссылается на: «{example.agentQuote}»</p>}
         <p className="text-small text-lab-text">

@@ -28,7 +28,7 @@ export function Evidence({ p, from, at, onAt, hover, onHover, onDecide }: {
         <>
           <div className="mt-3"><ExampleMeta example={example} /></div>
           <ConversationBox className="mt-2" view={view} example={example} hover={hover} onHover={onHover} />
-          <div className="mt-3"><JudgeNote example={example} marked={view.marked} onDecide={onDecide} /></div>
+          <div className="mt-3"><JudgeNote example={example} marked={view.marked} onDecide={onDecide} hover={hover} onHover={onHover} /></div>
         </>
       )}
     </section>

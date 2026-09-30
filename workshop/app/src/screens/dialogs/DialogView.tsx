@@ -67,6 +67,8 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
   const shell = useShell();
   const review = useReview();
   const { state } = useLabState();
+  const [active, setActive] = useState<number | null>(null);
+  const [pinned, setPinned] = useState<number | null>(null);
   const [decided, setDecided] = useState<Record<string, Decision | null>>({});
   const tab = (params.get("dt") as Tab | null) ?? "talk";
   const setTab = (t: Tab) => setParams(prev => { const n = new URLSearchParams(prev); if (t === "talk") n.delete("dt"); else n.set("dt", t); return n; }, { replace: true });
@@ -86,6 +88,11 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
   const marks: Mark[] = fails.map((r, i) => ({ quote: r.agentQuote, n: i + 1 }));
   const verdict = row.status ? VERDICT[row.status] : undefined;
   const who = row.source === "sim" ? [row.name, `клиент: ${personaName(state?.personas ?? [], row.persona)}`, row.attempt && row.attempt > 1 ? `повтор ${row.attempt}` : ""].filter(Boolean).join(" · ") : "";
+  const mark = (n: number | null, pin?: boolean) => {
+    if (pin) setPinned(p => (p === n ? null : n));
+    setActive(n);
+  };
+  const jump = (n: number) => { mark(n, true); document.getElementById(`mark-${n}`)?.scrollIntoView({ block: "center", behavior: "smooth" }); };
   const decide = (example: Example, d: Decision) => {
     const next = (decided[example.ruleId] !== undefined ? decided[example.ruleId] : example.review) === d ? null : d;
     setDecided(x => ({ ...x, [example.ruleId]: next }));
@@ -114,14 +121,24 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
         <div className="mt-5">
           {loading ? <Skeleton className="h-40" />
             : error ? <p className="text-small text-lab-bad">Не удалось загрузить разговор: {error instanceof Error ? error.message : String(error)}</p>
-            : turns ? <Conversation turns={turns} marks={marks} />
+            : turns ? <Conversation turns={turns} marks={marks} active={active ?? pinned} onActive={mark} />
             : <p className="text-read text-lab-text">{row.title}</p>}
           {fails.length > 0 && (
             <div className="mt-6 space-y-2">
               <Label>Нарушения</Label>
-              {fails.map(r => (
-                <p key={r.ruleId} className="flex gap-2 text-small text-lab-text"><MarkNumber n={numbers.get(r.ruleId) ?? 0} /><span><span className="text-lab-bad">{r.title || r.rule}.</span> {r.reason}</span></p>
-              ))}
+              {fails.map(r => {
+                const n = numbers.get(r.ruleId) ?? 0;
+                const on = (active ?? pinned) === n;
+                return (
+                  <div
+                    key={r.ruleId} onMouseEnter={() => setActive(n)} onMouseLeave={() => setActive(null)} onClick={() => jump(n)}
+                    className={cn("flex cursor-pointer gap-3 rounded-lg border px-3 py-2.5 text-small text-lab-text transition-colors", on ? "border-lab-mark/50 bg-lab-mark/[0.06]" : "border-white/[0.07] hover:border-white/15")}
+                  >
+                    <MarkNumber n={n} active={on} />
+                    <span><span className="text-lab-ink">{r.title || r.rule}</span><span className="block text-lab-mute">{r.reason}</span></span>
+                  </div>
+                );
+              })}
               <button type="button" onClick={() => setTab("rules")} className="text-small text-lab-dim underline decoration-white/20 underline-offset-4 hover:text-lab-text">Все критерии и проверка вердиктов</button>
             </div>
           )}
