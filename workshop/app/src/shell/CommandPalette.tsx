@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, CornerDownLeft, FileText, FlaskConical, Hammer, ListChecks, MessageSquare, MessagesSquare, Play, Search, Settings, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
+import { Bot, ClipboardCheck, CornerDownLeft, FileText, FlaskConical, Hammer, ListChecks, MessageSquare, MessagesSquare, Play, Route, Search, Settings, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { day } from "../lab/format";
 import { useProblems } from "../lab/problems";
@@ -12,7 +12,7 @@ import { useShell } from "./ShellContext";
 
 type Entry = { id: string; group: string; label: string; sub?: string; icon: LucideIcon; run: () => void };
 
-/** ⌘K: any section, problem, rule, run or scenario and the main actions, without the mouse. Actions only open their place. */
+/** ⌘K: any block, problem, criterion, run or scenario and the main actions, without the mouse. Actions only open their place. */
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const shell = useShell();
@@ -26,35 +26,35 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const entries = useMemo<Entry[]>(() => {
     const go = (to: string) => () => navigate(to);
     const out: Entry[] = [
-      { id: "s-problems", group: "Разделы", label: "Проблемы", icon: TriangleAlert, run: go(LINKS.problems) },
-      { id: "s-dialogs", group: "Разделы", label: "Диалоги", icon: MessagesSquare, run: go(LINKS.dialogs) },
-      { id: "s-rules", group: "Разделы", label: "Правила", icon: ListChecks, run: go(LINKS.rules) },
-      { id: "s-sims", group: "Разделы", label: "Симуляции", icon: FlaskConical, run: go(LINKS.simulations) },
-      { id: "s-agent", group: "Разделы", label: "Агент", icon: Bot, run: go(LINKS.agent) },
-      { id: "s-settings", group: "Разделы", label: "Настройки", icon: Settings, run: go(LINKS.settings) },
-      { id: "a-assess", group: "Действия", label: "Оценить логи", sub: "Судья проверит диалоги логов по правилам агента", icon: Play, run: go("/problems?assess=1") },
-      { id: "a-play", group: "Действия", label: "Сыграть сценарии", sub: "Синтетический клиент сыграет сценарии с агентом", icon: Play, run: go(`${LINKS.simulations}?play=1`) },
-      { id: "a-cards", group: "Действия", label: "Собрать сценарии", sub: "Из последней оценки логов — в «Симуляциях»", icon: Hammer, run: go(LINKS.scenarios) },
-      { id: "a-logs", group: "Действия", label: "Загрузить логи", sub: "Выгрузка чата — в «Диалогах»", icon: Upload, run: go(LINKS.dialogs) },
+      { id: "s-agent", group: "Блоки", label: "Агент", icon: Bot, run: go(LINKS.agent) },
+      { id: "s-logs", group: "Блоки", label: "Логи", icon: MessagesSquare, run: go(LINKS.logs) },
+      { id: "s-scenarios", group: "Блоки", label: "Сценарии", icon: Route, run: go(LINKS.scenarios) },
+      { id: "s-sims", group: "Блоки", label: "Прогоны", icon: FlaskConical, run: go(LINKS.simulations) },
+      { id: "s-results", group: "Блоки", label: "Результаты", icon: ClipboardCheck, run: go(LINKS.results) },
+      { id: "s-settings", group: "Блоки", label: "Настройки", icon: Settings, run: go(LINKS.settings) },
+      { id: "a-logs", group: "Действия", label: "Загрузить логи", sub: "Выгрузка чата — в «Логах»", icon: Upload, run: go(LINKS.logs) },
+      { id: "a-assess", group: "Действия", label: "Оценить логи", sub: "Судья проверит диалоги логов по критериям агента", icon: Play, run: go("/logs?assess=1") },
+      { id: "a-review", group: "Действия", label: "Проверить вердикты логов", sub: "Верно или неверно судья: по одному, клавишами V / N", icon: ListChecks, run: go("/logs?tab=review") },
+      { id: "a-cards", group: "Действия", label: "Собрать сценарии", sub: "Из оценки логов — в «Сценариях»", icon: Hammer, run: go(LINKS.scenarios) },
+      { id: "a-play", group: "Действия", label: "Запустить прогон", sub: "Синтетический клиент сыграет сценарии с агентом", icon: Play, run: go(`${LINKS.simulations}?play=1`) },
       { id: "a-code", group: "Действия", label: "Прочитать код агента", sub: "Промпты и инструменты — в «Агенте»", icon: FileText, run: go(`${LINKS.agent}?tab=code`) },
-      { id: "a-review", group: "Действия", label: "Проверить вердикты", sub: "Верно или неверно судья: по одному, клавишами V / N", icon: ListChecks, run: go(LINKS.review) },
       { id: "a-ask", group: "Действия", label: "Спросить", sub: "Ассистент по текущему экрану", icon: MessageSquare, run: () => shell.openAsk() },
     ];
     const byId = new Map((data?.rules ?? []).map(r => [r.id, r]));
     for (const id of data?.problems ?? []) {
       const p = byId.get(id);
-      if (p) out.push({ id: `p-${id}`, group: "Проблемы", label: p.title, sub: `в логах ${p.log.failed} · в симуляции ${p.sim.failed}`, icon: TriangleAlert, run: go(`/problems/${id}`) });
+      if (p?.log.failed) out.push({ id: `p-${id}`, group: "Нарушения в логах", label: p.title, sub: `${p.log.failed} из ${p.log.failed + p.log.passed}`, icon: TriangleAlert, run: go(`/logs?p=${encodeURIComponent(id)}`) });
     }
     for (const r of data?.rules ?? []) {
-      out.push({ id: `r-${r.id}`, group: "Правила", label: r.rule.text, sub: r.rule.origin, icon: ListChecks, run: go(`/rules/${r.id}`) });
+      out.push({ id: `r-${r.id}`, group: "Критерии", label: r.rule.text, sub: r.rule.origin, icon: ListChecks, run: go(`/agent?tab=criteria&c=${encodeURIComponent(r.id)}`) });
     }
     const runs = [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
     for (const r of runs) {
       const m = r.metric;
-      out.push({ id: `run-${r.id}`, group: "Прогоны", label: r.label || runTitle(r), sub: [day(r.startedAt), m?.measured ? `нарушения в ${m.failed} из ${m.measured}` : ""].filter(Boolean).join(" · "), icon: FlaskConical, run: go(`/simulations/runs/${encodeURIComponent(r.id)}`) });
+      out.push({ id: `run-${r.id}`, group: "Прогоны", label: r.label || runTitle(r), sub: [day(r.startedAt), m?.measured ? `нарушения в ${m.failed} из ${m.measured}` : ""].filter(Boolean).join(" · "), icon: FlaskConical, run: go(`/results?run=${encodeURIComponent(r.id)}`) });
     }
     for (const c of state?.cards?.cards ?? []) {
-      out.push({ id: `sc-${c.id}`, group: "Сценарии", label: c.name, sub: c.topic, icon: FlaskConical, run: go(`/simulations/scenarios/${encodeURIComponent(c.id)}`) });
+      out.push({ id: `sc-${c.id}`, group: "Сценарии", label: c.name, sub: c.topic, icon: FlaskConical, run: go(`${LINKS.scenarios}?s=${encodeURIComponent(c.id)}`) });
     }
     return out;
   }, [data, state?.runs, state?.cards, navigate, shell]);
@@ -82,7 +82,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <div className="flex items-center gap-2.5 border-b border-white/[0.07] px-4">
             <Search className="size-4 flex-shrink-0 text-lab-dim" />
             <input
-              autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Раздел, проблема, прогон или действие"
+              autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Блок, нарушение, критерий, прогон или действие"
               className="h-12 w-full bg-transparent text-body text-lab-ink outline-none placeholder:text-lab-faint"
             />
           </div>

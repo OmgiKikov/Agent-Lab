@@ -21,7 +21,7 @@ function useUpload() {
     try {
       const { total } = await upload<{ total: number }>("/api/logs", file);
       await refresh();
-      toast.notify(`Загружено ${count(total, "диалог", "диалога", "диалогов")}`, { label: "Оценить", run: () => navigate("/problems?assess=1") });
+      toast.notify(`Загружено ${count(total, "диалог", "диалога", "диалогов")}`, { label: "Оценить", run: () => navigate("/logs?assess=1") });
     } catch (e) {
       toast.error(e);
     } finally {
@@ -47,7 +47,7 @@ export function UploadButton({ variant = "primary" }: { variant?: "primary" | "o
   );
 }
 
-/** An empty «Диалоги»: drop the export here. */
+/** No logs yet: drop the export here. */
 export function Dropzone({ children }: { children?: ReactNode }) {
   const input = useRef<HTMLInputElement>(null);
   const { busy, send } = useUpload();

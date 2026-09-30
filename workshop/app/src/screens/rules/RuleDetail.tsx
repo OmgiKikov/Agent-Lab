@@ -6,7 +6,7 @@ import { plural } from "../../lab/format";
 import { sourceLabel } from "../../lab/problemReport";
 import { useReview, type Decision, type Example, type Problems, type RuleEntry } from "../../lab/problems";
 import { useKeys } from "../../shell/keys";
-import { LINKS } from "../../shell/links";
+import { viewLink } from "../../shell/links";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { Facts, type Fact } from "../../ui/Facts";
@@ -28,7 +28,7 @@ function side(label: string, s: RuleEntry["log"], present: boolean): Fact {
   return { label, value: parts.join(" · ") };
 }
 
-/** One rule: what the code requires, how the agent keeps it in the logs and the run, and every verdict behind the counts. */
+/** One criterion: what the code requires, how the agent keeps it in the logs and the run, and every verdict behind the counts. */
 export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; onBack: () => void }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -37,7 +37,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
   const [hover, setHover] = useState(false);
   const examples = [...r.log.examples, ...r.sim.examples];
   const counts: Record<Tab, number> = { FAIL: r.log.failed + r.sim.failed, PASS: r.log.passed + r.sim.passed, UNKNOWN: r.log.unknown + r.sim.unknown };
-  const wanted = params.get("tab") as Tab | null;
+  const wanted = params.get("vt") as Tab | null;
   const tab: Tab = wanted && counts[wanted] ? wanted : (["FAIL", "PASS", "UNKNOWN"] as Tab[]).find(t => counts[t]) ?? "FAIL";
   const list = examples.filter(e => e.status === tab);
   const at = Math.max(0, Math.min(list.length - 1, (Number(params.get("example")) || 1) - 1));
@@ -46,7 +46,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
   const update = (change: (next: URLSearchParams) => void) =>
     setParams(prev => { const next = new URLSearchParams(prev); change(next); return next; }, { replace: true });
   const setAt = (n: number) => update(next => next.set("example", String(Math.max(0, Math.min(list.length - 1, n)) + 1)));
-  const setTab = (t: Tab) => update(next => { next.set("tab", t); next.delete("example"); });
+  const setTab = (t: Tab) => update(next => { next.set("vt", t); next.delete("example"); });
   const decide = (d: Decision) => { if (example && example.status !== "UNKNOWN") review.mutate({ example, decision: example.review === d ? null : d }); };
   useKeys({
     ArrowLeft: () => setAt(at - 1),
@@ -56,6 +56,8 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
     KeyO: () => { if (example) navigate(dialogOf(example)); },
     Escape: () => { if (!wide()) onBack(); },
   });
+  const src: "log" | "sim" = r.log.failed + r.log.passed ? "log" : "sim";
+  const simRun = data.sim?.runId;
   const violated = counts.FAIL > 0;
   const disputes = disputedCount(r);
   const s = r.secondJudge;
@@ -65,27 +67,27 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
     {
       label: "Судьи расходятся",
       value: disputes ? `в ${disputes} ${plural(disputes, "вердикте", "вердиктах", "вердиктах")}` : s.checked ? "нет" : "второй судья не проверял",
-      onClick: disputes ? () => navigate(`${LINKS.review}?queue=disputed&rule=${r.id}`) : undefined,
+      onClick: disputes ? () => navigate(viewLink(src, simRun, "review", { queue: "disputed", rule: r.id })) : undefined,
     },
     {
       label: "Люди",
       value: r.human.agree + r.human.disagree ? `верно ${r.human.agree} · неверно ${r.human.disagree}` : "не проверяли",
-      onClick: counts.FAIL ? () => navigate(`${LINKS.review}?queue=all&rule=${r.id}`) : undefined,
+      onClick: counts.FAIL ? () => navigate(viewLink(src, simRun, "review", { queue: "all", rule: r.id })) : undefined,
     },
   ];
   return (
     <article className="message-arrive mx-auto max-w-[760px] px-6 pb-20 pt-6 lg:px-8">
       <button type="button" onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-small text-lab-mute transition-colors hover:text-lab-text lg:hidden">
-        <ArrowLeft className="size-3.5" />Правила
+        <ArrowLeft className="size-3.5" />Критерии
       </button>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
         <h1 className="min-w-0 flex-1 text-page font-medium text-lab-ink">{r.rule.text}</h1>
         {counts.FAIL + counts.PASS > 0 && (
-          <Button size="sm" icon={ListChecks} onClick={() => navigate(`${LINKS.review}?queue=${disputes ? "disputed" : "all"}&rule=${r.id}`)}>Проверить вердикты</Button>
+          <Button size="sm" icon={ListChecks} onClick={() => navigate(viewLink(src, simRun, "review", { queue: disputes ? "disputed" : "all", rule: r.id }))}>Проверить вердикты</Button>
         )}
       </div>
       {violated ? (
-        <Link to={`/problems/${r.id}`} className="mt-2 inline-flex items-center gap-1.5 text-small text-lab-bad transition-colors hover:text-lab-text">
+        <Link to={viewLink(r.log.failed ? "log" : "sim", simRun, "problems", { p: r.id })} className="mt-2 inline-flex items-center gap-1.5 text-small text-lab-bad transition-colors hover:text-lab-text">
           Нарушается: {r.title}<ArrowRight className="size-3.5" />
         </Link>
       ) : counts.PASS ? <p className="mt-2 text-small text-lab-ok">Нарушений не найдено</p> : null}
@@ -120,7 +122,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
             <ConversationBox className="mt-2" view={view} example={example} hover={hover} onHover={setHover} />
             <div className="mt-3"><JudgeNote example={example} marked={view.marked} onDecide={decide} /></div>
           </>
-        ) : <EmptyState title="Вердиктов пока нет">Правило появилось при извлечении, но ни в одном оценённом диалоге судья его ещё не применял.</EmptyState>}
+        ) : <EmptyState title="Вердиктов пока нет">Критерий появился при извлечении, но ни в одном оценённом диалоге судья его ещё не применял.</EmptyState>}
       </section>
       <SourceDrawer open={sourceOpen} onClose={() => setSourceOpen(false)} sourceId={r.rule.sourceId} origin={r.rule.origin} quote={r.rule.quote} />
     </article>

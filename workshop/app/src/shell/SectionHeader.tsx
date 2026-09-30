@@ -14,7 +14,7 @@ export function SectionHeader({ crumbs, actions, below }: { crumbs: Crumb[]; act
     <header className="flex-shrink-0 border-b border-white/[0.06] bg-lab-bg">
       <div className="flex h-10 items-center gap-3 px-4">
         <nav aria-label="Путь" className="flex min-w-0 flex-1 items-center gap-1.5 text-small">
-          <Link to="/problems" className="truncate text-lab-mute transition-colors hover:text-lab-text">{AGENT_TITLE}</Link>
+          <Link to="/logs" className="truncate text-lab-mute transition-colors hover:text-lab-text">{AGENT_TITLE}</Link>
           {crumbs.map(c => (
             <span key={c.label} className="flex min-w-0 items-center gap-1.5">
               <ChevronRight className="size-3.5 flex-shrink-0 text-lab-faint" />

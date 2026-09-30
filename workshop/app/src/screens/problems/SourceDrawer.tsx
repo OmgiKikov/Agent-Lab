@@ -23,7 +23,7 @@ export function SourceDrawer({ open, onClose, sourceId, origin, quote }: {
       {!!error && <p className="p-5 text-small text-lab-bad">Не удалось открыть источник: {error instanceof Error ? error.message : String(error)}</p>}
       {data && !parts && (
         <p className="border-b border-white/[0.06] px-5 py-3 text-meta text-lab-warn">
-          Цитаты правила нет в нынешнем тексте источника: код мог измениться после того, как правила извлекли.
+          Цитаты критерия нет в нынешнем тексте источника: код мог измениться после того, как критерии извлекли.
         </p>
       )}
       {data && (

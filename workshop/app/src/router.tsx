@@ -1,43 +1,64 @@
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import { createBrowserRouter, Navigate, useLocation, useParams } from "react-router-dom";
+import { dialogLink } from "./lab/dialogs";
 import { AppShell } from "./shell/AppShell";
 import { AgentPage } from "./screens/agent/AgentPage";
 import { RunsPage } from "./pages/RunsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
-import { DialogsPage } from "./screens/dialogs/DialogsPage";
-import { ProblemsPage } from "./screens/problems/ProblemsPage";
-import { ReviewPage } from "./screens/review/ReviewPage";
-import { RulesPage } from "./screens/rules/RulesPage";
+import { LogsPage } from "./screens/logs/LogsPage";
+import { ResultsPage } from "./screens/results/ResultsPage";
+import { ScenariosPage } from "./screens/scenarios/ScenariosPage";
 import { SettingsPage } from "./screens/settings/SettingsPage";
 import { SimulationsPage } from "./screens/simulations/SimulationsPage";
+
+/** An earlier address leads to its block; the query of the old address is kept, what the block needs is added. */
+function To({ to, from }: { to: string; from?: (p: Record<string, string | undefined>) => Record<string, string> }) {
+  const { search } = useLocation();
+  const params = useParams();
+  const [path, own = ""] = to.split("?");
+  const next = new URLSearchParams(own);
+  for (const [k, v] of new URLSearchParams(search)) if (!next.has(k)) next.set(k, v);
+  for (const [k, v] of Object.entries(from?.(params) ?? {})) next.set(k, v);
+  const q = next.toString();
+  return <Navigate to={`${path}${q ? `?${q}` : ""}`} replace />;
+}
+
+/** /dialogs/<key>: the dialogue at its block. */
+function DialogRedirect() {
+  const { dialogKey } = useParams();
+  return <Navigate to={dialogLink(decodeURIComponent(dialogKey ?? ""))} replace />;
+}
 
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <AppShell />,
     children: [
-      { index: true, element: <Navigate to="/problems" replace /> },
-      { path: "problems", element: <ProblemsPage /> },
-      { path: "problems/:problemId", element: <ProblemsPage /> },
-      { path: "rules", element: <RulesPage /> },
-      { path: "rules/:ruleId", element: <RulesPage /> },
-      { path: "review", element: <ReviewPage /> },
-      { path: "dialogs", element: <DialogsPage /> },
-      { path: "dialogs/:dialogKey", element: <DialogsPage /> },
-      { path: "simulations", element: <SimulationsPage /> },
-      { path: "simulations/runs/:runId", element: <SimulationsPage /> },
-      { path: "simulations/scenarios/:scenarioId", element: <SimulationsPage /> },
+      { index: true, element: <Navigate to="/logs" replace /> },
       { path: "agent", element: <AgentPage /> },
-      // The earlier addresses of the product lead to the sections that replaced them.
-      { path: "lab", element: <Navigate to="/problems" replace /> },
-      { path: "lab/dialogs/*", element: <Navigate to="/dialogs?source=sim" replace /> },
-      { path: "lab/logs/*", element: <Navigate to="/dialogs?source=log" replace /> },
-      { path: "lab/criteria/*", element: <Navigate to="/rules" replace /> },
-      { path: "lab/judge/check", element: <Navigate to="/review" replace /> },
-      { path: "lab/judge/*", element: <Navigate to="/rules" replace /> },
-      { path: "lab/checks/*", element: <Navigate to="/simulations?mode=scenarios" replace /> },
+      { path: "logs", element: <LogsPage /> },
+      { path: "scenarios", element: <ScenariosPage /> },
+      { path: "simulations", element: <SimulationsPage /> },
+      { path: "simulations/runs/:runId", element: <To to="/simulations" from={p => ({ r: p.runId ?? "" })} /> },
+      { path: "simulations/scenarios/:scenarioId", element: <To to="/scenarios" from={p => ({ s: p.scenarioId ?? "" })} /> },
+      { path: "results", element: <ResultsPage /> },
+      // The earlier sections: their content became tabs of the blocks.
+      { path: "problems", element: <To to="/logs" /> },
+      { path: "problems/:problemId", element: <To to="/logs" from={p => ({ p: p.problemId ?? "" })} /> },
+      { path: "rules", element: <To to="/agent?tab=criteria" /> },
+      { path: "rules/:ruleId", element: <To to="/agent?tab=criteria" from={p => ({ c: p.ruleId ?? "" })} /> },
+      { path: "review", element: <To to="/logs?tab=review" /> },
+      { path: "dialogs", element: <To to="/logs?tab=dialogs" /> },
+      { path: "dialogs/:dialogKey", element: <DialogRedirect /> },
+      { path: "lab", element: <Navigate to="/logs" replace /> },
+      { path: "lab/dialogs/*", element: <Navigate to="/results?tab=dialogs" replace /> },
+      { path: "lab/logs/*", element: <Navigate to="/logs?tab=dialogs" replace /> },
+      { path: "lab/criteria/*", element: <Navigate to="/agent?tab=criteria" replace /> },
+      { path: "lab/judge/check", element: <Navigate to="/logs?tab=review" replace /> },
+      { path: "lab/judge/*", element: <Navigate to="/agent?tab=criteria" replace /> },
+      { path: "lab/checks/*", element: <Navigate to="/scenarios" replace /> },
       { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
-      { path: "lab/*", element: <Navigate to="/problems" replace /> },
+      { path: "lab/*", element: <Navigate to="/logs" replace /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId/span/:spanId", element: <RunsPage /> },
       { path: "runs/:runId/spans", element: <RunsPage /> },
@@ -54,7 +75,7 @@ export const router = createBrowserRouter([
       { path: "saved/:runId", element: <SavedPage /> },
       { path: "saved", element: <SavedPage /> },
       { path: "settings", element: <SettingsPage /> },
-      { path: "*", element: <Navigate to="/problems" replace /> },
+      { path: "*", element: <Navigate to="/logs" replace /> },
     ],
   },
 ]);

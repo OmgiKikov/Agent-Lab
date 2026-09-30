@@ -2,7 +2,7 @@ import { day, plural } from "./format";
 import type { Example, Problems, RuleEntry } from "./problems";
 
 const SOURCE_LABEL: Record<string, string> = { prompt: "Промпт требует", tools: "Инструменты агента" };
-export const sourceLabel = (kind: string) => SOURCE_LABEL[kind] ?? "Источник правила";
+export const sourceLabel = (kind: string) => SOURCE_LABEL[kind] ?? "Источник критерия";
 
 /** How well an example is backed, in words: the order of examples follows it. */
 export function reliabilityWord(e: Example): string {
@@ -22,10 +22,10 @@ export function secondLine(e: Example, model: string | null): string {
   return e.second === "agree" ? `${who}: согласен.` : `${who}: не согласен.`;
 }
 
-/** «Агент нарушает 6 из 18 своих правил», or the good result said as plainly. */
+/** «Агент нарушает 6 из 18 критериев», or the good result said as plainly. */
 export function summarySentence(data: Problems): string {
   const total = data.rules.length;
-  const rules = plural(total, "своего правила", "своих правил", "своих правил");
+  const rules = plural(total, "критерия", "критериев", "критериев");
   if (data.problems.length) return `Агент нарушает ${data.problems.length} из ${total} ${rules}`;
   const n = data.log?.assessed ?? 0;
   return `Судья не нашёл нарушений ни одного из ${total} ${rules} в ${n} ${plural(n, "диалоге", "диалогах", "диалогах")}`;
@@ -43,7 +43,7 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1): string {
     `${"#".repeat(level)} ${p.title}`, "",
     `Нарушено ${where(p)}.`, "",
     `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${p.rule.origin})` : ""}: «${p.rule.quote}»`, "",
-    `Правило: ${p.rule.text}`,
+    `Критерий: ${p.rule.text}`,
   ];
   if (e) lines.push("", `${"#".repeat(level + 1)} Пример`, "", `Клиент: ${e.opening}`, `Агент: «${e.agentQuote}»`, `Судья: ${e.reason}`, `Надёжность: ${reliabilityWord(e)}`);
   lines.push("", link);

@@ -49,13 +49,13 @@ export function AssessDialog({ open, onClose }: { open: boolean; onClose: () => 
         </Button>
       </>}
     >
-      {blocked === "code" && <p className="text-small text-lab-mute">Сначала прочитайте код агента: из него берутся правила. <Link className={link} to={LINKS.agent} onClick={onClose}>Открыть «Агент»</Link></p>}
-      {blocked === "logs" && <p className="text-small text-lab-mute">Сначала загрузите логи. <Link className={link} to={LINKS.logs} onClick={onClose}>Загрузить выгрузку</Link></p>}
+      {blocked === "code" && <p className="text-small text-lab-mute">Сначала прочитайте код агента: из него берутся критерии. <Link className={link} to={LINKS.agent} onClick={onClose}>Открыть «Агент»</Link></p>}
+      {blocked === "logs" && <p className="text-small text-lab-mute">Сначала загрузите логи.</p>}
       {blocked === "busy" && <p className="text-small text-lab-mute">Сейчас идёт другая задача. Дождитесь её или остановите: кольцо на рейке слева.</p>}
       {!blocked && (
         <>
           <p className="text-small text-lab-mute">
-            Судья проверит диалоги логов по правилам агента{since ? `, зафиксированным ${day(since)}` : " — сначала он извлечёт их из кода"}.
+            Судья проверит диалоги логов по критериям агента{since ? `, зафиксированным ${day(since)}` : " — сначала он извлечёт их из кода"}.
             Выборка каждый раз одна и та же, поэтому оценки сравнимы.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">

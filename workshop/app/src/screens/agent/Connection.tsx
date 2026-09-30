@@ -100,7 +100,7 @@ export function Connection({ state }: { state: LabState }) {
           <Field label="ЕПК клиентов" hint="Через пробел. На ИФТ синтетический клиент входит как один из этих клиентов; пусто — тестовый клиент.">
             <input value={epk} onChange={e => setEpk(e.target.value)} placeholder="Например: 1234567890 2345678901" className={INPUT} spellCheck={false} />
           </Field>
-          <Field label="Код агента" hint="Папка с исходниками: из неё читаются правила и запускается агент из исходников.">
+          <Field label="Код агента" hint="Папка с исходниками: из неё читаются критерии и запускается агент из исходников.">
             <input value={repo} onChange={e => setRepo(e.target.value)} placeholder="~/Desktop/aigw-local" className={INPUT} spellCheck={false} />
           </Field>
         </div>

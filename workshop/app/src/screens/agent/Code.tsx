@@ -13,22 +13,22 @@ import { segments } from "../../ui/highlight";
 
 const KIND: Record<string, string> = { prompt: "Промпт", tools: "Инструменты" };
 
-/** A source in full with every rule quoted from it marked and numbered; each rule opens in «Правила». */
+/** A source in full with every criterion quoted from it marked and numbered; each criterion opens in «Критерии». */
 function SourceText({ source, rules, onClose }: { source: Source | null; rules: RuleEntry[]; onClose: () => void }) {
   const { data, isLoading, error } = useSource(source?.id);
   const marks = rules.map((r, i) => ({ quote: r.rule.quote, n: i + 1 }));
   const pieces = data ? segments(data.content, marks) : [];
   const found = new Set(pieces.flatMap(p => (p.n ? [p.n] : [])));
   return (
-    <Drawer open={!!source} onClose={onClose} title={source?.origin ?? ""} sub={source ? `${KIND[source.kind] ?? source.kind} · ${thousands(source.chars)} · ${source.rules} ${plural(source.rules, "правило", "правила", "правил")}` : undefined}>
+    <Drawer open={!!source} onClose={onClose} title={source?.origin ?? ""} sub={source ? `${KIND[source.kind] ?? source.kind} · ${thousands(source.chars)} · ${source.rules} ${plural(source.rules, "критерий", "критерия", "критериев")}` : undefined}>
       {rules.length > 0 && (
         <div className="border-b border-white/[0.06] px-5 py-4">
-          <Label className="mb-2">Правила из этого источника</Label>
+          <Label className="mb-2">Критерии из этого источника</Label>
           <ol className="space-y-2">
             {rules.map((r, i) => (
               <li key={r.id} className="flex items-start gap-2.5">
                 <MarkNumber n={i + 1} />
-                <Link to={`/rules/${encodeURIComponent(r.id)}`} className="min-w-0 flex-1 text-small text-lab-text hover:text-lab-ink hover:underline hover:decoration-white/40 hover:underline-offset-4">
+                <Link to={`/agent?tab=criteria&c=${encodeURIComponent(r.id)}`} className="min-w-0 flex-1 text-small text-lab-text hover:text-lab-ink hover:underline hover:decoration-white/40 hover:underline-offset-4">
                   {r.rule.text}<ArrowUpRight className="ml-1 inline size-3.5 text-lab-dim" />
                 </Link>
                 {data && !found.has(i + 1) && <span className="flex-shrink-0 text-meta text-lab-warn">цитаты нет в тексте</span>}
@@ -64,14 +64,14 @@ export function Code({ state, openId, onOpen }: { state: LabState; openId: strin
   if (!sources.length) {
     return (
       <EmptyState drop title="Код агента ещё не прочитан">
-        Укажите папку с кодом во вкладке «Подключение» и нажмите «Прочитать код»: из промптов и описаний инструментов выделятся правила, дословными цитатами.
+        Укажите папку с кодом во вкладке «Подключение» и нажмите «Прочитать код»: из промптов и описаний инструментов выделятся критерии, дословными цитатами.
       </EmptyState>
     );
   }
   return (
     <div className="mx-auto max-w-[960px] px-6 pb-20 pt-6 lg:px-8">
       <p className="text-read text-lab-text">
-        {total} {plural(total, "правило", "правила", "правил")} из {sources.filter(s => s.rules).length} {plural(sources.filter(s => s.rules).length, "источника", "источников", "источников")};
+        {total} {plural(total, "критерий", "критерия", "критериев")} из {sources.filter(s => s.rules).length} {plural(sources.filter(s => s.rules).length, "источника", "источников", "источников")};
         всего прочитано {sources.length} {plural(sources.length, "источник", "источника", "источников")}.
       </p>
       <div className="mt-4 border-t border-white/[0.06]">
@@ -85,7 +85,7 @@ export function Code({ state, openId, onOpen }: { state: LabState; openId: strin
                   <div className="truncate font-mono text-small text-lab-text" title={s.origin}>{s.origin}</div>
                   <div className="mt-0.5 text-meta text-lab-dim">{KIND[s.kind] ?? s.kind} · {thousands(s.chars)}</div>
                 </div>
-                <span className={s.rules ? "flex-shrink-0 text-small text-lab-text" : "flex-shrink-0 text-small text-lab-faint"}>правил: <span className="font-mono">{s.rules}</span></span>
+                <span className={s.rules ? "flex-shrink-0 text-small text-lab-text" : "flex-shrink-0 text-small text-lab-faint"}>критериев: <span className="font-mono">{s.rules}</span></span>
               </div>
             </ListRow>
           );

@@ -76,7 +76,7 @@ function Frame() {
     <ShellContext.Provider value={shell}>
       <LegacyHashRedirect />
       <div className="flex h-screen overflow-hidden bg-lab-bg text-lab-text">
-        <Rail problems={data?.problems.length ?? 0} />
+        <Rail logs={data?.rules.filter(r => r.log.failed > 0).length ?? 0} results={data?.sim ? data.rules.filter(r => r.sim.failed > 0).length : 0} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-auto"><Outlet /></div>
           {traceRoute && <WorkshopOffline />}
