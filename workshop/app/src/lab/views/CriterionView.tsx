@@ -50,7 +50,7 @@ export function CriterionView({ state, scope, criterionKey, onBack, onTrace, go 
   state: LabState; scope: Scope; criterionKey: string; scopeBar?: ReactNode; onBack: () => void; onTrace: (id: string) => void; go: (to: string) => void;
 }) {
   const entry = scope.criteria.find(c => c.key === criterionKey);
-  const back = scope.finished ? `Версия ${scope.finished.version}` : "Версия";
+  const back = "Обзор";
   if (!scope.ready) return <Loading onBack={onBack} back={back} />;
   if (!entry) {
     return (

@@ -6,7 +6,7 @@ import { disputed, itemKey, personaOf } from "../logic";
 import { personaName, STATUS_TEXT } from "../look";
 import type { Item, LabRun, LabState } from "../types";
 import { useRunContext } from "../useRunContext";
-import { Button, EmptyState, Hero, Kbd, Label, Numbers, Page, Section, Skeleton, StatusIcon } from "../ui";
+import { Button, EmptyState, Hero, Label, Numbers, Page, Section, Skeleton, StatusIcon } from "../ui";
 
 const dialogs = (n: number) => count(n, "диалога", "диалогов", "диалогов");
 
@@ -56,12 +56,7 @@ export function TrustView({ state, run, onJudge }: { state: LabState; run: LabRu
       title="Судья" icon={Scale}
       primary={<Button variant="primary" disabled={!left} onClick={() => onJudge(finished.id)}>{reviewed ? `Продолжить сверку · ${left}` : "Сверить судью"}<ArrowRight className="size-3.5" /></Button>}
     >
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-8 text-caption text-lab-mute">
-        <span className="inline-flex items-center gap-2"><Label>Версия</Label>{finished.version} · {count(m.measured, "оценённый диалог", "оценённых диалога", "оценённых диалогов")}</span>
-        <span className="inline-flex items-center gap-2"><Label>Сверка</Label>ответ клавишами <Kbd>1</Kbd><Kbd>2</Kbd></span>
-      </header>
-
-      <Numbers className="mt-8" hero={
+      <Numbers className="mt-6" hero={
         <Hero
           label="Судья прав по сверке"
           value={m.human ? `${m.human.agree} из ${m.human.reviewed}` : "—"}

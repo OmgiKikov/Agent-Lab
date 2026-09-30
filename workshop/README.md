@@ -5,11 +5,11 @@
 
 Что наше поверх Raindrop Workshop:
 
-- раздел Agent Lab: `app/src/pages/LabPage.tsx`, экраны в `app/src/lab/` и маршруты `/lab`;
-- одна оболочка на всё приложение: рельс навигации Raindrop (`app/src/lab/Rail.tsx`) вместо их меню, палитра и шрифты с кириллицей
-  (Commissioner, Geist Mono), весь интерфейс по-русски — договор в `../docs/DESIGN.md`;
+- разделы Agent Lab в меню Raindrop (`app/src/components/NavSidebar.tsx`): «agent lab» и «подготовка» — `app/src/pages/LabPage.tsx`,
+  экраны в `app/src/lab/`, маршруты `/lab`; собраны из тех же деталей Raindrop (`app/src/lab/Shell.tsx`);
+- сам Raindrop — как в upstream: меню, трейсы, поиск, сохранённые, настройки, плашка ассистента; от нас только русский текст
+  и шрифты с кириллицей (Commissioner, Geist Mono) — договор в `../docs/DESIGN.md`;
 - заметки судьи как автор «Судья · Agent Lab» (`app/src/api/annotations.ts`, `AnnotationChip.tsx`);
-- кнопка «Спросить Agent Lab» в разговоре (`MessagePane.tsx`);
 - всё внутри сборки: шрифты лежат в ней, счётчика Raindrop нет, `update` не подменяет сборку их релизом;
 - заметки прошлых прогонов видны сразу (исправление `placeholderData` в аннотациях).
 

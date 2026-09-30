@@ -67,6 +67,16 @@ export function Section({ title, count, hint, right, children, className, id, to
 export const ChromeContext = createContext<{ context?: ReactNode; primary?: ReactNode }>({});
 
 /**
+ * Inside a Raindrop-style section (lab/Shell.tsx) the section draws the header: the run's title, buttons and tabs.
+ * A page there shows only its own way back and its own actions, in one quiet line above its content.
+ */
+export const EmbedContext = createContext(false);
+
+/** Buttons in that line take Raindrop's header-button look: small, outlined, never the light primary. */
+const RaindropButtons = createContext(false);
+const RAINDROP_BUTTON = "h-auto gap-1.5 rounded-md border border-white/10 bg-white/[0.06] px-3 py-1 text-[11px] font-medium text-lab-text hover:bg-white/10";
+
+/**
  * A page: a 52 px header (where you are, the page's actions), then the content in one column.
  * `crumb` is the way back for detail pages. `primary` replaces the global primary action with the page's own
  * (null hides it); `bare` hides the version and the global action (setup pages).
@@ -81,8 +91,29 @@ export function Page({ title, icon: Icon, count, crumb, lede, actions, primary, 
   noContext?: boolean; children?: ReactNode;
 }) {
   const chrome = useContext(ChromeContext);
+  const embedded = useContext(EmbedContext);
   const width = full ? "" : narrow ? "max-w-[800px]" : wide ? "max-w-[1200px]" : "max-w-[1080px]";
   const main = primary === undefined ? (bare ? null : chrome.primary) : primary;
+  if (embedded) {
+    const own = primary ?? null;
+    const bar = (crumb || actions || own) && (
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-2 px-4 pt-3">
+        {crumb && <button onClick={crumb.onClick} className="lab-focus -ml-1 rounded-sm px-1 text-caption text-lab-mute transition-colors duration-100 hover:text-lab-ink">← {crumb.label}</button>}
+        <RaindropButtons.Provider value={true}><div className="ml-auto flex items-center gap-1.5">{actions}{own}</div></RaindropButtons.Provider>
+      </div>
+    );
+    return fill ? (
+      <div className="flex h-full min-h-0 flex-col">{bar}<div className="flex min-h-0 flex-1">{children}</div></div>
+    ) : (
+      <div className="min-h-full">
+        {bar}
+        <div className={cn("mx-auto w-full px-5 pb-20 sm:px-6", width)}>
+          {lede && <p className="mt-6 max-w-[720px] text-pretty text-reading text-lab-soft">{lede}</p>}
+          {children}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={cn("flex flex-col", fill ? "h-full" : "min-h-full")}>
       <header className={cn("top-0 z-20 flex-shrink-0 border-b border-lab-line bg-lab-canvas/90 backdrop-blur-md", !fill && "sticky")}>
@@ -145,6 +176,7 @@ const BUTTON_SIZE = { sm: "h-7 gap-1.5 px-2.5 text-caption", md: "h-8 gap-1.5 px
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   { variant = "secondary", size = "md", icon: Icon, loading, kbd, collapse, className, children, disabled, ...rest }, ref,
 ) {
+  const raindrop = useContext(RaindropButtons);
   return (
     <button
       ref={ref}
@@ -152,7 +184,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       className={cn(
         "lab-focus inline-flex flex-shrink-0 select-none items-center justify-center whitespace-nowrap rounded-md font-medium",
         "transition-[background-color,border-color,color,transform] duration-100 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40",
-        BUTTON_SIZE[size], BUTTON_VARIANT[variant], className,
+        raindrop ? RAINDROP_BUTTON : [BUTTON_SIZE[size], BUTTON_VARIANT[variant]], className,
       )}
       {...rest}
     >

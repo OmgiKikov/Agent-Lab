@@ -4,6 +4,16 @@
 
 @layer base {
   :root {
+    /* Raindrop's shadcn sidebar (components/ui/sidebar.tsx), as upstream. */
+    --sidebar-background: 0 0% 7%;
+    --sidebar-foreground: 200 10% 85%;
+    --sidebar-primary: 216 80% 70%;
+    --sidebar-primary-foreground: 0 0% 95%;
+    --sidebar-accent: 0 0% 100% / 0.06;
+    --sidebar-accent-foreground: 200 10% 85%;
+    --sidebar-border: 0 0% 100% / 0.06;
+    --sidebar-ring: 216 80% 70%;
+
     /* Agent Lab tokens (docs/DESIGN.md): Raindrop's palette. rgb channels, so `bg-lab-ok/15` style alpha works. */
     /* Surfaces: Raindrop's black canvas, then each step a little lighter. Lightness is elevation. */
     --lab-canvas: 0 0 0;      /* #000000 the page */

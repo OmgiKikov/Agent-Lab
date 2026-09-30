@@ -189,11 +189,9 @@ function claimNextCloudMcpNudgeChatSlot(): boolean {
 interface MessagePaneProps {
   /** If set, messages sent from the pane will carry this run_id. */
   activeRunId?: string | null;
-  /** Hide the floating «ask» button: the page opens the pane itself (event `workshop:open-message-pane`). */
-  hideLauncher?: boolean;
 }
 
-export function MessagePane({ activeRunId, hideLauncher }: MessagePaneProps) {
+export function MessagePane({ activeRunId }: MessagePaneProps) {
   const [collapsed, setCollapsedState] = useState<boolean>(loadCollapsed);
   const [width, setWidth] = useState<number>(loadWidth);
   const [sessions, setSessions] = useState<ClaudeSessionSummary[]>([]);
@@ -753,7 +751,6 @@ export function MessagePane({ activeRunId, hideLauncher }: MessagePaneProps) {
   }
 
   if (collapsed) {
-    if (hideLauncher) return null;
     return (
       <FloatingAskButton
         provider={provider}
@@ -1035,7 +1032,7 @@ export function MessagePane({ activeRunId, hideLauncher }: MessagePaneProps) {
 
 function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
   return (
-    <div className="group fixed bottom-0 right-0 z-40">
+    <div className="group fixed bottom-0 right-0 z-40 hidden md:block">
       <div className="pointer-events-none absolute -top-14 right-16 grid h-12 w-12 scale-75 place-items-center rounded-full border border-white/45 bg-white/95 opacity-0 shadow-[0_16px_40px_rgba(255,255,255,0.18),0_8px_26px_rgba(0,0,0,0.32)] transition-all duration-300 group-hover:-translate-y-2 group-hover:-rotate-6 group-hover:scale-100 group-hover:opacity-100 [&>img]:brightness-0">
         <ProviderMark provider="claude" open={true} />
       </div>
@@ -1046,10 +1043,10 @@ function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; on
         type="button"
         onClick={onOpen}
         className="flex h-11 items-center gap-2 rounded-tl-[15px] rounded-r-none rounded-bl-none border border-r-0 border-b-0 border-white/80 bg-white/95 px-[26px] text-sm font-medium text-zinc-950 shadow-[0_26px_70px_rgba(0,0,0,0.72),0_8px_22px_rgba(255,255,255,0.18),0_0_0_1px_rgba(0,0,0,0.08)] backdrop-blur transition-[transform,background-color,border-color,color,box-shadow] hover:-translate-y-0.5 hover:border-white hover:bg-white hover:text-black hover:shadow-[0_32px_90px_rgba(0,0,0,0.82),0_10px_30px_rgba(255,255,255,0.24),0_0_0_1px_rgba(0,0,0,0.1)] active:translate-y-0"
-        title="Спросить Agent Lab"
+        title={`Спросить ${providerLabel(provider)}`}
       >
         <Terminal className="h-4 w-4 text-zinc-950" />
-        <span>Спросить Agent Lab</span>
+        <span>Спросить {providerLabel(provider)}</span>
       </button>
     </div>
   );

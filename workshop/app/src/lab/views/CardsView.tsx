@@ -6,7 +6,7 @@ import { count, plural } from "../format";
 import { JobLine } from "../JobLine";
 import { useLabContext } from "../LabContext";
 import { DEFAULT_PERSONA, personaName } from "../look";
-import { NextStep, SetupSteps } from "../Setup";
+import { NextStep } from "../Setup";
 import { useToast } from "../toast";
 import type { Card, LabState } from "../types";
 import { Button, Chip, EmptyState, Input, Label, Page, PersonaIcon, Segmented, Verdict } from "../ui";
@@ -74,7 +74,7 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
   );
 
   return (
-    <Page title="Подготовка" icon={SlidersHorizontal} count={undefined} bare nav={<SetupSteps state={state} current="checks" />} primary={build}>
+    <Page title="Подготовка" icon={SlidersHorizontal} count={undefined} bare primary={build}>
       <header className="pt-10">
         <Label>Шаг 3 · сценарии</Label>
         <h2 className="mt-3 text-balance text-display font-medium text-lab-ink">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Check, Copy, ExternalLink, MessagesSquare, RotateCcw, Search, X } from "lucide-react";
+import { Check, Copy, ExternalLink, MessagesSquare, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RunDetail } from "@/components/RunDetail";
 import { api } from "../api";
@@ -14,8 +14,8 @@ import { personaLook, personaName, STATUS_TEXT } from "../look";
 import { transcript } from "../report";
 import { useToast } from "../toast";
 import type { Item, LabState } from "../types";
-import { bySource, type Scope, type SourceFilter } from "../useScope";
-import { Button, Chip, EmptyState, Label, Meta, Page, Panel, Progress, Segmented, Skeleton, StatusIcon, inputClass } from "../ui";
+import type { Scope } from "../useScope";
+import { Button, Chip, EmptyState, Label, Meta, Page, Panel, Progress, Skeleton, StatusIcon, inputClass } from "../ui";
 
 type Filter = "all" | "FAIL" | "disputed" | "UNMEASURED" | "PASS";
 const FILTERS: { id: Filter; label: string; hue?: "bad" | "warn" }[] = [
@@ -45,12 +45,11 @@ function DialogList({ state, scope, selected, onOpen, rows, setRows }: {
   state: LabState; scope: Scope; selected: string | null; onOpen: (d: Dialog) => void; rows: Dialog[]; setRows: (r: Dialog[]) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
-  const [src, setSrc] = useState<SourceFilter>("all");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const listRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const pool = useMemo(() => bySource(scope.dialogs, src), [scope.dialogs, src]);
+  const pool = scope.sims;
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { all: pool.length, FAIL: 0, PASS: 0, UNMEASURED: 0, disputed: 0 };
     for (const d of pool) { c[outcome(d) as Filter] = (c[outcome(d) as Filter] ?? 0) + 1; if (isDisputed(d)) c.disputed++; }
@@ -75,7 +74,6 @@ function DialogList({ state, scope, selected, onOpen, rows, setRows }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const sims = scope.sims.length, logs = scope.logs.length;
 
   return (
     <aside className="flex w-full flex-shrink-0 flex-col border-r border-lab-line bg-lab-panel md:w-[340px]" aria-label="Список диалогов">
@@ -84,12 +82,6 @@ function DialogList({ state, scope, selected, onOpen, rows, setRows }: {
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-lab-faint" />
           <input ref={searchRef} value={query} onChange={e => { setQuery(e.target.value); setLimit(PAGE); }} placeholder="Поиск по первой реплике" aria-label="Поиск по диалогам" className={cn(inputClass, "pl-8")} />
         </div>
-        {sims > 0 && logs > 0 && (
-          <Segmented className="flex w-full [&>button]:flex-1 [&>button]:justify-center" value={src} onChange={v => { setSrc(v); setLimit(PAGE); }} options={[
-            { value: "all", label: "Все" }, { value: "sim", label: "Симулятор", title: `${sims}: сыграны симулятором с версией ${scope.finished?.version ?? ""}` },
-            { value: "log", label: "Реальные", title: `${logs}: записанные диалоги агента в проде` },
-          ]} />
-        )}
         <div className="flex flex-wrap gap-1.5">
           {FILTERS.filter(f => f.id === "all" || counts[f.id]).map(f => (
             <Chip key={f.id} on={filter === f.id} hue={f.hue} count={counts[f.id]} onClick={() => { setFilter(f.id); setLimit(PAGE); }}>{f.label}</Chip>
@@ -117,7 +109,6 @@ function DialogList({ state, scope, selected, onOpen, rows, setRows }: {
                   {isDisputed(d) && <span className="text-lab-warn"> · спорный</span>}
                 </span>
               </span>
-              <span className="lab-label mt-0.5 flex-shrink-0 text-lab-faint">{d.origin === "log" ? "лог" : "сим"}</span>
             </button>
           );
         })}
@@ -161,10 +152,6 @@ function SimDetail({ state, item, run }: { state: LabState; item: Item; run: Non
           <div className="-ml-2.5 flex flex-shrink-0 flex-wrap items-center gap-1.5 sm:ml-0">
             <Button size="sm" variant="ghost" icon={copied ? Check : Copy} onClick={copy}>{copied ? "Скопировано" : "Копировать"}</Button>
             {item.runId && <Button size="sm" variant="ghost" icon={ExternalLink} onClick={() => navigate(`/runs/${item.runId}`)}>Трейс</Button>}
-            {run.status !== "running" && (
-              <Button size="sm" variant="ghost" icon={RotateCcw} disabled={state.job.running} title="Судья заново оценит диалоги версии; агент не запускается"
-                onClick={() => api(`/api/runs/${run.id}/rejudge`, {}).catch(error)}>Переоценить</Button>
-            )}
           </div>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -243,9 +230,8 @@ function MapView({ state, scope, onOpen }: { state: LabState; scope: Scope; onOp
  * the list on the left, the dialogue on the right. «Карта» shows the version as scenario × customer type instead.
  */
 export function DialogsView({ state, scope, itemId, onOpen }: { state: LabState; scope: Scope; itemId: string | null; onOpen: (key: string, replace?: boolean) => void }) {
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const view = params.get("view") === "map" ? "map" : "list";
-  const setView = (v: "list" | "map") => setParams(p => { const next = new URLSearchParams(p); if (v === "map") next.set("view", "map"); else next.delete("view"); return next; }, { replace: true });
   const [rows, setRows] = useState<Dialog[]>([]);
   const run = scope.finished;
   const selected = itemId ? scope.dialogs.find(d => keyOf(d) === itemId || d.key === itemId) ?? null : null;
@@ -271,21 +257,20 @@ export function DialogsView({ state, scope, itemId, onOpen }: { state: LabState;
     return () => window.removeEventListener("keydown", onKey);
   }, [rows, itemId, onOpen, view]);
 
-  const viewSwitch = <Segmented value={view} onChange={setView} options={[{ value: "list", label: "Список" }, { value: "map", label: "Карта" }]} />;
   const title = "Диалоги";
-  if (!scope.ready) return <Page title={title} icon={MessagesSquare} actions={viewSwitch} fill><div className="w-[340px] border-r border-lab-line p-3"><Skeleton className="h-8" /><Skeleton className="mt-3 h-[420px]" /></div><div className="flex-1 p-8"><Skeleton className="h-[480px]" /></div></Page>;
+  if (!scope.ready) return <Page title={title} icon={MessagesSquare} fill><div className="w-[340px] border-r border-lab-line p-3"><Skeleton className="h-8" /><Skeleton className="mt-3 h-[420px]" /></div><div className="flex-1 p-8"><Skeleton className="h-[480px]" /></div></Page>;
   if (!scope.dialogs.length) {
     return (
-      <Page title={title} icon={MessagesSquare} actions={viewSwitch}>
+      <Page title={title} icon={MessagesSquare}>
         <EmptyState icon={MessagesSquare} title="Диалогов пока нет">Оцените реальные диалоги на шаге «Логи» или проверьте версию агента: судья оценит каждый диалог по критериям.</EmptyState>
       </Page>
     );
   }
   if (view === "map") {
-    return <Page title={title} icon={MessagesSquare} count={scope.sims.length} actions={viewSwitch} full><MapView state={state} scope={scope} onOpen={key => onOpen(key)} /></Page>;
+    return <Page title={title} icon={MessagesSquare} count={scope.sims.length} full><MapView state={state} scope={scope} onOpen={key => onOpen(key)} /></Page>;
   }
   return (
-    <Page title={title} icon={MessagesSquare} count={scope.dialogs.length} actions={viewSwitch} fill>
+    <Page title={title} icon={MessagesSquare} count={scope.dialogs.length} fill>
       <div className={cn("min-h-0 w-full md:w-auto", selected ? "hidden md:flex" : "flex")}>
         <DialogList state={state} scope={scope} selected={selected ? keyOf(selected) : null} onOpen={d => onOpen(keyOf(d))} rows={rows} setRows={setRows} />
       </div>

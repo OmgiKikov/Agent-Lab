@@ -7,10 +7,9 @@ import {
   useMatch,
   useNavigate,
 } from "react-router-dom";
-import { Menu } from "lucide-react";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { NavSidebar } from "./components/NavSidebar";
 import { LabProvider } from "./lab/LabContext";
-import { Rail } from "./lab/Rail";
-import { LabMark } from "./lab/ui";
 import { MessagePane } from "./components/MessagePane";
 import { RunsPage } from "./pages/RunsPage";
 import { LabPage } from "./pages/LabPage";
@@ -37,10 +36,18 @@ function LegacyHashRedirect() {
   return null;
 }
 
+/** On a phone Raindrop's sidebar is a sheet; this bar opens it. From md up the sidebar is always there, as upstream. */
+function MobileBar() {
+  return (
+    <div className="flex h-11 flex-shrink-0 items-center gap-2 border-b border-white/[0.06] px-2 md:hidden">
+      <SidebarTrigger className="text-white/60" />
+      <span className="text-[13px]" style={{ fontFamily: '"AlphaLyrae", "Commissioner Variable", sans-serif', color: "rgba(255,255,255,0.55)" }}>agent lab</span>
+    </div>
+  );
+}
+
 function AppLayout() {
   const [showDisconnectedNotice, setShowDisconnectedNotice] = useState(false);
-  const [menu, setMenu] = useState(false);
-  const location = useLocation();
   const runMatch = useMatch({ path: "/runs/:runId", end: false });
   // The Lab does not need the Workshop to work: only the trace pages wait for it.
   const onLab = !!useMatch({ path: "/lab", end: false });
@@ -64,48 +71,42 @@ function AppLayout() {
   useEffect(() => {
     sendWorkshopMessage({ type: "ui_view", run_id: activeRunId });
   }, [activeRunId]);
-  useEffect(() => { setMenu(false); }, [location.pathname]);
 
   const blocked = showDisconnectedNotice && !onLab;
+  // Raindrop's layout as upstream: its sidebar, the page, the chat pane with its «ask» tab. The Lab is one more section in it.
   return (
     <LabProvider>
-      <LegacyHashRedirect />
-      {/* One product, Raindrop's shell: the same rail on every page, the assistant opens from it, nothing floats over the content. */}
-      <div className="flex h-svh overflow-hidden bg-lab-canvas text-lab-text">
-        <Rail className="hidden md:flex" />
-        {menu && (
-          <div className="fixed inset-0 z-50 flex md:hidden">
-            <Rail expanded className="shadow-pop" onNavigate={() => setMenu(false)} />
-            <button className="flex-1 bg-black/70" aria-label="Закрыть меню" onClick={() => setMenu(false)} />
-          </div>
-        )}
-        <div className="relative flex min-w-0 flex-1 flex-col">
-          <div className="flex h-12 flex-shrink-0 items-center gap-2 border-b border-lab-line bg-lab-panel px-3 md:hidden">
-            <button onClick={() => setMenu(true)} aria-label="Меню" className="lab-focus inline-flex size-8 items-center justify-center rounded-md text-lab-mute hover:bg-white/[0.06] hover:text-lab-ink"><Menu className="size-4" /></button>
-            <LabMark size={18} className="text-lab-ink" /><span className="text-body font-semibold text-lab-ink">Agent Lab</span>
-          </div>
-          <div
-            className={`flex min-h-0 flex-1 transition-[filter,opacity] duration-200 ${blocked ? "pointer-events-none select-none opacity-40 blur-sm" : ""}`}
-            aria-hidden={blocked}
-          >
-            <div className="min-w-0 flex-1 overflow-auto">
-              <Outlet />
-            </div>
-            <MessagePane activeRunId={activeRunId} hideLauncher />
-          </div>
-          {blocked && (
-            <div className="absolute inset-0 z-40 flex items-center justify-center px-6">
-              <div className="w-[440px] max-w-full rounded-lg border border-lab-edge bg-lab-raised px-8 py-7 text-center shadow-pop">
-                <LabMark size={28} className="mx-auto text-lab-mute" />
-                <div className="mt-4 text-lead font-medium text-lab-ink">Workshop не запущен</div>
-                <p className="mt-1.5 text-body text-lab-soft">
-                  Трейсы хранит Workshop. Запустите его командой <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-caption text-lab-ink">sh bin/start.sh</code>, страница подключится сама.
-                </p>
+      <SidebarProvider defaultOpen={false}>
+        <LegacyHashRedirect />
+        <NavSidebar />
+        <SidebarInset>
+          <div className="relative flex h-svh flex-col overflow-hidden">
+            <MobileBar />
+            <div
+              className={`flex min-h-0 flex-1 transition-all duration-200 ${blocked ? "pointer-events-none select-none blur-sm opacity-45" : ""}`}
+              aria-hidden={blocked}
+            >
+              <div className="flex-1 min-w-0 overflow-auto">
+                <Outlet />
               </div>
+              <MessagePane activeRunId={activeRunId} />
             </div>
-          )}
-        </div>
-      </div>
+            {blocked && (
+              <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 px-6">
+                <div
+                  className="flex min-h-[180px] w-[520px] max-w-full flex-col items-center justify-center rounded-[10px] border border-white/10 bg-zinc-950/90 px-9 py-6 text-center shadow-2xl shadow-black/50 backdrop-blur"
+                  style={{ fontFamily: '"AlphaLyrae", "Commissioner Variable", sans-serif' }}
+                >
+                  <div className="text-lg font-medium text-white/90">Workshop не запущен.</div>
+                  <div className="mt-4 text-[15px] leading-relaxed text-white/62">
+                    Запустите <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-white/90">sh bin/start.sh</code> в терминале, чтобы продолжить.
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
     </LabProvider>
   );
 }
@@ -115,7 +116,7 @@ export const router = createBrowserRouter([
     path: "/",
     element: <AppLayout />,
     children: [
-      { index: true, element: <Navigate to="/lab/overview" replace /> },
+      { index: true, element: <Navigate to="/lab" replace /> },
       { path: "lab", element: <LabPage /> },
       { path: "lab/:step", element: <LabPage /> },
       { path: "lab/:step/:itemId", element: <LabPage /> },
@@ -135,7 +136,7 @@ export const router = createBrowserRouter([
       { path: "saved/:runId", element: <SavedPage /> },
       { path: "saved", element: <SavedPage /> },
       { path: "settings", element: <SettingsPage /> },
-      { path: "*", element: <Navigate to="/lab/overview" replace /> },
+      { path: "*", element: <Navigate to="/lab" replace /> },
     ],
   },
 ]);

@@ -6,7 +6,7 @@ import { count, whenLong } from "../format";
 import { JobLine } from "../JobLine";
 import { Confirm } from "../modal";
 import { setupSteps } from "../nav";
-import { NextStep, SetupSteps } from "../Setup";
+import { NextStep } from "../Setup";
 import { useToast } from "../toast";
 import type { LabState } from "../types";
 import { Button, EmptyState, Hero, Label, LinkButton, Numbers, Page, Section, inputClass } from "../ui";
@@ -66,10 +66,9 @@ export function LogsView({ state, onGo, onCriterion }: { state: LabState; onGo: 
     if (fileRef.current) fileRef.current.value = "";
   };
   const picker = <input ref={fileRef} type="file" accept=".xlsx,.jsonl" className="hidden" onChange={e => load(e.target.files?.[0])} />;
-  const nav = <SetupSteps state={state} current="logs" />;
   const cardsDone = setupSteps(state)[2].done;
   const noSources = !state.sources.length;
-  const page = { title: "Подготовка", icon: SlidersHorizontal, bare: true, nav, narrow: true };
+  const page = { title: "Подготовка", icon: SlidersHorizontal, bare: true, narrow: true };
 
   if (!state.logs.total) {
     return (

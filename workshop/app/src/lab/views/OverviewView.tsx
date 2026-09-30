@@ -7,31 +7,13 @@ import { JobLine } from "../JobLine";
 import { useLabContext } from "../LabContext";
 import { HUE, type Hue } from "../look";
 import { setupSteps } from "../nav";
-import type { LabRun, LabState } from "../types";
+import type { LabState } from "../types";
 import type { Scope } from "../useScope";
-import { VersionSwitch } from "../VersionSwitch";
-import { Button, Hero, Label, LabMark, LinkButton, Numbers, Page, Section, Skeleton, type FactRow } from "../ui";
+import { Button, Hero, LabMark, LinkButton, Numbers, Page, Section, Skeleton, type FactRow } from "../ui";
 
 type Go = (to: string) => void;
 
 const dialogs = (n: number) => count(n, "диалога", "диалогов", "диалогов");
-const RUN_STATUS: Record<string, string> = { failed: "прервана ошибкой", stopped: "остановлена" };
-
-/** The run record: the change the person wrote, when and with which agent; a check that did not finish says so. */
-function Header({ run }: { run: LabRun }) {
-  return (
-    <header className="pt-8">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-caption text-lab-mute">
-        {run.label && <span className="inline-flex min-w-0 items-center gap-2"><Label>Что изменили</Label><span className="truncate text-lab-text">{run.label}</span></span>}
-        <span className="inline-flex items-center gap-2"><Label>Проверка</Label>{whenLong(run.startedAt)} · {run.targetName}</span>
-      </div>
-      {RUN_STATUS[run.status] && (
-        <p className="mt-3 text-body text-lab-warn">Проверка {RUN_STATUS[run.status]}{run.error ? `: ${run.error}` : "."}</p>
-      )}
-    </header>
-  );
-}
-
 /**
  * lab/metric.py opens with «the one quality number and how far it can be trusted»: the check's accuracy is the page's one big number
  * (with what it is made of and the previous check's own number under it); the second judge, the human check and the repeats —
@@ -188,10 +170,8 @@ export function OverviewView({ state, scope, go, onPick }: { state: LabState; sc
       </Page>
     );
   }
-  const title = <VersionSwitch asTitle versions={scope.sameAgent} current={scope.finished} onPick={onPick} />;
   return (
-    <Page title={title} icon={FlaskConical} noContext>
-      <Header run={scope.finished} />
+    <Page title="Обзор" icon={FlaskConical} noContext>
       <Result scope={scope} go={go} />
       <Criteria scope={scope} go={go} />
       <RealLogs state={state} go={go} />

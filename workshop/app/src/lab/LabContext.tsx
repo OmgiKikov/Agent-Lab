@@ -10,7 +10,6 @@ import type { LabRun, LabState, Step } from "./types";
 import { Button, ChromeContext } from "./ui";
 import { useLab } from "./useLab";
 import { useScope, type Scope } from "./useScope";
-import { VersionSwitch } from "./VersionSwitch";
 
 type Lab = {
   state: LabState | null; offline: boolean; run: LabRun | null; pickRun: (id: string) => void;
@@ -58,7 +57,6 @@ export function LabProvider({ children }: { children: ReactNode }) {
   const openNewRun = useCallback(() => setNewRun(true), []);
   const openPalette = useCallback(() => setPalette(true), []);
   const chrome = useMemo(() => ({
-    context: <VersionSwitch versions={scope.sameAgent} current={finished} onPick={pickRun} />,
     // Without scenarios there is nothing to play: the button appears with them, the setup pages lead there.
     primary: deck ? (
       <Button variant="primary" icon={Play} disabled={!state || state.job.running} onClick={openNewRun}
@@ -66,7 +64,7 @@ export function LabProvider({ children }: { children: ReactNode }) {
         <span className="hidden sm:inline">Проверить версию</span>
       </Button>
     ) : null,
-  }), [scope.sameAgent, finished, pickRun, state, deck, openNewRun]);
+  }), [state, deck, openNewRun]);
 
   const value = useMemo<Lab>(() => ({ state, offline, run, pickRun, scope, nav, target, setTarget, openNewRun, openPalette }),
     [state, offline, run, pickRun, scope, nav, target, setTarget, openNewRun, openPalette]);

@@ -5,7 +5,7 @@ import { api } from "../api";
 import { count, thousands } from "../format";
 import { JobLine } from "../JobLine";
 import { setupSteps } from "../nav";
-import { NextStep, SetupSteps } from "../Setup";
+import { NextStep } from "../Setup";
 import { TagInput } from "../TagInput";
 import { useToast } from "../toast";
 import type { Check as CheckResult, LabState } from "../types";
@@ -76,7 +76,7 @@ export function AgentView({ state }: { state: LabState }) {
   );
 
   return (
-    <Page title="Подготовка" icon={SlidersHorizontal} bare nav={<SetupSteps state={state} current="agent" />} primary={collect} narrow>
+    <Page title="Подготовка" icon={SlidersHorizontal} bare primary={collect} narrow>
       <header className="pt-10">
         <Label>Шаг 1 · агент</Label>
         <h2 className="mt-3 text-balance text-display font-medium text-lab-ink">
