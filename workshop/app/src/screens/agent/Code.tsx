@@ -15,7 +15,7 @@ import { segments } from "../../ui/highlight";
 const KIND: Record<string, string> = { prompt: "Промпт", tools: "Инструменты" };
 
 /** A source in full with every criterion quoted from it marked and numbered; each criterion opens in «Критерии». */
-function SourceText({ source, rules, onClose }: { source: Source | null; rules: RuleEntry[]; onClose: () => void }) {
+export function SourceText({ source, rules, onClose }: { source: Source | null; rules: RuleEntry[]; onClose: () => void }) {
   const { data, isLoading, error } = useSource(source?.id);
   const marks = rules.map((r, i) => ({ quote: r.rule.quote, n: i + 1 }));
   const pieces = data ? segments(data.content, marks) : [];

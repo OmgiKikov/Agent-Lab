@@ -56,17 +56,15 @@ const ALWAYS = "Всегда";
 const SOURCE_NAME: Record<string, string> = { prompt: "Промпт ответа", tools: "Инструменты агента" };
 const sourceName = (r: RuleEntry) => SOURCE_NAME[r.rule.kind] ?? (r.rule.origin.split("/").pop() || "Источник не указан");
 
-/** «Когда спрашивают про …»: the topic, lowercased, cut to a short phrase. */
+/** The situation a criterion is for: the topic of the conversation, as the assessment named it. */
 function situation(topic: string) {
-  const t = topic.split(",")[0].trim();
-  const short = t.length > 48 ? `${t.slice(0, 47).trimEnd()}…` : t;
-  return `Когда спрашивают про ${short.charAt(0).toLowerCase()}${short.slice(1)}`;
+  return topic.trim();
 }
 
-type Group = { title: string; rules: { r: RuleEntry; also: string[] }[] };
+export type Group = { title: string; rules: { r: RuleEntry; also: string[] }[] };
 
 /** Criteria by situation: no topic or three and more topics is «Всегда»; else under the first topic, the rest as «также». */
-function groupRules(rules: RuleEntry[]): Group[] {
+export function groupRules(rules: RuleEntry[]): Group[] {
   const map = new Map<string, Group>();
   const put = (title: string, r: RuleEntry, also: string[]) => {
     const g = map.get(title) ?? { title, rules: [] };

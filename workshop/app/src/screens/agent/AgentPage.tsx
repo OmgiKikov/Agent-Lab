@@ -12,6 +12,11 @@ import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
 import { SourcesDrawer } from "./Code";
 import { ConnectionDrawer, useConnectionMemory, wayOf, WAY_NAME } from "./Connection";
+import { VariantA } from "./variants/VariantA";
+import { VariantB } from "./variants/VariantB";
+import { VariantC } from "./variants/VariantC";
+import { CriteriaLooks } from "./variants/CriteriaLooks";
+import { CriteriaStory } from "./variants/CriteriaStory";
 
 const READ_AT = "lab.agent.sourcesReadAt";
 const readAt = () => { try { return localStorage.getItem(READ_AT); } catch { return null; } };
@@ -55,6 +60,12 @@ export function AgentPage() {
   const memory = useConnectionMemory();
   const [connecting, setConnecting] = useState(false);
   const [reading, setReading] = useState(false);
+  const variant = params.get("v");
+  if (variant === "a") return <VariantA />;
+  if (variant === "b") return <VariantB />;
+  if (variant === "c") return <VariantC />;
+  if (variant === "d") return <CriteriaStory />;
+  if (variant === "k1" || variant === "k2" || variant === "k3") return <CriteriaLooks look={variant} />;
   if (params.get("tab") === "criteria") return <Navigate to={`${LINKS.criteria}${params.get("c") ? `?c=${encodeURIComponent(params.get("c")!)}` : ""}`} replace />;
   if (params.get("tab") === "code" || params.get("tab") === "connection") {
     return <Navigate to={params.get("tab") === "code" ? "/agent?sources=1" : "/agent"} replace />;
