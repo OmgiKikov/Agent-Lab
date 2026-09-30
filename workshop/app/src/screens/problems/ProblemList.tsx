@@ -6,11 +6,11 @@ import { IssueRow } from "../../ui/IssueRow";
 function ProblemRow({ p, source, selected, onClick }: { p: RuleEntry; source: "log" | "sim"; selected: boolean; onClick: () => void }) {
   const side = p[source];
   const total = side.failed + side.passed;
-  const topics = p.topics.length > 1 ? `${p.topics.length} ${plural(p.topics.length, "тема", "темы", "тем")}` : p.topics[0];
+  const many = p.topics.length > 1 ? `${p.topics.length} ${plural(p.topics.length, "тема", "темы", "тем")}` : null;
   return (
     <IssueRow
-      selected={selected} onClick={onClick} title={p.title} sub={p.rule.condition || topics}
-      tags={p.rule.condition && topics ? [topics] : undefined}
+      selected={selected} onClick={onClick} title={p.title} sub={p.rule.condition || p.topics[0]}
+      tags={many ? [many] : undefined}
       stats={[{ value: side.failed, of: `из ${total}`, share: total ? side.failed / total : 0, title: `нарушено в ${side.failed} из ${total}` }]}
     />
   );

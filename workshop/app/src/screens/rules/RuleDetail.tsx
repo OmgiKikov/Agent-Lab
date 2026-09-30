@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, ListChecks } from "lucide-react";
+import { ArrowLeft, ArrowRight, ListChecks } from "lucide-react";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
 import { sourceLabel } from "../../lab/problemReport";
@@ -14,6 +14,7 @@ import { Label } from "../../ui/Label";
 import { Quote } from "../../ui/Quote";
 import { Segmented } from "../../ui/Segmented";
 import { SourceDrawer } from "../problems/SourceDrawer";
+import { EvidenceAll, EvidenceBar, modeOf, orderExamples, type EvidenceMode } from "../verdicts/EvidenceBar";
 import { ConversationBox, ExampleMeta, JudgeNote, useExample } from "../verdicts/Example";
 import { disputedCount } from "./RuleList";
 
@@ -39,7 +40,8 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
   const counts: Record<Tab, number> = { FAIL: r.log.failed + r.sim.failed, PASS: r.log.passed + r.sim.passed, UNKNOWN: r.log.unknown + r.sim.unknown };
   const wanted = params.get("vt") as Tab | null;
   const tab: Tab = wanted && counts[wanted] ? wanted : (["FAIL", "PASS", "UNKNOWN"] as Tab[]).find(t => counts[t]) ?? "FAIL";
-  const list = examples.filter(e => e.status === tab);
+  const mode = modeOf(params.get("ev"));
+  const list = orderExamples(examples.filter(e => e.status === tab), mode);
   const at = Math.max(0, Math.min(list.length - 1, (Number(params.get("example")) || 1) - 1));
   const example: Example | undefined = list[at];
   const view = useExample(example);
@@ -47,6 +49,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
     setParams(prev => { const next = new URLSearchParams(prev); change(next); return next; }, { replace: true });
   const setAt = (n: number) => update(next => next.set("example", String(Math.max(0, Math.min(list.length - 1, n)) + 1)));
   const setTab = (t: Tab) => update(next => { next.set("vt", t); next.delete("example"); });
+  const setMode = (m: EvidenceMode) => update(next => { if (m === "rec") next.delete("ev"); else next.set("ev", m); next.delete("example"); });
   const decide = (d: Decision) => { if (example && example.status !== "UNKNOWN") review.mutate({ example, decision: example.review === d ? null : d }); };
   useKeys({
     ArrowLeft: () => setAt(at - 1),
@@ -106,17 +109,12 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
       </section>
       <section className="mt-10">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-baseline gap-3">
-            <Label>Вердикты</Label>
-            {list.length > 0 && <span className="text-meta text-lab-dim">{at + 1} из {list.length}</span>}
-          </div>
-          <div className="flex items-center gap-2">
-            <Segmented value={tab} onChange={setTab} options={(["FAIL", "PASS", "UNKNOWN"] as Tab[]).filter(t => counts[t]).map(t => ({ value: t, label: TAB_TITLE[t], count: counts[t] }))} />
-            <Button size="sm" variant="ghost" icon={ChevronLeft} aria-label="Предыдущий вердикт" disabled={at <= 0} onClick={() => setAt(at - 1)} />
-            <Button size="sm" variant="ghost" icon={ChevronRight} aria-label="Следующий вердикт" disabled={at >= list.length - 1} onClick={() => setAt(at + 1)} />
-          </div>
+          <Label>Вердикты</Label>
+          <Segmented value={tab} onChange={setTab} options={(["FAIL", "PASS", "UNKNOWN"] as Tab[]).filter(t => counts[t]).map(t => ({ value: t, label: TAB_TITLE[t], count: counts[t] }))} />
         </div>
-        {example ? (
+        <div className="mt-2"><EvidenceBar mode={mode} onMode={setMode} at={at} total={list.length} onAt={setAt} /></div>
+        {mode === "all" && list.length ? <EvidenceAll list={list} onPick={i => { update(next => { next.delete("ev"); next.set("example", String(i + 1)); }); }} /> : null}
+        {mode === "all" && list.length ? null : example ? (
           <>
             <div className="mt-3"><ExampleMeta example={example} /></div>
             <ConversationBox className="mt-2" view={view} example={example} hover={hover} onHover={setHover} />

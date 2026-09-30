@@ -13,6 +13,7 @@ import { Facts, type Fact } from "../../ui/Facts";
 import { Label } from "../../ui/Label";
 import { Quote } from "../../ui/Quote";
 import { useToast } from "../../ui/toast";
+import { modeOf, orderExamples, type EvidenceMode } from "../verdicts/EvidenceBar";
 import { Evidence } from "./Evidence";
 import { Reproduce } from "./Reproduce";
 import { SourceDrawer } from "./SourceDrawer";
@@ -40,7 +41,9 @@ export function ProblemDetail({ p, source, runId, onBack }: { p: RuleEntry; sour
   const [sourceOpen, setSourceOpen] = useState(false);
   const [hover, setHover] = useState(false);
   const side = p[source];
-  const violations = side.examples.filter(e => e.status === "FAIL");
+  const mode = modeOf(params.get("ev"));
+  const violations = orderExamples(side.examples.filter(e => e.status === "FAIL"), mode);
+  const setMode = (m: EvidenceMode) => setParams(prev => { const n = new URLSearchParams(prev); if (m === "rec") n.delete("ev"); else n.set("ev", m); n.delete("example"); return n; }, { replace: true });
   const at = Math.max(0, Math.min(violations.length - 1, (Number(params.get("example")) || 1) - 1));
   const example = violations[at];
   const update = (change: (next: URLSearchParams) => void) =>
@@ -95,7 +98,7 @@ export function ProblemDetail({ p, source, runId, onBack }: { p: RuleEntry; sour
           </dl>
         </details>
       </section>
-      <Evidence p={p} from={source} at={at} onAt={setAt} hover={hover} onHover={setHover} onDecide={decide} />
+      <Evidence list={violations} mode={mode} onMode={setMode} at={at} onAt={setAt} hover={hover} onHover={setHover} onDecide={decide} />
       {source === "log" && <Reproduce p={p} />}
       <SourceDrawer open={sourceOpen} onClose={() => setSourceOpen(false)} sourceId={p.rule.sourceId} origin={p.rule.origin} quote={p.rule.quote} />
     </article>

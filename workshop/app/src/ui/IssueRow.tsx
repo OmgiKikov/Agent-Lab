@@ -28,8 +28,8 @@ export function IssueRow({ selected, onClick, lead, title, sub, tags, stats, ton
         <div className="min-w-0 flex-1">
           <div className="truncate text-body text-lab-ink">{title}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-meta text-lab-dim">
-            {tags?.map((t, i) => <span key={i} className="flex-shrink-0 rounded border border-white/[0.1] px-1.5 text-lab-mute">{t}</span>)}
-            {sub && <span className="truncate">{sub}</span>}
+            {tags?.map((t, i) => <span key={i} className="max-w-[40%] flex-shrink-0 truncate rounded border border-white/[0.1] px-1.5 text-lab-mute">{t}</span>)}
+            {sub && <span className="min-w-0 truncate">{sub}</span>}
           </div>
         </div>
         {stats?.map((s, i) => (
