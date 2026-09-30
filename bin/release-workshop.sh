@@ -20,5 +20,5 @@ cd "$ROOT"
 cp workshop/build/bun/raindrop-bun-darwin-arm64 workshop/build/raindrop-darwin-arm64
 cp workshop/build/bun/raindrop-bun-darwin-x64 workshop/build/raindrop-darwin-x64
 gh release create "$TAG" workshop/build/raindrop-darwin-arm64 workshop/build/raindrop-darwin-x64 \
-  --title "Workshop $SOURCE" --notes "Сборка Workshop с разделом Agent Lab из workshop/ ($SOURCE). Скачивается bin/start.sh на компьютере без Bun."
+  --title "Workshop $SOURCE" --notes "Сборка Workshop с проверками агента из workshop/ ($SOURCE). Скачивается bin/start.sh на компьютере без Bun."
 echo "Published: $TAG"

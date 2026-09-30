@@ -17,7 +17,7 @@ from .transcript import for_trace, with_buttons
 MAX_AGENT_TURNS = 3
 PARALLEL = 4
 END = '[КОНЕЦ]'
-FOLDER_PREFIX = 'Agent Lab · '
+FOLDER_PREFIX = 'Симуляция · '
 Progress = Callable[..., None]
 
 

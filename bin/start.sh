@@ -1,5 +1,5 @@
 #!/bin/sh
-# Agent Lab: starts everything and opens http://127.0.0.1:5899/lab. The same on every computer:
+# Starts everything (the checks service and the Workshop) and opens http://127.0.0.1:5899/. The same on every computer:
 #   - Workshop (5899): our build of workshop/; built here with Bun, or downloaded from this repository's releases;
 #   - models: the bank's gateway when its certificates are in certs/, otherwise Pi bridges to OpenRouter (11436, 11437);
 #   - the Lab's API (5901), restarted on every start so it runs the current code.
@@ -81,7 +81,7 @@ fi
 
 # 4. The Lab's API, on the current code unless a job is running.
 if curl -fsS --max-time 2 http://127.0.0.1:5901/api/state 2>/dev/null | grep -q '"running":true'; then
-  say "Agent Lab занят задачей: оставляю как есть"
+  say "Сервис проверок занят задачей: оставляю как есть"
 else
   for old in $(lsof -ti tcp:5901 -sTCP:LISTEN 2>/dev/null); do kill "$old" 2>/dev/null || true; done
   for _ in 1 2 3 4 5 6 7 8 9 10; do lsof -ti tcp:5901 -sTCP:LISTEN >/dev/null 2>&1 || break; sleep 1; done
@@ -89,7 +89,7 @@ else
     </dev/null >>data/api.log 2>&1 &
 fi
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do up http://127.0.0.1:5901/api/state && break; sleep 1; done
-up http://127.0.0.1:5901/api/state || fail "Agent Lab не запустился: data/api.log"
+up http://127.0.0.1:5901/api/state || fail "Сервис проверок не запустился: data/api.log"
 
 say "Готово: http://127.0.0.1:5899/"
 [ "${LAB_NO_OPEN:-}" = 1 ] || open "http://127.0.0.1:5899/" 2>/dev/null || true

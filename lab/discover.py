@@ -15,7 +15,7 @@ from .context import sources
 from .prompts import ASSIGN, PLAN
 
 RESULT = 'discover.json'
-FOLDER = 'Agent Lab · Логи'
+FOLDER = 'Логи'
 SEED = 20260928  # the same sample of conversations in every audit
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
 OBSERVATIONS = ('reply', 'tool', 'state')

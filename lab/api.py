@@ -1,4 +1,4 @@
-"""HTTP API of the Agent Lab section in Workshop (workshop/app/src/pages/LabPage.tsx).
+"""HTTP API of the checks service behind the product's screens (workshop/app/src/screens/*).
 
 Long work (sources, audit, cards, a run, a rejudge) runs as one background job at a time; the page polls /api/state.
 """
@@ -15,7 +15,7 @@ from . import agents, cards, discover, llm, logs, personas, problems, simulate, 
 from .context import sources
 from .metric import metric
 
-app = FastAPI(title='Agent Lab')
+app = FastAPI(title='Сервис проверок')
 # The UI is served by Workshop (5899), or by Vite (5900) while it is being developed.
 app.add_middleware(
     CORSMiddleware,

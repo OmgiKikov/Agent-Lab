@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds our Workshop from workshop/ (Raindrop Workshop 0.1.21, MIT, with the Agent Lab section):
+# Builds our Workshop from workshop/ (Raindrop Workshop 0.1.21, MIT, with the product built into it):
 # the server and the UI compiled by Bun into one file, workshop/build/raindrop, and restarts a running Workshop.
 # The Workshop's traces stay in ~/.raindrop. Extra arguments go to workshop/scripts/build-bun.ts (e.g. --all).
 # "-local" in the version makes the binary unpack its UI on every start, so a rebuilt UI is never stale.

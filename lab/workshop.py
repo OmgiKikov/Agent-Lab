@@ -202,8 +202,8 @@ class Trace:
             pass
 
 
-# Workshop accepts only user/claude-code/codex as a note author; the Agent Lab section of the
-# UI shows notes carrying this prefix as "Судья · Agent Lab".
+# Workshop accepts only user/claude-code/codex as a note author; the UI shows notes carrying this
+# prefix as the judge's ("Судья").
 LAB_NOTE_MARK = '[agent-lab] '
 
 

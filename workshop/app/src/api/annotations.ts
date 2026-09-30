@@ -5,7 +5,7 @@ export type AnnotationSource = "user" | "claude-code" | "codex" | "agent-lab";
 
 const LAB_NOTE_MARK = "[agent-lab] ";
 
-/** Agent Lab verdicts arrive as codex notes with a prefix; show them as the Lab judge. */
+/** The judge's verdicts arrive as codex notes with a prefix; show them as the judge's. */
 export function fromLab(annotation: Annotation): Annotation {
   if (!annotation.note?.startsWith(LAB_NOTE_MARK)) return annotation;
   return { ...annotation, source: "agent-lab", note: annotation.note.slice(LAB_NOTE_MARK.length) };

@@ -13,7 +13,7 @@
     --sidebar-border: 0 0% 100% / 0.06;
     --sidebar-ring: 216 80% 70%;
 
-    /* Agent Lab: rgb channels, so `bg-lab-ok/15` style alpha works. */
+    /* The product's tokens: rgb channels, so `bg-lab-ok/15` style alpha works. */
     --lab-bg: 0 0 0;
     --lab-surface: 10 10 10;
     --lab-raised: 17 17 17;
@@ -32,12 +32,6 @@
     --lab-warn: 240 173 78;
     --lab-mark: 250 204 21;
   }
-}
-
-@font-face {
-  font-family: "AlphaLyrae";
-  src: local("AlphaLyrae-Medium"), url("./assets/fonts/AlphaLyrae-Medium.ttf") format("truetype");
-  font-display: swap;
 }
 
 html {

@@ -24,7 +24,7 @@ export const SOURCE_GLYPH: Record<Annotation["source"], string> = {
 export function annotationSourceLabel(source: Annotation["source"]): string {
   if (source === "claude-code") return "Claude Code";
   if (source === "codex") return "Codex";
-  if (source === "agent-lab") return "Судья · Agent Lab";
+  if (source === "agent-lab") return "Судья";
   return "Вы";
 }
 
