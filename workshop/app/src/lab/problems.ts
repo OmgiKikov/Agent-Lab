@@ -99,7 +99,7 @@ export function useTurns(example?: Example): { turns?: Turn[]; loading: boolean;
   if (!example) return { loading: false, error: null };
   if (example.source === "log") return { turns: log.data?.messages, loading: log.isLoading, error: log.error };
   const item = run.data?.items?.[example.index ?? -1];
-  const turns = item?.conversation.map(m => ({ role: m.role, text: m.text, events: m.events, ok: m.ok, status: m.status }));
+  const turns = item?.conversation.map(m => ({ role: m.role, text: m.text, events: m.events, ok: m.ok, status: m.status, seconds: m.seconds }));
   return { turns, loading: run.isLoading, error: run.error };
 }
 

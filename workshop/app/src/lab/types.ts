@@ -7,9 +7,11 @@ export type Metric = {
   human?: { reviewed: number; agree: number };
   personas?: Record<string, { accuracy: number | null; passed: number; measured: number }>;
 };
+/** A call of the agent's tool as the service recorded it. */
+export type ToolEvent = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };
 export type Message = {
   role: "customer" | "agent"; text: string; fromLog?: boolean; rewritten?: boolean; ok?: boolean; status?: string; seconds?: number;
-  options?: string[]; events?: { tool: string; article?: string }[];
+  options?: string[]; events?: ToolEvent[];
 };
 export type Item = {
   cardId: string; name: string; topic: string; origin: string; status: Status; stage: string; conversation: Message[]; rules: Rule[];
