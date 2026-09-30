@@ -777,7 +777,7 @@ export function SavedPage() {
       <div className={`w-80 flex-shrink-0 flex flex-col ${isEmpty ? "opacity-40 pointer-events-none" : ""}`} style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="p-3 space-y-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="flex items-center justify-between">
-            <div className="text-[14px]" style={{ fontFamily: '"Inter Variable", sans-serif', color: C.fg3 }}>Сохранённые трейсы</div>
+            <div className="text-[14px]" style={{ fontFamily: '"Commissioner Variable", sans-serif', color: C.fg3 }}>Сохранённые трейсы</div>
             <div className="text-[10px]" style={{ color: C.fg0 }}>
               {filtered.length === events.length ? String(events.length) : `${filtered.length}/${events.length}`}
             </div>

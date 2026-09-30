@@ -12,6 +12,7 @@ import { useLabState } from "../../shell/LabProvider";
 import { LINKS } from "../../shell/links";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
+import { Facts, type Fact } from "../../ui/Facts";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Modal } from "../../ui/Modal";
 import { Split } from "../../ui/Split";
@@ -19,33 +20,21 @@ import { useToast } from "../../ui/toast";
 import { RuleDetail } from "./RuleDetail";
 import { RuleList, matchesRule, type RuleFilter } from "./RuleList";
 
-const Dot = () => <span className="text-lab-faint">·</span>;
-
-/** Where the rules come from and how far the verdicts on them can be trusted, in two lines. */
+/** Where the rules come from and how far the verdicts can be trusted, as one line of run meta. */
 function Summary({ data, state }: { data: Problems; state: LabState }) {
-  const total = data.rules.length;
   const files = new Set(data.rules.map(r => r.rule.origin)).size;
   const logJudge = state.discover?.summary.secondJudge;
   const run = data.sim ? state.runs.find(r => r.id === data.sim?.runId) : undefined;
   const simJudge = run?.metric?.secondJudge;
   const people = decisions(data);
   const checked = people.agree + people.disagree;
-  return (
-    <div className="flex-shrink-0 border-b border-white/[0.06] px-6 py-5">
-      <h1 className="text-page font-semibold text-lab-ink">
-        {total} {plural(total, "правило", "правила", "правил")} из кода агента
-      </h1>
-      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-lab-mute">
-        <span>из {files} {plural(files, "источника", "источников", "источников")}{data.log?.rulesSince ? `, зафиксированы ${day(data.log.rulesSince)}` : ""}</span>
-        {logJudge && <><Dot /><span>второй судья согласен с первым в {logJudge.agree} из {logJudge.checked} диалогов логов</span></>}
-        {simJudge && <><Dot /><span>в {simJudge.agree} из {simJudge.checked} диалогов симуляции</span></>}
-        <Dot />
-        <span>{checked ? `люди проверили ${checked} ${plural(checked, "вердикт", "вердикта", "вердиктов")}: верно ${people.agree}, неверно ${people.disagree}` : "люди вердикты ещё не проверяли"}</span>
-        <Dot />
-        <Link to={LINKS.settings} className="transition-colors hover:text-lab-text">модели судей</Link>
-      </div>
-    </div>
-  );
+  const facts: Fact[] = [
+    { label: "Источников", value: String(files) },
+    ...(data.log?.rulesSince ? [{ label: "Зафиксированы", value: day(data.log.rulesSince) }] : []),
+    ...(logJudge ? [{ label: "Второй судья", value: `согласен в ${logJudge.agree} из ${logJudge.checked} (логи)${simJudge ? ` · ${simJudge.agree} из ${simJudge.checked} (симуляция)` : ""}` }] : []),
+    { label: "Люди", value: checked ? `проверили ${checked}: верно ${people.agree}, неверно ${people.disagree}` : "не проверяли" },
+  ];
+  return <Facts facts={facts} className="flex-shrink-0 border-b border-white/[0.06] px-4 py-2" />;
 }
 
 /** «Извлечь заново»: new rules from the code; the old ones stop counting, so it asks first. */
@@ -114,7 +103,7 @@ export function RulesPage() {
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={[{ label: "Правила" }]}
+        crumbs={[{ label: "Проблемы", to: "/problems" }, { label: "Все правила" }]}
         actions={<>
           <Button className="hidden sm:inline-flex" icon={RotateCcw} onClick={() => setReextract(true)} disabled={busy || !state?.discover} title={busy ? "Сейчас идёт другая задача" : undefined}>Извлечь заново</Button>
           <Button variant="primary" icon={ListChecks} onClick={() => navigate(LINKS.review)} disabled={!all.length}>Проверить вердикты</Button>
@@ -131,7 +120,7 @@ export function RulesPage() {
             <Summary data={data} state={state} />
             <Split
               showDetail={!!ruleId}
-              list={<RuleList rules={shown} all={all} selectedId={ruleId ?? null} filter={filter} onFilter={setFilter} query={query} onQuery={setQuery} onPick={open} />}
+              list={<RuleList rules={shown} all={all} problems={data.problems.length} selectedId={ruleId ?? null} filter={filter} onFilter={setFilter} query={query} onQuery={setQuery} onPick={open} />}
               detail={selected ? <RuleDetail key={selected.id} r={selected} data={data} onBack={() => navigate(`/rules${keep}`)} />
                 : <EmptyState title={ruleId ? "Этого правила нет в текущей оценке" : "Выберите правило слева"}>{ruleId ? "Правила могли извлечь заново." : null}</EmptyState>}
             />

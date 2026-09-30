@@ -31,7 +31,7 @@ export function ProblemsPage() {
   const runId = params.get("run");
   const { state, offline } = useLabState();
   const { data } = useProblems(runId);
-  const [filter, setFilter] = useState<Filter>("all");
+  const filter: Filter = "all";
   const [query, setQuery] = useState("");
   const byId = useMemo(() => new Map((data?.rules ?? []).map(r => [r.id, r])), [data]);
   const problems = useMemo(() => (data?.problems ?? []).flatMap(id => byId.get(id) ?? []), [data, byId]);
@@ -78,7 +78,7 @@ export function ProblemsPage() {
             <Summary data={data} runs={state.runs} runId={runId} onRun={setRun} />
             <Split
               showDetail={!!problemId}
-              list={<ProblemList problems={shown} all={problems} selectedId={problemId ?? null} filter={filter} onFilter={setFilter} query={query} onQuery={setQuery} onPick={open} />}
+              list={<ProblemList problems={shown} all={problems} rules={data.rules.length} selectedId={problemId ?? null} query={query} onQuery={setQuery} onPick={open} />}
               detail={selected ? <ProblemDetail key={selected.id} p={selected} data={data} onBack={() => navigate(`/problems${keep}`)} />
                 : problemId ? <EmptyState title="Этой проблемы нет в текущей оценке" action={<Link to="/problems" className="text-small text-lab-ink underline underline-offset-4">Все проблемы</Link>}>Правила могли извлечь заново, или она пропала в этом отборе.</EmptyState>
                 : <EmptyState drop title="Нарушений не найдено">Судья не нашёл нарушений в оценённых диалогах. Это хороший результат.</EmptyState>}

@@ -28,7 +28,7 @@ export function ScenarioDetail({ card, state, onBack, onPlay }: { card: Card; st
         <ArrowLeft className="size-3.5" />Сценарии
       </button>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-        <h1 className="min-w-0 flex-1 text-page font-semibold text-lab-ink">{card.name}</h1>
+        <h1 className="min-w-0 flex-1 text-page font-medium text-lab-ink">{card.name}</h1>
         <Button icon={Play} onClick={onPlay} disabled={state.job.running} title={state.job.running ? "Сейчас идёт другая задача" : undefined}>Сыграть этот сценарий</Button>
       </div>
       <Facts className="mt-5" facts={[

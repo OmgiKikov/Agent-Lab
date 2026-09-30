@@ -1,10 +1,13 @@
-import { Search } from "lucide-react";
+import { ChevronDown, Search } from "lucide-react";
 import type { RuleEntry } from "../../lab/problems";
 import { ListRow } from "../../ui/ListRow";
-import { Segmented } from "../../ui/Segmented";
+import { Menu } from "../../ui/Menu";
+import { ViewTabs } from "../problems/ViewTabs";
 import { Label } from "../../ui/Label";
 
 export type RuleFilter = "all" | "violated" | "kept" | "disputed";
+
+const FILTER: Record<RuleFilter, string> = { all: "все", violated: "нарушаются", kept: "выполняются", disputed: "спорные" };
 
 export const disputedCount = (r: RuleEntry) => [...r.log.examples, ...r.sim.examples].filter(e => e.second === "disagree").length;
 
@@ -30,23 +33,23 @@ function Counts({ label, side }: { label: string; side: RuleEntry["log"] }) {
 }
 
 /** The rules grouped by the file they are quoted from; violated ones marked, counts in the logs and the run. */
-export function RuleList({ rules, all, selectedId, filter, onFilter, query, onQuery, onPick }: {
-  rules: RuleEntry[]; all: RuleEntry[]; selectedId: string | null; filter: RuleFilter; onFilter: (f: RuleFilter) => void;
+export function RuleList({ rules, all, problems, selectedId, filter, onFilter, query, onQuery, onPick }: {
+  rules: RuleEntry[]; all: RuleEntry[]; problems: number; selectedId: string | null; filter: RuleFilter; onFilter: (f: RuleFilter) => void;
   query: string; onQuery: (q: string) => void; onPick: (id: string) => void;
 }) {
   const groups = new Map<string, RuleEntry[]>();
   for (const r of rules) groups.set(r.rule.origin, [...(groups.get(r.rule.origin) ?? []), r]);
   return (
     <div>
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-white/[0.06] bg-lab-surface px-4 py-2.5">
-        <Segmented value={filter} onChange={onFilter} options={[
-          { value: "all", label: "Все", count: all.length },
-          { value: "violated", label: "Нарушаются", count: all.filter(r => r.log.failed + r.sim.failed).length },
-          { value: "kept", label: "Выполняются", count: all.filter(r => !(r.log.failed + r.sim.failed)).length },
-          { value: "disputed", label: "Спорные", count: all.filter(disputedCount).length },
-        ]} />
-        <label className="flex h-7 min-w-[140px] flex-1 items-center gap-1.5 rounded-md border border-white/[0.08] px-2 text-meta text-lab-dim focus-within:border-white/25">
-          <Search className="size-3.5 flex-shrink-0" />
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/[0.06] bg-lab-surface px-3 py-2">
+        <ViewTabs active="rules" problems={problems} rules={all.length} />
+        <Menu
+          align="right"
+          trigger={<span className="inline-flex h-6 items-center gap-1 rounded px-1.5 font-mono text-meta text-lab-dim hover:text-lab-text">{FILTER[filter]}<ChevronDown className="size-3" /></span>}
+          items={(Object.keys(FILTER) as RuleFilter[]).map(f => ({ key: f, label: FILTER[f], on: f === filter, run: () => onFilter(f) }))}
+        />
+        <label className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded border border-white/[0.08] px-2 text-meta text-lab-dim focus-within:border-white/25">
+          <Search className="size-3 flex-shrink-0" />
           <input value={query} onChange={e => onQuery(e.target.value)} placeholder="Найти" aria-label="Найти правило" className="min-w-0 flex-1 bg-transparent text-lab-text outline-none placeholder:text-lab-faint" />
         </label>
       </div>

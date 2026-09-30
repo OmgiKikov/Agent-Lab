@@ -6,22 +6,22 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        // Both have Cyrillic and ship inside the build (no network on the work computer).
-        sans: ["Inter Variable", "system-ui", "sans-serif"],
+        // Commissioner is the Cyrillic grotesk closest to Raindrop's Barlow; both ship inside the build.
+        sans: ["Commissioner Variable", "system-ui", "sans-serif"],
         mono: ["Geist Mono Variable", "ui-monospace", "monospace"],
       },
       // The named scale (docs/superpowers/specs/2026-09-30-agent-lab-unified-product-design.md, section 6);
       // default / message / header stay for the Workshop screens until they move to it.
       fontSize: {
         micro: ["10px", "12px"],
-        label: ["11px", "16px"],
-        meta: ["12px", "16px"],
-        small: ["13px", "18px"],
-        body: ["14px", "20px"],
-        read: ["15px", "24px"],
-        title: ["18px", "24px"],
-        page: ["22px", "28px"],
-        count: ["20px", "24px"],
+        label: ["10px", "14px"],
+        meta: ["11px", "16px"],
+        small: ["12px", "17px"],
+        body: ["13px", "19px"],
+        read: ["14px", "22px"],
+        title: ["15px", "21px"],
+        page: ["16px", "22px"],
+        count: ["15px", "20px"],
         default: "12px",
         message: "14px",
         header: "21px",

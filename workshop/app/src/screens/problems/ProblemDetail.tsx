@@ -55,49 +55,45 @@ export function ProblemDetail({ p, data, onBack }: { p: RuleEntry; data: Problem
     KeyC: copy,
     Escape: () => { if (!wide()) onBack(); },
   });
+  const unknown = p.log.unknown + p.sim.unknown;
   const facts: Fact[] = [
     { label: "В логах", value: p.log.failed ? share(p.log) : "—", onClick: p.log.failed ? () => navigate(`${LINKS.dialogs}?source=log&rule=${p.id}`) : undefined, title: "Открыть диалоги логов, где правило нарушено" },
     { label: "В симуляции", value: data.sim ? share(p.sim) : "не было", onClick: p.sim.failed ? () => navigate(`${LINKS.dialogs}?source=sim&rule=${p.id}`) : undefined, title: "Открыть диалоги прогона, где правило нарушено" },
     { label: "Второй судья", value: secondFact(p), onClick: p.secondJudge.checked > p.secondJudge.agree ? () => navigate(`${LINKS.review}?queue=disputed&rule=${p.id}`) : undefined, title: "Открыть вердикты, где судьи расходятся" },
+    ...(unknown ? [{ label: "Не проверено", value: `в ${unknown} ${plural(unknown, "диалоге", "диалогах", "диалогах")}`, title: "Судья не нашёл доказательств ни выполнения, ни нарушения" }] : []),
     { label: "Люди", value: p.human.agree + p.human.disagree ? `верно ${p.human.agree} · неверно ${p.human.disagree}` : "не проверяли", onClick: () => navigate(`${LINKS.review}?queue=unchecked&rule=${p.id}`), title: "Проверить нарушения этого правила" },
   ];
-  const unknown = p.log.unknown + p.sim.unknown;
   return (
-    <article className="message-arrive mx-auto max-w-[760px] px-6 pb-20 pt-6 lg:px-8">
+    <article className="message-arrive mx-auto max-w-[760px] px-6 pb-16 pt-5 lg:px-8">
       <button type="button" onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-small text-lab-mute transition-colors hover:text-lab-text lg:hidden">
         <ArrowLeft className="size-3.5" />Проблемы
       </button>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
-        <h1 className="min-w-0 flex-1 text-page font-semibold text-lab-ink">{p.title}</h1>
+        <h1 className="min-w-0 flex-1 text-page font-medium text-lab-ink">{p.title}</h1>
         <div className="flex flex-shrink-0 gap-2">
           <Button size="sm" icon={Copy} kbd="C" onClick={copy}>Скопировать</Button>
           <Button size="sm" icon={MessageSquare} onClick={() => shell.openAsk(example?.traceId ?? null)}>Спросить</Button>
         </div>
       </div>
-      {p.topics.length > 0 && <p className="mt-1.5 text-small text-lab-dim">{plural(p.topics.length, "Тема", "Темы", "Темы")}: {p.topics.join(" · ")}</p>}
-      <Facts className="mt-6" facts={facts} />
-      <section className="mt-8">
+      {p.topics.length > 0 && <p className="mt-1 text-meta text-lab-dim">{plural(p.topics.length, "Тема", "Темы", "Темы")}: {p.topics.join(" · ")}</p>}
+      <Facts className="mt-4" facts={facts} />
+      <section className="mt-6">
         <Quote label={sourceLabel(p.rule.kind)} origin={p.rule.origin || undefined} onOrigin={p.rule.sourceId ? () => setSourceOpen(true) : undefined} hover={hover} onHover={setHover}>
           {p.rule.quote}
         </Quote>
-        <dl className="mt-3 space-y-1 pl-[18px] text-small">
+        <details className="group mt-2 pl-[18px] text-small">
+          <summary className="cursor-pointer list-none text-lab-dim transition-colors hover:text-lab-text">Подробнее о правиле</summary>
+          <dl className="mt-2 space-y-1">
           <div>
             <dt className="inline text-lab-dim">Как судья понимает правило: </dt><dd className="inline text-lab-mute">{p.rule.text}</dd>
             <Link to={`/rules/${p.id}`} className="ml-2 whitespace-nowrap text-lab-dim underline decoration-white/20 underline-offset-4 transition-colors hover:text-lab-text">правило целиком</Link>
           </div>
           {p.rule.condition && <div><dt className="inline text-lab-dim">Когда применяется: </dt><dd className="inline text-lab-mute">{p.rule.condition}</dd></div>}
           {p.rule.acceptable && <div><dt className="inline text-lab-dim">Что допустимо: </dt><dd className="inline text-lab-mute">{p.rule.acceptable}</dd></div>}
-        </dl>
+          </dl>
+        </details>
       </section>
       <Evidence p={p} from={from} onFrom={setFrom} at={at} onAt={setAt} hover={hover} onHover={setHover} onDecide={decide} />
-      {unknown > 0 && (
-        <section className="mt-10">
-          <Label>Не известно</Label>
-          <p className="mt-2 text-small text-lab-mute">
-            В {unknown} {plural(unknown, "диалоге", "диалогах", "диалогах")} правило не проверено: судья не нашёл доказательств ни выполнения, ни нарушения.
-          </p>
-        </section>
-      )}
       <Reproduce p={p} />
       <SourceDrawer open={sourceOpen} onClose={() => setSourceOpen(false)} sourceId={p.rule.sourceId} origin={p.rule.origin} quote={p.rule.quote} />
     </article>

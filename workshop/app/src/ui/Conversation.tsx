@@ -18,7 +18,7 @@ export type Mark = { quote: string; n: number };
 
 /** The number that ties the judge's quote in the conversation to its explanation. */
 export function MarkNumber({ n }: { n: number }) {
-  return <span className="inline-flex size-4 flex-shrink-0 items-center justify-center rounded-full bg-lab-mark font-mono text-micro font-semibold text-black">{n}</span>;
+  return <span className="inline-flex size-4 flex-shrink-0 items-center justify-center rounded-full bg-lab-mark font-mono text-micro font-medium text-black">{n}</span>;
 }
 
 function AgentTurn({ turn, marks, hover, onHover }: { turn: Turn; marks: Mark[]; hover?: boolean; onHover?: (on: boolean) => void }) {

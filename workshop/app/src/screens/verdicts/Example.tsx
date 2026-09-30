@@ -74,7 +74,7 @@ export function JudgeNote({ example, marked, onDecide, verdict = true }: { examp
       <span className={cn("mt-1", !marked && "invisible")}><MarkNumber n={1} /></span>
       <div className="min-w-0 flex-1 space-y-1.5">
         {!marked && example.agentQuote && <p className="text-small text-lab-mute">Судья ссылается на: «{example.agentQuote}»</p>}
-        <p className="text-read text-lab-text">
+        <p className="text-small text-lab-text">
           <span className="text-lab-dim">Судья{verdict && example.status !== "FAIL" ? ` · ${WORD[example.status]}` : ""}: </span>{example.reason}
         </p>
         {judged && <p className="text-small text-lab-mute">{secondLine(example, state?.models.second ?? null)}</p>}

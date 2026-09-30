@@ -14,7 +14,7 @@ export function Evidence({ p, from, onFrom, at, onAt, hover, onHover, onDecide }
   const example = list[at];
   const view = useExample(example);
   return (
-    <section className="mt-10">
+    <section className="mt-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-baseline gap-3">
           <Label>Доказательство</Label>

@@ -95,7 +95,7 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
     <article className="message-arrive mx-auto max-w-[820px] px-6 pb-20 pt-6 lg:px-8">
       <button type="button" onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-small text-lab-mute transition-colors hover:text-lab-text lg:hidden"><ArrowLeft className="size-3.5" />Диалоги</button>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
-        <h1 className="line-clamp-3 min-w-0 flex-1 text-title font-semibold text-lab-ink">{row.title}</h1>
+        <h1 className="line-clamp-3 min-w-0 flex-1 text-title font-medium text-lab-ink">{row.title}</h1>
         <div className="flex flex-shrink-0 gap-2">
           <Button size="sm" icon={Download} disabled={!turns} onClick={() => turns && download(`dialog-${row.dialogueId ?? row.index}.md`, transcript(row, turns))}>Скачать</Button>
           <Button size="sm" icon={MessageSquare} onClick={() => shell.openAsk(row.traceId)}>Спросить</Button>

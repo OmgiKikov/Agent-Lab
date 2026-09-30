@@ -40,7 +40,7 @@ export function Reproduce({ p }: { p: RuleEntry }) {
     }
   };
   return (
-    <section className="mt-10">
+    <section className="mt-8 border-t border-white/[0.06] pt-5">
       <Label>Воспроизвести</Label>
       {n ? (
         <div className="mt-2 flex flex-wrap items-center gap-3">

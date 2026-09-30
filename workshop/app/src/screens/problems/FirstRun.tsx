@@ -38,7 +38,7 @@ export function FirstRun({ state, onAssess }: { state: LabState; onAssess: () =>
   return (
     <div className="mx-auto flex max-w-[620px] flex-col items-center px-6 py-16">
       <DropPixelGrid px={3} gap={2} fillRgb="142,157,166" />
-      <h1 className="mt-6 text-center text-page font-semibold text-lab-ink">Найдём, где агент нарушает свои правила</h1>
+      <h1 className="mt-6 text-center text-page font-medium text-lab-ink">Найдём, где агент нарушает свои правила</h1>
       <p className="mt-2 max-w-[500px] text-center text-read text-lab-mute">
         Продукт читает правила агента из его кода и находит в разговорах места, где агент их нарушил, — с цитатой из кода и цитатой из разговора.
       </p>

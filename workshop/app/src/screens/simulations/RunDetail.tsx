@@ -107,7 +107,7 @@ export function RunDetail({ summary, state, onBack }: { summary: LabRun; state: 
       </button>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
         <div className="min-w-0 flex-1">
-          <h1 className="text-page font-semibold text-lab-ink">{runTitle(summary)}</h1>
+          <h1 className="text-page font-medium text-lab-ink">{runTitle(summary)}</h1>
           {summary.label && <p className="mt-1 text-read text-lab-soft">{summary.label}</p>}
         </div>
         <Button

@@ -79,7 +79,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
         <ArrowLeft className="size-3.5" />Правила
       </button>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
-        <h1 className="min-w-0 flex-1 text-title font-semibold text-lab-ink">{r.rule.text}</h1>
+        <h1 className="min-w-0 flex-1 text-page font-medium text-lab-ink">{r.rule.text}</h1>
         {counts.FAIL + counts.PASS > 0 && (
           <Button size="sm" icon={ListChecks} onClick={() => navigate(`${LINKS.review}?queue=${disputes ? "disputed" : "all"}&rule=${r.id}`)}>Проверить вердикты</Button>
         )}
@@ -89,7 +89,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
           Нарушается: {r.title}<ArrowRight className="size-3.5" />
         </Link>
       ) : counts.PASS ? <p className="mt-2 text-small text-lab-ok">Нарушений не найдено</p> : null}
-      <Facts className="mt-6" facts={facts} />
+      <Facts className="mt-4" facts={facts} />
       <section className="mt-8">
         <Quote label={sourceLabel(r.rule.kind)} origin={r.rule.origin || undefined} onOrigin={r.rule.sourceId ? () => setSourceOpen(true) : undefined} hover={hover} onHover={setHover}>
           {r.rule.quote}

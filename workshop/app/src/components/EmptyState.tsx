@@ -78,7 +78,7 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
         <h1
           className="text-center"
           style={{
-            fontFamily: '"Inter Variable", sans-serif',
+            fontFamily: '"Commissioner Variable", sans-serif',
             fontSize: "38px",
             fontWeight: 500,
             lineHeight: 1.12,
