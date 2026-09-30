@@ -1,115 +1,103 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Hammer, Play } from "lucide-react";
-import { api } from "../../lab/api";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Play } from "lucide-react";
+import { when } from "../../lab/format";
 import { runTitle } from "../../lab/runs";
 import { JobStrip } from "../../shell/Activity";
 import { useKeys } from "../../shell/keys";
 import { useLabState } from "../../shell/LabProvider";
-import { SectionHeader, type Crumb } from "../../shell/SectionHeader";
+import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { Facts } from "../../ui/Facts";
 import { Split } from "../../ui/Split";
-import { useToast } from "../../ui/toast";
 import { PlayDialog } from "./PlayDialog";
 import { RunDetail } from "./RunDetail";
-import { ScenarioDetail } from "./ScenarioDetail";
-import { ModeBar, RunList, ScenarioList, type Mode } from "./SimList";
+import { RunList } from "./SimList";
 
 const wide = () => window.matchMedia("(min-width: 1024px)").matches;
+const link = "text-small text-lab-ink underline underline-offset-4";
 
-/** Симуляции: the runs of the simulated customer against the agent, and the scenarios it plays. */
+/** Прогоны: synthetic customers play the scenarios against the agent; each run keeps its dialogues and their traces. */
 export function SimulationsPage() {
-  const { runId, scenarioId } = useParams<{ runId?: string; scenarioId?: string }>();
+  const { runId } = useParams<{ runId?: string }>();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  const { state, offline, refresh } = useLabState();
-  const toast = useToast();
+  const { state, offline } = useLabState();
   const [play, setPlay] = useState<{ preset: string[] | null } | null>(null);
   const [follow, setFollow] = useState(false);
-  const mode: Mode = scenarioId ? "scenarios" : runId ? "runs" : params.get("mode") === "scenarios" ? "scenarios" : "runs";
   const runs = useMemo(() => [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)), [state?.runs]);
-  const cards = useMemo(() => state?.cards?.cards ?? [], [state?.cards]);
-  const run = runId ? runs.find(r => r.id === runId) : undefined;
-  const card = scenarioId ? cards.find(c => c.id === scenarioId) : undefined;
-  const ids = mode === "runs" ? runs.map(r => r.id) : cards.map(c => c.id);
-  const selectedId = mode === "runs" ? runId ?? null : scenarioId ?? null;
-  const pathOf = (id: string) => (mode === "runs" ? `/simulations/runs/${encodeURIComponent(id)}` : `/simulations/scenarios/${encodeURIComponent(id)}`);
-  const home = mode === "runs" ? "/simulations" : "/simulations?mode=scenarios";
+  const cards = state?.cards?.cards ?? [];
+  const sel = runId ?? params.get("r");
+  const run = runs.find(r => r.id === sel);
+  const setRun = (id: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (id) n.set("r", id); else n.delete("r"); n.delete("d"); n.delete("tab"); return n; }, { replace: !!id });
 
   useEffect(() => {
-    if (!selectedId && ids[0] && wide()) navigate(pathOf(ids[0]), { replace: true });
-  }, [selectedId, ids[0], mode]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!run && !sel && runs[0] && wide()) setRun(runs[0].id);
+  }, [run, sel, runs[0]?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ⌘K «Сыграть сценарии» comes with ?play=1: the dialog opens, nothing starts until it is confirmed.
+  // «Сыграть этот сценарий» comes with ?play=<id>, ⌘K with ?play=1: the dialog opens, nothing starts until it is confirmed.
+  const asked = params.get("play");
   useEffect(() => {
-    if (params.get("play") !== "1") return;
-    setPlay({ preset: null });
+    if (!asked) return;
+    setPlay({ preset: asked === "1" ? null : [asked] });
     setParams(prev => { const n = new URLSearchParams(prev); n.delete("play"); return n; }, { replace: true });
-  }, [params, setParams]);
+  }, [asked, setParams]);
 
   // After «Сыграть» the run opens as soon as the service names it.
   const started = state?.job.running && state.job.kind === "run" ? state.job.progress.run : undefined;
   useEffect(() => {
-    if (follow && started) { setFollow(false); navigate(`/simulations/runs/${encodeURIComponent(started)}`); }
-  }, [follow, started, navigate]);
+    if (follow && started) { setFollow(false); setRun(started); }
+  }, [follow, started]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const step = (d: 1 | -1) => {
-    if (!ids.length) return;
-    const at = ids.indexOf(selectedId ?? "");
-    navigate(pathOf(ids[at < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, at + d))]));
+    if (!runs.length) return;
+    const at = runs.findIndex(r => r.id === sel);
+    setRun(runs[at < 0 ? 0 : Math.max(0, Math.min(runs.length - 1, at + d))].id);
   };
   useKeys({ KeyJ: () => step(1), ArrowDown: () => step(1), KeyK: () => step(-1), ArrowUp: () => step(-1) });
 
+  if (params.get("mode") === "scenarios") return <Navigate to="/scenarios" replace />;
   if (offline && !state) return <ServiceDown />;
   const busy = !!state?.job.running;
-  const build = () => api("/api/cards", {}).then(() => refresh()).catch(toast.error);
-  const crumbs: Crumb[] = [{ label: "Симуляции", to: selectedId ? home : undefined }];
-  if (run) crumbs.push({ label: runTitle(run) });
-  if (card) crumbs.push({ label: card.name });
-  const head = <ModeBar mode={mode} onMode={m => navigate(m === "runs" ? "/simulations" : "/simulations?mode=scenarios")} runs={runs.length} scenarios={cards.length} />;
-  const buildButton = (
-    <Button icon={Hammer} onClick={build} disabled={busy || !state?.discover} title={busy ? "Сейчас идёт другая задача" : !state?.discover ? "Сначала оцените логи в «Проблемах»" : "Собрать сценарии из последней оценки логов"}>
-      Собрать сценарии
-    </Button>
-  );
+  const last = runs[0];
 
-  const detail = () => {
-    if (!state) return null;
-    if (mode === "runs") {
-      if (run) return <RunDetail key={run.id} summary={run} state={state} onBack={() => navigate(home)} />;
-      if (runId) return <EmptyState title="Такого прогона нет" action={<Link to="/simulations" className="text-small text-lab-ink underline underline-offset-4">Все прогоны</Link>} />;
-      return cards.length
-        ? <EmptyState drop title="Прогонов пока нет" action={<Button variant="primary" icon={Play} disabled={busy} onClick={() => setPlay({ preset: null })}>Сыграть</Button>}>Синтетический клиент сыграет сценарии с агентом, судья оценит каждый диалог по правилам.</EmptyState>
-        : <EmptyState drop title="Сначала нужны сценарии" action={buildButton}>Сценарии собираются из оценки логов: для каждой найденной ошибки и темы — ситуация, которую сыграет синтетический клиент.</EmptyState>;
-    }
-    if (card) return <ScenarioDetail key={card.id} card={card} state={state} onBack={() => navigate(home)} onPlay={() => setPlay({ preset: [card.id] })} />;
-    if (scenarioId) return <EmptyState title="Такого сценария нет" action={<Link to="/simulations?mode=scenarios" className="text-small text-lab-ink underline underline-offset-4">Все сценарии</Link>}>Сценарии могли собрать заново.</EmptyState>;
-    return (
-      <EmptyState drop title="Сценариев пока нет" action={buildButton}>
-        Сценарии собираются из оценки логов: для каждой найденной ошибки и темы — ситуация, первая реплика клиента и правила, которые проверит судья.
-      </EmptyState>
-    );
-  };
+  const playButton = (
+    <Button variant="primary" icon={Play} onClick={() => setPlay({ preset: null })} disabled={busy || !cards.length}
+      title={busy ? "Сейчас идёт другая задача" : !cards.length ? "Сначала соберите сценарии" : undefined}>Сыграть</Button>
+  );
+  const empty = cards.length
+    ? <EmptyState drop title="Прогонов пока нет" action={playButton} />
+    : <EmptyState drop title="Сначала нужны сценарии" action={<Link to="/scenarios" className={link}>Открыть сценарии</Link>} />;
 
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={crumbs}
+        crumbs={[{ label: "Прогоны", to: run ? "/simulations" : undefined }, ...(run ? [{ label: runTitle(run) }] : [])]}
         actions={<>
-          <span className="hidden sm:contents">{buildButton}</span>
-          <Button variant="primary" icon={Play} onClick={() => setPlay({ preset: null })} disabled={busy || !cards.length} title={busy ? "Сейчас идёт другая задача" : !cards.length ? "Сначала соберите сценарии" : undefined}>Сыграть</Button>
+          <span className="hidden gap-2 sm:contents">
+            <Button variant="ghost" onClick={() => navigate("/runs")}>Все трейсы</Button>
+            <Button variant="ghost" onClick={() => navigate("/search")}>Поиск по трейсам</Button>
+            <Button variant="ghost" onClick={() => navigate("/saved")}>Сохранённые</Button>
+          </span>
+          {playButton}
         </>}
-        below={<JobStrip kinds={["run", "rejudge", "cards"]} />}
+        below={<JobStrip kinds={["run", "rejudge"]} />}
       />
-      {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : (
-        <Split
-          showDetail={!!selectedId}
-          list={mode === "runs"
-            ? <RunList runs={runs} state={state} selectedId={selectedId} onPick={id => navigate(pathOf(id))} head={head} />
-            : <ScenarioList cards={cards} selectedId={selectedId} onPick={id => navigate(pathOf(id))} head={head} />}
-          detail={detail()}
-        />
+      {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : !runs.length ? empty : (
+        <>
+          <Facts className="border-b border-white/[0.06] px-4 py-2" facts={[
+            { label: "Прогонов", value: runs.length },
+            { label: "Последний", value: `${last.targetName} · ${when(last.startedAt)}` },
+          ]} />
+          <Split
+            showDetail={!!run}
+            list={<RunList runs={runs} state={state} selectedId={run?.id ?? null} onPick={setRun} />}
+            detail={run
+              ? <RunDetail key={run.id} summary={run} state={state} onBack={() => setRun(null)} />
+              : <EmptyState title={sel ? "Такого прогона нет" : "Выберите прогон"} action={sel ? <Link to="/simulations" className={link}>Все прогоны</Link> : undefined} />}
+          />
+        </>
       )}
       {state && <PlayDialog open={!!play} onClose={() => setPlay(null)} state={state} preset={play?.preset} onStarted={() => setFollow(true)} />}
     </div>

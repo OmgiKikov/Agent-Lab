@@ -1,7 +1,6 @@
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { cellOf, personaOf, scenariosOfRun, typesOfRun } from "../../lab/logic";
-import { simDialog } from "../../lab/runs";
 import type { Item, LabRun, LabState, Status } from "../../lab/types";
 
 const SIGN: Record<string, { sign: string; word: string; tone: string }> = {
@@ -19,7 +18,7 @@ export function Sign({ status, className }: { status: Status; className?: string
 }
 
 /** Scenarios down, customer types across: each cell the verdicts of that scenario for that type, one sign per repeat. */
-export function RunMatrix({ run, items, state }: { run: LabRun; items: Item[]; state: LabState }) {
+export function RunMatrix({ run, items, state, hrefOf, scores }: { run: LabRun; items: Item[]; state: LabState; hrefOf: (index: number) => string; scores?: boolean }) {
   const types = typesOfRun(run, state.personas);
   const scenarios = scenariosOfRun(items);
   const index = new Map(items.map((item, i) => [item, i]));
@@ -38,7 +37,7 @@ export function RunMatrix({ run, items, state }: { run: LabRun; items: Item[]; s
                 return (
                   <th key={t.id} className="min-w-[110px] px-3 py-2 align-bottom font-normal">
                     <div className="text-small text-lab-text">{t.name}</div>
-                    {score && score.measured > 0 && <div className="mt-0.5 text-meta text-lab-dim">нарушения в {score.measured - score.passed} из {score.measured}</div>}
+                    {scores && score && score.measured > 0 && <div className="mt-0.5 text-meta text-lab-dim">нарушения в {score.measured - score.passed} из {score.measured}</div>}
                   </th>
                 );
               })}
@@ -48,7 +47,7 @@ export function RunMatrix({ run, items, state }: { run: LabRun; items: Item[]; s
             {scenarios.map(s => (
               <tr key={s.id} className="border-b border-white/[0.06]">
                 <td className="max-w-[360px] py-2.5 pr-4 text-small text-lab-ink">
-                  <Link to={`/simulations/scenarios/${encodeURIComponent(s.id)}`} className="hover:underline hover:decoration-white/40 hover:underline-offset-4">{s.name}</Link>
+                  <Link to={`/scenarios?s=${encodeURIComponent(s.id)}`} className="hover:underline hover:decoration-white/40 hover:underline-offset-4">{s.name}</Link>
                 </td>
                 {types.map(t => {
                   const cell = cellOf(items, s.id, t.id);
@@ -58,7 +57,7 @@ export function RunMatrix({ run, items, state }: { run: LabRun; items: Item[]; s
                       {cell.state === "NONE" ? <span className="text-meta text-lab-faint">—</span> : (
                         <span className="inline-flex gap-1.5">
                           {own.map(i => (
-                            <Link key={index.get(i)} to={simDialog(run.id, index.get(i) ?? 0)} className="rounded px-0.5 transition-colors hover:bg-lab-hover">
+                            <Link key={index.get(i)} to={hrefOf(index.get(i) ?? 0)} className="rounded px-0.5 transition-colors hover:bg-lab-hover">
                               <Sign status={i.status} />
                             </Link>
                           ))}
