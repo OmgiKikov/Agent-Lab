@@ -14,7 +14,7 @@ import { Tabs } from "../../ui/Tabs";
 import { DialogsView } from "../dialogs/DialogsView";
 import { ProblemsView } from "../problems/ProblemsView";
 import { RunMatrix } from "../simulations/RunMatrix";
-import { ReviewTab } from "./ReviewTab";
+import { ReviewView } from "../review/ReviewView";
 
 type Tab = "problems" | "dialogs" | "review" | "types";
 
@@ -63,7 +63,7 @@ export function ResultsPage() {
           <div className="min-h-0 flex-1 overflow-auto">
             {tab === "problems" ? <ProblemsView source="sim" runId={run.id} />
               : tab === "dialogs" ? <DialogsView source="sim" runId={run.id} />
-              : tab === "review" ? <ReviewTab runId={run.id} />
+              : tab === "review" ? <ReviewView source="sim" runId={run.id} />
               : !full?.items?.length ? <Skeleton className="m-6 h-64" />
               : <div className="mx-auto max-w-[960px] px-6 pb-16"><RunMatrix run={full} items={full.items} state={state} scores hrefOf={i => simDialog(run.id, i)} /></div>}
           </div>
