@@ -1,114 +1,53 @@
 import { useSearchParams } from "react-router-dom";
-import { Link } from "react-router-dom";
-import { FileDown, Play } from "lucide-react";
-import { day } from "../../lab/format";
 import { logRows } from "../../lab/dialogs";
-import { download, problemsReport } from "../../lab/problemReport";
 import { useProblems } from "../../lab/problems";
-import { humanChecked } from "../../lab/verdicts";
 import { JobStrip } from "../../shell/Activity";
 import { useLabState } from "../../shell/LabProvider";
-import { LINKS } from "../../shell/links";
 import { SectionHeader } from "../../shell/SectionHeader";
-import { Button } from "../../ui/Button";
-import { ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { ChainSteps, FirstRun } from "../../shell/FirstRun";
-import { Summary, type Stat } from "../../ui/Summary";
-import { PillTabs } from "../../ui/PillTabs";
-import { Dropzone, UploadButton } from "../dialogs/UploadLogs";
+import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { DialogsView } from "../dialogs/DialogsView";
-import { AssessDialog } from "../problems/AssessDialog";
-import { ProblemsView } from "../problems/ProblemsView";
+import { ProblemDetail } from "../problems/ProblemDetail";
 import { ReviewView } from "../review/ReviewView";
+import { AssessPanel } from "./AssessPanel";
+import { AssessResult } from "./AssessResult";
 
-type Tab = "problems" | "dialogs" | "review";
-const link = "text-small text-lab-ink underline underline-offset-4";
-
-/** Логи: the real conversations, assessed by the agent's criteria without running the agent. The first result. */
+/** Логи: assess the real conversations by the agent's criteria. Before: what × by what, one button. After: every criterion and its counts. */
 export function LogsPage() {
   const [params, setParams] = useSearchParams();
   const { state, offline } = useLabState();
   const { data } = useProblems(null);
-  const wanted = params.get("tab");
-  const tab: Tab = wanted === "dialogs" || wanted === "review" ? wanted : "problems";
-  const change = (edit: (n: URLSearchParams) => void, replace = true) => setParams(prev => { const n = new URLSearchParams(prev); edit(n); return n; }, { replace });
-  const setTab = (t: Tab) => change(n => { for (const k of ["p", "d", "dt", "v", "rule", "queue", "example"]) n.delete(k); if (t === "problems") n.delete("tab"); else n.set("tab", t); }, false);
-  const assessing = params.get("assess") === "1";
-  const setAssess = (on: boolean) => change(n => (on ? n.set("assess", "1") : n.delete("assess")));
-
   if (offline && !state) return <ServiceDown />;
-  const logs = state?.logs;
-  const busy = !!state?.job.running;
-  const assessed = !!state?.discover;
-  const log = data?.log;
-  const violated = data?.rules.filter(r => r.log.failed > 0).length ?? 0;
-  const v = params.get("v");
-  const people = data ? humanChecked(data, "log") : null;
-  const go = (t: Tab, v?: string) => change(n => {
-    for (const k of ["p", "d", "dt", "v", "rule", "queue", "example"]) n.delete(k);
-    if (t === "problems") n.delete("tab"); else n.set("tab", t);
-    if (v) n.set("v", v);
-  }, false);
-  const stats: Stat[] = log ? [
-    { label: "Оценено", value: log.assessed, of: `из ${log.sampled}`, active: tab === "dialogs" && !v, onClick: () => go("dialogs"), title: `Все оценённые диалоги. Всего в логах ${logs?.total}${logs?.file ? `, файл ${logs.file}` : ""}${logs?.updatedAt ? `, загружены ${day(logs.updatedAt)}` : ""}` },
-    { label: "Диалогов с нарушениями", value: log.withViolations, of: `из ${log.assessed}`, active: tab === "dialogs" && v === "fail", onClick: () => go("dialogs", "fail") },
-    { label: "Нарушаются критериев", value: violated, of: `из ${data!.rules.length}`, active: tab === "problems", onClick: () => go("problems") },
-    ...(log.unassessed ? [{ label: "Без оценки", value: log.unassessed, of: "диалогов", active: tab === "dialogs" && v === "none", onClick: () => go("dialogs", "none"), title: "Судья не смог оценить" }] : []),
-    { label: "Проверено людьми", value: people?.checked ?? 0, of: `из ${people?.of ?? 0}`, active: tab === "review", onClick: () => go("review") },
-  ] : [];
-  const tabName = { problems: "Нарушения", dialogs: "Диалоги", review: "Проверка" }[tab];
-  const openId = tab === "problems" ? params.get("p") : tab === "dialogs" ? params.get("d") : null;
-  const openTitle = !openId ? null : tab === "problems" ? data?.rules.find(r => r.id === openId)?.title : state && logRows(state).find(r => r.key === openId)?.title;
-  const back = (t: Tab) => { const n = new URLSearchParams(params); for (const k of ["p", "d", "dt", "example", "ev"]) n.delete(k); if (t === "problems") n.delete("tab"); return `/logs${n.toString() ? `?${n}` : ""}`; };
+  const tab = params.get("tab") === "dialogs" || params.get("tab") === "review" ? (params.get("tab") as "dialogs" | "review") : null;
+  const change = (edit: (n: URLSearchParams) => void, replace = true) => setParams(prev => { const n = new URLSearchParams(prev); edit(n); return n; }, { replace });
+  const ruleId = params.get("p");
+  const rule = ruleId ? data?.rules.find(r => r.id === ruleId) : undefined;
+  const assessing = params.get("assess") === "1";
+  const assessed = !!state?.discover && !!data?.log;
+  const dialogId = tab === "dialogs" ? params.get("d") : null;
+  const dialogTitle = dialogId && state ? logRows(state).find(r => r.key === dialogId)?.title : undefined;
+  const clear = (...keys: string[]) => { const n = new URLSearchParams(params); keys.forEach(k => n.delete(k)); return `/logs${n.toString() ? `?${n}` : ""}`; };
+  const crumbs = tab
+    ? [{ label: "Логи", to: "/logs" }, { label: tab === "dialogs" ? "Все разговоры" : "Проверка вердиктов", to: dialogId ? clear("d", "dt", "example", "ev") : undefined }, ...(dialogTitle ? [{ label: dialogTitle }] : [])]
+    : ruleId ? [{ label: "Логи", to: "/logs" }, { label: rule?.title ?? "Критерий" }]
+    : [{ label: "Логи" }];
   return (
     <div className="flex h-full flex-col">
-      <SectionHeader
-        crumbs={[{ label: "Логи", to: "/logs" }, ...(logs?.total && assessed ? [{ label: tabName, to: openId ? back(tab) : undefined }] : []), ...(openTitle ? [{ label: openTitle }] : [])]}
-        meta={!openId && tab === "problems" && log ? `${violated} из ${data!.rules.length} критериев нарушаются` : undefined}
-        actions={<>
-          <UploadButton variant="outline" />
-          <Button variant="primary" icon={Play} onClick={() => setAssess(true)} disabled={!state?.sources.length || !logs?.total || busy} title={busy ? "Сейчас идёт другая задача" : undefined}>Оценить логи</Button>
-        </>}
-        below={<JobStrip kinds={["discover"]} />}
-      />
-      {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div>
-        : !state.sources.length && !assessed ? (
-          <FirstRun here="logs" title="Логи покажут, где агент нарушает свои критерии"
-            action={<Link to={LINKS.agent}><Button variant="primary">Подключить агента</Button></Link>}
-            hints={[{ title: "1. Агент", text: "Сначала прочитайте его код: критерии берутся оттуда." }, { title: "2. Загрузить логи", text: "Excel-выгрузка чата или .jsonl." }, { title: "3. Оценить", text: "Судья проверит каждый диалог по каждому критерию." }]}>
-            Реальные диалоги, оценённые по критериям из кода агента, без запуска агента.
-          </FirstRun>
-        )
-        : !logs?.total ? <div className="flex flex-1 flex-col"><div className="pt-8"><ChainSteps here="logs" /></div><Dropzone /></div>
-        : !assessed ? (
-          <>
-            <FirstRun here="logs" title="Логи загружены, осталось их оценить"
-              action={<Button variant="primary" icon={Play} onClick={() => setAssess(true)} disabled={busy}>Оценить логи</Button>}
-              hints={[{ title: "Что оценивается", text: "Выборка диалогов: каждый по каждому критерию." }, { title: "Что получится", text: "Нарушения со ссылкой на диалог и слова агента." }, { title: "Что дальше", text: "Из нарушений соберутся сценарии для прогона." }]}>
-              Судья прочитает диалоги и отметит, какие критерии агент нарушил.
-            </FirstRun>
-          </>
-        ) : (
-          <>
-            {!openId && (
-              <>
-                <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-white/[0.08] px-3 py-[7px]">
-                  <PillTabs<Tab> value={tab} onChange={setTab} tabs={[
-                    { value: "problems", label: "Нарушения", count: violated },
-                    { value: "dialogs", label: "Диалоги", count: log?.assessed },
-                    { value: "review", label: "Проверка" },
-                  ]} />
-                  {log && data && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download("otchet-logi.md", problemsReport(data, window.location.origin, "log"))}>Отчёт</Button>}
-                </div>
-                {tab !== "review" && <Summary stats={stats} />}
-              </>
-            )}
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              {tab === "problems" ? <ProblemsView source="log" /> : tab === "dialogs" ? <DialogsView source="log" /> : <ReviewView source="log" />}
-            </div>
-          </>
-        )}
-      {state && <AssessDialog open={assessing} onClose={() => setAssess(false)} />}
+      <SectionHeader crumbs={crumbs} below={<JobStrip kinds={["discover"]} />} />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div>
+          : tab === "dialogs" ? <DialogsView source="log" />
+          : tab === "review" ? <ReviewView source="log" />
+          : ruleId ? (
+            !data ? <div className="p-6"><Skeleton className="h-[420px]" /></div>
+              : rule ? <ProblemDetail key={rule.id} p={rule} source="log" onBack={() => change(n => { n.delete("p"); n.delete("example"); }, false)} />
+              : <EmptyState title="Этого критерия нет в текущей оценке">Критерии могли извлечь заново.</EmptyState>
+          )
+          : <div className="min-h-0 flex-1 overflow-auto">
+              {state.discover && !data ? <div className="p-6"><Skeleton className="h-[420px]" /></div>
+                : assessed && !assessing && data ? <AssessResult data={data} onAgain={() => change(n => n.set("assess", "1"), false)} onOpen={id => change(n => n.set("p", id), false)} />
+                : <AssessPanel onCancel={assessed ? () => change(n => n.delete("assess"), false) : undefined} />}
+            </div>}
+      </div>
     </div>
   );
 }

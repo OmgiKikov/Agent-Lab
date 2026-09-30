@@ -32,7 +32,7 @@ function useUpload() {
 }
 
 /** «Загрузить логи»: the chat's Excel export (sheet «Данные») or prepared .jsonl. */
-export function UploadButton({ variant = "primary" }: { variant?: "primary" | "outline" }) {
+export function UploadButton({ variant = "primary", label = "Загрузить логи" }: { variant?: "primary" | "outline"; label?: string }) {
   const input = useRef<HTMLInputElement>(null);
   const { state } = useLabState();
   const { busy, send } = useUpload();
@@ -41,7 +41,7 @@ export function UploadButton({ variant = "primary" }: { variant?: "primary" | "o
     <>
       <input ref={input} type="file" accept={ACCEPT} className="hidden" onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) send(f); }} />
       <Button variant={variant} icon={Upload} loading={busy} disabled={running} title={running ? "Сейчас идёт другая задача" : "Excel-выгрузка чата или .jsonl"} onClick={() => input.current?.click()}>
-        Загрузить логи
+        {label}
       </Button>
     </>
   );
