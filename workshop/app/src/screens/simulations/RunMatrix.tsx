@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { cellOf, personaOf, scenariosOfRun, typesOfRun } from "../../lab/logic";
-import type { Item, LabRun, LabState, Status } from "../../lab/types";
+import { useLabState } from "../../shell/LabProvider";
+import type { Item, LabRun, Status } from "../../lab/types";
 
 const SIGN: Record<string, { sign: string; word: string; tone: string }> = {
   FAIL: { sign: "✗", word: "нарушение", tone: "text-lab-bad" },
@@ -18,8 +19,9 @@ export function Sign({ status, className }: { status: Status; className?: string
 }
 
 /** Scenarios down, customer types across: each cell the verdicts of that scenario for that type, one sign per repeat. */
-export function RunMatrix({ run, items, state, hrefOf, scores }: { run: LabRun; items: Item[]; state: LabState; hrefOf: (index: number) => string; scores?: boolean }) {
-  const types = typesOfRun(run, state.personas);
+export function RunMatrix({ run, items, hrefOf, scores }: { run: LabRun; items: Item[]; hrefOf: (index: number) => string; scores?: boolean }) {
+  const { state } = useLabState();
+  const types = typesOfRun(run, state?.personas ?? []);
   const scenarios = scenariosOfRun(items);
   const index = new Map(items.map((item, i) => [item, i]));
   return (
