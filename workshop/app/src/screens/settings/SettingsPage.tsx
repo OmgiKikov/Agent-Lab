@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Plus, Trash2, Cpu, Key, FlaskConical } from "lucide-react";
-import { C } from "../utils/colors";
-import { LocalAgentSetupCTA } from "../components/LocalAgentSetupCTA";
-import { SecretInput } from "../components/SecretInput";
-import { useWorkshopEvent } from "../hooks/use-workshop-ws";
+import { Plus, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { LocalAgentSetupCTA } from "../../components/LocalAgentSetupCTA";
+import { SecretInput } from "../../components/SecretInput";
+import { useWorkshopEvent } from "../../hooks/use-workshop-ws";
+import { api, API } from "../../lab/api";
+import type { Check, LabState } from "../../lab/types";
+import { useLabState } from "../../shell/LabProvider";
+import { SectionHeader } from "../../shell/SectionHeader";
+import { Button } from "../../ui/Button";
+import { Facts } from "../../ui/Facts";
 import {
   deleteSecret,
   getSecretStatuses,
@@ -12,69 +18,90 @@ import {
   type SecretKey,
   type SecretStatus,
   type SecretStatuses,
-} from "../api/secrets";
+} from "../../api/secrets";
 
-type Tab = "agents" | "keys" | "debug";
+type Part = "models" | "keys" | "assistant" | "replay" | "about";
 
-const TABS: { id: Tab; label: string; icon: typeof Cpu }[] = [
-  { id: "keys",         label: "Ключи API",           icon: Key },
-  { id: "agents",       label: "Адреса агентов",      icon: Cpu },
-  { id: "debug",        label: "Отладка",             icon: FlaskConical },
-];
-
+/** Настройки: the models that judge and play the customer, the keys, the assistant, trace replay and where things run. */
 export function SettingsPage() {
-  const [tab, setTab] = useState<Tab>("keys");
-
-  const sectionMap: Record<Tab, () => ReactNode> = {
-    agents: () => <AgentEndpointsSection />,
-    keys: () => <KeysSection />,
-    debug: () => <DebugSection />,
-  };
-
+  const { state } = useLabState();
   return (
-    <div className="h-full flex">
-      <div className="w-48 flex-shrink-0 p-6 pr-0">
-        <h1
-          className="text-[22px] mb-6 pl-3"
-          style={{ fontFamily: '"Inter Variable", sans-serif', color: C.fg4 }}
-        >
-          настройки
-        </h1>
-        <nav className="flex flex-col gap-0.5">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all duration-150"
-              style={{
-                color: tab === id ? C.fg4 : C.fg0,
-                background: tab === id ? "rgba(255,255,255,0.06)" : "transparent",
-              }}
-            >
-              <Icon className="w-3.5 h-3.5 flex-shrink-0" style={{ opacity: tab === id ? 0.9 : 0.4 }} />
-              <span className="text-[12px]">{label}</span>
-            </button>
-          ))}
-        </nav>
-      </div>
-
-      <div className="flex-1 overflow-auto sb p-6 pl-8">
-        <div className="max-w-xl pb-16">
-          {sectionMap[tab]()}
+    <div className="flex h-full flex-col">
+      <SectionHeader crumbs={[{ label: "Настройки" }]} />
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className="mx-auto max-w-[760px] space-y-12 px-6 pb-20 pt-6 lg:px-8">
+          {state && <ModelsSection state={state} />}
+          <KeysSection />
+          <AssistantSection />
+          <AgentEndpointsSection />
+          <AboutSection />
         </div>
       </div>
     </div>
   );
 }
 
-function SectionBlock({ id, title, description, children }: { id: Tab; title: string; description?: string; children: ReactNode }) {
+function SectionBlock({ id, title, description, action, children }: { id: Part; title: string; description?: string; action?: ReactNode; children: ReactNode }) {
   return (
     <section id={`settings-${id}`}>
-      <h2 className="text-[14px] font-medium mb-0.5" style={{ color: C.fg4 }}>{title}</h2>
-      {description && <p className="text-[11px] mb-5 leading-relaxed" style={{ color: C.fg0 }}>{description}</p>}
-      {!description && <div className="mb-4" />}
-      <div className="space-y-3">{children}</div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-title font-medium text-lab-ink">{title}</h2>
+          {description && <p className="mt-1 text-small text-lab-dim">{description}</p>}
+        </div>
+        {action}
+      </div>
+      <div className="mt-4 space-y-3">{children}</div>
     </section>
+  );
+}
+
+/** Модели: which model judges and plays the customer, which one judges again; «Проверить модели» asks each once. */
+function ModelsSection({ state }: { state: LabState }) {
+  const [checks, setChecks] = useState<{ main: Check; second: Check } | "pending" | null>(null);
+  const check = () => {
+    setChecks("pending");
+    api<{ main: Check; second: Check }>("/api/models/check", {})
+      .then(setChecks)
+      .catch(e => setChecks({ main: { ok: false, error: String(e.message ?? e) }, second: { ok: false, error: String(e.message ?? e) } }));
+  };
+  const result = (role: "main" | "second") => {
+    if (!checks || checks === "pending") return null;
+    const c = checks[role];
+    return c.ok ? <span className="text-lab-ok">✓ отвечает</span> : <span className="text-lab-bad">✗ {c.error ?? "не отвечает"}</span>;
+  };
+  const rows: { role: "main" | "second"; label: string; model: string | null }[] = [
+    { role: "main", label: "Судья и клиент", model: state.models.main },
+    { role: "second", label: "Второй судья", model: state.models.second },
+  ];
+  return (
+    <SectionBlock
+      id="models" title="Модели" description={`Запросы идут через ${state.models.via}.${state.models.via === "OpenRouter" ? " Сертификаты шлюза банка кладутся в папку certs/." : ""}`}
+      action={<Button icon={ShieldCheck} loading={checks === "pending"} onClick={check}>Проверить модели</Button>}
+    >
+      <div className="border-t border-white/[0.06]">
+        {rows.map(r => (
+          <div key={r.role} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-white/[0.06] py-3">
+            <span className="w-40 flex-shrink-0 text-small text-lab-mute">{r.label}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-small text-lab-text">{r.model ?? "не задана"}</span>
+            <span className="text-meta">{result(r.role)}</span>
+          </div>
+        ))}
+      </div>
+    </SectionBlock>
+  );
+}
+
+/** О продукте: where the service and the Workshop answer, and the one command that starts them. */
+function AboutSection() {
+  return (
+    <SectionBlock id="about" title="О продукте">
+      <Facts facts={[
+        { label: "Сервис проверок", value: <span className="font-mono text-small">{API}</span> },
+        { label: "Workshop", value: <span className="font-mono text-small">{window.location.origin}</span> },
+        { label: "Запуск", value: <span className="font-mono text-small">sh bin/start.sh</span> },
+      ]} />
+    </SectionBlock>
   );
 }
 
@@ -134,17 +161,18 @@ function AgentEndpointsSection() {
     save(updated);
   };
 
+  const INPUT = "h-8 min-w-0 rounded-md border border-white/[0.08] bg-transparent px-2.5 font-mono text-small text-lab-text outline-none placeholder:text-lab-faint focus:border-white/25";
   return (
     <SectionBlock
-      id="agents"
-      title="Адреса агентов"
-      description='Добавьте локальные адреса агентов, чтобы повторять трейсы с настоящими инструментами. В повторе появится режим «Локальный агент».'
+      id="replay"
+      title="Повтор трейсов"
+      description="Локальные адреса агентов, чтобы повторять трейсы с настоящими инструментами. В повторе появится режим «Локальный агент»."
     >
       <LocalAgentSetupCTA
         title="Добавить адрес агента"
         description={
           <>
-            Подключите агента к режиму повтора «Локальный агент» в Workshop. Выберите
+            Подключите агента к режиму повтора «Локальный агент». Выберите
             способ под свой инструмент для кода — для Claude Code установится
             плагин Raindrop, если его ещё нет.
           </>
@@ -152,33 +180,18 @@ function AgentEndpointsSection() {
       />
 
       {Object.keys(agents).length > 0 && (
-        <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
-          {Object.entries(agents).map(([name, config], i) => {
+        <div className="border-t border-white/[0.06]">
+          {Object.entries(agents).map(([name, config]) => {
             const status = health[name] ?? "checking";
             return (
-              <div
-                key={name}
-                className="flex items-center gap-3 px-3 py-2.5 group"
-                style={{ borderTop: i > 0 ? `1px solid ${C.border}` : undefined }}
-              >
-                <div
-                  className={`w-2 h-2 rounded-full flex-shrink-0 ${status === "online" ? "pulse-dot" : ""}`}
-                  title={status === "online" ? "На связи" : status === "checking" ? "Проверяем…" : "Нет связи"}
-                  style={{
-                    background: status === "online" ? C.green : status === "checking" ? C.fg0 : C.red,
-                    opacity: status === "checking" ? 0.4 : 0.8,
-                  }}
-                />
-                <span className="text-[12px] font-medium min-w-[80px]" style={{ color: C.fg3 }}>{name}</span>
-                <span className="text-[11px] font-mono flex-1 truncate" style={{ color: C.fg0 }}>{config.url}</span>
-                <span className="text-[10px] flex-shrink-0 min-w-[40px] text-right" style={{ color: status === "online" ? C.green : C.fg0 }}>
-                  {status === "online" ? "на связи" : status === "checking" ? "..." : "нет связи"}
+              <div key={name} className="group flex items-center gap-3 border-b border-white/[0.06] py-2.5">
+                <span className="min-w-[80px] text-small font-medium text-lab-text">{name}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-meta text-lab-dim">{config.url}</span>
+                <span className={cn("flex-shrink-0 text-meta", status === "online" ? "text-lab-ok" : status === "checking" ? "text-lab-dim" : "text-lab-bad")}>
+                  {status === "online" ? "✓ на связи" : status === "checking" ? "проверяю…" : "✗ нет связи"}
                 </span>
-                <button
-                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-white/10"
-                  onClick={() => removeAgent(name)}
-                >
-                  <Trash2 className="h-3 w-3" style={{ color: C.fg0 }} />
+                <button type="button" aria-label="Удалить" className="rounded p-1 text-lab-dim opacity-0 transition-opacity hover:bg-white/[0.06] group-hover:opacity-100" onClick={() => removeAgent(name)}>
+                  <Trash2 className="size-3.5" />
                 </button>
               </div>
             );
@@ -187,29 +200,9 @@ function AgentEndpointsSection() {
       )}
 
       <div className="flex gap-1.5">
-        <input
-          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-[12px] font-mono outline-none transition-colors focus:ring-1 focus:ring-white/20"
-          style={{ background: "rgba(255,255,255,0.05)", color: C.fg3, border: `1px solid ${C.border}` }}
-          placeholder="agent-name"
-          value={newName}
-          onChange={e => setNewName(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && addAgent()}
-        />
-        <input
-          className="flex-[2] min-w-0 px-2.5 py-1.5 rounded-md text-[12px] font-mono outline-none transition-colors focus:ring-1 focus:ring-white/20"
-          style={{ background: "rgba(255,255,255,0.05)", color: C.fg3, border: `1px solid ${C.border}` }}
-          placeholder="http://localhost:5860/replay"
-          value={newUrl}
-          onChange={e => setNewUrl(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && addAgent()}
-        />
-        <button
-          className="px-2.5 py-1.5 rounded-md text-[12px] transition-colors hover:bg-white/10 flex-shrink-0"
-          style={{ background: "rgba(255,255,255,0.05)", color: C.fg2, border: `1px solid ${C.border}` }}
-          onClick={addAgent}
-        >
-          <Plus className="h-3 w-3" />
-        </button>
+        <input className={cn(INPUT, "flex-1")} placeholder="имя" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && addAgent()} />
+        <input className={cn(INPUT, "flex-[2]")} placeholder="http://localhost:5860/replay" value={newUrl} onChange={e => setNewUrl(e.target.value)} onKeyDown={e => e.key === "Enter" && addAgent()} />
+        <Button icon={Plus} onClick={addAgent} aria-label="Добавить адрес" />
       </div>
     </SectionBlock>
   );
@@ -296,45 +289,31 @@ function KeysSection() {
   });
 
   return (
-    <SectionBlock id="keys" title="Ключи API" description="Ключи один раз передаются локальному демону и не возвращаются в браузер. Чтобы заменить сохранённый ключ, вставьте новый.">
+    <SectionBlock id="keys" title="Ключи" description="Ключи Workshop один раз передаются локальному демону и не возвращаются в браузер. Чтобы заменить сохранённый ключ, вставьте новый.">
       <SecretInput label="Anthropic" placeholder="sk-ant-..." description={sourceText("anthropic", "Для повтора и чата с ассистентом.")} value={drafts.anthropic} saved={secretSaved("anthropic")} saving={savingKey === "anthropic"} onChange={v => setDraft("anthropic", v)} onSave={v => persist("anthropic", v)} onClear={canClearSecret("anthropic") ? () => clearSecret("anthropic") : undefined} getKeyUrl="https://console.anthropic.com/settings/keys" />
       <SecretInput label="OpenAI" placeholder="sk-..." description={sourceText("openai", "Для повтора с моделями GPT.")} value={drafts.openai} saved={secretSaved("openai")} saving={savingKey === "openai"} onChange={v => setDraft("openai", v)} onSave={v => persist("openai", v)} onClear={canClearSecret("openai") ? () => clearSecret("openai") : undefined} getKeyUrl="https://platform.openai.com/api-keys" />
       <SecretInput label="Raindrop" placeholder="rk_..." description={sourceText("raindrop", "Ключ записи для отправки трейсов.")} value={drafts.raindrop} saved={secretSaved("raindrop")} saving={savingKey === "raindrop"} onChange={v => setDraft("raindrop", v)} onSave={v => persist("raindrop", v)} onClear={canClearSecret("raindrop") ? () => clearSecret("raindrop") : undefined} getKeyUrl="https://app.raindrop.ai" />
       <SecretInput label="Query API" placeholder="ключ Query API" description={sourceText("query", "Для поиска событий на вкладке «Поиск».")} value={drafts.query} saved={secretSaved("query")} saving={savingKey === "query"} onChange={v => setDraft("query", v)} onSave={v => persist("query", v)} onClear={canClearSecret("query") ? () => clearSecret("query") : undefined} getKeyUrl="https://auth.raindrop.ai/org/api_keys" />
-      {saveError && <div className="text-[11px]" style={{ color: C.red }}>{saveError}</div>}
+      {saveError && <div className="text-meta text-lab-bad">{saveError}</div>}
       <DaemonQueryKeyStatus status={statuses?.query ?? null} />
     </SectionBlock>
   );
 }
 
-function DaemonQueryKeyStatus({
-  status,
-}: {
-  status: SecretStatus | null;
-}) {
+function DaemonQueryKeyStatus({ status }: { status: SecretStatus | null }) {
   const configured = status?.configured === true;
   return (
-    <div
-      className="flex items-center justify-between gap-3 rounded-md px-2.5 py-2"
-      style={{ background: "rgba(255,255,255,0.035)", border: `1px solid ${C.border}` }}
-    >
-      <div className="min-w-0">
-        <div className="text-[11px]" style={{ color: C.fg3 }}>Raindrop Cloud MCP</div>
-      </div>
-      <span
-        className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]"
-        style={{
-          color: status === null ? C.fg1 : configured ? C.green : C.fg0,
-          background: configured ? "rgba(96,227,109,0.08)" : "rgba(255,255,255,0.04)",
-        }}
-      >
-        {status === null ? "проверяем" : configured ? "включён" : "не подключён"}
+    <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3">
+      <span className="text-small text-lab-text">Raindrop Cloud MCP</span>
+      <span className={cn("font-mono text-meta", configured ? "text-lab-ok" : "text-lab-dim")}>
+        {status === null ? "проверяю…" : configured ? "✓ включён" : "не подключён"}
       </span>
     </div>
   );
 }
 
-function DebugSection() {
+/** Ассистент: «Спросить» works through Claude Code or Codex on this computer; the choice can be shown again. */
+function AssistantSection() {
   const [reset, setReset] = useState(false);
 
   const resetChatOnboarding = useCallback(() => {
@@ -347,25 +326,13 @@ function DebugSection() {
   }, []);
 
   return (
-    <SectionBlock id="debug" title="Отладка" description="Сброс состояния интерфейса локального чата.">
-      <div className="flex items-center justify-between gap-4 py-1.5">
-        <div className="flex min-w-0 flex-col">
-          <span className="text-[12px]" style={{ color: C.fg3 }}>Первый запуск чата Claude Code</span>
-          <span className="text-[11px] mt-0.5" style={{ color: C.fg0 }}>
-            Снова показать экран подключения локального агента.
-          </span>
+    <SectionBlock id="assistant" title="Ассистент" description="«Спросить» (⌘J) работает через Claude Code или Codex на этом компьютере.">
+      <div className="flex items-center justify-between gap-4 border-t border-white/[0.06] pt-3">
+        <div className="min-w-0">
+          <div className="text-small text-lab-text">Выбор ассистента</div>
+          <div className="mt-0.5 text-meta text-lab-dim">Снова показать экран, где выбирается Claude Code или Codex.</div>
         </div>
-        <button
-          className="text-[11px] font-mono px-2.5 py-1 rounded-md transition-colors hover:bg-white/10 flex-shrink-0"
-          style={{
-            color: reset ? C.green : C.fg2,
-            background: reset ? "rgba(96,227,109,0.08)" : "rgba(255,255,255,0.05)",
-            border: `1px solid ${reset ? "rgba(96,227,109,0.15)" : C.border}`,
-          }}
-          onClick={resetChatOnboarding}
-        >
-          {reset ? "готово" : "сбросить"}
-        </button>
+        <Button size="sm" icon={RotateCcw} onClick={resetChatOnboarding}>{reset ? "Готово" : "Показать снова"}</Button>
       </div>
     </SectionBlock>
   );

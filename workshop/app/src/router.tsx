@@ -5,11 +5,11 @@ import { RunsPage } from "./pages/RunsPage";
 import { LabPage } from "./pages/LabPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
-import { SettingsPage } from "./pages/SettingsPage";
 import { DialogsPage } from "./screens/dialogs/DialogsPage";
 import { ProblemsPage } from "./screens/problems/ProblemsPage";
 import { ReviewPage } from "./screens/review/ReviewPage";
 import { RulesPage } from "./screens/rules/RulesPage";
+import { SettingsPage } from "./screens/settings/SettingsPage";
 import { SimulationsPage } from "./screens/simulations/SimulationsPage";
 
 export const router = createBrowserRouter([
