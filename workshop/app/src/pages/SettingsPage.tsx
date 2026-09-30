@@ -17,9 +17,9 @@ import {
 type Tab = "agents" | "keys" | "debug";
 
 const TABS: { id: Tab; label: string; icon: typeof Cpu }[] = [
-  { id: "keys",         label: "API Keys",            icon: Key },
-  { id: "agents",       label: "Agent Endpoints",     icon: Cpu },
-  { id: "debug",        label: "Debug",               icon: FlaskConical },
+  { id: "keys",         label: "Ключи API",           icon: Key },
+  { id: "agents",       label: "Адреса агентов",      icon: Cpu },
+  { id: "debug",        label: "Отладка",             icon: FlaskConical },
 ];
 
 export function SettingsPage() {
@@ -36,9 +36,9 @@ export function SettingsPage() {
       <div className="w-48 flex-shrink-0 p-6 pr-0">
         <h1
           className="text-[22px] mb-6 pl-3"
-          style={{ fontFamily: '"AlphaLyrae", sans-serif', color: C.fg4 }}
+          style={{ fontFamily: '"Inter Variable", sans-serif', color: C.fg4 }}
         >
-          settings
+          настройки
         </h1>
         <nav className="flex flex-col gap-0.5">
           {TABS.map(({ id, label, icon: Icon }) => (
@@ -137,16 +137,16 @@ function AgentEndpointsSection() {
   return (
     <SectionBlock
       id="agents"
-      title="Agent Endpoints"
-      description='Register local endpoints to replay agent runs with real tools. Adds "Local Agent" mode to Replay.'
+      title="Адреса агентов"
+      description='Добавьте локальные адреса агентов, чтобы повторять трейсы с настоящими инструментами. В повторе появится режим «Локальный агент».'
     >
       <LocalAgentSetupCTA
-        title="Register a new agent endpoint"
+        title="Добавить адрес агента"
         description={
           <>
-            Wire your agent into Workshop&rsquo;s Local Agent replay mode. Pick
-            the path that matches your coding tool — the Claude Code option
-            installs the Raindrop plugin if you don&rsquo;t have it yet.
+            Подключите агента к режиму повтора «Локальный агент» в Workshop. Выберите
+            способ под свой инструмент для кода — для Claude Code установится
+            плагин Raindrop, если его ещё нет.
           </>
         }
       />
@@ -163,7 +163,7 @@ function AgentEndpointsSection() {
               >
                 <div
                   className={`w-2 h-2 rounded-full flex-shrink-0 ${status === "online" ? "pulse-dot" : ""}`}
-                  title={status === "online" ? "Online" : status === "checking" ? "Checking..." : "Offline"}
+                  title={status === "online" ? "На связи" : status === "checking" ? "Проверяем…" : "Нет связи"}
                   style={{
                     background: status === "online" ? C.green : status === "checking" ? C.fg0 : C.red,
                     opacity: status === "checking" ? 0.4 : 0.8,
@@ -172,7 +172,7 @@ function AgentEndpointsSection() {
                 <span className="text-[12px] font-medium min-w-[80px]" style={{ color: C.fg3 }}>{name}</span>
                 <span className="text-[11px] font-mono flex-1 truncate" style={{ color: C.fg0 }}>{config.url}</span>
                 <span className="text-[10px] flex-shrink-0 min-w-[40px] text-right" style={{ color: status === "online" ? C.green : C.fg0 }}>
-                  {status === "online" ? "online" : status === "checking" ? "..." : "offline"}
+                  {status === "online" ? "на связи" : status === "checking" ? "..." : "нет связи"}
                 </span>
                 <button
                   className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-white/10"
@@ -283,7 +283,7 @@ function KeysSection() {
   const sourceText = useCallback((key: SecretKey, fallback: string) => {
     const status = statuses?.[key];
     if (!status?.configured) return fallback;
-    return status.source === "env" ? "Configured from environment." : undefined;
+    return status.source === "env" ? "Задан через переменную окружения." : undefined;
   }, [statuses]);
 
   const canClearSecret = useCallback((key: SecretKey) => {
@@ -296,11 +296,11 @@ function KeysSection() {
   });
 
   return (
-    <SectionBlock id="keys" title="API Keys" description="Keys are sent once to the local daemon and are never read back into the browser. Paste a new key to replace a saved one.">
-      <SecretInput label="Anthropic" placeholder="sk-ant-..." description={sourceText("anthropic", "Used for replay and Ask chat.")} value={drafts.anthropic} saved={secretSaved("anthropic")} saving={savingKey === "anthropic"} onChange={v => setDraft("anthropic", v)} onSave={v => persist("anthropic", v)} onClear={canClearSecret("anthropic") ? () => clearSecret("anthropic") : undefined} getKeyUrl="https://console.anthropic.com/settings/keys" />
-      <SecretInput label="OpenAI" placeholder="sk-..." description={sourceText("openai", "Used for replay with GPT models.")} value={drafts.openai} saved={secretSaved("openai")} saving={savingKey === "openai"} onChange={v => setDraft("openai", v)} onSave={v => persist("openai", v)} onClear={canClearSecret("openai") ? () => clearSecret("openai") : undefined} getKeyUrl="https://platform.openai.com/api-keys" />
-      <SecretInput label="Raindrop" placeholder="rk_..." description={sourceText("raindrop", "Write key for trace shipping.")} value={drafts.raindrop} saved={secretSaved("raindrop")} saving={savingKey === "raindrop"} onChange={v => setDraft("raindrop", v)} onSave={v => persist("raindrop", v)} onClear={canClearSecret("raindrop") ? () => clearSecret("raindrop") : undefined} getKeyUrl="https://app.raindrop.ai" />
-      <SecretInput label="Query API" placeholder="your-query-api-key" description={sourceText("query", "Key for searching events in the Search tab.")} value={drafts.query} saved={secretSaved("query")} saving={savingKey === "query"} onChange={v => setDraft("query", v)} onSave={v => persist("query", v)} onClear={canClearSecret("query") ? () => clearSecret("query") : undefined} getKeyUrl="https://auth.raindrop.ai/org/api_keys" />
+    <SectionBlock id="keys" title="Ключи API" description="Ключи один раз передаются локальному демону и не возвращаются в браузер. Чтобы заменить сохранённый ключ, вставьте новый.">
+      <SecretInput label="Anthropic" placeholder="sk-ant-..." description={sourceText("anthropic", "Для повтора и чата с ассистентом.")} value={drafts.anthropic} saved={secretSaved("anthropic")} saving={savingKey === "anthropic"} onChange={v => setDraft("anthropic", v)} onSave={v => persist("anthropic", v)} onClear={canClearSecret("anthropic") ? () => clearSecret("anthropic") : undefined} getKeyUrl="https://console.anthropic.com/settings/keys" />
+      <SecretInput label="OpenAI" placeholder="sk-..." description={sourceText("openai", "Для повтора с моделями GPT.")} value={drafts.openai} saved={secretSaved("openai")} saving={savingKey === "openai"} onChange={v => setDraft("openai", v)} onSave={v => persist("openai", v)} onClear={canClearSecret("openai") ? () => clearSecret("openai") : undefined} getKeyUrl="https://platform.openai.com/api-keys" />
+      <SecretInput label="Raindrop" placeholder="rk_..." description={sourceText("raindrop", "Ключ записи для отправки трейсов.")} value={drafts.raindrop} saved={secretSaved("raindrop")} saving={savingKey === "raindrop"} onChange={v => setDraft("raindrop", v)} onSave={v => persist("raindrop", v)} onClear={canClearSecret("raindrop") ? () => clearSecret("raindrop") : undefined} getKeyUrl="https://app.raindrop.ai" />
+      <SecretInput label="Query API" placeholder="ключ Query API" description={sourceText("query", "Для поиска событий на вкладке «Поиск».")} value={drafts.query} saved={secretSaved("query")} saving={savingKey === "query"} onChange={v => setDraft("query", v)} onSave={v => persist("query", v)} onClear={canClearSecret("query") ? () => clearSecret("query") : undefined} getKeyUrl="https://auth.raindrop.ai/org/api_keys" />
       {saveError && <div className="text-[11px]" style={{ color: C.red }}>{saveError}</div>}
       <DaemonQueryKeyStatus status={statuses?.query ?? null} />
     </SectionBlock>
@@ -328,7 +328,7 @@ function DaemonQueryKeyStatus({
           background: configured ? "rgba(96,227,109,0.08)" : "rgba(255,255,255,0.04)",
         }}
       >
-        {status === null ? "checking" : configured ? "enabled" : "not connected"}
+        {status === null ? "проверяем" : configured ? "включён" : "не подключён"}
       </span>
     </div>
   );
@@ -347,12 +347,12 @@ function DebugSection() {
   }, []);
 
   return (
-    <SectionBlock id="debug" title="Debug" description="Tools for resetting in-progress local chat UI state.">
+    <SectionBlock id="debug" title="Отладка" description="Сброс состояния интерфейса локального чата.">
       <div className="flex items-center justify-between gap-4 py-1.5">
         <div className="flex min-w-0 flex-col">
-          <span className="text-[12px]" style={{ color: C.fg3 }}>Claude Code chat onboarding</span>
+          <span className="text-[12px]" style={{ color: C.fg3 }}>Первый запуск чата Claude Code</span>
           <span className="text-[11px] mt-0.5" style={{ color: C.fg0 }}>
-            Show the local coding agent connection screen again.
+            Снова показать экран подключения локального агента.
           </span>
         </div>
         <button
@@ -364,7 +364,7 @@ function DebugSection() {
           }}
           onClick={resetChatOnboarding}
         >
-          {reset ? "done" : "reset"}
+          {reset ? "готово" : "сбросить"}
         </button>
       </div>
     </SectionBlock>

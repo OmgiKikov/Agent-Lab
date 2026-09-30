@@ -37,8 +37,8 @@ function InlineSetupCTA({ eventName, title, description }: { eventName?: string;
     setTimeout(() => setCopied(false), 1500);
   }, [skillPrompt]);
 
-  const resolvedTitle = title ?? `Set Up Agent Replay${eventName ? ` for "${eventName}"` : ""}`;
-  const resolvedDescription = description ?? "Copy the setup prompt and paste it into your AI coding tool to wire up replay.";
+  const resolvedTitle = title ?? `Настройка повтора трейсов${eventName ? ` для «${eventName}»` : ""}`;
+  const resolvedDescription = description ?? "Скопируйте промпт настройки и вставьте его в ИИ-инструмент для кода — он подключит повтор.";
 
   return (
     <div className="rounded-lg p-3 space-y-2"
@@ -59,7 +59,7 @@ function InlineSetupCTA({ eventName, title, description }: { eventName?: string;
         onClick={copy}
       >
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-        {copied ? "Copied!" : "Copy Setup Prompt"}
+        {copied ? "Скопировано!" : "Копировать промпт настройки"}
       </button>
     </div>
   );
@@ -130,18 +130,18 @@ export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalP
         <div className="p-6 space-y-4">
           <div>
             <h2 className="text-[15px] font-semibold" style={{ color: C.fg4 }}>
-              Set Up Agent Replay
+              Настройка повтора трейсов
             </h2>
             {cleanName && (
               <div className="text-[12px] mt-1 font-mono" style={{ color: C.fg1 }}>
-                for "{cleanName}"
+                для «{cleanName}»
               </div>
             )}
           </div>
 
           <p className="text-[13px] leading-relaxed" style={{ color: C.fg2 }}>
-            Copy this prompt and paste it into Claude Code, Cursor, or another AI coding tool
-            in your agent's repo. It will set up the replay endpoint automatically.
+            Скопируйте этот промпт и вставьте его в Claude Code, Cursor или другой ИИ-инструмент
+            для кода в репозитории агента. Он сам настроит адрес для повтора.
           </p>
 
           <button
@@ -154,11 +154,11 @@ export function SetupReplayModal({ open, onClose, eventName }: SetupReplayModalP
             onClick={copy}
           >
             {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-            {copied ? "Copied to clipboard!" : "Copy Setup Prompt"}
+            {copied ? "Скопировано в буфер обмена!" : "Копировать промпт настройки"}
           </button>
 
           <div className="text-[11px] text-center" style={{ color: C.fg0 }}>
-            Using Claude Code? Just run <code className="font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.08)", color: C.fg2 }}>/setup-agent-replay</code>
+            Работаете в Claude Code? Просто выполните <code className="font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.08)", color: C.fg2 }}>/setup-agent-replay</code>
           </div>
         </div>
       </div>

@@ -23,6 +23,12 @@ import {
 } from "../api/query-api";
 import { getSecretStatuses, purgeLegacyBrowserSecrets, saveSecret, type SecretStatus } from "../api/secrets";
 
+/** Russian plural: 1 трейс, 2 трейса, 5 трейсов. */
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
 /** Port of detectSubAgents from server — works on Span[] */
 function detectSubAgents(spans: Span[]): SubAgent[] {
   const children = new Map<string, Span[]>();
@@ -86,17 +92,24 @@ function daysAgo(n: number): string {
 }
 
 const DATE_PRESETS = [
-  { label: "24h", value: "1" },
-  { label: "7d", value: "7" },
-  { label: "30d", value: "30" },
+  { label: "24\u00a0ч", value: "1" },
+  { label: "7\u00a0дн.", value: "7" },
+  { label: "30\u00a0дн.", value: "30" },
 ] as const;
 
 // Hover hints for the mode chips. Kept terse — the right-pane welcome panel
 // has the long-form explanation; this is just for the in-context tooltip.
 const MODE_HINTS: Record<SearchMode, string> = {
-  text: "Substring match across user / assistant content. Fast, no ranking.",
-  semantic: "Meaning-based, relevance-ranked. Limited to the last 14 days.",
-  regex: "Regex over content (e.g. error|timeout, ^Failed.+).",
+  text: "Поиск подстроки в сообщениях пользователя и ассистента. Быстро, без ранжирования.",
+  semantic: "По смыслу, с ранжированием по релевантности. Только за последние 14\u00a0дней.",
+  regex: "Регулярное выражение по содержимому (например, error|timeout, ^Failed.+).",
+};
+
+// Visible names of the search modes; the keys stay the API's mode ids.
+const MODE_LABELS: Record<SearchMode, string> = {
+  text: "текст",
+  semantic: "по смыслу",
+  regex: "regex",
 };
 
 /**
@@ -264,7 +277,7 @@ export function SearchPage() {
       if (!isAppend) setWindows(activeWindows);
       setWindowIdx(nextIdx);
     } catch (e: any) {
-      setError(e.message ?? "Search failed");
+      setError(e.message ?? "Поиск не удался");
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -349,12 +362,12 @@ export function SearchPage() {
             <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${query ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)"}` }}>
               <Search className="h-3 w-3 shrink-0" style={{ color: C.fg0 }} />
               <input ref={inputRef} className="flex-1 min-w-0 bg-transparent text-[11px] font-mono outline-none" style={{ color: C.fg3 }}
-                placeholder="Search events..." value={query} onChange={e => setQuery(e.target.value)} />
+                placeholder="Поиск по событиям…" value={query} onChange={e => setQuery(e.target.value)} />
               {query && <button type="button" onClick={() => setQuery("")} className="shrink-0"><X className="h-2.5 w-2.5" style={{ color: C.fg0 }} /></button>}
             </div>
             <button type="submit" disabled={loading} className="px-2.5 py-1.5 rounded text-[10px] font-medium shrink-0"
               style={{ background: "#fff", color: "#000", opacity: loading ? 0.5 : 1 }}>
-              {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Go"}
+              {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Найти"}
             </button>
           </form>
           <div className="flex items-center gap-2 flex-wrap">
@@ -363,15 +376,15 @@ export function SearchPage() {
                 <button key={m} className="px-2 py-0.5 text-[10px] font-mono transition-colors"
                   style={{ background: mode === m ? "rgba(255,255,255,0.06)" : "transparent", color: mode === m ? C.fg3 : C.fg0 }}
                   title={MODE_HINTS[m]}
-                  onClick={() => handleModeChange(m)}>{m}</button>
+                  onClick={() => handleModeChange(m)}>{MODE_LABELS[m]}</button>
               ))}
             </div>
             <div className="flex rounded overflow-hidden" style={{ background: "rgba(255,255,255,0.03)" }}>
               {DATE_PRESETS.map(p => {
                 const allowed = isPresetAllowed(mode, Number(p.value));
                 const tooltip = allowed
-                  ? `Limit to the last ${p.label}`
-                  : `${p.label} not supported in ${mode} mode (server caps semantic search at 14 days)`;
+                  ? `За последние ${p.label}`
+                  : `${p.label} — недоступно в режиме «${MODE_LABELS[mode]}»: сервер ограничивает его 14\u00a0днями`;
                 return (
                   <button key={p.value}
                     className="px-2 py-0.5 text-[10px] font-mono transition-colors"
@@ -392,7 +405,7 @@ export function SearchPage() {
             <select className="w-full appearance-none pl-2 pr-5 py-1 rounded text-[10px] font-mono outline-none cursor-pointer"
               style={{ background: "rgba(255,255,255,0.04)", color: C.fg2, border: `1px solid rgba(255,255,255,0.06)` }}
               value={selectedSignal} onChange={e => setSelectedSignal(e.target.value)} disabled={signalsLoading}>
-              <option value="">All signals</option>
+              <option value="">Все сигналы</option>
               {signals.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
             <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 h-2.5 w-2.5 pointer-events-none" style={{ color: C.fg0 }} />
@@ -409,15 +422,15 @@ export function SearchPage() {
           {loading && <div className="flex items-center justify-center py-12"><Loader2 className="h-4 w-4 animate-spin" style={{ color: C.fg0 }} /></div>}
           {!loading && !hasSearched && (
             <div className="text-center text-[11px] mt-8 px-2 leading-relaxed" style={{ color: C.fg0 }}>
-              Press <span className="font-mono" style={{ color: C.fg2 }}>Go</span> to browse recent events,
-              or type a query first.
+              Нажмите <span className="font-mono" style={{ color: C.fg2 }}>Найти</span>, чтобы посмотреть последние события,
+              или сначала введите запрос.
             </div>
           )}
           {!loading && hasSearched && results.length === 0 && !error && (
             <div className="text-center text-[11px] mt-8 px-2 leading-relaxed" style={{ color: C.fg0 }}>
               {query.trim()
-                ? <>No matches in this range. Try a wider date preset, a different mode, or clear the signal filter.</>
-                : <>No events in this range. Events appear here once your agent ships traces with a Raindrop write key.</>}
+                ? <>За этот период ничего не нашлось. Расширьте период, смените режим или сбросьте фильтр сигнала.</>
+                : <>За этот период событий нет. Они появятся, когда агент начнёт отправлять трейсы с ключом записи Raindrop.</>}
             </div>
           )}
           {!loading && results.map(evt => (
@@ -427,7 +440,7 @@ export function SearchPage() {
             <div className="pt-1">
               <button onClick={handleLoadMore} disabled={loadingMore}
                 className="w-full py-1.5 rounded text-[10px] font-mono" style={{ background: "rgba(255,255,255,0.03)", color: C.fg1 }}>
-                {loadingMore ? <Loader2 className="h-3 w-3 animate-spin mx-auto" /> : "load more"}
+                {loadingMore ? <Loader2 className="h-3 w-3 animate-spin mx-auto" /> : "загрузить ещё"}
               </button>
             </div>
           )}
@@ -489,7 +502,7 @@ function SearchLockedOverlay({ onConnected }: { onConnected: () => void }) {
         <h1
           className="text-center"
           style={{
-            fontFamily: '"AlphaLyrae", sans-serif',
+            fontFamily: '"Inter Variable", sans-serif',
             fontSize: "36px",
             fontWeight: 500,
             lineHeight: 1.08,
@@ -497,15 +510,15 @@ function SearchLockedOverlay({ onConnected }: { onConnected: () => void }) {
             color: C.fg5,
           }}
         >
-          Search Production Traces
+          Поиск по трейсам прода
         </h1>
         <p className="mx-auto mt-4 max-w-[520px] text-[17px] font-light leading-8" style={{ color: C.fg2 }}>
-          Connect workshop to your Raindrop account to iterate on production traces locally.
+          Подключите Workshop к аккаунту Raindrop, чтобы разбирать трейсы прода локально.
         </p>
         <form className="mx-auto mt-8 max-w-[440px] text-left" onSubmit={handleSubmit}>
           <SecretInput
             label="Query API"
-            placeholder="your-query-api-key"
+            placeholder="ключ Query API"
             value={pendingKey}
             saved={false}
             onChange={setPendingKey}
@@ -518,7 +531,7 @@ function SearchLockedOverlay({ onConnected }: { onConnected: () => void }) {
             className="mt-3 w-full rounded py-2 text-[12px] font-medium"
             style={{ background: "#fff", color: "#000", opacity: trimmed && !saving ? 1 : 0.5 }}
           >
-            {saving ? "Saving..." : "Connect"}
+            {saving ? "Сохраняем…" : "Подключить"}
           </button>
         </form>
       </div>
@@ -546,14 +559,14 @@ function SearchWelcome({
         <div className="space-y-2">
           <Search className="h-4 w-4" style={{ color: C.fg0 }} />
           <div className="text-sm font-medium" style={{ color: C.fg3 }}>
-            Browse production traces
+            Просмотр трейсов прода
           </div>
           <div className="text-[11px] leading-relaxed" style={{ color: C.fg1 }}>
             {loading && !hasResults
-              ? <>Loading recent events from <code className="font-mono" style={{ color: C.fg2 }}>query.raindrop.ai</code>…</>
+              ? <>Загружаем последние события из <code className="font-mono" style={{ color: C.fg2 }}>query.raindrop.ai</code>…</>
               : hasResults
-                ? <>Pick an event on the left to view its full trace, replay it, or save it for later.</>
-                : <>Events from <code className="font-mono" style={{ color: C.fg2 }}>query.raindrop.ai</code>. Once your agent ships traces, they'll show up on the left — click any to view, replay, or save.</>}
+                ? <>Выберите событие слева, чтобы открыть его трейс целиком, повторить или сохранить на потом.</>
+                : <>События из <code className="font-mono" style={{ color: C.fg2 }}>query.raindrop.ai</code>. Когда агент начнёт отправлять трейсы, они появятся слева — откройте любой, чтобы посмотреть, повторить или сохранить.</>}
           </div>
         </div>
 
@@ -569,19 +582,19 @@ function SearchWelcome({
 
 function ModeKey() {
   const rows: { mode: SearchMode; gloss: string }[] = [
-    { mode: "text", gloss: "Substring match. Fast, no ranking." },
-    { mode: "semantic", gloss: "Meaning-based, ranked. Last 14 days only." },
-    { mode: "regex", gloss: "Pattern, e.g. error|timeout." },
+    { mode: "text", gloss: "Поиск подстроки. Быстро, без ранжирования." },
+    { mode: "semantic", gloss: "По смыслу, с ранжированием. Только последние 14\u00a0дней." },
+    { mode: "regex", gloss: "Шаблон, например error|timeout." },
   ];
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.fg0 }}>
-        Search modes
+        Режимы поиска
       </div>
       <dl className="text-[11px] leading-snug">
         {rows.map(r => (
           <div key={r.mode} className="flex gap-2 py-0.5">
-            <dt className="font-mono w-16 shrink-0" style={{ color: C.fg3 }}>{r.mode}</dt>
+            <dt className="font-mono w-16 shrink-0" style={{ color: C.fg3 }}>{MODE_LABELS[r.mode]}</dt>
             <dd style={{ color: C.fg1 }}>{r.gloss}</dd>
           </div>
         ))}
@@ -594,16 +607,16 @@ function FilterKey() {
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.fg0 }}>
-        Filters
+        Фильтры
       </div>
       <dl className="text-[11px] leading-snug">
         <div className="flex gap-2 py-0.5">
-          <dt className="font-mono w-16 shrink-0" style={{ color: C.fg3 }}>signal</dt>
-          <dd style={{ color: C.fg1 }}>Tags emitted by your SDK (errors, drops, custom labels).</dd>
+          <dt className="font-mono w-16 shrink-0" style={{ color: C.fg3 }}>сигнал</dt>
+          <dd style={{ color: C.fg1 }}>Метки от вашего SDK (ошибки, обрывы, свои метки).</dd>
         </div>
         <div className="flex gap-2 py-0.5">
-          <dt className="font-mono w-16 shrink-0" style={{ color: C.fg3 }}>range</dt>
-          <dd style={{ color: C.fg1 }}>How far back to look. <span style={{ color: C.fg0 }}>30d</span> is text/regex only.</dd>
+          <dt className="font-mono w-16 shrink-0" style={{ color: C.fg3 }}>период</dt>
+          <dd style={{ color: C.fg1 }}>Насколько далеко назад искать. <span style={{ color: C.fg0 }}>30&nbsp;дн.</span> — только для режимов «текст» и regex.</dd>
         </div>
       </dl>
     </div>
@@ -615,14 +628,14 @@ function ExampleQueries({ onExample }: { onExample: (q: string, mode: SearchMode
   // than us having to teach all three through copy. Queries chosen to be
   // generic enough that most users with any traffic will see hits.
   const examples: { label: string; query: string; mode: SearchMode }[] = [
-    { label: "errors", query: "error", mode: "text" },
+    { label: "ошибки", query: "error", mode: "text" },
     { label: "user got confused", query: "user got confused", mode: "semantic" },
     { label: "error|timeout", query: "error|timeout", mode: "regex" },
   ];
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.fg0 }}>
-        Try
+        Попробуйте
       </div>
       <div className="flex flex-wrap gap-1.5">
         {examples.map(ex => (
@@ -635,9 +648,9 @@ function ExampleQueries({ onExample }: { onExample: (q: string, mode: SearchMode
               color: C.fg2,
               border: `1px solid ${C.border}`,
             }}
-            title={`Search "${ex.query}" in ${ex.mode} mode`}
+            title={`Искать «${ex.query}» в режиме «${MODE_LABELS[ex.mode]}»`}
           >
-            <span style={{ color: C.fg0 }}>{ex.mode}:</span> {ex.label}
+            <span style={{ color: C.fg0 }}>{MODE_LABELS[ex.mode]}:</span> {ex.label}
           </button>
         ))}
       </div>
@@ -647,8 +660,8 @@ function ExampleQueries({ onExample }: { onExample: (q: string, mode: SearchMode
 
 function ResultItem({ event, selected, onClick }: { event: QueryEvent; selected: boolean; onClick: () => void }) {
   const ts = new Date(event.timestamp);
-  const timeStr = ts.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " +
-    ts.toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" });
+  const timeStr = ts.toLocaleDateString("ru-RU", { month: "short", day: "numeric" }) + " " +
+    ts.toLocaleTimeString("ru-RU", { hour12: false, hour: "2-digit", minute: "2-digit" });
 
   return (
     <button className="w-full text-left px-3 py-2.5 rounded-lg transition-all duration-150"
@@ -714,13 +727,13 @@ function RemoteRunDetail({ eventId, event }: { eventId: string; event?: QueryEve
           body: JSON.stringify({ spans: mapped }),
         }).catch(() => {});
       })
-      .catch(e => setTraceError(e.message ?? "Failed to load traces"))
+      .catch(e => setTraceError(e.message ?? "Не удалось загрузить трейс"))
       .finally(() => setTraceLoading(false));
   }, [eventId]);
 
   if (traceLoading) {
     return <div className="h-full flex items-center justify-center gap-2" style={{ color: C.fg1 }}>
-      <Loader2 className="h-4 w-4 animate-spin" /> Loading trace...
+      <Loader2 className="h-4 w-4 animate-spin" /> Загрузка трейса…
     </div>;
   }
 
@@ -735,7 +748,7 @@ function RemoteRunDetail({ eventId, event }: { eventId: string; event?: QueryEve
 
   if (spans.length === 0) {
     return <div className="h-full flex items-center justify-center">
-      <div className="text-[11px]" style={{ color: C.fg0 }}>No trace data for this event</div>
+      <div className="text-[11px]" style={{ color: C.fg0 }}>У этого события нет данных трейса</div>
     </div>;
   }
 
@@ -869,7 +882,7 @@ export function RemoteConvoLoader({ convoId, highlightEventId }: { convoId: stri
           setTurns(fetched);
         }
       } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? "Failed to load conversation");
+        if (!cancelled) setError(e?.message ?? "Не удалось загрузить диалог");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -906,25 +919,25 @@ function RemoteConvoDetail({ turns, loading, highlightEventId }: { turns: ConvoT
 
   const events = useMemo(() => buildRemoteConvoEvents(turns), [turns]);
 
-  if (loading) return <div className="flex items-center justify-center h-full gap-2" style={{ color: C.fg1 }}>Loading <Dots /></div>;
-  if (turns.length === 0) return <div className="flex items-center justify-center h-full" style={{ color: C.fg1 }}>No runs found</div>;
+  if (loading) return <div className="flex items-center justify-center h-full gap-2" style={{ color: C.fg1 }}>Загрузка <Dots /></div>;
+  if (turns.length === 0) return <div className="flex items-center justify-center h-full" style={{ color: C.fg1 }}>Трейсов пока нет</div>;
 
   return (
     <div className="h-full flex flex-col">
       <div className="flex-shrink-0 px-4 py-3" style={{ borderBottom: `1px solid ${C.border}` }}>
         <div className="text-[11px] font-mono inline-flex items-center gap-1.5" style={{ color: C.fg1 }}>
-          <span>conversation</span>
+          <span>диалог</span>
           <span className="relative group inline-flex items-center">
             <HelpCircle size={13} style={{ color: C.fg0, cursor: "help" }} />
             <div className="absolute left-0 top-full mt-2 z-50 hidden group-hover:block">
               <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed whitespace-nowrap shadow-xl"
                 style={{ background: C.elevated, border: `1px solid ${C.borderLight}`, color: C.fg3 }}>
-                Conversation groups separate runs that share the same <span className="font-mono" style={{ color: C.fg4 }}>convo_id</span>
+                Диалог объединяет трейсы с одинаковым <span className="font-mono" style={{ color: C.fg4 }}>convo_id</span>
               </div>
             </div>
           </span>
           <span style={{ color: C.fg0 }}>&middot;</span>
-          <span>{turns.length} run{turns.length !== 1 ? "s" : ""}</span>
+          <span>{turns.length} {ruPlural(turns.length, "трейс", "трейса", "трейсов")}</span>
         </div>
       </div>
       <div ref={scrollRef} className="flex-1 overflow-auto sb pb-24">
@@ -942,7 +955,7 @@ function RemoteConvoDetail({ turns, loading, highlightEventId }: { turns: ConvoT
                     color: isHighlightedTurn ? C.accent : C.fg1,
                     background: isHighlightedTurn ? "rgba(91,141,239,0.1)" : "rgba(255,255,255,0.04)",
                   }}>
-                    run {evt.turnIndex + 1}
+                    трейс {evt.turnIndex + 1}
                   </span>
                   <span className="text-[10px] cursor-default" style={{ color: C.fg0 }}
                     onMouseEnter={() => setHoveredTurn(evt.turnIndex)}

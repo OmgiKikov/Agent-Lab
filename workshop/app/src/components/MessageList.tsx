@@ -5,6 +5,12 @@ import type { Message } from "../utils/messageParsing";
 
 export { parseMessages, messagesFromSpan };
 
+/** Russian plural: 1 изображение, 2 изображения, 5 изображений. */
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
 const ROLE_STYLES: Record<string, { bg: string; border: string; text: string; label: string }> = {
   system:    { bg: "rgba(255,255,255,0.08)", border: "rgba(255,255,255,0.13)", text: "#b0bcc2", label: "#7d8a90" },
   user:      { bg: "rgba(255,255,255,0.03)", border: "rgba(255,255,255,0.07)", text: "#c8d5dc", label: "#9aa5ab" },
@@ -16,14 +22,14 @@ export function MessageImages({ images, outlineColor }: { images: string[]; outl
   return (
     <div className="flex flex-wrap gap-2">
       {images.map((src, i) => {
-        const label = `Attached image ${i + 1} of ${images.length}`;
+        const label = `Изображение ${i + 1} из ${images.length}`;
         return (
           <a
             key={i}
             href={src}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={`Open ${label.toLowerCase()} in a new tab`}
+            aria-label={`Открыть ${label.toLowerCase()} в новой вкладке`}
             className="block max-w-full rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
           >
             <img
@@ -46,7 +52,7 @@ function MessageBubble({ msg, defaultExpanded }: { msg: Message; defaultExpanded
   const [expanded, setExpanded] = useState(defaultExpanded);
   const style = ROLE_STYLES[msg.role] ?? ROLE_STYLES.system;
   const imageCount = msg.images?.length ?? 0;
-  const previewText = msg.content || (imageCount > 0 ? `${imageCount} image${imageCount === 1 ? "" : "s"}` : "");
+  const previewText = msg.content || (imageCount > 0 ? `${imageCount} ${ruPlural(imageCount, "изображение", "изображения", "изображений")}` : "");
   const preview = previewText.slice(0, 100).replace(/\n/g, " ") + (previewText.length > 100 ? "\u2026" : "");
 
   return (
@@ -65,7 +71,7 @@ function MessageBubble({ msg, defaultExpanded }: { msg: Message; defaultExpanded
         )}
         {msg.content.length > 100 && (
           <span className="text-[10px] ml-auto flex-shrink-0" style={{ color: "#7d8a90" }}>
-            {(msg.content.length / 1000).toFixed(1)}k
+            {(msg.content.length / 1000).toFixed(1)}&nbsp;тыс. знаков
           </span>
         )}
       </button>

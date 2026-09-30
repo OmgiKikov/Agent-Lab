@@ -99,7 +99,7 @@ function TraceAnnotationRow({
       </div>
       <button
         onClick={onDelete}
-        title="Delete"
+        title="Удалить"
         style={{
           background: "transparent",
           border: 0,
@@ -122,7 +122,7 @@ export function InlineCreateForm({
   onSubmit,
   compact = false,
   title,
-  submitLabel = "Save",
+  submitLabel = "Сохранить",
   frameless = false,
 }: {
   initialKind?: AnnotationKind;
@@ -156,7 +156,7 @@ export function InlineCreateForm({
       {title && (
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: C.fg }}>{title}</div>
-          <span style={{ fontSize: 10, color: C.muted }}>Run note</span>
+          <span style={{ fontSize: 10, color: C.muted }}>ко всему трейсу</span>
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -186,15 +186,15 @@ export function InlineCreateForm({
         })}
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 10, color: C.muted, whiteSpace: "nowrap" }}>
-          <kbd style={{ background: "rgba(255,255,255,0.06)", padding: "0 4px", borderRadius: 3 }}>⌘↵</kbd> save ·{" "}
-          <kbd style={{ background: "rgba(255,255,255,0.06)", padding: "0 4px", borderRadius: 3 }}>esc</kbd> cancel
+          <kbd style={{ background: "rgba(255,255,255,0.06)", padding: "0 4px", borderRadius: 3 }}>⌘↵</kbd> сохранить ·{" "}
+          <kbd style={{ background: "rgba(255,255,255,0.06)", padding: "0 4px", borderRadius: 3 }}>esc</kbd> отмена
         </span>
       </div>
       <textarea
         autoFocus
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        placeholder="What did you notice?"
+        placeholder="Что вы заметили?"
         onKeyDown={(e) => {
           if (e.key === "Escape") { e.preventDefault(); onCancel(); }
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
@@ -217,7 +217,7 @@ export function InlineCreateForm({
           onClick={onCancel}
           style={{ padding: "4px 10px", fontSize: 11, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer" }}
         >
-          Cancel
+          Отмена
         </button>
         <button
           onClick={save}
@@ -269,8 +269,8 @@ export function AnnotationCreatePopover({
       }}
     >
       <InlineCreateForm
-        title="Annotate run"
-        submitLabel="Add annotation"
+        title="Новая заметка"
+        submitLabel="Добавить заметку"
         frameless
         onCancel={onClose}
         onSubmit={async (input) => {
@@ -284,8 +284,8 @@ export function AnnotationCreatePopover({
 
 function timeAgo(ts: number): string {
   const delta = (Date.now() - ts) / 1000;
-  if (delta < 60) return "just now";
-  if (delta < 3600) return `${Math.round(delta / 60)}m ago`;
-  if (delta < 86400) return `${Math.round(delta / 3600)}h ago`;
-  return `${Math.round(delta / 86400)}d ago`;
+  if (delta < 60) return "только что";
+  if (delta < 3600) return `${Math.round(delta / 60)}\u00a0мин назад`;
+  if (delta < 86400) return `${Math.round(delta / 3600)}\u00a0ч назад`;
+  return `${Math.round(delta / 86400)}\u00a0дн. назад`;
 }

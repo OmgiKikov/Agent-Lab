@@ -12,6 +12,12 @@ import { Markdown } from "./Markdown";
 import { RaindropLogo } from "./RaindropLogo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
+/** Russian plural: 1 сообщение, 2 сообщения, 5 сообщений. */
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
 type Role = "user" | "assistant";
 
 interface ClaudeChatMessage {
@@ -346,7 +352,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
     const targetCwd = cwd ?? conversationCwd ?? workspaceCwd;
     const res = await fetch(apiPathWithCwd(`/api/agent/sessions/${encodeURIComponent(id)}`, targetCwd));
     if (!res.ok) {
-      setError(`Could not load ${providerLabel(provider)} session.`);
+      setError(`Не удалось загрузить сессию ${providerLabel(provider)}.`);
       return;
     }
     pendingQuestions.forEach((question) => {
@@ -586,7 +592,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
       });
       const body = await res.json().catch(() => null);
       if (activeClientMessageIdRef.current !== clientMessageId) return;
-      if (!res.ok) throw new Error(body?.error ?? `${providerLabel(provider)} request failed (${res.status})`);
+      if (!res.ok) throw new Error(body?.error ?? `Запрос к ${providerLabel(provider)} не удался (${res.status})`);
       if (body?.session_id) setSelectedId(body.session_id);
       if (body?.session) {
         setDetail(appendLiveCompletionIfMissing(body.session, liveBlocksRef.current));
@@ -644,7 +650,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
         body: JSON.stringify({ provider: next }),
       });
       const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.error ?? "Could not switch local coding agent.");
+      if (!res.ok) throw new Error(body?.error ?? "Не удалось переключить локального агента.");
       if (isAgentProvider(body?.provider)) setProvider(body.provider);
       startNewChat();
       setShowList(true);
@@ -708,7 +714,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
     });
     const body = await res.json().catch(() => null);
     if (!res.ok) {
-      setError(body?.error ?? "Could not send answer.");
+      setError(body?.error ?? "Не удалось отправить ответ.");
       return;
     }
     hiddenPendingQuestionIdsRef.current.delete(id);
@@ -783,7 +789,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
           resizeRef.current = { x: event.clientX, width, shouldCollapse: false };
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
-        title="Resize sidebar; drag smaller to hide"
+        title="Потяните, чтобы изменить ширину. Сузьте до упора, чтобы скрыть."
       />
       {!showProviderIntro && (
         showList ? (
@@ -804,9 +810,9 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
               <button
                 onClick={() => setCollapsed(true)}
                 className="min-h-8 rounded-md px-2.5 text-xs font-medium text-white/55 transition-[transform,background-color,color] hover:bg-white/5 hover:text-white active:scale-[0.96]"
-                title="Collapse chat"
+                title="Свернуть чат"
               >
-                Collapse
+                Свернуть
               </button>
             </div>
           </header>
@@ -815,15 +821,15 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
             <button
               onClick={() => { setShowList(true); void refreshSessions(); }}
               className="mb-1 -ml-1.5 inline-flex items-center gap-0.5 rounded text-xs font-medium text-white/45 transition-colors hover:text-white/80"
-              title="Show all chats"
+              title="Показать все чаты"
             >
               <ChevronLeft className="h-3 w-3" />
-              All Chats
+              Все чаты
             </button>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-white/85" title={detail?.preview ?? detail?.last_prompt ?? "New chat"}>
-                  {detail?.preview ?? detail?.last_prompt ?? "New chat"}
+                <div className="truncate text-sm font-medium text-white/85" title={detail?.preview ?? detail?.last_prompt ?? "Новый чат"}>
+                  {detail?.preview ?? detail?.last_prompt ?? "Новый чат"}
                 </div>
                 <div className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-white/35">
                   <FolderIcon className="h-3 w-3 shrink-0" />
@@ -834,7 +840,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                       onClick={() => setShowDirectoryPicker(true)}
                       className="shrink-0 rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-white/45 transition-colors hover:bg-white/5 hover:text-white/75"
                     >
-                      Change
+                      Сменить
                     </button>
                   ) : null}
                 </div>
@@ -842,18 +848,18 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
               <div className="-mr-1 -mt-[22px] flex shrink-0 items-center gap-1">
                 {detail && selectedId && (
                   <div className="relative">
-                    <HeaderIconTooltip label="Open in terminal">
+                    <HeaderIconTooltip label="Открыть в терминале">
                       <button
                         onClick={() => void copyOpenInTerminalCommand()}
                         className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/[0.04] text-white/50 transition-[transform,background-color,border-color,color] hover:border-white/18 hover:bg-white/[0.08] hover:text-white active:scale-[0.96]"
-                        aria-label="Open in terminal"
+                        aria-label="Открыть в терминале"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                       </button>
                     </HeaderIconTooltip>
                     {terminalCommandCopied && (
                     <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-white/10 bg-zinc-900/95 px-3 py-2 text-[11px] leading-relaxed text-white/75 shadow-2xl backdrop-blur">
-                      <div>Copied command to clipboard. Run it in your terminal.</div>
+                      <div>Команда скопирована. Выполните её в терминале.</div>
                       <code className="mt-2 block select-all break-all rounded bg-black/35 px-2 py-1.5 font-mono text-[10px] text-white/85">
                         {terminalCommand}
                       </code>
@@ -861,20 +867,20 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                     )}
                   </div>
                 )}
-                <HeaderIconTooltip label="New chat">
+                <HeaderIconTooltip label="Новый чат">
                   <button
                     onClick={startNewChat}
                     className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/[0.04] text-white/50 transition-[transform,background-color,border-color,color] hover:border-white/18 hover:bg-white/[0.08] hover:text-white active:scale-[0.96]"
-                    aria-label="New chat"
+                    aria-label="Новый чат"
                   >
                     <Plus className="h-3.5 w-3.5" />
                   </button>
                 </HeaderIconTooltip>
-                <HeaderIconTooltip label="Hide">
+                <HeaderIconTooltip label="Скрыть">
                   <button
                     onClick={() => setCollapsed(true)}
                     className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/[0.04] text-white/50 transition-[transform,background-color,border-color,color] hover:border-white/18 hover:bg-white/[0.08] hover:text-white active:scale-[0.96]"
-                    aria-label="Hide chat"
+                    aria-label="Скрыть чат"
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -988,7 +994,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 onClick={() => void sendMessage()}
                 disabled={!draft.trim() || sending}
                 className="absolute bottom-2 right-2 grid min-h-10 min-w-10 place-items-center rounded-[6px] bg-white/10 text-white/75 transition-[transform,background-color,color,opacity] hover:bg-white/15 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-30 disabled:active:scale-100"
-                title="Send"
+                title="Отправить"
               >
                 <ArrowRight className="h-4 w-4" />
               </button>
@@ -1000,9 +1006,9 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
         <button
           onClick={() => setCollapsed(true)}
           className="absolute right-3 top-3 min-h-8 rounded-md px-2.5 text-xs font-medium text-white/45 transition-[transform,background-color,color] hover:bg-white/5 hover:text-white active:scale-[0.96]"
-          title="Hide chat"
+          title="Скрыть чат"
         >
-          Hide
+          Скрыть
         </button>
       )}
       {showDirectoryPicker && (
@@ -1042,7 +1048,7 @@ function DirectoryPicker({
     try {
       const res = await fetch(`/api/directories?path=${encodeURIComponent(nextPath)}`);
       const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.error ?? "Could not load directory.");
+      if (!res.ok) throw new Error(body?.error ?? "Не удалось открыть папку.");
       setListing(body as DirectoryListing);
       setPathInput(typeof body?.path === "string" ? body.path : nextPath);
     } catch (err) {
@@ -1061,14 +1067,14 @@ function DirectoryPicker({
       <div className="w-full max-w-[440px] rounded-xl border border-white/10 bg-zinc-950/95 p-3 shadow-2xl">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium text-white/85">Choose working directory</div>
-            <div className="mt-0.5 text-[11px] text-white/40">Browse to a folder or type a path. Select confirms your choice.</div>
+            <div className="text-sm font-medium text-white/85">Выберите рабочую папку</div>
+            <div className="mt-0.5 text-[11px] text-white/40">Перейдите к папке или введите путь. Кнопка «Выбрать» подтвердит выбор.</div>
           </div>
           <button
             type="button"
             onClick={onClose}
             className="grid h-7 w-7 place-items-center rounded-md text-white/45 transition-colors hover:bg-white/5 hover:text-white"
-            aria-label="Close directory picker"
+            aria-label="Закрыть выбор папки"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -1091,7 +1097,7 @@ function DirectoryPicker({
             type="submit"
             className="rounded-md border border-white/10 bg-white/[0.06] px-2.5 py-1.5 text-xs text-white/65 transition-colors hover:bg-white/[0.1] hover:text-white"
           >
-            Go to path
+            Перейти
           </button>
         </form>
 
@@ -1102,7 +1108,7 @@ function DirectoryPicker({
             className="flex min-h-7 items-center gap-1 rounded-md border border-white/10 px-2 text-[11px] text-white/50 transition-colors hover:bg-white/5 hover:text-white/75"
           >
             <Home className="h-3 w-3" />
-            Home
+            Домой
           </button>
           <button
             type="button"
@@ -1111,7 +1117,7 @@ function DirectoryPicker({
             className="flex min-h-7 items-center gap-1 rounded-md border border-white/10 px-2 text-[11px] text-white/50 transition-colors hover:bg-white/5 hover:text-white/75 disabled:cursor-not-allowed disabled:opacity-35"
           >
             <ChevronLeft className="h-3 w-3" />
-            Up
+            Вверх
           </button>
         </div>
 
@@ -1119,14 +1125,14 @@ function DirectoryPicker({
           {loading && (
             <div className="flex items-center justify-center gap-2 py-8 text-xs text-white/45">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Loading directories...
+              Загрузка папок…
             </div>
           )}
           {!loading && error && (
             <div className="px-2 py-2 text-xs text-red-100/80">{error}</div>
           )}
           {!loading && !error && listing?.entries.length === 0 && (
-            <div className="px-2 py-8 text-center text-xs text-white/35">No child directories.</div>
+            <div className="px-2 py-8 text-center text-xs text-white/35">Вложенных папок нет.</div>
           )}
           {!loading && !error && listing?.entries.map((entry) => (
             <button
@@ -1146,7 +1152,7 @@ function DirectoryPicker({
               onClick={onClose}
               className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs text-white/50 transition-colors hover:bg-white/5 hover:text-white/75"
             >
-              Cancel
+              Отмена
             </button>
             <button
               type="button"
@@ -1154,7 +1160,7 @@ function DirectoryPicker({
               onClick={() => listing && onSelect(listing.path)}
               className="rounded-md border border-white/15 bg-white/[0.08] px-2.5 py-1.5 text-xs font-medium text-white/70 transition-colors hover:bg-white/[0.13] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
             >
-              Select
+              Выбрать
             </button>
         </div>
       </div>
@@ -1212,9 +1218,9 @@ function CloudMcpNudge({ onDismiss }: { onDismiss: () => void }) {
           <KeyRound className="h-3.5 w-3.5" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-medium text-white/90">Cloud traces</div>
+          <div className="font-medium text-white/90">Облачные трейсы</div>
           <div className="mt-0.5 leading-relaxed text-white/55">
-            Add a Query API key in Settings to search raindrop from chat.
+            Добавьте ключ Query API в настройках, чтобы искать в Raindrop прямо из чата.
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
@@ -1222,7 +1228,7 @@ function CloudMcpNudge({ onDismiss }: { onDismiss: () => void }) {
               onClick={() => window.open("https://auth.raindrop.ai/org/api_keys", "_blank", "noopener,noreferrer")}
               className="inline-flex items-center gap-1 rounded-md border border-white/[0.12] bg-white/[0.06] px-2 py-1 text-[11px] font-medium text-white/[0.82] transition-[background-color,border-color,color] hover:border-white/20 hover:bg-white/[0.1] hover:text-white"
             >
-              API Keys
+              Ключи API
               <ExternalLink className="h-3 w-3" />
             </button>
             <button
@@ -1230,7 +1236,7 @@ function CloudMcpNudge({ onDismiss }: { onDismiss: () => void }) {
               onClick={dismissWithPoof}
               className="rounded-md px-2 py-1 text-[11px] font-medium text-white/[0.42] transition-[background-color,color] hover:bg-white/[0.06] hover:text-white/70"
             >
-              Dismiss
+              Скрыть
             </button>
           </div>
         </div>
@@ -1333,14 +1339,14 @@ function ProviderDropdown({
 
 function ProviderThinking({ provider }: { provider: AgentProviderId }) {
   if (provider === "claude") {
-    return <div className="text-xs text-white/40">Claude Code is thinking...</div>;
+    return <div className="text-xs text-white/40">Claude Code думает…</div>;
   }
   return (
     <div className="flex items-center gap-2 text-xs text-white/45">
       <span className="grid h-6 w-6 animate-pulse place-items-center rounded-full bg-white">
         <img src={codexLogo} alt="" className="h-5 w-5 object-contain" />
       </span>
-      <span>Codex is working...</span>
+      <span>Codex работает…</span>
     </div>
   );
 }
@@ -1367,7 +1373,7 @@ function applyLiveStreamEvent(blocks: AssistantMessageBlock[], event: AgentStrea
       return upsertLiveToolBlock(blocks, {
         type: "tool",
         id: event.parent_id,
-        name: `Agent: ${event.subagent}`,
+        name: `Агент: ${event.subagent}`,
         state: "running",
       });
     default:
@@ -1525,7 +1531,7 @@ function AskUserQuestionCard({
 
   return (
     <div className="message-arrive w-[90%] rounded-[4px] border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-white/85">
-      <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-amber-100/70">Claude needs input</div>
+      <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-amber-100/70">Claude ждёт ответа</div>
       <div className="space-y-3">
         {prompt.questions.map((question, questionIndex) => {
           const selected = choices[questionIndex] ?? [];
@@ -1558,7 +1564,7 @@ function AskUserQuestionCard({
               <input
                 value={otherText[questionIndex] ?? ""}
                 onChange={(event) => setOtherText((current) => ({ ...current, [questionIndex]: event.target.value }))}
-                placeholder="Other"
+                placeholder="Другое"
                 className="w-full rounded-[4px] border border-white/10 bg-black/20 px-2 py-1.5 text-xs text-white/80 placeholder:text-white/30 focus:outline-none focus:border-white/20"
               />
             </div>
@@ -1572,7 +1578,7 @@ function AskUserQuestionCard({
         className="mt-3 flex min-h-9 items-center justify-center gap-2 rounded-[4px] border border-white/10 bg-white/10 px-3 text-xs text-white/75 hover:bg-white/15 active:scale-[0.98] transition-[transform,background-color,color] disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100"
       >
         <Send className="h-3.5 w-3.5" />
-        Send answer
+        Отправить ответ
       </button>
     </div>
   );
@@ -1656,11 +1662,11 @@ function ChatList({
           </div>
           <div className="h-[210px] overflow-y-auto border-t border-white/10 px-4 py-3">
             <div className="mb-2 text-[11px] text-white/35">
-              Your Recent {providerLabel(introProvider)} Chats
+              Недавние чаты в {providerLabel(introProvider)}
             </div>
             <div className="space-y-1.5 opacity-60">
               {introSessions.length === 0 ? (
-                <div className="flex h-[150px] items-center justify-center text-xs text-white/35">No chats yet.</div>
+                <div className="flex h-[150px] items-center justify-center text-xs text-white/35">Чатов пока нет.</div>
               ) : introSessions.slice(0, 4).map((session) => (
                 <ChatPreviewItem
                   key={session.id}
@@ -1681,11 +1687,11 @@ function ChatList({
             className="mb-2 flex w-full items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white active:scale-[0.99] transition-[transform,background-color,color]"
           >
             <Plus className="h-4 w-4" />
-            New chat
+            Новый чат
           </button>
           <div className="space-y-1">
             {sessions.length === 0 ? (
-              <div className="px-3 py-8 text-center text-xs text-white/40">No {providerLabel(provider)} chats yet.</div>
+              <div className="px-3 py-8 text-center text-xs text-white/40">Чатов в {providerLabel(provider)} пока нет.</div>
             ) : sessions.map((session) => (
               <ChatListItem
                 key={session.id}
@@ -1722,9 +1728,9 @@ function AgentConnectCard({
 }) {
   return (
     <section className="w-full max-w-[340px] text-center">
-      <div className="text-[18px] font-medium text-white/90">Connect your coding agent</div>
+      <div className="text-[18px] font-medium text-white/90">Подключите агента для кода</div>
       <p className="mx-auto mt-2 max-w-[300px] text-sm leading-relaxed text-white/48">
-        Ask questions about traces and resume chats from your terminal.
+        Задавайте вопросы о трейсах и продолжайте чаты в терминале.
       </p>
       <div className="mt-5 grid grid-cols-2 gap-1.5 rounded-xl border border-white/10 bg-black/15 p-1">
         {(["claude", "codex"] as AgentProviderId[]).map((option) => {
@@ -1754,7 +1760,7 @@ function AgentConnectCard({
         onClick={() => onProviderChange(selectedProvider)}
         className="mt-3 flex min-h-10 w-full items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.07] px-4 text-sm font-medium text-white transition-[transform,background-color,border-color,opacity] hover:border-white/[0.14] hover:bg-white/[0.11] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-55"
       >
-        {busy ? "Connecting..." : `Connect ${providerLabel(selectedProvider)}`}
+        {busy ? "Подключаем…" : `Подключить ${providerLabel(selectedProvider)}`}
       </button>
       {error && <div className="mt-3 rounded-lg border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-xs text-red-100">{error}</div>}
     </section>
@@ -1797,22 +1803,22 @@ function ChatListItem({
       }`}
     >
       <div className="flex items-center justify-between gap-3">
-        <div className="truncate text-xs font-medium">{session.preview || "Untitled chat"}</div>
+        <div className="truncate text-xs font-medium">{session.preview || "Чат без названия"}</div>
         <div className="shrink-0 text-[10px] text-white/35">{formatSessionTime(session.updated_at)}</div>
       </div>
       <div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-white/35">
         <Terminal className="h-3 w-3 shrink-0" />
-        <span className="truncate" title={cwd ?? "Working directory unavailable"}>
+        <span className="truncate" title={cwd ?? "Рабочая папка недоступна"}>
           {cwdDisplay}
         </span>
       </div>
       <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-white/30">
-        <span>{session.id.slice(0, 8)} · {session.message_count} messages</span>
+        <span>{session.id.slice(0, 8)} · {session.message_count} {ruPlural(session.message_count, "сообщение", "сообщения", "сообщений")}</span>
         <span className="h-3 w-px bg-white/10" />
         <button
           type="button"
-          title={`Copy ${resumeCommandForSession(session, workspaceCwd, provider)}`}
-          aria-label={`Copy ${resumeCommandForSession(session, workspaceCwd, provider)}`}
+          title={`Копировать: ${resumeCommandForSession(session, workspaceCwd, provider)}`}
+          aria-label={`Копировать: ${resumeCommandForSession(session, workspaceCwd, provider)}`}
           onClick={(event) => void onCopy(event, session)}
           className={`grid h-5 w-5 place-items-center rounded transition-colors focus:outline-none focus-visible:outline-none ${
             copied
@@ -1838,7 +1844,7 @@ function ChatPreviewItem({
   return (
     <div className="px-1 py-1">
       <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1 truncate text-xs text-white/70">{session.preview || "Untitled chat"}</div>
+        <div className="min-w-0 flex-1 truncate text-xs text-white/70">{session.preview || "Чат без названия"}</div>
         <div className="shrink-0 text-[10px] text-white/35">{formatSessionTime(session.updated_at)}</div>
       </div>
       <div className="mt-0.5 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-white/30">
@@ -1850,7 +1856,7 @@ function ChatPreviewItem({
 }
 
 function formatCwdDisplay(cwd: string | null): string {
-  if (!cwd) return "Working directory unavailable";
+  if (!cwd) return "Рабочая папка недоступна";
   return cwd.replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
 }
 
@@ -1961,11 +1967,11 @@ function ThinkingActivityCard({ text }: { text: string }) {
   return (
     <details
       className="stream-block tool-card activity-inline max-w-[90%] text-[11px] text-white/40"
-      title="thinking"
+      title="размышления"
     >
       <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 outline-none">
         <Brain className="activity-icon h-3.5 w-3.5 shrink-0 text-violet-200/55" />
-        <span className="activity-label min-w-0 truncate font-mono text-[11px]">thinking</span>
+        <span className="activity-label min-w-0 truncate font-mono text-[11px]">размышления</span>
         <ChevronDown className="tool-card-chevron activity-chevron h-3 w-3 shrink-0 transition-transform" />
       </summary>
       <div className="activity-content mt-1 pl-5">
@@ -2015,13 +2021,13 @@ function ToolActivityCard({ block }: { block: Extract<AssistantMessageBlock, { t
         <div className="activity-content mt-1 pl-5">
           {block.input_preview && (
             <div>
-              <div className="activity-kicker mb-0.5 text-[9px] font-medium uppercase tracking-[0.16em]">Input</div>
+              <div className="activity-kicker mb-0.5 text-[9px] font-medium uppercase tracking-[0.16em]">Вход</div>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed">{block.input_preview}</pre>
             </div>
           )}
           {block.output_preview && (
             <div className={block.input_preview ? "mt-2" : ""}>
-              <div className="activity-kicker mb-0.5 text-[9px] font-medium uppercase tracking-[0.16em]">Output</div>
+              <div className="activity-kicker mb-0.5 text-[9px] font-medium uppercase tracking-[0.16em]">Выход</div>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed">{block.output_preview}</pre>
             </div>
           )}
@@ -2086,10 +2092,10 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-sky-300/20 bg-sky-300/[0.07] px-3 py-3 text-white/80 shadow-[0_8px_24px_rgba(0,0,0,0.18)]">
         <div className="text-[11px] font-medium uppercase tracking-wide text-sky-100/70">
-          Asking agent
+          Спрашиваем агента
         </div>
         {question && <div className="mt-2 text-sm text-white/90">{question}</div>}
-        <div className="mt-2 text-xs text-white/45">Continuing the captured agent context...</div>
+        <div className="mt-2 text-xs text-white/45">Продолжаем сохранённый контекст агента…</div>
       </div>
     );
   }
@@ -2098,10 +2104,10 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-sky-300/15 bg-sky-300/[0.05] px-3 py-3 text-white/75">
         <div className="text-[11px] font-medium uppercase tracking-wide text-sky-100/65">
-          Asked agent
+          Вопрос агенту
         </div>
         {question && <div className="mt-2 text-sm text-white/85">{question}</div>}
-        <div className="mt-2 text-xs text-white/45">Workshop chat is talking to your agent...</div>
+        <div className="mt-2 text-xs text-white/45">Чат Workshop общается с вашим агентом…</div>
       </div>
     );
   }
@@ -2110,7 +2116,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-emerald-300/20 bg-emerald-300/[0.07] px-3 py-3 text-white/85 shadow-[0_8px_24px_rgba(0,0,0,0.18)]">
         <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-100/70">
-          Agent answered
+          Агент ответил
         </div>
         {question && <div className="mt-2 text-xs text-white/45">{question}</div>}
         <div className="mt-2 text-sm leading-relaxed text-white/90">
@@ -2126,9 +2132,9 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
       <div className="stream-block w-[90%] rounded-[8px] border border-amber-300/25 bg-amber-300/[0.08] px-3 py-3 text-white/85">
         <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-amber-100/75">
           <KeyRound className="h-3.5 w-3.5" />
-          Agent needs an API key
+          Агенту нужен ключ API
         </div>
-        <div className="mt-2 text-sm text-white/90">Add the key in Workshop Settings, or set the environment variable and restart Workshop.</div>
+        <div className="mt-2 text-sm text-white/90">Добавьте ключ в настройках Workshop или задайте переменную окружения и перезапустите Workshop.</div>
         <code className="mt-2 block rounded-[6px] border border-white/10 bg-black/25 px-2 py-1.5 font-mono text-[11px] text-amber-50/90">
           {envVar}=...
         </code>
@@ -2140,9 +2146,9 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-amber-300/20 bg-amber-300/[0.07] px-3 py-3 text-white/85">
         <div className="text-[11px] font-medium uppercase tracking-wide text-amber-100/70">
-          Agent context unavailable
+          Контекст агента недоступен
         </div>
-        <div className="mt-2 text-sm leading-relaxed text-white/85">{String(result.message ?? "This run does not include an LLM input payload that Workshop can continue.")}</div>
+        <div className="mt-2 text-sm leading-relaxed text-white/85">{String(result.message ?? "В этом трейсе нет входа LLM, с которого Workshop мог бы продолжить.")}</div>
       </div>
     );
   }
@@ -2151,9 +2157,9 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
     <div className="stream-block w-[90%] rounded-[8px] border border-red-300/20 bg-red-400/[0.08] px-3 py-3 text-white/85">
       <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-red-100/75">
         <AlertTriangle className="h-3.5 w-3.5" />
-        Agent ask failed
+        Не удалось спросить агента
       </div>
-      <div className="mt-2 whitespace-pre-wrap text-sm text-white/85">{String(result.message ?? result.error ?? "The captured agent context did not return a usable answer.")}</div>
+      <div className="mt-2 whitespace-pre-wrap text-sm text-white/85">{String(result.message ?? result.error ?? "Сохранённый контекст агента не дал пригодного ответа.")}</div>
     </div>
   );
 }
@@ -2246,13 +2252,13 @@ function buildSlashItems(loadout: AgentLoadout | null, draft: string, provider: 
   };
   const label = providerLabel(provider);
   const commands: SlashItem[] = [
-    { label: "New chat", value: "/new", description: `Start a fresh ${label} session` },
+    { label: "Новый чат", value: "/new", description: `Новая сессия ${label}` },
   ].filter(matches);
   const skills = (loadout?.skills ?? [])
     .map((skill): SlashItem => ({
       label: skill,
       value: `/${skill} `,
-      description: `Use ${label} skill`,
+      description: `Навык ${label}`,
     }))
     .filter(matches)
     .slice(0, 12);
@@ -2260,7 +2266,7 @@ function buildSlashItems(loadout: AgentLoadout | null, draft: string, provider: 
     .map((cmd): SlashItem => ({
       label: cmd,
       value: cmd.startsWith("/") ? `${cmd} ` : `/${cmd} `,
-      description: `${label} command`,
+      description: `Команда ${label}`,
     }))
     .filter(matches);
   return [...commands, ...skills, ...slash].slice(0, 50);
@@ -2271,10 +2277,10 @@ function formatSessionTime(value: string | null): string {
   const time = new Date(value).getTime();
   if (!Number.isFinite(time)) return "";
   const diff = Date.now() - time;
-  if (diff < 60_000) return "now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
-  return `${Math.floor(diff / 86_400_000)}d`;
+  if (diff < 60_000) return "сейчас";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}\u00a0мин`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}\u00a0ч`;
+  return `${Math.floor(diff / 86_400_000)}\u00a0дн.`;
 }
 
 /**

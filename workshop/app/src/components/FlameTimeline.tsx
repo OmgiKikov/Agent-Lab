@@ -4,11 +4,17 @@ import { C, spanColor } from "../utils/colors";
 import { fmt, tryJson } from "../utils/helpers";
 import type { Span } from "../utils/types";
 
+/** Russian plural: 1 спан, 2 спана, 5 спанов. */
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
 function spanTypeInfo(span: Span): { color: string; label: string } {
-  if (span.span_type === "TRACE") return { color: C.purple, label: "TRACE" };
-  if (span.span_type === "TOOL_CALL") return { color: "#b08c5a", label: "TOOL" };
+  if (span.span_type === "TRACE") return { color: C.purple, label: "трейс" };
+  if (span.span_type === "TOOL_CALL") return { color: "#b08c5a", label: "инструмент" };
   if (span.span_type?.includes("LLM")) return { color: C.fg1, label: "LLM" };
-  return { color: C.fg0, label: "SPAN" };
+  return { color: C.fg0, label: "спан" };
 }
 
 const LLM_BAR_COLOR = "rgba(255,255,255,0.38)";
@@ -40,7 +46,7 @@ function TooltipPayloadBlock({
           type="button"
           className="flex-shrink-0 p-1 rounded transition-colors hover:bg-white/10"
           style={{ color: copied ? C.green : C.fg0 }}
-          title="Copy"
+          title="Копировать"
           onClick={(e) => {
             e.stopPropagation();
             void navigator.clipboard.writeText(copyText ?? "");
@@ -130,14 +136,14 @@ function SpanTooltip({
         <span style={{ color: isErr ? C.red : C.green }}>{span.status}</span>
         {span.model && <span style={{ color: C.fg1 }}>{span.model}</span>}
         {(inTok > 0 || outTok > 0) && (
-          <span style={{ color: C.fg1 }}>{inTok.toLocaleString()} in / {outTok.toLocaleString()} out</span>
+          <span style={{ color: C.fg1 }}>{inTok.toLocaleString()} вход / {outTok.toLocaleString()} выход</span>
         )}
       </div>
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-        {inputRaw ? <TooltipPayloadBlock label="Input" payload={span.input_payload!} /> : null}
+        {inputRaw ? <TooltipPayloadBlock label="Вход" payload={span.input_payload!} /> : null}
         {outputRaw ? (
           <TooltipPayloadBlock
-            label="Output"
+            label="Выход"
             payload={span.output_payload!}
             isErr={isErr}
             showTopBorder={!!inputRaw}
@@ -251,8 +257,8 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
     <div ref={containerRef} className="rounded-lg mb-4" style={{ background: C.surface, border: `1px solid ${C.border}`, overflow: "hidden" }}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <span className="text-[10px] uppercase tracking-wider font-medium" style={{ color: C.fg1 }}>Trajectory</span>
-        <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{vizSpans.length} spans &middot; {fmt(dur)}</span>
+        <span className="text-[10px] uppercase tracking-wider font-medium" style={{ color: C.fg1 }}>Траектория</span>
+        <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{vizSpans.length} {ruPlural(vizSpans.length, "спан", "спана", "спанов")} &middot; {fmt(dur)}</span>
       </div>
 
       {/* Chart */}
@@ -292,7 +298,7 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
                 onMouseEnter={() => setHoveredLabelName(name)}
                 onMouseLeave={() => setHoveredLabelName((current) => current === name ? null : current)}
                 onClick={() => focusTool(firstToolSpan.id)}
-                title={`${name} - jump to first tool call`}
+                title={`${name} — перейти к первому вызову`}
               >
                 {label}
               </button>

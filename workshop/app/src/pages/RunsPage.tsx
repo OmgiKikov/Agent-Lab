@@ -95,6 +95,8 @@ export function RunsPage() {
   useEffect(() => {
     if (runs.length === 0 || replayOriginalId) return;
     if (selectedId && runs.some((run) => run.id === selectedId)) return;
+    // On a phone the list comes first; the first trace opens by itself only where list and trace sit side by side.
+    if (!selectedId && !window.matchMedia("(min-width: 768px)").matches) return;
     const firstUserTrace = runs.find((run) => !isDefaultDemoRun(run));
     if (firstUserTrace) navigate(runPath(firstUserTrace.id), { replace: true });
   }, [navigate, replayOriginalId, runs, selectedId]);
@@ -161,7 +163,7 @@ export function RunsPage() {
 
 
   const handleClear = async () => {
-    if (!confirm("Clear all runs?")) return;
+    if (!confirm("Удалить все трейсы?")) return;
     await fetch("/api/clear", { method: "POST" });
     navigate("/runs", { replace: true });
     setRuns([]);
@@ -232,17 +234,17 @@ export function RunsPage() {
   return (
     <div className="h-full flex">
       {/* Run list sidebar */}
-      <div className="w-[248px] flex-shrink-0 flex flex-col" style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className={`w-full md:w-[248px] flex-shrink-0 flex-col ${selectedId ? "hidden md:flex" : "flex"}`} style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="p-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-1.5">
               {/* WebSocket connection indicator */}
-              <div className="w-1.5 h-1.5 rounded-full" title={wsConnected ? "Connected" : "Disconnected"}
+              <div className="w-1.5 h-1.5 rounded-full" title={wsConnected ? "На связи" : "Нет связи"}
                 style={{ background: wsConnected ? C.green : C.red, opacity: wsConnected ? 0.6 : 1 }} />
-              <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{wsConnected ? "connected" : "disconnected"}</span>
+              <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{wsConnected ? "на связи" : "нет связи"}</span>
             </div>
             <button className="text-[10px] transition hover:text-red-400" style={{ color: "#5a6a72" }} onClick={handleClear}>
-              clear
+              очистить
             </button>
           </div>
           {/* Search */}
@@ -251,7 +253,7 @@ export function RunsPage() {
               ref={searchRef}
               className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none"
               style={{ background: "rgba(255,255,255,0.04)", color: C.fg3, border: `1px solid ${search ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)"}` }}
-              placeholder="Search runs..."
+              placeholder="Поиск по трейсам…"
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -271,7 +273,7 @@ export function RunsPage() {
                 value={agentFilter}
                 onChange={e => setAgentFilter(e.target.value)}
               >
-                <option value="all">All agents</option>
+                <option value="all">Все агенты</option>
                 {agentTypes.map(name => (
                   <option key={name} value={name}>{name}</option>
                 ))}
@@ -284,7 +286,7 @@ export function RunsPage() {
         <div ref={listRef} className="flex-1 overflow-auto p-2 space-y-0.5 sb">
           {filtered.length === 0
               ? <div className="text-center text-xs mt-8" style={{ color: "#5a6a72" }}>
-                  {search ? "No matching runs" : "No runs"}
+                  {search ? "Ничего не нашлось" : "Трейсов пока нет"}
                 </div>
               : filtered.map(run => (
                   <RunListItem key={run.id} run={run}
@@ -298,7 +300,13 @@ export function RunsPage() {
       </div>
 
       {/* Main */}
-      <div className="flex-1 min-w-0 relative overflow-hidden">
+      <div className={`flex-1 min-w-0 relative overflow-hidden flex-col ${selectedId ? "flex" : "hidden md:flex"}`}>
+        {selectedId && (
+          <button className="md:hidden flex-shrink-0 px-4 py-2 text-left text-[12px]" style={{ color: C.fg1, borderBottom: `1px solid ${C.border}` }} onClick={() => navigate("/runs")}>
+            ← Все трейсы
+          </button>
+        )}
+        <div className="relative min-h-0 flex-1">
         {(replay.state !== "idle" || replay.replayRunId) && replayOriginalId
           ? (() => {
               const origRun = runs.find(r => r.id === replayOriginalId);
@@ -332,7 +340,7 @@ export function RunsPage() {
                             <div className="flex items-center gap-2 min-w-0">
                               <RotateCcw style={{ width: 12, height: 12, color: C.fg1, flexShrink: 0 }} />
                               <span className="text-[12px] truncate" style={{ color: C.fg1 }}>
-                                replay of{" "}
+                                повтор трейса{" "}
                                 <button className="font-medium hover:underline transition-colors" style={{ color: C.fg3 }}
                                   onClick={() => { setReplayCompare(false); navigate(runPath(meta.replay.sourceRunId)); }}
                                   onMouseEnter={() => {
@@ -355,7 +363,7 @@ export function RunsPage() {
                                   className="flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded transition-colors hover:bg-white/10 flex-shrink-0"
                                   style={{ color: C.fg2, border: `1px solid rgba(255,255,255,0.15)` }}
                                   onClick={() => setReplayCompare(true)}>
-                                  compare <ArrowRight className="w-3 h-3" />
+                                  сравнить <ArrowRight className="w-3 h-3" />
                                 </button>
                               )}
                             </div>
@@ -370,7 +378,7 @@ export function RunsPage() {
                                 style={{ background: "rgba(255,255,255,0.04)", flex: 1 }}
                               >
                                 <span className="text-[12px] truncate" style={{ color: C.fg1 }}>
-                                  original — <span style={{ color: C.fg3 }}>{srcName}</span>
+                                  исходный — <span style={{ color: C.fg3 }}>{srcName}</span>
                                 </span>
                                 <button
                                   className="p-0.5 rounded transition-colors hover:bg-white/10 flex-shrink-0"
@@ -405,6 +413,7 @@ export function RunsPage() {
                   onSeeDemoTraces={openDemoTrace}
                 />
         }
+        </div>
       </div>
     </div>
   );

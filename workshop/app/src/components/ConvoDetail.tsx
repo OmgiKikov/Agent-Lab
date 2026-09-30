@@ -11,21 +11,27 @@ import { buildConvoEvents } from "./convo-events";
 import { useWorkshopEvent } from "../hooks/use-workshop-ws";
 import { useConversationDetail } from "../hooks/use-runs";
 
+/** Russian plural: 1 трейс, 2 трейса, 5 трейсов. */
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
 function ConversationHeader({ runCount }: { runCount: number }) {
   return (
     <div className="text-[11px] font-mono inline-flex items-center gap-1.5" style={{ color: C.fg1 }}>
-      <span>conversation</span>
+      <span>диалог</span>
       <span className="relative group inline-flex items-center">
         <HelpCircle size={13} style={{ color: C.fg0, cursor: "help" }} />
         <div className="absolute left-0 top-full mt-2 z-50 hidden group-hover:block">
           <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed whitespace-nowrap shadow-xl"
             style={{ background: C.elevated, border: `1px solid ${C.borderLight}`, color: C.fg3 }}>
-            Conversation groups separate runs that share the same <span className="font-mono" style={{ color: C.fg4 }}>convo_id</span>
+            Диалог объединяет трейсы с одинаковым <span className="font-mono" style={{ color: C.fg4 }}>convo_id</span>
           </div>
         </div>
       </span>
       <span style={{ color: C.fg0 }}>&middot;</span>
-      <span>{runCount} run{runCount !== 1 ? "s" : ""}</span>
+      <span>{runCount} {ruPlural(runCount, "трейс", "трейса", "трейсов")}</span>
     </div>
   );
 }
@@ -49,7 +55,7 @@ function TurnDivider({ index, run, onOpen, onHover }: { index: number; run: Run;
     <div className="flex items-center gap-3 px-4 pt-6 pb-2">
       <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />
       <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ color: C.fg1, background: "rgba(255,255,255,0.04)" }}>
-        run {index + 1}
+        трейс {index + 1}
       </span>
       <span className="text-[10px]" style={{ color: C.fg0 }}>{ago(run.started_at)}</span>
       <button
@@ -59,7 +65,7 @@ function TurnDivider({ index, run, onOpen, onHover }: { index: number; run: Run;
         onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; onHover(false); }}
         onClick={onOpen}
       >
-        open &rarr;
+        открыть &rarr;
       </button>
       <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />
     </div>
@@ -93,9 +99,9 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
 
   const events = useMemo(() => buildConvoEvents(turns), [turns]);
 
-  if (isLoading) return <div className="flex items-center justify-center h-full gap-2" style={{ color: C.fg1 }}>Loading <Dots /></div>;
-  if (isError) return <div className="flex items-center justify-center h-full" style={{ color: C.fg1 }}>Could not load conversation</div>;
-  if (turns.length === 0) return <div className="flex items-center justify-center h-full" style={{ color: C.fg1 }}>No runs found</div>;
+  if (isLoading) return <div className="flex items-center justify-center h-full gap-2" style={{ color: C.fg1 }}>Загрузка <Dots /></div>;
+  if (isError) return <div className="flex items-center justify-center h-full" style={{ color: C.fg1 }}>Не удалось загрузить диалог</div>;
+  if (turns.length === 0) return <div className="flex items-center justify-center h-full" style={{ color: C.fg1 }}>Трейсов пока нет</div>;
 
   return (
     <div className="h-full flex flex-col">
@@ -151,7 +157,7 @@ export function ConvoDetail({ convoId, onOpenTurn }: { convoId: string; onOpenTu
           if (evt.type === "active") {
             return (
               <div key={`act${i}`} className="px-4 py-2 text-[11px] font-mono" style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 0.15s", color: C.fg0 }}>
-                running <Dots />
+                выполняется <Dots />
               </div>
             );
           }
