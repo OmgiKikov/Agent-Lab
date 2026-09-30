@@ -32,7 +32,7 @@ export function AgentPage() {
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={[{ label: "Агент" }]}
+        crumbs={[{ label: "Агент", to: tab === "connection" ? undefined : "/agent" }, { label: { connection: "Подключение", code: "Код", criteria: "Критерии" }[tab] }]}
         actions={tab === "criteria" ? (
           <Button icon={RotateCcw} onClick={() => setReextract(true)} disabled={busy || !state?.discover} title={busy ? "Сейчас идёт другая задача" : undefined}>Извлечь заново</Button>
         ) : tab === "code" && (

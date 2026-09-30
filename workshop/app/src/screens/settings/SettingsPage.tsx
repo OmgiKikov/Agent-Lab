@@ -46,7 +46,7 @@ function SectionBlock({ id, title, description, action, children }: { id: Part; 
     <section id={`settings-${id}`}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h2 className="text-title font-medium text-lab-ink">{title}</h2>
+          <h2 className="text-body font-medium text-lab-ink">{title}</h2>
           {description && <p className="mt-1 text-small text-lab-dim">{description}</p>}
         </div>
         {action}

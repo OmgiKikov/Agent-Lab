@@ -24,10 +24,10 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
     <button
       ref={ref} type={type} disabled={disabled || loading} title={kbd ? `${title ?? (typeof children === "string" ? children : "")} (${kbd})`.trim() : title}
       className={cn(
-        "inline-flex flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded border font-mono text-meta transition-colors",
+        "inline-flex flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded border text-body transition-colors",
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-lab-accent disabled:pointer-events-none disabled:opacity-40",
-        size === "sm" ? "h-6 px-2" : "h-7 px-2.5",
-        !children && (size === "sm" ? "w-6 px-0" : "w-7 px-0"),
+        size === "sm" ? "h-7 px-2.5" : "h-8 px-3",
+        !children && (size === "sm" ? "w-7 px-0" : "w-8 px-0"),
         VARIANT[variant], className,
       )}
       {...rest}

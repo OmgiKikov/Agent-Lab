@@ -11,11 +11,11 @@ function ProblemRow({ p, source, selected, onClick }: { p: RuleEntry; source: "l
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 text-small text-lab-ink">{p.title}</div>
-          <div className="mt-1 truncate font-mono text-micro text-lab-dim">
+          <div className="mt-1 truncate text-meta text-lab-dim">
             {[`${side.failed} из ${total}`, p.topics.length > 1 ? `${p.topics.length} ${plural(p.topics.length, "тема", "темы", "тем")}` : ""].filter(Boolean).join(" · ")}
           </div>
         </div>
-        <span className="font-mono text-count text-lab-ink" title={`нарушено в ${side.failed} из ${total}`}>{side.failed}</span>
+        <span className="text-count text-lab-ink" title={`нарушено в ${side.failed} из ${total}`}>{side.failed}</span>
       </div>
     </ListRow>
   );

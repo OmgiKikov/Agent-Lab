@@ -52,9 +52,8 @@ export function LogsPage() {
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={[{ label: "Логи" }]}
+        crumbs={[{ label: "Логи", to: "/logs" }, ...(logs?.total && assessed ? [{ label: { problems: "Нарушения", dialogs: "Диалоги", review: "Проверка" }[tab] }] : [])]}
         actions={<>
-          {log && data && <Button variant="outline" icon={FileDown} onClick={() => download("otchet-logi.md", problemsReport(data, window.location.origin, "log"))}>Отчёт</Button>}
           <UploadButton variant="outline" />
           <Button variant="primary" icon={Play} onClick={() => setAssess(true)} disabled={!state?.sources.length || !logs?.total || busy} title={busy ? "Сейчас идёт другая задача" : undefined}>Оценить логи</Button>
         </>}
@@ -75,7 +74,9 @@ export function LogsPage() {
         ) : (
           <>
             <Facts facts={facts} className="flex-shrink-0 border-b border-white/[0.06] px-4 py-2" />
-            <Tabs<Tab> className="flex-shrink-0 px-4" value={tab} onChange={setTab} tabs={[
+            <Tabs<Tab> className="flex-shrink-0 px-4" value={tab} onChange={setTab}
+              end={log && data && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download("otchet-logi.md", problemsReport(data, window.location.origin, "log"))}>Отчёт</Button>}
+              tabs={[
               { value: "problems", label: "Нарушения", count: violated },
               { value: "dialogs", label: "Диалоги", count: log?.assessed },
               { value: "review", label: "Проверка" },

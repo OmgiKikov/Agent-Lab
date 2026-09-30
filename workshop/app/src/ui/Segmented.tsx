@@ -16,7 +16,7 @@ export function Segmented<T extends string>({ value, options, onChange, classNam
           )}
         >
           {o.label}
-          {o.count !== undefined && <span className="font-mono text-micro text-lab-dim">{o.count}</span>}
+          {o.count !== undefined && <span className="text-micro text-lab-dim">{o.count}</span>}
         </button>
       ))}
     </div>

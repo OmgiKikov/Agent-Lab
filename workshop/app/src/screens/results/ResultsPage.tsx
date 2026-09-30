@@ -48,10 +48,9 @@ export function ResultsPage() {
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={[{ label: "Результаты" }]}
+        crumbs={[{ label: "Результаты", to: run ? "/results" : undefined }, ...(run ? [{ label: runTitle(run) }] : [])]}
         actions={run ? <>
-          {problems?.sim?.runId === run.id && <Button variant="outline" icon={FileDown} onClick={() => download(`otchet-${run.id}.md`, problemsReport(problems, window.location.origin, "sim"))}>Отчёт</Button>}
-          <Link to={`/simulations?r=${encodeURIComponent(run.id)}`}><Button variant="outline">Прогон</Button></Link>
+          <Link to={`/simulations?r=${encodeURIComponent(run.id)}`}><Button variant="outline">Открыть прогон</Button></Link>
         </> : undefined}
         below={<JobStrip kinds={["rejudge"]} />}
       />
@@ -60,7 +59,9 @@ export function ResultsPage() {
       ) : (
         <>
           <Facts className="px-4 pt-2.5" facts={facts} />
-          <Tabs<Tab> className="mt-2 px-2" value={tab} onChange={t => set("tab", t === "problems" ? null : t)} tabs={[
+          <Tabs<Tab> className="mt-2 px-2" value={tab} onChange={t => set("tab", t === "problems" ? null : t)}
+            end={problems?.sim?.runId === run.id && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download(`otchet-${run.id}.md`, problemsReport(problems, window.location.origin, "sim"))}>Отчёт</Button>}
+            tabs={[
             { value: "problems", label: "Нарушения" },
             { value: "dialogs", label: "Диалоги", count: m?.total },
             { value: "review", label: "Проверка" },

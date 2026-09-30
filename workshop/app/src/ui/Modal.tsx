@@ -11,7 +11,7 @@ export function Modal({ open, onClose, title, children, footer }: { open: boolea
           aria-describedby={undefined}
           className="fixed left-1/2 top-[18%] z-50 w-[calc(100vw-32px)] max-w-[500px] -translate-x-1/2 rounded-xl border border-white/10 bg-lab-surface shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
-          <Dialog.Title className="px-5 pt-5 text-title font-medium text-lab-ink">{title}</Dialog.Title>
+          <Dialog.Title className="px-5 pt-5 text-body font-medium text-lab-ink">{title}</Dialog.Title>
           <div className="px-5 pb-5 pt-3">{children}</div>
           <div className="flex justify-end gap-2 border-t border-white/[0.06] px-5 py-3">{footer}</div>
         </Dialog.Content>

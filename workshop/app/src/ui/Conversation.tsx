@@ -18,7 +18,7 @@ export type Mark = { quote: string; n: number };
 
 /** The number that ties the judge's quote in the conversation to its explanation. */
 export function MarkNumber({ n }: { n: number }) {
-  return <span className="inline-flex size-4 flex-shrink-0 items-center justify-center rounded-full bg-lab-mark font-mono text-micro font-medium text-black">{n}</span>;
+  return <span className="inline-flex size-4 flex-shrink-0 items-center justify-center rounded-full bg-lab-mark text-micro font-medium text-black">{n}</span>;
 }
 
 function AgentTurn({ turn, marks, hover, onHover }: { turn: Turn; marks: Mark[]; hover?: boolean; onHover?: (on: boolean) => void }) {
@@ -43,7 +43,7 @@ function AgentTurn({ turn, marks, hover, onHover }: { turn: Turn; marks: Mark[];
       {buttons.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {buttons.map((code, i) => (
-            <span key={i} className="rounded-full border border-white/15 px-2.5 py-0.5 font-mono text-micro text-lab-mute" title="Кнопка, которую агент отправил в чат">
+            <span key={i} className="rounded-full border border-white/15 px-2.5 py-0.5 text-micro text-lab-mute" title="Кнопка, которую агент отправил в чат">
               кнопка{code ? `: ${code}` : ""}
             </span>
           ))}

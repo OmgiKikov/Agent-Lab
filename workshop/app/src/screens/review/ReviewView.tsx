@@ -73,7 +73,7 @@ export function ReviewView({ source, runId }: { source: "log" | "sim"; runId?: s
         <div className="flex flex-wrap items-center gap-3 px-4 py-2">
           <Segmented value={queue} onChange={setQueue} options={QUEUES.map(q => ({ value: q, label: QUEUE_TITLE[q], count: counts[q] }))} />
           {rule && <span className="flex min-w-0 items-center gap-1 text-meta text-lab-dim"><span title={rule.rule.text} className="truncate">критерий: {rule.rule.text}</span><button type="button" onClick={() => setParams(prev => { const n = new URLSearchParams(prev); n.delete("rule"); return n; }, { replace: true })} aria-label="Снять отбор по критерию" className="hover:text-lab-text"><X className="size-3" /></button></span>}
-          <span className="ml-auto font-mono text-meta text-lab-dim">{Math.min(at + 1, keys.length)} из {keys.length}</span>
+          <span className="ml-auto text-meta text-lab-dim">{Math.min(at + 1, keys.length)} из {keys.length}</span>
         </div>
         <div className="h-px bg-white/[0.06]"><div className="h-px bg-lab-accent transition-[width] duration-300" style={{ width: `${keys.length ? (100 * at) / keys.length : 0}%` }} /></div>
       </div>

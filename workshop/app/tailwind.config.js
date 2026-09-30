@@ -13,15 +13,16 @@ export default {
       // The named scale (docs/superpowers/specs/2026-09-30-agent-lab-unified-product-design.md, section 6);
       // default / message / header stay for the Workshop screens until they move to it.
       fontSize: {
-        micro: ["10px", "12px"],
-        label: ["10px", "14px"],
+        // Three sizes and nothing between: 11 for captions and labels, 13 for text, 20 for titles and big numbers.
+        micro: ["11px", "16px"],
+        label: ["11px", "16px"],
         meta: ["11px", "16px"],
-        small: ["12px", "17px"],
+        small: ["13px", "19px"],
         body: ["13px", "19px"],
-        read: ["14px", "22px"],
-        title: ["15px", "21px"],
-        page: ["16px", "22px"],
-        count: ["15px", "20px"],
+        read: ["13px", "20px"],
+        title: ["20px", "26px"],
+        page: ["20px", "26px"],
+        count: ["20px", "26px"],
         default: "12px",
         message: "14px",
         header: "21px",

@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight, MessageSquare, Search } from "lucide-react";
-import { AGENT_TITLE } from "../lab/look";
 import { Button } from "../ui/Button";
 import { useShell } from "./ShellContext";
 
@@ -13,12 +12,11 @@ export function SectionHeader({ crumbs, actions, below }: { crumbs: Crumb[]; act
   return (
     <header className="flex-shrink-0 border-b border-white/[0.06] bg-lab-bg">
       <div className="flex h-10 items-center gap-3 px-4">
-        <nav aria-label="Путь" className="flex min-w-0 flex-1 items-center gap-1.5 text-small">
-          <Link to="/logs" className="truncate text-lab-mute transition-colors hover:text-lab-text">{AGENT_TITLE}</Link>
-          {crumbs.map(c => (
+        <nav aria-label="Путь" className="flex min-w-0 flex-1 items-center gap-1.5 text-body">
+          {crumbs.map((c, i) => (
             <span key={c.label} className="flex min-w-0 items-center gap-1.5">
-              <ChevronRight className="size-3.5 flex-shrink-0 text-lab-faint" />
-              {c.to
+              {i > 0 && <ChevronRight aria-hidden className="size-3.5 flex-shrink-0 text-lab-faint" />}
+              {c.to && i < crumbs.length - 1
                 ? <Link to={c.to} className="truncate text-lab-mute transition-colors hover:text-lab-text">{c.label}</Link>
                 : <span className="truncate text-lab-ink">{c.label}</span>}
             </span>

@@ -14,7 +14,7 @@ export function Drawer({ open, onClose, title, sub, children }: { open: boolean;
         >
           <div className="flex items-start justify-between gap-4 border-b border-white/[0.06] px-5 py-4">
             <div className="min-w-0">
-              <Dialog.Title className="truncate font-mono text-small text-lab-ink">{title}</Dialog.Title>
+              <Dialog.Title className="truncate text-body text-lab-ink">{title}</Dialog.Title>
               {sub && <div className="mt-1 text-meta text-lab-dim">{sub}</div>}
             </div>
             <Dialog.Close className="rounded p-1 text-lab-dim transition-colors hover:bg-white/[0.06] hover:text-lab-text" aria-label="Закрыть"><X className="size-4" /></Dialog.Close>

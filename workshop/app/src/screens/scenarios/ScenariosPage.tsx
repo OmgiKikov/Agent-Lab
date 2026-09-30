@@ -61,7 +61,7 @@ export function ScenariosPage() {
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={[{ label: "Сценарии" }]}
+        crumbs={[{ label: "Сценарии", to: card ? "/scenarios" : undefined }, ...(card ? [{ label: card.name }] : [])]}
         actions={<Button variant="primary" icon={Hammer} onClick={build} disabled={busy || !state?.discover}
           title={busy ? "Сейчас идёт другая задача" : !state?.discover ? "Сначала оцените логи" : "Собрать сценарии из оценённых логов"}>Собрать сценарии</Button>}
         below={<JobStrip kinds={["cards"]} />}

@@ -108,7 +108,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-baseline gap-3">
             <Label>Вердикты</Label>
-            {list.length > 0 && <span className="font-mono text-meta text-lab-dim">{at + 1} из {list.length}</span>}
+            {list.length > 0 && <span className="text-meta text-lab-dim">{at + 1} из {list.length}</span>}
           </div>
           <div className="flex items-center gap-2">
             <Segmented value={tab} onChange={setTab} options={(["FAIL", "PASS", "UNKNOWN"] as Tab[]).filter(t => counts[t]).map(t => ({ value: t, label: TAB_TITLE[t], count: counts[t] }))} />

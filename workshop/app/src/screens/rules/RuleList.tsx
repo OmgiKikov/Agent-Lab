@@ -42,7 +42,7 @@ export function RuleList({ rules, selectedId, filter, onFilter, query, onQuery, 
     <div>
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/[0.06] bg-lab-surface px-3 py-2">
         <Menu
-          trigger={<span className="inline-flex h-6 items-center gap-1 rounded px-1.5 font-mono text-meta text-lab-dim hover:text-lab-text">{FILTER[filter]}<ChevronDown className="size-3" /></span>}
+          trigger={<span className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-meta text-lab-dim hover:text-lab-text">{FILTER[filter]}<ChevronDown className="size-3" /></span>}
           items={(Object.keys(FILTER) as RuleFilter[]).map(f => ({ key: f, label: FILTER[f], on: f === filter, run: () => onFilter(f) }))}
         />
         <label className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded border border-white/[0.08] px-2 text-meta text-lab-dim focus-within:border-white/25">

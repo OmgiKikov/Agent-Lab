@@ -75,11 +75,7 @@ export function SimulationsPage() {
       <SectionHeader
         crumbs={[{ label: "Прогоны", to: run ? "/simulations" : undefined }, ...(run ? [{ label: runTitle(run) }] : [])]}
         actions={<>
-          <span className="hidden gap-2 sm:contents">
-            <Button variant="ghost" onClick={() => navigate("/runs")}>Все трейсы</Button>
-            <Button variant="ghost" onClick={() => navigate("/search")}>Поиск по трейсам</Button>
-            <Button variant="ghost" onClick={() => navigate("/saved")}>Сохранённые</Button>
-          </span>
+          <Button variant="ghost" className="hidden sm:inline-flex" onClick={() => navigate("/runs")} title="Все трейсы Workshop">Трейсы</Button>
           {playButton}
         </>}
         below={<JobStrip kinds={["run", "rejudge"]} />}

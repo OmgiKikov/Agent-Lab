@@ -21,7 +21,7 @@ function RailLink({ item, busy }: { item: Item; busy: boolean }) {
       )}
     >
       <item.icon className="size-4" strokeWidth={1.75} />
-      {!!item.badge && <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-lab-bad px-1 text-center font-mono text-micro leading-[14px] text-black">{item.badge}</span>}
+      {!!item.badge && <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-lab-bad px-1 text-center text-micro leading-[14px] text-black">{item.badge}</span>}
       {busy && <span className="pulse-dot absolute bottom-1 right-1 size-1.5 rounded-full bg-lab-accent" />}
     </NavLink>
   );

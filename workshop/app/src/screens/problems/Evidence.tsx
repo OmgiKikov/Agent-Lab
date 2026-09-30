@@ -17,7 +17,7 @@ export function Evidence({ p, from, at, onAt, hover, onHover, onDecide }: {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-baseline gap-3">
           <Label>Доказательство</Label>
-          {list.length > 0 && <span className="font-mono text-meta text-lab-dim">{at + 1} из {list.length}</span>}
+          {list.length > 0 && <span className="text-meta text-lab-dim">{at + 1} из {list.length}</span>}
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="ghost" icon={ChevronLeft} title="Предыдущий пример (←)" aria-label="Предыдущий пример" disabled={at <= 0} onClick={() => onAt(at - 1)} />

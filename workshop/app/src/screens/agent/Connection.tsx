@@ -96,7 +96,7 @@ function ConnectionForm({ state }: { state: LabState }) {
   return (
     <div className="mx-auto max-w-[760px] px-6 pb-20 pt-6 lg:px-8">
       <section>
-        <h2 className="text-title font-medium text-lab-ink">Где агент</h2>
+        <h2 className="text-body font-medium text-lab-ink">Где агент</h2>
         <div className="mt-4 space-y-4">
           <Field label="Адрес агента на ИФТ" hint="Ручка в контуре банка; открывается с рабочего компьютера.">
             <input name="prod-url" type="url" autoComplete="off" value={prodUrl} onChange={e => setProdUrl(e.target.value)} placeholder="https://…" className={INPUT} spellCheck={false} />
@@ -114,7 +114,7 @@ function ConnectionForm({ state }: { state: LabState }) {
         </div>
       </section>
       <section className="mt-10">
-        <h2 className="text-title font-medium text-lab-ink">Как до него достучаться</h2>
+        <h2 className="text-body font-medium text-lab-ink">Как до него достучаться</h2>
         <p className="mt-1 text-small text-lab-dim">Три способа сыграть с агентом прогон; выбираются при запуске.</p>
         <div className="mt-2">{state.targets.map(t => <Way key={t.id} target={t} />)}</div>
       </section>

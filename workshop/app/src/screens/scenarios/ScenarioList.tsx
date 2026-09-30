@@ -32,7 +32,7 @@ export function ScenarioList({ cards, selectedId, onPick, query, onQuery, origin
       </div>
       {groups.map(([topic, list]) => (
         <div key={topic}>
-          <div className="border-b border-white/[0.06] bg-lab-bg px-3 py-1.5 font-mono text-micro uppercase tracking-wide text-lab-dim">
+          <div className="border-b border-white/[0.06] bg-lab-bg px-3 py-1.5 text-meta font-medium text-lab-dim">
             {topic} · {list.length} {plural(list.length, "сценарий", "сценария", "сценариев")}
           </div>
           {list.map(c => (
