@@ -57,7 +57,7 @@ export type LabState = {
   models: Models;
   settings: Settings;
   sources: Source[];
-  logs: { total: number };
+  logs: { total: number; file?: string | null; updatedAt?: string | null };
   discover: null | Discover;
   cards: null | { cards: Card[] };
   runs: LabRun[];

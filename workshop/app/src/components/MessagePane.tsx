@@ -2,6 +2,7 @@ import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, ChevronLeft, Clou
 import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import claudeCodeLogo from "../assets/claude-code-logo.png";
 import codexLogo from "../assets/codex-logo.svg";
+import { ASK_EVENT } from "../shell/ShellContext";
 import { useWorkshopEvent } from "../hooks/use-workshop-ws";
 import { router } from "../router";
 import { runPath } from "../utils/navigation";
@@ -225,6 +226,13 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
   const suppressPendingUntilNextSendRef = useRef(false);
   const daemonCloudMcpConfiguredRef = useRef(false);
   const cloudMcpNudgeCountedForChatRef = useRef(false);
+
+  useEffect(() => {
+    // «Спросить» anywhere in the product (shell/ShellContext.tsx) opens the pane.
+    const open = () => { setWidth(loadWidth()); setCollapsed(false); };
+    window.addEventListener(ASK_EVENT, open);
+    return () => window.removeEventListener(ASK_EVENT, open);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function setCollapsed(v: boolean) {
     setCollapsePreview(false);
@@ -744,18 +752,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
     });
   }
 
-  if (collapsed) {
-    return (
-      <FloatingAskButton
-        provider={provider}
-        onOpen={() => {
-          setWidth(loadWidth());
-          setShowList(showProviderIntro);
-          setCollapsed(false);
-        }}
-      />
-    );
-  }
+  if (collapsed) return null;
 
   const paneWidth = springClosing ? 0 : width;
 
@@ -981,7 +978,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                     void sendMessage();
                   }
                 }}
-                placeholder={activeRunId ? "Ask about this trace..." : `Ask ${providerLabel(provider)}...`}
+                placeholder={activeRunId ? "Спросите про этот диалог…" : `Спросите ${providerLabel(provider)}…`}
                 rows={2}
                 aria-expanded={showSlash}
                 aria-controls="claude-slash-menu"
@@ -1021,28 +1018,6 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
         />
       )}
     </aside>
-  );
-}
-
-function FloatingAskButton({ provider, onOpen }: { provider: AgentProviderId; onOpen: () => void }) {
-  return (
-    <div className="group fixed bottom-0 right-0 z-40">
-      <div className="pointer-events-none absolute -top-14 right-16 grid h-12 w-12 scale-75 place-items-center rounded-full border border-white/45 bg-white/95 opacity-0 shadow-[0_16px_40px_rgba(255,255,255,0.18),0_8px_26px_rgba(0,0,0,0.32)] transition-all duration-300 group-hover:-translate-y-2 group-hover:-rotate-6 group-hover:scale-100 group-hover:opacity-100 [&>img]:brightness-0">
-        <ProviderMark provider="claude" open={true} />
-      </div>
-      <div className="pointer-events-none absolute -top-12 right-3 grid h-11 w-11 scale-75 place-items-center rounded-full border border-white/40 bg-white/95 opacity-0 shadow-[0_16px_40px_rgba(255,255,255,0.18)] transition-all duration-300 delay-75 group-hover:-translate-y-3 group-hover:rotate-12 group-hover:scale-100 group-hover:opacity-100">
-        <img src={codexLogo} alt="" className="h-8 w-8 object-contain" />
-      </div>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex h-11 items-center gap-2 rounded-tl-[15px] rounded-r-none rounded-bl-none border border-r-0 border-b-0 border-white/80 bg-white/95 px-[26px] text-sm font-medium text-zinc-950 shadow-[0_26px_70px_rgba(0,0,0,0.72),0_8px_22px_rgba(255,255,255,0.18),0_0_0_1px_rgba(0,0,0,0.08)] backdrop-blur transition-[transform,background-color,border-color,color,box-shadow] hover:-translate-y-0.5 hover:border-white hover:bg-white hover:text-black hover:shadow-[0_32px_90px_rgba(0,0,0,0.82),0_10px_30px_rgba(255,255,255,0.24),0_0_0_1px_rgba(0,0,0,0.1)] active:translate-y-0"
-        title="Спросить Agent Lab"
-      >
-        <Terminal className="h-4 w-4 text-zinc-950" />
-        <span>Спросить Agent Lab</span>
-      </button>
-    </div>
   );
 }
 

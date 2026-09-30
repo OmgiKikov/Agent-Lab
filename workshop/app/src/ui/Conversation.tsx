@@ -4,6 +4,16 @@ import { plural } from "../lab/format";
 import { splitQuote } from "./highlight";
 
 export type Turn = { role: "customer" | "agent"; text: string; events?: { tool: string }[]; ok?: boolean; status?: string };
+
+/** A chat button the agent sent, written into the logged text as «` ` ` transition-code CODE ` ` `». */
+const CONTROL = /`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_]*)\s*`\s*`\s*`/g;
+
+/** The words the customer saw, and the buttons the agent sent with them. */
+export function visible(text: string): { text: string; buttons: string[] } {
+  const buttons: string[] = [];
+  const clean = text.replace(CONTROL, (_, code: string) => { buttons.push(code); return ""; }).trim();
+  return { text: clean, buttons };
+}
 export type Mark = { quote: string; n: number };
 
 /** The number that ties the judge's quote in the conversation to its explanation. */
@@ -12,7 +22,8 @@ export function MarkNumber({ n }: { n: number }) {
 }
 
 function AgentTurn({ turn, mark, hover, onHover }: { turn: Turn; mark?: Mark; hover?: boolean; onHover?: (on: boolean) => void }) {
-  const parts = mark ? splitQuote(turn.text, mark.quote) : null;
+  const { text, buttons } = visible(turn.text);
+  const parts = mark ? splitQuote(text, mark.quote) : null;
   const tools = [...new Set((turn.events ?? []).map(e => e.tool.replace("Система банка · ", "")))];
   return (
     <div className="flex max-w-[92%] flex-col items-start gap-1.5 self-start">
@@ -29,8 +40,17 @@ function AgentTurn({ turn, mark, hover, onHover }: { turn: Turn; mark?: Mark; ho
             <span className="ml-1 inline-block translate-y-[-1px] align-middle"><MarkNumber n={mark.n} /></span>
             {parts[2]}
           </>
-        ) : turn.text}
+        ) : text}
       </div>
+      {buttons.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {buttons.map((code, i) => (
+            <span key={i} className="rounded-full border border-white/15 px-2.5 py-0.5 font-mono text-micro text-lab-mute" title="Кнопка, которую агент отправил в чат">
+              кнопка{code ? `: ${code}` : ""}
+            </span>
+          ))}
+        </div>
+      )}
       {tools.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {tools.map(name => <span key={name} className="rounded border border-white/15 bg-white/[0.06] px-2 py-0.5 text-meta text-lab-soft">{name}</span>)}
@@ -46,7 +66,7 @@ function AgentTurn({ turn, mark, hover, onHover }: { turn: Turn; mark?: Mark; ho
  * the judge's quote marked in the agent's words with its number. Turns long before the mark fold away.
  */
 export function Conversation({ turns, mark, hover, onHover }: { turns: Turn[]; mark?: Mark; hover?: boolean; onHover?: (on: boolean) => void }) {
-  const at = mark ? turns.findIndex(t => t.role === "agent" && splitQuote(t.text, mark.quote)) : -1;
+  const at = mark ? turns.findIndex(t => t.role === "agent" && splitQuote(visible(t.text).text, mark.quote)) : -1;
   const [open, setOpen] = useState(false);
   const from = at > 2 && !open ? at - 1 : 0;
   return (

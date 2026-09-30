@@ -10,7 +10,7 @@ export function Quote({ label, origin, onOrigin, children, hover, onHover }: {
   return (
     <figure>
       <div className="flex items-baseline justify-between gap-4">
-        <Label>{label}</Label>
+        <Label className="flex-shrink-0 whitespace-nowrap">{label}</Label>
         {origin && (onOrigin ? (
           <button type="button" onClick={onOrigin} title="Открыть источник" className="inline-flex min-w-0 items-center gap-1 font-mono text-meta text-lab-dim transition-colors hover:text-lab-text">
             <span className="truncate">{origin}</span><ArrowUpRight className="size-3.5 flex-shrink-0" />

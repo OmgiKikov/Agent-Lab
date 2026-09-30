@@ -91,5 +91,5 @@ fi
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do up http://127.0.0.1:5901/api/state && break; sleep 1; done
 up http://127.0.0.1:5901/api/state || fail "Agent Lab не запустился: data/api.log"
 
-say "Agent Lab: http://127.0.0.1:5899/lab"
-[ "${LAB_NO_OPEN:-}" = 1 ] || open "http://127.0.0.1:5899/lab" 2>/dev/null || true
+say "Готово: http://127.0.0.1:5899/"
+[ "${LAB_NO_OPEN:-}" = 1 ] || open "http://127.0.0.1:5899/" 2>/dev/null || true
