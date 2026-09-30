@@ -289,8 +289,13 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
 
     async def one(item: dict) -> None:
         nonlocal done
+        kept = {r['ruleId']: (r['status'], r['review']) for r in item.get('rules') or [] if r.get('review')}
         try:
             await judge.evaluate(by_id[item['cardId']], item)
+            for row in item['rules']:
+                status, decision = kept.get(row['ruleId'], (None, None))
+                if decision and status == row['status']:
+                    row['review'] = decision  # a person's decision stays with a verdict that did not change
         except llm.ModelError as error:
             item.update(status='UNMEASURED', error=str(error))
         done += 1

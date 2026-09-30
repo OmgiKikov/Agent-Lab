@@ -159,6 +159,22 @@ async def judge_dialogue(dialogue: dict, topic: dict, use_workshop: bool) -> dic
     return result
 
 
+def carry_reviews(previous: dict, results: list[dict]) -> None:
+    """A person's decision stays with a verdict that did not change: the same conversation, rule and status.
+    Only with frozen rules: extracted anew, the same rule id may be another rule."""
+    kept = {
+        (str(r['dialogueId']), row['ruleId'], row['status']): row['review']
+        for r in previous.get('results') or []
+        for row in r.get('rules') or []
+        if row.get('review') in ('agree', 'disagree')
+    }
+    for result in results:
+        for row in result['rules']:
+            decision = kept.get((str(result['dialogueId']), row['ruleId'], row['status']))
+            if decision:
+                row['review'] = decision
+
+
 def summarize(results: list[dict], topics: list[dict]) -> dict:
     """Counts, the second judge's agreement and the recurring violations, most frequent first."""
     measured = [r for r in results if r['status'] != 'UNMEASURED']
@@ -253,6 +269,8 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     await asyncio.gather(*(one(*item) for item in todo))
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     results.sort(key=lambda r: order.get(str(r['dialogueId']), 0))
+    if previous.get('topics') and not replan:
+        carry_reviews(previous, results)
     rule_count = Counter(rule.get('sourceId') for topic in topics for rule in topic['rules'])
     value = {
         'startedAt': started,

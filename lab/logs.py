@@ -7,12 +7,15 @@ CLIENT and AGENT. It repeats every exchange; «Порядок сообщения
 import io
 import json
 import re
+from datetime import UTC, datetime
 
 from openpyxl import load_workbook
 
+from . import store
 from .settings import DATA
 
 FILE = DATA / 'logs.jsonl'
+META = 'logs-meta.json'  # name and time of the last upload
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
 MARKER = re.compile(r'\b(CLIENT|AGENT)\b')
@@ -88,4 +91,18 @@ def replace(name: str, data: bytes) -> int:
     temp.write_text(''.join(json.dumps(d, ensure_ascii=False) + '\n' for d in usable), encoding='utf-8')
     temp.chmod(0o600)
     temp.replace(FILE)
+    store.save(META, {'file': name, 'updatedAt': store.now()})
     return len(usable)
+
+
+def meta() -> dict:
+    """The last uploaded export: its name and time; for an upload older than this record, the file's own time."""
+    saved = store.load(META)
+    if saved:
+        return saved
+    if FILE.exists():
+        return {
+            'file': None,
+            'updatedAt': datetime.fromtimestamp(FILE.stat().st_mtime, UTC).isoformat(timespec='seconds'),
+        }
+    return {'file': None, 'updatedAt': None}

@@ -11,15 +11,15 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from . import agents, cards, discover, llm, logs, personas, simulate, store, workshop
+from . import agents, cards, discover, llm, logs, personas, problems, simulate, store, workshop
 from .context import sources
 from .metric import metric
 
 app = FastAPI(title='Agent Lab')
-# The section is served by Workshop, another local origin.
+# The UI is served by Workshop (5899), or by Vite (5900) while it is being developed.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['http://127.0.0.1:5899', 'http://localhost:5899'],
+    allow_origins=['http://127.0.0.1:5899', 'http://localhost:5899', 'http://127.0.0.1:5900', 'http://localhost:5900'],
     allow_methods=['GET', 'POST'],
     allow_headers=['Content-Type'],
 )
@@ -97,7 +97,7 @@ def state() -> dict:
         'workshop': {'url': workshop.URL, 'available': workshop.available()},
         'settings': agents.settings(),
         'sources': source_summary(),
-        'logs': {'total': len(logs.load())},
+        'logs': {'total': len(logs.load()), **logs.meta()},
         'discover': analysis,
         'cards': store.load(cards.DECK),
         'runs': [{k: r.get(k) for k in RUN_FIELDS} for r in store.runs()],
@@ -192,16 +192,79 @@ async def rejudge(run_id: str) -> dict:
     return start('rejudge', lambda progress: simulate.rejudge(record, progress))
 
 
+@app.get('/api/problems')
+def problems_view(run: str | None = None) -> dict:
+    """Every rule with its verdicts in the logs and in one run; the rules found violated are the problems."""
+    if run and not store.run(run):
+        raise HTTPException(404, 'Прогон не найден')
+    return problems.build(run)
+
+
+@app.get('/api/dialogues/{dialogue_id}')
+def dialogue_view(dialogue_id: str) -> dict:
+    """A logged conversation in full, with its verdicts from the last assessment."""
+    found = next((d for d in logs.load() if str(d['id']) == dialogue_id), None)
+    if not found:
+        raise HTTPException(404, 'Диалог не найден в логах')
+    analysis = store.load(discover.RESULT) or {}
+    topics = {t['id']: t['title'] for t in analysis.get('topics') or []}
+    result = next((r for r in analysis.get('results') or [] if str(r['dialogueId']) == dialogue_id), None)
+    messages = [
+        {'role': 'customer' if m['role'] == 'user' else 'agent', 'text': m['content']} for m in found['messages']
+    ]
+    return {
+        'id': dialogue_id,
+        'messages': messages,
+        'result': result and {**result, 'topic': topics.get(result['topicId'], '')},
+    }
+
+
+@app.get('/api/sources/{source_id}')
+def source_view(source_id: str) -> dict:
+    """The text of a source the rules are quoted from: a prompt or the list of the agent's tools."""
+    found = next((s for s in sources.load() if s['id'] == source_id), None)
+    if not found:
+        raise HTTPException(404, 'Источник не найден')
+    return {key: found.get(key) for key in ('id', 'kind', 'origin', 'sha256', 'content')}
+
+
+def review_log(dialogue_id: str, rule_id: str, decision: str | None) -> dict:
+    if job['running'] and job['kind'] == 'discover':
+        raise HTTPException(409, 'Идёт оценка логов: решение не сохранится. Отметьте после неё.')
+    analysis = store.load(discover.RESULT) or {}
+    result = next((r for r in analysis.get('results') or [] if str(r['dialogueId']) == dialogue_id), None)
+    row = next((r for r in (result or {}).get('rules') or [] if r['ruleId'] == rule_id), None)
+    if not row:
+        raise HTTPException(404, 'Вердикт не найден')
+    row['review'] = decision
+    store.save(discover.RESULT, analysis)
+    return {'ok': True}
+
+
 @app.post('/api/review')
 async def review(payload: dict = Body(...)) -> dict:
-    """A person agrees or disagrees with the judge's verdict on one conversation."""
-    run_id, index, decision = str(payload.get('run') or ''), payload.get('index'), payload.get('decision')
+    """A person agrees or disagrees with the judge: on one rule of a logged or simulated conversation, or (older
+    requests without ruleId) on a simulated conversation as a whole."""
+    decision = payload.get('decision')
     if decision not in ('agree', 'disagree', None):
         raise HTTPException(400, 'decision: agree | disagree | null')
+    rule_id = str(payload.get('ruleId') or '')
+    if payload.get('source') == 'log':
+        return review_log(str(payload.get('dialogueId') or ''), rule_id, decision)
+    run_id, index = str(payload.get('run') or ''), payload.get('index')
     record = store.run(run_id)
     if not record or not isinstance(index, int) or not 0 <= index < len(record['items']):
         raise HTTPException(404, 'Разговор не найден')
-    record['items'][index]['review'] = decision
+    if record.get('status') == 'running':
+        raise HTTPException(409, 'Прогон ещё идёт: решение не сохранится. Отметьте после него.')
+    item = record['items'][index]
+    if rule_id:
+        row = next((r for r in item.get('rules') or [] if r['ruleId'] == rule_id), None)
+        if not row:
+            raise HTTPException(404, 'Вердикт не найден')
+        row['review'] = decision
+    else:
+        item['review'] = decision
     record['metric'] = metric(record['items'])
     store.save_run(record)
     return {'ok': True, 'metric': record['metric']}
