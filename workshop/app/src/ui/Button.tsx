@@ -32,7 +32,7 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
       )}
       {...rest}
     >
-      {loading ? <Loader2 className="size-3.5 animate-spin" /> : Icon && <Icon className="size-3.5" />}
+      {loading ? <Loader2 aria-hidden className="size-3.5 animate-spin" /> : Icon && <Icon aria-hidden className="size-3.5" />}
       {children}
     </button>
   );

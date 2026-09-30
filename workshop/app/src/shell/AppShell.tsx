@@ -77,7 +77,8 @@ function Frame() {
       <LegacyHashRedirect />
       <div className="flex h-screen overflow-hidden bg-lab-bg text-lab-text">
         <Rail logs={data?.rules.filter(r => r.log.failed > 0).length ?? 0} results={data?.sim ? data.rules.filter(r => r.sim.failed > 0).length : 0} />
-        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <a href="#main" className="sr-only focus-visible:not-sr-only focus-visible:fixed focus-visible:left-2 focus-visible:top-2 focus-visible:z-[80] focus-visible:rounded focus-visible:bg-lab-surface focus-visible:px-3 focus-visible:py-1.5 focus-visible:text-small focus-visible:text-lab-ink">К содержимому</a>
+        <main id="main" tabIndex={-1} className="relative flex min-w-0 flex-1 flex-col overflow-hidden focus:outline-none">
           <div className="min-h-0 flex-1 overflow-auto"><Outlet /></div>
           {traceRoute && <WorkshopOffline />}
         </main>

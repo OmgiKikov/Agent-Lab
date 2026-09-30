@@ -307,3 +307,11 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: 'Geist Mono Va
 
 .timeline-bar { transition: filter .12s ease; }
 .timeline-bar:hover { filter: brightness(1.2); z-index: 999 !important; }
+
+/* Motion off for those who ask: dialogs, drawers, spinners and skeletons stop moving. */
+@media (prefers-reduced-motion: reduce) {
+  [class*="animate-in"], [class*="animate-spin"], [class*="animate-pulse"], .message-arrive {
+    animation: none !important;
+  }
+  * { scroll-behavior: auto !important; }
+}

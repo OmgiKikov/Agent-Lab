@@ -95,13 +95,13 @@ export function Connection({ state }: { state: LabState }) {
         <h2 className="text-title font-medium text-lab-ink">Где агент</h2>
         <div className="mt-4 space-y-4">
           <Field label="Адрес агента на ИФТ" hint="Ручка в контуре банка; открывается с рабочего компьютера.">
-            <input value={prodUrl} onChange={e => setProdUrl(e.target.value)} placeholder="https://…" className={INPUT} spellCheck={false} />
+            <input name="prod-url" type="url" autoComplete="off" value={prodUrl} onChange={e => setProdUrl(e.target.value)} placeholder="https://…" className={INPUT} spellCheck={false} />
           </Field>
           <Field label="ЕПК клиентов" hint="Через пробел. На ИФТ синтетический клиент входит как один из этих клиентов; пусто — тестовый клиент.">
-            <input value={epk} onChange={e => setEpk(e.target.value)} placeholder="Например: 1234567890 2345678901" className={INPUT} spellCheck={false} />
+            <input name="epk" autoComplete="off" inputMode="numeric" value={epk} onChange={e => setEpk(e.target.value)} placeholder="Например: 1234567890 2345678901" className={INPUT} spellCheck={false} />
           </Field>
           <Field label="Код агента" hint="Папка с исходниками: из неё читаются критерии и запускается агент из исходников.">
-            <input value={repo} onChange={e => setRepo(e.target.value)} placeholder="~/Desktop/aigw-local" className={INPUT} spellCheck={false} />
+            <input name="repo" autoComplete="off" value={repo} onChange={e => setRepo(e.target.value)} placeholder="~/Desktop/aigw-local" className={INPUT} spellCheck={false} />
           </Field>
         </div>
         <div className="mt-4 flex items-center gap-3">

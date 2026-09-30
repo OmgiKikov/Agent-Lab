@@ -17,7 +17,7 @@ function RunRow({ run, state, selected, onClick }: { run: LabRun; state: LabStat
   return (
     <ListRow selected={selected} onClick={onClick}>
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-small font-medium text-lab-ink">{runTitle(run)}</span>
+        <span title={runTitle(run)} className="min-w-0 flex-1 truncate text-small font-medium text-lab-ink">{runTitle(run)}</span>
         {live && <span className="flex flex-shrink-0 items-center gap-1.5 text-meta text-lab-accent"><span className="pulse-dot size-1.5 rounded-full bg-lab-accent" />{job?.total ? `${job.done ?? 0} из ${job.total}` : "идёт"}</span>}
         {run.status === "failed" && <span className="flex-shrink-0 text-meta text-lab-bad">прервался</span>}
         {run.status === "stopped" && <span className="flex-shrink-0 text-meta text-lab-warn">остановлен</span>}

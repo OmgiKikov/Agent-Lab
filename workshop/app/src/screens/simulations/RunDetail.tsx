@@ -27,7 +27,7 @@ function DialogRows({ items, state, onOpen }: { items: Item[]; state: LabState; 
           <button key={index} type="button" onClick={() => onOpen(index)} className="flex w-full gap-3 border-b border-white/[0.06] px-1 py-2 text-left transition-colors hover:bg-lab-hover">
             <Sign status={item.status} className="mt-0.5" />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-small text-lab-ink">{item.name}</div>
+              <div title={item.name} className="truncate text-small text-lab-ink">{item.name}</div>
               <div className="mt-0.5 truncate text-meta text-lab-dim">{[item.topic, ...who].join(" · ")}</div>
             </div>
           </button>

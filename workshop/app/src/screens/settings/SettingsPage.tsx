@@ -186,7 +186,7 @@ function AgentEndpointsSection() {
             return (
               <div key={name} className="group flex items-center gap-3 border-b border-white/[0.06] py-2.5">
                 <span className="min-w-[80px] text-small font-medium text-lab-text">{name}</span>
-                <span className="min-w-0 flex-1 truncate font-mono text-meta text-lab-dim">{config.url}</span>
+                <span title={config.url} className="min-w-0 flex-1 truncate font-mono text-meta text-lab-dim">{config.url}</span>
                 <span className={cn("flex-shrink-0 text-meta", status === "online" ? "text-lab-ok" : status === "checking" ? "text-lab-dim" : "text-lab-bad")}>
                   {status === "online" ? "✓ на связи" : status === "checking" ? "проверяю…" : "✗ нет связи"}
                 </span>
@@ -200,8 +200,8 @@ function AgentEndpointsSection() {
       )}
 
       <div className="flex gap-1.5">
-        <input className={cn(INPUT, "flex-1")} placeholder="имя" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && addAgent()} />
-        <input className={cn(INPUT, "flex-[2]")} placeholder="http://localhost:5860/replay" value={newUrl} onChange={e => setNewUrl(e.target.value)} onKeyDown={e => e.key === "Enter" && addAgent()} />
+        <input className={cn(INPUT, "flex-1")} name="agent-name" aria-label="Имя агента" autoComplete="off" spellCheck={false} placeholder="имя" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && addAgent()} />
+        <input className={cn(INPUT, "flex-[2]")} name="agent-url" type="url" aria-label="Адрес агента" autoComplete="off" spellCheck={false} placeholder="http://localhost:5860/replay…" value={newUrl} onChange={e => setNewUrl(e.target.value)} onKeyDown={e => e.key === "Enter" && addAgent()} />
         <Button icon={Plus} onClick={addAgent} aria-label="Добавить адрес" />
       </div>
     </SectionBlock>

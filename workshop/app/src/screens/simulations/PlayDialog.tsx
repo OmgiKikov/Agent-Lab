@@ -128,7 +128,7 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
         </Block>
         <Block label="Подпись">
           <input
-            value={label} onChange={e => setLabel(e.target.value)} placeholder="Необязательно: что проверяете этим прогоном"
+            name="label" autoComplete="off" aria-label="Подпись прогона" value={label} onChange={e => setLabel(e.target.value)} placeholder="Необязательно: что проверяете этим прогоном"
             className="h-8 w-full rounded-md border border-white/[0.08] bg-transparent px-2.5 text-small text-lab-text outline-none placeholder:text-lab-faint focus:border-white/25"
           />
         </Block>

@@ -46,8 +46,8 @@ export function RuleList({ rules, selectedId, filter, onFilter, query, onQuery, 
           items={(Object.keys(FILTER) as RuleFilter[]).map(f => ({ key: f, label: FILTER[f], on: f === filter, run: () => onFilter(f) }))}
         />
         <label className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded border border-white/[0.08] px-2 text-meta text-lab-dim focus-within:border-white/25">
-          <Search className="size-3 flex-shrink-0" />
-          <input value={query} onChange={e => onQuery(e.target.value)} placeholder="Найти" aria-label="Найти критерий" className="min-w-0 flex-1 bg-transparent text-lab-text outline-none placeholder:text-lab-faint" />
+          <Search aria-hidden className="size-3 flex-shrink-0" />
+          <input value={query} onChange={e => onQuery(e.target.value)} placeholder="Найти…" name="q" autoComplete="off" aria-label="Найти критерий" className="min-w-0 flex-1 bg-transparent text-lab-text outline-none placeholder:text-lab-faint" />
         </label>
       </div>
       {[...groups.entries()].map(([origin, list]) => (
