@@ -317,7 +317,7 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
               <Fragment key={i}>
                 <div style={{ position: "absolute", left: x, top: 0, bottom: AXIS_H, borderLeft: "1px solid rgba(255,255,255,0.04)" }} />
                 {i > 0 && (
-                  <div style={{ position: "absolute", left: x, bottom: 0, transform: "translateX(-50%)", fontSize: 9, color: C.fg0, fontFamily: "Space Mono, monospace" }}>
+                  <div style={{ position: "absolute", left: x, bottom: 0, transform: "translateX(-50%)", fontSize: 9, color: C.fg0, fontFamily: "Geist Mono Variable, monospace" }}>
                     {fmt(i * gridMs)}
                   </div>
                 )}

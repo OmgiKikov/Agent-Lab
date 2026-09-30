@@ -17,6 +17,8 @@
     --lab-bg: 0 0 0;
     --lab-surface: 10 10 10;
     --lab-raised: 17 17 17;
+    --lab-hover: 24 25 26;
+    --lab-active: 33 35 37;
     --lab-ink: 242 245 247;
     --lab-text: 225 232 236;
     --lab-soft: 200 213 220;
@@ -28,6 +30,7 @@
     --lab-ok: 96 227 109;
     --lab-bad: 242 107 107;
     --lab-warn: 240 173 78;
+    --lab-mark: 250 204 21;
   }
 }
 
@@ -44,6 +47,7 @@ html {
 body {
   background: #000;
   color: #999;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -274,7 +278,7 @@ input.secret-input-saved:focus::placeholder {
 *::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 2px; }
 *::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.14); }
 
-pre { white-space: pre-wrap; word-break: break-word; font-family: 'Space Mono', monospace; }
+pre { white-space: pre-wrap; word-break: break-word; font-family: 'Geist Mono Variable', ui-monospace, monospace; }
 
 /* Streamdown CSS variable overrides for dark theme */
 .streamdown {

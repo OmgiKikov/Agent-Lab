@@ -6,11 +6,22 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["Barlow", "system-ui", "sans-serif"],
-        mono: ["Space Mono", "monospace"],
+        // Both have Cyrillic and ship inside the build (no network on the work computer).
+        sans: ["Inter Variable", "system-ui", "sans-serif"],
+        mono: ["Geist Mono Variable", "ui-monospace", "monospace"],
       },
+      // The named scale (docs/superpowers/specs/2026-09-30-agent-lab-unified-product-design.md, section 6);
+      // default / message / header stay for the Workshop screens until they move to it.
       fontSize: {
-        label: "10px",
+        micro: ["10px", "12px"],
+        label: ["11px", "16px"],
+        meta: ["12px", "16px"],
+        small: ["13px", "18px"],
+        body: ["14px", "20px"],
+        read: ["15px", "24px"],
+        title: ["18px", "24px"],
+        page: ["22px", "28px"],
+        count: ["20px", "24px"],
         default: "12px",
         message: "14px",
         header: "21px",
@@ -29,7 +40,7 @@ export default {
       },
       colors: {
         lab: Object.fromEntries(
-          ["bg", "surface", "raised", "ink", "text", "soft", "mute", "dim", "faint", "user", "accent", "ok", "bad", "warn"]
+          ["bg", "surface", "raised", "hover", "active", "ink", "text", "soft", "mute", "dim", "faint", "user", "accent", "ok", "bad", "warn", "mark"]
             .map(name => [name, `rgb(var(--lab-${name}) / <alpha-value>)`]),
         ),
         sidebar: {
