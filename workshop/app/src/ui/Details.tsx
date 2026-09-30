@@ -23,6 +23,6 @@ export function Details({ title = "Детали", rows, className }: { title?: s
 }
 
 /** A small bordered word, as Raindrop's tags. */
-export function Tag({ children, className }: { children: ReactNode; className?: string }) {
-  return <span className={cn("inline-flex max-w-full items-center truncate rounded border border-white/[0.1] bg-lab-raised px-1.5 text-meta text-lab-mute", className)}>{children}</span>;
+export function Tag({ children, className, title }: { children: ReactNode; className?: string; title?: string }) {
+  return <span title={title} className={cn("inline-flex max-w-full items-center truncate rounded border border-white/[0.1] bg-lab-raised px-1.5 text-meta text-lab-mute", className)}>{children}</span>;
 }

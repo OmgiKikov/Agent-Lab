@@ -2,12 +2,13 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BookOpen, RotateCcw } from "lucide-react";
 import { api } from "../../lab/api";
+import { useProblems } from "../../lab/problems";
 import { JobStrip } from "../../shell/Activity";
 import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { Tabs } from "../../ui/Tabs";
+import { PillTabs } from "../../ui/PillTabs";
 import { useToast } from "../../ui/toast";
 import { Code } from "./Code";
 import { Criteria, Reextract } from "./Criteria";
@@ -20,6 +21,7 @@ export function AgentPage() {
   const [params, setParams] = useSearchParams();
   const { state, offline, refresh } = useLabState();
   const toast = useToast();
+  const { data } = useProblems(null);
   const [reextract, setReextract] = useState(false);
   const wanted = params.get("tab");
   const tab: Tab = wanted === "code" || wanted === "criteria" ? wanted : "connection";
@@ -32,7 +34,7 @@ export function AgentPage() {
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={[{ label: "Агент", to: tab === "connection" ? undefined : "/agent" }, { label: { connection: "Подключение", code: "Код", criteria: "Критерии" }[tab] }]}
+        crumbs={[{ label: "Агент", to: tab === "connection" ? undefined : "/agent" }, { label: { connection: "Подключение", code: "Код", criteria: "Критерии" }[tab], to: tab === "criteria" && params.get("c") ? "/agent?tab=criteria" : undefined }, ...(tab === "criteria" && params.get("c") ? [{ label: data?.rules.find(r => r.id === params.get("c"))?.title ?? "Критерий" }] : [])]}
         actions={tab === "criteria" ? (
           <Button icon={RotateCcw} onClick={() => setReextract(true)} disabled={busy || !state?.discover} title={busy ? "Сейчас идёт другая задача" : undefined}>Извлечь заново</Button>
         ) : tab === "code" && (
@@ -45,11 +47,15 @@ export function AgentPage() {
         )}
         below={<JobStrip kinds={["sources"]} />}
       />
-      <Tabs<Tab> className="px-4" value={tab} onChange={setTab} tabs={[
-        { value: "connection", label: "Подключение" },
-        { value: "code", label: "Код", count: state?.sources.length },
-        { value: "criteria", label: "Критерии", count: state?.sources.reduce((n, x) => n + x.rules, 0) },
-      ]} />
+      {!(tab === "criteria" && params.get("c")) && (
+        <div className="flex flex-shrink-0 items-center border-b border-white/[0.08] px-3 py-[7px]">
+          <PillTabs<Tab> value={tab} onChange={setTab} tabs={[
+            { value: "connection", label: "Подключение" },
+            { value: "code", label: "Код", count: state?.sources.length },
+            { value: "criteria", label: "Критерии", count: state?.sources.reduce((n, x) => n + x.rules, 0) },
+          ]} />
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-auto">
         {!state ? <div className="p-6"><Skeleton className="h-64" /></div>
           : tab === "criteria" ? <Criteria />

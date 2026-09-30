@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Hammer } from "lucide-react";
 import { day } from "../../lab/format";
@@ -12,12 +12,9 @@ import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { FirstRun } from "../../shell/FirstRun";
 import { Summary } from "../../ui/Summary";
-import { Split } from "../../ui/Split";
 import { useToast } from "../../ui/toast";
 import { inOrigin, ScenarioList, type Origin } from "./ScenarioList";
 import { ScenarioDetail } from "./ScenarioDetail";
-
-const wide = () => window.matchMedia("(min-width: 1024px)").matches;
 
 /** Сценарии: the business-scenario cards built from the assessed logs, for the synthetic customers to play. */
 export function ScenariosPage() {
@@ -37,16 +34,12 @@ export function ScenariosPage() {
   const sel = params.get("s");
   const card = cards.find(c => c.id === sel);
 
-  useEffect(() => {
-    if (!card && order[0] && wide()) setParam("s", order[0]);
-  }, [card, order[0]]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const step = (d: 1 | -1) => {
-    if (!order.length) return;
-    const at = order.indexOf(sel ?? "");
-    setParam("s", order[at < 0 ? 0 : Math.max(0, Math.min(order.length - 1, at + d))]);
+    if (!sel || !order.length) return;
+    const at = order.indexOf(sel);
+    setParam("s", order[Math.max(0, Math.min(order.length - 1, (at < 0 ? 0 : at) + d))]);
   };
-  useKeys({ KeyJ: () => step(1), ArrowDown: () => step(1), KeyK: () => step(-1), ArrowUp: () => step(-1) });
+  useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
 
   if (offline && !state) return <ServiceDown />;
   const busy = !!state?.job.running;
@@ -67,25 +60,24 @@ export function ScenariosPage() {
     <div className="flex h-full flex-col">
       <SectionHeader
         crumbs={[{ label: "Сценарии", to: card ? "/scenarios" : undefined }, ...(card ? [{ label: card.name }] : [])]}
+        meta={!card && cards.length ? `${cards.length} сценариев · ${topics} тем` : undefined}
         actions={<Button variant="primary" icon={Hammer} onClick={build} disabled={busy || !state?.discover}
           title={busy ? "Сейчас идёт другая задача" : !state?.discover ? "Сначала оцените логи" : "Собрать сценарии из оценённых логов"}>Собрать сценарии</Button>}
         below={<JobStrip kinds={["cards"]} />}
       />
       {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : !cards.length ? empty : (
         <>
-          <Summary stats={[
+          {!card && <Summary stats={[
             { label: "Сценариев", value: cards.length, active: origin === "all", onClick: () => setParam("origin", null), title: state?.cards?.createdAt ? `Собраны ${day(state.cards.createdAt)}` : undefined },
             { label: "Из ошибок логов", value: fromErrors, of: `из ${cards.length}`, active: origin === "errors", onClick: () => setParam("origin", "errors") },
             { label: "Покрытие тем", value: cards.length - fromErrors, of: `из ${cards.length}`, active: origin === "coverage", onClick: () => setParam("origin", "coverage") },
             { label: "Тем", value: topics },
-          ]} />
-          <Split
-            showDetail={!!card}
-            list={<ScenarioList cards={cards} selectedId={card?.id ?? null} onPick={id => setParam("s", id)} query={query} onQuery={v => setParam("q", v || null)} origin={origin} onOrigin={o => setParam("origin", o === "all" ? null : o)} />}
-            detail={card
-              ? <ScenarioDetail key={card.id} card={card} state={state} onBack={() => setParam("s", null)} onPlay={() => navigate(`/simulations?play=${encodeURIComponent(card.id)}`)} />
-              : <EmptyState title="Выберите сценарий" />}
-          />
+          ]} />}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {card ? <ScenarioDetail key={card.id} card={card} state={state} onBack={() => setParam("s", null)} onPlay={() => navigate(`/simulations?play=${encodeURIComponent(card.id)}`)} />
+              : sel ? <EmptyState title="Такого сценария нет" />
+              : <ScenarioList cards={cards} onOpen={id => setParam("s", id)} query={query} onQuery={v => setParam("q", v || null)} origin={origin} onOrigin={o => setParam("origin", o === "all" ? null : o)} />}
+          </div>
         </>
       )}
     </div>

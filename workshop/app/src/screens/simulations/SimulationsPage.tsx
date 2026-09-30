@@ -11,12 +11,10 @@ import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { FirstRun } from "../../shell/FirstRun";
 import { Summary } from "../../ui/Summary";
-import { Split } from "../../ui/Split";
 import { PlayDialog } from "./PlayDialog";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./SimList";
 
-const wide = () => window.matchMedia("(min-width: 1024px)").matches;
 const link = "text-small text-lab-ink underline underline-offset-4";
 
 /** Прогоны: synthetic customers play the scenarios against the agent; each run keeps its dialogues and their traces. */
@@ -36,10 +34,6 @@ export function SimulationsPage() {
   const run = runs.find(r => r.id === sel);
   const setRun = (id: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (id) n.set("r", id); else n.delete("r"); n.delete("d"); n.delete("tab"); return n; }, { replace: !!id });
 
-  useEffect(() => {
-    if (!run && !sel && runs[0] && wide()) setRun(runs[0].id);
-  }, [run, sel, runs[0]?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // «Сыграть этот сценарий» comes with ?play=<id>, ⌘K with ?play=1: the dialog opens, nothing starts until it is confirmed.
   const asked = params.get("play");
   useEffect(() => {
@@ -55,11 +49,11 @@ export function SimulationsPage() {
   }, [follow, started]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const step = (d: 1 | -1) => {
-    if (!runs.length) return;
+    if (!sel || !runs.length) return;
     const at = runs.findIndex(r => r.id === sel);
-    setRun(runs[at < 0 ? 0 : Math.max(0, Math.min(runs.length - 1, at + d))].id);
+    setRun(runs[Math.max(0, Math.min(runs.length - 1, (at < 0 ? 0 : at) + d))].id);
   };
-  useKeys({ KeyJ: () => step(1), ArrowDown: () => step(1), KeyK: () => step(-1), ArrowUp: () => step(-1) });
+  useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
 
   if (params.get("mode") === "scenarios") return <Navigate to="/scenarios" replace />;
   if (offline && !state) return <ServiceDown />;
@@ -86,19 +80,17 @@ export function SimulationsPage() {
       />
       {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : !runs.length ? empty : (
         <>
-          <Summary stats={[
+          {!sel && <Summary stats={[
             { label: "Прогонов", value: runs.length, active: st === "all", onClick: () => setParam("st", null) },
             { label: "Завершены", value: runs.filter(r => !isRunning(r) && r.status !== "failed" && r.status !== "stopped").length, of: `из ${runs.length}`, active: st === "done", onClick: () => setParam("st", "done") },
             ...(runs.some(isRunning) ? [{ label: "Идут сейчас", value: runs.filter(isRunning).length, active: st === "live", onClick: () => setParam("st", "live") }] : []),
             ...(runs.some(r => r.status === "failed" || r.status === "stopped") ? [{ label: "Прерваны", value: runs.filter(r => r.status === "failed" || r.status === "stopped").length, active: st === "broken", onClick: () => setParam("st", "broken") }] : []),
-          ]} />
-          <Split
-            showDetail={!!run}
-            list={<RunList runs={shownRuns} state={state} selectedId={run?.id ?? null} onPick={setRun} />}
-            detail={run
-              ? <RunDetail key={run.id} summary={run} state={state} onBack={() => setRun(null)} />
-              : <EmptyState title={sel ? "Такого прогона нет" : "Выберите прогон"} action={sel ? <Link to="/simulations" className={link}>Все прогоны</Link> : undefined} />}
-          />
+          ]} />}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {run ? <RunDetail key={run.id} summary={run} state={state} onBack={() => setRun(null)} />
+              : sel ? <EmptyState title="Такого прогона нет" action={<Link to="/simulations" className={link}>Все прогоны</Link>} />
+              : <RunList runs={shownRuns} state={state} onOpen={setRun} />}
+          </div>
         </>
       )}
       {state && <PlayDialog open={!!play} onClose={() => setPlay(null)} state={state} preset={play?.preset} onStarted={() => setFollow(true)} />}

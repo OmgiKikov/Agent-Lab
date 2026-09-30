@@ -1,9 +1,10 @@
-import { Search } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { plural } from "../../lab/format";
 import { FROM_LOG } from "../../lab/runs";
 import type { Card } from "../../lab/types";
-import { IssueRow } from "../../ui/IssueRow";
+import { Tag } from "../../ui/Details";
 import { Menu } from "../../ui/Menu";
+import { Lead, ListBar, Table, type Col } from "../../ui/Table";
 
 export type Origin = "all" | "errors" | "coverage";
 const ORIGINS: { value: Origin; label: string }[] = [
@@ -12,39 +13,28 @@ const ORIGINS: { value: Origin; label: string }[] = [
 
 export const inOrigin = (c: Card, o: Origin) => o === "all" || (o === "errors" ? c.origin === FROM_LOG : c.origin !== FROM_LOG);
 
-/** The scenarios grouped by topic; one row of controls above: a search and the origin. */
-export function ScenarioList({ cards, selectedId, onPick, query, onQuery, origin, onOrigin }: {
-  cards: Card[]; selectedId: string | null; onPick: (id: string) => void;
-  query: string; onQuery: (q: string) => void; origin: Origin; onOrigin: (o: Origin) => void;
+/** The scenarios as Raindrop's Issues table: a name and the situation, its topic, where it came from, how many criteria it checks. */
+export function ScenarioList({ cards, onOpen, query, onQuery, origin, onOrigin }: {
+  cards: Card[]; onOpen: (id: string) => void; query: string; onQuery: (q: string) => void; origin: Origin; onOrigin: (o: Origin) => void;
 }) {
   const q = query.trim().toLowerCase();
   const shown = cards.filter(c => inOrigin(c, origin) && (!q || `${c.name} ${c.topic} ${c.situation}`.toLowerCase().includes(q)));
-  const groups = [...shown.reduce((m, c) => m.set(c.topic, [...(m.get(c.topic) ?? []), c]), new Map<string, Card[]>())];
+  const cols: Col<Card>[] = [
+    { key: "name", label: "Сценарий", sort: (a, b) => a.name.localeCompare(b.name, "ru"), cell: c => <Lead title={c.name} sub={c.situation} /> },
+    { key: "topic", label: "Тема", width: "240px", sort: (a, b) => a.topic.localeCompare(b.topic, "ru"), cell: c => <Tag className="max-w-full">{c.topic}</Tag> },
+    { key: "origin", label: "Откуда", width: "120px", sort: (a, b) => a.origin.localeCompare(b.origin, "ru"), cell: c => <span className="text-small text-lab-soft">{c.origin === FROM_LOG ? "ошибка из лога" : "покрытие темы"}</span> },
+    { key: "criteria", label: "Критериев", width: "88px", align: "right", sort: (a, b) => a.criteria.length - b.criteria.length, cell: c => <span className="text-small font-medium text-lab-ink">{c.criteria.length}</span> },
+  ];
   return (
-    <div>
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/[0.08] bg-lab-surface px-3 py-2">
-        <label className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-white/[0.08] px-2 text-meta text-lab-dim focus-within:border-white/25">
-          <Search aria-hidden className="size-3.5 flex-shrink-0" />
-          <input value={query} onChange={e => onQuery(e.target.value)} placeholder="Найти сценарий…" name="q" autoComplete="off" aria-label="Найти сценарий" className="min-w-0 flex-1 bg-transparent text-lab-text outline-none placeholder:text-lab-faint" />
-        </label>
-        <Menu align="right" trigger={<span className="inline-flex h-7 items-center rounded-md border border-white/[0.08] px-2 text-meta text-lab-soft hover:text-lab-ink">{ORIGINS.find(o => o.value === origin)?.label}</span>}
-          items={ORIGINS.map(o => ({ key: o.value, label: o.label, on: o.value === origin, run: () => onOrigin(o.value) }))} />
-      </div>
-      {groups.map(([topic, list]) => (
-        <div key={topic}>
-          <div className="border-b border-white/[0.08] bg-lab-bg px-3 py-1.5 text-meta font-medium text-lab-dim">
-            {topic} · {list.length} {plural(list.length, "сценарий", "сценария", "сценариев")}
-          </div>
-          {list.map(c => (
-            <IssueRow
-              key={c.id} selected={c.id === selectedId} onClick={() => onPick(c.id)} title={c.name} sub={c.situation}
-              tags={[c.origin === FROM_LOG ? "из лога" : "покрытие"]} tone="mute"
-              stats={[{ value: c.criteria.length, label: plural(c.criteria.length, "критерий", "критерия", "критериев") }]}
-            />
-          ))}
-        </div>
-      ))}
-      {!shown.length && <div className="px-4 py-10 text-center text-small text-lab-dim">В этом отборе сценариев нет</div>}
+    <div className="h-full overflow-auto px-4 py-4">
+      <ListBar query={query} onQuery={onQuery} placeholder="Найти сценарий…" label="Найти сценарий"
+        end={
+          <Menu align="right" trigger={<span className="inline-flex h-9 items-center gap-2 rounded border border-white/[0.08] px-3 text-small text-lab-text hover:border-white/25">{ORIGINS.find(o => o.value === origin)?.label}<ChevronDown className="size-3.5 text-lab-dim" /></span>}
+            items={ORIGINS.map(o => ({ key: o.value, label: o.label, on: o.value === origin, run: () => onOrigin(o.value) }))} />
+        } />
+      <Table className="mt-4" rows={shown} cols={cols} rowKey={c => c.id} onOpen={c => onOpen(c.id)} initial={{ key: "topic", dir: 1 }}
+        empty={<div className="px-4 py-10 text-center text-small text-lab-dim">В этом отборе сценариев нет</div>} />
+      {shown.length > 0 && <p className="mt-2 text-meta text-lab-dim">{shown.length} {plural(shown.length, "сценарий", "сценария", "сценариев")}</p>}
     </div>
   );
 }

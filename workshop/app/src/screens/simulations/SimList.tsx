@@ -1,33 +1,33 @@
 import { plural, when } from "../../lab/format";
 import { isRunning, runTitle, runTypes } from "../../lab/runs";
 import type { LabRun, LabState } from "../../lab/types";
-import { IssueRow } from "../../ui/IssueRow";
+import { Tag } from "../../ui/Details";
+import { Lead, Table, type Col } from "../../ui/Table";
 
-/** A run: which agent and version, when, how many dialogues, which customer types, how many repeats. Nothing of the verdicts. */
-function RunRow({ run, state, selected, onClick }: { run: LabRun; state: LabState; selected: boolean; onClick: () => void }) {
-  const live = isRunning(run);
+const stateWord = (run: LabRun, state: LabState) => {
   const job = state.job.running && state.job.progress.run === run.id ? state.job.progress : null;
-  const total = run.metric?.total;
-  const meta = [
-    when(run.startedAt),
-    runTypes(run, state).join(", "),
-    run.repeats && run.repeats > 1 ? `повторы ×${run.repeats}` : null,
-  ].filter(Boolean).join(" · ");
-  return (
-    <IssueRow
-      selected={selected} onClick={onClick} tone="mute" title={runTitle(run)} sub={meta}
-      tags={live ? [job?.total ? `идёт ${job.done ?? 0} из ${job.total}` : "идёт"] : run.status === "failed" ? ["прервался"] : run.status === "stopped" ? ["остановлен"] : undefined}
-      stats={total !== undefined ? [{ value: total, label: plural(total, "диалог", "диалога", "диалогов"), share: live && job?.total ? (job.done ?? 0) / job.total : undefined }] : []}
-    />
-  );
-}
+  return isRunning(run) ? (job?.total ? `идёт ${job.done ?? 0} из ${job.total}` : "идёт") : run.status === "failed" ? "прервался" : run.status === "stopped" ? "остановлен" : "завершён";
+};
 
-/** The runs, newest first. */
-export function RunList({ runs, state, selectedId, onPick }: { runs: LabRun[]; state: LabState; selectedId: string | null; onPick: (id: string) => void }) {
+/** The runs as Raindrop's Issues table, newest first: which agent and version, when, how many dialogues, which customers. Nothing of the verdicts. */
+export function RunList({ runs, state, onOpen }: { runs: LabRun[]; state: LabState; onOpen: (id: string) => void }) {
+  const cols: Col<LabRun>[] = [
+    {
+      key: "run", label: "Прогон", sort: (a, b) => runTitle(a).localeCompare(runTitle(b), "ru"),
+      cell: r => <Lead title={runTitle(r)} sub={r.label || runTypes(r, state).join(", ")} tags={isRunning(r) || r.status === "failed" || r.status === "stopped" ? <Tag>{stateWord(r, state)}</Tag> : undefined} />,
+    },
+    { key: "when", label: "Начат", width: "128px", sort: (a, b) => a.startedAt.localeCompare(b.startedAt), cell: r => <span className="text-small text-lab-soft">{when(r.startedAt)}</span> },
+    { key: "types", label: "Типы клиентов", width: "200px", cell: r => <span className="line-clamp-2 text-small text-lab-soft">{runTypes(r, state).join(", ")}</span> },
+    { key: "repeats", label: "Повторы", width: "80px", align: "right", sort: (a, b) => (a.repeats ?? 1) - (b.repeats ?? 1), cell: r => <span className="text-small text-lab-soft">{r.repeats && r.repeats > 1 ? `×${r.repeats}` : "—"}</span> },
+    {
+      key: "dialogs", label: "Диалогов", width: "88px", align: "right", sort: (a, b) => (a.metric?.total ?? 0) - (b.metric?.total ?? 0),
+      cell: r => (r.metric ? <span title={plural(r.metric.total, "диалог", "диалога", "диалогов")} className="text-small font-medium text-lab-ink">{r.metric.total}</span> : <span className="text-lab-faint">—</span>),
+    },
+  ];
   return (
-    <div>
-      {runs.map(r => <RunRow key={r.id} run={r} state={state} selected={r.id === selectedId} onClick={() => onPick(r.id)} />)}
-      {!runs.length && <div className="px-4 py-10 text-center text-small text-lab-dim">Прогонов пока нет</div>}
+    <div className="h-full overflow-auto px-4 py-4">
+      <Table rows={runs} cols={cols} rowKey={r => r.id} onOpen={r => onOpen(r.id)} initial={{ key: "when", dir: -1 }}
+        empty={<div className="px-4 py-10 text-center text-small text-lab-dim">Прогонов пока нет</div>} />
     </div>
   );
 }

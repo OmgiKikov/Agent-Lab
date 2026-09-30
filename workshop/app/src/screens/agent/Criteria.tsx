@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../lab/api";
 import { day, plural } from "../../lab/format";
@@ -11,7 +11,6 @@ import { Button } from "../../ui/Button";
 import { EmptyState, Skeleton } from "../../ui/EmptyState";
 import { Summary, type Stat } from "../../ui/Summary";
 import { Modal } from "../../ui/Modal";
-import { Split } from "../../ui/Split";
 import { useToast } from "../../ui/toast";
 import { RuleDetail } from "../rules/RuleDetail";
 import { RuleList, matchesRule, type RuleFilter } from "../rules/RuleList";
@@ -87,16 +86,12 @@ export function Criteria() {
     n.delete("vt"); n.delete("example");
     return n;
   }, { replace });
-  useEffect(() => {
-    if (!id && shown[0] && window.matchMedia("(min-width: 1024px)").matches) open(shown[0].id, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, shown]);
   const step = (d: 1 | -1) => {
-    if (!shown.length) return;
+    if (!id || !shown.length) return;
     const at = shown.findIndex(r => r.id === id);
-    open(shown[at < 0 ? 0 : Math.max(0, Math.min(shown.length - 1, at + d))].id, true);
+    open(shown[Math.max(0, Math.min(shown.length - 1, (at < 0 ? 0 : at) + d))].id, true);
   };
-  useKeys({ KeyJ: () => step(1), ArrowDown: () => step(1), KeyK: () => step(-1), ArrowUp: () => step(-1) });
+  useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
 
   if (!state || (state.discover && !data)) return <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div>;
   if (!state.discover || !data) {
@@ -108,13 +103,12 @@ export function Criteria() {
   }
   return (
     <div className="flex h-full flex-col">
-      <CriteriaSummary data={data} state={state} filter={filter} onFilter={setFilter} />
-      <Split
-        showDetail={!!id}
-        list={<RuleList rules={shown} selectedId={id} filter={filter} onFilter={setFilter} query={query} onQuery={setQuery} onPick={k => open(k)} />}
-        detail={selected ? <RuleDetail key={selected.id} r={selected} data={data} onBack={() => open(null)} />
-          : <EmptyState title={id ? "Этого критерия нет в текущей оценке" : "Выберите критерий слева"}>{id ? "Критерии могли извлечь заново." : null}</EmptyState>}
-      />
+      {!id && <CriteriaSummary data={data} state={state} filter={filter} onFilter={setFilter} />}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {id ? (selected ? <RuleDetail key={selected.id} r={selected} data={data} onBack={() => open(null)} />
+          : <EmptyState title="Этого критерия нет в текущей оценке">Критерии могли извлечь заново.</EmptyState>)
+          : <RuleList rules={shown} filter={filter} onFilter={setFilter} query={query} onQuery={setQuery} onOpen={k => open(k)} />}
+      </div>
     </div>
   );
 }

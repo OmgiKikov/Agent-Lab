@@ -1,12 +1,12 @@
-import { ChevronDown, Search } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import type { RuleEntry } from "../../lab/problems";
-import { IssueRow } from "../../ui/IssueRow";
+import { Tag } from "../../ui/Details";
 import { Menu } from "../../ui/Menu";
-import { Label } from "../../ui/Label";
+import { Lead, ListBar, Share, Table, type Col } from "../../ui/Table";
 
 export type RuleFilter = "all" | "violated" | "kept" | "disputed";
 
-const FILTER: Record<RuleFilter, string> = { all: "все", violated: "нарушаются", kept: "выполняются", disputed: "спорные" };
+const FILTER: Record<RuleFilter, string> = { all: "Все", violated: "Нарушаются", kept: "Выполняются", disputed: "Спорные" };
 
 export const disputedCount = (r: RuleEntry) => [...r.log.examples, ...r.sim.examples].filter(e => e.second === "disagree").length;
 
@@ -20,49 +20,32 @@ export function matchesRule(r: RuleEntry, filter: RuleFilter, query: string) {
 }
 
 const fileOf = (origin: string) => origin.split("/").pop() || origin || "без источника";
+const dash = <span className="text-lab-faint">—</span>;
 
-/** The criteria grouped by the file they are quoted from; violated ones marked, counts in the logs and the run. */
-export function RuleList({ rules, selectedId, filter, onFilter, query, onQuery, onPick }: {
-  rules: RuleEntry[]; selectedId: string | null; filter: RuleFilter; onFilter: (f: RuleFilter) => void;
-  query: string; onQuery: (q: string) => void; onPick: (id: string) => void;
+/** The criteria as Raindrop's Issues table: the text with its file, then the counts of the logs and of the run, kept apart. */
+export function RuleList({ rules, filter, onFilter, query, onQuery, onOpen }: {
+  rules: RuleEntry[]; filter: RuleFilter; onFilter: (f: RuleFilter) => void; query: string; onQuery: (q: string) => void; onOpen: (id: string) => void;
 }) {
-  const groups = new Map<string, RuleEntry[]>();
-  for (const r of rules) groups.set(r.rule.origin, [...(groups.get(r.rule.origin) ?? []), r]);
+  const side = (s: RuleEntry["log"]) => (s.failed + s.passed ? <Share n={s.failed} of={s.failed + s.passed} title={`нарушено ${s.failed} из ${s.failed + s.passed}`} /> : dash);
+  const cols: Col<RuleEntry>[] = [
+    { key: "rule", label: "Критерий", sort: (a, b) => a.rule.text.localeCompare(b.rule.text, "ru"),
+      cell: r => <Lead title={r.rule.text} sub={r.rule.condition || undefined} tags={<Tag title={r.rule.origin} className="max-w-[260px] font-mono">{fileOf(r.rule.origin)}{r.rule.kind === "tools" ? " · инструменты" : ""}</Tag>} /> },
+    { key: "log", label: "В логах", width: "128px", align: "right", title: "Нарушено в N из M диалогов логов", sort: (a, b) => a.log.failed - b.log.failed, cell: r => side(r.log) },
+    { key: "sim", label: "В прогоне", width: "128px", align: "right", title: "Нарушено в N из M диалогов последнего прогона", sort: (a, b) => a.sim.failed - b.sim.failed, cell: r => side(r.sim) },
+    { key: "disputed", label: "Спорных", width: "76px", align: "right", title: "Вердиктов, где второй судья не согласен", sort: (a, b) => disputedCount(a) - disputedCount(b), cell: r => (disputedCount(r) ? <span className="text-small text-lab-warn">{disputedCount(r)}</span> : dash) },
+    { key: "people", label: "Люди", width: "72px", align: "right", sort: (a, b) => a.human.agree + a.human.disagree - b.human.agree - b.human.disagree,
+      cell: r => (r.human.agree + r.human.disagree ? <span className="whitespace-nowrap text-small text-lab-soft">{r.human.agree + r.human.disagree}</span> : dash) },
+  ];
   return (
-    <div>
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-white/[0.08] bg-lab-surface px-3 py-2">
-        <Menu
-          trigger={<span className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-meta text-lab-dim hover:text-lab-text">{FILTER[filter]}<ChevronDown className="size-3" /></span>}
-          items={(Object.keys(FILTER) as RuleFilter[]).map(f => ({ key: f, label: FILTER[f], on: f === filter, run: () => onFilter(f) }))}
-        />
-        <label className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded border border-white/[0.08] px-2 text-meta text-lab-dim focus-within:border-white/25">
-          <Search aria-hidden className="size-3 flex-shrink-0" />
-          <input value={query} onChange={e => onQuery(e.target.value)} placeholder="Найти…" name="q" autoComplete="off" aria-label="Найти критерий" className="min-w-0 flex-1 bg-transparent text-lab-text outline-none placeholder:text-lab-faint" />
-        </label>
-      </div>
-      {[...groups.entries()].map(([origin, list]) => (
-        <div key={origin}>
-          <div className="border-b border-white/[0.08] bg-lab-bg/60 px-4 py-2" title={origin}>
-            <Label className="truncate">{fileOf(origin)}{list[0].rule.kind === "tools" && " · инструменты"}</Label>
-          </div>
-          {list.map(r => {
-            const violated = r.log.failed + r.sim.failed > 0;
-            const stat = (label: string, side: RuleEntry["log"]) => {
-              const total = side.failed + side.passed;
-              return total ? { value: side.failed, of: `из ${total}`, label, share: side.failed / total, title: `${label}: нарушено ${side.failed} из ${total}` } : null;
-            };
-            return (
-              <IssueRow
-                key={r.id} selected={r.id === selectedId} onClick={() => onPick(r.id)}
-                lead={<span className={violated ? "size-1.5 flex-shrink-0 rounded-full bg-lab-bad" : "size-1.5 flex-shrink-0 rounded-full bg-white/20"} aria-label={violated ? "нарушается" : "не нарушается"} />}
-                title={r.rule.text} sub={r.rule.condition || undefined}
-                stats={[stat("логи", r.log), stat("прогон", r.sim)].filter((x): x is NonNullable<typeof x> => !!x)}
-              />
-            );
-          })}
-        </div>
-      ))}
-      {!rules.length && <div className="px-4 py-10 text-center text-small text-lab-dim">{query ? "Ничего не нашлось" : "В этом отборе критериев нет"}</div>}
+    <div className="h-full overflow-auto px-4 py-4">
+      <ListBar query={query} onQuery={onQuery} placeholder="Найти критерий…" label="Найти критерий"
+        end={
+          <Menu align="right" trigger={<span className="inline-flex h-9 items-center gap-2 rounded border border-white/[0.08] px-3 text-small text-lab-text hover:border-white/25">{FILTER[filter]}<ChevronDown className="size-3.5 text-lab-dim" /></span>}
+            items={(Object.keys(FILTER) as RuleFilter[]).map(f => ({ key: f, label: FILTER[f], on: f === filter, run: () => onFilter(f) }))} />
+        } />
+      <Table className="mt-4" rows={rules} cols={cols} rowKey={r => r.id} onOpen={r => onOpen(r.id)} initial={{ key: "log", dir: -1 }}
+        empty={<div className="px-4 py-10 text-center text-small text-lab-dim">{query ? "Ничего не нашлось" : "В этом отборе критериев нет"}</div>} />
+      {rules.length > 0 && <p className="mt-2 text-meta text-lab-dim">{rules.length} критериев</p>}
     </div>
   );
 }
