@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ChevronDown, FileDown } from "lucide-react";
 import { when } from "../../lab/format";
+import { simKey, simRows } from "../../lab/dialogs";
 import { download, problemsReport } from "../../lab/problemReport";
 import { useProblems } from "../../lab/problems";
 import { humanChecked } from "../../lab/verdicts";
@@ -14,7 +15,7 @@ import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { FirstRun } from "../../shell/FirstRun";
 import { Summary, type Stat } from "../../ui/Summary";
 import { Menu } from "../../ui/Menu";
-import { Tabs } from "../../ui/Tabs";
+import { PillTabs } from "../../ui/PillTabs";
 import { DialogsView } from "../dialogs/DialogsView";
 import { ProblemsView } from "../problems/ProblemsView";
 import { TypesView } from "./TypesView";
@@ -53,15 +54,20 @@ export function ResultsPage() {
     ...(m.secondJudge?.checked ? [{ label: "Второй судья согласен", value: m.secondJudge.agree, of: `из ${m.secondJudge.checked}`, title: m.secondJudge.model, onClick: () => go("review", { queue: "disputed" }) }] : []),
     { label: "Проверено людьми", value: people?.checked ?? 0, of: `из ${people?.of ?? 0}`, active: tab === "review", onClick: () => go("review") },
   ] : [];
+  const openId = tab === "problems" ? params.get("p") : tab === "dialogs" ? params.get("d") : null;
+  const tabName = { problems: "Нарушения", dialogs: "Диалоги", review: "Проверка", types: "По типам клиентов" }[tab];
+  const openTitle = !openId ? null : tab === "problems" ? problems?.rules.find(r => r.id === openId)?.title : simRows(full).find(r => r.key === openId)?.title;
+  const back = () => { const n = new URLSearchParams(params); for (const k of ["p", "d", "dt", "example", "ev"]) n.delete(k); return `/results?${n}`; };
   const picker = run && (
-    <Menu align="right" trigger={<span className="inline-flex h-7 items-center gap-1 rounded px-2 text-meta text-lab-mute hover:text-lab-text">Прогон: {when(run.startedAt)}<ChevronDown className="size-3" /></span>}
+    <Menu align="right" trigger={<span className="inline-flex h-7 items-center gap-1 rounded border border-white/[0.15] bg-[rgb(40,40,40)] px-2.5 text-meta text-lab-text hover:border-white/25">Прогон: {when(run.startedAt)}<ChevronDown className="size-3" /></span>}
       items={finished.map(r => ({ key: r.id, label: runTitle(r), sub: when(r.startedAt), on: r.id === run.id, run: () => set("run", r.id) }))} />
   );
 
   return (
     <div className="flex h-full flex-col">
       <SectionHeader
-        crumbs={[{ label: "Результаты", to: run ? "/results" : undefined }, ...(run ? [{ label: runTitle(run) }] : [])]}
+        crumbs={[{ label: "Результаты", to: run ? "/results" : undefined }, ...(run ? [{ label: runTitle(run), to: openId ? back() : undefined }] : []), ...(openTitle ? [{ label: openTitle }] : [])]}
+        meta={run && !openId ? `${tabName} · ${when(run.startedAt)}` : undefined}
         actions={run ? <>
           <Link to={`/simulations?r=${encodeURIComponent(run.id)}`}><Button variant="outline">Открыть прогон</Button></Link>
         </> : undefined}
@@ -74,21 +80,26 @@ export function ResultsPage() {
         </FirstRun>
       ) : (
         <>
-          <Summary stats={stats} />
-          <Tabs<Tab> className="px-2" value={tab} onChange={t => set("tab", t === "problems" ? null : t)}
-            end={<>{picker}{problems?.sim?.runId === run.id && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download(`otchet-${run.id}.md`, problemsReport(problems, window.location.origin, "sim"))}>Отчёт</Button>}</>}
-            tabs={[
-            { value: "problems", label: "Нарушения" },
-            { value: "dialogs", label: "Диалоги", count: m?.total },
-            { value: "review", label: "Проверка" },
-            { value: "types", label: "По типам клиентов" },
-          ]} />
-          <div className="min-h-0 flex-1 overflow-auto">
+          {!openId && (
+            <>
+              <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-white/[0.08] px-3 py-[7px]">
+                <PillTabs<Tab> value={tab} onChange={t => set("tab", t === "problems" ? null : t)} tabs={[
+                  { value: "problems", label: "Нарушения", count: violated },
+                  { value: "dialogs", label: "Диалоги", count: m?.total },
+                  { value: "review", label: "Проверка" },
+                  { value: "types", label: "По типам клиентов" },
+                ]} />
+                <div className="flex items-center gap-1">{picker}{problems?.sim?.runId === run.id && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download(`otchet-${run.id}.md`, problemsReport(problems, window.location.origin, "sim"))}>Отчёт</Button>}</div>
+              </div>
+              {tab !== "review" && tab !== "types" && <Summary stats={stats} />}
+            </>
+          )}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {tab === "problems" ? <ProblemsView source="sim" runId={run.id} />
               : tab === "dialogs" ? <DialogsView source="sim" runId={run.id} />
               : tab === "review" ? <ReviewView source="sim" runId={run.id} />
               : !full?.items?.length ? <Skeleton className="m-6 h-64" />
-              : <TypesView run={full} items={full.items} hrefOf={i => simDialog(run.id, i)} />}
+              : <div className="h-full overflow-auto"><TypesView run={full} items={full.items} hrefOf={i => simDialog(run.id, i)} /></div>}
           </div>
         </>
       )}

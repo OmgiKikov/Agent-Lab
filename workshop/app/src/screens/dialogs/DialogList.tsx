@@ -1,12 +1,11 @@
-import { memo } from "react";
-import { ChevronDown, Search, X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { when } from "../../lab/format";
 import type { DialogRow, Source } from "../../lab/dialogs";
 import { personaName } from "../../lab/look";
 import type { Persona } from "../../lab/types";
-import { IssueRow } from "../../ui/IssueRow";
+import { Tag } from "../../ui/Details";
 import { Menu } from "../../ui/Menu";
+import { Lead, ListBar, Share, Table, type Col } from "../../ui/Table";
 
 export type Verdict = "all" | "fail" | "pass" | "none" | "disputed";
 export type SourceFilter = "all" | Source;
@@ -24,61 +23,70 @@ export function matchesRow(r: DialogRow, source: SourceFilter, verdict: Verdict,
 
 const SOURCE: Record<Source, string> = { log: "лог", sim: "симуляция", trace: "трейс" };
 
-function Mark({ row }: { row: DialogRow }) {
-  if (row.source === "trace") return <span className="size-1.5 flex-shrink-0 rounded-full bg-white/20" />;
-  const tone = row.status === "FAIL" ? "bg-lab-bad" : row.status === "PASS" ? "bg-white/25" : "bg-lab-warn";
-  return <span className={cn("size-1.5 flex-shrink-0 rounded-full", tone)} title={row.status === "FAIL" ? "нарушение" : row.status === "PASS" ? "без обнаруженных нарушений" : "не оценён"} />;
-}
-
-/** One row; memo keeps a long list from re-rendering when only the selection or the query box changes. */
-const Row = memo(function Row({ row, selected, onPick, personas }: { row: DialogRow; selected: boolean; onPick: (key: string) => void; personas: Persona[] }) {
-  const who = row.source === "sim" ? [personaName(personas, row.persona), row.attempt && row.attempt > 1 ? `повтор ${row.attempt}` : ""].filter(Boolean).join(" · ") : "";
-  const judged = row.rules.filter(r => r.status === "FAIL" || r.status === "PASS").length;
-  const where = [row.topic, who].filter(Boolean).join(" · ");
-  return (
-    <IssueRow
-      selected={selected} onClick={() => onPick(row.key)} lead={<Mark row={row} />} title={row.title}
-      tags={row.status === "UNMEASURED" ? ["не оценён"] : row.disputed ? ["судьи расходятся"] : SOURCE[row.source] === "трейс" ? ["трейс"] : undefined}
-      sub={row.fails.length ? <span className="text-lab-bad">{row.fails[0]}{row.fails.length > 1 && ` и ещё ${row.fails.length - 1}`}</span> : where}
-      stats={judged ? [{ value: row.fails.length, of: `из ${judged}`, share: row.fails.length / judged, title: `нарушено ${row.fails.length} из ${judged} критериев` }] : []}
-    />
-  );
-});
+const VERDICT_WORD: Record<string, { word: string; tone: string }> = {
+  FAIL: { word: "нарушение", tone: "text-lab-bad" },
+  PASS: { word: "без нарушений", tone: "text-lab-ok" },
+  UNMEASURED: { word: "не оценён", tone: "text-lab-warn" },
+  RUNNING: { word: "идёт", tone: "text-lab-accent" },
+};
+const dash = <span className="text-lab-faint">—</span>;
+const judgedOf = (r: DialogRow) => r.rules.filter(x => x.status === "FAIL" || x.status === "PASS").length;
+const humansOf = (r: DialogRow) => { const f = r.rules.filter(x => x.status === "FAIL"); return { of: f.length, checked: f.filter(x => x.review).length }; };
 
 const VERDICTS: { value: Verdict; label: string }[] = [
   { value: "all", label: "Все" }, { value: "fail", label: "Нарушения" }, { value: "pass", label: "Без нарушений" },
   { value: "none", label: "Не оценены" }, { value: "disputed", label: "Спорные" },
 ];
 
-/** The dialogues of one source: a verdict filter and a search in one row, the criterion it is narrowed to. */
-export function DialogList({ rows, all, selected, verdict, onVerdict, query, onQuery, rule, onClearRule, onPick, personas }: {
-  rows: DialogRow[]; all: DialogRow[]; selected: string | null;
+/** The dialogues of one source as a table: the opening words, the judge's verdict and the counts; a verdict filter and a search in one bar. */
+export function DialogList({ rows, all, verdict, onVerdict, query, onQuery, rule, onClearRule, onOpen, personas }: {
+  rows: DialogRow[]; all: DialogRow[];
   verdict: Verdict; onVerdict: (v: Verdict) => void; query: string; onQuery: (q: string) => void;
-  rule: string | null; onClearRule: () => void; onPick: (key: string) => void; personas: Persona[];
+  rule: string | null; onClearRule: () => void; onOpen: (key: string) => void; personas: Persona[];
 }) {
   const count = (v: Verdict) => all.filter(r => matchesRow(r, "all", v, "", null)).length;
+  const cols: Col<DialogRow>[] = [
+    {
+      key: "title", label: "Диалог", sort: (a, b) => a.title.localeCompare(b.title, "ru"),
+      cell: r => {
+        const who = r.source === "sim" ? [personaName(personas, r.persona), r.attempt && r.attempt > 1 ? `повтор ${r.attempt}` : ""].filter(Boolean).join(" · ") : "";
+        return (
+          <Lead title={r.title} sub={[r.topic, who].filter(Boolean).join(" · ") || SOURCE[r.source]}
+            tags={r.fails.length || r.disputed || r.status === "UNMEASURED" ? <>
+              {r.fails.slice(0, 1).map(f => <Tag key={f} className="max-w-[320px]">{f}</Tag>)}
+              {r.fails.length > 1 && <Tag>+{r.fails.length - 1}</Tag>}
+              {r.status === "UNMEASURED" && <Tag>не оценён</Tag>}
+              {r.disputed && <Tag>судьи расходятся</Tag>}
+            </> : undefined} />
+        );
+      },
+    },
+    { key: "verdict", label: "Вердикт", width: "128px", sort: (a, b) => (a.status ?? "").localeCompare(b.status ?? ""),
+      cell: r => { const v = r.status ? VERDICT_WORD[r.status] : undefined; return v ? <span className={cn("text-small", v.tone)}>{v.word}</span> : dash; } },
+    { key: "fails", label: "Нарушено", width: "128px", align: "right", title: "Критериев с нарушением из тех, что судья смог проверить", sort: (a, b) => a.fails.length - b.fails.length,
+      cell: r => (judgedOf(r) ? <Share n={r.fails.length} of={judgedOf(r)} title={`нарушено ${r.fails.length} из ${judgedOf(r)} критериев`} /> : dash) },
+    { key: "second", label: "Второй судья", width: "112px", align: "right", sort: (a, b) => Number(!!a.second) - Number(!!b.second),
+      cell: r => (r.second ? <span className={cn("text-small", r.disputed ? "text-lab-warn" : "text-lab-soft")}>{r.disputed ? "расходится" : "согласен"}</span> : dash) },
+    { key: "people", label: "Люди", width: "72px", align: "right", sort: (a, b) => humansOf(a).checked - humansOf(b).checked,
+      cell: r => { const h = humansOf(r); return h.checked ? <span className="whitespace-nowrap text-small text-lab-soft">{h.checked} из {h.of}</span> : dash; } },
+  ];
   return (
-    <div>
-      <div className="sticky top-0 z-10 space-y-2 border-b border-white/[0.08] bg-lab-surface px-3 py-2">
-        <div className="flex items-center gap-2">
-          <Menu
-            trigger={<span className="inline-flex h-6 items-center gap-1 rounded border border-white/[0.08] px-2 text-meta text-lab-text hover:border-white/25">{VERDICTS.find(v => v.value === verdict)?.label}<ChevronDown className="size-3 text-lab-dim" /></span>}
-            items={VERDICTS.map(v => ({ key: v.value, label: v.label, sub: `${count(v.value)}`, on: v.value === verdict, run: () => onVerdict(v.value) }))}
-          />
-          <label className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded border border-white/[0.08] px-2 text-meta text-lab-dim focus-within:border-white/25">
-            <Search aria-hidden className="size-3 flex-shrink-0" />
-            <input value={query} onChange={e => onQuery(e.target.value)} placeholder="Найти…" name="q" autoComplete="off" aria-label="Найти диалог" className="min-w-0 flex-1 bg-transparent text-lab-text outline-none placeholder:text-lab-faint" />
-          </label>
-        </div>
-        {rule && (
-          <div className="flex items-center gap-2 rounded-md bg-lab-bad/10 px-2 py-1 text-meta text-lab-bad">
-            <span className="min-w-0 flex-1 truncate">Нарушено: {rule}</span>
-            <button type="button" onClick={onClearRule} aria-label="Снять отбор по критерию" className="text-lab-dim hover:text-lab-text"><X className="size-3.5" /></button>
-          </div>
-        )}
-      </div>
-      {rows.map(r => <Row key={r.key} row={r} selected={r.key === selected} onPick={onPick} personas={personas} />)}
-      {!rows.length && <div className="px-4 py-10 text-center text-small text-lab-dim">В этом отборе диалогов нет</div>}
+    <div className="h-full overflow-auto px-4 py-4">
+      <ListBar query={query} onQuery={onQuery} placeholder="Найти диалог…" label="Найти диалог"
+        filter={rule ? (
+          <span className="inline-flex max-w-[280px] items-center gap-1 rounded border border-white/[0.1] bg-lab-raised px-1.5 py-0.5 text-meta text-lab-text">
+            <span className="truncate">нарушено: {rule}</span>
+            <button type="button" onClick={onClearRule} aria-label="Снять отбор по критерию" className="text-lab-dim hover:text-lab-text"><X className="size-3" /></button>
+          </span>
+        ) : undefined}
+        end={
+          <Menu align="right"
+            trigger={<span className="inline-flex h-9 items-center gap-2 rounded border border-white/[0.08] px-3 text-small text-lab-text hover:border-white/25">{VERDICTS.find(v => v.value === verdict)?.label}<ChevronDown className="size-3.5 text-lab-dim" /></span>}
+            items={VERDICTS.map(v => ({ key: v.value, label: v.label, sub: `${count(v.value)}`, on: v.value === verdict, run: () => onVerdict(v.value) }))} />
+        } />
+      <Table className="mt-4" rows={rows} cols={cols} rowKey={r => r.key} onOpen={r => onOpen(r.key)}
+        empty={<div className="px-4 py-10 text-center text-small text-lab-dim">В этом отборе диалогов нет</div>} />
+      {rows.length > 0 && <p className="mt-2 text-meta text-lab-dim">{rows.length} из {all.length}</p>}
     </div>
   );
 }

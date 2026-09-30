@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Check, CircleHelp, Download, MessageSquare, Minus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RunDetail } from "../../components/RunDetail";
@@ -13,8 +13,11 @@ import { useShell } from "../../shell/ShellContext";
 import { Button } from "../../ui/Button";
 import { Conversation, MarkNumber, type Mark } from "../../ui/Conversation";
 import { Skeleton } from "../../ui/EmptyState";
-import { Label } from "../../ui/Label";
-import { Tabs } from "../../ui/Tabs";
+import { Chip } from "../../ui/Chip";
+import { Details, Tag, type Detail } from "../../ui/Details";
+import { PillTabs } from "../../ui/PillTabs";
+import { Tiles, type Tile } from "../../ui/Tiles";
+import { TwoCol } from "../../ui/TwoCol";
 import { VerdictChip } from "../../ui/VerdictChip";
 import { ReviewButtons } from "../verdicts/Example";
 
@@ -100,47 +103,72 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
     setDecided(x => ({ ...x, [example.ruleId]: next }));
     review.mutate({ example, decision: next });
   };
-  return (
-    <article className="message-arrive mx-auto max-w-[820px] px-6 pb-20 pt-6 lg:px-8">
-      <button type="button" onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-small text-lab-mute transition-colors hover:text-lab-text lg:hidden"><ArrowLeft className="size-3.5" />Диалоги</button>
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
-        <h1 className="line-clamp-3 min-w-0 flex-1 text-title font-medium text-lab-ink">{row.title}</h1>
-        <div className="flex flex-shrink-0 gap-2">
-          <Button size="sm" icon={Download} disabled={!turns} onClick={() => turns && download(`dialog-${row.dialogueId ?? row.index}.md`, transcript(row, turns))}>Скачать</Button>
-          <Button size="sm" icon={MessageSquare} onClick={() => shell.openAsk(row.traceId)}>Спросить</Button>
-        </div>
+  const judged = rules.filter(r => r.status === "PASS" || r.status === "FAIL").length;
+  const reviewed = rules.filter(r => r.status === "FAIL" && (decided[r.ruleId] !== undefined ? decided[r.ruleId] : r.review)).length;
+  const tone = row.status === "FAIL" ? "bad" : row.status === "PASS" ? "ok" : row.status === "RUNNING" ? "live" : "warn";
+  const tiles: Tile[] = [
+    { label: "Нарушено", value: rules.filter(r => r.status === "FAIL").length, of: judged ? `из ${judged}` : undefined, title: "Критериев с нарушением из тех, что судья смог проверить" },
+    { label: "Выполнено", value: kept, of: judged ? `из ${judged}` : undefined },
+    { label: "Второй судья", value: row.second ? (row.disputed ? "расходится" : "согласен") : "—", title: row.second?.model },
+    { label: "Люди", value: reviewed || "—", of: reviewed ? `из ${rules.filter(r => r.status === "FAIL").length}` : undefined },
+  ];
+  const details: Detail[] = [
+    { label: "Источник", value: row.source === "log" ? "Лог" : "Симуляция" },
+    ...(row.topic ? [{ label: "Тема", value: <Tag>{row.topic}</Tag> }] : []),
+    ...(row.name ? [{ label: "Сценарий", value: row.name }] : []),
+    ...(row.source === "sim" ? [{ label: "Клиент", value: personaName(state?.personas ?? [], row.persona) }] : []),
+    ...(row.attempt && row.attempt > 1 ? [{ label: "Повтор", value: `${row.attempt}` }] : []),
+    ...(row.runId ? [{ label: "Прогон", value: <Link to={`/results?run=${encodeURIComponent(row.runId)}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-ink">результаты прогона</Link> }] : []),
+    ...(row.traceId ? [{ label: "Трейс", value: <Link to={`/runs/${encodeURIComponent(row.traceId)}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-ink">открыть в Workshop</Link> }] : []),
+    ...(row.dialogueId ? [{ label: "Диалог", value: <span className="font-mono text-meta">{row.dialogueId}</span> }] : []),
+  ];
+  const left = (
+    <>
+      <button type="button" onClick={onBack} className="mb-3 inline-flex items-center gap-1.5 text-small text-lab-mute transition-colors hover:text-lab-text lg:hidden"><ArrowLeft className="size-3.5" />Диалоги</button>
+      {verdict && <Chip tone={tone}>{verdict.word}</Chip>}
+      {row.disputed && <Chip tone="warn" className="ml-1.5">судьи расходятся</Chip>}
+      <h1 className="mt-2.5 line-clamp-4 text-title font-medium text-lab-ink">{row.title}</h1>
+      <p className="mt-2 text-small text-lab-mute">{row.source === "log" ? "Лог" : "Симуляция"}{row.topic ? ` · тема «${row.topic}»` : ""}{who ? ` · ${who}` : ""}</p>
+      <div className="mt-3 flex gap-2">
+        <Button size="sm" icon={Download} disabled={!turns} onClick={() => turns && download(`dialog-${row.dialogueId ?? row.index}.md`, transcript(row, turns))}>Скачать</Button>
+        <Button size="sm" icon={MessageSquare} onClick={() => shell.openAsk(row.traceId)}>Спросить</Button>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-lab-dim">
-        <span>{row.source === "log" ? "Лог" : "Симуляция"}</span>
-        {row.topic && <><span className="text-lab-faint">·</span><span>тема «{row.topic}»</span></>}
-        {who && <><span className="text-lab-faint">·</span><span>{who}</span></>}
-        {verdict && <><span className="text-lab-faint">·</span><span className={cn("inline-flex items-center gap-1", verdict.tone)}><verdict.icon className="size-3.5" strokeWidth={2.5} />{verdict.word}</span></>}
-        {row.disputed && <><span className="text-lab-faint">·</span><span className="text-lab-warn">судьи расходятся</span></>}
-      </div>
-      {(fails.length > 0 || kept > 0) && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {rules.filter(r => r.status === "FAIL").map(r => <VerdictChip key={r.ruleId} label={r.title || r.rule} status="FAIL" className="max-w-[320px]" />)}
-          {kept > 0 && <VerdictChip label={`${kept} из ${rules.filter(r => r.status === "PASS" || r.status === "FAIL").length} критериев`} status="PASS" />}
-        </div>
+      <Tiles className="mt-4" tiles={tiles} />
+      <Details rows={details} />
+      {rules.some(r => r.status === "FAIL" || r.status === "PASS") && (
+        <section className="mt-6">
+          <h2 className="text-heading font-semibold text-lab-ink">Вердикты</h2>
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {rules.filter(r => r.status === "FAIL").map(r => <VerdictChip key={r.ruleId} label={r.title || r.rule} status="FAIL" className="max-w-full" />)}
+            {kept > 0 && <VerdictChip label={`${kept} из ${judged} критериев`} status="PASS" />}
+          </div>
+        </section>
       )}
-      <Tabs className="mt-6" value={tab} onChange={setTab}
-        tabs={TABS.filter(t => t.value !== "trace" || row.traceId).map(t => ({ ...t, count: t.value === "rules" ? row.rules.length : undefined }))} />
+    </>
+  );
+  const right = (
+    <div className="flex min-h-full flex-col">
+      <div className="flex-shrink-0 border-b border-white/[0.08] px-3 py-[7px]">
+        <PillTabs<Tab> value={tab} onChange={setTab}
+          tabs={TABS.filter(t => t.value !== "trace" || row.traceId).map(t => ({ ...t, count: t.value === "rules" ? row.rules.length : undefined }))} />
+      </div>
+      <div className="px-4 pb-16 pt-4">
       {tab === "talk" && (
-        <div className="mt-5">
+        <div>
           {loading ? <Skeleton className="h-40" />
             : error ? <p className="text-small text-lab-bad">Не удалось загрузить разговор: {error instanceof Error ? error.message : String(error)}</p>
             : turns ? <Conversation turns={turns} marks={marks} active={active ?? pinned} onActive={mark} />
             : <p className="text-read text-lab-text">{row.title}</p>}
           {fails.length > 0 && (
             <div className="mt-6 space-y-2">
-              <Label>Нарушения</Label>
+              <h2 className="text-heading font-semibold text-lab-ink">Нарушения</h2>
               {fails.map(r => {
                 const n = numbers.get(r.ruleId) ?? 0;
                 const on = (active ?? pinned) === n;
                 return (
                   <div
                     key={r.ruleId} onMouseEnter={() => setActive(n)} onMouseLeave={() => setActive(null)} onClick={() => jump(n)}
-                    className={cn("flex cursor-pointer gap-3 rounded-lg border px-3 py-2.5 text-small text-lab-text transition-colors", on ? "border-lab-mark/50 bg-lab-mark/[0.06]" : "border-white/[0.08] hover:border-white/15")}
+                    className={cn("flex cursor-pointer gap-3 rounded-lg border px-3 py-2.5 text-small text-lab-text transition-colors", on ? "border-lab-mark/50 bg-lab-mark/[0.06]" : "border-white/[0.08] bg-lab-raised hover:border-white/15")}
                   >
                     <MarkNumber n={n} active={on} />
                     <span><span className="text-lab-ink">{r.title || r.rule}</span><span className="block text-lab-mute">{r.reason}</span></span>
@@ -153,17 +181,19 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
         </div>
       )}
       {tab === "rules" && (
-        <div className="mt-2">
+        <div className="-mt-2">
           {rules.length ? rules.map(r => <RuleRow key={r.ruleId} row={row} rule={r} n={numbers.get(r.ruleId)} decided={decided[r.ruleId]} onDecide={decide} />)
             : <p className="mt-5 text-small text-lab-dim">Судья этот диалог не оценивал.</p>}
         </div>
       )}
-      {tab === "trace" && row.traceId && <div className="-mx-6 mt-4 lg:-mx-8"><RunDetail key={row.traceId} runId={row.traceId} /></div>}
+      {tab === "trace" && row.traceId && <div className="-mx-4 -mt-4"><RunDetail key={row.traceId} runId={row.traceId} /></div>}
       {tab === "details" && (
-        <pre className="mt-5 overflow-auto rounded-lg border border-white/[0.08] bg-lab-surface p-4 font-mono text-meta text-lab-mute">
+        <pre className="overflow-auto rounded-lg border border-white/[0.08] bg-lab-surface p-4 font-mono text-meta text-lab-mute">
           {JSON.stringify({ источник: row.source, диалог: row.dialogueId, прогон: row.runId, номер: row.index, трейс: row.traceId, вердикт: row.status, второй_судья: row.second, критерии: row.rules }, null, 2)}
         </pre>
       )}
-    </article>
+      </div>
+    </div>
   );
+  return <TwoCol left={left} right={right} />;
 }

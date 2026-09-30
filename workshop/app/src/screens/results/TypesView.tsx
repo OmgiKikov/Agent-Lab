@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 import { personaOf, scenariosOfRun, typesOfRun } from "../../lab/logic";
 import type { Item, LabRun } from "../../lab/types";
 import { useLabState } from "../../shell/LabProvider";
-import { Label } from "../../ui/Label";
 
 const finished = (i: Item) => i.status === "PASS" || i.status === "FAIL";
 
@@ -33,8 +32,8 @@ export function TypesView({ run, items, hrefOf }: { run: LabRun; items: Item[]; 
   const scenarios = scenariosOfRun(items);
   const measuredOf = (own: Item[]) => own.filter(finished);
   return (
-    <div className="mx-auto max-w-[860px] px-6 pb-16 pt-6">
-      <Label>По типам клиентов</Label>
+    <div className="px-4 pb-16 pt-4">
+      <h2 className="text-heading font-semibold text-lab-ink">По типам клиентов</h2>
       <div className={cn("mt-3 grid gap-4", types.length > 1 && "md:grid-cols-2")}>
         {types.map(t => {
           const own = items.filter(i => personaOf(i) === t.id);
@@ -49,7 +48,7 @@ export function TypesView({ run, items, hrefOf }: { run: LabRun; items: Item[]; 
           );
         })}
       </div>
-      <Label className="mt-10">По сценариям</Label>
+      <h2 className="mt-10 text-heading font-semibold text-lab-ink">По сценариям</h2>
       <div className="mt-2">
         {scenarios.map(s => (
           <div key={s.id} className="border-b border-white/[0.08] py-3">
