@@ -16,13 +16,14 @@ function RailLink({ item, busy }: { item: Item; busy: boolean }) {
     <NavLink
       to={item.to} aria-current={active ? "page" : undefined} title={item.label} aria-label={item.label}
       className={cn(
-        "relative flex size-9 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-lab-accent",
+        "relative flex min-h-9 w-full items-center gap-3 rounded-md px-3 text-small transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-lab-accent",
         active ? "bg-lab-active text-lab-ink" : "text-lab-dim hover:bg-lab-hover hover:text-lab-text",
       )}
     >
-      <item.icon className="size-4" strokeWidth={1.75} />
-      {!!item.badge && <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-lab-bad px-1 text-center font-mono text-micro leading-[14px] text-black">{item.badge}</span>}
-      {busy && <span className="pulse-dot absolute bottom-1 right-1 size-1.5 rounded-full bg-lab-accent" />}
+      <item.icon className="size-4 shrink-0" strokeWidth={1.75} />
+      <span className="truncate">{item.label}</span>
+      {!!item.badge && <span className="ml-auto min-w-[18px] rounded-full bg-lab-bad/90 px-1.5 text-center font-mono text-micro leading-[18px] text-black">{item.badge}</span>}
+      {busy && <span className="pulse-dot ml-auto size-1.5 shrink-0 rounded-full bg-lab-accent" />}
     </NavLink>
   );
 }
@@ -42,12 +43,16 @@ export function Rail({ problems }: { problems: number }) {
     { to: LINKS.settings, label: "Настройки", icon: Settings, match: ["/settings"] },
   ];
   return (
-    <nav aria-label="Разделы" className="flex w-12 flex-shrink-0 flex-col items-center gap-1 border-r border-white/[0.06] bg-lab-surface py-3">
-      <NavLink to={LINKS.problems} aria-label="На главную" className="mb-3 rounded-md p-1 text-lab-soft transition-colors hover:text-lab-ink">
+    <nav aria-label="Разделы" className="flex w-[196px] flex-shrink-0 flex-col gap-1 border-r border-white/[0.06] bg-lab-surface px-3 py-4">
+      <NavLink to={LINKS.problems} aria-label="На главную" className="mb-7 flex items-center gap-2 px-2 text-lab-soft transition-colors hover:text-lab-ink">
         <RaindropLogo size={18} />
+        <span className="font-mono text-[11px] font-semibold tracking-[0.16em] text-lab-ink">RAINDROP</span>
+        <span className="ml-auto rounded border border-white/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-lab-dim">LAB</span>
       </NavLink>
+      <div className="mb-1 px-2 font-mono text-[9px] uppercase tracking-[0.16em] text-lab-faint">Evaluate</div>
       {main.map(i => <RailLink key={i.to} item={i} busy={busy(i.to)} />)}
-      <div className="flex-1" />
+      <div className="mt-6 flex-1" />
+      <div className="mb-1 px-2 font-mono text-[9px] uppercase tracking-[0.16em] text-lab-faint">Workspace</div>
       <Activity />
       {bottom.map(i => <RailLink key={i.to} item={i} busy={busy(i.to)} />)}
     </nav>
