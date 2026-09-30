@@ -32,15 +32,15 @@ function RailLink({ item, busy }: { item: Item; busy: boolean }) {
 export function Rail({ problems }: { problems: number }) {
   const { state } = useLabState();
   const kind = state?.job.running ? state.job.kind : null;
-  const busy = (to: string) => !!kind && JOBS[kind]?.to === to;
+  const busy = (to: string) => !!kind && JOBS[kind]?.to.split("?")[0] === to;
   const main: Item[] = [
     { to: LINKS.problems, label: "Проблемы", icon: TriangleAlert, match: ["/problems"], badge: problems },
     { to: LINKS.dialogs, label: "Диалоги", icon: MessagesSquare, match: ["/dialogs", "/runs", "/search", "/saved"] },
     { to: LINKS.rules, label: "Правила", icon: ListChecks, match: ["/rules", "/review"] },
-    { to: LINKS.simulations, label: "Симуляции", icon: FlaskConical, match: ["/simulations", "/lab/checks"] },
+    { to: LINKS.simulations, label: "Симуляции", icon: FlaskConical, match: ["/simulations"] },
   ];
   const bottom: Item[] = [
-    { to: LINKS.agent, label: "Агент", icon: Bot, match: ["/agent", "/lab/agent"] },
+    { to: LINKS.agent, label: "Агент", icon: Bot, match: ["/agent"] },
     { to: LINKS.settings, label: "Настройки", icon: Settings, match: ["/settings"] },
   ];
   return (

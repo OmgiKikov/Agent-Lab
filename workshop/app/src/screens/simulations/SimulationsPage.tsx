@@ -21,7 +21,7 @@ const wide = () => window.matchMedia("(min-width: 1024px)").matches;
 /** Симуляции: the runs of the simulated customer against the agent, and the scenarios it plays. */
 export function SimulationsPage() {
   const { runId, scenarioId } = useParams<{ runId?: string; scenarioId?: string }>();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const { state, offline, refresh } = useLabState();
   const toast = useToast();
@@ -40,6 +40,13 @@ export function SimulationsPage() {
   useEffect(() => {
     if (!selectedId && ids[0] && wide()) navigate(pathOf(ids[0]), { replace: true });
   }, [selectedId, ids[0], mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ⌘K «Сыграть сценарии» comes with ?play=1: the dialog opens, nothing starts until it is confirmed.
+  useEffect(() => {
+    if (params.get("play") !== "1") return;
+    setPlay({ preset: null });
+    setParams(prev => { const n = new URLSearchParams(prev); n.delete("play"); return n; }, { replace: true });
+  }, [params, setParams]);
 
   // After «Сыграть» the run opens as soon as the service names it.
   const started = state?.job.running && state.job.kind === "run" ? state.job.progress.run : undefined;

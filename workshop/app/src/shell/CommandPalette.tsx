@@ -1,19 +1,23 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, CornerDownLeft, FlaskConical, ListChecks, MessageSquare, MessagesSquare, Play, Search, Settings, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Bot, CornerDownLeft, FileText, FlaskConical, Hammer, ListChecks, MessageSquare, MessagesSquare, Play, Search, Settings, TriangleAlert, Upload, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { day } from "../lab/format";
 import { useProblems } from "../lab/problems";
+import { runTitle } from "../lab/runs";
+import { useLabState } from "./LabProvider";
 import { LINKS } from "./links";
 import { useShell } from "./ShellContext";
 
 type Entry = { id: string; group: string; label: string; sub?: string; icon: LucideIcon; run: () => void };
 
-/** ⌘K: any section, any problem and the main actions, without the mouse. */
+/** ⌘K: any section, problem, rule, run or scenario and the main actions, without the mouse. Actions only open their place. */
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const shell = useShell();
   const { data } = useProblems(null);
+  const { state } = useLabState();
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
   const list = useRef<HTMLDivElement>(null);
@@ -29,6 +33,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { id: "s-agent", group: "Разделы", label: "Агент", icon: Bot, run: go(LINKS.agent) },
       { id: "s-settings", group: "Разделы", label: "Настройки", icon: Settings, run: go(LINKS.settings) },
       { id: "a-assess", group: "Действия", label: "Оценить логи", sub: "Судья проверит диалоги логов по правилам агента", icon: Play, run: go("/problems?assess=1") },
+      { id: "a-play", group: "Действия", label: "Сыграть сценарии", sub: "Синтетический клиент сыграет сценарии с агентом", icon: Play, run: go(`${LINKS.simulations}?play=1`) },
+      { id: "a-cards", group: "Действия", label: "Собрать сценарии", sub: "Из последней оценки логов — в «Симуляциях»", icon: Hammer, run: go(LINKS.scenarios) },
+      { id: "a-logs", group: "Действия", label: "Загрузить логи", sub: "Выгрузка чата — в «Диалогах»", icon: Upload, run: go(LINKS.dialogs) },
+      { id: "a-code", group: "Действия", label: "Прочитать код агента", sub: "Промпты и инструменты — в «Агенте»", icon: FileText, run: go(`${LINKS.agent}?tab=code`) },
       { id: "a-review", group: "Действия", label: "Проверить вердикты", sub: "Верно или неверно судья: по одному, клавишами V / N", icon: ListChecks, run: go(LINKS.review) },
       { id: "a-ask", group: "Действия", label: "Спросить", sub: "Ассистент по текущему экрану", icon: MessageSquare, run: () => shell.openAsk() },
     ];
@@ -40,8 +48,16 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     for (const r of data?.rules ?? []) {
       out.push({ id: `r-${r.id}`, group: "Правила", label: r.rule.text, sub: r.rule.origin, icon: ListChecks, run: go(`/rules/${r.id}`) });
     }
+    const runs = [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+    for (const r of runs) {
+      const m = r.metric;
+      out.push({ id: `run-${r.id}`, group: "Прогоны", label: r.label || runTitle(r), sub: [day(r.startedAt), m?.measured ? `нарушения в ${m.failed} из ${m.measured}` : ""].filter(Boolean).join(" · "), icon: FlaskConical, run: go(`/simulations/runs/${encodeURIComponent(r.id)}`) });
+    }
+    for (const c of state?.cards?.cards ?? []) {
+      out.push({ id: `sc-${c.id}`, group: "Сценарии", label: c.name, sub: c.topic, icon: FlaskConical, run: go(`/simulations/scenarios/${encodeURIComponent(c.id)}`) });
+    }
     return out;
-  }, [data, navigate, shell]);
+  }, [data, state?.runs, state?.cards, navigate, shell]);
 
   const q = query.trim().toLowerCase();
   const shown = useMemo(() => entries.filter(e => !q || `${e.label} ${e.sub ?? ""}`.toLowerCase().includes(q)).slice(0, 40), [entries, q]);
@@ -66,7 +82,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <div className="flex items-center gap-2.5 border-b border-white/[0.07] px-4">
             <Search className="size-4 flex-shrink-0 text-lab-dim" />
             <input
-              autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Раздел, проблема или действие"
+              autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Раздел, проблема, прогон или действие"
               className="h-12 w-full bg-transparent text-body text-lab-ink outline-none placeholder:text-lab-faint"
             />
           </div>

@@ -2,7 +2,6 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "./shell/AppShell";
 import { AgentPage } from "./screens/agent/AgentPage";
 import { RunsPage } from "./pages/RunsPage";
-import { LabPage } from "./pages/LabPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
 import { DialogsPage } from "./screens/dialogs/DialogsPage";
@@ -29,17 +28,16 @@ export const router = createBrowserRouter([
       { path: "simulations/runs/:runId", element: <SimulationsPage /> },
       { path: "simulations/scenarios/:scenarioId", element: <SimulationsPage /> },
       { path: "agent", element: <AgentPage /> },
-      { path: "lab/dialogs", element: <Navigate to="/dialogs?source=sim" replace /> },
-      { path: "lab/dialogs/:itemId", element: <Navigate to="/dialogs?source=sim" replace /> },
-      { path: "lab/logs", element: <Navigate to="/dialogs?source=log" replace /> },
-      // The earlier Lab screens that «Правила» and «Проверка вердиктов» replace.
-      { path: "lab/criteria", element: <Navigate to="/rules" replace /> },
-      { path: "lab/criteria/:itemId", element: <Navigate to="/rules" replace /> },
-      { path: "lab/judge", element: <Navigate to="/rules" replace /> },
+      // The earlier addresses of the product lead to the sections that replaced them.
+      { path: "lab", element: <Navigate to="/problems" replace /> },
+      { path: "lab/dialogs/*", element: <Navigate to="/dialogs?source=sim" replace /> },
+      { path: "lab/logs/*", element: <Navigate to="/dialogs?source=log" replace /> },
+      { path: "lab/criteria/*", element: <Navigate to="/rules" replace /> },
       { path: "lab/judge/check", element: <Navigate to="/review" replace /> },
-      { path: "lab", element: <LabPage /> },
-      { path: "lab/:step", element: <LabPage /> },
-      { path: "lab/:step/:itemId", element: <LabPage /> },
+      { path: "lab/judge/*", element: <Navigate to="/rules" replace /> },
+      { path: "lab/checks/*", element: <Navigate to="/simulations?mode=scenarios" replace /> },
+      { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
+      { path: "lab/*", element: <Navigate to="/problems" replace /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId/span/:spanId", element: <RunsPage /> },
       { path: "runs/:runId/spans", element: <RunsPage /> },

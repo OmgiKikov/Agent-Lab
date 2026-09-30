@@ -1,7 +1,4 @@
-/**
- * Where each part of the product lives. Sections not rebuilt yet still open their earlier screens:
- * plan 4 moves «Симуляции» and «Агент».
- */
+/** Where each part of the product lives; every screen links through these, so a section moves in one place. */
 export const LINKS = {
   problems: "/problems",
   dialogs: "/dialogs",

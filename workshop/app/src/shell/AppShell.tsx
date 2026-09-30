@@ -61,17 +61,15 @@ function Frame() {
     openPalette: () => setPalette(true),
     openAsk: (runId?: string | null) => { setAskRunId(runId ?? null); window.dispatchEvent(new Event(ASK_EVENT)); },
   }), []);
-  // The earlier Lab screens (/lab/*) still have their own ⌘K until plans 2–4 replace them.
-  const earlierLab = location.pathname.startsWith("/lab");
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.code === "KeyK" && !earlierLab) { e.preventDefault(); setPalette(o => !o); }
+      if (e.code === "KeyK") { e.preventDefault(); setPalette(o => !o); }
       if (e.code === "KeyJ") { e.preventDefault(); shell.openAsk(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [earlierLab, shell]);
+  }, [shell]);
 
   const traceRoute = /^\/(runs|search|saved)(\/|$)/.test(location.pathname);
   return (
