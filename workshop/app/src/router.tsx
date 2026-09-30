@@ -9,6 +9,7 @@ import { DialogsPage } from "./screens/dialogs/DialogsPage";
 import { ProblemsPage } from "./screens/problems/ProblemsPage";
 import { ReviewPage } from "./screens/review/ReviewPage";
 import { RulesPage } from "./screens/rules/RulesPage";
+import { SimulationsPage } from "./screens/simulations/SimulationsPage";
 
 export const router = createBrowserRouter([
   {
@@ -23,6 +24,9 @@ export const router = createBrowserRouter([
       { path: "review", element: <ReviewPage /> },
       { path: "dialogs", element: <DialogsPage /> },
       { path: "dialogs/:dialogKey", element: <DialogsPage /> },
+      { path: "simulations", element: <SimulationsPage /> },
+      { path: "simulations/runs/:runId", element: <SimulationsPage /> },
+      { path: "simulations/scenarios/:scenarioId", element: <SimulationsPage /> },
       { path: "lab/dialogs", element: <Navigate to="/dialogs?source=sim" replace /> },
       { path: "lab/dialogs/:itemId", element: <Navigate to="/dialogs?source=sim" replace /> },
       { path: "lab/logs", element: <Navigate to="/dialogs?source=log" replace /> },

@@ -18,7 +18,7 @@ export type Item = {
 };
 export type LabRun = {
   id: string; target: string; targetName: string; version: string; startedAt: string; finishedAt: string | null; status: string;
-  metric: Metric | null; error: string | null; repeats?: number; items?: Item[];
+  metric: Metric | null; error: string | null; repeats?: number; items?: Item[]; label?: string; personas?: string[] | null; model?: string;
 };
 export type Criterion = { id: string; text: string; quote: string; condition?: string; acceptable?: string; sourceId?: string };
 export type World = {

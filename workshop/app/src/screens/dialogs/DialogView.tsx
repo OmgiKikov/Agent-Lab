@@ -14,6 +14,7 @@ import { Button } from "../../ui/Button";
 import { Conversation, MarkNumber, type Mark } from "../../ui/Conversation";
 import { Skeleton } from "../../ui/EmptyState";
 import { Label } from "../../ui/Label";
+import { Tabs } from "../../ui/Tabs";
 import { ReviewButtons } from "../verdicts/Example";
 
 type Tab = "talk" | "rules" | "trace" | "details";
@@ -107,14 +108,8 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
         {verdict && <><span className="text-lab-faint">·</span><span className={cn("inline-flex items-center gap-1", verdict.tone)}><verdict.icon className="size-3.5" strokeWidth={2.5} />{verdict.word}</span></>}
         {row.disputed && <><span className="text-lab-faint">·</span><span className="text-lab-warn">судьи расходятся</span></>}
       </div>
-      <div role="tablist" className="mt-6 flex border-b border-white/[0.06]">
-        {TABS.filter(t => t.value !== "trace" || row.traceId).map(t => (
-          <button key={t.value} type="button" role="tab" aria-selected={tab === t.value} onClick={() => setTab(t.value)}
-            className={cn("-mb-px border-b-2 px-3 py-2 text-small transition-colors", tab === t.value ? "border-lab-ink text-lab-ink" : "border-transparent text-lab-dim hover:text-lab-soft")}>
-            {t.label}{t.value === "rules" && row.rules.length > 0 && <span className="ml-1.5 font-mono text-micro text-lab-dim">{row.rules.length}</span>}
-          </button>
-        ))}
-      </div>
+      <Tabs className="mt-6" value={tab} onChange={setTab}
+        tabs={TABS.filter(t => t.value !== "trace" || row.traceId).map(t => ({ ...t, count: t.value === "rules" ? row.rules.length : undefined }))} />
       {tab === "talk" && (
         <div className="mt-5">
           {loading ? <Skeleton className="h-40" />
