@@ -35,6 +35,12 @@ import { useAgentForEvent } from "../hooks/use-agents";
 import { useWorkshopEvent } from "../hooks/use-workshop-ws";
 import { getCostBreakdown, fmtCost } from "../utils/costs";
 
+/** Russian plural: 1 ошибка, 2 ошибки, 5 ошибок. */
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
 const TOKEN_NUMBER_FLOW_TIMING = {
   spinTiming: { duration: 450, easing: "ease-out" },
   transformTiming: { duration: 250, easing: "ease-out" },
@@ -144,7 +150,7 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
   return (
     <span className="relative cursor-help"
       onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
-      <span style={{ color: C.red }}><NumberFlow value={errorSpans.length} /> error{errorSpans.length !== 1 ? "s" : ""}</span>
+      <span style={{ color: C.red }}><NumberFlow value={errorSpans.length} /> {ruPlural(errorSpans.length, "ошибка", "ошибки", "ошибок")}</span>
       {show && (
         <div className="absolute left-0 top-full mt-1 z-50 rounded-xl shadow-2xl overflow-hidden"
           style={{
@@ -159,7 +165,7 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
               <circle cx={12} cy={12} r={10} /><line x1={12} y1={8} x2={12} y2={12} /><line x1={12} y1={16} x2={12.01} y2={16} />
             </svg>
             <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>
-              {errorSpans.length} Error{errorSpans.length !== 1 ? "s" : ""}
+              {errorSpans.length} {ruPlural(errorSpans.length, "ошибка", "ошибки", "ошибок")}
             </span>
           </div>
           <div className="overflow-auto" style={{ maxHeight: 300 }}>
@@ -168,7 +174,7 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded"
                     style={{ color: s.span_type === "TOOL_CALL" ? "#b08c5a" : s.span_type?.includes("LLM") ? "#5a8ab0" : C.fg0, background: "rgba(255,255,255,0.05)" }}>
-                    {s.span_type === "TOOL_CALL" ? "TOOL" : s.span_type?.includes("LLM") ? "LLM" : "SPAN"}
+                    {s.span_type === "TOOL_CALL" ? "инструмент" : s.span_type?.includes("LLM") ? "LLM" : "спан"}
                   </span>
                   <span className="text-[11px] font-mono truncate" style={{ color: C.red }}>{s.name}</span>
                   <span className="text-[9px] font-mono ml-auto flex-shrink-0" style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
@@ -206,8 +212,8 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
       type="button"
       className="text-[9px] font-medium uppercase tracking-wide px-1 rounded transition-[color,background-color,transform] active:scale-[0.96]"
       style={{ background: copied ? "rgba(96,227,109,0.12)" : "rgba(255,255,255,0.09)", color: copied ? C.green : C.fg0, lineHeight: "16px" }}
-      title={`Copy ${label}`}
-      aria-label={`Copy ${label}`}
+      title={`Копировать: ${label}`}
+      aria-label={`Копировать: ${label}`}
       onClick={(event) => {
         event.stopPropagation();
         void navigator.clipboard.writeText(copyValue).then(() => {
@@ -257,13 +263,13 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
 
   return (
     <div className="flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: C.fg1 }}>
-      {model && <><Badge label="model" copyValue={model} /><span>{model}</span><Dot /></>}
-      {stats.tools > 0 && <><span><NumberFlow value={stats.tools} /> tool{stats.tools !== 1 ? "s" : ""}</span><Dot /></>}
-      {(stats.agents ?? 0) > 0 && <><span><NumberFlow value={stats.agents!} /> sub-agent{stats.agents !== 1 ? "s" : ""}</span><Dot /></>}
+      {model && <><Badge label="модель" copyValue={model} /><span>{model}</span><Dot /></>}
+      {stats.tools > 0 && <><span><NumberFlow value={stats.tools} /> {ruPlural(stats.tools, "инструмент", "инструмента", "инструментов")}</span><Dot /></>}
+      {(stats.agents ?? 0) > 0 && <><span><NumberFlow value={stats.agents!} /> {ruPlural(stats.agents!, "субагент", "субагента", "субагентов")}</span><Dot /></>}
       {stats.errors > 0 && spans && <><ErrorsTooltip spans={spans} /><Dot /></>}
-      {stats.errors > 0 && !spans && <><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> error{stats.errors !== 1 ? "s" : ""}</span><Dot /></>}
-      <Badge label="duration" /><span>{durMin > 0 ? <><NumberFlow value={durMin} />m <NumberFlow value={durRemSec} />s</> : <><NumberFlow value={durSec} />s</>}</span>
-      {(inTok > 0 || outTok > 0) && <><Dot /><Badge label="tokens" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> in / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> out</span></>}
+      {stats.errors > 0 && !spans && <><span style={{ color: C.red }}><NumberFlow value={stats.errors} /> {ruPlural(stats.errors, "ошибка", "ошибки", "ошибок")}</span><Dot /></>}
+      <Badge label="длительность" /><span>{durMin > 0 ? <><NumberFlow value={durMin} />&nbsp;мин <NumberFlow value={durRemSec} />&nbsp;с</> : <><NumberFlow value={durSec} />&nbsp;с</>}</span>
+      {(inTok > 0 || outTok > 0) && <><Dot /><Badge label="токены" /><span><NumberFlow value={inTok} {...TOKEN_NUMBER_FLOW_TIMING} /> вход / <NumberFlow value={outTok} {...TOKEN_NUMBER_FLOW_TIMING} /> выход</span></>}
       {(() => {
         const totalCost = breakdown.reduce((sum, b) => sum + (b.breakdown?.totalCost ?? 0), 0);
         const cost = totalCost > 0 ? fmtCost(totalCost) : null;
@@ -276,22 +282,22 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
             {showCost && breakdown.length > 0 && (
               <div className="absolute left-0 top-full mt-1 z-50 rounded-lg p-2.5 shadow-xl whitespace-nowrap"
                 style={{ background: C.elevated, border: `1px solid ${C.borderLight}` }}>
-                <div className="text-[9px] uppercase tracking-wide mb-2 font-medium" style={{ color: C.fg0 }}>Cost Breakdown</div>
+                <div className="text-[9px] uppercase tracking-wide mb-2 font-medium" style={{ color: C.fg0 }}>Стоимость</div>
                 {breakdown.map(b => (
                   <div key={b.model} className="mb-2 last:mb-0">
                     <div className="text-[10px] font-medium mb-0.5" style={{ color: C.fg2 }}>{b.model}</div>
                     {b.breakdown && (
                       <div className="text-[9px] space-y-0.5" style={{ color: C.fg0 }}>
                         <div className="flex justify-between gap-4">
-                          <span>{b.inTok.toLocaleString()} input @ ${b.breakdown.inRate}/M</span>
+                          <span>{b.inTok.toLocaleString()} вход по ${b.breakdown.inRate}/млн</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.inCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4">
-                          <span>{b.outTok.toLocaleString()} output @ ${b.breakdown.outRate}/M</span>
+                          <span>{b.outTok.toLocaleString()} выход по ${b.breakdown.outRate}/млн</span>
                           <span style={{ color: C.fg1 }}>{fmtCost(b.breakdown.outCost)}</span>
                         </div>
                         <div className="flex justify-between gap-4 pt-0.5" style={{ borderTop: `1px solid ${C.border}` }}>
-                          <span style={{ color: C.fg1 }}>total</span>
+                          <span style={{ color: C.fg1 }}>итого</span>
                           <span style={{ color: C.fg2 }}>{fmtCost(b.breakdown.totalCost)}</span>
                         </div>
                       </div>
@@ -321,7 +327,7 @@ function MoreMenu({ runId, deleteRedirectPath = "/runs" }: { runId?: string; del
   }, [open]);
 
   const handleDelete = async () => {
-    if (!runId || !confirm("Delete this run and all its spans?")) return;
+    if (!runId || !confirm("Удалить этот трейс со всеми спанами?")) return;
     await fetch(`/api/runs/${runId}`, { method: "DELETE" });
     setOpen(false);
     navigate(deleteRedirectPath, { replace: true });
@@ -344,7 +350,7 @@ function MoreMenu({ runId, deleteRedirectPath = "/runs" }: { runId?: string; del
             style={{ color: C.red }}
             onClick={handleDelete}
           >
-            Delete run
+            Удалить трейс
           </button>
         </div>
       )}
@@ -559,7 +565,7 @@ function ViewHeader({
     <div className="flex-shrink-0" style={{ padding: isReplay ? "8px 16px" : "10px 16px", borderBottom: `1px solid ${C.border}` }}>
       {parentName && onBack ? (
         <>
-          <div><Button onClick={onBack}>&larr; Show Parent Agent</Button></div>
+          <div><Button onClick={onBack}>&larr; К родительскому агенту</Button></div>
           <div className="mt-3 mb-1"><button className="text-[13px] font-medium cursor-pointer" style={{ color: C.fg1 }} onClick={onBack}>{parentName}</button></div>
           <div className="flex items-start ml-1">
             <svg className="flex-shrink-0" width="12" height="24" viewBox="0 0 12 24" style={{ marginRight: 6, marginTop: 2 }}>
@@ -571,7 +577,7 @@ function ViewHeader({
                 {model && <span className="text-[10px] px-2 py-0.5 rounded font-mono" style={{ background: "rgba(255,255,255,0.04)", color: C.fg1 }}>{model}</span>}
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
                   style={{ background: active ? "rgba(102,170,187,0.1)" : "rgba(255,255,255,0.03)", color: active ? C.green : C.fg0 }}>
-                  {active ? "Active" : "Done"}
+                  {active ? "Идёт" : "Готово"}
                 </span>
               </div>
               <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
@@ -592,7 +598,7 @@ function ViewHeader({
         <>
           <div className="flex items-center mb-1 justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0">
-              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${active ? "pulse-dot" : ""}`} style={{ background: active ? C.green : "rgba(255,255,255,0.18)" }} title={active ? "Active" : "Done"} />
+              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${active ? "pulse-dot" : ""}`} style={{ background: active ? C.green : "rgba(255,255,255,0.18)" }} title={active ? "Идёт" : "Готово"} />
               {onFork && !active ? (
                 <InlineEdit value={displayTitle}
                   onConfirm={handleRename}
@@ -615,10 +621,10 @@ function ViewHeader({
                         setOptionsOpen(false);
                         setAnnotationPopoverOpen((open) => !open);
                       }}
-                      title="Annotate run"
+                      title="Добавить заметку к трейсу"
                     >
                       <Pencil className="h-3 w-3" />
-                      Annotate
+                      Заметка
                     </button>
                     {annotationPopoverOpen && (
                       <AnnotationCreatePopover
@@ -638,20 +644,20 @@ function ViewHeader({
                     setOptionsOpen(false);
                     window.dispatchEvent(new CustomEvent("workshop:open-message-pane", { detail: { runId: run?.id } }));
                   }}
-                  title="Debug with Claude Code"
+                  title="Разобрать с Claude Code"
                 >
                   <MessageCircle className="h-3 w-3" />
-                  Debug
+                  Разобрать
                 </button>
                 {onDownload && (
                   <button
                     className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors hover:bg-white/10"
                     style={{ color: C.fg3, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)" }}
                     onClick={onDownload}
-                    title="Download trace as JSON"
+                    title="Скачать трейс в JSON"
                   >
                     <Download className="h-3 w-3" />
-                    Download
+                    Скачать
                   </button>
                 )}
                 <button
@@ -663,10 +669,10 @@ function ViewHeader({
                     if (!isSaved) handleSave();
                     setSavePopoverOpen(true);
                   }}
-                  title={isSaved ? "Move folder or unsave" : "Save run"}
+                  title={isSaved ? "Сменить папку или убрать из сохранённых" : "Сохранить трейс"}
                 >
                   <Bookmark className="h-3 w-3" style={isSaved ? { fill: C.green } : {}} />
-                  {isSaved ? "Saved" : "Save"}
+                  {isSaved ? "Сохранено" : "Сохранить"}
                 </button>
                 {savePopoverOpen && (
                   <SavePopover
@@ -696,7 +702,7 @@ function ViewHeader({
                       }}
                     >
                       <RotateCcw className="h-3 w-3" />
-                      Replay
+                      Повторить
                     </button>
                     <button
                       className="flex items-center justify-center px-1.5 transition-colors hover:bg-white/10"
@@ -705,7 +711,7 @@ function ViewHeader({
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
                       }}
-                      title="Replay with options"
+                      title="Повторить с параметрами"
                     >
                       <ChevronDown className="h-3.5 w-3.5" />
                     </button>
@@ -730,7 +736,7 @@ function ViewHeader({
                       )}
                       {/* Model */}
                       <div>
-                        <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Model</div>
+                        <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Модель</div>
                         <select
                           className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none appearance-none"
                           style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)" }}
@@ -738,30 +744,30 @@ function ViewHeader({
                           onChange={e => setForkModel(e.target.value)}
                         >
                           <option value="" style={{ background: "#111", color: "#e8e8e8" }}>
-                            {traceModelFromMetadata ? `Use trace default (${traceModelFromMetadata})` : "Use trace default model"}
+                            {traceModelFromMetadata ? `Как в трейсе (${traceModelFromMetadata})` : "Модель как в трейсе"}
                           </option>
                           {forkModelOptions.map((candidate) => (
                             <option key={candidate} value={candidate} style={{ background: "#111", color: "#e8e8e8" }}>
-                              {candidate === traceModelFromMetadata ? `${candidate} (original trace model)` : candidate}
+                              {candidate === traceModelFromMetadata ? `${candidate} (модель исходного трейса)` : candidate}
                             </option>
                           ))}
                         </select>
                       </div>
                       {/* User message */}
                       <div>
-                        <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>User message</div>
+                        <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Сообщение пользователя</div>
                         <textarea
                           className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none resize-y"
                           style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: `1px solid rgba(255,255,255,0.1)`, minHeight: 60, maxHeight: 200 }}
                           value={forkMsg}
                           onChange={e => setForkMsg(e.target.value)}
-                          placeholder="Enter user message..."
+                          placeholder="Введите сообщение пользователя…"
                         />
                       </div>
                       {/* Agent context (only when Local Agent + has context fields) */}
                       {Object.keys(contextEdits).length > 0 && (
                         <div>
-                          <div className="text-[10px] font-medium mb-1.5" style={{ color: C.fg0 }}>Context</div>
+                          <div className="text-[10px] font-medium mb-1.5" style={{ color: C.fg0 }}>Контекст</div>
                           <div className="space-y-1.5">
                             {Object.entries(contextEdits).map(([key, val]) => (
                               <div key={key} className="flex items-center gap-2">
@@ -797,7 +803,7 @@ function ViewHeader({
                           onFork(forkMsg || undefined, forkMode, forkModel || undefined, Object.keys(ctxOverrides ?? {}).length ? ctxOverrides : undefined);
                         }}
                       >
-                        Replay
+                        Повторить
                       </button>
                     </div>
                   )}
@@ -813,9 +819,9 @@ function ViewHeader({
               <>
                 <Dot />
                 <span className="flex items-center gap-1.5" style={{ color: C.fg1 }}>
-                  {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="user" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
-                  {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="convo" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
-                  <span className="inline-flex items-center gap-1" title={run.id}><Badge label="trace" copyValue={run.id} />{run.id.slice(0, 8)}</span>
+                  {run.user_id && <span className="inline-flex items-center gap-1" title={run.user_id}><Badge label="пользователь" copyValue={run.user_id} />{run.user_id.length > 12 ? run.user_id.slice(0, 12) + "…" : run.user_id}</span>}
+                  {run.convo_id && <span className="inline-flex items-center gap-1" title={run.convo_id}><Badge label="диалог" copyValue={run.convo_id} />{run.convo_id.length > 12 ? run.convo_id.slice(0, 12) + "…" : run.convo_id}</span>}
+                  <span className="inline-flex items-center gap-1" title={run.id}><Badge label="трейс" copyValue={run.id} />{run.id.slice(0, 8)}</span>
                 </span>
               </>
             )}
@@ -894,11 +900,11 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
           background: "rgba(20,20,20,0.85)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)",
           border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 16px 48px rgba(0,0,0,0.5)",
         }}>
-        <div className="text-[13px] font-medium" style={{ color: C.fg3 }}>Edit &amp; Replay</div>
+        <div className="text-[13px] font-medium" style={{ color: C.fg3 }}>Изменить и повторить</div>
 
         {/* Model */}
         <div>
-          <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Model</div>
+          <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Модель</div>
           <select
             className="w-full px-2.5 py-2 rounded-lg text-[11px] font-mono outline-none appearance-none"
             style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)" }}
@@ -906,11 +912,11 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
             onChange={e => setMdl(e.target.value)}
           >
             <option value="" style={{ background: "#111", color: "#e8e8e8" }}>
-              {traceModelFromMetadata ? `Use trace default (${traceModelFromMetadata})` : "Use trace default model"}
+              {traceModelFromMetadata ? `Как в трейсе (${traceModelFromMetadata})` : "Модель как в трейсе"}
             </option>
             {modalModelOptions.map((candidate) => (
               <option key={candidate} value={candidate} style={{ background: "#111", color: "#e8e8e8" }}>
-                {candidate === traceModelFromMetadata ? `${candidate} (original trace model)` : candidate}
+                {candidate === traceModelFromMetadata ? `${candidate} (модель исходного трейса)` : candidate}
               </option>
             ))}
           </select>
@@ -918,20 +924,20 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
 
         {/* User message */}
         <div>
-          <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>User message</div>
+          <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Сообщение пользователя</div>
           <textarea
             autoFocus
             className="w-full px-2.5 py-2 rounded-lg text-[11px] font-mono outline-none resize-y"
             style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)", minHeight: 100, maxHeight: 300 }}
             value={msg} onChange={e => setMsg(e.target.value)}
-            placeholder="Enter user message..."
+            placeholder="Введите сообщение пользователя…"
           />
         </div>
 
         {/* Agent context */}
         {Object.keys(contextEdits).length > 0 && (
           <div>
-            <div className="text-[10px] font-medium mb-1.5" style={{ color: C.fg0 }}>Context</div>
+            <div className="text-[10px] font-medium mb-1.5" style={{ color: C.fg0 }}>Контекст</div>
             <div className="space-y-1.5">
               {Object.entries(contextEdits).map(([key, val]) => (
                 <div key={key} className="flex items-center gap-2">
@@ -955,7 +961,7 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
             style={{ color: C.fg1, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
             onClick={onClose}
           >
-            Cancel
+            Отмена
           </button>
           <button
             className="px-4 py-1.5 rounded-lg text-[11px] font-medium transition-colors hover:brightness-110"
@@ -966,7 +972,7 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
             }}
             onClick={handleReplay}
           >
-            Replay
+            Повторить
           </button>
         </div>
       </div>
@@ -1003,7 +1009,7 @@ function ScrollToBottomButton() {
       }}
     >
       <ArrowDown size={12} />
-      Scroll to bottom
+      Прокрутить вниз
     </animated.button>
   );
 }
@@ -1016,9 +1022,9 @@ function TraceNotFound({ runId, backPath }: { runId: string; backPath: string })
         <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04]">
           <SearchX className="h-5 w-5" style={{ color: C.fg1 }} />
         </div>
-        <div className="text-[15px] font-medium" style={{ color: C.fg4, fontFamily: '"AlphaLyrae", sans-serif' }}>Trace not found</div>
+        <div className="text-[15px] font-medium" style={{ color: C.fg4, fontFamily: '"AlphaLyrae", "Commissioner Variable", sans-serif' }}>Трейс не найден</div>
         <div className="mt-2 text-sm leading-relaxed" style={{ color: C.fg1 }}>
-          This trace is not available in the current workspace. It may have been deleted, cleared, or opened from a different project.
+          Этого трейса нет в текущей рабочей папке: его могли удалить или открыть из другого проекта.
         </div>
         <code className="mt-3 block truncate rounded-md border border-white/10 bg-black/20 px-2 py-1.5 text-[11px]" style={{ color: C.fg0 }}>
           {runId}
@@ -1028,7 +1034,7 @@ function TraceNotFound({ runId, backPath }: { runId: string; backPath: string })
           className="mt-4 rounded-md border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-white/70 transition-colors hover:bg-white/[0.10] hover:text-white"
           onClick={() => navigate(backPath, { replace: true })}
         >
-          Back to traces
+          Назад к трейсам
         </button>
       </div>
     </div>
@@ -1277,7 +1283,7 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, source, onF
     }
   }, [annotationsApi.annotations, annotationsApi.freshIds, saveAnnotationPreview]);
 
-  if (loading) return <div className="flex items-center justify-center h-full gap-2" style={{ color: C.fg1 }}>Loading <Dots /></div>;
+  if (loading) return <div className="flex items-center justify-center h-full gap-2" style={{ color: C.fg1 }}>Загрузка <Dots /></div>;
   if (notFound || !data?.run) return <TraceNotFound runId={runId} backPath={routeBase ?? "/runs"} />;
 
   const { run, spans, subAgents } = data;
@@ -1320,8 +1326,8 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, source, onF
           }}
         />
         <div className="flex-shrink-0 flex" style={{ borderBottom: `1px solid ${C.border}`, paddingLeft: 16 }}>
-          <button style={tabStyle("chat")} onClick={() => setAgentTab("chat")}>Overview</button>
-          <button style={tabStyle("tree")} onClick={() => setAgentTab("tree")}>Span Tree</button>
+          <button style={tabStyle("chat")} onClick={() => setAgentTab("chat")}>Обзор</button>
+          <button style={tabStyle("tree")} onClick={() => setAgentTab("tree")}>Спаны</button>
         </div>
         {agentTab === "tree" ? (
           <div className="flex-1 relative min-h-0 overflow-auto sb" style={{ padding: 16 }}>
@@ -1397,10 +1403,10 @@ export function RunDetail({ runId, routeBase, initialData, isReplay, source, onF
         onDelete={annotationsApi.remove}
       />
       <div className="flex-shrink-0 flex" style={{ borderBottom: `1px solid ${C.border}`, paddingLeft: 16 }}>
-        <button style={tabStyle("chat")} onClick={goOverview}>Overview</button>
-        <button style={tabStyle("tree")} onClick={goSpans}>Span Tree</button>
+        <button style={tabStyle("chat")} onClick={goOverview}>Обзор</button>
+        <button style={tabStyle("tree")} onClick={goSpans}>Спаны</button>
         {run.convo_id && (
-          <button style={tabStyle("convo")} onClick={goConvo}>Convo</button>
+          <button style={tabStyle("convo")} onClick={goConvo}>Диалог</button>
         )}
       </div>
       {activeTab === "tree" ? (

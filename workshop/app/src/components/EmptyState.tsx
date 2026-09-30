@@ -78,7 +78,7 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
         <h1
           className="text-center"
           style={{
-            fontFamily: '"AlphaLyrae", sans-serif',
+            fontFamily: '"AlphaLyrae", "Commissioner Variable", sans-serif',
             fontSize: "38px",
             fontWeight: 500,
             lineHeight: 1.12,
@@ -86,11 +86,11 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
             color: C.fg2,
           }}
         >
-          Waiting for your agent...
+          Ждём первый трейс…
         </h1>
 
         <p className="mb-6 mt-1 max-w-2xl text-center text-[15px] font-light leading-7" style={{ color: C.fg3 }}>
-          Now just instrument your agent using our skill. Next run, you'll see traces here.
+          Осталось добавить трассировку в агента с помощью нашего навыка. После следующего запуска трейсы появятся здесь.
         </p>
         <CommandPill value={SETUP_ANOTHER_SLASH} large />
         {onSeeDemoTraces && (
@@ -104,14 +104,14 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
               background: "transparent",
             }}
           >
-            {demoLoading ? "Loading demo traces..." : "See demo traces"}
+            {demoLoading ? "Загружаем демо-трейсы…" : "Показать демо-трейсы"}
           </button>
         )}
 
         <WorksWith />
 
         <p className="mt-8 max-w-xl text-center text-sm leading-6" style={{ color: C.fg1 }}>
-          Traces will appear here as soon as your instrumented agent runs.
+          Трейсы появятся здесь, как только запустится агент с трассировкой.
         </p>
       </div>
     </div>
@@ -139,7 +139,7 @@ function CommandPill({ value, large = false }: { value: string; large?: boolean 
         border: "1px solid rgba(255,255,255,0.13)",
         boxShadow: large ? "0 12px 40px rgba(0,0,0,0.28)" : "none",
       }}
-      title={copied ? "Copied" : "Click to copy"}
+      title={copied ? "Скопировано" : "Нажмите, чтобы скопировать"}
     >
       <span>{value}</span>
       <span
@@ -160,7 +160,7 @@ function WorksWith() {
   return (
     <div className="mt-9 flex max-w-xl flex-col items-center gap-2.5">
       <div className="text-[10px] uppercase tracking-[0.22em]" style={{ color: C.fg0 }}>
-        Works with
+        Работает с
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2.5">
         {AGENTS.map((agent) => (
@@ -185,7 +185,7 @@ function AgentName({ agent }: { agent: Agent }) {
         href={agent.localHref}
         className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:bg-white/10"
         style={{ color: C.fg1, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.06)" }}
-        title={`Open ${agent.name}`}
+        title={`Открыть ${agent.name}`}
       >
         {content}
       </a>

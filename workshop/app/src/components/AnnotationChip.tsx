@@ -9,9 +9,9 @@ export const KIND_STYLES: Record<
   AnnotationKind,
   { icon: string; label: string; fg: string; bg: string; border: string }
 > = {
-  issue: { icon: "!", label: "issue", fg: "#f87171", bg: "rgba(220,38,38,0.12)", border: "rgba(220,38,38,0.35)" },
-  good:  { icon: "✓", label: "good",  fg: "#34d399", bg: "rgba(5,150,105,0.12)",  border: "rgba(5,150,105,0.35)" },
-  note:  { icon: "·", label: "note",  fg: "#60a5fa", bg: "rgba(37,99,235,0.12)",  border: "rgba(37,99,235,0.35)" },
+  issue: { icon: "!", label: "проблема", fg: "#f87171", bg: "rgba(220,38,38,0.12)", border: "rgba(220,38,38,0.35)" },
+  good:  { icon: "✓", label: "хорошо",  fg: "#34d399", bg: "rgba(5,150,105,0.12)",  border: "rgba(5,150,105,0.35)" },
+  note:  { icon: "·", label: "заметка",  fg: "#60a5fa", bg: "rgba(37,99,235,0.12)",  border: "rgba(37,99,235,0.35)" },
 };
 
 export const SOURCE_GLYPH: Record<Annotation["source"], string> = {
@@ -25,7 +25,7 @@ export function annotationSourceLabel(source: Annotation["source"]): string {
   if (source === "claude-code") return "Claude Code";
   if (source === "codex") return "Codex";
   if (source === "agent-lab") return "Судья · Agent Lab";
-  return "You";
+  return "Вы";
 }
 
 /**

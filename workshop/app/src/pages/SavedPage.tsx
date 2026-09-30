@@ -49,9 +49,9 @@ export function getSavedAnnotationPreview(event: SavedEvent): SavedAnnotationPre
 }
 
 function annotationKindLabel(kind: SavedAnnotationPreview["kind"]): string {
-  if (kind === "issue") return "Issue";
-  if (kind === "good") return "Good";
-  return "Note";
+  if (kind === "issue") return "Проблема";
+  if (kind === "good") return "Хорошо";
+  return "Заметка";
 }
 
 // Server-backed (`/api/saved-runs`) so saves are visible across browsers
@@ -370,7 +370,7 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
         className="shrink-0 px-2 py-0.5 rounded text-[10px] transition-colors"
         style={{ background: selected === null ? "rgba(255,255,255,0.08)" : "transparent", color: selected === null ? C.fg3 : C.fg0 }}
         onClick={() => onSelect(null)}
-      >All</button>
+      >Все</button>
       {folders.map(f => {
         const fc = getFolderColor(f);
         const isActive = selected === f;
@@ -388,7 +388,7 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
                 <span
                   role="button"
                   tabIndex={0}
-                  aria-label={isConfirming ? `Confirm delete folder ${f}` : `Delete folder ${f}`}
+                  aria-label={isConfirming ? `Подтвердить удаление папки ${f}` : `Удалить папку ${f}`}
                   className="ml-0.5 px-1 -mr-1 rounded hover:bg-white/10"
                   style={{ color: isConfirming ? "#ff7a7a" : C.fg0 }}
                   onClick={(e) => {
@@ -396,7 +396,7 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
                     if (isConfirming) { onDelete(f); setConfirmDelete(null); }
                     else { setConfirmDelete(f); }
                   }}
-                  title={isConfirming ? "Click again to confirm" : "Delete folder"}
+                  title={isConfirming ? "Нажмите ещё раз для подтверждения" : "Удалить папку"}
                 >{isConfirming ? "✓" : "×"}</span>
               )}
             </button>
@@ -415,14 +415,14 @@ function FolderPills({ folders, selected, onSelect, onCreate, onDelete }: {
             if (e.key === "Enter") submitNew();
             if (e.key === "Escape") { setNewName(""); setShowNew(false); }
           }}
-          placeholder="Folder name…"
-          aria-label="New folder name"
+          placeholder="Название папки…"
+          aria-label="Название новой папки"
         />
       ) : (
         <button
           className="shrink-0 px-1.5 py-0.5 rounded text-[10px] transition-colors hover:bg-white/[0.06]"
           style={{ color: C.fg0 }}
-          aria-label="Add folder"
+          aria-label="Добавить папку"
           onClick={() => setShowNew(true)}
         ><FolderPlus className="h-3 w-3" /></button>
       )}
@@ -455,16 +455,16 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
       <div className="relative flex-1 min-w-0">
         <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none" style={{ color: C.fg0 }} />
         <input
-          aria-label="Search saved runs"
+          aria-label="Поиск по сохранённым трейсам"
           className="w-full pl-6 pr-6 py-1 rounded text-[11px] outline-none"
           style={{ background: "rgba(255,255,255,0.04)", color: C.fg3, border: "1px solid rgba(255,255,255,0.06)" }}
-          placeholder="Search saved runs…"
+          placeholder="Поиск по сохранённым трейсам…"
           value={filters.search}
           onChange={e => onUpdate({ search: e.target.value })}
         />
         {filters.search && (
           <button
-            aria-label="Clear search"
+            aria-label="Очистить поиск"
             className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-white/10"
             style={{ color: C.fg0 }}
             onClick={() => onUpdate({ search: "" })}
@@ -473,7 +473,7 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
       </div>
       <button
         ref={btnRef}
-        aria-label="Open filters"
+        aria-label="Открыть фильтры"
         className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
         style={{
           background: activeCount > 0 ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
@@ -483,7 +483,7 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
         onClick={() => setPopOpen(v => !v)}
       >
         <SlidersHorizontal className="h-3 w-3" />
-        Filters{activeCount > 0 ? ` · ${activeCount}` : ""}
+        Фильтры{activeCount > 0 ? ` · ${activeCount}` : ""}
       </button>
       {popOpen && (
         <div
@@ -498,24 +498,24 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
           style={{ background: "rgba(20,20,20,0.92)", backdropFilter: "blur(20px)", border: "1px solid rgba(255,255,255,0.12)", width: 220 }}
         >
           <div>
-            <div className="text-[10px] mb-1" style={{ color: C.fg0 }}>Agent</div>
+            <div className="text-[10px] mb-1" style={{ color: C.fg0 }}>Агент</div>
             <div className="relative">
               <select
-                aria-label="Filter by agent"
+                aria-label="Фильтр по агенту"
                 className="w-full appearance-none pl-2 pr-5 py-1 rounded text-[11px] outline-none cursor-pointer"
                 style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.08)" }}
                 value={filters.agent}
                 onChange={e => onUpdate({ agent: e.target.value })}
               >
-                <option value="">All agents</option>
+                <option value="">Все агенты</option>
                 {agents.map(a => <option key={a} value={a}>{a}</option>)}
               </select>
               <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 h-2.5 w-2.5 pointer-events-none" style={{ color: C.fg0 }} />
             </div>
           </div>
           <div>
-            <div className="text-[10px] mb-1" style={{ color: C.fg0 }}>Source</div>
-            <div role="radiogroup" aria-label="Filter by source" className="flex rounded overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
+            <div className="text-[10px] mb-1" style={{ color: C.fg0 }}>Источник</div>
+            <div role="radiogroup" aria-label="Фильтр по источнику" className="flex rounded overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
               {(["all", "local", "cloud"] as const).map(opt => (
                 <button
                   key={opt}
@@ -527,7 +527,7 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
                     color: filters.source === opt ? C.fg3 : C.fg1,
                   }}
                   onClick={() => onUpdate({ source: opt })}
-                >{opt === "all" ? "All" : opt === "local" ? "Local" : "Prod"}</button>
+                >{opt === "all" ? "Все" : opt === "local" ? "Локальные" : "Прод"}</button>
               ))}
             </div>
           </div>
@@ -536,7 +536,7 @@ function FilterBar({ filters, agents, onUpdate, onResetSecondary }: {
               className="w-full text-[10px] py-1 rounded transition-colors hover:bg-white/[0.06]"
               style={{ color: C.fg0 }}
               onClick={onResetSecondary}
-            >Reset</button>
+            >Сбросить</button>
           )}
         </div>
       )}
@@ -549,9 +549,9 @@ function ActiveFilterChips({ filters, onUpdate }: {
   onUpdate: (patch: Partial<SavedFilters>) => void;
 }) {
   const chips: { key: string; label: string; clear: () => void }[] = [];
-  if (filters.search) chips.push({ key: "search", label: `"${filters.search}"`, clear: () => onUpdate({ search: "" }) });
-  if (filters.agent) chips.push({ key: "agent", label: `Agent: ${filters.agent}`, clear: () => onUpdate({ agent: "" }) });
-  if (filters.source !== "all") chips.push({ key: "source", label: `Source: ${filters.source === "local" ? "Local" : "Prod"}`, clear: () => onUpdate({ source: "all" }) });
+  if (filters.search) chips.push({ key: "search", label: `«${filters.search}»`, clear: () => onUpdate({ search: "" }) });
+  if (filters.agent) chips.push({ key: "agent", label: `Агент: ${filters.agent}`, clear: () => onUpdate({ agent: "" }) });
+  if (filters.source !== "all") chips.push({ key: "source", label: `Источник: ${filters.source === "local" ? "локальный" : "прод"}`, clear: () => onUpdate({ source: "all" }) });
   if (chips.length === 0) return null;
   return (
     <div className="flex items-center gap-1 flex-wrap" data-testid="active-filter-chips">
@@ -561,7 +561,7 @@ function ActiveFilterChips({ filters, onUpdate }: {
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] transition-colors hover:bg-white/[0.06]"
           style={{ background: "rgba(255,255,255,0.04)", color: C.fg2, border: "1px solid rgba(255,255,255,0.08)" }}
           onClick={c.clear}
-          aria-label={`Clear ${c.key} filter`}
+          aria-label={`Сбросить фильтр: ${c.label}`}
         >
           {c.label}
           <X className="h-2.5 w-2.5" />
@@ -645,9 +645,9 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
       style={{ background: "rgba(20,20,20,0.85)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 8px 32px rgba(0,0,0,0.4)", width: 220 }}
     >
       <div className="text-[10px] px-2 py-1" style={{ color: C.fg0 }}>
-        {isSaved ? "Move to folder" : "Save to folder"}
+        {isSaved ? "Перенести в папку" : "Сохранить в папку"}
       </div>
-      {renderFolderRow("Unfiled", null, <Folder className="h-3 w-3" style={{ color: C.fg0 }} />)}
+      {renderFolderRow("Без папки", null, <Folder className="h-3 w-3" style={{ color: C.fg0 }} />)}
       {folders.map(f => renderFolderRow(
         f,
         f,
@@ -656,17 +656,17 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
       {showNew ? (
         <div className="flex gap-1">
           <input autoFocus className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] outline-none" style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)" }}
-            placeholder="Folder name..." value={newFolder} onChange={e => setNewFolder(e.target.value)}
+            placeholder="Название папки…" value={newFolder} onChange={e => setNewFolder(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && newFolder.trim()) { addFolder(newFolder.trim()); onSave(newFolder.trim()); onClose(); } }} />
           <button className="px-2 py-1 rounded text-[10px] font-medium" style={{ background: "rgba(255,255,255,0.08)", color: C.fg3 }}
             onClick={() => { if (newFolder.trim()) { addFolder(newFolder.trim()); onSave(newFolder.trim()); onClose(); } }}>
-            {isSaved ? "Move" : "Save"}
+            {isSaved ? "Перенести" : "Сохранить"}
           </button>
         </div>
       ) : (
         <button className="w-full text-left px-2 py-1.5 rounded text-[11px] flex items-center gap-1.5 transition-colors hover:bg-white/[0.06]" style={{ color: C.fg0 }}
           onClick={() => setShowNew(true)}>
-          <FolderPlus className="h-3 w-3" /> New folder...
+          <FolderPlus className="h-3 w-3" /> Новая папка…
         </button>
       )}
       {onUnsave && (
@@ -677,7 +677,7 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
             onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,107,107,0.1)"; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
             onClick={() => { onUnsave(); onClose(); }}>
-            <Trash2 className="h-3 w-3" /> Remove from saved
+            <Trash2 className="h-3 w-3" /> Убрать из сохранённых
           </button>
         </>
       )}
@@ -777,7 +777,7 @@ export function SavedPage() {
       <div className={`w-80 flex-shrink-0 flex flex-col ${isEmpty ? "opacity-40 pointer-events-none" : ""}`} style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="p-3 space-y-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="flex items-center justify-between">
-            <div className="text-[14px]" style={{ fontFamily: '"AlphaLyrae", sans-serif', color: C.fg3 }}>Saved Runs</div>
+            <div className="text-[14px]" style={{ fontFamily: '"AlphaLyrae", "Commissioner Variable", sans-serif', color: C.fg3 }}>Сохранённые трейсы</div>
             <div className="text-[10px]" style={{ color: C.fg0 }}>
               {filtered.length === events.length ? String(events.length) : `${filtered.length}/${events.length}`}
             </div>
@@ -822,7 +822,7 @@ export function SavedPage() {
           <div className="h-full flex items-center justify-center">
             <div className="text-center space-y-2">
               <Bookmark className="mx-auto h-6 w-6" style={{ color: C.fg0 }} />
-              <div className="text-[11px]" style={{ color: C.fg0 }}>Select a saved event to view its trace</div>
+              <div className="text-[11px]" style={{ color: C.fg0 }}>Выберите сохранённый трейс, чтобы посмотреть его</div>
             </div>
           </div>
         )}
@@ -833,9 +833,9 @@ export function SavedPage() {
         <div className="absolute inset-0 flex items-center justify-center z-10">
           <div className="text-center space-y-3 max-w-xs px-4 py-6 rounded-xl" style={{ background: "rgba(0,0,0,0.8)", border: "1px solid rgba(255,255,255,0.1)" }}>
             <Bookmark className="mx-auto h-8 w-8" style={{ color: C.fg1 }} />
-            <div className="text-sm font-medium" style={{ color: C.fg3 }}>No Saved Runs</div>
+            <div className="text-sm font-medium" style={{ color: C.fg3 }}>Сохранённых трейсов пока нет</div>
             <div className="text-[11px] leading-relaxed" style={{ color: C.fg1 }}>
-              Save runs from the Runs page to collect them here for later reference.
+              Сохраняйте трейсы на странице «Все трейсы», чтобы вернуться к ним позже.
             </div>
           </div>
         </div>
@@ -848,8 +848,8 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
   event: SavedEvent; selected: boolean; onClick: () => void; onRemove: () => void; onMove: (folder: string | undefined) => void;
 }) {
   const ts = new Date(event.timestamp);
-  const timeStr = ts.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " +
-    ts.toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" });
+  const timeStr = ts.toLocaleDateString("ru-RU", { month: "short", day: "numeric" }) + " " +
+    ts.toLocaleTimeString("ru-RU", { hour12: false, hour: "2-digit", minute: "2-digit" });
   const [moveOpen, setMoveOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const moveBtnRef = useRef<HTMLButtonElement>(null);
@@ -881,7 +881,7 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
       >
         <div className="min-w-0 overflow-hidden">
           <div className="text-[12px] leading-snug line-clamp-2 min-h-[32px]" style={{ color: titleColor }}>
-            {titleText || "No summary yet"}
+            {titleText || "Описания пока нет"}
           </div>
           {annotationPreview && (
             <div className="mt-1.5 flex min-w-0 items-start gap-1.5 rounded-md px-2 py-1.5 text-[10px] leading-snug"
@@ -890,7 +890,7 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
               <span className="line-clamp-2">
                 {annotationPreview.note
                   ? `${annotationKindLabel(annotationPreview.kind)}: ${annotationPreview.note}`
-                  : `${annotationKindLabel(annotationPreview.kind)} annotation`}
+                  : `${annotationKindLabel(annotationPreview.kind)} (без текста)`}
               </span>
             </div>
           )}
@@ -907,7 +907,7 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
                 ? { background: "rgba(255,255,255,0.12)", color: "#fff", border: "1px solid rgba(255,255,255,0.25)" }
                 : { background: "transparent", color: C.fg3, border: "1px solid rgba(255,255,255,0.28)" }
             }>
-              {event.source === "cloud" ? "Prod" : "Local"}
+              {event.source === "cloud" ? "Прод" : "Локальный"}
             </span>
             <span className="text-[10px] truncate" style={{ color: C.fg0 }}>{event.event_name}</span>
             <span className="text-[9px] flex-shrink-0 ml-auto" style={{ color: C.fg0 }}>{timeStr}</span>
@@ -928,7 +928,7 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
           className="p-1 rounded transition-colors hover:bg-white/10"
           style={{ color: C.fg2 }}
           onClick={(e) => { e.stopPropagation(); setConfirmRemove(false); setMoveOpen(v => !v); }}
-          title="Move to folder"
+          title="Перенести в папку"
         >
           <Folder className="h-3 w-3" />
         </button>
@@ -945,7 +945,7 @@ function SavedListItem({ event, selected, onClick, onRemove, onMove }: {
             if (confirmRemove) { setConfirmRemove(false); onRemove(); }
             else { setConfirmRemove(true); setMoveOpen(false); }
           }}
-          title={confirmRemove ? "Click again to confirm delete" : "Remove"}
+          title={confirmRemove ? "Нажмите ещё раз для подтверждения" : "Убрать из сохранённых"}
         >
           <Trash2 className="h-3 w-3" />
         </button>
@@ -989,7 +989,7 @@ function SavedRunDetail({ event }: { event: SavedEvent }) {
 
   if (hasLocalRun === null) {
     return <div className="h-full flex items-center justify-center gap-2" style={{ color: C.fg1 }}>
-      <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+      <Loader2 className="h-4 w-4 animate-spin" /> Загрузка…
     </div>;
   }
 
@@ -1023,7 +1023,7 @@ async function fetchCloudTraces(eventId: string): Promise<TraceSpan[]> {
   url.searchParams.set("event_id", eventId);
   url.searchParams.set("limit", "500");
   const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) throw new Error(`Ошибка API ${res.status}`);
   const data = await res.json();
   return data.data;
 }
@@ -1121,9 +1121,9 @@ function CloudTraceDetail({ event }: { event: SavedEvent }) {
       .finally(() => setLoading(false));
   }, [event.id]);
 
-  if (loading) return <div className="h-full flex items-center justify-center gap-2" style={{ color: C.fg1 }}><Loader2 className="h-4 w-4 animate-spin" /> Loading trace...</div>;
+  if (loading) return <div className="h-full flex items-center justify-center gap-2" style={{ color: C.fg1 }}><Loader2 className="h-4 w-4 animate-spin" /> Загрузка трейса…</div>;
   if (error) return <div className="h-full flex items-center justify-center"><div className="text-[11px]" style={{ color: C.red }}>{error}</div></div>;
-  if (spans.length === 0) return <div className="h-full flex items-center justify-center"><div className="text-[11px]" style={{ color: C.fg0 }}>No trace data</div></div>;
+  if (spans.length === 0) return <div className="h-full flex items-center justify-center"><div className="text-[11px]" style={{ color: C.fg0 }}>Данных трейса нет</div></div>;
 
   const startMs = Math.min(...spans.map(s => s.start_time_ms));
   const endMs = Math.max(...spans.map(s => s.end_time_ms));

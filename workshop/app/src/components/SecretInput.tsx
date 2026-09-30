@@ -60,7 +60,7 @@ export function SecretInput({
         <span className="text-[12px]" style={{ color: C.fg3 }}>{label}</span>
         {saved && (
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ color: C.green, background: "rgba(96,227,109,0.08)" }}>
-            saved
+            сохранено
           </span>
         )}
       </div>
@@ -95,7 +95,7 @@ export function SecretInput({
             style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`, color: C.fg1 }}
             onMouseDown={e => e.preventDefault()}
             onClick={() => setShow(!show)}
-            title={show ? "Hide typed key" : "Show typed key"}
+            title={show ? "Скрыть ключ" : "Показать ключ"}
           >
             {show ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
           </button>
@@ -113,7 +113,7 @@ export function SecretInput({
             onMouseDown={e => e.preventDefault()}
             onClick={clearSavedKey}
             disabled={saving}
-            title="Clear saved key"
+            title="Удалить сохранённый ключ"
           >
             <Trash2 className="w-3 h-3" />
           </button>
@@ -138,7 +138,7 @@ export function SecretInput({
                 onClick={saveAndExitEditMode}
                 disabled={saving || !canSave}
               >
-                {saving ? "saving..." : "Save"}
+                {saving ? "сохранение…" : "Сохранить"}
               </button>
             ) : getKeyUrl && (
               <a
@@ -148,7 +148,7 @@ export function SecretInput({
                 className="text-[11px] font-medium whitespace-nowrap hover:underline flex-shrink-0"
                 style={{ color: C.fg3 }}
               >
-                {getKeyLabel ?? "Get a key \u2192"}
+                {getKeyLabel ?? "Получить ключ \u2192"}
               </a>
             )}
           </div>

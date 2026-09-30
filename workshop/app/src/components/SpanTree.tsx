@@ -36,16 +36,16 @@ function CopyButton({ text }: { text: string }) {
       style={{ color: copied ? C.green : C.fg0, background: "rgba(255,255,255,0.03)" }}
       onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
     >
-      {copied ? "copied" : "copy"}
+      {copied ? "скопировано" : "копировать"}
     </button>
   );
 }
 
 const TYPE_LABEL: Record<string, { color: string; label: string }> = {
-  TRACE: { color: C.purple, label: "TRACE" },
-  TOOL_CALL: { color: "#b08c5a", label: "TOOL" },
+  TRACE: { color: C.purple, label: "трейс" },
+  TOOL_CALL: { color: "#b08c5a", label: "инструмент" },
   LLM_GENERATION: { color: "#5a8ab0", label: "LLM" },
-  INTERNAL: { color: C.fg0, label: "SPAN" },
+  INTERNAL: { color: C.fg0, label: "спан" },
 };
 
 function typeInfo(span: Span) {
@@ -132,7 +132,7 @@ function SpanDetail({ span }: { span: Span }) {
           <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style={{ color: info.color, background: `${info.color}15`, marginLeft: -6 }}>
             {info.label}
           </span>
-          {isErr && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ color: C.red, background: "rgba(204,102,102,0.1)" }}>ERROR</span>}
+          {isErr && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ color: C.red, background: "rgba(204,102,102,0.1)" }}>ошибка</span>}
           {(() => { const p = detectProvider(span.model, span.provider); return p ? <span className="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded" style={{ color: C.fg1, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>{p.label}</span> : null; })()}
         </div>
         <div className="text-sm font-mono font-medium" style={{ color: C.fg4 }}>{span.name}</div>
@@ -141,27 +141,27 @@ function SpanDetail({ span }: { span: Span }) {
       {/* Error banner */}
       {isErr && span.output_payload && (
         <div className="rounded-lg p-2.5" style={{ background: "rgba(204,102,102,0.06)", border: "1px solid rgba(204,102,102,0.12)" }}>
-          <div className="text-[9px] uppercase tracking-wide mb-1 font-medium" style={{ color: C.red }}>Error</div>
+          <div className="text-[9px] uppercase tracking-wide mb-1 font-medium" style={{ color: C.red }}>Ошибка</div>
           <pre className="text-[11px] font-mono leading-relaxed" style={{ color: C.red }}>{tryJson(span.output_payload)}</pre>
         </div>
       )}
 
       {/* Meta */}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] font-mono">
-        <div style={{ color: C.fg0 }}>duration</div>
+        <div style={{ color: C.fg0 }}>длительность</div>
         <div style={{ color: C.fg2 }}>{fmt(span.duration_ms)}</div>
-        {span.model && <><div style={{ color: C.fg0 }}>model</div><div style={{ color: C.fg2 }}>{span.model}</div></>}
-        {span.input_tokens != null && <><div style={{ color: C.fg0 }}>input tokens</div><div style={{ color: C.fg2 }}>{span.input_tokens.toLocaleString()}</div></>}
-        {span.output_tokens != null && <><div style={{ color: C.fg0 }}>output tokens</div><div style={{ color: C.fg2 }}>{span.output_tokens.toLocaleString()}</div></>}
-        <div style={{ color: C.fg0 }}>status</div>
+        {span.model && <><div style={{ color: C.fg0 }}>модель</div><div style={{ color: C.fg2 }}>{span.model}</div></>}
+        {span.input_tokens != null && <><div style={{ color: C.fg0 }}>токены на входе</div><div style={{ color: C.fg2 }}>{span.input_tokens.toLocaleString()}</div></>}
+        {span.output_tokens != null && <><div style={{ color: C.fg0 }}>токены на выходе</div><div style={{ color: C.fg2 }}>{span.output_tokens.toLocaleString()}</div></>}
+        <div style={{ color: C.fg0 }}>статус</div>
         <div style={{ color: isErr ? C.red : C.fg2 }}>{span.status}</div>
-        <div style={{ color: C.fg0 }}>start</div>
+        <div style={{ color: C.fg0 }}>начало</div>
         <div style={{ color: C.fg2 }}>{new Date(span.start_time_ms).toISOString().replace("T", " ").slice(0, 23)}</div>
-        <div style={{ color: C.fg0 }}>end</div>
+        <div style={{ color: C.fg0 }}>конец</div>
         <div style={{ color: C.fg2 }}>{span.end_time_ms ? new Date(span.end_time_ms).toISOString().replace("T", " ").slice(0, 23) : "—"}</div>
-        <div style={{ color: C.fg0 }}>span id</div>
+        <div style={{ color: C.fg0 }}>id спана</div>
         <div style={{ color: C.fg0 }}>{span.id.slice(-12)}</div>
-        {span.attributes && (() => { try { const a = JSON.parse(span.attributes); return a["ai.provider.baseURL"] ? <><div style={{ color: C.fg0 }}>base url</div><div style={{ color: C.fg0 }}>{a["ai.provider.baseURL"]}</div></> : null; } catch { return null; } })()}
+        {span.attributes && (() => { try { const a = JSON.parse(span.attributes); return a["ai.provider.baseURL"] ? <><div style={{ color: C.fg0 }}>базовый URL</div><div style={{ color: C.fg0 }}>{a["ai.provider.baseURL"]}</div></> : null; } catch { return null; } })()}
       </div>
 
       {/* LLM Provider Options — collapsible */}
@@ -219,7 +219,7 @@ function SpanDetail({ span }: { span: Span }) {
             const name = p.split(".")[0];
             return name.charAt(0).toUpperCase() + name.slice(1);
           })();
-          const title = providerName ? `Provider Options (${providerName})` : "Provider Options";
+          const title = providerName ? `Параметры провайдера (${providerName})` : "Параметры провайдера";
           return <CollapsibleSection title={title} preview={preview} data={configObj} maxExpand={10} />;
         } catch { return null; }
       })()}
@@ -228,7 +228,7 @@ function SpanDetail({ span }: { span: Span }) {
       {span.input_payload && (
         <div>
           <div className="flex items-center justify-between mb-1">
-            <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Input</div>
+            <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Вход</div>
             <CopyButton text={tryJson(span.input_payload) ?? span.input_payload} />
           </div>
           <div className="p-2 rounded" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}` }}>
@@ -241,7 +241,7 @@ function SpanDetail({ span }: { span: Span }) {
       {span.output_payload && (
         <div>
           <div className="flex items-center justify-between mb-1">
-            <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Output</div>
+            <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Выход</div>
             <CopyButton text={tryJson(span.output_payload) ?? span.output_payload} />
           </div>
           <div className="p-2 rounded" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}` }}>
@@ -391,7 +391,7 @@ export function SpanTree({
 
   const selectedSpan = selectedId ? spanMap.get(selectedId) : null;
 
-  if (flat.length === 0) return <div style={{ color: C.fg1 }}>No spans</div>;
+  if (flat.length === 0) return <div style={{ color: C.fg1 }}>Спанов нет</div>;
 
   return (
     <div className="flex flex-col h-full rounded-lg" style={{ border: `1px solid ${C.border}` }}>
@@ -400,9 +400,9 @@ export function SpanTree({
         <div className="overflow-auto sb" style={{ flex: selectedSpan ? "0 0 50%" : "1 1 auto", borderRight: selectedSpan ? `1px solid ${C.border}` : "none" }}>
           {/* Header */}
           <div className="flex items-center px-2 py-1.5 sticky top-0 z-10" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
-            <div className="text-[9px] uppercase tracking-wider font-medium" style={{ color: C.fg0, width: 220 }}>Span</div>
-            <div className="flex-1 text-[9px] uppercase tracking-wider font-medium" style={{ color: C.fg0 }}>Timeline</div>
-            <div className="text-[9px] uppercase tracking-wider font-medium text-right pr-3" style={{ color: C.fg0, width: 55 }}>Dur</div>
+            <div className="text-[9px] uppercase tracking-wider font-medium" style={{ color: C.fg0, width: 220 }}>Спан</div>
+            <div className="flex-1 text-[9px] uppercase tracking-wider font-medium" style={{ color: C.fg0 }}>Шкала времени</div>
+            <div className="text-[9px] uppercase tracking-wider font-medium text-right pr-3" style={{ color: C.fg0, width: 55 }}>Длит.</div>
           </div>
           {flat.map(({ span, depth }) => (
             <div key={span.id}>
@@ -440,10 +440,10 @@ export function SpanTree({
                           <span style={{ color: C.fg0, fontSize: 10, marginRight: 6 }}>
                             {SOURCE_GLYPH[a.source]} {annotationSourceLabel(a.source)}
                           </span>
-                          {a.note ? <DeepLinkedText text={a.note} /> : <em style={{ color: C.fg0 }}>(no note)</em>}
+                          {a.note ? <DeepLinkedText text={a.note} /> : <em style={{ color: C.fg0 }}>(без текста)</em>}
                         </div>
                         {onDeleteAnnotation && (
-                          <button onClick={(e) => { e.stopPropagation(); onDeleteAnnotation(a.id); }} title="Delete" style={{ background: "transparent", border: 0, color: C.fg0, fontSize: 13, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>×</button>
+                          <button onClick={(e) => { e.stopPropagation(); onDeleteAnnotation(a.id); }} title="Удалить" style={{ background: "transparent", border: 0, color: C.fg0, fontSize: 13, cursor: "pointer", padding: "0 4px", lineHeight: 1 }}>×</button>
                         )}
                       </div>
                     );
@@ -505,7 +505,7 @@ function SpanContextMenu({ x, y, onClose, onMarkKind, onAddNote }: {
       }}
     >
       <div style={{ padding: "4px 12px 2px", fontSize: 10, textTransform: "uppercase", color: C.fg0, letterSpacing: "0.04em" }}>
-        Annotate span
+        Заметка к спану
       </div>
       {(["issue", "good", "note"] as AnnotationKind[]).map((kind) => {
         const s = KIND_STYLES[kind];
@@ -522,7 +522,7 @@ function SpanContextMenu({ x, y, onClose, onMarkKind, onAddNote }: {
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <span style={{ width: 14, textAlign: "center", color: s.fg, fontWeight: 700 }}>{s.icon}</span>
-            <span style={{ flex: 1 }}>{kind === "note" ? "Add note…" : `Mark as ${kind}`}</span>
+            <span style={{ flex: 1 }}>{kind === "note" ? "Добавить заметку…" : kind === "issue" ? "Отметить как проблему" : "Отметить как хорошее"}</span>
           </button>
         );
       })}

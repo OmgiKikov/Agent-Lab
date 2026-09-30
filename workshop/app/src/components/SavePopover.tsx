@@ -68,10 +68,10 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
       style={{ background: "rgba(20,20,20,0.85)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 8px 32px rgba(0,0,0,0.4)", width: 220 }}
     >
       <div className="text-[10px] px-2 py-1" style={{ color: C.fg0 }}>
-        {isSaved ? "Move to folder" : "Save to folder"}
+        {isSaved ? "Перенести в папку" : "Сохранить в папку"}
       </div>
       <FolderRow
-        label="Unfiled"
+        label="Без папки"
         value={null}
         selected={normalizedCurrent === null}
         icon={<Folder className="size-3" style={{ color: C.fg0 }} />}
@@ -90,17 +90,17 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
       {showNew ? (
         <div className="flex gap-1">
           <input autoFocus className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] outline-none" style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)" }}
-            placeholder="Folder name..." value={newFolder} onChange={e => setNewFolder(e.target.value)}
+            placeholder="Название папки…" value={newFolder} onChange={e => setNewFolder(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && newFolder.trim()) { addFolder(newFolder.trim()); onSave(newFolder.trim()); onClose(); } }} />
           <button className="px-2 py-1 rounded text-[10px] font-medium" style={{ background: "rgba(255,255,255,0.08)", color: C.fg3 }}
             onClick={() => { if (newFolder.trim()) { addFolder(newFolder.trim()); onSave(newFolder.trim()); onClose(); } }}>
-            {isSaved ? "Move" : "Save"}
+            {isSaved ? "Перенести" : "Сохранить"}
           </button>
         </div>
       ) : (
         <button className="w-full text-left px-2 py-1.5 rounded text-[11px] flex items-center gap-1.5 transition-colors hover:bg-white/[0.06]" style={{ color: C.fg0 }}
           onClick={() => setShowNew(true)}>
-          <FolderPlus className="size-3" /> New folder…
+          <FolderPlus className="size-3" /> Новая папка…
         </button>
       )}
       {onUnsave && (
@@ -111,7 +111,7 @@ export function SavePopover({ onSave, onClose, anchorRef, currentFolder, onUnsav
             onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,107,107,0.1)"; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
             onClick={() => { onUnsave(); onClose(); }}>
-            <Trash2 className="size-3" /> Remove from saved
+            <Trash2 className="size-3" /> Убрать из сохранённых
           </button>
         </>
       )}

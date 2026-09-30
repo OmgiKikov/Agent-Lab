@@ -4,12 +4,18 @@ import { C, spanColor } from "../utils/colors";
 import { argsPreview, fmt, trunc, tryJson } from "../utils/helpers";
 import { getNormalizedTool, type Span } from "../utils/types";
 
+/** Russian plural: 1 токен, 2 токена, 5 токенов. */
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
 function approxTokens(s: string | null | undefined): string | null {
   if (!s || s.length < 20) return null;
   const tokens = Math.round(s.length / 4);
   if (tokens < 10) return null;
-  if (tokens < 1000) return `~${tokens} tok`;
-  return `~${(tokens / 1000).toFixed(1)}k tok`;
+  if (tokens < 1000) return `~${tokens} ${ruPlural(tokens, "токен", "токена", "токенов")}`;
+  return `~${(tokens / 1000).toFixed(1)}\u00a0тыс. токенов`;
 }
 
 export function ToolCallPill({ span, colorMap }: { span: Span; colorMap: Map<string, string> }) {
@@ -79,7 +85,7 @@ export function ToolCallPill({ span, colorMap }: { span: Span; colorMap: Map<str
         >
           {/* Header */}
           <div className="flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: `1px solid ${C.border}` }}>
-            {err && <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style={{ color: C.red, background: "rgba(204,102,102,0.1)" }}>ERROR</span>}
+            {err && <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded" style={{ color: C.red, background: "rgba(204,102,102,0.1)" }}>ошибка</span>}
             <span className="text-[11px] font-mono font-medium" style={{ color: err ? C.red : C.fg4 }}>{name}</span>
             {span.duration_ms > 0 && <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{fmt(span.duration_ms)}</span>}
             {resultTokens && <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{resultTokens}</span>}
@@ -94,13 +100,13 @@ export function ToolCallPill({ span, colorMap }: { span: Span; colorMap: Map<str
           <div className="flex flex-col md:flex-row" style={{ maxHeight: 400 }}>
             {span.input_payload && (
               <div className="flex-1 min-w-0 p-2.5 overflow-auto sb" style={{ borderRight: span.output_payload ? `1px solid ${C.border}` : "none" }}>
-                <div className="text-[9px] uppercase tracking-wide mb-1 font-sans font-medium" style={{ color: C.fg0 }}>Input</div>
+                <div className="text-[9px] uppercase tracking-wide mb-1 font-sans font-medium" style={{ color: C.fg0 }}>Вход</div>
                 <pre className="text-[11px] font-mono leading-relaxed select-all whitespace-pre-wrap break-words" style={{ color: C.fg2 }}>{tryJson(span.input_payload)}</pre>
               </div>
             )}
             {span.output_payload && (
               <div className="flex-1 min-w-0 p-2.5 overflow-auto sb">
-                <div className="text-[9px] uppercase tracking-wide mb-1 font-sans font-medium" style={{ color: C.fg0 }}>Output</div>
+                <div className="text-[9px] uppercase tracking-wide mb-1 font-sans font-medium" style={{ color: C.fg0 }}>Выход</div>
                 <pre className="text-[11px] font-mono leading-relaxed select-all whitespace-pre-wrap break-words" style={{ color: err ? C.red : C.fg2 }}>{tryJson(span.output_payload)}</pre>
               </div>
             )}

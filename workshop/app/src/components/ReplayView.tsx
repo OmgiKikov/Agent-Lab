@@ -48,13 +48,13 @@ export function ReplayView({ originalRunId, originalName, replayRunId, error, is
           <div className="flex items-center gap-2 min-w-0">
             <RotateCcw style={{ width: 12, height: 12, color: C.fg1, flexShrink: 0 }} />
             <span className="text-[12px] truncate" style={{ color: C.fg1 }}>
-              replay of{" "}
+              повтор трейса{" "}
               <button
                 className="font-medium hover:underline transition-colors"
                 style={{ color: C.fg3 }}
                 onClick={() => setShowOriginal(!showOriginal)}
               >
-                {originalName ?? "run"}
+                {originalName ?? "без названия"}
               </button>
             </span>
             {!showOriginal && (
@@ -63,7 +63,7 @@ export function ReplayView({ originalRunId, originalName, replayRunId, error, is
                 style={{ color: C.fg2, border: `1px solid rgba(255,255,255,0.15)` }}
                 onClick={() => setShowOriginal(true)}
               >
-                compare <ArrowRight className="size-3" />
+                сравнить <ArrowRight className="size-3" />
               </button>
             )}
           </div>
@@ -74,13 +74,13 @@ export function ReplayView({ originalRunId, originalName, replayRunId, error, is
                 style={{ color: C.red }}
                 onClick={onCancel}
               >
-                cancel
+                отмена
               </button>
             )}
             {!isRunning && onReplay && (
               <button
                 className="p-1 rounded transition-colors hover:bg-white/10"
-                title="Replay"
+                title="Повторить"
                 onClick={onReplay}
               >
                 <RotateCcw style={{ width: 12, height: 12, color: C.fg2 }} />
@@ -98,7 +98,7 @@ export function ReplayView({ originalRunId, originalName, replayRunId, error, is
               style={{ background: "rgba(255,255,255,0.04)", flex: 1 }}
             >
               <span className="text-[12px] truncate" style={{ color: C.fg1 }}>
-                original — <span style={{ color: C.fg3 }}>{originalName ?? "run"}</span>
+                исходный — <span style={{ color: C.fg3 }}>{originalName ?? "без названия"}</span>
               </span>
               <button
                 className="p-0.5 rounded transition-colors hover:bg-white/10 flex-shrink-0"
@@ -126,13 +126,13 @@ export function ReplayView({ originalRunId, originalName, replayRunId, error, is
             </div>
           ) : isCancelled ? (
             <div className="flex items-center justify-center h-full">
-              <span className="text-xs font-mono" style={{ color: C.fg1 }}>Stopped</span>
+              <span className="text-xs font-mono" style={{ color: C.fg1 }}>Остановлено</span>
             </div>
           ) : (
             <div className="flex items-center justify-center h-full">
               <div className="flex flex-col items-center gap-3">
                 <Loader2 className="size-5 animate-spin" style={{ color: C.fg1 }} />
-                <span className="text-xs font-mono" style={{ color: C.fg1 }}>Replaying agent…</span>
+                <span className="text-xs font-mono" style={{ color: C.fg1 }}>Повторяем трейс…</span>
               </div>
             </div>
           )}

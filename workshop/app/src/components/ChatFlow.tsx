@@ -13,6 +13,12 @@ import { extractLiveToolArgs } from "./chat-flow-live";
 import { useSmoothText } from "../hooks/use-smooth-text";
 import { canEditReplayMessage } from "../utils/messageParsing";
 
+/** Russian plural: 1 инструмент, 2 инструмента, 5 инструментов. */
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
 type ToolGroupItem = { type: "tool"; span: Span } | { type: "sub_agent"; agent: SubAgent };
 type LiveToolItem =
   | { type: "live_tool_start"; name: string; argsPreview: string | null; time: number }
@@ -35,8 +41,9 @@ function isSyntheticPartialLlmSpan(span: Span): boolean {
 
 function PreviousMessages({ messages }: { messages: { role: string; content: string }[] }) {
   const [expanded, setExpanded] = useState(false);
+  const roleLabels: Record<string, string> = { assistant: "ассистент", user: "пользователь", tool: "инструмент" };
   const counts = ["assistant", "user", "tool"]
-    .map(r => { const n = messages.filter(m => m.role === r).length; return n > 0 ? `${n} ${r}` : null; })
+    .map(r => { const n = messages.filter(m => m.role === r).length; return n > 0 ? `${roleLabels[r]}: ${n}` : null; })
     .filter(Boolean).join(", ");
 
   return (
@@ -51,11 +58,11 @@ function PreviousMessages({ messages }: { messages: { role: string; content: str
           onClick={() => setExpanded(!expanded)}
         >
           {expanded ? (
-            "hide"
+            "скрыть"
           ) : (
             <>
               <span className="text-[12px] font-medium normal-case leading-snug" style={{ color: C.fg2 }}>
-                previous messages
+                предыдущие сообщения
               </span>
               <span className="mt-0.5 text-[10px] text-[--fg1] opacity-70 font-normal">
                 {counts}
@@ -108,9 +115,9 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
         onClick={() => setOpen(!open)}
       >
         <span className="text-[10px] font-bold uppercase tracking-wider px-1 rounded leading-none"
-          style={{ color: "#7aaccc", background: "rgba(90,138,176,0.15)", padding: "2px 4px" }}>agent</span>
+          style={{ color: "#7aaccc", background: "rgba(90,138,176,0.15)", padding: "2px 4px" }}>агент</span>
         <span style={{ color: C.fg4 }}>{a.name}</span>
-        <span style={{ color: C.fg0, fontSize: "10px" }}>{a.tool_count} tools &middot; {fmt(a.duration_ms)}</span>
+        <span style={{ color: C.fg0, fontSize: "10px" }}>{a.tool_count} {ruPlural(a.tool_count, "инструмент", "инструмента", "инструментов")} &middot; {fmt(a.duration_ms)}</span>
         <Chevron open={open} size={10} />
       </button>
 
@@ -145,7 +152,7 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
               {/* Output */}
               {agentOutput?.output_payload && (
                 <div>
-                  <div className="text-[9px] uppercase tracking-wide mb-0.5 font-medium" style={{ color: C.fg0 }}>Output</div>
+                  <div className="text-[9px] uppercase tracking-wide mb-0.5 font-medium" style={{ color: C.fg0 }}>Выход</div>
                   <pre className="text-[11px] font-sans leading-relaxed whitespace-pre-wrap" style={{ color: C.fg2 }}>{trunc(agentOutput.output_payload, 150)}</pre>
                 </div>
               )}
@@ -156,14 +163,14 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
             <div className="flex-shrink-0 flex items-center justify-between px-3 py-2" style={{ borderTop: `1px solid ${C.border}` }}>
               {onDiveIn ? (
                 <Button onClick={() => { setOpen(false); onDiveIn(a.root_span_id); }}>
-                  Open Sub-Agent &rarr;
+                  Открыть субагента &rarr;
                 </Button>
               ) : <div />}
               <div className="text-[10px] font-mono text-right" style={{ color: C.fg0 }}>
                 {a.model && <>{a.model} &middot; </>}
-                {a.llm_count} LLM &middot; {a.tool_count} tools &middot; {fmt(a.duration_ms)}
-                {a.total_input_tokens > 0 && <> &middot; {a.total_input_tokens.toLocaleString()} in</>}
-                {a.total_output_tokens > 0 && <> &middot; {a.total_output_tokens.toLocaleString()} out</>}
+                {a.llm_count} LLM &middot; {a.tool_count} {ruPlural(a.tool_count, "инструмент", "инструмента", "инструментов")} &middot; {fmt(a.duration_ms)}
+                {a.total_input_tokens > 0 && <> &middot; {a.total_input_tokens.toLocaleString()} вход</>}
+                {a.total_output_tokens > 0 && <> &middot; {a.total_output_tokens.toLocaleString()} выход</>}
               </div>
             </div>
           </div>
@@ -194,7 +201,7 @@ function UserBubble({ content, collapsible }: { content: string; collapsible?: b
       {canCollapse && (
         <button className="text-[10px] font-mono mt-0.5 px-1.5 py-0.5 -ml-1.5 rounded transition-colors hover:bg-white/10"
           style={{ color: C.fg1 }}
-          onClick={() => setCollapsed(!collapsed)}>{collapsed ? "expand" : "collapse"}</button>
+          onClick={() => setCollapsed(!collapsed)}>{collapsed ? "развернуть" : "свернуть"}</button>
       )}
     </div>
   );
@@ -231,7 +238,7 @@ function UserMessage({ content, parts, images, onEdit }: { content: string; part
               boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
               color: C.fg2,
             }}
-            title="Edit & replay"
+            title="Изменить и повторить"
             onClick={() => editAction(content)}
           >
             <Pencil className="size-2.5" />
@@ -280,7 +287,7 @@ function RenderModeToggle({ md, onChange }: { md: boolean; onChange: (md: boolea
         style={{ ...baseStyle, color: md ? "#b4c0c7" : C.fg0 }}
         onClick={() => onChange(true)}
       >
-        Markdown
+        Текст
       </button>
       <span style={{ color: C.fg0, opacity: 0.5, fontSize: 10 }}>/</span>
       <button
@@ -289,7 +296,7 @@ function RenderModeToggle({ md, onChange }: { md: boolean; onChange: (md: boolea
         style={{ ...baseStyle, color: !md ? "#b4c0c7" : C.fg0 }}
         onClick={() => onChange(false)}
       >
-        Raw
+        Исходник
       </button>
     </div>
   );
@@ -359,7 +366,7 @@ function LLMErrorBanner({ content }: { content: string }) {
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
         style={{ background: "rgba(235,20,20,0.08)", border: "1px solid rgba(235,20,20,0.18)" }}>
         <AlertCircle />
-        <span className="text-[12px] font-medium" style={{ color: C.red }}>LLM Error</span>
+        <span className="text-[12px] font-medium" style={{ color: C.red }}>Ошибка LLM</span>
         <span className="text-[11px] font-mono truncate max-w-[300px]" style={{ color: "rgba(235,20,20,0.7)" }}>
           {trunc(formatted, 80)}
         </span>
@@ -377,7 +384,7 @@ function LLMErrorBanner({ content }: { content: string }) {
           }}>
           <div className="px-3 py-2 flex items-center gap-2" style={{ borderBottom: "1px solid rgba(235,20,20,0.15)" }}>
             <AlertCircle />
-            <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>Error Details</span>
+            <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>Подробности ошибки</span>
           </div>
           <div className="p-3 overflow-auto" style={{ maxHeight: 270 }}>
             <pre className="text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words" style={{ color: "rgba(235,100,100,0.9)" }}>
@@ -586,7 +593,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     if (replayError) {
       return (
         <div className="flex flex-col items-center justify-center h-48 text-sm gap-2 px-6 text-center" style={{ color: C.fg1 }}>
-          <div className="font-medium" style={{ color: C.red }}>Replay failed</div>
+          <div className="font-medium" style={{ color: C.red }}>Не удалось повторить</div>
           <div className="font-mono text-xs opacity-70">{replayError.code}</div>
           <div className="max-w-xl text-xs whitespace-pre-wrap">{replayError.message}</div>
         </div>
@@ -594,7 +601,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
     }
     return (
       <div className="flex flex-col items-center justify-center h-48 text-sm gap-2" style={{ color: C.fg1 }}>
-        Waiting for events <Dots />
+        Ждём события <Dots />
       </div>
     );
   }

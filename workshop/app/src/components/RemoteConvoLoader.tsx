@@ -66,7 +66,7 @@ export function RemoteConvoLoader({ convoId, highlightEventId }: { convoId: stri
       <div className="h-full flex items-center justify-center">
         <div className="text-center space-y-2">
           <AlertCircle className="mx-auto size-5" style={{ color: C.red }} />
-          <div className="text-[11px]" style={{ color: C.red }}>{(error as Error).message ?? "Failed to load conversation"}</div>
+          <div className="text-[11px]" style={{ color: C.red }}>{(error as Error).message ?? "Не удалось загрузить диалог"}</div>
         </div>
       </div>
     );
@@ -75,13 +75,13 @@ export function RemoteConvoLoader({ convoId, highlightEventId }: { convoId: stri
   if (isLoading && turns.length === 0) {
     return (
       <div className="h-full flex items-center justify-center gap-2" style={{ color: C.fg1 }}>
-        <Loader2 className="size-4 animate-spin" /> Loading conversation…
+        <Loader2 className="size-4 animate-spin" /> Загрузка диалога…
       </div>
     );
   }
 
   if (turns.length === 0) {
-    return <div className="h-full flex items-center justify-center"><div className="text-[11px]" style={{ color: C.fg0 }}>No conversation data</div></div>;
+    return <div className="h-full flex items-center justify-center"><div className="text-[11px]" style={{ color: C.fg0 }}>Данных диалога нет</div></div>;
   }
 
   return (
@@ -94,7 +94,7 @@ export function RemoteConvoLoader({ convoId, highlightEventId }: { convoId: stri
               <div key={idx} id={`convo-turn-${ev.event.id}`} className="flex items-center gap-2 py-2">
                 <div className="h-px flex-1" style={{ background: C.border }} />
                 <div className="text-[10px] font-mono px-2 py-1 rounded-full" style={{ background: isHighlight ? "rgba(165,124,245,0.18)" : "rgba(255,255,255,0.04)", color: isHighlight ? C.purple : C.fg0 }}>
-                  Turn {ev.turnIndex + 1} | {ago(new Date(ev.event.timestamp).getTime())}
+                  Шаг {ev.turnIndex + 1} | {ago(new Date(ev.event.timestamp).getTime())}
                 </div>
                 <div className="h-px flex-1" style={{ background: C.border }} />
               </div>

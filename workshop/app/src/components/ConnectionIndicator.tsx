@@ -89,7 +89,7 @@ export function ConnectionIndicator({
         style={{ background: COLORS[status.state] }}
       />
       {status.state !== "green" && (
-        <span className="truncate text-xs text-white/70">{providerLabel(provider)} unavailable</span>
+        <span className="truncate text-xs text-white/70">{providerLabel(provider)} недоступен</span>
       )}
       {dir && (
         <span className="flex min-w-0 items-center gap-1 text-xs text-white/45">
@@ -109,7 +109,7 @@ export function ConnectionIndicator({
             setShowWorkspaceMenu((value) => !value);
             void loadRegisteredWorkspaces(setWorkspaces, setWorkspaceError);
           }}
-          title="Switch workspace"
+          title="Сменить рабочую папку"
         >
           {statusContent}
         </button>
@@ -133,14 +133,14 @@ export function ConnectionIndicator({
               }}
             >
               <Folder className="h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 flex-1 truncate">Choose folder...</span>
+              <span className="min-w-0 flex-1 truncate">Выбрать папку…</span>
             </button>
           )}
           {workspaceError && (
             <div className="px-2 py-1.5 text-red-100/80">{workspaceError}</div>
           )}
           {!workspaceError && workspaces.length === 0 && (
-            <div className="px-2 py-2 text-white/40">No registered workspaces.</div>
+            <div className="px-2 py-2 text-white/40">Рабочих папок пока нет.</div>
           )}
           {!workspaceError && workspaces.map((workspace) => (
             <button
@@ -163,39 +163,39 @@ export function ConnectionIndicator({
       {showRemediation && status.state !== "green" && (
         <div className="absolute right-0 top-full mt-2 w-80 rounded-lg border border-white/10 bg-zinc-900/95 backdrop-blur p-3 z-50 text-xs">
           <div className="text-white/80 mb-2 leading-relaxed">
-            Workshop chat streams through your local {providerLabel(provider)} CLI. Make sure
+            Чат Workshop работает через локальный CLI {providerLabel(provider)}. Проверьте, что
             <code className="mx-1 rounded bg-black/40 px-1 font-mono">{provider === "codex" ? "codex" : "claude"}</code>
-            is on your PATH and you are logged in.
+            есть в PATH и вы вошли в аккаунт.
           </div>
           <button
             className="mt-1 text-white/50 hover:text-white/80"
             onClick={() => setFirstTimeOpen((v) => !v)}
           >
-            First time? {firstTimeOpen ? "▾" : "▸"}
+            Впервые? {firstTimeOpen ? "▾" : "▸"}
           </button>
           {firstTimeOpen && (
             <div className="mt-2 text-white/60 leading-relaxed space-y-2">
               <div>
-                Run this once to install the raindrop CLI and drop MCP + skill
-                files into your coding tool config:
+                Выполните один раз: команда установит CLI raindrop и добавит MCP
+                и файлы навыков в настройки вашего инструмента для кода:
               </div>
               <div className="flex items-center gap-2 rounded bg-black/40 px-2 py-1.5 font-mono text-[10px] text-white/90">
                 <span className="flex-1 select-all break-all">{installer}</span>
               </div>
               <div>
-                For source-tree development, register the stdio MCP command once:
+                Для разработки из исходников один раз зарегистрируйте MCP-команду stdio:
               </div>
               <div className="flex items-center gap-2 rounded bg-black/40 px-2 py-1.5 font-mono text-[10px] text-white/90">
                 <span className="flex-1 select-all break-all">{mcpAddCommand}</span>
               </div>
               <div>
-                Workshop chat streams through {providerLabel(provider)} and
-                passes the Raindrop MCP into that session. The Claude Code MCP
-                entry lives in{" "}
+                Чат Workshop работает через {providerLabel(provider)} и
+                подключает к этой сессии MCP Raindrop. Запись MCP для Claude Code
+                хранится в{" "}
                 <code className="font-mono bg-black/40 px-1 rounded">
                   ~/.claude.json
                 </code>
-                ; Codex can also read MCP servers from{" "}
+                ; Codex также читает MCP-серверы из{" "}
                 <code className="font-mono bg-black/40 px-1 rounded">
                   ~/.codex/config.toml
                 </code>
@@ -217,7 +217,7 @@ async function loadRegisteredWorkspaces(
   try {
     const res = await fetch("/api/workspace/registered");
     const body = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(body?.error ?? "Could not load registered workspaces.");
+    if (!res.ok) throw new Error(body?.error ?? "Не удалось загрузить рабочие папки.");
     setWorkspaces(Array.isArray(body?.workspaces) ? body.workspaces : []);
   } catch (err) {
     setError((err as Error).message);
@@ -238,7 +238,7 @@ async function switchWorkspace(
       body: JSON.stringify({ cwd }),
     });
     const body = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(body?.error ?? "Could not switch workspace.");
+    if (!res.ok) throw new Error(body?.error ?? "Не удалось сменить рабочую папку.");
     setOpen(false);
   } catch (err) {
     setError((err as Error).message);
