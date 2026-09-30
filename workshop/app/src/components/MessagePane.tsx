@@ -1891,7 +1891,7 @@ function copyTextWithTextarea(text: string): boolean {
 }
 
 function TraceDebugPrompt({ onPrompt }: { onPrompt: (prompt: string) => void }) {
-  const prompts = ["What went wrong here?", "What workshop tools are available?", "Annotate trace, save it for later"];
+  const prompts = ["Что здесь пошло не так?", "Какие инструменты Workshop доступны?", "Отметь трейс и сохрани его на потом"];
   return (
     <div className="mb-2 flex gap-1.5 overflow-x-auto whitespace-nowrap pb-0.5">
       {prompts.map((prompt) => (
