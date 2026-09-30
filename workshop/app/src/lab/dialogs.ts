@@ -11,8 +11,6 @@ export type DialogRow = {
   rules: Rule[]; second?: { model?: string; status: string; rules?: Rule[] } | null; review?: Decision | null;
 };
 
-/** The earlier address of a dialogue; it redirects to its block. */
-export const dialogPath = (key: string) => `/dialogs/${encodeURIComponent(key)}`;
 export const logKey = (dialogueId: string) => `log~${dialogueId}`;
 export const simKey = (runId: string, index: number) => `sim~${runId}~${index}`;
 

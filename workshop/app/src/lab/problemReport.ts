@@ -22,26 +22,30 @@ export function secondLine(e: Example, model: string | null): string {
   return e.second === "agree" ? `${who}: согласен.` : `${who}: не согласен.`;
 }
 
-/** «Агент нарушает 6 из 18 критериев», or the good result said as plainly. */
-export function summarySentence(data: Problems): string {
+type Source = "log" | "sim";
+
+/** «Агент нарушает 6 из 18 критериев» in one source, or the good result said as plainly. */
+export function summarySentence(data: Problems, source: Source): string {
   const total = data.rules.length;
   const rules = plural(total, "критерия", "критериев", "критериев");
-  if (data.problems.length) return `Агент нарушает ${data.problems.length} из ${total} ${rules}`;
-  const n = data.log?.assessed ?? 0;
+  const failed = data.rules.filter(r => r[source].failed > 0).length;
+  if (failed) return `Агент нарушает ${failed} из ${total} ${rules}`;
+  const n = source === "log" ? data.log?.assessed ?? 0 : data.sim?.dialogs ?? 0;
   return `Судья не нашёл нарушений ни одного из ${total} ${rules} в ${n} ${plural(n, "диалоге", "диалогах", "диалогах")}`;
 }
 
-const where = (p: RuleEntry) => [
-  p.log.failed ? `в ${p.log.failed} из ${p.log.failed + p.log.passed} диалогов логов` : null,
-  p.sim.failed ? `в ${p.sim.failed} из ${p.sim.failed + p.sim.passed} диалогов симуляции` : null,
+const where = (p: RuleEntry, source?: Source) => [
+  source !== "sim" && p.log.failed ? `в ${p.log.failed} из ${p.log.failed + p.log.passed} диалогов логов` : null,
+  source !== "log" && p.sim.failed ? `в ${p.sim.failed} из ${p.sim.failed + p.sim.passed} диалогов симуляции` : null,
 ].filter(Boolean).join(", ");
 
-/** One problem for a ticket or a message: what, where it is written, how often, one proof and the link. */
-export function problemMarkdown(p: RuleEntry, link: string, level = 1): string {
-  const e = [...p.log.examples, ...p.sim.examples].find(x => x.status === "FAIL");
+/** One problem for a ticket or a message: what, where it is written, how often, one proof and the link. With a source, only that source is told. */
+export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: Source): string {
+  const own = source ? p[source].examples : [...p.log.examples, ...p.sim.examples];
+  const e = own.find(x => x.status === "FAIL");
   const lines = [
     `${"#".repeat(level)} ${p.title}`, "",
-    `Нарушено ${where(p)}.`, "",
+    `Нарушено ${where(p, source)}.`, "",
     `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${p.rule.origin})` : ""}: «${p.rule.quote}»`, "",
     `Критерий: ${p.rule.text}`,
   ];
@@ -50,15 +54,16 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1): string {
   return lines.join("\n");
 }
 
-export function problemsReport(data: Problems, base: string): string {
-  const byId = new Map(data.rules.map(r => [r.id, r]));
-  const lines = [`# ${summarySentence(data)}`, ""];
-  if (data.log) lines.push(`Логи: оценено ${data.log.assessed} из ${data.log.sampled} диалогов ${day(data.log.finishedAt)}, нарушения в ${data.log.withViolations}, без оценки ${data.log.unassessed}.`);
-  if (data.sim) lines.push(`Симуляция: ${data.sim.target} · ${data.sim.version} от ${day(data.sim.finishedAt)}, ${data.sim.dialogs} диалогов, нарушения в ${data.sim.withViolations}.`);
+/** The problems of one source as a file: logs and simulation are never told together. */
+export function problemsReport(data: Problems, base: string, source: Source): string {
+  const lines = [`# ${summarySentence(data, source)}`, ""];
+  if (source === "log" && data.log) lines.push(`Логи: оценено ${data.log.assessed} из ${data.log.sampled} диалогов ${day(data.log.finishedAt)}, нарушения в ${data.log.withViolations}, без оценки ${data.log.unassessed}.`);
+  if (source === "sim" && data.sim) lines.push(`Прогон: ${data.sim.target} · ${data.sim.version} от ${day(data.sim.finishedAt)}, ${data.sim.dialogs} диалогов, нарушения в ${data.sim.withViolations}.`);
   lines.push("");
-  for (const id of data.problems) {
-    const p = byId.get(id);
-    if (p) lines.push(problemMarkdown(p, `${base}/problems/${id}`, 2), "");
+  const list = data.rules.filter(r => r[source].failed > 0).sort((a, b) => b[source].failed - a[source].failed);
+  for (const p of list) {
+    const link = source === "log" ? `${base}/logs?p=${encodeURIComponent(p.id)}` : `${base}/results?${data.sim ? `run=${encodeURIComponent(data.sim.runId)}&` : ""}p=${encodeURIComponent(p.id)}`;
+    lines.push(problemMarkdown(p, link, 2, source), "");
   }
   return lines.join("\n");
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Hammer } from "lucide-react";
+import { day } from "../../lab/format";
 import { api } from "../../lab/api";
 import { FROM_LOG } from "../../lab/runs";
 import { JobStrip } from "../../shell/Activity";
@@ -72,6 +73,7 @@ export function ScenariosPage() {
             { label: "Из ошибок", value: fromErrors },
             { label: "Покрытие", value: cards.length - fromErrors },
             { label: "Тем", value: topics },
+            ...(state?.cards?.createdAt ? [{ label: "Собраны", value: day(state.cards.createdAt) }] : []),
           ]} />
           <Split
             showDetail={!!card}

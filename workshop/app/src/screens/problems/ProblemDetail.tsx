@@ -47,7 +47,7 @@ export function ProblemDetail({ p, source, runId, onBack }: { p: RuleEntry; sour
     setParams(prev => { const next = new URLSearchParams(prev); change(next); return next; }, { replace: true });
   const setAt = (n: number) => update(next => next.set("example", String(Math.max(0, Math.min(violations.length - 1, n)) + 1)));
   const decide = (d: Decision) => { if (example) review.mutate({ example, decision: example.review === d ? null : d }); };
-  const copy = () => { navigator.clipboard.writeText(problemMarkdown(p, window.location.href)).then(() => toast.notify("Разбор скопирован"), toast.error); };
+  const copy = () => { navigator.clipboard.writeText(problemMarkdown(p, window.location.href, 1, source)).then(() => toast.notify("Разбор скопирован"), toast.error); };
   useKeys({
     ArrowLeft: () => setAt(at - 1),
     ArrowRight: () => setAt(at + 1),

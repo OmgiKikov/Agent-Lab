@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import { dialogPath, simKey } from "./dialogs";
+import { dialogOf } from "./dialogs";
 import { DEFAULT_PERSONA, personaName } from "./look";
 import type { Card, LabRun, LabState } from "./types";
 
@@ -41,4 +41,4 @@ export const pickOf = (cards: Card[], pick: Pick, chosen: Set<string>) =>
   pick === "all" ? cards : pick === "errors" ? cards.filter(c => c.origin === FROM_LOG) : cards.filter(c => chosen.has(c.id));
 
 /** Where a dialogue of a run opens: «Диалоги» with this run as the simulation shown there. */
-export const simDialog = (runId: string, index: number) => `${dialogPath(simKey(runId, index))}?run=${encodeURIComponent(runId)}`;
+export const simDialog = (runId: string, index: number) => dialogOf({ source: "sim", runId, index });

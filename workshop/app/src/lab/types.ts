@@ -62,7 +62,7 @@ export type LabState = {
   sources: Source[];
   logs: { total: number; file?: string | null; updatedAt?: string | null };
   discover: null | Discover;
-  cards: null | { cards: Card[] };
+  cards: null | { cards: Card[]; createdAt?: string };
   runs: LabRun[];
   targets: Target[];
   personas: Persona[];

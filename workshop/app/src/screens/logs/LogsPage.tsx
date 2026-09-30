@@ -1,7 +1,8 @@
 import { useSearchParams } from "react-router-dom";
 import { Link } from "react-router-dom";
-import { Play } from "lucide-react";
+import { FileDown, Play } from "lucide-react";
 import { day, plural } from "../../lab/format";
+import { download, problemsReport } from "../../lab/problemReport";
 import { useProblems } from "../../lab/problems";
 import { JobStrip } from "../../shell/Activity";
 import { useLabState } from "../../shell/LabProvider";
@@ -53,6 +54,7 @@ export function LogsPage() {
       <SectionHeader
         crumbs={[{ label: "Логи" }]}
         actions={<>
+          {log && data && <Button variant="outline" icon={FileDown} onClick={() => download("otchet-logi.md", problemsReport(data, window.location.origin, "log"))}>Отчёт</Button>}
           <UploadButton variant="outline" />
           <Button variant="primary" icon={Play} onClick={() => setAssess(true)} disabled={!state?.sources.length || !logs?.total || busy} title={busy ? "Сейчас идёт другая задача" : undefined}>Оценить логи</Button>
         </>}

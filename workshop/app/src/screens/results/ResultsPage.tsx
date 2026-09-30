@@ -1,7 +1,9 @@
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, FileDown } from "lucide-react";
 import { when } from "../../lab/format";
+import { download, problemsReport } from "../../lab/problemReport";
+import { useProblems } from "../../lab/problems";
 import { runTitle, simDialog, useRun } from "../../lab/runs";
 import { JobStrip } from "../../shell/Activity";
 import { useLabState } from "../../shell/LabProvider";
@@ -27,6 +29,7 @@ export function ResultsPage() {
   const tab = (params.get("tab") as Tab | null) ?? "problems";
   const set = (k: string, v: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (v) n.set(k, v); else n.delete(k); return n; }, { replace: true });
   const { data: full } = useRun(run?.id, state);
+  const { data: problems } = useProblems(run?.id ?? null);
   if (offline && !state) return <ServiceDown />;
 
   const m = run?.metric;
@@ -46,7 +49,10 @@ export function ResultsPage() {
     <div className="flex h-full flex-col">
       <SectionHeader
         crumbs={[{ label: "Результаты" }]}
-        actions={run ? <Link to={`/simulations?r=${encodeURIComponent(run.id)}`}><Button variant="outline">Прогон</Button></Link> : undefined}
+        actions={run ? <>
+          {problems?.sim?.runId === run.id && <Button variant="outline" icon={FileDown} onClick={() => download(`otchet-${run.id}.md`, problemsReport(problems, window.location.origin, "sim"))}>Отчёт</Button>}
+          <Link to={`/simulations?r=${encodeURIComponent(run.id)}`}><Button variant="outline">Прогон</Button></Link>
+        </> : undefined}
         below={<JobStrip kinds={["rejudge"]} />}
       />
       {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : !run ? (

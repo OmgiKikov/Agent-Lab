@@ -33,7 +33,9 @@ export function RunMatrix({ run, items, state, hrefOf, scores }: { run: LabRun; 
             <tr className="border-b border-white/[0.08]">
               <th className="py-2 pr-4 align-bottom font-mono text-label font-normal uppercase tracking-[0.08em] text-lab-dim">Сценарий</th>
               {types.map(t => {
-                const score = run.metric?.personas?.[t.id];
+                // The service's per-type numbers when it has them, else counted from the dialogues themselves.
+                const own = items.filter(i => personaOf(i) === t.id && (i.status === "PASS" || i.status === "FAIL"));
+                const score = run.metric?.personas?.[t.id] ?? { measured: own.length, passed: own.filter(i => i.status === "PASS").length };
                 return (
                   <th key={t.id} className="min-w-[110px] px-3 py-2 align-bottom font-normal">
                     <div className="text-small text-lab-text">{t.name}</div>
