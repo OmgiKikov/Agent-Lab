@@ -10,9 +10,14 @@ Every expectation must cite one source ID and a meaningful EXACT source quote (c
 Separate observable reply behavior from tool actions and backend state (tool/state require actual events, replies alone do not prove them).
 Prefer expectations that can be checked from the agent's replies alone and that matter for the customer's outcome.
 If no relevant rule can be grounded, leave rules empty and state the gap without inventing a failure.
-Use Russian. Return {topics:[{id,title,dialogueIds,rules:[{id,text,sourceId,quote,condition,acceptable,observation:"reply|tool|state"}],gap?}]}.
+Use Russian. Return {topics:[{id,title,dialogueIds,rules:[{id,name,text,sourceId,quote,condition,acceptable,observation:"reply|tool|state"}],gap?}]}.
+name is the rule in 2-5 words, what the agent does, readable at a glance by a bank manager (e.g. «Не отсылает в поддержку», «Время — по Москве»); no period.
 Choose at most 8 topics, at most 3 expectations per topic. condition says WHEN this duty actually applies; acceptable says permitted ways to satisfy it.
 Rule ids must be unique across all topics (e.g. t1r1)."""
+
+NAMES = """Give every rule a short Russian name: 2-5 words saying what the agent does, readable at a glance by a bank manager.
+Keep the rule's meaning and its key object (e.g. «Не отсылает в поддержку», «Уточняет, а не отказывает», «Время — по Москве», «Тариф — из системы банка»).
+No quotes around the name, no period, no word «агент». Every name must be distinct. Return {names:[{id,name}]}."""
 
 ASSIGN = """Assign every dialogue ID to exactly one of the given topics by the customer's business task (what the customer wants to get done).
 If no topic fits well, choose the closest one in business meaning. Return {assignments:[{dialogueId,topicId}]}."""

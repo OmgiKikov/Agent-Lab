@@ -37,7 +37,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { id: "a-review", group: "Действия", label: "Проверить вердикты логов", sub: "Верно или неверно судья: по одному, клавишами V / N", icon: ListChecks, run: go("/logs?tab=review") },
       { id: "a-cards", group: "Действия", label: "Собрать сценарии", sub: "Из оценки логов — в «Сценариях»", icon: Hammer, run: go(LINKS.scenarios) },
       { id: "a-play", group: "Действия", label: "Запустить прогон", sub: "Синтетический клиент сыграет сценарии с агентом", icon: Play, run: go(`${LINKS.simulations}?play=1`) },
-      { id: "a-code", group: "Действия", label: "Прочитать код агента", sub: "Промпты и инструменты — в «Агенте»", icon: FileText, run: go(`${LINKS.agent}?sources=1`) },
+      { id: "a-code", group: "Действия", label: "Прочитать код агента", sub: "Промпты и инструменты — в «Агенте»", icon: FileText, run: go(LINKS.agent) },
       { id: "a-ask", group: "Действия", label: "Спросить", sub: "Ассистент по текущему экрану", icon: MessageSquare, run: () => shell.openAsk() },
     ];
     const byId = new Map((data?.rules ?? []).map(r => [r.id, r]));

@@ -7,7 +7,9 @@ import { useShell } from "./ShellContext";
 export type Crumb = { label: string; to?: string };
 
 /** The header of every section: where you are, the section's actions, ⌘K and «Спросить»; below it, the section's task. */
-export function SectionHeader({ crumbs, actions, below, meta }: { crumbs: Crumb[]; actions?: ReactNode; below?: ReactNode; meta?: ReactNode }) {
+export type HeaderTab = { label: ReactNode; to: string; on: boolean };
+
+export function SectionHeader({ crumbs, actions, below, meta, tabs }: { crumbs: Crumb[]; actions?: ReactNode; below?: ReactNode; meta?: ReactNode; tabs?: HeaderTab[] }) {
   const shell = useShell();
   return (
     <header className="flex-shrink-0 border-b border-white/[0.08] bg-lab-bg">
@@ -22,6 +24,14 @@ export function SectionHeader({ crumbs, actions, below, meta }: { crumbs: Crumb[
             </span>
           ))}
           {meta && <span className="ml-1 flex min-w-0 items-center gap-2 truncate text-meta font-normal text-lab-dim"><span aria-hidden>·</span>{meta}</span>}
+          {tabs && (
+            <span className="ml-2 flex items-center gap-0.5 font-normal">
+              {tabs.map(t => (
+                <Link key={t.to} to={t.to} aria-current={t.on ? "page" : undefined}
+                  className={`h-[26px] rounded-[5px] px-2 text-[11px] font-medium leading-[26px] transition-colors ${t.on ? "bg-white/[0.13] text-lab-ink" : "text-lab-mute hover:text-lab-text"}`}>{t.label}</Link>
+              ))}
+            </span>
+          )}
         </nav>
         {actions && <div className="flex flex-shrink-0 items-center gap-2">{actions}</div>}
         <div className="hidden flex-shrink-0 items-center gap-1 border-l border-white/[0.08] pl-2 md:flex">

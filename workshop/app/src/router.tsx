@@ -2,7 +2,6 @@ import { createBrowserRouter, Navigate, useLocation, useParams } from "react-rou
 import { dialogLink } from "./lab/dialogs";
 import { AppShell } from "./shell/AppShell";
 import { AgentPage } from "./screens/agent/AgentPage";
-import { CriteriaPage } from "./screens/agent/Criteria";
 import { RunsPage } from "./pages/RunsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
@@ -37,7 +36,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/logs" replace /> },
       { path: "agent", element: <AgentPage /> },
-      { path: "agent/criteria", element: <CriteriaPage /> },
+      { path: "agent/criteria", element: <AgentPage /> },
       { path: "logs", element: <LogsPage /> },
       { path: "scenarios", element: <ScenariosPage /> },
       { path: "simulations", element: <SimulationsPage /> },

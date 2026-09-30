@@ -18,7 +18,7 @@ export type Example = {
 export type Side = { failed: number; passed: number; unknown: number; examples: Example[] };
 export type RuleEntry = {
   id: string; title: string;
-  rule: { text: string; quote: string; sourceId: string | null; origin: string; kind: string; condition: string; acceptable: string };
+  rule: { name?: string; text: string; quote: string; sourceId: string | null; origin: string; kind: string; condition: string; acceptable: string };
   topics: string[]; log: Side; sim: Side;
   secondJudge: { checked: number; agree: number; byDialogue: number };
   human: { agree: number; disagree: number };

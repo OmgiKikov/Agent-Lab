@@ -80,6 +80,7 @@ class Book:
             self.rules[key] = {
                 'id': key,
                 'rule': {
+                    'name': rule.get('name', ''),
                     'text': rule['text'],
                     'quote': rule['quote'],
                     'sourceId': source.get('id'),
@@ -93,6 +94,8 @@ class Book:
             }
             self.by_text[quotes.normalized(rule['text'])] = rule
         entry = self.rules[key]
+        if not entry['rule']['name'] and rule.get('name'):
+            entry['rule']['name'] = rule['name']
         if topic and topic not in entry['topics']:
             entry['topics'].append(topic)
         return entry

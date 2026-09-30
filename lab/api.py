@@ -11,7 +11,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from . import agents, cards, discover, llm, logs, personas, problems, simulate, store, workshop
+from . import agents, cards, discover, llm, logs, names, personas, problems, simulate, store, workshop
 from .context import sources
 from .metric import metric
 
@@ -163,6 +163,12 @@ async def start_discover(payload: dict = Body(default={})) -> dict:
     count = max(5, min(int(payload.get('count') or 60), 300))
     replan = bool(payload.get('replan'))
     return start('discover', lambda progress: discover.run(count, progress, replan))
+
+
+@app.post('/api/names')
+async def start_names() -> dict:
+    """Short names for the criteria extracted before names existed; one request to the model."""
+    return start('names', names.run)
 
 
 @app.post('/api/cards')

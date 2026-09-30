@@ -1,21 +1,20 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { RotateCcw } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowRight, Check, Clock, FileText, Globe, RotateCcw, Search, Sparkles } from "lucide-react";
 import { api } from "../../lab/api";
+import { fileOf } from "../../lab/agentParts";
+import { EVERY, useQuoteContext, type Criterion, type Topic } from "../../lab/criteria";
 import { plural } from "../../lab/format";
-import { useProblems, type RuleEntry } from "../../lab/problems";
+import { LINKS } from "../../shell/links";
 import { useKeys } from "../../shell/keys";
 import { useLabState } from "../../shell/LabProvider";
-import { LINKS } from "../../shell/links";
-import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
-import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { Details, type Detail } from "../../ui/Details";
-import { Label } from "../../ui/Label";
+import { EmptyState, Skeleton } from "../../ui/EmptyState";
+import { Mark, MARK_TEXT } from "../../ui/Mark";
 import { Modal } from "../../ui/Modal";
-import { TwoCol } from "../../ui/TwoCol";
+import { Chips, Pill } from "../../ui/Pill";
+import { Caption, Floating, PageTitle, Soft, Stack, Tile, TileGrid, WithFloating } from "../../ui/Tile";
 import { useToast } from "../../ui/toast";
-import { SourceDrawer } from "../problems/SourceDrawer";
 
 /** «Извлечь заново»: new criteria from the code; the old ones stop counting, so it asks first. */
 export function Reextract({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -52,127 +51,141 @@ export function Reextract({ open, onClose }: { open: boolean; onClose: () => voi
   );
 }
 
-const ALWAYS = "Всегда";
-const SOURCE_NAME: Record<string, string> = { prompt: "Промпт ответа", tools: "Инструменты агента" };
-const sourceName = (r: RuleEntry) => SOURCE_NAME[r.rule.kind] ?? (r.rule.origin.split("/").pop() || "Источник не указан");
-
-/** The situation a criterion is for: the topic of the conversation, as the assessment named it. */
-function situation(topic: string) {
-  return topic.trim();
-}
-
-export type Group = { title: string; rules: { r: RuleEntry; also: string[] }[] };
-
-/** Criteria by situation: no topic or three and more topics is «Всегда»; else under the first topic, the rest as «также». */
-export function groupRules(rules: RuleEntry[]): Group[] {
-  const map = new Map<string, Group>();
-  const put = (title: string, r: RuleEntry, also: string[]) => {
-    const g = map.get(title) ?? { title, rules: [] };
-    g.rules.push({ r, also });
-    map.set(title, g);
-  };
-  map.set(ALWAYS, { title: ALWAYS, rules: [] });
-  for (const r of rules) {
-    if (r.topics.length === 0 || r.topics.length >= 3) put(ALWAYS, r, []);
-    else put(situation(r.topics[0]), r, r.topics.slice(1).map(t => t.toLowerCase()));
-  }
-  const always = map.get(ALWAYS)!;
-  map.delete(ALWAYS);
-  return [...(always.rules.length ? [always] : []), ...map.values()];
-}
-
-function RuleGroups({ rules, selected, onOpen }: { rules: RuleEntry[]; selected?: string; onOpen: (id: string) => void }) {
+/** Where a criterion applies, as pills: every conversation, or the topics with their colour. */
+export function Scope({ c, max = 2 }: { c: Criterion; max?: number }) {
+  if (c.every) return <Pill icon={Globe}>{EVERY}</Pill>;
   return (
-    <div className="px-4 py-4">
-      {groupRules(rules).map(g => (
-        <section key={g.title} className="mb-5">
-          <h2 className="px-2 text-meta font-medium text-lab-mute">{g.title}</h2>
-          <ul className="mt-1.5">
-            {g.rules.map(({ r, also }) => (
-              <li key={r.id}>
-                <button type="button" onClick={() => onOpen(r.id)} aria-current={r.id === selected || undefined}
-                  className={`block w-full rounded px-2 py-2 text-left transition-colors hover:bg-white/[0.04] ${r.id === selected ? "bg-white/[0.07]" : ""}`}>
-                  <span className="block text-read text-lab-ink">{r.rule.text}</span>
-                  {r.rule.condition && <span className="mt-0.5 block text-meta text-lab-dim">когда: {r.rule.condition}</span>}
-                  {also.length > 0 && <span className="mt-0.5 block text-meta text-lab-dim">также: {also.join(", ")}</span>}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
-    </div>
+    <>
+      {c.topics.slice(0, max).map(t => <Pill key={t.topic} dot={t.hue} hue={t.hue} title={t.topic}>{t.short}</Pill>)}
+      {c.topics.length > max && <Pill title={c.topics.slice(max).map(t => t.topic).join(", ")}>+{c.topics.length - max}</Pill>}
+    </>
   );
 }
 
-/** One criterion as a contract: when it applies, what is fine, where the prompt says it, and the prompt's own words. */
-function RuleContract({ r }: { r: RuleEntry }) {
-  const [sourceOpen, setSourceOpen] = useState(false);
-  const rows: Detail[] = [
-    ...(r.rule.condition ? [{ label: "Когда действует", value: r.rule.condition }] : []),
-    ...(r.rule.acceptable ? [{ label: "Что не считается нарушением", value: r.rule.acceptable }] : []),
-    { label: "Где в промпте", value: (
-      <span title={r.rule.origin || undefined}>
-        {sourceName(r)}
-        {r.rule.sourceId && <> · <button type="button" onClick={() => setSourceOpen(true)} className="underline decoration-white/20 underline-offset-2 hover:text-lab-ink">открыть</button></>}
-      </span>
-    ) },
-  ];
+function CriterionTile({ c, on, onOpen }: { c: Criterion; on: boolean; onOpen: () => void }) {
   return (
-    <div className="max-w-[720px] px-6 py-5">
-      <h1 className="text-title font-medium text-lab-ink">{r.rule.text}</h1>
-      <Details title="Договор" rows={rows} className="mt-4 [&_dl>div]:grid-cols-[190px_minmax(0,1fr)]" />
-      <section className="mt-6">
-        <Label>Как написано в промпте</Label>
-        <blockquote className="mt-2 border-l-2 border-white/25 pl-4 text-read text-lab-soft">«{r.rule.quote}»</blockquote>
-      </section>
-      <p className="mt-8 text-meta text-lab-dim">
-        Как агент соблюдает это правило — в <Link to={`${LINKS.logs}?p=${r.id}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-text">«Логах»</Link> и <Link to={`${LINKS.results}?p=${r.id}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-text">«Результатах»</Link>
+    <Tile on={on} onClick={onOpen}>
+      <div className="flex items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap gap-1.5"><Scope c={c} /></div>
+        <Mark n={c.n} on={on} />
+      </div>
+      <div className="mt-3 text-[14px] font-medium leading-[20px] text-lab-ink">{c.name}</div>
+      <p className="mt-1 line-clamp-2 text-[12px] leading-[18px] text-lab-dim">{c.r.rule.text}</p>
+      {c.r.rule.acceptable && (
+        <div className="mt-auto flex items-start gap-2 pt-3 text-[11.5px]"><Check className="mt-[2px] size-3 flex-shrink-0 text-lab-ok" /><span className="line-clamp-1 text-lab-soft">{c.r.rule.acceptable}</span></div>
+      )}
+    </Tile>
+  );
+}
+
+/** One criterion as a contract: what it asks, what is fine, when it is checked, and the prompt's own words. */
+function CriterionPanel({ c, onClose }: { c: Criterion; onClose: () => void }) {
+  const { parts, loading } = useQuoteContext(c.r, 220);
+  const f = fileOf(c.r.rule);
+  return (
+    <Floating onClose={onClose} head={<><Mark n={c.n} on /><span className="text-[11px] text-lab-dim">Критерий {c.n}</span></>}>
+      <div className="flex flex-wrap gap-1.5"><Scope c={c} max={7} /></div>
+      <h2 className="mt-3 text-[20px] font-medium leading-[26px] tracking-[-0.4px] text-lab-ink">{c.name}</h2>
+      <p className="mt-2 text-[13px] leading-[20px] text-lab-soft">{c.r.rule.text}</p>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="rounded-[8px] border border-white/[0.08] bg-[rgb(35,35,35)] p-3">
+          <div className="flex items-center gap-1.5 text-[11px] text-lab-ok"><Check className="size-3" />Так можно</div>
+          <p className="mt-1 text-[12px] leading-[18px] text-lab-text">{c.r.rule.acceptable || "—"}</p>
+        </div>
+        <div className="rounded-[8px] border border-white/[0.08] bg-[rgb(35,35,35)] p-3">
+          <div className="flex items-center gap-1.5 text-[11px] text-lab-mute"><Clock className="size-3" />Когда проверяем</div>
+          <p className="mt-1 text-[12px] leading-[18px] text-lab-text">{c.r.rule.condition || EVERY}</p>
+        </div>
+      </div>
+      <Caption className="mt-6">Как написано в промпте</Caption>
+      <Stack depth={2} className="mb-5 mr-5 mt-2">
+        <div className="rounded-[12px] border border-[rgba(232,145,45,0.28)] bg-[rgb(37,33,29)] px-4 py-3.5">
+          <div className="flex items-center gap-2 text-[11px] text-lab-dim"><FileText className="size-3" /><span className="truncate font-mono text-lab-soft" title={c.r.rule.origin}>{c.r.rule.kind === "tools" ? "Инструменты агента" : f.file}</span></div>
+          <div className="mt-2 whitespace-pre-line text-[12.5px] leading-[20px] text-lab-mute">
+            {loading ? <Skeleton className="h-20" /> : parts
+              ? <>{parts[0]}<mark className={MARK_TEXT}>{parts[1]}</mark><span className="ml-1 inline-block translate-y-[-1px] align-middle"><Mark n={c.n} on size={18} /></span>{parts[2]}</>
+              : <>«{c.r.rule.quote}»<span className="mt-2 block text-[11px] text-lab-warn">Этой фразы нет в нынешнем тексте источника дословно: возможно, он поменялся.</span></>}
+          </div>
+          {c.r.rule.sourceId && c.r.rule.kind !== "tools" && (
+            <Link to={`${LINKS.agent}?p=${encodeURIComponent(c.r.rule.sourceId)}`} className="mt-3 inline-flex items-center gap-1 text-[11px] text-lab-mute hover:text-lab-ink">
+              Весь промпт<ArrowRight className="size-3" />
+            </Link>
+          )}
+        </div>
+      </Stack>
+      <p className="text-[11px] leading-[16px] text-lab-faint">
+        Как агент его соблюдает — в <Link to={`${LINKS.logs}?p=${c.r.id}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-text">логах</Link> и в <Link to={`${LINKS.results}?p=${c.r.id}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-text">результатах прогонов</Link>.
       </p>
-      <SourceDrawer open={sourceOpen} onClose={() => setSourceOpen(false)} sourceId={r.rule.sourceId} origin={r.rule.origin} quote={r.rule.quote} />
-    </div>
+    </Floating>
   );
 }
 
-/** Критерии: the contract, list by situation on the left, the selected rule on the right (?c= selects one). No results here. */
-export function CriteriaPage() {
+/** Агент, вкладка «Критерии»: the contract as cards with the topics they apply to; one opens over the grid. No results here. */
+export function Criteria({ criteria, topics, unnamed }: { criteria: Criterion[]; topics: Topic[]; unnamed: number }) {
+  const { state, refresh } = useLabState();
+  const navigate = useNavigate();
+  const toast = useToast();
   const [params, setParams] = useSearchParams();
-  const { state, offline } = useLabState();
-  const { data } = useProblems(null);
+  const [filter, setFilter] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [reextract, setReextract] = useState(false);
-  const all = data?.rules ?? [];
-  const id = params.get("c");
-  const selected = id ? all.find(r => r.id === id) : undefined;
-  const open = (next: string) => setParams(prev => { const n = new URLSearchParams(prev); n.set("c", next); return n; }, { replace: true });
-  const step = (d: 1 | -1) => {
-    const order = groupRules(all).flatMap(g => g.rules.map(x => x.r.id));
-    if (!order.length) return;
-    const at = id ? order.indexOf(id) : -1;
-    open(order[Math.max(0, Math.min(order.length - 1, at + d))]);
+  const [naming, setNaming] = useState(false);
+  const cid = params.get("c");
+  const setCid = (id: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (id) n.set("c", id); else n.delete("c"); return n; }, { replace: true });
+  const q = query.trim().toLowerCase();
+  const shown = criteria.filter(c => (!filter || (filter === EVERY ? c.every : !c.every && c.r.topics.includes(filter))) && (!q || `${c.name} ${c.r.rule.text}`.toLowerCase().includes(q)));
+  const at = shown.findIndex(c => c.r.id === cid);
+  useKeys({ KeyJ: () => shown.length && setCid(shown[Math.min(shown.length - 1, at + 1)].r.id), KeyK: () => shown.length && setCid(shown[Math.max(0, at - 1)].r.id) });
+  if (!state) return <div className="p-6"><Skeleton className="h-64" /></div>;
+  const busy = !!state.job.running;
+  const chosen = criteria.find(c => c.r.id === cid) ?? null;
+  const name = () => {
+    setNaming(true);
+    api("/api/names", {}).then(refresh).catch(toast.error).finally(() => setNaming(false));
   };
-  useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
 
-  if (offline && !state) return <ServiceDown />;
-  const busy = !!state?.job.running;
-  let body;
-  if (!state || (state.discover && !data)) body = <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div>;
-  else if (!state.discover || !data) body = <EmptyState drop title="Критериев пока нет" className="h-full">Появятся при первой проверке логов: судья достанет их из промптов агента.</EmptyState>;
-  else body = (
-    <TwoCol
-      left={<div className="-mx-[18px] -mt-4"><RuleGroups rules={all} selected={selected?.id} onOpen={open} /></div>}
-      right={selected ? <RuleContract key={selected.id} r={selected} />
-        : <EmptyState title={id ? "Этого критерия нет в текущем списке" : "Выберите правило"} className="h-full">{id ? "Критерии могли извлечь заново." : "Справа появится, когда оно действует и где написано в промпте."}</EmptyState>}
-    />
-  );
   return (
-    <div className="flex h-full flex-col">
-      <SectionHeader
-        crumbs={[{ label: "Агент", to: "/agent" }, { label: "Критерии" }]}
-        meta={data ? `${data.rules.length} ${plural(data.rules.length, "правило", "правила", "правил")} из промптов агента` : undefined}
-        actions={<Button icon={RotateCcw} onClick={() => setReextract(true)} disabled={busy || !state?.discover} title={busy ? "Сейчас идёт другая задача" : undefined}>Извлечь заново</Button>}
-      />
-      <div className="flex min-h-0 flex-1 flex-col">{body}</div>
+    <>
+      <WithFloating open={!!chosen} panel={chosen && <CriterionPanel key={chosen.r.id} c={chosen} onClose={() => setCid(null)} />}>
+        <PageTitle title="Критерии" sub="что агент обязан делать · фразы из его промптов" actions={criteria.length > 0 && (
+          <>
+            {unnamed > 0 && (
+              <Soft onClick={name} disabled={busy || naming} title="Модель даст каждому критерию имя в 2–5 слов. Один запрос к модели.">
+                <Sparkles className="size-3.5" />Дать короткие имена
+              </Soft>
+            )}
+            <label className="flex h-8 w-[200px] items-center gap-2 rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 focus-within:border-white/[0.22]">
+              <Search className="size-3.5 text-lab-dim" />
+              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Найти критерий" className="min-w-0 flex-1 bg-transparent text-[12px] text-lab-ink outline-none placeholder:text-lab-faint" />
+            </label>
+            <Soft onClick={() => setReextract(true)} disabled={busy} title={busy ? "Сейчас идёт другая задача" : "Когда агент поменялся"}><RotateCcw className="size-3.5" />Извлечь заново</Soft>
+          </>
+        )} />
+        {!criteria.length ? (
+          state.discover
+            ? <div className="mt-6"><Skeleton className="h-64" /></div>
+            : (
+              <EmptyState drop title="Критериев пока нет" className="mt-10 rounded-[14px] border border-dashed border-white/[0.12]"
+                action={<Button variant="primary" onClick={() => navigate(LINKS.logs)}>Перейти к логам</Button>}>
+                Появятся при первой оценке логов: судья возьмёт их из промптов агента дословно.
+              </EmptyState>
+            )
+        ) : (
+          <>
+            <Chips<string> className="mt-4" value={filter} onChange={setFilter} options={[
+              { value: null, label: "Все", count: criteria.length },
+              { value: EVERY, label: EVERY, count: criteria.filter(c => c.every).length, icon: Globe },
+              ...topics.map(t => ({ value: t.topic, label: t.short, title: t.topic, dot: t.hue, count: criteria.filter(c => !c.every && c.r.topics.includes(t.topic)).length })),
+            ]} />
+            <div className="mt-5">
+              <TileGrid>{shown.map(c => <CriterionTile key={c.r.id} c={c} on={c.r.id === cid} onOpen={() => setCid(c.r.id === cid ? null : c.r.id)} />)}</TileGrid>
+              {!shown.length && <p className="mt-10 text-center text-[13px] text-lab-dim">Ничего не нашлось</p>}
+            </div>
+            <p className="mt-4 text-[11px] text-lab-faint">{criteria.length} {plural(criteria.length, "критерий", "критерия", "критериев")} · номер у критерия один на весь продукт · J и K листают</p>
+          </>
+        )}
+      </WithFloating>
       <Reextract open={reextract} onClose={() => setReextract(false)} />
-    </div>
+    </>
   );
 }
