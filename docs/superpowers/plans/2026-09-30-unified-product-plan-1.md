@@ -1,7 +1,7 @@
 # Единый продукт — план 1 из 4: сервис, основа интерфейса, «Проблемы»
 
 > Исполнение: нативно, в этой сессии (владелец: «давай газ»; субагенты разрешены «если что» — финальное ревью свежим агентом).
-> Шаги — чек-листы `- [ ]`.
+> Шаги — чек-листы `- [x]`.
 
 **Цель:** работающий срез нового продукта — сервис отдаёт проблемы с доказательствами, интерфейс получает новую оболочку
 (рейка, шапки разделов, активность, ⌘K, ассистент), шрифты с кириллицей, токены и экран «Проблемы» с разбором.
@@ -52,13 +52,13 @@
 `human {agree, disagree}`, `scenarioIds`. Пример: `source, dialogueId | runId+index, ruleId, status, traceId, opening, topic,
 name?, persona?, attempt?, agentQuote, reason, second, secondScope, review, reviewScope`.
 
-- [ ] Написать `lab/problems.py`: `Book` (правила по ключу цитаты; источник по `sourceId`, иначе поиск цитаты в источниках;
+- [x] Написать `lab/problems.py`: `Book` (правила по ключу цитаты; источник по `sourceId`, иначе поиск цитаты в источниках;
   разговор учитывается один раз — худшим вердиктом), `from_logs`, `from_run` (правило по критерию сценария, иначе по тексту),
   `finish`, `build(run_id)`.
-- [ ] `api.py`: `GET /api/problems` (404, если прогона нет); CORS: добавить `http://127.0.0.1:5900`, `http://localhost:5900`.
-- [ ] Проверка: `.venv/bin/python` скрипт на настоящих `data/` — печать счётов; число правил, нарушенных в логах, равно
+- [x] `api.py`: `GET /api/problems` (404, если прогона нет); CORS: добавить `http://127.0.0.1:5900`, `http://localhost:5900`.
+- [x] Проверка: `.venv/bin/python` скрипт на настоящих `data/` — печать счётов; число правил, нарушенных в логах, равно
   `len(summary.patterns)`; у каждой проблемы `failed > 0`. `.venv/bin/ruff format lab && .venv/bin/ruff check lab`.
-- [ ] Коммит.
+- [x] Коммит.
 
 ### Task 2: сервис — диалог, источник, решение по правилу, сохранность решений, логи
 
@@ -69,25 +69,25 @@ name?, persona?, attempt?, agentQuote, reason, second, secondScope, review, revi
 decision}` или `{source: "sim", run, index, ruleId, decision}` (старое тело принимается); `state.logs = {total, file,
 updatedAt}`; `metric.human` считает решения по правилам (и по диалогу для старых записей).
 
-- [ ] Маршруты; решение по логам — 409, пока идёт оценка; по прогону — 409, пока он идёт.
-- [ ] `discover.run`: при зафиксированных правилах перенести решения людей на тот же (диалог, правило, статус).
-- [ ] `simulate.rejudge`: перенести решения на тот же (правило, статус).
-- [ ] `logs.replace` запоминает имя и время (`data/logs-meta.json`); `logs.meta()`; поля в `/api/state`.
-- [ ] Проверка: перезапуск `LAB_NO_OPEN=1 sh bin/start.sh`; `curl` каждого маршрута; «верно» → видно в `/api/problems` →
+- [x] Маршруты; решение по логам — 409, пока идёт оценка; по прогону — 409, пока он идёт.
+- [x] `discover.run`: при зафиксированных правилах перенести решения людей на тот же (диалог, правило, статус).
+- [x] `simulate.rejudge`: перенести решения на тот же (правило, статус).
+- [x] `logs.replace` запоминает имя и время (`data/logs-meta.json`); `logs.meta()`; поля в `/api/state`.
+- [x] Проверка: перезапуск `LAB_NO_OPEN=1 sh bin/start.sh`; `curl` каждого маршрута; «верно» → видно в `/api/problems` →
   снять (`null`); ruff.
-- [ ] Коммит.
+- [x] Коммит.
 
 ### Task 3: основа интерфейса — шрифты, токены, компоненты
 
 **Files:** Modify `workshop/app/package.json`, `src/main.tsx`, `tailwind.config.js`, `src/index.css`, `src/lib/utils.ts`;
 Create `src/ui/{Label,Kbd,Button,Segmented,ListRow,Split,Facts,Quote,highlight,Conversation,Drawer,Modal,Menu,EmptyState,toast}.tsx|ts`.
 
-- [ ] Шрифты: `@fontsource-variable/inter` (`opsz.css`), `@fontsource-variable/geist-mono`; убрать Barlow и Space Mono.
-- [ ] Tailwind: `fontFamily`, шкала размеров, цвета `lab-hover`, `lab-active`, `lab-mark`; `cn` знает шкалу
+- [x] Шрифты: `@fontsource-variable/inter` (`opsz.css`), `@fontsource-variable/geist-mono`; убрать Barlow и Space Mono.
+- [x] Tailwind: `fontFamily`, шкала размеров, цвета `lab-hover`, `lab-active`, `lab-mark`; `cn` знает шкалу
   (`extendTailwindMerge`, тема `text`).
-- [ ] Компоненты по спеке §6.
-- [ ] Проверка: `bun x tsc --noEmit`; `cn("text-read text-lab-ink")` сохраняет оба класса.
-- [ ] Коммит.
+- [x] Компоненты по спеке §6.
+- [x] Проверка: `bun x tsc --noEmit`; `cn("text-read text-lab-ink")` сохраняет оба класса.
+- [x] Коммит.
 
 ### Task 4: оболочка
 
@@ -97,12 +97,12 @@ Modify `src/router.tsx`, `src/components/MessagePane.tsx`, `bin/start.sh` (от�
 **Produces:** `useLabState()`, `useShell()` (`openPalette`, `openAsk(runId?)`), `useKeys(map, enabled)`, `LINKS`, `JOBS`,
 `SectionHeader({crumbs, actions, below})`, `JobStrip({kinds})`.
 
-- [ ] Рейка (Проблемы, Диалоги, Правила, Симуляции | Агент, Настройки), кольцо активности и уведомление об окончании.
-- [ ] `AppShell` вместо `AppLayout` и `NavSidebar`; плашка «Workshop не запущен» только на трейсах; ⌘K, ⌘J.
-- [ ] `MessagePane`: открывается событием `raindrop:ask`, плавающая плашка убрана.
-- [ ] Маршруты: `/` и `*` → `/problems`; прежние экраны на своих адресах.
-- [ ] Проверка: `bun x tsc --noEmit`.
-- [ ] Коммит.
+- [x] Рейка (Проблемы, Диалоги, Правила, Симуляции | Агент, Настройки), кольцо активности и уведомление об окончании.
+- [x] `AppShell` вместо `AppLayout` и `NavSidebar`; плашка «Workshop не запущен» только на трейсах; ⌘K, ⌘J.
+- [x] `MessagePane`: открывается событием `raindrop:ask`, плавающая плашка убрана.
+- [x] Маршруты: `/` и `*` → `/problems`; прежние экраны на своих адресах.
+- [x] Проверка: `bun x tsc --noEmit`.
+- [x] Коммит.
 
 ### Task 5: данные проблем
 
@@ -112,30 +112,30 @@ Modify `src/router.tsx`, `src/components/MessagePane.tsx`, `bin/start.sh` (от�
 `useSource(id)`; `summarySentence`, `problemMarkdown`, `problemsReport`, `reliabilityWord`, `secondLine`, `sourceLabel`,
 `download`.
 
-- [ ] Проверка: `bun x tsc --noEmit`. Коммит вместе с задачей 6.
+- [x] Проверка: `bun x tsc --noEmit`. Коммит вместе с задачей 6.
 
 ### Task 6: экран «Проблемы»
 
 **Files:** Create `src/screens/problems/{ProblemsPage,Summary,ProblemList,FirstRun,AssessDialog}.tsx`; Modify `src/router.tsx`.
 
-- [ ] Фраза-итог, строка «откуда цифры» с выбором прогона, список с фильтрами и поиском, J/K, первый запуск, «Оценить логи»
+- [x] Фраза-итог, строка «откуда цифры» с выбором прогона, список с фильтрами и поиском, J/K, первый запуск, «Оценить логи»
   (выбор числа диалогов), «Отчёт».
-- [ ] Проверка: `bun x tsc --noEmit`, Vite на :5900, снимок экрана.
-- [ ] Коммит.
+- [x] Проверка: `bun x tsc --noEmit`, Vite на :5900, снимок экрана.
+- [x] Коммит.
 
 ### Task 7: разбор проблемы
 
 **Files:** Create `src/screens/problems/{ProblemDetail,Evidence,SourceDrawer,Reproduce}.tsx`.
 
-- [ ] Факты, «Промпт требует» с панелью источника, доказательство (примеры по надёжности, ←/→, логи/симуляция, подсветка
+- [x] Факты, «Промпт требует» с панелью источника, доказательство (примеры по надёжности, ←/→, логи/симуляция, подсветка
   с номером, объяснение, второй судья, «верно / неверно» V/N), «не известно», «воспроизвести», «скопировать».
-- [ ] Проверка: `bun x tsc --noEmit`, снимки, клики.
-- [ ] Коммит.
+- [x] Проверка: `bun x tsc --noEmit`, снимки, клики.
+- [x] Коммит.
 
 ### Task 8: сборка и проверка
 
-- [ ] `sh bin/build-workshop.sh`; снимки 1440×900, 1280×800, 1024×768, 390×844 на :5899; ошибок консоли нет.
-- [ ] Шрифты: `document.fonts.check('14px "Inter Variable"', 'Ж')` и для Geist Mono — `true`.
-- [ ] Числа: фраза-итог и счёты совпадают с `/api/problems`.
-- [ ] Проход: «Проблемы» → проблема → панель источника → пример ←/→ → «Верно» (и снять) → ⌘K → «Спросить».
-- [ ] Коммит.
+- [x] `sh bin/build-workshop.sh`; снимки 1440×900, 1280×800, 1024×768, 390×844 на :5899; ошибок консоли нет.
+- [x] Шрифты: `document.fonts.check('14px "Inter Variable"', 'Ж')` и для Geist Mono — `true`.
+- [x] Числа: фраза-итог и счёты совпадают с `/api/problems`.
+- [x] Проход: «Проблемы» → проблема → панель источника → пример ←/→ → «Верно» (и снять) → ⌘K → «Спросить».
+- [x] Коммит.
