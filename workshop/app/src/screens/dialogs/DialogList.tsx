@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { ChevronDown, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { when } from "../../lab/format";
@@ -29,10 +30,11 @@ function Mark({ row }: { row: DialogRow }) {
   return <span className={cn("mt-1.5 size-1.5 flex-shrink-0 rounded-full", tone)} title={row.status === "FAIL" ? "нарушение" : row.status === "PASS" ? "без обнаруженных нарушений" : "не оценён"} />;
 }
 
-function Row({ row, selected, onClick, personas }: { row: DialogRow; selected: boolean; onClick: () => void; personas: Persona[] }) {
+/** One row; memo keeps a long list from re-rendering when only the selection or the query box changes. */
+const Row = memo(function Row({ row, selected, onPick, personas }: { row: DialogRow; selected: boolean; onPick: (key: string) => void; personas: Persona[] }) {
   const who = row.source === "sim" ? [personaName(personas, row.persona), row.attempt && row.attempt > 1 ? `повтор ${row.attempt}` : ""].filter(Boolean).join(" · ") : "";
   return (
-    <ListRow selected={selected} onClick={onClick}>
+    <ListRow selected={selected} onClick={() => onPick(row.key)}>
       <div className="flex gap-3">
         <Mark row={row} />
         <div className="min-w-0 flex-1">
@@ -49,7 +51,7 @@ function Row({ row, selected, onClick, personas }: { row: DialogRow; selected: b
       </div>
     </ListRow>
   );
-}
+});
 
 const VERDICTS: { value: Verdict; label: string }[] = [
   { value: "all", label: "Все" }, { value: "fail", label: "Нарушения" }, { value: "pass", label: "Без нарушений" },
@@ -83,7 +85,7 @@ export function DialogList({ rows, all, selected, verdict, onVerdict, query, onQ
           </div>
         )}
       </div>
-      {rows.map(r => <Row key={r.key} row={r} selected={r.key === selected} onClick={() => onPick(r.key)} personas={personas} />)}
+      {rows.map(r => <Row key={r.key} row={r} selected={r.key === selected} onPick={onPick} personas={personas} />)}
       {!rows.length && <div className="px-4 py-10 text-center text-small text-lab-dim">В этом отборе диалогов нет</div>}
     </div>
   );

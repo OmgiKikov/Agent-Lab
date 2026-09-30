@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lab/api";
@@ -31,7 +31,8 @@ export function DialogsView({ source, runId }: { source: "log" | "sim"; runId?: 
   const rows = useMemo(() => all.filter(r => matchesRow(r, "all", verdict, query, only)), [all, verdict, query, only]);
   const selected = key ? all.find(r => r.key === key) : undefined;
   const set = (name: string, value: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (value && value !== "all") n.set(name, value); else n.delete(name); return n; }, { replace: true });
-  const open = (k: string | null, replace = false) => setParams(prev => { const n = new URLSearchParams(prev); if (k) n.set("d", k); else n.delete("d"); n.delete("dt"); return n; }, { replace });
+  const open = useCallback((k: string | null, replace = false) => setParams(prev => { const n = new URLSearchParams(prev); if (k) n.set("d", k); else n.delete("d"); n.delete("dt"); return n; }, { replace }), [setParams]);
+  const pick = useCallback((k: string) => open(k), [open]);
   useEffect(() => {
     if (!key && rows[0] && wide()) open(rows[0].key, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -49,7 +50,7 @@ export function DialogsView({ source, runId }: { source: "log" | "sim"; runId?: 
     <Split
       showDetail={!!key}
       list={<DialogList rows={rows} all={all} selected={key} verdict={verdict} onVerdict={v => set("v", v)} query={query} onQuery={setQuery}
-        rule={rule?.title ?? null} onClearRule={() => set("rule", null)} onPick={k => open(k)} personas={state.personas} />}
+        rule={rule?.title ?? null} onClearRule={() => set("rule", null)} onPick={pick} personas={state.personas} />}
       detail={selected ? <DialogView key={selected.key} row={selected} onBack={() => open(null)} />
         : <EmptyState title={key ? "Этого диалога нет среди загруженных" : "Выберите диалог слева"} />}
     />

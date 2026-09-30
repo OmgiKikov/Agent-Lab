@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Code, Globe, PlugZap, Save } from "lucide-react";
 import { api } from "../../lab/api";
 import type { Check, LabState, Target } from "../../lab/types";
@@ -73,16 +73,20 @@ function Way({ target }: { target: Target }) {
 }
 
 /** Подключение: where the agent is, whose accounts it answers for, where its code is, and the three ways to reach it. */
+/** The form starts from what the service saved, and starts over when that changes: no effect copying props to state. */
 export function Connection({ state }: { state: LabState }) {
+  const s = state.settings;
+  return <ConnectionForm key={`${s.prodUrl}|${s.repo}|${s.epk.join(" ")}`} state={state} />;
+}
+
+function ConnectionForm({ state }: { state: LabState }) {
   const { refresh } = useLabState();
   const toast = useToast();
   const saved = state.settings;
-  const savedKey = `${saved.prodUrl}|${saved.repo}|${saved.epk.join(" ")}`;
   const [prodUrl, setProdUrl] = useState(saved.prodUrl);
   const [epk, setEpk] = useState(saved.epk.join(" "));
   const [repo, setRepo] = useState(saved.repo);
   const [saving, setSaving] = useState(false);
-  useEffect(() => { setProdUrl(saved.prodUrl); setEpk(saved.epk.join(" ")); setRepo(saved.repo); }, [savedKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const dirty = prodUrl.trim() !== saved.prodUrl || repo.trim() !== saved.repo || words(epk).join(" ") !== saved.epk.join(" ");
   const save = () => {
     setSaving(true);

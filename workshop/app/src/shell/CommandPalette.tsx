@@ -61,7 +61,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const q = query.trim().toLowerCase();
   const shown = useMemo(() => entries.filter(e => !q || `${e.label} ${e.sub ?? ""}`.toLowerCase().includes(q)).slice(0, 40), [entries, q]);
-  useEffect(() => { setAt(0); }, [q]);
   useEffect(() => { list.current?.querySelector<HTMLElement>(`[data-index="${at}"]`)?.scrollIntoView({ block: "nearest" }); }, [at]);
   const choose = (e?: Entry) => { if (!e) return; onClose(); e.run(); };
 
@@ -82,7 +81,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <div className="flex items-center gap-2.5 border-b border-white/[0.07] px-4">
             <Search aria-hidden className="size-4 flex-shrink-0 text-lab-dim" />
             <input
-              autoFocus name="palette" autoComplete="off" spellCheck={false} aria-label="Поиск по блокам и действиям" value={query} onChange={e => setQuery(e.target.value)} placeholder="Блок, нарушение, критерий, прогон или действие"
+              autoFocus name="palette" autoComplete="off" spellCheck={false} aria-label="Поиск по блокам и действиям" value={query} onChange={e => { setQuery(e.target.value); setAt(0); }} placeholder="Блок, нарушение, критерий, прогон или действие"
               className="h-12 w-full bg-transparent text-body text-lab-ink outline-none placeholder:text-lab-faint"
             />
           </div>
