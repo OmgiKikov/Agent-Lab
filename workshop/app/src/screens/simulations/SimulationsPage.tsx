@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Play } from "lucide-react";
 import { when } from "../../lab/format";
-import { runTitle } from "../../lab/runs";
+import { isRunning, runTitle } from "../../lab/runs";
 import { JobStrip } from "../../shell/Activity";
 import { useKeys } from "../../shell/keys";
 import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { Facts } from "../../ui/Facts";
+import { Summary } from "../../ui/Summary";
 import { Split } from "../../ui/Split";
 import { PlayDialog } from "./PlayDialog";
 import { RunDetail } from "./RunDetail";
@@ -28,6 +28,9 @@ export function SimulationsPage() {
   const [follow, setFollow] = useState(false);
   const runs = useMemo(() => [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)), [state?.runs]);
   const cards = state?.cards?.cards ?? [];
+  const st = params.get("st") ?? "all";
+  const setParam = (k: string, v: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (v) n.set(k, v); else n.delete(k); return n; }, { replace: true });
+  const shownRuns = runs.filter(r => st === "all" || (st === "live" ? isRunning(r) : st === "broken" ? r.status === "failed" || r.status === "stopped" : !isRunning(r) && r.status !== "failed" && r.status !== "stopped"));
   const sel = runId ?? params.get("r");
   const run = runs.find(r => r.id === sel);
   const setRun = (id: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (id) n.set("r", id); else n.delete("r"); n.delete("d"); n.delete("tab"); return n; }, { replace: !!id });
@@ -60,8 +63,7 @@ export function SimulationsPage() {
   if (params.get("mode") === "scenarios") return <Navigate to="/scenarios" replace />;
   if (offline && !state) return <ServiceDown />;
   const busy = !!state?.job.running;
-  const last = runs[0];
-
+  
   const playButton = (
     <Button variant="primary" icon={Play} onClick={() => setPlay({ preset: null })} disabled={busy || !cards.length}
       title={busy ? "Сейчас идёт другая задача" : !cards.length ? "Сначала соберите сценарии" : undefined}>Сыграть</Button>
@@ -82,13 +84,15 @@ export function SimulationsPage() {
       />
       {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : !runs.length ? empty : (
         <>
-          <Facts className="border-b border-white/[0.06] px-4 py-2" facts={[
-            { label: "Прогонов", value: runs.length },
-            { label: "Последний", value: `${last.targetName} · ${when(last.startedAt)}` },
+          <Summary stats={[
+            { label: "Прогонов", value: runs.length, active: st === "all", onClick: () => setParam("st", null) },
+            { label: "Завершены", value: runs.filter(r => !isRunning(r) && r.status !== "failed" && r.status !== "stopped").length, of: `из ${runs.length}`, active: st === "done", onClick: () => setParam("st", "done") },
+            ...(runs.some(isRunning) ? [{ label: "Идут сейчас", value: runs.filter(isRunning).length, active: st === "live", onClick: () => setParam("st", "live") }] : []),
+            ...(runs.some(r => r.status === "failed" || r.status === "stopped") ? [{ label: "Прерваны", value: runs.filter(r => r.status === "failed" || r.status === "stopped").length, active: st === "broken", onClick: () => setParam("st", "broken") }] : []),
           ]} />
           <Split
             showDetail={!!run}
-            list={<RunList runs={runs} state={state} selectedId={run?.id ?? null} onPick={setRun} />}
+            list={<RunList runs={shownRuns} state={state} selectedId={run?.id ?? null} onPick={setRun} />}
             detail={run
               ? <RunDetail key={run.id} summary={run} state={state} onBack={() => setRun(null)} />
               : <EmptyState title={sel ? "Такого прогона нет" : "Выберите прогон"} action={sel ? <Link to="/simulations" className={link}>Все прогоны</Link> : undefined} />}

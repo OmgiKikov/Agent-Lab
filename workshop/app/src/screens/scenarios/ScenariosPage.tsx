@@ -10,7 +10,7 @@ import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { Facts } from "../../ui/Facts";
+import { Summary } from "../../ui/Summary";
 import { Split } from "../../ui/Split";
 import { useToast } from "../../ui/toast";
 import { inOrigin, ScenarioList, type Origin } from "./ScenarioList";
@@ -68,12 +68,11 @@ export function ScenariosPage() {
       />
       {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : !cards.length ? empty : (
         <>
-          <Facts className="border-b border-white/[0.06] px-4 py-2" facts={[
-            { label: "Сценариев", value: cards.length },
-            { label: "Из ошибок", value: fromErrors },
-            { label: "Покрытие", value: cards.length - fromErrors },
+          <Summary stats={[
+            { label: "Сценариев", value: cards.length, active: origin === "all", onClick: () => setParam("origin", null), title: state?.cards?.createdAt ? `Собраны ${day(state.cards.createdAt)}` : undefined },
+            { label: "Из ошибок логов", value: fromErrors, of: `из ${cards.length}`, active: origin === "errors", onClick: () => setParam("origin", "errors") },
+            { label: "Покрытие тем", value: cards.length - fromErrors, of: `из ${cards.length}`, active: origin === "coverage", onClick: () => setParam("origin", "coverage") },
             { label: "Тем", value: topics },
-            ...(state?.cards?.createdAt ? [{ label: "Собраны", value: day(state.cards.createdAt) }] : []),
           ]} />
           <Split
             showDetail={!!card}

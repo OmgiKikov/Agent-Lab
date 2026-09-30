@@ -26,6 +26,22 @@ export function queueOf(data: Problems, queue: Queue, ruleId?: string | null, so
   return [...all.filter(v => v.example.status === "FAIL"), ...all.filter(v => v.example.status === "PASS")];
 }
 
+/** Verdicts of one source a person has checked, of the violations there are. */
+export function humanChecked(data: Problems, source: "log" | "sim"): { checked: number; of: number } {
+  const seen = new Set<string>();
+  let checked = 0;
+  let of = 0;
+  for (const { example } of verdictsOf(data, null, source)) {
+    if (example.status !== "FAIL") continue;
+    const key = exampleKey(example);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    of++;
+    if (example.review) checked++;
+  }
+  return { checked, of };
+}
+
 /** People's decisions on verdicts: each verdict once; an older decision on a whole simulated conversation once. */
 export function decisions(data: Problems): { agree: number; disagree: number } {
   const seen = new Set<string>();

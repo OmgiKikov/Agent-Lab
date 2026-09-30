@@ -4,13 +4,14 @@ import { ChevronDown, FileDown } from "lucide-react";
 import { when } from "../../lab/format";
 import { download, problemsReport } from "../../lab/problemReport";
 import { useProblems } from "../../lab/problems";
+import { humanChecked } from "../../lab/verdicts";
 import { runTitle, simDialog, useRun } from "../../lab/runs";
 import { JobStrip } from "../../shell/Activity";
 import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { Facts, type Fact } from "../../ui/Facts";
+import { Summary, type Stat } from "../../ui/Summary";
 import { Menu } from "../../ui/Menu";
 import { Tabs } from "../../ui/Tabs";
 import { DialogsView } from "../dialogs/DialogsView";
@@ -33,17 +34,28 @@ export function ResultsPage() {
   if (offline && !state) return <ServiceDown />;
 
   const m = run?.metric;
-  const facts: Fact[] = run && m ? [
-    { label: "Прогон", value: (
-      <Menu trigger={<span className="inline-flex items-center gap-1 underline decoration-white/20 underline-offset-2">{runTitle(run)} · {when(run.startedAt)}<ChevronDown className="size-3" /></span>}
-        items={finished.map(r => ({ key: r.id, label: runTitle(r), sub: when(r.startedAt), on: r.id === run.id, run: () => set("run", r.id) }))} />
-    ) },
-    { label: "Диалогов", value: m.total },
-    ...(m.measured ? [{ label: "Нарушения", value: `в ${m.failed} из ${m.measured}` }] : []),
-    ...(m.unmeasured ? [{ label: "Без оценки", value: m.unmeasured }] : []),
-    ...(m.secondJudge?.checked ? [{ label: "Второй судья", value: `согласен в ${m.secondJudge.agree} из ${m.secondJudge.checked}`, title: m.secondJudge.model }] : []),
-    ...(m.human?.reviewed ? [{ label: "Люди", value: `проверили ${m.human.reviewed}` }] : []),
+  const v = params.get("v");
+  const violated = problems?.rules.filter(r => r.sim.failed > 0).length ?? 0;
+  const people = problems ? humanChecked(problems, "sim") : null;
+  const go = (t: Tab, extra?: Record<string, string>) => setParams(prev => {
+    const n = new URLSearchParams(prev);
+    for (const k of ["p", "d", "dt", "v", "rule", "queue", "example"]) n.delete(k);
+    if (t === "problems") n.delete("tab"); else n.set("tab", t);
+    for (const [k, x] of Object.entries(extra ?? {})) n.set(k, x);
+    return n;
+  });
+  const stats: Stat[] = run && m ? [
+    { label: "Диалогов", value: m.total, active: tab === "dialogs" && !v, onClick: () => go("dialogs") },
+    ...(m.measured ? [{ label: "Диалогов с нарушениями", value: m.failed, of: `из ${m.measured}`, active: tab === "dialogs" && v === "fail", onClick: () => go("dialogs", { v: "fail" }) }] : []),
+    { label: "Нарушаются критериев", value: violated, of: `из ${problems?.rules.length ?? 0}`, active: tab === "problems", onClick: () => go("problems") },
+    ...(m.unmeasured ? [{ label: "Без оценки", value: m.unmeasured, of: "диалогов", active: tab === "dialogs" && v === "none", onClick: () => go("dialogs", { v: "none" }) }] : []),
+    ...(m.secondJudge?.checked ? [{ label: "Второй судья согласен", value: m.secondJudge.agree, of: `из ${m.secondJudge.checked}`, title: m.secondJudge.model, onClick: () => go("review", { queue: "disputed" }) }] : []),
+    { label: "Проверено людьми", value: people?.checked ?? 0, of: `из ${people?.of ?? 0}`, active: tab === "review", onClick: () => go("review") },
   ] : [];
+  const picker = run && (
+    <Menu align="right" trigger={<span className="inline-flex h-7 items-center gap-1 rounded px-2 text-meta text-lab-mute hover:text-lab-text">Прогон: {when(run.startedAt)}<ChevronDown className="size-3" /></span>}
+      items={finished.map(r => ({ key: r.id, label: runTitle(r), sub: when(r.startedAt), on: r.id === run.id, run: () => set("run", r.id) }))} />
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -58,9 +70,9 @@ export function ResultsPage() {
         <EmptyState drop title="Завершённых прогонов нет" action={<Link to="/simulations"><Button variant="primary">Сыграть</Button></Link>}>Результаты появятся после первого прогона.</EmptyState>
       ) : (
         <>
-          <Facts className="px-4 pt-2.5" facts={facts} />
-          <Tabs<Tab> className="mt-2 px-2" value={tab} onChange={t => set("tab", t === "problems" ? null : t)}
-            end={problems?.sim?.runId === run.id && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download(`otchet-${run.id}.md`, problemsReport(problems, window.location.origin, "sim"))}>Отчёт</Button>}
+          <Summary stats={stats} />
+          <Tabs<Tab> className="px-2" value={tab} onChange={t => set("tab", t === "problems" ? null : t)}
+            end={<>{picker}{problems?.sim?.runId === run.id && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download(`otchet-${run.id}.md`, problemsReport(problems, window.location.origin, "sim"))}>Отчёт</Button>}</>}
             tabs={[
             { value: "problems", label: "Нарушения" },
             { value: "dialogs", label: "Диалоги", count: m?.total },

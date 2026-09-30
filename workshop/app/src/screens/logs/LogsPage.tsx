@@ -1,16 +1,17 @@
 import { useSearchParams } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { FileDown, Play } from "lucide-react";
-import { day, plural } from "../../lab/format";
+import { day } from "../../lab/format";
 import { download, problemsReport } from "../../lab/problemReport";
 import { useProblems } from "../../lab/problems";
+import { humanChecked } from "../../lab/verdicts";
 import { JobStrip } from "../../shell/Activity";
 import { useLabState } from "../../shell/LabProvider";
 import { LINKS } from "../../shell/links";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { Facts, type Fact } from "../../ui/Facts";
+import { Summary, type Stat } from "../../ui/Summary";
 import { Tabs } from "../../ui/Tabs";
 import { Dropzone, UploadButton } from "../dialogs/UploadLogs";
 import { DialogsView } from "../dialogs/DialogsView";
@@ -39,15 +40,19 @@ export function LogsPage() {
   const assessed = !!state?.discover;
   const log = data?.log;
   const violated = data?.rules.filter(r => r.log.failed > 0).length ?? 0;
-  const facts: Fact[] = logs?.total ? [
-    { label: "Логи", value: String(logs.total) },
-    ...(logs.file ? [{ label: "Файл", value: logs.file }] : []),
-    ...(logs.updatedAt ? [{ label: "Загружены", value: day(logs.updatedAt) }] : []),
-    ...(log ? [
-      { label: "Оценено", value: `${log.assessed} из ${log.sampled}` },
-      ...(log.unassessed ? [{ label: "Без оценки", value: String(log.unassessed), onClick: () => setTab("dialogs") }] : []),
-      { label: "Нарушается", value: `${violated} из ${data!.rules.length} ${plural(data!.rules.length, "критерия", "критериев", "критериев")}`, onClick: () => setTab("problems") },
-    ] : []),
+  const v = params.get("v");
+  const people = data ? humanChecked(data, "log") : null;
+  const go = (t: Tab, v?: string) => change(n => {
+    for (const k of ["p", "d", "dt", "v", "rule", "queue", "example"]) n.delete(k);
+    if (t === "problems") n.delete("tab"); else n.set("tab", t);
+    if (v) n.set("v", v);
+  }, false);
+  const stats: Stat[] = log ? [
+    { label: "Оценено", value: log.assessed, of: `из ${log.sampled}`, active: tab === "dialogs" && !v, onClick: () => go("dialogs"), title: `Все оценённые диалоги. Всего в логах ${logs?.total}${logs?.file ? `, файл ${logs.file}` : ""}${logs?.updatedAt ? `, загружены ${day(logs.updatedAt)}` : ""}` },
+    { label: "Диалогов с нарушениями", value: log.withViolations, of: `из ${log.assessed}`, active: tab === "dialogs" && v === "fail", onClick: () => go("dialogs", "fail") },
+    { label: "Нарушаются критериев", value: violated, of: `из ${data!.rules.length}`, active: tab === "problems", onClick: () => go("problems") },
+    ...(log.unassessed ? [{ label: "Без оценки", value: log.unassessed, of: "диалогов", active: tab === "dialogs" && v === "none", onClick: () => go("dialogs", "none"), title: "Судья не смог оценить" }] : []),
+    { label: "Проверено людьми", value: people?.checked ?? 0, of: `из ${people?.of ?? 0}`, active: tab === "review", onClick: () => go("review") },
   ] : [];
   return (
     <div className="flex h-full flex-col">
@@ -68,12 +73,11 @@ export function LogsPage() {
         : !logs?.total ? <Dropzone />
         : !assessed ? (
           <>
-            <Facts facts={facts} className="flex-shrink-0 border-b border-white/[0.06] px-4 py-2" />
             <EmptyState drop title="Логи ещё не оценены" className="flex-1" action={<Button variant="primary" icon={Play} onClick={() => setAssess(true)} disabled={busy}>Оценить логи</Button>} />
           </>
         ) : (
           <>
-            <Facts facts={facts} className="flex-shrink-0 border-b border-white/[0.06] px-4 py-2" />
+            <Summary stats={stats} />
             <Tabs<Tab> className="flex-shrink-0 px-4" value={tab} onChange={setTab}
               end={log && data && <Button variant="ghost" size="sm" icon={FileDown} onClick={() => download("otchet-logi.md", problemsReport(data, window.location.origin, "log"))}>Отчёт</Button>}
               tabs={[
