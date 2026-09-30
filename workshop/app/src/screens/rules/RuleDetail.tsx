@@ -66,7 +66,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
   const tiles: Tile[] = [
     sideTile("В логах", r.log, !!data.log),
     sideTile("В прогоне", r.sim, !!data.sim),
-    { label: "Судьи расходятся", value: disputes || (s.checked ? 0 : "—"), onClick: disputes ? () => to("review", { queue: "disputed", rule: r.id }) : undefined, title: s.checked ? "Вердиктов, где второй судья не согласен" : "Второй судья не проверял" },
+    { label: "Спорные", value: disputes || (s.checked ? 0 : "—"), onClick: disputes ? () => to("review", { queue: "disputed", rule: r.id }) : undefined, title: s.checked ? "Вердиктов, где второй судья не согласен" : "Второй судья не проверял" },
     { label: "Люди", value: people || "—", of: people ? `верно ${r.human.agree}` : undefined, onClick: counts.FAIL ? () => to("review", { queue: "all", rule: r.id }) : undefined },
   ];
   const details: Detail[] = [

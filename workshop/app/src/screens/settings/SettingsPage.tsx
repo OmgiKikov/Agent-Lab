@@ -9,7 +9,7 @@ import type { Check, LabState } from "../../lab/types";
 import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
-import { Facts } from "../../ui/Facts";
+import { Details } from "../../ui/Details";
 import {
   deleteSecret,
   getSecretStatuses,
@@ -96,10 +96,10 @@ function ModelsSection({ state }: { state: LabState }) {
 function AboutSection() {
   return (
     <SectionBlock id="about" title="О продукте">
-      <Facts facts={[
-        { label: "Сервис проверок", value: <span className="font-mono text-small">{API}</span> },
-        { label: "Workshop", value: <span className="font-mono text-small">{window.location.origin}</span> },
-        { label: "Запуск", value: <span className="font-mono text-small">sh bin/start.sh</span> },
+      <Details title="Адреса" className="mt-0" rows={[
+        { label: "Сервис проверок", value: <span className="font-mono text-meta">{API}</span> },
+        { label: "Workshop", value: <span className="font-mono text-meta">{window.location.origin}</span> },
+        { label: "Запуск", value: <span className="font-mono text-meta">sh bin/start.sh</span> },
       ]} />
     </SectionBlock>
   );
