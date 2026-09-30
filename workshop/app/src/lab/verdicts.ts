@@ -1,16 +1,16 @@
 import type { Example, Problems, RuleEntry } from "./problems";
 
-/** One verdict: a rule in one conversation. */
+/** One verdict: a criterion in one conversation. */
 export const exampleKey = (e: Example) => `${e.source}|${e.source === "log" ? e.dialogueId : `${e.runId}#${e.index}`}|${e.ruleId}`;
 
 export type Queue = "disputed" | "unchecked" | "all";
 
 export const QUEUE_TITLE: Record<Queue, string> = { disputed: "спорные", unchecked: "не проверенные нарушения", all: "все вердикты" };
 
-/** Every verdict with evidence (a violation or a fulfilment), with its rule; of one rule when given. */
-export function verdictsOf(data: Problems, ruleId?: string | null): { rule: RuleEntry; example: Example }[] {
+/** Every verdict with evidence (a violation or a fulfilment), with its criterion; of one criterion and one source when given. */
+export function verdictsOf(data: Problems, ruleId?: string | null, source?: "log" | "sim"): { rule: RuleEntry; example: Example }[] {
   const rules = ruleId ? data.rules.filter(r => r.id === ruleId) : data.rules;
-  return rules.flatMap(rule => [...rule.log.examples, ...rule.sim.examples]
+  return rules.flatMap(rule => (source ? rule[source].examples : [...rule.log.examples, ...rule.sim.examples])
     .filter(e => e.status === "FAIL" || e.status === "PASS")
     .map(example => ({ rule, example })));
 }
@@ -19,8 +19,8 @@ export function verdictsOf(data: Problems, ruleId?: string | null): { rule: Rule
  * What a person checks, in order: disputed ones (the second judge gave another verdict) first; then violations
  * nobody checked; then everything, violations before fulfilments.
  */
-export function queueOf(data: Problems, queue: Queue, ruleId?: string | null) {
-  const all = verdictsOf(data, ruleId);
+export function queueOf(data: Problems, queue: Queue, ruleId?: string | null, source?: "log" | "sim") {
+  const all = verdictsOf(data, ruleId, source);
   if (queue === "disputed") return all.filter(v => v.example.second === "disagree");
   if (queue === "unchecked") return all.filter(v => v.example.status === "FAIL" && !v.example.review);
   return [...all.filter(v => v.example.status === "FAIL"), ...all.filter(v => v.example.status === "PASS")];

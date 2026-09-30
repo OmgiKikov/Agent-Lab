@@ -2,7 +2,7 @@ import type { Run } from "../utils/types";
 import type { Decision, Example, Scope } from "./problems";
 import type { LabRun, LabState, Rule, Status } from "./types";
 
-/** One row of «Диалоги»: a logged conversation, a simulated one, or any other Workshop trace. */
+/** One row of the dialogues list: a logged conversation, a simulated one, or any other Workshop trace. */
 export type Source = "log" | "sim" | "trace";
 export type DialogRow = {
   key: string; source: Source; title: string; topic: string; status: Status | null;
@@ -11,13 +11,24 @@ export type DialogRow = {
   rules: Rule[]; second?: { model?: string; status: string; rules?: Rule[] } | null; review?: Decision | null;
 };
 
+/** The earlier address of a dialogue; it redirects to its block. */
 export const dialogPath = (key: string) => `/dialogs/${encodeURIComponent(key)}`;
 export const logKey = (dialogueId: string) => `log~${dialogueId}`;
 export const simKey = (runId: string, index: number) => `sim~${runId}~${index}`;
 
 /** The dialogue an example of a problem or a rule comes from. */
 export const dialogOf = (e: Pick<Example, "source" | "dialogueId" | "runId" | "index">) =>
-  dialogPath(e.source === "log" ? logKey(e.dialogueId ?? "") : simKey(e.runId ?? "", e.index ?? 0));
+  e.source === "log"
+    ? `/logs?tab=dialogs&d=${encodeURIComponent(logKey(e.dialogueId ?? ""))}`
+    : `/results?run=${encodeURIComponent(e.runId ?? "")}&tab=dialogs&d=${encodeURIComponent(simKey(e.runId ?? "", e.index ?? 0))}`;
+
+/** The dialogue behind a row key, at its block: a logged one in «Логи», a simulated one in «Результаты» of its run. */
+export function dialogLink(key: string): string {
+  const [kind, a, b] = key.split("~");
+  if (kind === "sim") return dialogOf({ source: "sim", runId: a, index: Number(b) });
+  if (kind === "log") return dialogOf({ source: "log", dialogueId: a });
+  return `/runs/${encodeURIComponent(a)}`;
+}
 
 const failTitles = (rules: Rule[]) => [...new Set(rules.filter(r => r.status === "FAIL").map(r => r.title || r.rule))];
 const disputedOf = (status: Status, second?: DialogRow["second"]) =>

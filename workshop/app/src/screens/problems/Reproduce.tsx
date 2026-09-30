@@ -58,7 +58,7 @@ export function Reproduce({ p }: { p: RuleEntry }) {
           ) : <Link to={LINKS.agent} className={`text-small ${link}`}>Подключите агента</Link>}
         </div>
       ) : (
-        <p className="mt-2 text-small text-lab-mute">Сценарии из этих диалогов не собраны. <Link to={LINKS.scenarios} className={link}>Собрать в «Симуляциях»</Link></p>
+        <p className="mt-2 text-small text-lab-mute">Сценарии из этих диалогов не собраны. <Link to={LINKS.scenarios} className={link}>Собрать в «Сценариях»</Link></p>
       )}
     </section>
   );

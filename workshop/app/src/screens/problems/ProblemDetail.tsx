@@ -4,9 +4,9 @@ import { ArrowLeft, Copy, MessageSquare } from "lucide-react";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
 import { problemMarkdown, sourceLabel } from "../../lab/problemReport";
-import { useReview, type Decision, type Problems, type RuleEntry } from "../../lab/problems";
+import { useReview, type Decision, type Example, type RuleEntry } from "../../lab/problems";
 import { useKeys } from "../../shell/keys";
-import { LINKS } from "../../shell/links";
+import { viewLink } from "../../shell/links";
 import { useShell } from "../../shell/ShellContext";
 import { Button } from "../../ui/Button";
 import { Facts, type Fact } from "../../ui/Facts";
@@ -20,15 +20,18 @@ import { SourceDrawer } from "./SourceDrawer";
 const share = (side: { failed: number; passed: number }) => `${side.failed} из ${side.failed + side.passed}`;
 const wide = () => window.matchMedia("(min-width: 1024px)").matches;
 
-function secondFact(p: RuleEntry): string {
-  const s = p.secondJudge;
-  if (!s.checked) return "не проверял";
-  const scope = s.byDialogue === s.checked ? " · по диалогу целиком" : s.byDialogue ? ` · ${s.byDialogue} по диалогу целиком` : "";
-  return `согласен в ${s.agree} из ${s.checked}${scope}`;
+/** The second judge on the violations of one side: how many he checked and agreed with. */
+function secondFact(examples: Example[]): string {
+  const judged = examples.filter(e => e.status === "FAIL" && e.second);
+  if (!judged.length) return "не проверял";
+  const agree = judged.filter(e => e.second === "agree").length;
+  const whole = judged.filter(e => e.secondScope === "dialogue").length;
+  const scope = whole === judged.length ? " · по диалогу целиком" : whole ? ` · ${whole} по диалогу целиком` : "";
+  return `согласен в ${agree} из ${judged.length}${scope}`;
 }
 
-/** One problem, read top to bottom as an argument: what is wrong, what the code requires, the proof, what is unknown, what next. */
-export function ProblemDetail({ p, data, onBack }: { p: RuleEntry; data: Problems; onBack: () => void }) {
+/** One problem of one source, read top to bottom as an argument: what is wrong, what the code requires, the proof, what is unknown, what next. */
+export function ProblemDetail({ p, source, runId, onBack }: { p: RuleEntry; source: "log" | "sim"; runId?: string | null; onBack: () => void }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const shell = useShell();
@@ -36,14 +39,13 @@ export function ProblemDetail({ p, data, onBack }: { p: RuleEntry; data: Problem
   const review = useReview();
   const [sourceOpen, setSourceOpen] = useState(false);
   const [hover, setHover] = useState(false);
-  const from: "log" | "sim" = params.get("from") === "sim" && p.sim.failed ? "sim" : p.log.failed ? "log" : "sim";
-  const violations = p[from].examples.filter(e => e.status === "FAIL");
+  const side = p[source];
+  const violations = side.examples.filter(e => e.status === "FAIL");
   const at = Math.max(0, Math.min(violations.length - 1, (Number(params.get("example")) || 1) - 1));
   const example = violations[at];
   const update = (change: (next: URLSearchParams) => void) =>
     setParams(prev => { const next = new URLSearchParams(prev); change(next); return next; }, { replace: true });
   const setAt = (n: number) => update(next => next.set("example", String(Math.max(0, Math.min(violations.length - 1, n)) + 1)));
-  const setFrom = (f: "log" | "sim") => update(next => { next.set("from", f); next.delete("example"); });
   const decide = (d: Decision) => { if (example) review.mutate({ example, decision: example.review === d ? null : d }); };
   const copy = () => { navigator.clipboard.writeText(problemMarkdown(p, window.location.href)).then(() => toast.notify("Разбор скопирован"), toast.error); };
   useKeys({
@@ -55,18 +57,18 @@ export function ProblemDetail({ p, data, onBack }: { p: RuleEntry; data: Problem
     KeyC: copy,
     Escape: () => { if (!wide()) onBack(); },
   });
-  const unknown = p.log.unknown + p.sim.unknown;
+  const humans = violations.filter(e => e.review);
+  const agreed = humans.filter(e => e.review === "agree").length;
   const facts: Fact[] = [
-    { label: "В логах", value: p.log.failed ? share(p.log) : "—", onClick: p.log.failed ? () => navigate(`${LINKS.dialogs}?source=log&rule=${p.id}`) : undefined, title: "Открыть диалоги логов, где правило нарушено" },
-    { label: "В симуляции", value: data.sim ? share(p.sim) : "не было", onClick: p.sim.failed ? () => navigate(`${LINKS.dialogs}?source=sim&rule=${p.id}`) : undefined, title: "Открыть диалоги прогона, где правило нарушено" },
-    { label: "Второй судья", value: secondFact(p), onClick: p.secondJudge.checked > p.secondJudge.agree ? () => navigate(`${LINKS.review}?queue=disputed&rule=${p.id}`) : undefined, title: "Открыть вердикты, где судьи расходятся" },
-    ...(unknown ? [{ label: "Не проверено", value: `в ${unknown} ${plural(unknown, "диалоге", "диалогах", "диалогах")}`, title: "Судья не нашёл доказательств ни выполнения, ни нарушения" }] : []),
-    { label: "Люди", value: p.human.agree + p.human.disagree ? `верно ${p.human.agree} · неверно ${p.human.disagree}` : "не проверяли", onClick: () => navigate(`${LINKS.review}?queue=unchecked&rule=${p.id}`), title: "Проверить нарушения этого правила" },
+    { label: source === "log" ? "В логах" : "В симуляции", value: share(side), onClick: () => navigate(viewLink(source, runId, "dialogs", { v: "fail", rule: p.id })), title: "Открыть диалоги, где критерий нарушен" },
+    { label: "Второй судья", value: secondFact(side.examples), onClick: violations.some(e => e.second === "disagree") ? () => navigate(viewLink(source, runId, "review", { queue: "disputed", rule: p.id })) : undefined, title: "Открыть вердикты, где судьи расходятся" },
+    ...(side.unknown ? [{ label: "Не проверено", value: `в ${side.unknown} ${plural(side.unknown, "диалоге", "диалогах", "диалогах")}`, title: "Судья не нашёл доказательств ни выполнения, ни нарушения" }] : []),
+    { label: "Люди", value: humans.length ? `верно ${agreed} · неверно ${humans.length - agreed}` : "не проверяли", onClick: () => navigate(viewLink(source, runId, "review", { queue: "unchecked", rule: p.id })), title: "Проверить нарушения этого критерия" },
   ];
   return (
     <article className="message-arrive mx-auto max-w-[760px] px-6 pb-16 pt-5 lg:px-8">
       <button type="button" onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-small text-lab-mute transition-colors hover:text-lab-text lg:hidden">
-        <ArrowLeft className="size-3.5" />Проблемы
+        <ArrowLeft className="size-3.5" />Нарушения
       </button>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
         <h1 className="min-w-0 flex-1 text-page font-medium text-lab-ink">{p.title}</h1>
@@ -82,19 +84,19 @@ export function ProblemDetail({ p, data, onBack }: { p: RuleEntry; data: Problem
           {p.rule.quote}
         </Quote>
         <details className="group mt-2 pl-[18px] text-small">
-          <summary className="cursor-pointer list-none text-lab-dim transition-colors hover:text-lab-text">Подробнее о правиле</summary>
+          <summary className="cursor-pointer list-none text-lab-dim transition-colors hover:text-lab-text">Подробнее о критерии</summary>
           <dl className="mt-2 space-y-1">
           <div>
-            <dt className="inline text-lab-dim">Как судья понимает правило: </dt><dd className="inline text-lab-mute">{p.rule.text}</dd>
-            <Link to={`/rules/${p.id}`} className="ml-2 whitespace-nowrap text-lab-dim underline decoration-white/20 underline-offset-4 transition-colors hover:text-lab-text">правило целиком</Link>
+            <dt className="inline text-lab-dim">Как судья понимает критерий: </dt><dd className="inline text-lab-mute">{p.rule.text}</dd>
+            <Link to={`/agent?tab=criteria&c=${encodeURIComponent(p.id)}`} className="ml-2 whitespace-nowrap text-lab-dim underline decoration-white/20 underline-offset-4 transition-colors hover:text-lab-text">критерий целиком</Link>
           </div>
           {p.rule.condition && <div><dt className="inline text-lab-dim">Когда применяется: </dt><dd className="inline text-lab-mute">{p.rule.condition}</dd></div>}
           {p.rule.acceptable && <div><dt className="inline text-lab-dim">Что допустимо: </dt><dd className="inline text-lab-mute">{p.rule.acceptable}</dd></div>}
           </dl>
         </details>
       </section>
-      <Evidence p={p} from={from} onFrom={setFrom} at={at} onAt={setAt} hover={hover} onHover={setHover} onDecide={decide} />
-      <Reproduce p={p} />
+      <Evidence p={p} from={source} at={at} onAt={setAt} hover={hover} onHover={setHover} onDecide={decide} />
+      {source === "log" && <Reproduce p={p} />}
       <SourceDrawer open={sourceOpen} onClose={() => setSourceOpen(false)} sourceId={p.rule.sourceId} origin={p.rule.origin} quote={p.rule.quote} />
     </article>
   );

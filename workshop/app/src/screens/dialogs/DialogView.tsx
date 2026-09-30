@@ -19,7 +19,7 @@ import { ReviewButtons } from "../verdicts/Example";
 
 type Tab = "talk" | "rules" | "trace" | "details";
 const TABS: { value: Tab; label: string }[] = [
-  { value: "talk", label: "Разговор" }, { value: "rules", label: "Правила" }, { value: "trace", label: "Трейс" }, { value: "details", label: "Детали" },
+  { value: "talk", label: "Разговор" }, { value: "rules", label: "Критерии" }, { value: "trace", label: "Трейс" }, { value: "details", label: "Детали" },
 ];
 const VERDICT: Record<string, { word: string; tone: string; icon: typeof Check }> = {
   FAIL: { word: "нарушение", tone: "text-lab-bad", icon: X },
@@ -68,8 +68,8 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
   const review = useReview();
   const { state } = useLabState();
   const [decided, setDecided] = useState<Record<string, Decision | null>>({});
-  const tab = (params.get("tab") as Tab | null) ?? "talk";
-  const setTab = (t: Tab) => setParams(prev => { const n = new URLSearchParams(prev); if (t === "talk") n.delete("tab"); else n.set("tab", t); return n; }, { replace: true });
+  const tab = (params.get("dt") as Tab | null) ?? "talk";
+  const setTab = (t: Tab) => setParams(prev => { const n = new URLSearchParams(prev); if (t === "talk") n.delete("dt"); else n.set("dt", t); return n; }, { replace: true });
   const probe = { source: row.source === "sim" ? "sim" : "log", dialogueId: row.dialogueId, runId: row.runId, index: row.index } as Example;
   const { turns, loading, error } = useTurns(row.source === "trace" ? undefined : probe);
   if (row.source === "trace" && row.traceId) {
@@ -122,7 +122,7 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
               {fails.map(r => (
                 <p key={r.ruleId} className="flex gap-2 text-small text-lab-text"><MarkNumber n={numbers.get(r.ruleId) ?? 0} /><span><span className="text-lab-bad">{r.title || r.rule}.</span> {r.reason}</span></p>
               ))}
-              <button type="button" onClick={() => setTab("rules")} className="text-small text-lab-dim underline decoration-white/20 underline-offset-4 hover:text-lab-text">Все правила и проверка вердиктов</button>
+              <button type="button" onClick={() => setTab("rules")} className="text-small text-lab-dim underline decoration-white/20 underline-offset-4 hover:text-lab-text">Все критерии и проверка вердиктов</button>
             </div>
           )}
         </div>
@@ -136,7 +136,7 @@ export function DialogView({ row, onBack }: { row: DialogRow; onBack: () => void
       {tab === "trace" && row.traceId && <div className="-mx-6 mt-4 lg:-mx-8"><RunDetail key={row.traceId} runId={row.traceId} /></div>}
       {tab === "details" && (
         <pre className="mt-5 overflow-auto rounded-lg border border-white/[0.07] bg-lab-surface p-4 font-mono text-meta text-lab-mute">
-          {JSON.stringify({ источник: row.source, диалог: row.dialogueId, прогон: row.runId, номер: row.index, трейс: row.traceId, вердикт: row.status, второй_судья: row.second, правила: row.rules }, null, 2)}
+          {JSON.stringify({ источник: row.source, диалог: row.dialogueId, прогон: row.runId, номер: row.index, трейс: row.traceId, вердикт: row.status, второй_судья: row.second, критерии: row.rules }, null, 2)}
         </pre>
       )}
     </article>
