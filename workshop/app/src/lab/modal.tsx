@@ -11,17 +11,17 @@ export function Modal({ open, onClose, title, description, children, className }
   return (
     <Dialog.Root open={open} onOpenChange={o => { if (!o) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=open]:fade-in-0 motion-reduce:animate-none" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=open]:fade-in-0 motion-reduce:animate-none" />
         <Dialog.Content
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-48px)] w-[calc(100vw-32px)] max-w-[720px] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-xl",
+            "fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-48px)] w-[calc(100vw-32px)] max-w-[720px] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-lg",
             "border border-lab-edge bg-lab-panel shadow-pop outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 motion-reduce:animate-none",
             className,
           )}
         >
           <div className="flex items-start justify-between gap-4 px-6 pb-2 pt-5">
             <div className="min-w-0">
-              <Dialog.Title className="text-lead font-semibold text-lab-ink">{title}</Dialog.Title>
+              <Dialog.Title className="text-lead font-medium text-lab-ink">{title}</Dialog.Title>
               <Dialog.Description className={cn("mt-1 text-body text-lab-mute", !description && "sr-only")}>{description ?? title}</Dialog.Description>
             </div>
             <Dialog.Close asChild><IconButton icon={X} label="Закрыть" className="-mr-2 -mt-1" /></Dialog.Close>

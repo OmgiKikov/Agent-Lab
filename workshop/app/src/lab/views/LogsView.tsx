@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { FileText, ShieldCheck, TriangleAlert, Upload } from "lucide-react";
+import { FileText, SlidersHorizontal, TriangleAlert, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, upload } from "../api";
 import { count, pct, plural, whenLong } from "../format";
@@ -9,7 +9,7 @@ import { setupSteps } from "../nav";
 import { NextStep, SetupSteps } from "../Setup";
 import { useToast } from "../toast";
 import type { LabState } from "../types";
-import { Badge, Button, EmptyState, inputClass, LinkButton, Page, Panel, Section } from "../ui";
+import { Button, EmptyState, Label, LinkButton, Page, Section, Stat, Strip, inputClass } from "../ui";
 
 function DropZone({ busy, onFile, onPick }: { busy: boolean; onFile: (f: File) => void; onPick: () => void }) {
   const [over, setOver] = useState(false);
@@ -18,13 +18,13 @@ function DropZone({ busy, onFile, onPick }: { busy: boolean; onFile: (f: File) =
       onDragOver={e => { e.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={e => { e.preventDefault(); setOver(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
-      className={cn("flex flex-col items-center rounded-xl border border-dashed px-8 py-14 text-center transition-colors duration-100", over ? "border-lab-accent/70 bg-lab-accent/5" : "border-lab-strong bg-lab-panel")}
+      className={cn("lab-dots flex flex-col items-center rounded-lg border border-dashed px-8 py-14 text-center transition-colors duration-100", over ? "border-lab-accent/70 bg-lab-accent/[0.05]" : "border-lab-strong")}
     >
-      <span className="mb-5 inline-flex size-11 items-center justify-center rounded-xl bg-lab-raised text-lab-mute"><Upload className="size-5" /></span>
-      <div className="text-title font-semibold text-lab-ink">Перетащите выгрузку сюда</div>
-      <div className="mt-1.5 max-w-[440px] text-body text-lab-mute">Или выберите файл на компьютере. Он остаётся здесь и никуда не отправляется.</div>
+      <span className="mb-5 inline-flex size-11 items-center justify-center rounded-lg border border-lab-line bg-lab-canvas text-lab-mute"><Upload className="size-5" /></span>
+      <div className="text-lead font-medium text-lab-ink">Перетащите выгрузку сюда</div>
+      <div className="mt-1.5 max-w-[440px] text-body text-lab-mute">Или выберите файл. Он остаётся на этом компьютере.</div>
       <Button className="mt-6" variant="primary" icon={Upload} loading={busy} onClick={onPick}>Выбрать файл</Button>
-      <div className="mt-3 text-caption text-lab-mute">.xlsx или .jsonl</div>
+      <div className="mt-3 font-mono text-micro text-lab-faint">.XLSX ИЛИ .JSONL</div>
     </div>
   );
 }
@@ -32,18 +32,18 @@ function DropZone({ busy, onFile, onPick }: { busy: boolean; onFile: (f: File) =
 /** What the export must look like, drawn as the sheet itself. */
 function FormatHint() {
   return (
-    <Section title="Какой должна быть выгрузка" hint="Excel, лист «Данные»: в каждой строке — один диалог">
-      <Panel className="overflow-hidden">
-        <div className="grid grid-cols-[140px_1fr] text-body">
-          <div className="border-b border-lab-line bg-lab-card px-5 py-2 font-medium text-lab-text">Id диалога</div>
-          <div className="border-b border-lab-line bg-lab-card px-5 py-2 font-medium text-lab-text">Текст</div>
-          <div className="px-5 py-3 font-mono text-caption text-lab-mute">48213</div>
-          <div className="px-5 py-3 font-mono text-caption text-lab-mute">
+    <Section title="Какой должна быть выгрузка" hint="лист «Данные», в каждой строке один диалог">
+      <div className="overflow-hidden rounded-lg border border-lab-line">
+        <div className="grid grid-cols-[120px_1fr] text-body">
+          <div className="lab-label border-b border-lab-line bg-lab-panel px-4 py-2 text-lab-mute">Id диалога</div>
+          <div className="lab-label border-b border-lab-line bg-lab-panel px-4 py-2 text-lab-mute">Текст</div>
+          <div className="px-4 py-3 font-mono text-caption text-lab-mute">48213</div>
+          <div className="px-4 py-3 font-mono text-caption text-lab-mute">
             <span className="text-lab-text">CLIENT:</span> Не проходит оплата картой на терминале<br />
             <span className="text-lab-text">AGENT:</span> Подскажите, пожалуйста, номер терминала
           </div>
         </div>
-      </Panel>
+      </div>
     </Section>
   );
 }
@@ -68,27 +68,33 @@ export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: (
   const picker = <input ref={fileRef} type="file" accept=".xlsx,.jsonl" className="hidden" onChange={e => load(e.target.files?.[0])} />;
   const nav = <SetupSteps state={state} current="logs" />;
   const cardsDone = setupSteps(state)[2].done;
+  const noSources = !state.sources.length;
+  const page = { title: "Подготовка", icon: SlidersHorizontal, bare: true, nav, narrow: true };
 
   if (!state.logs.total) {
     return (
-      <Page title="Логи" bare nav={nav} lede="Реальных диалогов пока нет. Загрузите выгрузку чата: судья проверит записанные разговоры агента по критериям, не запуская самого агента.">
-        <div className="mt-6"><DropZone busy={busy} onFile={load} onPick={() => fileRef.current?.click()} /></div>
+      <Page {...page} primary={null}>
+        <header className="pt-10">
+          <Label>Шаг 2 · логи</Label>
+          <h2 className="mt-3 text-display font-medium text-lab-ink">Загрузите реальные диалоги.</h2>
+          <p className="mt-2 max-w-[680px] text-pretty text-lead text-lab-soft">Судья проверит записанные разговоры агента по критериям, не запуская самого агента.</p>
+        </header>
+        <div className="mt-8"><DropZone busy={busy} onFile={load} onPick={() => fileRef.current?.click()} /></div>
         <FormatHint />
         {picker}
       </Page>
     );
   }
 
-  const noSources = !state.sources.length;
   const actions = (
     <>
       <Button size="sm" variant="ghost" icon={Upload} loading={busy} disabled={state.job.running} onClick={() => fileRef.current?.click()}>Новая выгрузка</Button>
       {d && <Button size="sm" variant="ghost" disabled={state.job.running} onClick={() => setConfirm(true)} title="Выделить критерии из источников заново">Новые критерии</Button>}
     </>
   );
+  const evaluate = <Button variant={d ? "secondary" : "primary"} icon={FileText} disabled={state.job.running || noSources} onClick={() => run(false)}>{d ? "Оценить заново" : "Оценить логи"}</Button>;
   const toolbar = (
     <div className="mt-6 flex flex-wrap items-center gap-2">
-      <Button variant={d ? "secondary" : "primary"} icon={FileText} disabled={state.job.running || noSources} onClick={() => run(false)}>{d ? "Оценить заново" : "Оценить логи"}</Button>
       <select value={sample} onChange={e => setSample(+e.target.value)} aria-label="Сколько диалогов оценить" className={cn(inputClass, "w-auto cursor-pointer pr-8")}>
         {[20, 40, 60, 100, 200].map(n => <option key={n} value={n}>{count(n, "диалог", "диалога", "диалогов")}</option>)}
       </select>
@@ -106,9 +112,14 @@ export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: (
 
   if (!d) {
     return (
-      <Page title="Логи" bare nav={nav} actions={actions} lede={`Выгрузка загружена: ${count(state.logs.total, "диалог", "диалога", "диалогов")}. Оцените их — судья проверит выбранное число диалогов по критериям агента.`}>
+      <Page {...page} actions={actions} primary={evaluate}>
+        <header className="pt-10">
+          <Label>Шаг 2 · логи</Label>
+          <h2 className="mt-3 text-display font-medium text-lab-ink">Выгрузка загружена: {count(state.logs.total, "диалог", "диалога", "диалогов")}.</h2>
+          <p className="mt-2 max-w-[680px] text-pretty text-lead text-lab-soft">Выберите, сколько диалогов оценить. На 20 диалогов уходит около минуты.</p>
+        </header>
         {toolbar}
-        <EmptyState className="mt-6" icon={FileText} title="Диалоги ещё не оценены">Выберите, сколько диалогов оценить, и нажмите «Оценить логи». На 20 диалогов уходит около минуты.</EmptyState>
+        <EmptyState icon={FileText} title="Диалоги ещё не оценены">Нажмите «Оценить логи»: судья проверит выбранное число диалогов по критериям агента.</EmptyState>
       </Page>
     );
   }
@@ -120,47 +131,42 @@ export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: (
     const own = d.results.filter(r => r.topicId === t.id && (r.status === "PASS" || r.status === "FAIL"));
     return { id: t.id, title: t.title, rules: t.rules.length, checked: own.length, failed: own.filter(r => r.status === "FAIL").length };
   }).sort((a, b) => (b.checked ? b.failed / b.checked : 0) - (a.checked ? a.failed / a.checked : 0));
-  const lede = `Нарушения в ${s.failed} из ${count(s.checked, "оценённого диалога", "оценённых диалогов", "оценённых диалогов")}${topPattern ? `; чаще всего — «${topPattern.rule}» (${count(topPattern.count, "диалог", "диалога", "диалогов")})` : ""}.`;
 
   return (
-    <Page title="Логи" bare nav={nav} actions={actions} lede={lede}>
+    <Page {...page} actions={actions} primary={evaluate}>
       <Confirm open={confirm} onClose={() => setConfirm(false)} onConfirm={() => run(true)} title="Выделить критерии заново?" action="Выделить заново" danger>
         Следующая оценка пойдёт по новым критериям, и её нельзя будет сравнить с прошлыми версиями.
       </Confirm>
+      <header className="pt-10">
+        <Label>Шаг 2 · логи · оценены {whenLong(d.finishedAt)}</Label>
+        <h2 className="mt-3 text-balance text-display font-medium text-lab-ink">Нарушения в {s.failed} из {count(s.checked, "реального диалога", "реальных диалогов", "реальных диалогов")}.</h2>
+        {topPattern && <p className="mt-2 max-w-[720px] text-pretty text-lead text-lab-soft">Чаще всего: «{topPattern.rule}» — {count(topPattern.count, "диалог", "диалога", "диалогов")}.</p>}
+      </header>
       {toolbar}
-      <Panel className="mt-5 grid gap-6 p-5 sm:grid-cols-3">
-        <div>
-          <div className="text-metric font-semibold tabular-nums text-lab-ink">{s.checked}<span className="ml-1.5 text-body font-normal text-lab-mute">из {state.logs.total}</span></div>
-          <div className="mt-1 text-caption text-lab-mute">{plural(s.checked, "диалог оценён", "диалога оценено", "диалогов оценено")} · {whenLong(d.finishedAt)}</div>
-        </div>
-        <div>
-          <div className={cn("text-metric font-semibold tabular-nums", s.failed ? "text-lab-bad" : "text-lab-ink")}>{s.failed}</div>
-          <div className="mt-1 text-caption text-lab-mute">{plural(s.failed, "с нарушением", "с нарушениями", "с нарушениями")}{s.unmeasured ? ` · ещё ${s.unmeasured} без данных` : ""}</div>
-        </div>
-        <div>
-          <div className="text-metric font-semibold tabular-nums text-lab-ink">{rules}</div>
-          <div className="mt-1 text-caption text-lab-mute">{plural(rules, "критерий", "критерия", "критериев")} в {count(d.topics.length, "теме", "темах", "темах")}</div>
-          {s.secondJudge && <Badge hue="ok" icon={ShieldCheck} className="mt-2">второй судья согласен в {pct(s.secondJudge.agree, s.secondJudge.checked)}%</Badge>}
-        </div>
-      </Panel>
+      <Strip className="mt-4">
+        <Stat label="Оценено" value={s.checked} sub={`из ${state.logs.total} в выгрузке`} />
+        <Stat label="С нарушениями" value={s.failed} hue={s.failed ? "bad" : undefined} sub={s.unmeasured ? `ещё ${s.unmeasured} без данных` : plural(s.failed, "диалог", "диалога", "диалогов")} />
+        <Stat label="Критериев" value={rules} sub={`в ${count(d.topics.length, "теме", "темах", "темах")}`} onClick={onCriteria} />
+        {s.secondJudge && <Stat label="Второй судья" value={`${pct(s.secondJudge.agree, s.secondJudge.checked)}%`} sub="согласен с итогом" hue={pct(s.secondJudge.agree, s.secondJudge.checked) >= 80 ? "ok" : "warn"} />}
+      </Strip>
 
-      <Section title="Темы" hint="Каждый диалог попадает в одну тему и проверяется по её критериям; справа — сколько диалогов темы с нарушением" right={<LinkButton onClick={onCriteria}>Все критерии</LinkButton>}>
-        <Panel className="overflow-hidden">
-          {topics.map((t, k) => (
-            <div key={t.id} className={cn("flex items-center gap-4 px-5 py-3", k > 0 && "border-t border-lab-line")}>
+      <Section title="Темы" count={topics.length} hint="справа — диалоги темы с нарушением">
+        <div className="divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">
+          {topics.map(t => (
+            <div key={t.id} className="flex items-center gap-4 px-4 py-2.5">
               <div className="min-w-0 flex-1">
                 <div className="text-body text-lab-ink">{t.title}</div>
-                <div className="mt-0.5 text-caption text-lab-mute">{count(t.rules, "критерий", "критерия", "критериев")}</div>
+                <div className="text-caption text-lab-mute">{count(t.rules, "критерий", "критерия", "критериев")}</div>
               </div>
-              <div className="hidden w-[160px] sm:block">
-                <div className="h-1 overflow-hidden rounded-full bg-white/[0.07]"><div className="h-full rounded-full bg-lab-bad/70" style={{ width: `${t.checked ? (100 * t.failed) / t.checked : 0}%` }} /></div>
+              <div className="hidden w-[140px] sm:block">
+                <div className="h-1 overflow-hidden rounded-sm bg-white/[0.07]"><div className="h-full bg-lab-bad/80" style={{ width: `${t.checked ? (100 * t.failed) / t.checked : 0}%` }} /></div>
               </div>
-              <div className="w-[120px] whitespace-nowrap text-right text-body tabular-nums text-lab-mute" title={t.checked ? `С нарушением ${t.failed} из ${t.checked} диалогов темы` : undefined}>
-                {t.checked ? <><span className={t.failed ? "font-semibold text-lab-ink" : ""}>{t.failed}</span> из {t.checked}</> : "не проверялась"}
+              <div className="w-[96px] whitespace-nowrap text-right text-body tabular-nums text-lab-mute" title={t.checked ? `С нарушением ${t.failed} из ${t.checked} диалогов темы` : undefined}>
+                {t.checked ? <><span className={t.failed ? "font-medium text-lab-ink" : ""}>{t.failed}</span> из {t.checked}</> : "не проверялась"}
               </div>
             </div>
           ))}
-        </Panel>
+        </div>
       </Section>
       <NextStep done={cardsDone} title="Соберите сценарии для симулятора" hint="Из оценённых диалогов получатся ситуации клиента: симулятор сыграет их с каждой новой версией агента." to="/lab/checks" cta={cardsDone ? "К сценариям" : "Собрать сценарии"} />
     </Page>

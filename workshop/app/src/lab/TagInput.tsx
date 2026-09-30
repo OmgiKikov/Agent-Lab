@@ -23,12 +23,12 @@ export function TagInput({ value, onChange, placeholder, label }: { value: strin
     <div
       onClick={() => input.current?.focus()}
       className={cn(
-        "flex min-h-8 w-full cursor-text flex-wrap items-center gap-1.5 rounded-md border border-lab-edge bg-lab-canvas px-1.5 py-1 transition-colors duration-100",
-        "hover:border-lab-strong focus-within:border-lab-accent/60 focus-within:ring-2 focus-within:ring-lab-accent/20",
+        "flex min-h-8 w-full cursor-text flex-wrap items-center gap-1.5 rounded-md border border-lab-line bg-white/[0.04] px-1.5 py-1 transition-colors duration-100",
+        "hover:border-lab-edge focus-within:border-lab-accent/60 focus-within:ring-2 focus-within:ring-lab-accent/20",
       )}
     >
       {value.map(tag => (
-        <span key={tag} className="inline-flex h-6 items-center gap-1 rounded-md bg-lab-active pl-2 pr-1 font-mono text-caption text-lab-ink">
+        <span key={tag} className="inline-flex h-6 items-center gap-1 rounded bg-white/[0.08] pl-2 pr-1 font-mono text-caption text-lab-ink">
           {tag}
           <button
             type="button" aria-label={`Убрать ${tag}`} onClick={e => { e.stopPropagation(); onChange(value.filter(t => t !== tag)); }}

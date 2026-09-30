@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils";
 import { count, pct } from "../format";
 import { disputed } from "../logic";
 import type { Item, LabRun, LabState } from "../types";
-import { Badge, Button, PersonaTag } from "../ui";
-import { Conversation } from "./RunView";
+import { Button, Label, PersonaTag, Verdict } from "../ui";
+import { Conversation } from "../Conversation";
 
 type Decision = "agree" | "disagree";
 /** Below this many answers a percentage says nothing, so it is not shown. */
@@ -69,11 +69,12 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
       <div className="flex-shrink-0 border-b border-lab-line px-6 py-4">
         <div className="mx-auto flex max-w-[800px] items-end justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-lead font-semibold text-lab-ink">Прав ли судья?</div>
-            <div className="mt-0.5 text-body text-lab-mute">Прочитайте диалог и ответьте, верен ли вердикт. Спорные идут первыми, поэтому процент строже, чем на всех диалогах.</div>
+            <Label>Сверка судьи</Label>
+            <div className="mt-1.5 text-lead font-medium text-lab-ink">Прав ли судья?</div>
+            <div className="mt-0.5 text-body text-lab-mute">Прочитайте диалог и ответьте, верен ли вердикт. Спорные идут первыми.</div>
           </div>
           <div className="flex-shrink-0 text-right">
-            <div className="text-title font-semibold tabular-nums text-lab-ink">{share === null ? "—" : `${share}%`}</div>
+            <div className="text-metric font-medium tabular-nums text-lab-ink">{share === null ? "—" : `${share}%`}</div>
             <div className="text-caption tabular-nums text-lab-mute">
               {share === null ? `ещё ${MIN_CHECKED - reviewed.length} до первого процента` : `судья прав · сверено ${reviewed.length} из ${queue.length}`}
             </div>
@@ -84,7 +85,7 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
             const d = decisionOf(i);
             return (
               <button key={i} role="listitem" onClick={() => setAt(k)} aria-label={`Вердикт ${k + 1}${d ? d === "agree" ? ": верно" : ": неверно" : ""}`}
-                className={cn("h-1.5 flex-1 rounded-full transition-colors duration-100", d === "agree" ? "bg-lab-mute" : d === "disagree" ? "bg-lab-bad" : "bg-white/[0.08] hover:bg-white/20", k === at && "ring-1 ring-lab-ink ring-offset-1 ring-offset-lab-canvas")} />
+                className={cn("h-1.5 flex-1 rounded-[1px] transition-colors duration-100", d === "agree" ? "bg-lab-mute" : d === "disagree" ? "bg-lab-bad" : "bg-white/[0.08] hover:bg-white/20", k === at && "ring-1 ring-lab-ink ring-offset-1 ring-offset-lab-canvas")} />
             );
           })}
         </div>
@@ -94,26 +95,26 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
         <div className="flex-shrink-0 border-b border-lab-line bg-lab-panel px-6 py-3">
           <div className="mx-auto max-w-[800px] text-body text-lab-text">
             Сверены все {count(queue.length, "вердикт", "вердикта", "вердиктов")}: судья прав в {agree} из {queue.length}.
-            {share !== null && share < 80 ? " Это мало: числу пока верить рано. Посмотрите на экране «Доверие», в каких критериях судья ошибается." : " Числу версии можно верить."}
+            {share !== null && share < 80 ? " Это мало: числу пока верить рано. Посмотрите на странице «Судья», в каких критериях он ошибается." : " Числу версии можно верить."}
           </div>
         </div>
       )}
 
       <div className="flex flex-shrink-0 items-center border-b border-lab-line px-6 py-2.5">
         <div className="mx-auto flex w-full max-w-[800px] flex-wrap items-center gap-2.5">
-          <span className="text-caption tabular-nums text-lab-mute">{at + 1} из {queue.length}</span>
+          <span className="font-mono text-micro tabular-nums text-lab-mute">{at + 1} / {queue.length}</span>
           <span className="min-w-0 truncate text-body font-medium text-lab-ink">{item.name}</span>
           <PersonaTag personas={state.personas} id={item.persona} />
-          {disputed(item) && <Badge hue="warn">судьи расходятся</Badge>}
+          {disputed(item) && <Verdict hue="warn">судьи расходятся</Verdict>}
           <span className="ml-auto flex items-center gap-1">
-            {item.runId && <a href={`/runs/${item.runId}`} className="lab-focus inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-caption font-medium text-lab-mute transition-colors duration-100 hover:bg-lab-raised hover:text-lab-ink"><ExternalLink className="size-3.5" />Трейс</a>}
+            {item.runId && <a href={`/runs/${item.runId}`} className="lab-focus inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-caption text-lab-mute transition-colors duration-100 hover:bg-white/[0.06] hover:text-lab-ink"><ExternalLink className="size-3.5" />Трейс</a>}
             <Button size="sm" variant="ghost" onClick={() => onOpen(item)}>Открыть в диалогах</Button>
           </span>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        <Conversation key={index} item={item} state={state} />
+      <div className="min-h-0 flex-1 overflow-auto px-6 py-7">
+        <div className="mx-auto max-w-[800px]"><Conversation key={index} item={item} state={state} /></div>
       </div>
 
       <div className="flex-shrink-0 border-t border-lab-line bg-lab-panel px-6 py-3">

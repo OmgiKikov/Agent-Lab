@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { whenLong } from "./format";
+import { when } from "./format";
 import type { LabRun } from "./types";
 
 /**
  * The version a page is about, and the one it is compared with. The version is the Lab's main object,
- * so it sits in every page header; the list shows each version's own result, so picking one is already informed.
+ * so it sits in every result page's header; the list shows each version's own result, so picking one is already informed.
  */
-export function VersionSwitch({ versions, current, previous, onPick }: {
+export function VersionSwitch({ versions, current, previous, onPick, asTitle }: {
   versions: LabRun[]; current: LabRun | null; previous: LabRun | null; onPick: (id: string) => void;
+  /** The version page: the switch is the page's title. */
+  asTitle?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -35,32 +37,43 @@ export function VersionSwitch({ versions, current, previous, onPick }: {
   const newest = [...versions].reverse();
   return (
     <div ref={box} className="relative">
-      <button
-        onClick={() => setOpen(o => !o)} aria-haspopup="listbox" aria-expanded={open}
-        className="lab-focus inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-body transition-colors duration-100 hover:bg-lab-raised"
-      >
-        <span className="text-lab-mute">Версия</span>
-        <span className="font-semibold tabular-nums text-lab-ink">{current.version}</span>
-        {previous && <span className="hidden text-lab-mute lg:inline">против <span className="tabular-nums">{previous.version}</span></span>}
-        <ChevronDown className="size-3.5 text-lab-mute" />
-      </button>
+      {asTitle ? (
+        <button
+          onClick={() => setOpen(o => !o)} aria-haspopup="listbox" aria-expanded={open}
+          className="lab-focus -ml-1.5 inline-flex h-8 items-center gap-1.5 rounded-md px-1.5 text-body transition-colors duration-100 hover:bg-white/[0.05]"
+        >
+          <span className="font-semibold text-lab-ink">Версия <span className="tabular-nums">{current.version}</span></span>
+          <ChevronDown className="size-3.5 text-lab-mute" />
+          {previous && <span className="text-lab-mute">против <span className="tabular-nums">{previous.version}</span></span>}
+        </button>
+      ) : (
+        <button
+          onClick={() => setOpen(o => !o)} aria-haspopup="listbox" aria-expanded={open}
+          className="lab-focus inline-flex h-8 items-center gap-2 rounded-md border border-lab-line px-2.5 text-body transition-colors duration-100 hover:border-lab-edge hover:bg-white/[0.04]"
+        >
+          <span className="lab-label text-lab-mute">Версия</span>
+          <span className="font-medium tabular-nums text-lab-ink">{current.version}</span>
+          {previous && <span className="hidden text-lab-mute lg:inline">против <span className="tabular-nums">{previous.version}</span></span>}
+          <ChevronDown className="size-3.5 text-lab-mute" />
+        </button>
+      )}
       {open && (
-        <div ref={list} role="listbox" aria-label="Версии агента" className="absolute right-0 top-full z-40 mt-1.5 w-[320px] rounded-xl border border-lab-edge bg-lab-raised p-1 shadow-pop">
-          <div className="px-2.5 pb-1.5 pt-2 text-caption text-lab-mute">Версии агента · сравнение всегда с предыдущей</div>
+        <div ref={list} role="listbox" aria-label="Версии агента" className={cn("absolute top-full z-40 mt-1.5 w-[340px] rounded-lg border border-lab-edge bg-lab-raised p-1 shadow-pop", asTitle ? "left-0" : "right-0")}>
+          <div className="lab-label px-2.5 pb-1.5 pt-2 text-lab-mute">Версии · сравнение с предыдущей</div>
           {newest.map(r => {
             const on = r.id === current.id;
             return (
               <button
                 key={r.id} role="option" aria-selected={on} aria-current={on} onClick={() => { onPick(r.id); setOpen(false); }}
-                className={cn("lab-focus-inset flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition-colors duration-100 hover:bg-lab-active focus:bg-lab-active", on && "bg-lab-active/60")}
+                className={cn("lab-focus-inset flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors duration-100 hover:bg-white/[0.06] focus:bg-white/[0.06]", on && "bg-white/[0.04]")}
               >
-                <span className="w-12 flex-shrink-0 pt-px text-body font-semibold tabular-nums text-lab-ink">{r.version}</span>
+                <span className="w-10 flex-shrink-0 text-body font-medium tabular-nums text-lab-ink">{r.version}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-body text-lab-text">{r.label || r.targetName}</span>
-                  <span className="block text-caption text-lab-mute">{whenLong(r.startedAt)}</span>
+                  <span className="block font-mono text-micro text-lab-mute">{when(r.startedAt)}</span>
                 </span>
-                <span className="flex-shrink-0 pt-px text-body tabular-nums text-lab-text">{r.metric?.accuracy ?? "—"}%</span>
-                <Check className={cn("mt-0.5 size-3.5 flex-shrink-0", on ? "text-lab-ink" : "text-transparent")} />
+                <span className="flex-shrink-0 text-body tabular-nums text-lab-soft">{r.metric?.accuracy ?? "—"}%</span>
+                <Check className={cn("size-3.5 flex-shrink-0", on ? "text-lab-ink" : "text-transparent")} />
               </button>
             );
           })}

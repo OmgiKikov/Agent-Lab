@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BookOpen, Bot, Check, CircleAlert, Code, Globe, Loader2, ShieldCheck, Wrench, type LucideIcon } from "lucide-react";
+import { BookOpen, Bot, Check, CircleAlert, Code, Globe, Loader2, ShieldCheck, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../api";
 import { count, plural, thousands } from "../format";
@@ -9,12 +9,12 @@ import { NextStep, SetupSteps } from "../Setup";
 import { TagInput } from "../TagInput";
 import { useToast } from "../toast";
 import type { Check as CheckResult, LabState } from "../types";
-import { Badge, Button, EmptyState, Field, Input, Page, Panel, Row, Section, StackBar } from "../ui";
+import { Badge, Button, EmptyState, Field, Input, Label, Page, Section, Stat, Strip } from "../ui";
 
-const SOURCE: Record<string, { label: string; icon: LucideIcon; tone: string }> = {
-  prompt: { label: "Промпт", icon: Bot, tone: "bg-lab-ink/70" },
-  tools: { label: "Инструменты", icon: Wrench, tone: "bg-lab-mute" },
-  knowledge: { label: "База знаний", icon: BookOpen, tone: "bg-lab-faint" },
+const SOURCE: Record<string, { label: string; icon: LucideIcon }> = {
+  prompt: { label: "Промпт", icon: Bot },
+  tools: { label: "Инструменты", icon: Wrench },
+  knowledge: { label: "База знаний", icon: BookOpen },
 };
 
 type Checks = Record<string, CheckResult | "pending">;
@@ -69,144 +69,130 @@ export function AgentView({ state }: { state: LabState }) {
   const totalRules = withRules.reduce((n, src) => n + src.rules, 0);
   const kinds = Object.keys(SOURCE).map(kind => ({ kind, rules: withRules.filter(s => s.kind === kind).reduce((n, s) => n + s.rules, 0) })).filter(k => k.rules > 0);
   const logsDone = setupSteps(state)[1].done;
-  const lede = state.sources.length
-    ? `Агент подключён: ${count(totalRules, "критерий", "критерия", "критериев")} из ${count(withRules.length, "источника", "источников", "источников")} — промптов, инструментов и базы знаний.`
-    : saved.repo ? "Код агента указан, но критерии ещё не собраны: нажмите «Собрать из кода»." : "Агент не подключён. Укажите адрес агента и репозиторий с его кодом: из промптов и инструментов получатся критерии.";
+  const collect = (
+    <Button variant={state.sources.length ? "secondary" : "primary"} icon={Bot} disabled={state.job.running || !saved.repo} onClick={() => api("/api/sources", {}).catch(error)}
+      title={!saved.repo ? "Сначала укажите код агента" : "Прочитать промпты, инструменты и базу знаний из кода агента"}>
+      {state.sources.length ? "Собрать заново" : "Собрать из кода"}
+    </Button>
+  );
 
   return (
-    <Page title="Агент" bare wide nav={<SetupSteps state={state} current="agent" />} lede={lede}>
-      <div className="grid gap-x-8 min-[1240px]:grid-cols-2">
-        <div className="min-w-0">
-          <Section className="mt-8" title="Подключение" hint="Куда ходит симулятор клиента и откуда берётся код агента. Хранится только на этом компьютере.">
-            <Panel>
-              <div className="space-y-5 p-5">
-                <Field label="Адрес агента на тестовом стенде" hint="HTTP-ручка агента на ИФТ, доступная из сети банка.">
-                  <Input mono value={form.prodUrl} onChange={e => setForm({ ...form, prodUrl: e.target.value })} placeholder="http://…/api/v1/ai/agents/…" />
-                </Field>
-                <div>
-                  <div className="mb-1.5 text-body font-medium text-lab-ink">EPK клиентов</div>
-                  <TagInput label="EPK клиентов" value={form.epk} onChange={epk => setForm({ ...form, epk })} placeholder="Введите EPK и нажмите Enter" />
-                  <div className="mt-1.5 text-caption text-lab-mute">Агент увидит данные этих организаций. Без EPK клиент будет неавторизованным.</div>
+    <Page title="Подготовка" icon={SlidersHorizontal} bare nav={<SetupSteps state={state} current="agent" />} primary={collect} narrow>
+      <header className="pt-10">
+        <Label>Шаг 1 · агент</Label>
+        <h2 className="mt-3 text-balance text-display font-medium text-lab-ink">
+          {state.sources.length ? `${count(totalRules, "критерий", "критерия", "критериев")} из кода агента.` : "Подключите агента."}
+        </h2>
+        <p className="mt-2 max-w-[680px] text-pretty text-lead text-lab-soft">
+          {state.sources.length ? "Их источники — промпты, инструменты и база знаний. У каждого критерия есть цитата-первоисточник." : "Укажите адрес агента и его репозиторий: из промптов и инструментов получатся критерии проверки."}
+        </p>
+        <div className="mt-4"><JobLine state={state} kind="sources" /></div>
+      </header>
+
+      {state.sources.length > 0 ? (
+        <Section title="Источники критериев" count={withRules.length}>
+          <Strip>
+            <Stat label="Критериев" value={totalRules} sub={`из ${count(withRules.length, "источника", "источников", "источников")}`} />
+            {kinds.map(k => <Stat key={k.kind} label={SOURCE[k.kind].label} value={k.rules} sub={plural(k.rules, "критерий", "критерия", "критериев")} />)}
+          </Strip>
+          <div className="mt-3 divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">
+            {withRules.map(src => {
+              const meta = SOURCE[src.kind] ?? { label: src.kind, icon: BookOpen };
+              return (
+                <div key={src.id} className="flex items-center gap-3 px-4 py-2.5">
+                  <meta.icon className="size-4 flex-shrink-0 text-lab-mute" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono text-caption text-lab-text" title={src.origin}>{src.origin}</div>
+                    <div className="text-caption text-lab-mute">{meta.label} · {thousands(src.chars)}</div>
+                  </div>
+                  <span className="flex-shrink-0 text-body tabular-nums text-lab-soft">{count(src.rules, "критерий", "критерия", "критериев")}</span>
                 </div>
-                <Field label="Код агента" hint="Репозиторий, откуда берутся промпты, инструменты и база знаний.">
-                  <Input mono value={form.repo} onChange={e => setForm({ ...form, repo: e.target.value })} placeholder="~/Desktop/aigw-local" />
-                </Field>
+              );
+            })}
+            {hidden > 0 && <div className="px-4 py-2.5 text-caption text-lab-mute">Ещё {count(hidden, "промпт", "промпта", "промптов")} без критериев скрыто: это классификаторы маршрутизации.</div>}
+          </div>
+        </Section>
+      ) : (
+        <EmptyState icon={Bot} title="Критерии ещё не собраны">Укажите репозиторий с кодом агента и нажмите «Собрать из кода»: из промптов и инструментов выделятся критерии, у каждого — цитата.</EmptyState>
+      )}
+
+      <Section title="Подключение" hint="хранится только на этом компьютере">
+        <div className="rounded-lg border border-lab-line bg-lab-panel">
+          <div className="space-y-5 p-5">
+            <Field label="Адрес агента на тестовом стенде" hint="HTTP-ручка агента на ИФТ, доступная из сети банка.">
+              <Input mono value={form.prodUrl} onChange={e => setForm({ ...form, prodUrl: e.target.value })} placeholder="http://…/api/v1/ai/agents/…" />
+            </Field>
+            <div>
+              <div className="mb-1.5 text-body font-medium text-lab-text">EPK клиентов</div>
+              <TagInput label="EPK клиентов" value={form.epk} onChange={epk => setForm({ ...form, epk })} placeholder="Введите EPK и нажмите Enter" />
+              <div className="mt-1.5 text-caption text-lab-mute">Агент увидит данные этих организаций. Без EPK клиент будет неавторизованным.</div>
+            </div>
+            <Field label="Код агента" hint="Репозиторий, откуда берутся промпты, инструменты и база знаний.">
+              <Input mono value={form.repo} onChange={e => setForm({ ...form, repo: e.target.value })} placeholder="~/Desktop/aigw-local" />
+            </Field>
+          </div>
+          <div className="flex items-center gap-2 border-t border-lab-line px-5 py-3">
+            <Button variant={dirty ? "primary" : "secondary"} disabled={!dirty} onClick={save}>Сохранить</Button>
+            {dirty && <Button variant="ghost" onClick={() => setForm(base)}>Отменить</Button>}
+            <span className={cn("ml-auto inline-flex items-center gap-1.5 text-caption", dirty ? "text-lab-warn" : "text-lab-mute")}>
+              {dirty ? <><span className="size-1.5 rounded-full bg-lab-warn" />Есть несохранённые изменения</> : <><Check className="size-3.5" />Сохранено</>}
+            </span>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Агенты" count={state.targets.length} hint="с кем можно проверить версию"
+        right={reachable.length > 1 ? <Button size="sm" onClick={() => reachable.forEach(t => check(t.id, `/api/agents/${t.id}/check`))}>Проверить связь со всеми</Button> : undefined}>
+        <div className="divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">
+          {state.targets.map(t => {
+            const Icon = t.kind === "code" ? Code : Globe;
+            return (
+              <div key={t.id} className="px-4 py-3.5">
+                <div className="flex items-start gap-3">
+                  <Icon className="mt-0.5 size-4 flex-shrink-0 text-lab-mute" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-body font-medium text-lab-ink">{t.name}</span>
+                      <span className="lab-label text-lab-faint">{t.kind === "code" ? "из кода" : "по HTTP"}</span>
+                    </div>
+                    <div className="mt-0.5 truncate font-mono text-caption text-lab-mute" title={t.where}>{t.where || "адрес не задан"}</div>
+                    <div className="mt-1 text-body text-lab-soft">{t.note}</div>
+                    <VerdictDetail check={checks[t.id]} />
+                  </div>
+                  <div className="flex flex-shrink-0 flex-col items-end gap-2">
+                    {!t.ready ? <Badge hue="warn">не настроен</Badge> : <Verdict check={checks[t.id]} />}
+                    {t.kind === "http" && t.ready && checks[t.id] !== "pending" && (
+                      <Button size="sm" onClick={() => check(t.id, `/api/agents/${t.id}/check`)}>{checks[t.id] ? "Ещё раз" : "Проверить связь"}</Button>
+                    )}
+                  </div>
+                </div>
               </div>
-              <Row className="flex items-center gap-2 px-5 py-3.5">
-                <Button variant="primary" disabled={!dirty} onClick={save}>Сохранить</Button>
-                {dirty && <Button variant="ghost" onClick={() => setForm(base)}>Отменить</Button>}
-                <span className={cn("ml-auto inline-flex items-center gap-1.5 text-body", dirty ? "text-lab-warn" : "text-lab-mute")}>
-                  {dirty ? <><span className="size-1.5 rounded-full bg-lab-warn" />Есть несохранённые изменения</> : <><Check className="size-3.5" />Сохранено</>}
-                </span>
-              </Row>
-            </Panel>
-          </Section>
-
-          <Section title="Модели" hint="Судья оценивает диалоги и играет клиента; второй судья независимо перепроверяет" right={<Button size="sm" icon={ShieldCheck} onClick={checkModels}>Проверить</Button>}>
-            <Panel>
-              {([["main", "Судья и клиент", "оценивает диалоги и пишет реплики клиента", state.models.main], ["second", "Второй судья", "модель другого вендора, перепроверяет вердикты", state.models.second]] as const).map(([key, role, sub, model], i) => (
-                <Row first={!i} key={key} className="px-5 py-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="text-body font-medium text-lab-ink">{role}</div>
-                      <div className="mt-0.5 text-body text-lab-mute">{sub}</div>
-                    </div>
-                    <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
-                      <span className="rounded-md bg-lab-raised px-2 py-0.5 font-mono text-caption text-lab-text">{model ?? "новейшая из каталога"}</span>
-                      <Verdict check={checks[key]} />
-                    </div>
-                  </div>
-                  <VerdictDetail check={checks[key]} />
-                </Row>
-              ))}
-              <Row className="px-5 py-3 text-body text-lab-mute">
-                Запросы идут через {state.models.via}.{state.models.via === "OpenRouter" ? " Чтобы работать через шлюз банка, положите сертификаты в папку certs/." : ""}
-              </Row>
-            </Panel>
-          </Section>
+            );
+          })}
         </div>
+      </Section>
 
-        <div className="min-w-0">
-          <Section
-            className="min-[1240px]:mt-8" title="Агенты" hint="С кем можно провести проверку версии"
-            right={reachable.length > 1 ? <Button size="sm" onClick={() => reachable.forEach(t => check(t.id, `/api/agents/${t.id}/check`))}>Проверить все</Button> : undefined}
-          >
-            <Panel>
-              {state.targets.map((t, i) => {
-                const Icon = t.kind === "code" ? Code : Globe;
-                return (
-                  <Row first={!i} key={t.id} className="px-5 py-4">
-                    <div className="flex items-start gap-3.5">
-                      <span className="mt-0.5 flex size-8 flex-shrink-0 items-center justify-center rounded-lg bg-lab-raised text-lab-mute"><Icon className="size-4" /></span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-body font-semibold text-lab-ink">{t.name}</span>
-                          <Badge>{t.kind === "code" ? "из кода" : "по HTTP"}</Badge>
-                        </div>
-                        <div className="mt-0.5 truncate font-mono text-caption text-lab-mute" title={t.where}>{t.where || "адрес не задан"}</div>
-                        <div className="mt-1.5 text-body text-lab-text">{t.note}</div>
-                        <VerdictDetail check={checks[t.id]} />
-                      </div>
-                      <div className="flex flex-shrink-0 flex-col items-end gap-2">
-                        {!t.ready ? <Badge hue="warn">не настроен</Badge> : <Verdict check={checks[t.id]} />}
-                        {t.kind === "http" && t.ready && checks[t.id] !== "pending" && (
-                          <Button size="sm" onClick={() => check(t.id, `/api/agents/${t.id}/check`)}>{checks[t.id] ? "Ещё раз" : "Проверить связь"}</Button>
-                        )}
-                      </div>
-                    </div>
-                  </Row>
-                );
-              })}
-            </Panel>
-          </Section>
-
-          <Section
-            title="Источники критериев" hint="Из промптов, инструментов и базы знаний выделяются критерии, по которым судья проверяет диалоги"
-            right={<>
-              <JobLine state={state} kind="sources" bare />
-              <Button size="sm" variant={state.sources.length ? "secondary" : "primary"} icon={Bot} disabled={state.job.running || !saved.repo} onClick={() => api("/api/sources", {}).catch(error)}
-                title={!saved.repo ? "Сначала укажите код агента" : undefined}>
-                {state.sources.length ? "Собрать заново" : "Собрать из кода"}
-              </Button>
-            </>}
-          >
-            {state.sources.length > 0 ? (
-              <Panel>
-                <div className="px-5 pb-4 pt-4">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-metric font-semibold tabular-nums text-lab-ink">{totalRules}</span>
-                    <span className="text-body text-lab-mute">{plural(totalRules, "критерий", "критерия", "критериев")} из {count(withRules.length, "источника", "источников", "источников")}</span>
-                  </div>
-                  <StackBar className="mt-3" parts={kinds.map(k => ({ value: k.rules, tone: SOURCE[k.kind].tone }))} />
-                  <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1">
-                    {kinds.map(k => (
-                      <span key={k.kind} className="inline-flex items-center gap-1.5 text-caption text-lab-mute">
-                        <span className={cn("size-2 rounded-full", SOURCE[k.kind].tone)} />{SOURCE[k.kind].label} · <span className="tabular-nums">{k.rules}</span>
-                      </span>
-                    ))}
-                  </div>
+      <Section title="Модели" hint={`запросы идут через ${state.models.via}`} right={<Button size="sm" icon={ShieldCheck} onClick={checkModels}>Проверить</Button>}>
+        <div className="divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">
+          {([["main", "Судья и клиент", "оценивает диалоги и пишет реплики клиента", state.models.main], ["second", "Второй судья", "модель другого вендора, перепроверяет вердикты", state.models.second]] as const).map(([key, role, sub, model]) => (
+            <div key={key} className="px-4 py-3.5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-body font-medium text-lab-ink">{role}</div>
+                  <div className="mt-0.5 text-caption text-lab-mute">{sub}</div>
                 </div>
-                {withRules.map(src => {
-                  const meta = SOURCE[src.kind] ?? { label: src.kind, icon: BookOpen, tone: "" };
-                  return (
-                    <Row key={src.id} className="flex items-center gap-3 px-5 py-2.5">
-                      <meta.icon className="size-4 flex-shrink-0 text-lab-mute" />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-mono text-caption text-lab-text" title={src.origin}>{src.origin}</div>
-                        <div className="text-caption text-lab-mute">{meta.label} · {thousands(src.chars)}</div>
-                      </div>
-                      <span className="flex-shrink-0 text-body tabular-nums text-lab-ink">{count(src.rules, "критерий", "критерия", "критериев")}</span>
-                    </Row>
-                  );
-                })}
-                {hidden > 0 && <Row className="px-5 py-2.5 text-caption text-lab-mute">Ещё {count(hidden, "промпт", "промпта", "промптов")} без критериев скрыто: это классификаторы маршрутизации.</Row>}
-              </Panel>
-            ) : (
-              <EmptyState icon={Bot} title="Критерии ещё не собраны">Укажите репозиторий с кодом агента и нажмите «Собрать из кода». Из промптов и инструментов выделятся критерии проверки, у каждого — цитата-первоисточник.</EmptyState>
-            )}
-          </Section>
+                <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
+                  <span className="font-mono text-caption text-lab-text">{model ?? "новейшая из каталога"}</span>
+                  <Verdict check={checks[key]} />
+                </div>
+              </div>
+              <VerdictDetail check={checks[key]} />
+            </div>
+          ))}
         </div>
-      </div>
+        {state.models.via === "OpenRouter" && <p className="mt-2 text-caption text-lab-mute">Чтобы работать через шлюз банка, положите сертификаты в папку certs/.</p>}
+      </Section>
+
       {state.sources.length > 0 && (
         <NextStep done={logsDone} title="Оцените реальные диалоги" hint="Загрузите выгрузку чата: судья проверит записанные разговоры по этим критериям." to="/lab/logs" cta={logsDone ? "К логам" : "Загрузить логи"} />
       )}

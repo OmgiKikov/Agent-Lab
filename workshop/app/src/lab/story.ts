@@ -1,12 +1,11 @@
 /**
- * The Lab tells what it found in sentences: a headline verdict for the version, one line of detail, and a short list of observations.
- * The interface narrates the data, never itself. Every sentence here is computed from the same numbers the tables show,
+ * The Lab tells what it found in sentences: a headline verdict for the version, one line of detail, and at most two things worth a look.
+ * The interface narrates the data, never itself. Every sentence here is computed from the same numbers the page shows,
  * and every observation points to where its evidence is.
  */
-import { rate, type Compared, type Dialog } from "./criteria";
+import { rate, type Dialog } from "./criteria";
 import { trustOf } from "./findings";
-import { count, points } from "./format";
-import { disputed } from "./logic";
+import { count } from "./format";
 import type { Hue } from "./look";
 import type { Direction } from "./stats";
 import type { LabRun, LabState } from "./types";
@@ -21,71 +20,55 @@ export type Verdict = {
 };
 
 const HEADLINE: Record<Direction, (v: string, p: string) => string> = {
-  better: (v, p) => `Версия ${v} лучше, чем ${p}`,
-  "likely-better": (v, p) => `Версия ${v}, похоже, лучше ${p}`,
-  same: (v, p) => `Версия ${v} на уровне ${p}`,
-  "likely-worse": (v, p) => `Версия ${v}, похоже, хуже ${p}`,
-  worse: (v, p) => `Версия ${v} хуже, чем ${p}`,
+  better: (v, p) => `Версия ${v} лучше, чем ${p}.`,
+  "likely-better": (v, p) => `Версия ${v}, похоже, лучше ${p}.`,
+  same: (v, p) => `Версия ${v} на уровне ${p}.`,
+  "likely-worse": (v, p) => `Версия ${v}, похоже, хуже ${p}.`,
+  worse: (v, p) => `Версия ${v} хуже, чем ${p}.`,
 };
 
-const title = (c?: { title: string }) => (c ? `«${c.title}»` : "");
+/** The verdict's chip: one or two words in capitals, coloured only when the change is real. */
+export const VERDICT_CHIP: Record<Verdict["kind"], { text: string; hue: Hue }> = {
+  better: { text: "лучше", hue: "ok" }, "likely-better": { text: "в пределах шума", hue: "mute" }, same: { text: "на уровне", hue: "mute" },
+  "likely-worse": { text: "в пределах шума", hue: "mute" }, worse: { text: "хуже", hue: "bad" },
+  first: { text: "первая проверка", hue: "mute" }, logs: { text: "реальные диалоги", hue: "mute" }, none: { text: "нет данных", hue: "mute" },
+};
 
+/** One sentence and one number: the headline says better or worse, the detail says by how much. Everything else is on the page below it. */
 export function verdictOf(scope: Scope): Verdict {
-  const { finished, previous, sim, log, change, compared } = scope;
-  const broken = compared.filter(c => c.criterion.by.sim.failed > 0).sort((a, b) => b.criterion.by.sim.failed - a.criterion.by.sim.failed);
-  const top = broken[0]?.criterion;
-  const topLine = top ? ` Чаще всего нарушается ${title(top)}: ${top.by.sim.failed} из ${top.by.sim.failed + top.by.sim.passed}.` : " Нарушений не найдено.";
-
+  const { finished, previous, prevSim, sim, log, change } = scope;
   if (finished && sim.measured) {
     const share = sim.share ?? 0;
-    const cleanLine = `Без нарушений ${share}% диалогов симулятора: ${sim.clean} из ${sim.measured}.`;
     if (previous && change) {
-      const fresh = compared.filter(c => c.change === "new").length;
-      const fixed = compared.filter(c => c.change === "fixed").length;
-      const moved = change.delta === 0 ? "столько же, сколько в " + previous.version : `${points(change.delta)} к ${previous.version}`;
-      const noise = change.direction === "likely-better" || change.direction === "likely-worse"
-        ? ` На ${count(sim.measured, "диалоге", "диалогах", "диалогах")} такая разница может быть случайной: повторите проверку, чтобы убедиться.`
-        : "";
-      const criteriaLine = fresh || fixed
-        ? ` ${fixed ? `Исправлено ${count(fixed, "критерий", "критерия", "критериев")}` : "Исправленных нет"}, ${fresh ? `${count(fresh, "новое нарушение", "новых нарушения", "новых нарушений")}` : "новых нарушений нет"}.`
-        : "";
+      const before = prevSim?.share;
+      const noise = change.direction === "likely-better" || change.direction === "likely-worse";
       return {
         kind: change.direction,
         headline: HEADLINE[change.direction](finished.version, previous.version),
-        detail: `Без нарушений ${share}% диалогов, ${moved}.${criteriaLine}${noise}${noise ? "" : topLine}`,
+        detail: `Без нарушений ${share}% диалогов${before !== null && before !== undefined ? ` против ${before}% в ${previous.version}` : ""}.${noise ? ` На ${count(sim.measured, "диалоге", "диалогах", "диалогах")} такая разница может быть случайной: повторите проверку.` : ""}`,
       };
     }
-    return { kind: "first", headline: `Версия ${finished.version}: агент справляется в ${sim.clean} из ${sim.measured} диалогов`, detail: `${cleanLine}${topLine} Проверьте следующую версию, и здесь появится сравнение.` };
+    return {
+      kind: "first",
+      headline: `Версия ${finished.version}: без нарушений ${share}% диалогов.`,
+      detail: `Агент справился в ${sim.clean} из ${count(sim.measured, "диалога", "диалогов", "диалогов")}. Проверьте следующую версию, и здесь появится сравнение.`,
+    };
   }
   if (log.measured) {
     const failed = log.measured - log.clean;
-    const topLog = compared.filter(c => c.criterion.by.log.failed > 0).sort((a, b) => b.criterion.by.log.failed - a.criterion.by.log.failed)[0]?.criterion;
     return {
       kind: "logs",
-      headline: `В реальных диалогах агент нарушает критерии в ${failed} из ${log.measured}`,
-      detail: `Это оценка записанных разговоров, без запуска агента.${topLog ? ` Чаще всего нарушается ${title(topLog)}.` : ""} Прогоните симулятор, чтобы проверять версии агента до выкладки.`,
+      headline: `В реальных диалогах агент нарушает критерии в ${failed} из ${log.measured}.`,
+      detail: "Это оценка записанных разговоров. Проверьте версию на симуляторе, чтобы сравнивать версии до выкладки.",
     };
   }
-  return { kind: "none", headline: "Пока нечего оценивать", detail: "Подключите агента и загрузите логи: судья проверит разговоры по критериям из промптов агента." };
+  return { kind: "none", headline: "Пока нечего оценивать.", detail: "Подключите агента и загрузите логи: судья проверит разговоры по критериям из промптов агента." };
 }
 
-export type Observation = { id: string; hue: Hue; text: string; to?: string; cta?: string };
-
-/** What is worth knowing about the version beyond the headline, most important first. Each one says where to look. */
-export function observationsOf(scope: Scope, state: LabState): Observation[] {
+/** At most two things worth a look that the numbers above do not already say: a customer type the agent fails, unstable repeats. */
+export function attentionOf(scope: Scope, state: LabState): Observation[] {
   const out: Observation[] = [];
-  const { finished, sims, compared } = scope;
-  const link = (key: string) => `/lab/criteria/${encodeURIComponent(key)}`;
-  const decidedSims = sims.filter(d => d.status === "PASS" || d.status === "FAIL");
-
-  for (const c of compared.filter(x => x.change === "new").slice(0, 2)) {
-    out.push({ id: `new:${c.criterion.key}`, hue: "bad", text: `Новое нарушение в ${finished?.version}: «${c.criterion.title}» — ${c.criterion.by.sim.failed} из ${tally(c)}.`, to: link(c.criterion.key), cta: "Диалоги" });
-  }
-  for (const c of compared.filter(x => x.change === "fixed").slice(0, 2)) {
-    out.push({ id: `fixed:${c.criterion.key}`, hue: "ok", text: `Исправлено: «${c.criterion.title}» больше не нарушается (было в ${count(c.before, "диалоге", "диалогах", "диалогах")}).`, to: link(c.criterion.key), cta: "Критерий" });
-  }
-
-  // The customer type the agent handles worst, when the gap is visible.
+  const decidedSims = scope.sims.filter(d => d.status === "PASS" || d.status === "FAIL");
   const types = state.personas.map(p => {
     const own = decidedSims.filter(d => d.persona === p.id);
     return { p, n: own.length, share: own.length ? own.filter(d => d.status === "PASS").length / own.length : null };
@@ -94,36 +77,17 @@ export function observationsOf(scope: Scope, state: LabState): Observation[] {
     const worst = [...types].sort((a, b) => a.share! - b.share!)[0];
     const best = [...types].sort((a, b) => b.share! - a.share!)[0];
     if (best.share! - worst.share! >= 0.15) {
-      out.push({ id: "persona", hue: "warn", text: `Хуже всего агент справляется с типом «${worst.p.name}»: ${Math.round(100 * worst.share!)}% без нарушений против ${Math.round(100 * best.share!)}% у типа «${best.p.name}».`, to: "/lab/dialogs?view=map", cta: "Карта" });
+      out.push({ id: "persona", hue: "warn", text: `С типом «${worst.p.name}» агент справляется хуже: ${Math.round(100 * worst.share!)}% без нарушений против ${Math.round(100 * best.share!)}% у типа «${best.p.name}».`, to: "/lab/dialogs?view=map", cta: "Карта" });
     }
   }
-
-  // Handing the conversation to an operator instead of answering.
-  const handoff = decidedSims.filter(d => d.item?.conversation.some(m => m.role === "agent" && m.ok === false)).length;
-  if (handoff > 0) {
-    out.push({ id: "handoff", hue: "warn", text: `Передаёт разговор оператору вместо ответа в ${handoff} из ${count(decidedSims.length, "диалога", "диалогов", "диалогов")}.`, to: "/lab/dialogs", cta: "Диалоги" });
-  }
-
-  // Stability on repeats.
-  const repeats = finished?.metric?.repeats;
+  const repeats = scope.finished?.metric?.repeats;
   if (repeats && repeats.scenarios > 0 && repeats.stable < repeats.scenarios) {
-    const unstable = repeats.scenarios - repeats.stable;
-    out.push({ id: "repeats", hue: "warn", text: `На повторах результат меняется в ${unstable} из ${count(repeats.scenarios, "сценария", "сценариев", "сценариев")}: агент отвечает по-разному на один и тот же вопрос.`, to: "/lab/dialogs?view=map", cta: "Карта" });
+    out.push({ id: "repeats", hue: "warn", text: `На повторах результат меняется в ${repeats.scenarios - repeats.stable} из ${count(repeats.scenarios, "сценария", "сценариев", "сценариев")}: агент отвечает по-разному на один вопрос.`, to: "/lab/dialogs?view=map", cta: "Карта" });
   }
-
-  // The most frequent violation, if it is not already told as new.
-  const top = compared.filter(c => c.criterion.by.sim.failed > 0 && c.change !== "new").sort((a, b) => b.criterion.by.sim.failed - a.criterion.by.sim.failed)[0];
-  if (top) out.push({ id: `top:${top.criterion.key}`, hue: "bad", text: `Чаще всего нарушается «${top.criterion.title}»: ${top.criterion.by.sim.failed} из ${tally(top)}.`, to: link(top.criterion.key), cta: "Диалоги" });
-
-  // Disagreement between the judges: where a person should look.
-  const disputes = (finished?.items ?? []).filter(disputed).length;
-  if (disputes > 0) {
-    out.push({ id: "disputes", hue: "warn", text: `Судьи расходятся в ${count(disputes, "диалоге", "диалогах", "диалогах")}. Проверьте их вручную: так станет ясно, кто из судей прав.`, to: "/lab/judge/check", cta: "Проверить" });
-  }
-  return out;
+  return out.slice(0, 2);
 }
 
-const tally = (c: Compared) => count(c.criterion.by.sim.failed + c.criterion.by.sim.passed, "диалога", "диалогов", "диалогов");
+export type Observation = { id: string; hue: Hue; text: string; to?: string; cta?: string };
 
 export type Trust = {
   level: "pending" | "partial" | "ok";

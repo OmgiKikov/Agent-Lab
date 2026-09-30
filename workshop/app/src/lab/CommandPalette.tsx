@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Bookmark, CornerDownLeft, Play, Search, Settings, Sparkles, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { when } from "./format";
-import { NAV_ICON, buildNav, type NavExtra } from "./nav";
+import { NAV_ICON, STEP_HINT, buildNav, type NavExtra } from "./nav";
 import type { LabState, Step } from "./types";
 import { Kbd } from "./ui";
 
@@ -28,7 +28,7 @@ export function CommandPalette({ open, onClose, state, go, navigate, onPickRun, 
     if (onNewRun) out.push({ id: "new-run", group: "Действия", label: "Проверить версию", sub: "Симулятор сыграет сценарии, судья оценит диалоги", icon: Play, run: onNewRun });
     if (state?.runs.length) out.push({ id: "judge", group: "Действия", label: "Сверить судью", sub: "Пройти вердикты последней проверки: верно или нет", icon: NAV_ICON.judge, run: onJudge });
     out.push({ id: "ask", group: "Действия", label: "Спросить ассистента", sub: "Claude Code или Codex рядом с трейсами", icon: Sparkles, run: () => window.dispatchEvent(new Event("workshop:open-message-pane")) });
-    if (state) out.push(...buildNav(state, extra).map(n => ({ id: `nav-${n.id}`, group: "Разделы", label: n.title, icon: n.icon, run: () => go(n.id) })));
+    if (state) out.push(...buildNav(state, extra).map(n => ({ id: `nav-${n.id}`, group: "Разделы", label: n.title, sub: STEP_HINT[n.id], icon: n.icon, run: () => go(n.id) })));
     out.push(
       { id: "ws-runs", group: "Разделы", label: "Все трейсы", sub: "Workshop", icon: Activity, run: () => navigate("/runs") },
       { id: "ws-search", group: "Разделы", label: "Поиск по трейсам", sub: "Workshop", icon: Search, run: () => navigate("/search") },
@@ -54,7 +54,7 @@ export function CommandPalette({ open, onClose, state, go, navigate, onPickRun, 
   return (
     <Dialog.Root open={open} onOpenChange={o => { if (!o) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70" />
         <Dialog.Content
           aria-describedby={undefined}
           onKeyDown={e => {
@@ -62,7 +62,7 @@ export function CommandPalette({ open, onClose, state, go, navigate, onPickRun, 
             else if (e.key === "ArrowUp") { e.preventDefault(); setAt(a => Math.max(a - 1, 0)); }
             else if (e.key === "Enter") { e.preventDefault(); choose(shown[at]); }
           }}
-          className="fixed left-1/2 top-[16%] z-50 w-[calc(100vw-32px)] max-w-[620px] -translate-x-1/2 overflow-hidden rounded-xl border border-lab-edge bg-lab-raised shadow-pop outline-none"
+          className="fixed left-1/2 top-[16%] z-50 w-[calc(100vw-32px)] max-w-[620px] -translate-x-1/2 overflow-hidden rounded-lg border border-lab-edge bg-lab-raised shadow-pop outline-none"
         >
           <Dialog.Title className="sr-only">Поиск и команды</Dialog.Title>
           <div className="flex items-center gap-2.5 border-b border-lab-line px-4">
@@ -79,10 +79,10 @@ export function CommandPalette({ open, onClose, state, go, navigate, onPickRun, 
               lastGroup = e.group;
               return (
                 <div key={e.id}>
-                  {header && <div className="px-2.5 pb-1 pt-3 text-caption font-medium text-lab-mute">{header}</div>}
+                  {header && <div className="lab-label px-2.5 pb-1 pt-3 text-lab-mute">{header}</div>}
                   <button
                     data-index={i} onClick={() => choose(e)} onMouseMove={() => setAt(i)}
-                    className={cn("flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left", i === at && "bg-lab-active")}
+                    className={cn("flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left", i === at && "bg-white/[0.07]")}
                   >
                     <e.icon className={cn("size-4 flex-shrink-0", i === at ? "text-lab-ink" : "text-lab-mute")} />
                     <span className="min-w-0 flex-1">

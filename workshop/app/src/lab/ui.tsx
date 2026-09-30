@@ -1,8 +1,9 @@
 /**
- * Building blocks of Agent Lab: one visual language for every screen (docs/DESIGN.md).
+ * Building blocks of Agent Lab: one visual language for every screen, Raindrop's (docs/DESIGN.md).
+ * A black canvas, hairlines, tiny mono labels over values, colour only for meaning.
  * Colours come from the `lab-*` tokens (index.css, tailwind.config.js), sizes from the named type scale
- * (text-caption 12, text-body 13, text-reading 14, text-lead 16, text-title 20, text-display 28, text-metric 40, text-hero 72).
- * No inline hex, no arbitrary text sizes, no mono outside identifiers and code.
+ * (text-caption 12, text-body 13, text-reading 14, text-lead 16, text-title 20, text-display 30, text-metric 30).
+ * No inline hex, no arbitrary text sizes, mono only for labels (`Label`), identifiers and code.
  */
 import { createContext, forwardRef, useContext, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { ArrowDown, ArrowUp, Check, CircleHelp, Equal, Loader2, Minus, X, type LucideIcon } from "lucide-react";
@@ -11,14 +12,20 @@ import { HUE, STATUS_TEXT, personaLook, personaName, statusHue, type Hue } from 
 import type { Direction } from "./stats";
 import type { Persona, Status } from "./types";
 
-/** @deprecated The UI font is also the title font now; kept so older call sites compile. */
-export const titleFont = {};
+/* ---------- type ---------- */
+
+/** Raindrop's instrument label: mono capitals, 10 px, over a value, a column or a group. One to three words, never a sentence. */
+export function Label({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("lab-label text-lab-mute", className)} {...rest} />;
+}
+/** @deprecated The same thing as `Label`. */
+export const Eyebrow = Label;
 
 /* ---------- surfaces ---------- */
 
-/** A raised region: a card, a list, a form. One step lighter than the canvas and a hairline. */
+/** A real boundary: a list, a form, a strip. One step lighter than the canvas and a hairline. Never a panel inside a panel. */
 export function Panel({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("rounded-xl border border-lab-line bg-lab-panel", className)} {...rest} />;
+  return <div className={cn("rounded-lg border border-lab-line bg-lab-panel", className)} {...rest} />;
 }
 export const Card = Panel;
 
@@ -27,20 +34,23 @@ export function Row({ className, first, ...rest }: HTMLAttributes<HTMLDivElement
   return <div className={cn(!first && "border-t border-lab-line", className)} {...rest} />;
 }
 
-/** A small label above a value or a group: sentence case, never uppercase mono (Cyrillic caps read badly). */
-export function Eyebrow({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("text-caption font-medium text-lab-mute", className)} {...rest} />;
-}
-export const Label = Eyebrow;
-
-/** A titled block of a page. `hint` is one line of state or instruction, not a description of the block. */
-export function Section({ title, hint, right, children, className, id }: { title: ReactNode; hint?: ReactNode; right?: ReactNode; children: ReactNode; className?: string; id?: string }) {
+/**
+ * A block of a page: a mono label with an optional count, the content right under it.
+ * `hint` is one short line of state, not a description of the block; most blocks need none.
+ */
+export function Section({ title, count, hint, right, children, className, id, tone }: {
+  title: ReactNode; count?: ReactNode; hint?: ReactNode; right?: ReactNode; children: ReactNode; className?: string; id?: string;
+  /** A dot before the label, when the block is about a state (new violations, fixed). */
+  tone?: Hue;
+}) {
   return (
     <section className={cn("mt-10", className)} id={id} aria-label={typeof title === "string" ? title : undefined}>
-      <div className="mb-3 flex items-end justify-between gap-4">
-        <div className="min-w-0">
-          <h2 className="text-lead font-semibold text-lab-ink">{title}</h2>
-          {hint && <p className="mt-0.5 text-body text-lab-mute">{hint}</p>}
+      <div className="mb-2.5 flex min-h-6 items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-2">
+          {tone && <span className={cn("size-1.5 flex-shrink-0 rounded-full", HUE[tone].solid)} aria-hidden />}
+          <h2 className="lab-label text-lab-soft">{title}</h2>
+          {count !== undefined && count !== null && <span className="lab-label tabular-nums text-lab-faint">{count}</span>}
+          {hint && <span className="hidden min-w-0 truncate text-caption text-lab-mute sm:inline">· {hint}</span>}
         </div>
         {right && <div className="flex flex-shrink-0 items-center gap-2">{right}</div>}
       </div>
@@ -52,48 +62,57 @@ export function Section({ title, hint, right, children, className, id }: { title
 /* ---------- page ---------- */
 
 /**
- * What every page header carries on the right besides its own actions: the version being looked at and the one primary action
- * of the product («Проверить версию»). Provided by LabPage, so a view only says what is its own.
+ * What every result page's header carries on the right besides its own actions: the version being looked at
+ * and the product's main action («Проверить версию»). Provided by LabContext, so a view only says what is its own.
  */
 export const ChromeContext = createContext<{ context?: ReactNode; primary?: ReactNode }>({});
 
 /**
- * A page: a sticky header (title, the global context, actions), then the content in a readable column.
- * `crumb` is the way back for detail pages («Критерии»), `lede` one line of the page's state — a conclusion, never a description of the page.
- * `bare` hides the global context and primary action (setup pages carry their own).
+ * A page: a 52 px header (where you are, the page's actions), then the content in one column.
+ * `crumb` is the way back for detail pages. `primary` replaces the global primary action with the page's own
+ * (null hides it); `bare` hides the version and the global action (setup pages).
  */
-export function Page({ title, count, crumb, lede, actions, wide, narrow, nav, bare, children }: {
-  title: ReactNode; count?: ReactNode; crumb?: { label: string; onClick: () => void }; lede?: ReactNode; actions?: ReactNode;
-  wide?: boolean; narrow?: boolean; nav?: ReactNode; bare?: boolean; children?: ReactNode;
+export function Page({ title, icon: Icon, count, crumb, lede, actions, primary, wide, narrow, full, fill, nav, bare, noContext, children }: {
+  title: ReactNode; icon?: LucideIcon; count?: ReactNode; crumb?: { label: string; onClick: () => void }; lede?: ReactNode; actions?: ReactNode;
+  primary?: ReactNode | null; wide?: boolean; narrow?: boolean; full?: boolean;
+  /** A list and its detail side by side, each scrolling on its own (Workshop's layout): the content takes the whole height, no padding. */
+  fill?: boolean;
+  nav?: ReactNode; bare?: boolean;
+  /** The page's title already names the version (the version page). */
+  noContext?: boolean; children?: ReactNode;
 }) {
   const chrome = useContext(ChromeContext);
-  const width = narrow ? "max-w-[800px]" : wide ? "max-w-[1200px]" : "max-w-[1080px]";
+  const width = full ? "" : narrow ? "max-w-[800px]" : wide ? "max-w-[1200px]" : "max-w-[1080px]";
+  const main = primary === undefined ? (bare ? null : chrome.primary) : primary;
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-20 border-b border-lab-line bg-lab-canvas/85 backdrop-blur-md">
-        <div className="flex h-14 items-center gap-3 px-6">
+    <div className={cn("flex flex-col", fill ? "h-full" : "min-h-full")}>
+      <header className={cn("top-0 z-20 flex-shrink-0 border-b border-lab-line bg-lab-canvas/90 backdrop-blur-md", !fill && "sticky")}>
+        <div className="flex h-[52px] items-center gap-3 px-5">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             {crumb && (
               <>
-                <button onClick={crumb.onClick} className="lab-focus -ml-1.5 rounded-md px-1.5 py-1 text-body text-lab-mute transition-colors duration-100 hover:text-lab-ink">{crumb.label}</button>
+                <button onClick={crumb.onClick} className="lab-focus -ml-1.5 min-w-0 truncate rounded-md px-1.5 py-1 text-body text-lab-mute transition-colors duration-100 hover:text-lab-ink">{crumb.label}</button>
                 <span className="text-body text-lab-faint" aria-hidden>/</span>
               </>
             )}
-            <h1 className="min-w-0 truncate text-body font-semibold text-lab-ink">{title}</h1>
+            {Icon && !crumb && <Icon className="size-4 flex-shrink-0 text-lab-mute" aria-hidden />}
+            {typeof title === "string" ? <h1 className="min-w-0 truncate text-body font-semibold text-lab-ink">{title}</h1> : <div className="min-w-0">{title}</div>}
             {count !== undefined && count !== null && <span className="text-body tabular-nums text-lab-mute">{count}</span>}
           </div>
-          <div className="flex flex-shrink-0 items-center gap-2">
+          <div className="flex flex-shrink-0 items-center gap-1.5">
             {actions}
-            {!bare && chrome.context}
-            {!bare && chrome.primary}
+            {!bare && !noContext && chrome.context}
+            {main}
           </div>
         </div>
-        {nav && <div className="px-6">{nav}</div>}
+        {nav && <div className="px-5">{nav}</div>}
       </header>
-      <div className={cn("mx-auto w-full flex-1 px-6 pb-20", width)}>
-        {lede && <p className="mt-6 max-w-[720px] text-pretty text-reading text-lab-text">{lede}</p>}
-        {children}
-      </div>
+      {fill ? <div className="flex min-h-0 flex-1">{children}</div> : (
+        <div className={cn("mx-auto w-full flex-1 px-5 pb-20 sm:px-8", width)}>
+          {lede && <p className="mt-6 max-w-[720px] text-pretty text-reading text-lab-soft">{lede}</p>}
+          {children}
+        </div>
+      )}
     </div>
   );
 }
@@ -109,17 +128,18 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   kbd?: string;
 };
 
+/** Raindrop's buttons: outlined and quiet; the one primary is light, like its «Ask Claude Code» tab. */
 const BUTTON_VARIANT = {
-  primary: "bg-lab-ink text-lab-canvas hover:bg-white",
+  primary: "bg-lab-ink text-black hover:bg-white",
   accent: "bg-lab-accent-solid text-white hover:bg-lab-accent-solid/90",
-  secondary: "border border-lab-edge bg-lab-raised text-lab-ink hover:border-lab-strong hover:bg-lab-active",
-  ghost: "text-lab-mute hover:bg-lab-raised hover:text-lab-ink",
+  secondary: "border border-lab-edge bg-white/[0.04] text-lab-text hover:border-lab-strong hover:bg-white/[0.08] hover:text-lab-ink",
+  ghost: "text-lab-mute hover:bg-white/[0.06] hover:text-lab-ink",
   danger: "bg-lab-bad/10 text-lab-bad hover:bg-lab-bad/20",
 };
 
 const BUTTON_SIZE = { sm: "h-7 gap-1.5 px-2.5 text-caption", md: "h-8 gap-1.5 px-3 text-body", lg: "h-10 gap-2 px-4 text-reading" };
 
-/** Sans, sentence case, verb first. One primary per region; the primary is light, colour is kept for meaning. */
+/** Sans, sentence case, verb first. One primary per region. */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   { variant = "secondary", size = "md", icon: Icon, loading, kbd, className, children, disabled, ...rest }, ref,
 ) {
@@ -136,7 +156,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     >
       {loading ? <Loader2 className="size-3.5 animate-spin" /> : Icon && <Icon className={size === "lg" ? "size-4" : "size-3.5"} />}
       {children}
-      {kbd && <kbd className={cn("ml-0.5 font-sans text-caption", variant === "primary" ? "text-lab-canvas/50" : "text-lab-faint")}>{kbd}</kbd>}
+      {kbd && <kbd className={cn("ml-0.5 font-mono text-micro", variant === "primary" ? "text-black/45" : "text-lab-faint")}>{kbd}</kbd>}
     </button>
   );
 });
@@ -144,24 +164,24 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 /** An icon-only button. `label` is required: it is the tooltip and what a screen reader says. */
 export function IconButton({ icon: Icon, label, className, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { icon: LucideIcon; label: string }) {
   return (
-    <button aria-label={label} title={label} className={cn("lab-focus inline-flex size-8 flex-shrink-0 items-center justify-center rounded-md text-lab-mute transition-colors duration-100 hover:bg-lab-raised hover:text-lab-ink disabled:opacity-40", className)} {...rest}>
+    <button aria-label={label} title={label} className={cn("lab-focus inline-flex size-8 flex-shrink-0 items-center justify-center rounded-md text-lab-mute transition-colors duration-100 hover:bg-white/[0.06] hover:text-lab-ink disabled:opacity-40", className)} {...rest}>
       <Icon className="size-4" />
     </button>
   );
 }
 
-/** A text action inside a sentence or a card: «Все критерии →». */
+/** A text action inside a sentence or a block: «Все диалоги →». */
 export function LinkButton({ className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button className={cn("lab-focus inline-flex items-center gap-1 rounded-sm text-body font-medium text-lab-accent transition-colors duration-100 hover:text-lab-ink", className)} {...rest}>{children}</button>;
+  return <button className={cn("lab-focus inline-flex items-center gap-1 rounded-sm text-body text-lab-soft underline decoration-white/20 underline-offset-4 transition-colors duration-100 hover:text-lab-ink hover:decoration-white/60", className)} {...rest}>{children}</button>;
 }
 
 export function Kbd({ children, className }: { children: ReactNode; className?: string }) {
-  return <kbd className={cn("inline-flex h-5 min-w-5 items-center justify-center rounded border border-lab-edge bg-lab-raised px-1 font-sans text-micro font-medium text-lab-mute", className)}>{children}</kbd>;
+  return <kbd className={cn("inline-flex h-[18px] min-w-[18px] items-center justify-center rounded border border-lab-edge bg-white/[0.04] px-1 font-mono text-micro text-lab-mute", className)}>{children}</kbd>;
 }
 
 export const inputClass = cn(
-  "h-8 w-full rounded-md border border-lab-edge bg-lab-canvas px-2.5 text-body text-lab-ink outline-none transition-colors duration-100",
-  "placeholder:text-lab-faint hover:border-lab-strong focus:border-lab-accent/60 focus:ring-2 focus:ring-lab-accent/20",
+  "h-8 w-full rounded-md border border-lab-line bg-white/[0.04] px-2.5 text-body text-lab-ink outline-none transition-colors duration-100",
+  "placeholder:text-lab-faint hover:border-lab-edge focus:border-lab-accent/60 focus:ring-2 focus:ring-lab-accent/20",
 );
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { mono?: boolean }>(function Input({ className, mono, ...rest }, ref) {
@@ -175,7 +195,7 @@ export function TextArea({ className, mono, ...rest }: TextareaHTMLAttributes<HT
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-body font-medium text-lab-ink">{label}</span>
+      <span className="mb-1.5 block text-body font-medium text-lab-text">{label}</span>
       {children}
       {hint && <span className="mt-1.5 block text-caption text-lab-mute">{hint}</span>}
     </label>
@@ -186,13 +206,13 @@ export function Segmented<T extends string | number>({ value, options, onChange,
   value: T; options: { value: T; label: ReactNode; title?: string }[]; onChange: (v: T) => void; className?: string;
 }) {
   return (
-    <div role="radiogroup" className={cn("inline-flex gap-0.5 rounded-lg border border-lab-line bg-lab-panel p-0.5", className)}>
+    <div role="radiogroup" className={cn("inline-flex gap-0.5 rounded-md border border-lab-line bg-white/[0.02] p-0.5", className)}>
       {options.map(o => (
         <button
           key={String(o.value)} role="radio" aria-checked={o.value === value} title={o.title} onClick={() => onChange(o.value)}
           className={cn(
-            "lab-focus inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-body transition-colors duration-100",
-            o.value === value ? "bg-lab-active text-lab-ink shadow-card" : "text-lab-mute hover:text-lab-ink",
+            "lab-focus inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-body transition-colors duration-100",
+            o.value === value ? "bg-white/[0.09] text-lab-ink" : "text-lab-mute hover:text-lab-ink",
           )}
         >
           {o.label}
@@ -202,16 +222,16 @@ export function Segmented<T extends string | number>({ value, options, onChange,
   );
 }
 
-/** Underlined tabs. */
+/** Underlined tabs, as in Workshop's trace view (Обзор · Спаны · Диалог). */
 export function Tabs<T extends string>({ value, tabs, onChange, flush }: { value: T; tabs: { value: T; label: ReactNode }[]; onChange: (v: T) => void; flush?: boolean }) {
   return (
-    <div role="tablist" className={cn("flex flex-shrink-0 gap-1", flush ? "-ml-2" : "border-b border-lab-line px-4")}>
+    <div role="tablist" className={cn("flex flex-shrink-0 gap-4", flush ? "" : "border-b border-lab-line px-5")}>
       {tabs.map(t => (
         <button
           key={t.value} role="tab" aria-selected={t.value === value} onClick={() => onChange(t.value)}
           className={cn(
-            "lab-focus-inset -mb-px inline-flex h-10 items-center gap-1.5 border-b-2 px-2 text-body font-medium transition-colors duration-100",
-            t.value === value ? "border-lab-ink text-lab-ink" : "border-transparent text-lab-mute hover:text-lab-ink",
+            "lab-focus-inset -mb-px inline-flex h-10 items-center gap-1.5 border-b-2 text-body transition-colors duration-100",
+            t.value === value ? "border-lab-ink font-medium text-lab-ink" : "border-transparent text-lab-mute hover:text-lab-ink",
           )}
         >
           {t.label}
@@ -221,21 +241,21 @@ export function Tabs<T extends string>({ value, tabs, onChange, flush }: { value
   );
 }
 
-/** «label value», for facts in a header. */
-export function Meta({ label, children }: { label: string; children: ReactNode }) {
+/** A fact in a header, as in Workshop: a mono label chip, then the value. */
+export function Meta({ label, children, title }: { label: string; children: ReactNode; title?: string }) {
   return (
-    <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap text-body">
-      <span className="text-lab-mute">{label}</span>
-      <span className="tabular-nums text-lab-text">{children}</span>
+    <span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-caption" title={title}>
+      <span className="lab-label rounded-sm bg-white/[0.08] px-1 text-lab-mute">{label}</span>
+      <span className="min-w-0 truncate tabular-nums text-lab-soft">{children}</span>
     </span>
   );
 }
 
-/** A tool the agent called in a conversation. */
+/** A tool the agent called in a conversation: Workshop's tool pill. */
 export function ToolPill({ name }: { name: string }) {
   return (
-    <span className="inline-flex h-6 items-center gap-1.5 rounded-md border border-lab-edge bg-lab-raised px-2 text-caption font-medium text-lab-text">
-      <Check className="size-3 text-lab-mute" strokeWidth={2.5} />{name}
+    <span className="inline-flex h-6 items-center gap-1.5 rounded-md border border-lab-edge px-2 font-mono text-micro normal-case tracking-normal text-lab-soft">
+      <Check className="size-3 text-lab-ok" strokeWidth={2.5} />{name}
     </span>
   );
 }
@@ -246,13 +266,13 @@ export function Chip({ on, onClick, children, count, hue }: { on?: boolean; onCl
     <button
       onClick={onClick} aria-pressed={on}
       className={cn(
-        "lab-focus inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-body transition-colors duration-100",
-        on ? "border-lab-strong bg-lab-active text-lab-ink" : "border-lab-edge text-lab-mute hover:border-lab-strong hover:text-lab-ink",
+        "lab-focus inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-body transition-colors duration-100",
+        on ? "border-lab-strong bg-white/[0.08] text-lab-ink" : "border-lab-line text-lab-mute hover:border-lab-edge hover:text-lab-ink",
       )}
     >
       {hue && <span className={cn("size-1.5 rounded-full", HUE[hue].solid)} />}
       {children}
-      {count !== undefined && <span className={cn("tabular-nums", on ? "text-lab-text" : "text-lab-faint")}>{count}</span>}
+      {count !== undefined && <span className={cn("tabular-nums", on ? "text-lab-soft" : "text-lab-faint")}>{count}</span>}
     </button>
   );
 }
@@ -262,20 +282,33 @@ export function Chip({ on, onClick, children, count, hue }: { on?: boolean; onCl
 /** `quiet`: a pass is grey, so in a long list only failures and gaps stand out. */
 export function Dot({ status, pulse, quiet, className }: { status: Status | string; pulse?: boolean; quiet?: boolean; className?: string }) {
   const solid = quiet && status === "PASS" ? "bg-lab-faint" : HUE[statusHue(status)].solid;
-  return <span className={cn("size-2 flex-shrink-0 rounded-full", solid, pulse && "pulse-dot", className)} />;
+  return <span className={cn("size-1.5 flex-shrink-0 rounded-full", solid, pulse && "pulse-dot", className)} />;
 }
 
 /** A tag: muted tint of a hue. Read-only: it never looks like a button. */
 export function Badge({ hue = "mute", icon: Icon, children, className, title }: { hue?: Hue; icon?: LucideIcon; children: ReactNode; className?: string; title?: string }) {
   const h = HUE[hue];
   return (
-    <span title={title} className={cn("inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-caption font-medium tabular-nums", h.bg, h.text, className)}>
+    <span title={title} className={cn("inline-flex h-5 items-center gap-1 whitespace-nowrap rounded px-1.5 text-caption tabular-nums", h.bg, h.text, className)}>
       {Icon && <Icon className="size-3" strokeWidth={2.5} />}
       {children}
     </span>
   );
 }
 export const Tag = Badge;
+
+/**
+ * Raindrop's verdict chip: mono capitals on a tint — ЛУЧШЕ, ХУЖЕ, НОВОЕ, ИСПРАВЛЕНО, В ПРЕДЕЛАХ ШУМА.
+ * `solid` is for the one verdict of a page.
+ */
+export function Verdict({ hue = "mute", solid, children, className, title }: { hue?: Hue; solid?: boolean; children: ReactNode; className?: string; title?: string }) {
+  const h = HUE[hue];
+  return (
+    <span title={title} className={cn("lab-label inline-flex h-5 flex-shrink-0 items-center rounded-sm px-1.5", solid && hue !== "mute" ? cn(h.solid, "text-black") : cn(h.bg, h.text), className)}>
+      {children}
+    </span>
+  );
+}
 
 const STATUS_ICON: Record<Status, LucideIcon> = { PASS: Check, FAIL: X, RUNNING: Loader2, UNMEASURED: CircleHelp, UNKNOWN: CircleHelp, NOT_APPLICABLE: Minus };
 
@@ -289,12 +322,13 @@ export function StatusBadge({ status, children }: { status: Status | string; chi
   return <Badge hue={statusHue(status)} icon={Icon}>{children ?? STATUS_TEXT[status as Status] ?? status}</Badge>;
 }
 
-/** A round status mark: ✓ / ✕ / – / ? inside a tinted circle. Shape and colour together, never colour alone. */
-export function StatusMark({ status, size = 20 }: { status: Status | string; size?: number }) {
+/** A status mark: ✓ / ✕ / – / ? inside a tinted square. Shape and colour together, never colour alone. A pass stays quiet. */
+export function StatusMark({ status, size = 20, loud }: { status: Status | string; size?: number; loud?: boolean }) {
   const h = HUE[statusHue(status)];
+  const quiet = status === "PASS" && !loud;
   return (
-    <span className={cn("inline-flex flex-shrink-0 items-center justify-center rounded-full", h.bgStrong, h.text)} style={{ width: size, height: size }}>
-      <StatusIcon status={status} size={Math.round(size * 0.55)} />
+    <span className={cn("inline-flex flex-shrink-0 items-center justify-center rounded", quiet ? "bg-white/[0.05] text-lab-mute" : cn(h.bgStrong, h.text))} style={{ width: size, height: size }}>
+      <StatusIcon status={status} size={Math.round(size * 0.58)} />
     </span>
   );
 }
@@ -303,26 +337,45 @@ export function StatusMark({ status, size = 20 }: { status: Status | string; siz
 export function StackBar({ parts, className }: { parts: { value: number; hue?: Hue; tone?: string }[]; className?: string }) {
   const shown = parts.filter(p => p.value > 0);
   return (
-    <div className={cn("flex h-1.5 gap-[2px] overflow-hidden rounded-full", className)}>
+    <div className={cn("flex h-1.5 gap-[2px] overflow-hidden rounded-sm", className)}>
       {shown.length ? shown.map((p, i) => <div key={i} className={cn("h-full", p.tone ?? HUE[p.hue ?? "mute"].solid)} style={{ flex: p.value }} />) : <div className="h-full flex-1 bg-white/[0.07]" />}
     </div>
   );
 }
 
-/** A share as a thin bar. Grey by default: a bar is colored only when its value is a problem. */
+/** A share as a thin bar. Grey by default: a bar is coloured only when its value is a problem. */
 export function Meter({ value, hue, className }: { value: number; hue?: Hue; className?: string }) {
   return (
-    <div className={cn("h-1 w-full overflow-hidden rounded-full bg-white/[0.07]", className)}>
-      <div className={cn("h-full rounded-full", hue ? HUE[hue].solid : "bg-lab-mute")} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+    <div className={cn("h-1 w-full overflow-hidden rounded-sm bg-white/[0.07]", className)}>
+      <div className={cn("h-full rounded-sm", hue ? HUE[hue].solid : "bg-lab-mute")} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
     </div>
   );
 }
 
 export function Progress({ value, className }: { value: number; className?: string }) {
   return (
-    <div className={cn("h-[3px] w-full overflow-hidden bg-white/[0.06]", className)} role="progressbar" aria-valuenow={Math.round(value)} aria-valuemin={0} aria-valuemax={100}>
+    <div className={cn("h-[2px] w-full overflow-hidden bg-white/[0.06]", className)} role="progressbar" aria-valuenow={Math.round(value)} aria-valuemin={0} aria-valuemax={100}>
       <div className="h-full bg-lab-accent transition-[width] duration-500 ease-out" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
     </div>
+  );
+}
+
+/**
+ * Raindrop's trend column: one bar per version, the last one is this version. `values` are shares 0–100 of what is counted
+ * (violations), null where the version did not measure it. A bar is red only when it is this version's and not zero.
+ */
+export function TrendBars({ values, labels, height = 20, className, hue = "bad" }: { values: (number | null)[]; labels?: string[]; height?: number; className?: string; hue?: Hue }) {
+  const last = values.length - 1;
+  return (
+    <span className={cn("inline-flex items-end gap-[3px]", className)} style={{ height }} aria-hidden>
+      {values.map((v, i) => (
+        <span
+          key={i} title={labels ? `${labels[i]}: ${v === null ? "не проверялся" : `${v}%`}` : undefined}
+          className={cn("w-[5px] rounded-[1px]", v === null ? "bg-white/[0.06]" : i === last ? (v > 0 ? HUE[hue].solid : "bg-lab-mute") : "bg-white/25")}
+          style={{ height: v === null ? 2 : Math.max(2, Math.round((height * v) / 100)) }}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -352,71 +405,108 @@ export function Delta({ value, unit = "п.п.", direction, className }: { value:
  */
 export function IntervalBar({ value, low, high, className }: { value: number; low: number; high: number; className?: string }) {
   return (
-    <div className={cn("relative h-2 w-full rounded-full bg-white/[0.06]", className)} aria-hidden>
-      <div className="absolute inset-y-0 rounded-full bg-white/[0.14]" style={{ left: `${100 * low}%`, width: `${100 * Math.max(0.005, high - low)}%` }} />
-      <div className="absolute -top-1 h-4 w-[3px] -translate-x-1/2 rounded-full bg-lab-ink" style={{ left: `${100 * value}%` }} />
+    <div className={cn("relative h-1.5 w-full rounded-sm bg-white/[0.06]", className)} aria-hidden>
+      <div className="absolute inset-y-0 rounded-sm bg-white/[0.16]" style={{ left: `${100 * low}%`, width: `${100 * Math.max(0.005, high - low)}%` }} />
+      <div className="absolute -top-1 h-3.5 w-[2px] -translate-x-1/2 rounded-full bg-lab-ink" style={{ left: `${100 * value}%` }} />
     </div>
   );
+}
+
+/* ---------- numbers ---------- */
+
+/** Raindrop's metric strip: one surface, the metrics side by side, each a label, a value and one line of context. It never wraps: it scrolls. */
+export function Strip({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cn("overflow-x-auto rounded-lg border border-lab-line bg-lab-panel", className)}>
+      <div className="flex min-w-max divide-x divide-lab-line">{children}</div>
+    </div>
+  );
+}
+
+/** One metric of a strip. `onClick` makes it a way to the evidence behind the number. */
+export function Stat({ label, value, sub, hue, onClick, className, children }: {
+  label: ReactNode; value: ReactNode; sub?: ReactNode; hue?: Hue; onClick?: () => void; className?: string; children?: ReactNode;
+}) {
+  const body = (
+    <>
+      <Label>{label}</Label>
+      <div className={cn("mt-2 text-metric font-medium tabular-nums", hue === "mute" ? "text-lab-soft" : hue ? HUE[hue].text : "text-lab-ink")}>{value}</div>
+      {sub && <div className="mt-1 text-caption text-lab-mute">{sub}</div>}
+      {children}
+    </>
+  );
+  const box = "flex min-w-[150px] flex-1 flex-col items-start justify-start px-5 py-4 text-left";
+  return onClick
+    ? <button onClick={onClick} className={cn("lab-focus-inset group transition-colors duration-100 hover:bg-white/[0.03]", box, className)}>{body}</button>
+    : <div className={cn(box, className)}>{body}</div>;
 }
 
 /* ---------- content ---------- */
 
 /** Placeholder of a block that is still loading: mirrors the final layout. */
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-lg bg-white/[0.05]", className)} />;
-}
-
-/** A number with a label. The number is the loudest thing in the block. */
-export function Stat({ label, value, sub, hue, className }: { label: string; value: ReactNode; sub?: ReactNode; hue?: Hue; className?: string }) {
-  return (
-    <Panel className={cn("px-4 py-3.5", className)}>
-      <Eyebrow>{label}</Eyebrow>
-      <div className={cn("mt-1 text-display font-semibold tabular-nums", hue ? HUE[hue].text : "text-lab-ink")}>{value}</div>
-      {sub && <div className="mt-0.5 text-caption text-lab-mute">{sub}</div>}
-    </Panel>
-  );
+  return <div className={cn("animate-pulse rounded-md bg-white/[0.05]", className)} />;
 }
 
 /** A quote with its source: what the agent said, or the line of the prompt a criterion comes from. */
 export function Quote({ who, tone, children }: { who: string; tone?: "bad" | "ok"; children: ReactNode }) {
   return (
     <figure className={cn("mt-2.5 border-l-2 pl-3", tone === "bad" ? "border-lab-bad/70" : tone === "ok" ? "border-lab-ok/60" : "border-lab-strong")}>
-      <figcaption className="mb-0.5 text-caption text-lab-mute">{who}</figcaption>
+      <figcaption className="lab-label mb-1 text-lab-mute">{who}</figcaption>
       <blockquote className={cn("text-body", tone === "bad" ? "text-lab-ink" : "text-lab-text")}>{children}</blockquote>
     </figure>
   );
 }
 
-/** A customer's message. */
+/** A customer's message: Raindrop's teal bubble. */
 export function Bubble({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cn("max-w-full rounded-2xl rounded-br-md bg-lab-user px-3.5 py-2 text-reading text-lab-ink", className)}>{children}</div>;
 }
 
-/** The mark of Agent Lab: a conversation bubble with a tick — a dialogue that was checked. */
+/** The pixels of the mark: a speech bubble with a tick, on Raindrop's dot-matrix grid (11 × 11). */
+const MARK = [
+  ".XXXXXXXXX.",
+  "X.........X",
+  "X.......X.X",
+  "X......X..X",
+  "X.X...X...X",
+  "X..X.X....X",
+  "X...X.....X",
+  "X.........X",
+  ".XXXXXXXXX.",
+  "..XX.......",
+  "..X........",
+];
+
+/** The mark of Agent Lab: a checked dialogue, drawn in pixels like Raindrop's drop. */
 export function LabMark({ size = 20, className }: { size?: number; className?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 20 20" fill="none" className={className} aria-hidden>
-      <path d="M4 3.5h12a2.5 2.5 0 0 1 2.5 2.5v6.5A2.5 2.5 0 0 1 16 15h-5.2l-3.6 2.9c-.5.4-1.2 0-1.2-.6V15H4a2.5 2.5 0 0 1-2.5-2.5V6A2.5 2.5 0 0 1 4 3.5Z" fill="currentColor" fillOpacity=".14" stroke="currentColor" strokeWidth="1.3" />
-      <path d="m6.6 9.3 2.2 2.2 4.6-4.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width={size} height={size} viewBox="0 0 22 22" className={className} aria-hidden>
+      {MARK.flatMap((row, y) => [...row].map((c, x) => c === "X"
+        ? <rect key={`${x}-${y}`} x={x * 2 + 0.2} y={y * 2 + 0.2} width={1.6} height={1.6} rx={0.3} fill="currentColor" />
+        : null))}
     </svg>
   );
 }
 
-/** An empty state names what is missing, why it matters and the next step. `drop` is kept for older call sites: it shows the Lab's mark. */
+/**
+ * An empty state, Raindrop's way: on the canvas, not in a box. The mark, what is missing in one line, why in one sentence, one action.
+ * `drop` is kept for older call sites.
+ */
 export function EmptyState({ icon: Icon, drop, title, children, action, className }: { icon?: LucideIcon; drop?: boolean; title: string; children?: ReactNode; action?: ReactNode; className?: string }) {
   return (
-    <div className={cn("flex flex-col items-center rounded-xl border border-lab-line bg-lab-panel/60 px-8 py-12 text-center", className)}>
-      <span className="mb-4 inline-flex size-10 items-center justify-center rounded-xl bg-lab-raised text-lab-mute">
+    <div className={cn("flex flex-col items-center px-6 py-14 text-center", className)}>
+      <span className="mb-5 inline-flex size-11 items-center justify-center rounded-lg border border-lab-line bg-lab-panel text-lab-mute">
         {Icon && !drop ? <Icon className="size-5" /> : <LabMark size={22} />}
       </span>
-      <div className="text-lead font-semibold text-lab-ink">{title}</div>
-      {children && <div className="mt-1.5 max-w-[460px] text-pretty text-body text-lab-mute">{children}</div>}
-      {action && <div className="mt-5 flex items-center gap-2">{action}</div>}
+      <div className="text-lead font-medium text-lab-ink">{title}</div>
+      {children && <div className="mt-1.5 max-w-[440px] text-pretty text-body text-lab-mute">{children}</div>}
+      {action && <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{action}</div>}
     </div>
   );
 }
 
-/** Hover / focus hint without JS. Two sentences at most: what the element means, not how to click it. */
+/** Hover / focus hint without JS. One sentence: what the element means, not how to click it. */
 export function Tip({ text, children, side = "top", className }: { text: ReactNode; children: ReactNode; side?: "top" | "bottom"; className?: string }) {
   return (
     <span className={cn("group/tip relative inline-flex", className)}>
@@ -424,7 +514,7 @@ export function Tip({ text, children, side = "top", className }: { text: ReactNo
       <span
         role="tooltip"
         className={cn(
-          "pointer-events-none absolute left-1/2 z-40 w-max max-w-[280px] -translate-x-1/2 rounded-lg bg-lab-raised px-2.5 py-1.5 text-caption text-lab-text opacity-0 shadow-pop transition-opacity duration-100",
+          "pointer-events-none absolute left-1/2 z-40 w-max max-w-[280px] -translate-x-1/2 rounded-md border border-lab-edge bg-lab-raised px-2.5 py-1.5 text-caption text-lab-text opacity-0 shadow-pop transition-opacity duration-100",
           "group-hover/tip:opacity-100 group-focus-within/tip:opacity-100",
           side === "top" ? "bottom-full mb-1.5" : "top-full mt-1.5",
         )}
@@ -440,7 +530,7 @@ export function Tip({ text, children, side = "top", className }: { text: ReactNo
 export function PersonaIcon({ id, size = 24 }: { id?: string; size?: number }) {
   const { icon: Icon } = personaLook(id);
   return (
-    <span className="inline-flex flex-shrink-0 items-center justify-center rounded-md bg-lab-raised text-lab-mute" style={{ width: size, height: size }}>
+    <span className="inline-flex flex-shrink-0 items-center justify-center rounded bg-white/[0.05] text-lab-mute" style={{ width: size, height: size }}>
       <Icon style={{ width: size * 0.55, height: size * 0.55 }} />
     </span>
   );
@@ -449,7 +539,7 @@ export function PersonaIcon({ id, size = 24 }: { id?: string; size?: number }) {
 export function PersonaTag({ personas, id }: { personas: Persona[]; id?: string }) {
   const { icon: Icon } = personaLook(id);
   return (
-    <span className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md bg-lab-raised pl-1.5 pr-2 text-caption font-medium text-lab-text">
+    <span className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md border border-lab-line pl-1.5 pr-2 text-caption text-lab-soft">
       <Icon className="size-3 text-lab-mute" />{personaName(personas, id)}
     </span>
   );
@@ -461,17 +551,17 @@ export function PersonaCard({ persona, on, onClick }: { persona: Persona; on: bo
     <button
       onClick={onClick} aria-pressed={on}
       className={cn(
-        "lab-focus flex items-start gap-3 rounded-lg border p-3 text-left transition-colors duration-100",
-        on ? "border-lab-strong bg-lab-active" : "border-lab-line bg-lab-panel hover:border-lab-edge hover:bg-lab-raised",
+        "lab-focus flex items-start gap-3 rounded-md border p-3 text-left transition-colors duration-100",
+        on ? "border-lab-strong bg-white/[0.06]" : "border-lab-line hover:border-lab-edge hover:bg-white/[0.03]",
       )}
     >
-      <PersonaIcon id={persona.id} size={28} />
+      <PersonaIcon id={persona.id} size={26} />
       <span className="min-w-0 flex-1">
         <span className={cn("block text-body font-medium", on ? "text-lab-ink" : "text-lab-text")}>{persona.name}</span>
         <span className="mt-0.5 block text-caption text-lab-mute">{persona.note}</span>
       </span>
-      <span className={cn("mt-0.5 flex size-4 flex-shrink-0 items-center justify-center rounded-full border transition-colors duration-100", on ? "border-transparent bg-lab-ink" : "border-lab-strong")}>
-        {on && <Check className="size-2.5 text-lab-canvas" strokeWidth={3} />}
+      <span className={cn("mt-0.5 flex size-4 flex-shrink-0 items-center justify-center rounded-sm border transition-colors duration-100", on ? "border-transparent bg-lab-ink" : "border-lab-strong")}>
+        {on && <Check className="size-2.5 text-black" strokeWidth={3} />}
       </span>
     </button>
   );

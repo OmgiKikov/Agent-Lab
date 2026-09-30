@@ -4,31 +4,29 @@
 
 @layer base {
   :root {
-    /* Agent Lab tokens (docs/DESIGN.md). rgb channels, so `bg-lab-ok/15` style alpha works. */
-    /* Surfaces: a near-black canvas, then each step a little lighter. Lightness is elevation. */
-    --lab-canvas: 10 11 13;   /* #0a0b0d */
-    --lab-panel: 15 16 18;    /* #0f1012 sidebar, panels */
-    --lab-card: 20 21 25;     /* #141519 cards */
-    --lab-raised: 26 28 33;   /* #1a1c21 hover, inputs, popovers */
-    --lab-active: 34 36 42;   /* #22242a selected, pressed */
-    /* Text: four steps. faint is for placeholders and disabled only (3.3:1). */
-    --lab-ink: 242 243 245;   /* #f2f3f5 headings, numbers */
-    --lab-text: 197 201 208;  /* #c5c9d0 body */
-    --lab-mute: 141 146 156;  /* #8d929c meta (6.3:1) */
-    --lab-faint: 95 100 109;  /* #5f646d */
-    /* One accent: focus, selection, links, the current version. */
-    --lab-accent: 123 139 255;       /* #7b8bff */
-    --lab-accent-solid: 88 100 240;  /* #5864f0 */
-    /* Status: colour is meaning. Tuned to stay apart for deuteranopia; always paired with a glyph and a word. */
-    --lab-ok: 93 211 158;     /* #5dd39e fixed, better, passed */
-    --lab-bad: 236 91 98;     /* #ec5b62 violation, worse */
-    --lab-warn: 230 172 69;   /* #e6ac45 unsure: no data, judges disagree */
-    --lab-user: 30 36 50;     /* #1e2432 the customer's bubble */
-    /* Aliases of the earlier palette. */
-    --lab-bg: var(--lab-canvas);
-    --lab-surface: var(--lab-panel);
-    --lab-soft: var(--lab-text);
-    --lab-dim: var(--lab-mute);
+    /* Agent Lab tokens (docs/DESIGN.md): Raindrop's palette. rgb channels, so `bg-lab-ok/15` style alpha works. */
+    /* Surfaces: Raindrop's black canvas, then each step a little lighter. Lightness is elevation. */
+    --lab-canvas: 0 0 0;      /* #000000 the page */
+    --lab-panel: 10 10 10;    /* #0a0a0a the rail, list columns */
+    --lab-card: 17 17 17;     /* #111111 a strip, a raised block */
+    --lab-raised: 24 25 26;   /* #18191a hover, inputs, popovers */
+    --lab-active: 33 35 37;   /* #212325 selected, pressed */
+    /* Text: Raindrop's cool steel ramp. faint is for placeholders, axes and disabled only. */
+    --lab-ink: 242 245 247;   /* #f2f5f7 headings, numbers */
+    --lab-text: 200 213 220;  /* #c8d5dc body, Raindrop's text colour */
+    --lab-soft: 160 172 178;  /* #a0acb2 secondary body */
+    --lab-mute: 125 138 144;  /* #7d8a90 labels, meta (5.8:1) */
+    --lab-faint: 90 106 114;  /* #5a6a72 */
+    /* One accent, Raindrop blue: focus, selection, links, what is live. */
+    --lab-accent: 91 141 239;        /* #5b8def */
+    --lab-accent-solid: 64 112 214;  /* #4070d6 */
+    /* Status: colour is meaning, always paired with a glyph and a word. */
+    --lab-ok: 96 227 109;     /* #60e36d fixed, better, passed */
+    --lab-bad: 240 68 68;     /* #f04444 violation, worse */
+    --lab-warn: 240 173 78;   /* #f0ad4e unsure: no data, judges disagree, within noise */
+    /* The judge's quote, drawn as a marker over the agent's words (Raindrop's evidence highlight). */
+    --lab-mark: 242 255 102;  /* #f2ff66 */
+    --lab-user: 13 52 66;     /* #0d3442 the customer's bubble, Raindrop's */
   }
 }
 
@@ -41,6 +39,28 @@
   .lab-focus-inset:focus-visible {
     outline: none;
     box-shadow: inset 0 0 0 2px rgb(var(--lab-accent) / 0.7);
+  }
+  /* Raindrop's instrument label: tiny mono capitals over a value, a column, a section. Never a sentence. */
+  .lab-label {
+    font-family: "Geist Mono Variable", ui-monospace, monospace;
+    font-size: 10px;
+    line-height: 14px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  /* The judge's quote inside the agent's words. */
+  .lab-marker {
+    background: rgb(var(--lab-mark) / 0.16);
+    box-shadow: inset 0 -2px 0 rgb(var(--lab-mark) / 0.55);
+    color: rgb(var(--lab-ink));
+    border-radius: 2px;
+    padding: 0 2px;
+  }
+  /* Raindrop's dot matrix: a field of dim squares behind brand moments (empty states), never behind data. */
+  .lab-dots {
+    background-image: radial-gradient(rgb(255 255 255 / 0.07) 1px, transparent 1.2px);
+    background-size: 8px 8px;
   }
 }
 
@@ -56,13 +76,19 @@ html {
 
 body {
   background: rgb(var(--lab-canvas));
-  color: #999;
+  color: rgb(var(--lab-text));
+  font-family: "Commissioner Variable", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "tnum" 0;
 }
 
 ::selection { background: rgb(var(--lab-accent) / 0.32); color: rgb(var(--lab-ink)); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
 
 input.secret-input-saved:focus::placeholder {
   color: transparent !important;

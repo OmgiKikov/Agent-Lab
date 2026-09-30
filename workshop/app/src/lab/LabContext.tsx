@@ -5,19 +5,19 @@ import { CommandPalette } from "./CommandPalette";
 import { trustOf } from "./findings";
 import { Modal } from "./modal";
 import { buildNav, type NavExtra, type NavItem } from "./nav";
+import { NewRun } from "./NewRun";
 import { ToastProvider } from "./toast";
 import type { LabRun, LabState, Step } from "./types";
 import { Button, ChromeContext } from "./ui";
 import { useLab } from "./useLab";
 import { useScope, type Scope } from "./useScope";
 import { VersionSwitch } from "./VersionSwitch";
-import { NewRun } from "./views/RunView";
 
 type Lab = {
   state: LabState | null; offline: boolean; run: LabRun | null; pickRun: (id: string) => void;
   scope: Scope; nav: NavItem[]; extra: NavExtra;
   target: string; setTarget: (t: string) => void;
-  /** Opens «Проверить версию» — the product's one primary action — from anywhere. */
+  /** Opens «Проверить версию» — the product's main action — from anywhere. */
   openNewRun: () => void;
   openPalette: () => void;
 };
@@ -33,8 +33,8 @@ export function useLabContext(): Lab {
 const readTarget = () => { try { return localStorage.getItem("lab.target") || "local-http"; } catch { return "local-http"; } };
 
 /**
- * The Lab's state for the whole app: the sidebar shows its sections and the running job on every page (the trace viewer too),
- * ⌘K and «Проверить версию» work everywhere, and every page header can carry the version.
+ * The Lab's state for the whole app: the rail shows what needs a look and the running job on every page (the trace viewer too),
+ * ⌘K and «Проверить версию» work everywhere, and every result page's header carries the version.
  */
 export function LabProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
@@ -53,7 +53,8 @@ export function LabProvider({ children }: { children: ReactNode }) {
   const { finished } = scope;
   const trustLevel = finished ? trustOf(finished).level : null;
   const broken = scope.criteria.filter(c => c.failed > 0).length;
-  const extra = useMemo<NavExtra>(() => ({ broken: broken || undefined, dialogs: scope.dialogs.length || undefined, trustPending: !!trustLevel && trustLevel !== "ok" }), [broken, scope.dialogs.length, trustLevel]);
+  const fresh = scope.compared.filter(c => c.change === "new").length;
+  const extra = useMemo<NavExtra>(() => ({ broken: broken || undefined, fresh: fresh || undefined, dialogs: scope.dialogs.length || undefined, trustPending: !!trustLevel && trustLevel !== "ok" }), [broken, fresh, scope.dialogs.length, trustLevel]);
   const nav = useMemo(() => buildNav(state, extra), [state, extra]);
   const paletteCriteria = useMemo(() => scope.criteria.map(c => ({ key: c.key, title: c.title, failed: c.failed })), [scope.criteria]);
   const go = useCallback((s: Step, item?: string | null) => navigate(item ? `/lab/${s}/${encodeURIComponent(item)}` : `/lab/${s}`), [navigate]);
@@ -63,12 +64,13 @@ export function LabProvider({ children }: { children: ReactNode }) {
   const openPalette = useCallback(() => setPalette(true), []);
   const chrome = useMemo(() => ({
     context: <VersionSwitch versions={scope.sameAgent} current={finished} previous={scope.previous} onPick={pickRun} />,
-    primary: (
-      <Button variant="primary" icon={Play} disabled={!state || state.job.running || !deck} onClick={openNewRun}
-        title={!deck ? "Сначала соберите сценарии: шаг «Сценарии»" : state?.job.running ? "Дождитесь окончания текущей работы" : "Симулятор сыграет сценарии с агентом, судья оценит каждый диалог"}>
+    // Without scenarios there is nothing to play: the button appears with them, the setup pages lead there.
+    primary: deck ? (
+      <Button variant="primary" icon={Play} disabled={!state || state.job.running} onClick={openNewRun}
+        title={state?.job.running ? "Дождитесь конца текущей работы" : "Симулятор сыграет сценарии с агентом, судья оценит каждый диалог"}>
         <span className="hidden sm:inline">Проверить версию</span>
       </Button>
-    ),
+    ) : null,
   }), [scope.sameAgent, finished, scope.previous, pickRun, state, deck, openNewRun]);
 
   const value = useMemo<Lab>(() => ({ state, offline, run, pickRun, scope, nav, extra, target, setTarget, openNewRun, openPalette }),

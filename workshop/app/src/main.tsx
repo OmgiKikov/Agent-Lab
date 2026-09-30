@@ -3,9 +3,10 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router-dom";
 import { router } from "./router";
 import { queryClient } from "./query-client";
-// Inter and Geist Mono carry Cyrillic (Barlow and Space Mono do not). The full CSS of each package is imported,
+// Raindrop's faces are Barlow and Space Mono, neither has Cyrillic: Commissioner is the grotesk closest to Barlow that has it,
+// Geist Mono is what Raindrop itself uses for labels and ids. The full CSS of each package is imported,
 // so the browser picks subsets by unicode-range: ₽, № and «» live outside the latin subset.
-import "@fontsource-variable/inter/opsz.css";
+import "@fontsource-variable/commissioner/index.css";
 import "@fontsource-variable/geist-mono/index.css";
 import "./index.css";
 

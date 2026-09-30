@@ -9,7 +9,7 @@ import {
 } from "react-router-dom";
 import { Menu } from "lucide-react";
 import { LabProvider } from "./lab/LabContext";
-import { Sidebar } from "./lab/Sidebar";
+import { Rail } from "./lab/Rail";
 import { LabMark } from "./lab/ui";
 import { MessagePane } from "./components/MessagePane";
 import { RunsPage } from "./pages/RunsPage";
@@ -70,18 +70,18 @@ function AppLayout() {
   return (
     <LabProvider>
       <LegacyHashRedirect />
-      {/* One product: the same navigation column on every page, the assistant opens from it, nothing floats over the content. */}
+      {/* One product, Raindrop's shell: the same rail on every page, the assistant opens from it, nothing floats over the content. */}
       <div className="flex h-svh overflow-hidden bg-lab-canvas text-lab-text">
-        <Sidebar className="hidden md:flex" />
+        <Rail className="hidden md:flex" />
         {menu && (
           <div className="fixed inset-0 z-50 flex md:hidden">
-            <Sidebar className="shadow-pop" onNavigate={() => setMenu(false)} />
-            <button className="flex-1 bg-black/60" aria-label="Закрыть меню" onClick={() => setMenu(false)} />
+            <Rail expanded className="shadow-pop" onNavigate={() => setMenu(false)} />
+            <button className="flex-1 bg-black/70" aria-label="Закрыть меню" onClick={() => setMenu(false)} />
           </div>
         )}
         <div className="relative flex min-w-0 flex-1 flex-col">
-          <div className="flex h-12 flex-shrink-0 items-center gap-2 border-b border-lab-line px-3 md:hidden">
-            <button onClick={() => setMenu(true)} aria-label="Меню" className="lab-focus inline-flex size-8 items-center justify-center rounded-md text-lab-mute hover:bg-lab-raised hover:text-lab-ink"><Menu className="size-4" /></button>
+          <div className="flex h-12 flex-shrink-0 items-center gap-2 border-b border-lab-line bg-lab-panel px-3 md:hidden">
+            <button onClick={() => setMenu(true)} aria-label="Меню" className="lab-focus inline-flex size-8 items-center justify-center rounded-md text-lab-mute hover:bg-white/[0.06] hover:text-lab-ink"><Menu className="size-4" /></button>
             <LabMark size={18} className="text-lab-ink" /><span className="text-body font-semibold text-lab-ink">Agent Lab</span>
           </div>
           <div
@@ -95,10 +95,11 @@ function AppLayout() {
           </div>
           {blocked && (
             <div className="absolute inset-0 z-40 flex items-center justify-center px-6">
-              <div className="w-[460px] max-w-full rounded-xl border border-lab-edge bg-lab-raised px-8 py-7 text-center shadow-pop">
-                <div className="text-title font-semibold text-lab-ink">Workshop не запущен</div>
-                <p className="mt-2 text-reading text-lab-text">
-                  Трейсы хранит Workshop. Запустите его вместе с Agent Lab командой <code className="rounded-md bg-lab-active px-1.5 py-0.5 font-mono text-body text-lab-ink">sh bin/start.sh</code> — страница подключится сама.
+              <div className="w-[440px] max-w-full rounded-lg border border-lab-edge bg-lab-raised px-8 py-7 text-center shadow-pop">
+                <LabMark size={28} className="mx-auto text-lab-mute" />
+                <div className="mt-4 text-lead font-medium text-lab-ink">Workshop не запущен</div>
+                <p className="mt-1.5 text-body text-lab-soft">
+                  Трейсы хранит Workshop. Запустите его командой <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-caption text-lab-ink">sh bin/start.sh</code>, страница подключится сама.
                 </p>
               </div>
             </div>
