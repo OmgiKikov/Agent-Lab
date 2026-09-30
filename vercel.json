@@ -1,0 +1,6 @@
+{
+  "buildCommand": "npm --prefix workshop/app run build",
+  "outputDirectory": "workshop/app/dist",
+  "devCommand": "npm --prefix workshop/app run dev -- --host 0.0.0.0",
+  "framework": "vite"
+}
