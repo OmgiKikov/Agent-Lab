@@ -1,4 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../../../lab/api";
+import type { LogDialogue } from "../../../lab/problems";
+import { visible } from "../../../ui/Conversation";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Wrench } from "lucide-react";
 import { plural, thousands } from "../../../lab/format";
 import { useSource, type RuleEntry } from "../../../lab/problems";
@@ -115,6 +119,31 @@ function Details({ rows }: { rows: [string, ReactNode][] }) {
   );
 }
 
+/** Raindrop's customer bubble: teal, on the right. */
+function Bubble({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[80%] rounded-[10px] border border-[rgba(75,180,200,0.11)] bg-[rgba(75,180,200,0.14)] px-[11px] py-2 text-[12px] leading-[17px] text-[rgb(212,224,230)]">{children}</div>
+    </div>
+  );
+}
+
+/** A real conversation from the logs, as it went: the customer on the right, the agent's words as text. No verdict here. */
+function LoggedTalk({ id }: { id: string }) {
+  const { data, isLoading } = useQuery({ queryKey: ["dialogue", id], queryFn: () => api<LogDialogue>(`/api/dialogues/${encodeURIComponent(id)}`), staleTime: Infinity });
+  const [all, setAll] = useState(false);
+  if (isLoading || !data) return <Skeleton className="h-28" />;
+  const turns = all ? data.messages : data.messages.slice(0, 4);
+  return (
+    <div className="space-y-3">
+      {turns.map((t, i) => t.role === "customer"
+        ? <Bubble key={i}>{t.text}</Bubble>
+        : <p key={i} className="whitespace-pre-line text-[12px] leading-[21.6px] text-lab-text">{visible(t.text).text}</p>)}
+      {data.messages.length > 4 && <button type="button" onClick={() => setAll(v => !v)} className="text-[11px] text-lab-dim hover:text-lab-text">{all ? "Свернуть" : `Весь разговор · ${data.messages.length} ${plural(data.messages.length, "реплика", "реплики", "реплик")}`}</button>}
+    </div>
+  );
+}
+
 // ─── Prompt with marks ──────────────────────────────────────────────────────
 
 function PromptText({ source, marks, chosen, onMark }: { source: Source; marks: { quote: string; n: number; id: string }[]; chosen?: string; onMark: (id: string) => void }) {
@@ -175,6 +204,16 @@ export function VariantF() {
   const prompt = a.prompts[Math.min(promptAt, a.prompts.length - 1)];
   const marksFor = (s: Source) => flat.filter(x => x.r.rule.sourceId === s.id).map(x => ({ quote: x.r.rule.quote, n: x.n, id: x.r.id }));
   const openCriterion = (id: string) => { setTab("criteria"); setRid(id); };
+  const results = a.state.discover?.results ?? [];
+  const talk = (results.find(r => r.status === "PASS" && r.opening.length > 20 && r.opening.length < 120) ?? results[0])?.dialogueId ?? null;
+  const topicId = new Map((a.state.discover?.topics ?? []).map(t => [t.title, t.id]));
+  /** Real first messages of customers in the topics a criterion is for: how people actually ask. */
+  const asks = (r: RuleEntry) => {
+    const ids = new Set(r.topics.map(t => topicId.get(t)));
+    const seen = new Set<string>();
+    return results.filter(x => ids.has(x.topicId) && x.opening.length > 15 && x.opening.length < 140)
+      .map(x => x.opening.trim()).filter(o => !seen.has(o.toLowerCase()) && seen.add(o.toLowerCase())).slice(0, 3);
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -235,6 +274,12 @@ export function VariantF() {
                     className="mt-3 inline-flex h-7 items-center gap-1.5 rounded-[5px] border border-white/[0.12] bg-[rgb(35,35,35)] px-2.5 text-[11px] text-lab-soft hover:border-white/[0.22] hover:text-lab-ink">
                     Открыть {flat.length} {plural(flat.length, "критерий", "критерия", "критериев")}<ChevronRight className="size-3" />
                   </button>
+                  {talk && (
+                    <section className="mt-8 border-t border-white/[0.08] pt-4">
+                      <div className="mb-3 flex items-center gap-1.5 text-[11px] text-lab-dim">Так агент разговаривает<span className="text-lab-faint">· разговор из логов</span></div>
+                      <LoggedTalk id={talk} />
+                    </section>
+                  )}
                 </div>
               )}
               {pane === "prompts" && prompt && (
@@ -271,7 +316,7 @@ export function VariantF() {
               </section>
             ))}
           </aside>
-          {chosen && <CriterionPage key={chosen.r.id} x={chosen} total={flat.length} onStep={step} group={list.find(g => g.items.includes(chosen))?.title ?? ""} source={a.sources.find(s => s.id === chosen.r.rule.sourceId)} marks={(s: Source) => marksFor(s)} onMark={id => setRid(id)} />}
+          {chosen && <CriterionPage key={chosen.r.id} x={chosen} total={flat.length} onStep={step} group={list.find(g => g.items.includes(chosen))?.title ?? ""} source={a.sources.find(s => s.id === chosen.r.rule.sourceId)} marks={(s: Source) => marksFor(s)} onMark={id => setRid(id)} asks={asks(chosen.r)} />}
         </div>
       )}
       <ConnectionDrawer open={connecting} onClose={() => setConnecting(false)} state={a.state} />
@@ -279,9 +324,9 @@ export function VariantF() {
   );
 }
 
-function CriterionPage({ x, total, onStep, group, source, marks, onMark }: {
+function CriterionPage({ x, total, onStep, group, source, marks, onMark, asks }: {
   x: { r: RuleEntry; n: number }; total: number; onStep: (d: 1 | -1) => void; group: string; source?: Source;
-  marks: (s: Source) => { quote: string; n: number; id: string }[]; onMark: (id: string) => void;
+  marks: (s: Source) => { quote: string; n: number; id: string }[]; onMark: (id: string) => void; asks: string[];
 }) {
   const [pane, setPane] = useState<"quote" | "prompt">("quote");
   const { parts, loading } = useQuoteContext(x.r, 260);
@@ -307,6 +352,13 @@ function CriterionPage({ x, total, onStep, group, source, marks, onMark }: {
         <div className="min-h-0 flex-1 overflow-auto">
           {pane === "quote" ? (
             <div className="max-w-[640px] px-4 py-4">
+              {asks.length > 0 && (
+                <section className="mb-5">
+                  <div className="mb-2.5 text-[11px] text-lab-dim">Так пишут клиенты <span className="text-lab-faint">· из логов</span></div>
+                  <div className="space-y-2">{asks.map(q => <Bubble key={q}>{q}</Bubble>)}</div>
+                </section>
+              )}
+              <div className="mb-2.5 text-[11px] text-lab-dim">Что агенту велено <span className="text-lab-faint">· промпт</span></div>
               <div className="rounded-[8px] border border-white/[0.08] bg-[rgb(35,35,35)] px-[11px] py-[9px]">
                 <div className="flex items-center gap-2 text-[11px] text-lab-dim"><FileText className="size-3" /><span className="font-mono text-lab-soft">{f.file}</span><span>промпт агента</span></div>
                 <div className="mt-1.5 whitespace-pre-line text-[12px] leading-[21.6px] text-lab-text">
