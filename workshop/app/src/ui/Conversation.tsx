@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { plural } from "../lab/format";
-import { splitQuote } from "./highlight";
+import { segments, splitQuote } from "./highlight";
 
 export type Turn = { role: "customer" | "agent"; text: string; events?: { tool: string }[]; ok?: boolean; status?: string };
 
@@ -21,26 +21,24 @@ export function MarkNumber({ n }: { n: number }) {
   return <span className="inline-flex size-4 flex-shrink-0 items-center justify-center rounded-full bg-lab-mark font-mono text-micro font-semibold text-black">{n}</span>;
 }
 
-function AgentTurn({ turn, mark, hover, onHover }: { turn: Turn; mark?: Mark; hover?: boolean; onHover?: (on: boolean) => void }) {
+function AgentTurn({ turn, marks, hover, onHover }: { turn: Turn; marks: Mark[]; hover?: boolean; onHover?: (on: boolean) => void }) {
   const { text, buttons } = visible(turn.text);
-  const parts = mark ? splitQuote(text, mark.quote) : null;
+  const pieces = marks.length ? segments(text, marks) : [{ text }];
   const tools = [...new Set((turn.events ?? []).map(e => e.tool.replace("Система банка · ", "")))];
   return (
     <div className="flex max-w-[92%] flex-col items-start gap-1.5 self-start">
       <div className="whitespace-pre-wrap text-read text-lab-text">
-        {parts && mark ? (
-          <>
-            {parts[0]}
+        {pieces.map((piece, i) => (piece.n ? (
+          <span key={i}>
             <mark
               onMouseEnter={() => onHover?.(true)} onMouseLeave={() => onHover?.(false)}
               className={cn("rounded-sm border-b-2 border-lab-mark px-0.5 text-lab-ink transition-colors", hover ? "bg-lab-mark/[0.34]" : "bg-lab-mark/[0.18]")}
             >
-              {parts[1]}
+              {piece.text}
             </mark>
-            <span className="ml-1 inline-block translate-y-[-1px] align-middle"><MarkNumber n={mark.n} /></span>
-            {parts[2]}
-          </>
-        ) : text}
+            <span className="ml-1 inline-block translate-y-[-1px] align-middle"><MarkNumber n={piece.n} /></span>
+          </span>
+        ) : <span key={i}>{piece.text}</span>))}
       </div>
       {buttons.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -65,8 +63,11 @@ function AgentTurn({ turn, mark, hover, onHover }: { turn: Turn; mark?: Mark; ho
  * A conversation as a chat: the customer's teal bubble on the right, the agent's words on the left,
  * the judge's quote marked in the agent's words with its number. Turns long before the mark fold away.
  */
-export function Conversation({ turns, mark, hover, onHover }: { turns: Turn[]; mark?: Mark; hover?: boolean; onHover?: (on: boolean) => void }) {
-  const at = mark ? turns.findIndex(t => t.role === "agent" && splitQuote(visible(t.text).text, mark.quote)) : -1;
+export function Conversation({ turns, mark, marks, hover, onHover }: {
+  turns: Turn[]; mark?: Mark; marks?: Mark[]; hover?: boolean; onHover?: (on: boolean) => void;
+}) {
+  const all = marks ?? (mark ? [mark] : []);
+  const at = all.length ? turns.findIndex(t => t.role === "agent" && all.some(m => splitQuote(visible(t.text).text, m.quote))) : -1;
   const [open, setOpen] = useState(false);
   const from = at > 2 && !open ? at - 1 : 0;
   return (
@@ -80,7 +81,7 @@ export function Conversation({ turns, mark, hover, onHover }: { turns: Turn[]; m
         const index = i + from;
         return t.role === "customer"
           ? <div key={index} className="max-w-[85%] self-end whitespace-pre-wrap rounded-2xl rounded-br-md bg-lab-user px-3.5 py-2 text-read text-lab-text">{t.text}</div>
-          : <AgentTurn key={index} turn={t} mark={index === at ? mark : undefined} hover={hover} onHover={onHover} />;
+          : <AgentTurn key={index} turn={t} marks={all} hover={hover} onHover={onHover} />;
       })}
     </div>
   );

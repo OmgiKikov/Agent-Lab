@@ -11,3 +11,25 @@ export function splitQuote(text: string, quote?: string): [string, string, strin
   }
   return at < 0 ? null : [text.slice(0, at), text.slice(at, at + len), text.slice(at + len)];
 }
+
+export type Segment = { text: string; n?: number };
+
+/** A text cut into plain pieces and quoted ones (each with its number), in order; overlapping quotes keep the first. */
+export function segments(text: string, marks: { quote: string; n: number }[]): Segment[] {
+  const found: { at: number; len: number; n: number }[] = [];
+  for (const m of marks) {
+    const parts = splitQuote(text, m.quote);
+    if (parts) found.push({ at: parts[0].length, len: parts[1].length, n: m.n });
+  }
+  found.sort((a, b) => a.at - b.at);
+  const out: Segment[] = [];
+  let pos = 0;
+  for (const f of found) {
+    if (f.at < pos) continue;
+    if (f.at > pos) out.push({ text: text.slice(pos, f.at) });
+    out.push({ text: text.slice(f.at, f.at + f.len), n: f.n });
+    pos = f.at + f.len;
+  }
+  if (pos < text.length) out.push({ text: text.slice(pos) });
+  return out;
+}

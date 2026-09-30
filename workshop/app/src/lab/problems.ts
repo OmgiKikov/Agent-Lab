@@ -65,6 +65,7 @@ function withDecision(data: Problems, target: Example, decision: Decision | null
 export function useReview() {
   const client = useQueryClient();
   const toast = useToast();
+  const { refresh } = useLabState();
   return useMutation({
     mutationFn: ({ example, decision }: { example: Example; decision: Decision | null }) => api("/api/review", example.source === "log"
       ? { source: "log", dialogueId: example.dialogueId, ruleId: example.ruleId, decision }
@@ -73,7 +74,11 @@ export function useReview() {
       client.setQueriesData<Problems>({ queryKey: ["problems"] }, old => (old ? withDecision(old, example, decision) : old));
     },
     onError: e => toast.error(e),
-    onSettled: () => client.invalidateQueries({ queryKey: ["problems"] }),
+    onSettled: () => {
+      client.invalidateQueries({ queryKey: ["problems"] });
+      client.invalidateQueries({ queryKey: ["run"] });
+      refresh();
+    },
   });
 }
 

@@ -1,5 +1,5 @@
 export type Status = "PASS" | "FAIL" | "UNMEASURED" | "UNKNOWN" | "NOT_APPLICABLE" | "RUNNING";
-export type Rule = { ruleId: string; rule: string; status: Status; reason: string; agentQuote: string; title?: string };
+export type Rule = { ruleId: string; rule: string; status: Status; reason: string; agentQuote: string; title?: string; review?: "agree" | "disagree" | null };
 export type Metric = {
   accuracy: number | null; passed: number; failed: number; unmeasured: number; measured: number; total: number;
   secondJudge?: { model: string; checked: number; agree: number };
@@ -30,7 +30,10 @@ export type Card = {
   id: string; topic: string; name: string; situation: string; opening: string; criteria: Criterion[]; origin: string;
   sourceDialogueId: string; world?: World | null; openings?: Record<string, string>;
 };
-export type LogResult = { dialogueId: string; topicId: string; status: Status; rules: Rule[]; opening: string; runId?: string };
+export type LogResult = {
+  dialogueId: string; topicId: string; status: Status; rules: Rule[]; opening: string; runId?: string;
+  second?: { model?: string; status: string; rules?: Rule[] } | null;
+};
 export type PatternExample = { dialogueId: string; reason: string; agentQuote: string; opening: string; url?: string };
 export type Pattern = { rule: string; quote: string; topics: string[]; count: number; titles: string[]; examples: PatternExample[] };
 export type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };

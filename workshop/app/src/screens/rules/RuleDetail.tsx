@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, ListChecks } from "lucide-react";
+import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
 import { sourceLabel } from "../../lab/problemReport";
 import { useReview, type Decision, type Example, type Problems, type RuleEntry } from "../../lab/problems";
@@ -52,7 +53,7 @@ export function RuleDetail({ r, data, onBack }: { r: RuleEntry; data: Problems; 
     ArrowRight: () => setAt(at + 1),
     KeyV: () => decide("agree"),
     KeyN: () => decide("disagree"),
-    KeyO: () => { if (example?.traceId) navigate(LINKS.trace(example.traceId)); },
+    KeyO: () => { if (example) navigate(dialogOf(example)); },
     Escape: () => { if (!wide()) onBack(); },
   });
   const violated = counts.FAIL > 0;

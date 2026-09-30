@@ -6,7 +6,7 @@ import { reliabilityWord, secondLine } from "../../lab/problemReport";
 import { useTurns, type Decision, type Example } from "../../lab/problems";
 import type { Persona } from "../../lab/types";
 import { useLabState } from "../../shell/LabProvider";
-import { LINKS } from "../../shell/links";
+import { dialogOf } from "../../lab/dialogs";
 import { Button } from "../../ui/Button";
 import { Conversation, MarkNumber, visible } from "../../ui/Conversation";
 import { Skeleton } from "../../ui/EmptyState";
@@ -32,11 +32,9 @@ export function ExampleMeta({ example }: { example: Example }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 text-meta text-lab-dim">
       <span>{exampleWhere(example, state?.personas ?? [])}{example.status === "FAIL" && ` · ${reliabilityWord(example)}`}</span>
-      {example.traceId && (
-        <Link to={LINKS.trace(example.traceId)} className="inline-flex items-center gap-1 transition-colors hover:text-lab-text" title="Открыть диалог (O)">
-          Открыть диалог<ArrowUpRight className="size-3.5" />
-        </Link>
-      )}
+      <Link to={dialogOf(example)} className="inline-flex items-center gap-1 transition-colors hover:text-lab-text" title="Открыть диалог (O)">
+        Открыть диалог<ArrowUpRight className="size-3.5" />
+      </Link>
     </div>
   );
 }

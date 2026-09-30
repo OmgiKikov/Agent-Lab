@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Copy, MessageSquare } from "lucide-react";
+import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
 import { problemMarkdown, sourceLabel } from "../../lab/problemReport";
 import { useReview, type Decision, type Problems, type RuleEntry } from "../../lab/problems";
@@ -50,13 +51,13 @@ export function ProblemDetail({ p, data, onBack }: { p: RuleEntry; data: Problem
     ArrowRight: () => setAt(at + 1),
     KeyV: () => decide("agree"),
     KeyN: () => decide("disagree"),
-    KeyO: () => { if (example?.traceId) navigate(LINKS.trace(example.traceId)); },
+    KeyO: () => { if (example) navigate(dialogOf(example)); },
     KeyC: copy,
     Escape: () => { if (!wide()) onBack(); },
   });
   const facts: Fact[] = [
-    { label: "В логах", value: p.log.failed ? share(p.log) : "—", onClick: p.log.failed && from !== "log" ? () => setFrom("log") : undefined, title: "Нарушено в диалогах логов из тех, где правило удалось проверить" },
-    { label: "В симуляции", value: data.sim ? share(p.sim) : "не было", onClick: p.sim.failed && from !== "sim" ? () => setFrom("sim") : undefined, title: "Нарушено в диалогах выбранного прогона" },
+    { label: "В логах", value: p.log.failed ? share(p.log) : "—", onClick: p.log.failed ? () => navigate(`${LINKS.dialogs}?source=log&rule=${p.id}`) : undefined, title: "Открыть диалоги логов, где правило нарушено" },
+    { label: "В симуляции", value: data.sim ? share(p.sim) : "не было", onClick: p.sim.failed ? () => navigate(`${LINKS.dialogs}?source=sim&rule=${p.id}`) : undefined, title: "Открыть диалоги прогона, где правило нарушено" },
     { label: "Второй судья", value: secondFact(p), onClick: p.secondJudge.checked > p.secondJudge.agree ? () => navigate(`${LINKS.review}?queue=disputed&rule=${p.id}`) : undefined, title: "Открыть вердикты, где судьи расходятся" },
     { label: "Люди", value: p.human.agree + p.human.disagree ? `верно ${p.human.agree} · неверно ${p.human.disagree}` : "не проверяли", onClick: () => navigate(`${LINKS.review}?queue=unchecked&rule=${p.id}`), title: "Проверить нарушения этого правила" },
   ];
