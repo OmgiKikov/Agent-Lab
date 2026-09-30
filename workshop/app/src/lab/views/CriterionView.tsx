@@ -3,13 +3,11 @@ import { BookOpen, Check, ChevronLeft, ChevronRight, Copy, ExternalLink, FileTex
 import { cn } from "@/lib/utils";
 import { api } from "../api";
 import { AgentMessage, CustomerMessage } from "../Conversation";
-import { normRule, type Compared, type Dialog } from "../criteria";
+import { normRule, sourceName, type Criterion, type Dialog } from "../criteria";
 import { splitQuote } from "../findings";
 import { cap, count } from "../format";
-import { disputed } from "../logic";
 import { personaName } from "../look";
 import { criterionReport } from "../report";
-import { sourceName } from "../story";
 import { useToast } from "../toast";
 import type { LabState, Rule } from "../types";
 import type { Scope } from "../useScope";
@@ -52,7 +50,7 @@ function Loading({ onBack, back }: { onBack: () => void; back: string }) {
 export function CriterionView({ state, scope, criterionKey, onBack, onTrace, go }: {
   state: LabState; scope: Scope; criterionKey: string; scopeBar?: ReactNode; onBack: () => void; onTrace: (id: string) => void; go: (to: string) => void;
 }) {
-  const entry = scope.compared.find(c => c.criterion.key === criterionKey);
+  const entry = scope.criteria.find(c => c.key === criterionKey);
   const back = scope.finished ? `Версия ${scope.finished.version}` : "Версия";
   if (!scope.ready) return <Loading onBack={onBack} back={back} />;
   if (!entry) {
@@ -68,9 +66,9 @@ export function CriterionView({ state, scope, criterionKey, onBack, onTrace, go 
   return <Detail key={criterionKey} state={state} scope={scope} entry={entry} back={back} onBack={onBack} onTrace={onTrace} go={go} />;
 }
 
-function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: LabState; scope: Scope; entry: Compared; back: string; onBack: () => void; onTrace: (id: string) => void; go: (to: string) => void }) {
+function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: LabState; scope: Scope; entry: Criterion; back: string; onBack: () => void; onTrace: (id: string) => void; go: (to: string) => void }) {
   const { error } = useToast();
-  const c = entry.criterion;
+  const c = entry;
   const [picked, setPicked] = useState<Tab | null>(null);
   const [at, setAt] = useState(0);
   const [decided, setDecided] = useState<Record<string, "agree" | "disagree" | null>>({});
@@ -124,12 +122,8 @@ function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: Lab
 
   const { sim, log } = c.by;
   const nSim = sim.failed + sim.passed, nLog = log.failed + log.passed;
-  const withSecond = simFailing.filter(d => d.item!.second && ["PASS", "FAIL", "UNMEASURED"].includes(d.item!.second!.status));
-  const secondAgree = withSecond.filter(d => !disputed(d.item!)).length;
-  const version = scope.finished?.version;
-  const chip = entry.change === "new" ? { text: `новое в ${version}`, hue: "bad" as const }
-    : entry.change === "fixed" ? { text: `исправлено в ${version}`, hue: "ok" as const }
-      : c.failed > 0 ? { text: "нарушается", hue: "bad" as const } : { text: "выполняется", hue: "mute" as const };
+  const was = scope.previousCriteria.get(c.key)?.by.sim;
+  const chip = c.failed > 0 ? { text: "нарушается", hue: "bad" as const } : { text: "выполняется", hue: "mute" as const };
 
   const byType = state.personas
     .map(p => {
@@ -176,8 +170,7 @@ function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: Lab
           <div className="mt-6 divide-y divide-lab-line border-y border-lab-line">
             {nSim > 0 && <Fact label="Симулятор" share={sim.failed / nSim}>{sim.failed ? <>нарушен в <b className="font-medium text-lab-ink">{sim.failed}</b> из {nSim}</> : <>не нарушен ни в одном из {nSim}</>}</Fact>}
             {nLog > 0 && <Fact label="Реальные" share={log.failed / nLog}>{log.failed ? <>нарушен в <b className="font-medium text-lab-ink">{log.failed}</b> из {nLog}</> : <>не нарушен ни в одном из {nLog}</>}</Fact>}
-            {scope.comparing && scope.previous && <Fact label={`В ${scope.previous.version}`}>{entry.before ? <>нарушен в {count(entry.before, "диалоге", "диалогах", "диалогах")}</> : "не нарушался"}</Fact>}
-            {withSecond.length > 0 && <Fact label="Второй судья">{secondAgree === withSecond.length ? "согласен во всех" : "согласен в"} {secondAgree} из {withSecond.length}</Fact>}
+            {scope.previous && was && was.failed + was.passed > 0 && <Fact label={`В ${scope.previous.version}`}>нарушен в {was.failed} из {was.failed + was.passed}</Fact>}
           </div>
 
           {bars.filter(v => v !== null).length > 1 && (

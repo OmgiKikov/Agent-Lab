@@ -4,7 +4,7 @@ import { Check, Copy, ExternalLink, MessagesSquare, RotateCcw, Search, X } from 
 import { cn } from "@/lib/utils";
 import { RunDetail } from "@/components/RunDetail";
 import { api } from "../api";
-import { Heatmap, mapFacts } from "../charts/Heatmap";
+import { Heatmap } from "../charts/Heatmap";
 import { Conversation } from "../Conversation";
 import { measured, type Dialog } from "../criteria";
 import { count } from "../format";
@@ -211,7 +211,6 @@ function SimDetail({ state, item, run }: { state: LabState; item: Item; run: Non
 /** The version's scenario × customer type map: where it breaks, at a glance. */
 function MapView({ state, scope, onOpen }: { state: LabState; scope: Scope; onOpen: (key: string) => void }) {
   const { openNewRun } = useLabContext();
-  const [compare, setCompare] = useState(false);
   const run = scope.finished;
   const items = run?.items ?? [];
   if (!run || !items.length) {
@@ -219,22 +218,21 @@ function MapView({ state, scope, onOpen }: { state: LabState; scope: Scope; onOp
   }
   const personas = typesOfRun(run, state.personas);
   const scenarios = scenariosOfRun(items);
-  const facts = mapFacts(items, personas, scenarios);
-  const previous = scope.previous;
+  const m = run.metric;
   return (
     <div className="mx-auto w-full max-w-[1200px] px-5 pb-20 sm:px-8">
       <div className="mt-8 flex flex-wrap items-end justify-between gap-3">
         <div>
           <Label>Сценарий × тип клиента</Label>
-          <p className="mt-1.5 text-reading text-lab-text">
-            Без нарушений {facts.seen - facts.broken} из {count(facts.seen, "пары", "пар", "пар")}{facts.mixed ? `, в ${facts.mixed} результат меняется от повтора к повтору` : ""}.
-          </p>
+          {m && (
+            <p className="mt-1.5 text-reading text-lab-text">
+              Без нарушений {m.passed} из {count(m.measured, "диалога", "диалогов", "диалогов")}{m.repeats && m.repeats.stable < m.repeats.scenarios ? `; на повторах результат разный в ${m.repeats.scenarios - m.repeats.stable} из ${m.repeats.scenarios}` : ""}.
+            </p>
+          )}
         </div>
-        {previous && scope.prevSims.length > 0 && <Chip on={compare} onClick={() => setCompare(c => !c)}>Сравнить с {previous.version}</Chip>}
       </div>
       <Panel className="mt-4 p-5">
-        <Heatmap personas={personas} scenarios={scenarios} items={items} previous={previous ? scope.prevSims.map(d => d.item!).filter(Boolean) : null}
-          previousVersion={previous?.version} compare={compare} onOpen={i => onOpen(itemKey(i))} />
+        <Heatmap personas={personas} scenarios={scenarios} items={items} accuracy={m?.personas} onOpen={i => onOpen(itemKey(i))} />
       </Panel>
     </div>
   );

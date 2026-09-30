@@ -16,12 +16,6 @@ export const scenariosOfRun = (items: Item[]) => [...new Map(items.map(i => [i.c
 
 const finished = (i: Item) => i.status === "PASS" || i.status === "FAIL";
 
-/** Share of finished conversations of a scenario that passed; null when none finished. */
-export const passShare = (items: Item[], cardId: string) => {
-  const done = items.filter(i => i.cardId === cardId && finished(i));
-  return done.length ? done.filter(i => i.status === "PASS").length / done.length : null;
-};
-
 export type CellState = "PASS" | "FAIL" | "MIXED" | "UNMEASURED" | "RUNNING" | "NONE";
 export type Cell = { state: CellState; passed: number; done: number; total: number; first?: Item };
 
@@ -37,8 +31,6 @@ export function cellOf(items: Item[], cardId: string, personaId: string): Cell {
   return { ...base, state: passed === done.length ? "PASS" : passed === 0 ? "FAIL" : "MIXED" };
 }
 
-export const cellShare = (c: Cell) => (c.done ? c.passed / c.done : null);
-
 /** Status of a scenario over all its conversations, for a dot. */
 export function scenarioStatus(own: Item[]): Status {
   return own.some(i => i.status === "RUNNING") ? "RUNNING"
@@ -50,16 +42,3 @@ export function scenarioStatus(own: Item[]): Status {
 export const previousOf = (runs: LabRun[], run: LabRun) =>
   runs.filter(r => r.id !== run.id && r.target === run.target && r.metric?.total && r.status !== "running" && r.startedAt < run.startedAt)
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0] ?? null;
-
-/** «в 22 из 30 разговоров»: what was counted, named right. */
-export function unitOf(items: Item[]): "сценариев" | "разговоров" {
-  const scenarios = new Set(items.map(i => i.cardId)).size;
-  return items.length > scenarios ? "разговоров" : "сценариев";
-}
-
-/** Failed criteria of a run, most frequent first. */
-export function failureReasons(items: Item[]): [string, number][] {
-  const reasons = new Map<string, number>();
-  for (const i of items) for (const r of i.rules) if (r.status === "FAIL") reasons.set(r.rule, (reasons.get(r.rule) ?? 0) + 1);
-  return [...reasons.entries()].sort((a, b) => b[1] - a[1]);
-}

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Bookmark, CornerDownLeft, Play, Search, Settings, Sparkles, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { when } from "./format";
-import { NAV_ICON, STEP_HINT, buildNav, type NavExtra } from "./nav";
+import { NAV_ICON, STEP_HINT, buildNav } from "./nav";
 import type { LabState, Step } from "./types";
 import { Kbd } from "./ui";
 
@@ -13,9 +13,9 @@ type Entry = { id: string; group: string; label: string; sub?: string; icon: Luc
  * ⌘K: go anywhere and do the main things without the mouse — sections, actions, criteria, scenarios, versions, the trace viewer.
  * The same shortcut opens it on every page of the app.
  */
-export function CommandPalette({ open, onClose, state, go, navigate, onPickRun, onJudge, onNewRun, extra, criteria }: {
+export function CommandPalette({ open, onClose, state, go, navigate, onPickRun, onJudge, onNewRun, criteria }: {
   open: boolean; onClose: () => void; state: LabState | null; go: (step: Step, item?: string | null) => void; navigate: (to: string) => void;
-  onPickRun: (id: string) => void; onJudge: () => void; onNewRun?: () => void; extra: NavExtra; criteria: { key: string; title: string; failed: number }[];
+  onPickRun: (id: string) => void; onJudge: () => void; onNewRun?: () => void; criteria: { key: string; title: string; failed: number }[];
 }) {
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
@@ -28,7 +28,7 @@ export function CommandPalette({ open, onClose, state, go, navigate, onPickRun, 
     if (onNewRun) out.push({ id: "new-run", group: "Действия", label: "Проверить версию", sub: "Симулятор сыграет сценарии, судья оценит диалоги", icon: Play, run: onNewRun });
     if (state?.runs.length) out.push({ id: "judge", group: "Действия", label: "Сверить судью", sub: "Пройти вердикты последней проверки: верно или нет", icon: NAV_ICON.judge, run: onJudge });
     out.push({ id: "ask", group: "Действия", label: "Спросить ассистента", sub: "Claude Code или Codex рядом с трейсами", icon: Sparkles, run: () => window.dispatchEvent(new Event("workshop:open-message-pane")) });
-    if (state) out.push(...buildNav(state, extra).map(n => ({ id: `nav-${n.id}`, group: "Разделы", label: n.title, sub: STEP_HINT[n.id], icon: n.icon, run: () => go(n.id) })));
+    if (state) out.push(...buildNav(state).map(n => ({ id: `nav-${n.id}`, group: "Разделы", label: n.title, sub: STEP_HINT[n.id], icon: n.icon, run: () => go(n.id) })));
     out.push(
       { id: "ws-runs", group: "Разделы", label: "Все трейсы", sub: "Workshop", icon: Activity, run: () => navigate("/runs") },
       { id: "ws-search", group: "Разделы", label: "Поиск по трейсам", sub: "Workshop", icon: Search, run: () => navigate("/search") },
@@ -42,7 +42,7 @@ export function CommandPalette({ open, onClose, state, go, navigate, onPickRun, 
       run: () => { onPickRun(r.id); go("overview"); },
     });
     return out;
-  }, [state, go, navigate, onPickRun, onJudge, onNewRun, extra, criteria]);
+  }, [state, go, navigate, onPickRun, onJudge, onNewRun, criteria]);
 
   const q = query.trim().toLowerCase();
   const shown = useMemo(() => entries.filter(e => !q || `${e.label} ${e.sub ?? ""}`.toLowerCase().includes(q)).slice(0, 50), [entries, q]);

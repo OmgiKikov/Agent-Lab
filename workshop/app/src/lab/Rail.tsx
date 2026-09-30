@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 import { useWorkshopConnected } from "@/hooks/use-workshop-ws";
 import { api } from "./api";
 import { useLabContext } from "./LabContext";
-import { AGENT_SUBTITLE, AGENT_TITLE } from "./look";
 import { STEP_HINT, setupHome, setupSteps } from "./nav";
 import { useToast } from "./toast";
 import type { LabState } from "./types";
@@ -103,7 +102,8 @@ function JobRing({ state, expanded }: { state: LabState; expanded?: boolean }) {
  * `expanded` shows the names beside them (the drawer on a narrow screen).
  */
 export function Rail({ className, expanded, onNavigate }: { className?: string; expanded?: boolean; onNavigate?: () => void }) {
-  const { state, offline, extra, openPalette } = useLabContext();
+  const { state, offline, openPalette, target } = useLabContext();
+  const agentName = state?.targets.find(t => t.id === target)?.name;
   const workshop = useWorkshopConnected();
   const { pathname } = useLocation();
   const navigate = useNavigate();
@@ -115,9 +115,9 @@ export function Rail({ className, expanded, onNavigate }: { className?: string; 
   const setupLeft = setup.filter(s => !s.done).length;
 
   const answer: Item[] = [
-    { key: "overview", title: "Версия", hint: STEP_HINT.overview, icon: FlaskConical, to: "/lab/overview", active: on("overview", "criteria"), dot: extra.fresh ? "bad" : undefined, busy: state?.job.running && state.job.kind === "run" },
+    { key: "overview", title: "Версия", hint: STEP_HINT.overview, icon: FlaskConical, to: "/lab/overview", active: on("overview", "criteria"), busy: state?.job.running && state.job.kind === "run" },
     { key: "dialogs", title: "Диалоги", hint: STEP_HINT.dialogs, icon: MessagesSquare, to: "/lab/dialogs", active: on("dialogs") },
-    { key: "judge", title: "Судья", hint: STEP_HINT.judge, icon: Scale, to: "/lab/judge", active: on("judge"), dot: extra.trustPending ? "warn" : undefined },
+    { key: "judge", title: "Судья", hint: STEP_HINT.judge, icon: Scale, to: "/lab/judge", active: on("judge"), busy: state?.job.running && state.job.kind === "rejudge" },
   ];
   const traces: Item[] = [
     { key: "runs", title: "Трейсы", hint: "Все трейсы Workshop: спаны, время, токены", icon: Activity, to: "/runs", active: under("/runs") },
@@ -136,7 +136,7 @@ export function Rail({ className, expanded, onNavigate }: { className?: string; 
     <aside className={cn("flex flex-shrink-0 flex-col border-r border-lab-line bg-lab-panel", expanded ? "w-[248px] px-2" : "w-14 items-center", className)} aria-label="Навигация">
       <button onClick={() => { navigate("/lab/overview"); onNavigate?.(); }} className={cn("lab-focus-inset flex h-[52px] flex-shrink-0 items-center gap-2.5 text-lab-ink", expanded ? "px-2.5" : "justify-center")} aria-label="Agent Lab">
         <LabMark size={20} />
-        {expanded && <span className="min-w-0 text-left"><span className="block text-body font-semibold">Agent Lab</span><span className="block truncate text-caption text-lab-mute">{AGENT_TITLE} · {AGENT_SUBTITLE}</span></span>}
+        {expanded && <span className="min-w-0 text-left"><span className="block text-body font-semibold">Agent Lab</span>{agentName && <span className="block truncate text-caption text-lab-mute">{agentName}</span>}</span>}
       </button>
 
       {expanded && (

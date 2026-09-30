@@ -111,7 +111,7 @@ export function CardsView({ state, onPick }: { state: LabState; onPick: (id: str
           {!shown.length && <div className={cn("mt-10 text-center text-body text-lab-mute")}>Под эти условия сценариев нет</div>}
           <NextStep
             done={state.runs.length > 0} title="Проверьте версию агента"
-            hint={`Симулятор сыграет ${plural(deck.length, "этот сценарий", "эти сценарии", "эти сценарии")} с агентом, судья оценит каждый диалог — появится вердикт.`}
+            hint={`Симулятор сыграет ${plural(deck.length, "этот сценарий", "эти сценарии", "эти сценарии")} с агентом, судья оценит каждый диалог по критериям.`}
             to="/lab/overview" cta={state.runs.length ? "К версии" : "Проверить версию"} onClick={state.runs.length ? undefined : openNewRun}
           />
         </>

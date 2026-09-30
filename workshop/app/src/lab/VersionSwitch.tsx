@@ -5,11 +5,11 @@ import { when } from "./format";
 import type { LabRun } from "./types";
 
 /**
- * The version a page is about, and the one it is compared with. The version is the Lab's main object,
- * so it sits in every result page's header; the list shows each version's own result, so picking one is already informed.
+ * The checked version a page is about. It sits in every result page's header; the list shows each check's own number
+ * (the service's `metric.accuracy`), so picking one is already informed.
  */
-export function VersionSwitch({ versions, current, previous, onPick, asTitle }: {
-  versions: LabRun[]; current: LabRun | null; previous: LabRun | null; onPick: (id: string) => void;
+export function VersionSwitch({ versions, current, onPick, asTitle }: {
+  versions: LabRun[]; current: LabRun | null; onPick: (id: string) => void;
   /** The version page: the switch is the page's title. */
   asTitle?: boolean;
 }) {
@@ -44,7 +44,6 @@ export function VersionSwitch({ versions, current, previous, onPick, asTitle }: 
         >
           <span className="font-semibold text-lab-ink">Версия <span className="tabular-nums">{current.version}</span></span>
           <ChevronDown className="size-3.5 text-lab-mute" />
-          {previous && <span className="text-lab-mute">против <span className="tabular-nums">{previous.version}</span></span>}
         </button>
       ) : (
         <button
@@ -53,13 +52,12 @@ export function VersionSwitch({ versions, current, previous, onPick, asTitle }: 
         >
           <span className="lab-label text-lab-mute">Версия</span>
           <span className="font-medium tabular-nums text-lab-ink">{current.version}</span>
-          {previous && <span className="hidden text-lab-mute lg:inline">против <span className="tabular-nums">{previous.version}</span></span>}
           <ChevronDown className="size-3.5 text-lab-mute" />
         </button>
       )}
       {open && (
         <div ref={list} role="listbox" aria-label="Версии агента" className={cn("absolute top-full z-40 mt-1.5 w-[340px] rounded-lg border border-lab-edge bg-lab-raised p-1 shadow-pop", asTitle ? "left-0" : "right-0")}>
-          <div className="lab-label px-2.5 pb-1.5 pt-2 text-lab-mute">Версии · сравнение с предыдущей</div>
+          <div className="lab-label px-2.5 pb-1.5 pt-2 text-lab-mute">Проверки версий · без нарушений</div>
           {newest.map(r => {
             const on = r.id === current.id;
             return (

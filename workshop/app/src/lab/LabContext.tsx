@@ -2,9 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { useNavigate } from "react-router-dom";
 import { Play } from "lucide-react";
 import { CommandPalette } from "./CommandPalette";
-import { trustOf } from "./findings";
 import { Modal } from "./modal";
-import { buildNav, type NavExtra, type NavItem } from "./nav";
+import { buildNav, type NavItem } from "./nav";
 import { NewRun } from "./NewRun";
 import { ToastProvider } from "./toast";
 import type { LabRun, LabState, Step } from "./types";
@@ -15,7 +14,7 @@ import { VersionSwitch } from "./VersionSwitch";
 
 type Lab = {
   state: LabState | null; offline: boolean; run: LabRun | null; pickRun: (id: string) => void;
-  scope: Scope; nav: NavItem[]; extra: NavExtra;
+  scope: Scope; nav: NavItem[];
   target: string; setTarget: (t: string) => void;
   /** Opens «Проверить версию» — the product's main action — from anywhere. */
   openNewRun: () => void;
@@ -51,11 +50,7 @@ export function LabProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const { finished } = scope;
-  const trustLevel = finished ? trustOf(finished).level : null;
-  const broken = scope.criteria.filter(c => c.failed > 0).length;
-  const fresh = scope.compared.filter(c => c.change === "new").length;
-  const extra = useMemo<NavExtra>(() => ({ broken: broken || undefined, fresh: fresh || undefined, dialogs: scope.dialogs.length || undefined, trustPending: !!trustLevel && trustLevel !== "ok" }), [broken, fresh, scope.dialogs.length, trustLevel]);
-  const nav = useMemo(() => buildNav(state, extra), [state, extra]);
+  const nav = useMemo(() => buildNav(state), [state]);
   const paletteCriteria = useMemo(() => scope.criteria.map(c => ({ key: c.key, title: c.title, failed: c.failed })), [scope.criteria]);
   const go = useCallback((s: Step, item?: string | null) => navigate(item ? `/lab/${s}/${encodeURIComponent(item)}` : `/lab/${s}`), [navigate]);
 
@@ -63,7 +58,7 @@ export function LabProvider({ children }: { children: ReactNode }) {
   const openNewRun = useCallback(() => setNewRun(true), []);
   const openPalette = useCallback(() => setPalette(true), []);
   const chrome = useMemo(() => ({
-    context: <VersionSwitch versions={scope.sameAgent} current={finished} previous={scope.previous} onPick={pickRun} />,
+    context: <VersionSwitch versions={scope.sameAgent} current={finished} onPick={pickRun} />,
     // Without scenarios there is nothing to play: the button appears with them, the setup pages lead there.
     primary: deck ? (
       <Button variant="primary" icon={Play} disabled={!state || state.job.running} onClick={openNewRun}
@@ -71,10 +66,10 @@ export function LabProvider({ children }: { children: ReactNode }) {
         <span className="hidden sm:inline">Проверить версию</span>
       </Button>
     ) : null,
-  }), [scope.sameAgent, finished, scope.previous, pickRun, state, deck, openNewRun]);
+  }), [scope.sameAgent, finished, pickRun, state, deck, openNewRun]);
 
-  const value = useMemo<Lab>(() => ({ state, offline, run, pickRun, scope, nav, extra, target, setTarget, openNewRun, openPalette }),
-    [state, offline, run, pickRun, scope, nav, extra, target, setTarget, openNewRun, openPalette]);
+  const value = useMemo<Lab>(() => ({ state, offline, run, pickRun, scope, nav, target, setTarget, openNewRun, openPalette }),
+    [state, offline, run, pickRun, scope, nav, target, setTarget, openNewRun, openPalette]);
 
   return (
     <ToastProvider>
@@ -84,10 +79,10 @@ export function LabProvider({ children }: { children: ReactNode }) {
           <CommandPalette
             open={palette} onClose={() => setPalette(false)} state={state} go={go} navigate={navigate} onPickRun={pickRun}
             onJudge={() => { if (finished) pickRun(finished.id); navigate("/lab/judge/check"); }} onNewRun={deck ? openNewRun : undefined}
-            extra={extra} criteria={paletteCriteria}
+            criteria={paletteCriteria}
           />
           {state && (
-            <Modal open={newRun} onClose={() => setNewRun(false)} title="Проверить версию агента" description="Симулятор клиента сыграет сценарии с агентом, судья оценит каждый диалог. Результат сравнится с предыдущей версией.">
+            <Modal open={newRun} onClose={() => setNewRun(false)} title="Проверить версию агента" description="Симулятор клиента сыграет сценарии с агентом, судья оценит каждый диалог по критериям.">
               <NewRun state={state} target={target} setTarget={setTarget} onStarted={() => { setNewRun(false); navigate("/lab/overview"); }} />
             </Modal>
           )}

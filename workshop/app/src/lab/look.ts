@@ -1,10 +1,6 @@
 import { CircleHelp, Keyboard, MessageSquareQuote, User, Zap, type LucideIcon } from "lucide-react";
 import type { Persona, Status } from "./types";
 
-/** The two lines under the logo: what is being tested. */
-export const AGENT_TITLE = "Агент эквайринга";
-export const AGENT_SUBTITLE = "СберБизнес · чат поддержки";
-
 export type Hue = "accent" | "ok" | "bad" | "warn" | "mute";
 
 /** Full class names on purpose: Tailwind only keeps what it can read. */

@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { FileText, SlidersHorizontal, TriangleAlert, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, upload } from "../api";
-import { count, pct, plural, whenLong } from "../format";
+import { count, plural, whenLong } from "../format";
 import { JobLine } from "../JobLine";
 import { Confirm } from "../modal";
 import { setupSteps } from "../nav";
@@ -49,7 +49,7 @@ function FormatHint() {
 }
 
 /** Step 2: the real dialogues. The judge reads what the agent already said — the agent is not run. */
-export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: () => void; onCriteria: () => void }) {
+export function LogsView({ state, onGo, onCriterion }: { state: LabState; onGo: () => void; onCriterion: (rule: string) => void }) {
   const { error } = useToast();
   const d = state.discover;
   const [sample, setSample] = useState(d?.sampled ?? 60);
@@ -116,7 +116,7 @@ export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: (
         <header className="pt-10">
           <Label>Шаг 2 · логи</Label>
           <h2 className="mt-3 text-display font-medium text-lab-ink">Выгрузка загружена: {count(state.logs.total, "диалог", "диалога", "диалогов")}.</h2>
-          <p className="mt-2 max-w-[680px] text-pretty text-lead text-lab-soft">Выберите, сколько диалогов оценить. На 20 диалогов уходит около минуты.</p>
+          <p className="mt-2 max-w-[680px] text-pretty text-lead text-lab-soft">Выберите, сколько диалогов оценить: судья выделит критерии из источников агента и проверит по ним каждый диалог.</p>
         </header>
         {toolbar}
         <EmptyState icon={FileText} title="Диалоги ещё не оценены">Нажмите «Оценить логи»: судья проверит выбранное число диалогов по критериям агента.</EmptyState>
@@ -126,7 +126,9 @@ export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: (
 
   const s = d.summary;
   const rules = d.topics.reduce((n, t) => n + t.rules.length, 0);
-  const topPattern = [...(s.patterns ?? [])].sort((a, b) => b.count - a.count)[0];
+  // The service's own list of recurring violations (discover.summarize): one per quote of the source, most frequent first.
+  const patterns = s.patterns ?? [];
+  const topPattern = patterns[0];
   const topics = d.topics.map(t => {
     const own = d.results.filter(r => r.topicId === t.id && (r.status === "PASS" || r.status === "FAIL"));
     return { id: t.id, title: t.title, rules: t.rules.length, checked: own.length, failed: own.filter(r => r.status === "FAIL").length };
@@ -135,20 +137,36 @@ export function LogsView({ state, onGo, onCriteria }: { state: LabState; onGo: (
   return (
     <Page {...page} actions={actions} primary={evaluate}>
       <Confirm open={confirm} onClose={() => setConfirm(false)} onConfirm={() => run(true)} title="Выделить критерии заново?" action="Выделить заново" danger>
-        Следующая оценка пойдёт по новым критериям, и её нельзя будет сравнить с прошлыми версиями.
+        Критерии будут выделены из источников заново: следующая оценка логов пойдёт по новому списку, а не по тому, что зафиксирован сейчас.
       </Confirm>
       <header className="pt-10">
         <Label>Шаг 2 · логи · оценены {whenLong(d.finishedAt)}</Label>
-        <h2 className="mt-3 text-balance text-display font-medium text-lab-ink">Нарушения в {s.failed} из {count(s.checked, "реального диалога", "реальных диалогов", "реальных диалогов")}.</h2>
+        <h2 className="mt-3 text-balance text-display font-medium text-lab-ink">Нарушения в {s.failed} из {count(s.measured, "реального диалога", "реальных диалогов", "реальных диалогов")}.</h2>
         {topPattern && <p className="mt-2 max-w-[720px] text-pretty text-lead text-lab-soft">Чаще всего: «{topPattern.rule}» — {count(topPattern.count, "диалог", "диалога", "диалогов")}.</p>}
       </header>
       {toolbar}
       <Strip className="mt-4">
         <Stat label="Оценено" value={s.checked} sub={`из ${state.logs.total} в выгрузке`} />
         <Stat label="С нарушениями" value={s.failed} hue={s.failed ? "bad" : undefined} sub={s.unmeasured ? `ещё ${s.unmeasured} без данных` : plural(s.failed, "диалог", "диалога", "диалогов")} />
-        <Stat label="Критериев" value={rules} sub={`в ${count(d.topics.length, "теме", "темах", "темах")}`} onClick={onCriteria} />
-        {s.secondJudge && <Stat label="Второй судья" value={`${pct(s.secondJudge.agree, s.secondJudge.checked)}%`} sub="согласен с итогом" hue={pct(s.secondJudge.agree, s.secondJudge.checked) >= 80 ? "ok" : "warn"} />}
+        <Stat label="Критериев" value={rules} sub={`в ${count(d.topics.length, "теме", "темах", "темах")}`} />
+        {s.secondJudge && <Stat label="Второй судья согласен" value={`${s.secondJudge.agree} из ${s.secondJudge.checked}`} sub={s.secondJudge.model} />}
       </Strip>
+
+      {patterns.length > 0 && (
+        <Section title="Нарушения" count={patterns.length} hint="по цитате источника, чаще всего сверху">
+          <div className="divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">
+            {patterns.map(p => (
+              <button key={p.quote} onClick={() => onCriterion(p.rule)} className="lab-focus-inset group flex w-full items-center gap-4 px-4 py-2.5 text-left transition-colors duration-100 hover:bg-white/[0.03]">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body text-lab-ink" title={p.rule}>{p.rule}</span>
+                  <span className="block truncate text-caption text-lab-mute" title={p.quote}>«{p.quote}» · {p.topics.join(", ")}</span>
+                </span>
+                <span className="flex-shrink-0 whitespace-nowrap text-body tabular-nums text-lab-mute">{count(p.count, "диалог", "диалога", "диалогов")}</span>
+              </button>
+            ))}
+          </div>
+        </Section>
+      )}
 
       <Section title="Темы" count={topics.length} hint="справа — диалоги темы с нарушением">
         <div className="divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">

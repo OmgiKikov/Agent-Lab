@@ -9,6 +9,7 @@
 import { useCallback } from "react";
 import { Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { RotateCw } from "lucide-react";
+import { normRule } from "../lab/criteria";
 import { useLabContext } from "../lab/LabContext";
 import { LEGACY, STEPS } from "../lab/nav";
 import type { Step } from "../lab/types";
@@ -86,7 +87,7 @@ export function LabPage() {
         ? <JudgeCheckPage state={state} scope={scope} onBack={() => go("judge")} onOpen={key => openDialog(key)} />
         : <TrustView state={state} run={scope.finished ?? run} onJudge={goJudge} />)}
       {step === "agent" && <AgentView state={state} />}
-      {step === "logs" && <LogsView state={state} onGo={() => go("agent")} onCriteria={() => go("overview")} />}
+      {step === "logs" && <LogsView state={state} onGo={() => go("agent")} onCriterion={rule => go("criteria", normRule(rule))} />}
       {step === "checks" && (card ? <CardView card={card} state={state} onBack={() => go("checks")} /> : <CardsView state={state} onPick={id => go("checks", id)} />)}
     </>
   );

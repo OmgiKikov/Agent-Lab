@@ -64,10 +64,10 @@ export function AgentView({ state }: { state: LabState }) {
   };
   const reachable = state.targets.filter(t => t.kind === "http" && t.ready);
 
-  const withRules = state.sources.filter(src => src.rules > 0 || src.kind !== "prompt");
-  const hidden = state.sources.length - withRules.length;
-  const totalRules = withRules.reduce((n, src) => n + src.rules, 0);
-  const kinds = Object.keys(SOURCE).map(kind => ({ kind, rules: withRules.filter(s => s.kind === kind).reduce((n, s) => n + s.rules, 0) })).filter(k => k.rules > 0);
+  // The service counts a source's criteria from the log audit (api.source_summary): before the audit every source has none.
+  const audited = !!state.discover;
+  const totalRules = state.sources.reduce((n, src) => n + src.rules, 0);
+  const kinds = Object.keys(SOURCE).map(kind => ({ kind, rules: state.sources.filter(s => s.kind === kind).reduce((n, s) => n + s.rules, 0) })).filter(k => k.rules > 0);
   const logsDone = setupSteps(state)[1].done;
   const collect = (
     <Button variant={state.sources.length ? "secondary" : "primary"} icon={Bot} disabled={state.job.running || !saved.repo} onClick={() => api("/api/sources", {}).catch(error)}
@@ -81,22 +81,26 @@ export function AgentView({ state }: { state: LabState }) {
       <header className="pt-10">
         <Label>Шаг 1 · агент</Label>
         <h2 className="mt-3 text-balance text-display font-medium text-lab-ink">
-          {state.sources.length ? `${count(totalRules, "критерий", "критерия", "критериев")} из кода агента.` : "Подключите агента."}
+          {state.sources.length ? `${count(state.sources.length, "источник", "источника", "источников")} из кода агента.` : "Подключите агента."}
         </h2>
         <p className="mt-2 max-w-[680px] text-pretty text-lead text-lab-soft">
-          {state.sources.length ? "Их источники — промпты, инструменты и база знаний. У каждого критерия есть цитата-первоисточник." : "Укажите адрес агента и его репозиторий: из промптов и инструментов получатся критерии проверки."}
+          {!state.sources.length ? "Укажите адрес агента и его репозиторий: из кода берутся промпты, инструменты и база знаний."
+            : audited ? `Оценка логов выделила из них ${count(totalRules, "критерий", "критерия", "критериев")}, у каждого есть цитата-первоисточник.`
+              : "Критерии из них выделит оценка логов — следующий шаг."}
         </p>
         <div className="mt-4"><JobLine state={state} kind="sources" /></div>
       </header>
 
       {state.sources.length > 0 ? (
-        <Section title="Источники критериев" count={withRules.length}>
-          <Strip>
-            <Stat label="Критериев" value={totalRules} sub={`из ${count(withRules.length, "источника", "источников", "источников")}`} />
-            {kinds.map(k => <Stat key={k.kind} label={SOURCE[k.kind].label} value={k.rules} sub={plural(k.rules, "критерий", "критерия", "критериев")} />)}
-          </Strip>
-          <div className="mt-3 divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">
-            {withRules.map(src => {
+        <Section title="Источники" count={state.sources.length}>
+          {audited && (
+            <Strip>
+              <Stat label="Критериев" value={totalRules} sub={`из ${count(state.sources.length, "источника", "источников", "источников")}`} />
+              {kinds.map(k => <Stat key={k.kind} label={SOURCE[k.kind].label} value={k.rules} sub={plural(k.rules, "критерий", "критерия", "критериев")} />)}
+            </Strip>
+          )}
+          <div className={cn("divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel", audited && "mt-3")}>
+            {state.sources.map(src => {
               const meta = SOURCE[src.kind] ?? { label: src.kind, icon: BookOpen };
               return (
                 <div key={src.id} className="flex items-center gap-3 px-4 py-2.5">
@@ -105,11 +109,10 @@ export function AgentView({ state }: { state: LabState }) {
                     <div className="truncate font-mono text-caption text-lab-text" title={src.origin}>{src.origin}</div>
                     <div className="text-caption text-lab-mute">{meta.label} · {thousands(src.chars)}</div>
                   </div>
-                  <span className="flex-shrink-0 text-body tabular-nums text-lab-soft">{count(src.rules, "критерий", "критерия", "критериев")}</span>
+                  {audited && <span className="flex-shrink-0 text-body tabular-nums text-lab-soft">{src.rules ? count(src.rules, "критерий", "критерия", "критериев") : "без критериев"}</span>}
                 </div>
               );
             })}
-            {hidden > 0 && <div className="px-4 py-2.5 text-caption text-lab-mute">Ещё {count(hidden, "промпт", "промпта", "промптов")} без критериев скрыто: это классификаторы маршрутизации.</div>}
           </div>
         </Section>
       ) : (

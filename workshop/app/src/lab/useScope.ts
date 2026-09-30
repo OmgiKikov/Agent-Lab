@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { compareCriteria, deriveCriteria, historyOf, logDialogs, measured, provenanceOf, simDialogs, summarize, type Dialog } from "./criteria";
+import { deriveCriteria, historyOf, logDialogs, measured, provenanceOf, simDialogs, summarize, type Dialog } from "./criteria";
 import type { LabRun, LabState } from "./types";
 import { useRunContext } from "./useRunContext";
 
@@ -22,10 +22,10 @@ export function useScope(state: LabState | null, run: LabRun | null) {
 
   const comparing = !!previous && !!previousItems;
   const criteria = useMemo(() => deriveCriteria(dialogs, provenance), [dialogs, provenance]);
-  // A version changes only what the simulator sees: the change of a criterion is counted on simulated dialogues, both sides.
-  const compared = useMemo(
-    () => compareCriteria(criteria, comparing ? deriveCriteria(prevSims, provenance) : null, c => c.by.sim.failed),
-    [criteria, comparing, prevSims, provenance],
+  /** The same criteria counted in the previous check's dialogues: shown beside this check's counts, never compared. */
+  const previousCriteria = useMemo(
+    () => new Map(comparing ? deriveCriteria(prevSims, provenance).map(c => [c.key, c]) : []),
+    [comparing, prevSims, provenance],
   );
 
   const sim = useMemo(() => summarize(sims), [sims]);
@@ -40,7 +40,7 @@ export function useScope(state: LabState | null, run: LabRun | null) {
     finished, previous, sameAgent, versions, history, comparing,
     /** Every dialogue: the version's simulated ones first, then the real logs. */
     dialogs, sims, logs, prevSims,
-    criteria, compared,
+    criteria, previousCriteria,
     /** Dialogues without violations: the version's (simulator), the previous version's, and the real logs'. */
     sim, prevSim, log,
     /** @deprecated Use `sim` (or `log` when there is no run). */

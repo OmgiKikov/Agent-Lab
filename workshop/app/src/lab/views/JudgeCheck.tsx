@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, ExternalLink, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { count, pct } from "../format";
+import { count } from "../format";
 import { disputed } from "../logic";
 import type { Item, LabRun, LabState } from "../types";
 import { Button, Label, PersonaTag, Verdict } from "../ui";
@@ -9,7 +9,6 @@ import { Conversation } from "../Conversation";
 
 type Decision = "agree" | "disagree";
 /** Below this many answers a percentage says nothing, so it is not shown. */
-const MIN_CHECKED = 10;
 
 /**
  * Checking the judge: a person goes through the verdicts one by one and says whether the judge is right.
@@ -60,7 +59,7 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
   });
 
   if (!queue.length) return <div className="flex h-full items-center justify-center text-body text-lab-mute">В этой проверке нет оценённых диалогов</div>;
-  const share = reviewed.length >= MIN_CHECKED ? pct(agree, reviewed.length) : null;
+
   const decision = decisionOf(index);
   const verdictWord = item.status === "PASS" ? "без нарушений" : "нарушение";
 
@@ -74,10 +73,8 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
             <div className="mt-0.5 text-body text-lab-mute">Прочитайте диалог и ответьте, верен ли вердикт. Спорные идут первыми.</div>
           </div>
           <div className="flex-shrink-0 text-right">
-            <div className="text-metric font-medium tabular-nums text-lab-ink">{share === null ? "—" : `${share}%`}</div>
-            <div className="text-caption tabular-nums text-lab-mute">
-              {share === null ? `ещё ${MIN_CHECKED - reviewed.length} до первого процента` : `судья прав · сверено ${reviewed.length} из ${queue.length}`}
-            </div>
+            <div className="text-metric font-medium tabular-nums text-lab-ink">{reviewed.length ? `${agree} из ${reviewed.length}` : "—"}</div>
+            <div className="text-caption tabular-nums text-lab-mute">судья прав · сверено {reviewed.length} из {queue.length}</div>
           </div>
         </div>
         <div className="mx-auto mt-4 flex max-w-[800px] gap-[2px]" role="list" aria-label="Очередь вердиктов">
@@ -95,7 +92,6 @@ export function JudgeCheck({ run, state, onReview, onOpen }: {
         <div className="flex-shrink-0 border-b border-lab-line bg-lab-panel px-6 py-3">
           <div className="mx-auto max-w-[800px] text-body text-lab-text">
             Сверены все {count(queue.length, "вердикт", "вердикта", "вердиктов")}: судья прав в {agree} из {queue.length}.
-            {share !== null && share < 80 ? " Это мало: числу пока верить рано. Посмотрите на странице «Судья», в каких критериях он ошибается." : " Числу версии можно верить."}
           </div>
         </div>
       )}

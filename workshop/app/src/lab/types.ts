@@ -43,7 +43,7 @@ export type Topic = { id: string; title: string; rules: Criterion[] };
 export type Discover = {
   sampled: number; model: string; finishedAt: string; rulesSince?: string; topics: Topic[]; results: LogResult[];
   summary: {
-    checked: number; failed: number; passed: number; unmeasured: number; patterns: Pattern[];
+    checked: number; measured: number; failed: number; passed: number; unmeasured: number; patterns: Pattern[];
     secondJudge?: { model: string; checked: number; agree: number } | null;
   };
 };

@@ -1,8 +1,7 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { cellOf, cellShare, type Cell, type CellState } from "../logic";
+import { cellOf, type Cell, type CellState } from "../logic";
 import { DEFAULT_PERSONA } from "../look";
-import type { Item, Persona } from "../types";
+import type { Item, Metric, Persona } from "../types";
 import { Meter, PersonaIcon, StatusIcon, Tip } from "../ui";
 
 /** A pass is quiet, a failure is loud, a doubt is amber; every state also has its own glyph, so colour is never the only channel. */
@@ -30,11 +29,10 @@ function Glyph({ cell }: { cell: Cell }) {
   }
 }
 
-function CellView({ cell, delta, broken, label, previous, onOpen }: { cell: Cell; delta: number; broken: boolean; label: string; previous?: string; onOpen: () => void }) {
+function CellView({ cell, broken, label, onOpen }: { cell: Cell; broken: boolean; label: string; onOpen: () => void }) {
   const text = [
     `${label}: ${CELL_TEXT[cell.state]}${cell.total > 1 && cell.done ? ` (${cell.passed} из ${cell.done})` : ""}`,
     broken ? "обычный клиент проходит, этот тип нет" : "",
-    delta && previous ? `в ${previous} нарушений здесь было ${delta > 0 ? "больше" : "меньше"}` : "",
   ].filter(Boolean).join(". ");
   return (
     <Tip text={text} className="flex">
@@ -44,73 +42,46 @@ function CellView({ cell, delta, broken, label, previous, onOpen }: { cell: Cell
       >
         <Glyph cell={cell} />
         {broken && <span className="absolute right-1 top-1 size-1.5 rounded-full bg-lab-warn ring-2 ring-lab-panel" />}
-        {delta !== 0 && (
-          <span className={cn("absolute -bottom-1 -right-1 flex size-4 items-center justify-center rounded-full text-lab-canvas ring-2 ring-lab-panel", delta > 0 ? "bg-lab-ok" : "bg-lab-bad")}>
-            {delta > 0 ? <ArrowUp className="size-2.5" strokeWidth={3} /> : <ArrowDown className="size-2.5" strokeWidth={3} />}
-          </span>
-        )}
       </button>
     </Tip>
   );
 }
 
 /**
- * The facts of the map, counted once for the header of every column and for the sentence above the map:
- * how many scenario × customer type pairs were played, and in how many something is broken (a failure, or repeats that disagree).
+ * Scenario × customer type, one cell per pair with all its repeats. Each column head is the service's accuracy for that
+ * customer type (`metric.personas`, lab/metric.py); «Итого» counts the scenario's dialogues. The worst scenarios come first.
+ * The amber dot is the reading lab/personas.py gives the types: a scenario the ordinary customer passes and this type fails.
+ * A cell opens the dialogue (the failed one when repeats differ). On a narrow screen the map scrolls inside its own frame.
  */
-export function mapFacts(items: Item[], personas: Persona[], scenarios: { id: string }[]) {
-  const per = personas.map(persona => {
-    let clean = 0, broken = 0;
-    for (const s of scenarios) {
-      const c = cellOf(items, s.id, persona.id);
-      if (c.state === "PASS") clean++;
-      else if (c.state === "FAIL" || c.state === "MIXED") broken++;
-    }
-    return { persona, clean, broken, seen: clean + broken };
-  });
-  const seen = per.reduce((n, p) => n + p.seen, 0);
-  const broken = per.reduce((n, p) => n + p.broken, 0);
-  const mixed = personas.reduce((n, p) => n + scenarios.filter(s => cellOf(items, s.id, p.id).state === "MIXED").length, 0);
-  return { per, seen, broken, mixed };
-}
-
-/**
- * Scenario × customer type. The worst scenarios come first. Each column head says how many scenarios that customer type passes cleanly;
- * a cell opens the dialogue (the failed one when repeats differ). On a narrow screen the map scrolls inside its own frame.
- */
-export function Heatmap({ personas, scenarios, items, previous, previousVersion, compare, onOpen }: {
+export function Heatmap({ personas, scenarios, items, accuracy, onOpen }: {
   personas: Persona[];
   scenarios: { id: string; name: string }[];
   items: Item[];
-  previous?: Item[] | null;
-  previousVersion?: string;
-  compare?: boolean;
+  /** `metric.personas` of the run: the service's accuracy per customer type (present when more than one type played). */
+  accuracy?: Metric["personas"];
   onOpen: (item: Item) => void;
 }) {
   const cols = `minmax(150px,1.6fr) repeat(${personas.length}, minmax(64px,1fr)) 64px`;
-  const facts = mapFacts(items, personas, scenarios);
-  const best = Math.max(0, ...facts.per.filter(p => p.seen).map(p => p.clean / p.seen));
   const rows = scenarios
     .map((s, i) => {
       const cells = personas.map(p => cellOf(items, s.id, p.id));
       return { s, i, cells, bad: cells.filter(c => c.state === "FAIL" || c.state === "MIXED").length };
     })
     .sort((a, b) => b.bad - a.bad || a.i - b.i);
-  const showDelta = !!compare && !!previous;
 
   return (
     <div>
       <div className="-mx-5 overflow-x-auto px-5 pb-1 sm:mx-0 sm:overflow-visible sm:px-0 sm:pb-0">
         <div className="grid items-end gap-x-1.5 gap-y-1.5" style={{ gridTemplateColumns: cols }}>
           <div className="sticky left-0 z-10 bg-lab-panel" />
-          {facts.per.map(({ persona, clean, seen }) => {
-            const weak = seen > 0 && best - clean / seen >= 0.15;
+          {personas.map(persona => {
+            const a = accuracy?.[persona.id];
             return (
-              <div key={persona.id} className="flex flex-col items-center gap-1 pb-2 text-center" title={`${persona.name}: без нарушений в ${clean} из ${seen} сценариев`}>
+              <div key={persona.id} className="flex flex-col items-center gap-1 pb-2 text-center" title={a ? `${persona.name}: без нарушений ${a.passed} из ${a.measured} диалогов` : persona.note}>
                 <PersonaIcon id={persona.id} size={24} />
                 <span className="text-caption font-medium leading-tight text-lab-text">{persona.name}</span>
-                <span className="text-caption tabular-nums text-lab-mute">{seen ? `${clean} из ${seen}` : "—"}</span>
-                <Meter value={seen ? (100 * clean) / seen : 0} hue={weak ? "warn" : undefined} className="w-full" />
+                {a && <span className="text-caption tabular-nums text-lab-mute">{a.accuracy === null ? "—" : `${a.accuracy}%`}</span>}
+                {a && a.accuracy !== null && <Meter value={a.accuracy} className="w-full" />}
               </div>
             );
           })}
@@ -118,20 +89,17 @@ export function Heatmap({ personas, scenarios, items, previous, previousVersion,
 
           {rows.map(({ s, cells }) => {
             const ordinary = cellOf(items, s.id, DEFAULT_PERSONA);
-            const seen = cells.filter(c => c.state === "PASS" || c.state === "FAIL" || c.state === "MIXED").length;
-            const ok = cells.filter(c => c.state === "PASS").length;
+            const own = items.filter(i => i.cardId === s.id && (i.status === "PASS" || i.status === "FAIL"));
+            const ok = own.filter(i => i.status === "PASS").length;
             return (
               <div key={s.id} className="contents">
                 <div className="sticky left-0 z-10 truncate bg-lab-panel pr-2 text-body text-lab-text" title={s.name}>{s.name}</div>
                 {personas.map((p, i) => {
                   const cell = cells[i];
-                  const before = showDelta ? cellShare(cellOf(previous!, s.id, p.id)) : null;
-                  const now = cellShare(cell);
-                  const delta = before !== null && now !== null ? Math.sign(now - before) : 0;
                   const broken = p.id !== DEFAULT_PERSONA && ordinary.state === "PASS" && cell.state === "FAIL";
-                  return <CellView key={p.id} cell={cell} delta={delta} broken={broken} previous={previousVersion} label={`${s.name} · ${p.name}`} onOpen={() => cell.first && onOpen(cell.first)} />;
+                  return <CellView key={p.id} cell={cell} broken={broken} label={`${s.name} · ${p.name}`} onOpen={() => cell.first && onOpen(cell.first)} />;
                 })}
-                <div className="text-center text-caption tabular-nums text-lab-mute">{seen ? `${ok} из ${seen}` : "—"}</div>
+                <div className="text-center text-caption tabular-nums text-lab-mute" title="Диалоги сценария без нарушений">{own.length ? `${ok} из ${own.length}` : "—"}</div>
               </div>
             );
           })}
@@ -144,13 +112,6 @@ export function Heatmap({ personas, scenarios, items, previous, previousVersion,
         <Legend state="MIXED" text="1/2">по-разному на повторах</Legend>
         <Legend state="UNMEASURED">нет данных</Legend>
         {personas.length > 1 && <span className="inline-flex items-center gap-2"><span className="size-1.5 rounded-full bg-lab-warn" />обычный клиент проходит, этот тип нет</span>}
-        {showDelta && (
-          <span className="inline-flex items-center gap-2">
-            <span className="flex size-4 items-center justify-center rounded-full bg-lab-ok text-lab-canvas"><ArrowUp className="size-2.5" strokeWidth={3} /></span>
-            <span className="-ml-1 flex size-4 items-center justify-center rounded-full bg-lab-bad text-lab-canvas"><ArrowDown className="size-2.5" strokeWidth={3} /></span>
-            нарушений меньше или больше, чем в {previousVersion ?? "прошлой версии"}
-          </span>
-        )}
       </div>
     </div>
   );

@@ -4,7 +4,8 @@ import type { Discover, Item, LabRun, LabState, Rule, Status } from "./types";
 /**
  * The model of the whole Lab: a criterion is a thing the agent must do; a dialogue is evidence, from a real log or from the simulator;
  * the judge's verdict joins them (0 or 1 with a reason). Everything on screen is a view of these three.
- * The service keeps no criteria of its own, so they are gathered here from the rules of every verdict, by the text of the rule.
+ * The service judges every dialogue rule by rule (lab/judge.py) and does not group the rows across dialogues,
+ * so they are grouped here by the text of the rule: a criterion's numbers are counts of the judge's own rows.
  */
 
 export type Origin = "log" | "sim";
@@ -25,9 +26,6 @@ export type Criterion = {
   failing: Dialog[]; passing: Dialog[];
   quote?: string; kind?: string;
 };
-
-export type Change = "new" | "remains" | "fixed";
-export type Compared = { criterion: Criterion; change: Change | null; before: number };
 
 export const normRule = (rule: string) => rule.trim().toLowerCase().replace(/\s+/g, " ");
 export const rate = (t: Tally) => (t.passed + t.failed ? t.passed / (t.passed + t.failed) : null);
@@ -75,23 +73,6 @@ export function deriveCriteria(dialogs: Dialog[], provenance?: Map<string, { quo
   return [...found.values()].sort((a, b) => b.failed - a.failed || (rate(a) ?? 1) - (rate(b) ?? 1) || b.passed - a.passed);
 }
 
-/**
- * The criteria against those of the previous version: new (broken now, not before), still broken, fixed. Without a previous version there is no verdict.
- * `failedNow` says which violations count for the version: the simulator's, since the real logs are the same for every version.
- */
-export function compareCriteria(current: Criterion[], previous: Criterion[] | null, failedNow: (c: Criterion) => number = c => c.failed): Compared[] {
-  if (!previous) return current.map(criterion => ({ criterion, change: null, before: 0 }));
-  const before = new Map(previous.map(c => [c.key, c]));
-  const out: Compared[] = current.map(criterion => {
-    const was = before.get(criterion.key)?.failed ?? 0;
-    const is = failedNow(criterion);
-    return { criterion, before: was, change: is > 0 ? (was > 0 ? "remains" : "new") : was > 0 ? "fixed" : null };
-  });
-  const present = new Set(current.map(c => c.key));
-  for (const c of previous) if (c.failed > 0 && !present.has(c.key)) out.push({ criterion: { ...c, passed: 0, failed: 0, failing: [], passing: [], by: { log: { passed: 0, failed: 0 }, sim: { passed: 0, failed: 0 } } }, change: "fixed", before: c.failed });
-  return out;
-}
-
 export type Summary = { measured: number; clean: number; share: number | null; unmeasured: number };
 
 export function summarize(dialogs: Dialog[]): Summary {
@@ -113,3 +94,6 @@ export function historyOf(key: string, runs: LabRun[]): (number | null)[] {
 }
 
 export const KIND_LABEL: Record<string, string> = { prompt: "промпт", tools: "инструменты", knowledge: "база знаний" };
+
+/** «реальный» / «симулятор»: where a dialogue comes from. */
+export const sourceName = (d: Dialog) => (d.origin === "log" ? "реальный" : "симулятор");
