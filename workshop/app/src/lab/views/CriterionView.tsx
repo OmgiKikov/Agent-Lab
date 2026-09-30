@@ -23,13 +23,12 @@ function originPath(state: LabState, key: string): string | undefined {
   for (const t of state.discover?.topics ?? []) for (const r of t.rules) if (normRule(r.text) === key && r.sourceId) return state.sources.find(s => s.id === r.sourceId)?.origin;
 }
 
-/** A fact of the claim: a mono label, the value, and an optional bar of the share. */
-function Fact({ label, children, share }: { label: string; children: ReactNode; share?: number }) {
+/** A fact of the claim beside its one number: a mono label and the value. */
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-center gap-3 py-2.5">
       <Label className="w-[112px] flex-shrink-0">{label}</Label>
       <span className="min-w-0 flex-1 text-body tabular-nums text-lab-text">{children}</span>
-      {share !== undefined && <span className="h-1 w-16 flex-shrink-0 overflow-hidden rounded-sm bg-white/[0.07]"><span className="block h-full bg-lab-bad/80" style={{ width: `${100 * share}%` }} /></span>}
     </div>
   );
 }
@@ -123,6 +122,11 @@ function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: Lab
   const { sim, log } = c.by;
   const nSim = sim.failed + sim.passed, nLog = log.failed + log.passed;
   const was = scope.previousCriteria.get(c.key)?.by.sim;
+  const main = nSim > 0
+    ? { failed: sim.failed, n: nSim, what: `диалогов проверки ${scope.finished?.version ?? ""}`.trim() }
+    : { failed: log.failed, n: nLog, what: "реальных диалогов из логов" };
+  const secondaryLog = nSim > 0 && nLog > 0;
+  const prevShown = nSim > 0 && !!scope.previous && !!was && was.failed + was.passed > 0;
   const chip = c.failed > 0 ? { text: "нарушается", hue: "bad" as const } : { text: "выполняется", hue: "mute" as const };
 
   const byType = state.personas
@@ -132,7 +136,6 @@ function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: Lab
     })
     .filter(t => t.total > 0);
   const past = scope.history(c.key);
-  const bars = past.map(v => (v === null ? null : 100 - v));
   const KindIcon = KIND_ICON[c.kind ?? ""] ?? FileText;
   const path = originPath(state, c.key);
 
@@ -156,6 +159,13 @@ function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: Lab
           <Verdict hue={chip.hue}>{chip.text}</Verdict>
           <h2 className="mt-3 text-balance text-title font-medium text-lab-ink">{c.title}</h2>
 
+          {/* The criterion's one number: in how many of the check's dialogues the judge found it broken (the real logs when there is no check). */}
+          <div className="mt-6">
+            <Label>Нарушен</Label>
+            <div className="mt-2 text-metric font-medium tabular-nums text-lab-ink">{main.failed} из {main.n}</div>
+            <div className="mt-1 text-caption text-lab-mute">{main.what}</div>
+          </div>
+
           {(c.quote || c.kind) && (
             <figure className="mt-6">
               <figcaption className="flex items-center gap-2">
@@ -167,25 +177,30 @@ function Detail({ state, scope, entry, back, onBack, onTrace, go }: { state: Lab
             </figure>
           )}
 
-          <div className="mt-6 divide-y divide-lab-line border-y border-lab-line">
-            {nSim > 0 && <Fact label="Симулятор" share={sim.failed / nSim}>{sim.failed ? <>нарушен в <b className="font-medium text-lab-ink">{sim.failed}</b> из {nSim}</> : <>не нарушен ни в одном из {nSim}</>}</Fact>}
-            {nLog > 0 && <Fact label="Реальные" share={log.failed / nLog}>{log.failed ? <>нарушен в <b className="font-medium text-lab-ink">{log.failed}</b> из {nLog}</> : <>не нарушен ни в одном из {nLog}</>}</Fact>}
-            {scope.previous && was && was.failed + was.passed > 0 && <Fact label={`В ${scope.previous.version}`}>нарушен в {was.failed} из {was.failed + was.passed}</Fact>}
-          </div>
+          {(secondaryLog || prevShown) && (
+            <div className="mt-6 divide-y divide-lab-line border-y border-lab-line">
+              {secondaryLog && <Fact label="Реальные">нарушен в {log.failed} из {nLog}</Fact>}
+              {prevShown && <Fact label={`В ${scope.previous!.version}`}>нарушен в {was!.failed} из {was!.failed + was!.passed}</Fact>}
+            </div>
+          )}
 
-          {bars.filter(v => v !== null).length > 1 && (
+          {past.filter(Boolean).length > 1 && (
             <div className="mt-6">
-              <Label>Нарушения по версиям</Label>
+              <Label>Нарушен по проверкам</Label>
               <div className="mt-3 flex items-end gap-4">
-                {bars.map((v, i) => (
-                  <div key={scope.versions[i] ?? i} className="flex flex-col items-center gap-1.5" title={v === null ? `В ${scope.versions[i]} не проверялся` : `В ${scope.versions[i]}: нарушен в ${v}% диалогов`}>
-                    <span className={cn("font-mono text-micro tabular-nums", i === bars.length - 1 ? "text-lab-ink" : "text-lab-mute")}>{v === null ? "—" : `${v}%`}</span>
-                    <span className="flex h-10 items-end" aria-hidden>
-                      <span className={cn("w-3 rounded-[1px]", v === null ? "bg-white/[0.06]" : i === bars.length - 1 ? (v > 0 ? "bg-lab-bad" : "bg-lab-mute") : "bg-white/25")} style={{ height: v === null ? 2 : Math.max(2, Math.round((40 * v) / 100)) }} />
-                    </span>
-                    <span className={cn("font-mono text-micro tabular-nums", i === bars.length - 1 ? "text-lab-ink" : "text-lab-mute")}>{scope.versions[i]}</span>
-                  </div>
-                ))}
+                {past.map((t, i) => {
+                  const n = t ? t.failed + t.passed : 0;
+                  const last = i === past.length - 1;
+                  return (
+                    <div key={scope.versions[i] ?? i} className="flex flex-col items-center gap-1.5" title={t ? `В ${scope.versions[i]}: нарушен в ${t.failed} из ${n}` : `В ${scope.versions[i]} не проверялся`}>
+                      <span className={cn("font-mono text-micro tabular-nums", last ? "text-lab-ink" : "text-lab-mute")}>{t ? `${t.failed}/${n}` : "—"}</span>
+                      <span className="flex h-10 items-end" aria-hidden>
+                        <span className={cn("w-3 rounded-[1px]", !t ? "bg-white/[0.06]" : last ? (t.failed ? "bg-lab-bad" : "bg-lab-mute") : "bg-white/25")} style={{ height: t ? Math.max(2, Math.round((40 * t.failed) / n)) : 2 }} />
+                      </span>
+                      <span className={cn("font-mono text-micro tabular-nums", last ? "text-lab-ink" : "text-lab-mute")}>{scope.versions[i]}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

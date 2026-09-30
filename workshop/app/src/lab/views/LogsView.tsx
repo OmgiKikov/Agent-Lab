@@ -2,14 +2,14 @@ import { useRef, useState } from "react";
 import { FileText, SlidersHorizontal, TriangleAlert, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, upload } from "../api";
-import { count, plural, whenLong } from "../format";
+import { count, whenLong } from "../format";
 import { JobLine } from "../JobLine";
 import { Confirm } from "../modal";
 import { setupSteps } from "../nav";
 import { NextStep, SetupSteps } from "../Setup";
 import { useToast } from "../toast";
 import type { LabState } from "../types";
-import { Button, EmptyState, Label, LinkButton, Page, Section, Stat, Strip, inputClass } from "../ui";
+import { Button, EmptyState, Hero, Label, LinkButton, Numbers, Page, Section, inputClass } from "../ui";
 
 function DropZone({ busy, onFile, onPick }: { busy: boolean; onFile: (f: File) => void; onPick: () => void }) {
   const [over, setOver] = useState(false);
@@ -102,7 +102,7 @@ export function LogsView({ state, onGo, onCriterion }: { state: LabState; onGo: 
       <JobLine state={state} kind="discover" />
       {noSources && (
         <div className="flex w-full items-center gap-2 text-body text-lab-warn">
-          <TriangleAlert className="size-4" />Судье пока не на что опереться: нет критериев.
+          <TriangleAlert className="size-4" />Судье не из чего выделить критерии: нет источников.
           <LinkButton onClick={onGo}>Подключите агента</LinkButton>
         </div>
       )}
@@ -128,7 +128,6 @@ export function LogsView({ state, onGo, onCriterion }: { state: LabState; onGo: 
   const rules = d.topics.reduce((n, t) => n + t.rules.length, 0);
   // The service's own list of recurring violations (discover.summarize): one per quote of the source, most frequent first.
   const patterns = s.patterns ?? [];
-  const topPattern = patterns[0];
   const topics = d.topics.map(t => {
     const own = d.results.filter(r => r.topicId === t.id && (r.status === "PASS" || r.status === "FAIL"));
     return { id: t.id, title: t.title, rules: t.rules.length, checked: own.length, failed: own.filter(r => r.status === "FAIL").length };
@@ -141,16 +140,17 @@ export function LogsView({ state, onGo, onCriterion }: { state: LabState; onGo: 
       </Confirm>
       <header className="pt-10">
         <Label>Шаг 2 · логи · оценены {whenLong(d.finishedAt)}</Label>
-        <h2 className="mt-3 text-balance text-display font-medium text-lab-ink">Нарушения в {s.failed} из {count(s.measured, "реального диалога", "реальных диалогов", "реальных диалогов")}.</h2>
-        {topPattern && <p className="mt-2 max-w-[720px] text-pretty text-lead text-lab-soft">Чаще всего: «{topPattern.rule}» — {count(topPattern.count, "диалог", "диалога", "диалогов")}.</p>}
       </header>
+      {/* The audit's own summary (discover.summarize): its one number, then the facts around it. */}
+      <Numbers className="mt-6" hero={
+        <Hero label="Без нарушений" value={`${s.passed} из ${s.measured}`}
+          sub={<>реальных диалогов{s.unmeasured ? ` · ещё ${s.unmeasured} без оценки` : ""}</>} />
+      } facts={[
+        { label: "Оценено", value: `${s.checked} из ${state.logs.total} в выгрузке` },
+        { label: "Критериев", value: `${rules} в ${count(d.topics.length, "теме", "темах", "темах")}` },
+        { label: "Второй судья", value: s.secondJudge ? `согласен в ${s.secondJudge.agree} из ${s.secondJudge.checked}` : "не оценивал", title: s.secondJudge?.model },
+      ]} />
       {toolbar}
-      <Strip className="mt-4">
-        <Stat label="Оценено" value={s.checked} sub={`из ${state.logs.total} в выгрузке`} />
-        <Stat label="С нарушениями" value={s.failed} hue={s.failed ? "bad" : undefined} sub={s.unmeasured ? `ещё ${s.unmeasured} без данных` : plural(s.failed, "диалог", "диалога", "диалогов")} />
-        <Stat label="Критериев" value={rules} sub={`в ${count(d.topics.length, "теме", "темах", "темах")}`} />
-        {s.secondJudge && <Stat label="Второй судья согласен" value={`${s.secondJudge.agree} из ${s.secondJudge.checked}`} sub={s.secondJudge.model} />}
-      </Strip>
 
       {patterns.length > 0 && (
         <Section title="Нарушения" count={patterns.length} hint="по цитате источника, чаще всего сверху">

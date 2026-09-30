@@ -6,7 +6,7 @@ import { disputed, itemKey, personaOf } from "../logic";
 import { personaName, STATUS_TEXT } from "../look";
 import type { Item, LabRun, LabState } from "../types";
 import { useRunContext } from "../useRunContext";
-import { Button, EmptyState, Kbd, Label, Page, Section, Skeleton, Stat, Strip, StatusIcon } from "../ui";
+import { Button, EmptyState, Hero, Kbd, Label, Numbers, Page, Section, Skeleton, StatusIcon } from "../ui";
 
 const dialogs = (n: number) => count(n, "диалога", "диалогов", "диалогов");
 
@@ -61,14 +61,17 @@ export function TrustView({ state, run, onJudge }: { state: LabState; run: LabRu
         <span className="inline-flex items-center gap-2"><Label>Сверка</Label>ответ клавишами <Kbd>1</Kbd><Kbd>2</Kbd></span>
       </header>
 
-      <Strip className="mt-4">
-        <Stat label="Второй судья согласен" value={m.secondJudge ? `${m.secondJudge.agree} из ${m.secondJudge.checked}` : "—"}
-          sub={m.secondJudge ? m.secondJudge.model : "не оценивал эти диалоги"} />
-        <Stat label="Сверено с человеком" value={reviewed} sub={`из ${dialogs(m.total)}`} onClick={() => onJudge(finished.id)} />
-        <Stat label="Судья прав по сверке" value={m.human ? `${m.human.agree} из ${m.human.reviewed}` : "—"} sub={m.human ? "человек согласен с вердиктом" : "сверки ещё не было"} />
-        <Stat label="Повторы" value={m.repeats ? `${m.repeats.stable} из ${m.repeats.scenarios}` : "—"}
-          sub={m.repeats ? "с одинаковым результатом" : "проверка без повторов"} />
-      </Strip>
+      <Numbers className="mt-8" hero={
+        <Hero
+          label="Судья прав по сверке"
+          value={m.human ? `${m.human.agree} из ${m.human.reviewed}` : "—"}
+          sub={m.human ? `человек согласен с вердиктом судьи · сверено ${m.human.reviewed} из ${dialogs(m.total)}` : "Сверки ещё не было: ответьте на нескольких диалогах, верен ли вердикт."}
+        />
+      } facts={[
+        { label: "Второй судья", value: m.secondJudge ? `согласен в ${m.secondJudge.agree} из ${m.secondJudge.checked}` : "не оценивал эти диалоги", title: m.secondJudge?.model },
+        { label: "Повторы", value: m.repeats ? `одинаковый результат в ${m.repeats.stable} из ${m.repeats.scenarios}` : "проверка без повторов" },
+        { label: "Ещё не сверено", value: count(left, "диалог", "диалога", "диалогов"), onClick: left ? () => onJudge(finished.id) : undefined },
+      ]} />
 
       <div className="grid gap-x-8 lg:grid-cols-2">
         <Section title="Судьи расходятся" count={split.length || undefined} hint={split.length ? "второй судья вынес другой вердикт" : undefined}>

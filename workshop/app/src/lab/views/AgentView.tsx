@@ -2,14 +2,14 @@ import { useEffect, useState } from "react";
 import { BookOpen, Bot, Check, CircleAlert, Code, Globe, Loader2, ShieldCheck, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../api";
-import { count, plural, thousands } from "../format";
+import { count, thousands } from "../format";
 import { JobLine } from "../JobLine";
 import { setupSteps } from "../nav";
 import { NextStep, SetupSteps } from "../Setup";
 import { TagInput } from "../TagInput";
 import { useToast } from "../toast";
 import type { Check as CheckResult, LabState } from "../types";
-import { Badge, Button, EmptyState, Field, Input, Label, Page, Section, Stat, Strip } from "../ui";
+import { Badge, Button, EmptyState, Field, Input, Label, Page, Section } from "../ui";
 
 const SOURCE: Record<string, { label: string; icon: LucideIcon }> = {
   prompt: { label: "Промпт", icon: Bot },
@@ -67,7 +67,6 @@ export function AgentView({ state }: { state: LabState }) {
   // The service counts a source's criteria from the log audit (api.source_summary): before the audit every source has none.
   const audited = !!state.discover;
   const totalRules = state.sources.reduce((n, src) => n + src.rules, 0);
-  const kinds = Object.keys(SOURCE).map(kind => ({ kind, rules: state.sources.filter(s => s.kind === kind).reduce((n, s) => n + s.rules, 0) })).filter(k => k.rules > 0);
   const logsDone = setupSteps(state)[1].done;
   const collect = (
     <Button variant={state.sources.length ? "secondary" : "primary"} icon={Bot} disabled={state.job.running || !saved.repo} onClick={() => api("/api/sources", {}).catch(error)}
@@ -93,13 +92,7 @@ export function AgentView({ state }: { state: LabState }) {
 
       {state.sources.length > 0 ? (
         <Section title="Источники" count={state.sources.length}>
-          {audited && (
-            <Strip>
-              <Stat label="Критериев" value={totalRules} sub={`из ${count(state.sources.length, "источника", "источников", "источников")}`} />
-              {kinds.map(k => <Stat key={k.kind} label={SOURCE[k.kind].label} value={k.rules} sub={plural(k.rules, "критерий", "критерия", "критериев")} />)}
-            </Strip>
-          )}
-          <div className={cn("divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel", audited && "mt-3")}>
+          <div className="divide-y divide-lab-line rounded-lg border border-lab-line bg-lab-panel">
             {state.sources.map(src => {
               const meta = SOURCE[src.kind] ?? { label: src.kind, icon: BookOpen };
               return (

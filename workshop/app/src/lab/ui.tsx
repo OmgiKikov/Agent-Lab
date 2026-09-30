@@ -6,7 +6,7 @@
  * No inline hex, no arbitrary text sizes, mono only for labels (`Label`), identifiers and code.
  */
 import { createContext, forwardRef, useContext, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
-import { Check, CircleHelp, Loader2, Minus, X, type LucideIcon } from "lucide-react";
+import { ArrowRight, Check, CircleHelp, Loader2, Minus, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HUE, STATUS_TEXT, personaLook, personaName, statusHue, type Hue } from "./look";
 import type { Persona, Status } from "./types";
@@ -362,53 +362,58 @@ export function Progress({ value, className }: { value: number; className?: stri
   );
 }
 
-/**
- * Raindrop's trend column: one bar per version, the last one is this version. `values` are shares 0–100 of what is counted
- * (violations), null where the version did not measure it. A bar is red only when it is this version's and not zero.
- */
-export function TrendBars({ values, labels, height = 20, className, hue = "bad" }: { values: (number | null)[]; labels?: string[]; height?: number; className?: string; hue?: Hue }) {
-  const last = values.length - 1;
-  return (
-    <span className={cn("inline-flex items-end gap-[3px]", className)} style={{ height }} aria-hidden>
-      {values.map((v, i) => (
-        <span
-          key={i} title={labels ? `${labels[i]}: ${v === null ? "не проверялся" : `${v}%`}` : undefined}
-          className={cn("w-[5px] rounded-[1px]", v === null ? "bg-white/[0.06]" : i === last ? (v > 0 ? HUE[hue].solid : "bg-lab-mute") : "bg-white/25")}
-          style={{ height: v === null ? 2 : Math.max(2, Math.round((height * v) / 100)) }}
-        />
-      ))}
-    </span>
-  );
-}
-
 /* ---------- numbers ---------- */
 
-/** Raindrop's metric strip: one surface, the metrics side by side, each a label, a value and one line of context. On a narrow screen it wraps. */
-export function Strip({ children, className }: { children: ReactNode; className?: string }) {
+/**
+ * The page's one number: the measure the service puts first — for a check, lab/metric.py's accuracy, «the one quality number».
+ * Big, with what it is made of under it and at most one quiet reference (the previous check). Nothing else on the page is as big:
+ * the eye lands here first. `side` holds a small picture of the same number (a sparkline across checks).
+ */
+export function Hero({ label, value, sub, note, side, className }: {
+  label: ReactNode; value: ReactNode; sub?: ReactNode; note?: ReactNode; side?: ReactNode; className?: string;
+}) {
   return (
-    <div className={cn("overflow-hidden rounded-lg border border-lab-line bg-lab-panel", className)}>
-      {/* The 1px gaps show the hairline through: the dividers stay right however the cells wrap. */}
-      <div className="flex flex-wrap gap-px bg-lab-line [&>*]:bg-lab-panel">{children}</div>
+    <div className={cn("min-w-0", className)}>
+      <Label>{label}</Label>
+      <div className="mt-3 flex flex-wrap items-end gap-x-5 gap-y-2">
+        <span className="text-hero font-medium tabular-nums text-lab-ink">{value}</span>
+        {side}
+      </div>
+      {sub && <p className="mt-3 text-reading text-lab-soft">{sub}</p>}
+      {note && <p className="mt-1 text-body tabular-nums text-lab-mute">{note}</p>}
     </div>
   );
 }
 
-/** One metric of a strip. `onClick` makes it a way to the evidence behind the number. */
-export function Stat({ label, value, sub, hue, onClick, className, children }: {
-  label: ReactNode; value: ReactNode; sub?: ReactNode; hue?: Hue; onClick?: () => void; className?: string; children?: ReactNode;
-}) {
-  const body = (
-    <>
-      <Label>{label}</Label>
-      <div className={cn("mt-2 text-metric font-medium tabular-nums", hue === "mute" ? "text-lab-soft" : hue ? HUE[hue].text : "text-lab-ink")}>{value}</div>
-      {sub && <div className="mt-1 text-caption text-lab-mute">{sub}</div>}
-      {children}
-    </>
+export type FactRow = { label: string; value: ReactNode; title?: string; onClick?: () => void };
+
+/** The facts beside the page's number: a mono label and a plain value per row — never as big as the number. A row with `onClick` leads to its evidence. */
+export function Facts({ rows, className }: { rows: FactRow[]; className?: string }) {
+  return (
+    <div className={cn("divide-y divide-lab-line border-y border-lab-line", className)}>
+      {rows.map(r => {
+        const inner = (
+          <>
+            <span className="lab-label w-[136px] flex-shrink-0 text-lab-mute">{r.label}</span>
+            <span className="min-w-0 flex-1 text-body tabular-nums text-lab-text">{r.value}</span>
+          </>
+        );
+        return r.onClick
+          ? <button key={r.label} onClick={r.onClick} title={r.title} className="lab-focus-inset group flex w-full items-center gap-3 py-2.5 text-left transition-colors duration-100 hover:text-lab-ink">{inner}<ArrowRight className="size-3.5 flex-shrink-0 text-lab-faint transition-colors duration-100 group-hover:text-lab-mute" /></button>
+          : <div key={r.label} title={r.title} className="flex items-center gap-3 py-2.5">{inner}</div>;
+      })}
+    </div>
   );
-  const box = "flex min-w-[150px] flex-1 flex-col items-start justify-start px-5 py-4 text-left";
-  return onClick
-    ? <button onClick={onClick} className={cn("lab-focus-inset group transition-colors duration-100 hover:bg-lab-card", box, className)}>{body}</button>
-    : <div className={cn(box, className)}>{body}</div>;
+}
+
+/** The top of a result page: the one number on the left, its facts on the right; stacked on a phone. */
+export function Numbers({ hero, facts, className }: { hero: ReactNode; facts?: FactRow[]; className?: string }) {
+  return (
+    <section className={cn("grid gap-x-14 gap-y-8 md:grid-cols-[minmax(0,1fr)_minmax(0,380px)] md:items-end", className)}>
+      {hero}
+      {facts && facts.length > 0 && <Facts rows={facts} />}
+    </section>
+  );
 }
 
 /* ---------- content ---------- */

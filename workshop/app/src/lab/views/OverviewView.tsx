@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { ArrowRight, Check, ChevronDown, FlaskConical } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Sparkline } from "../charts/Sparkline";
 import { KIND_LABEL, type Criterion } from "../criteria";
 import { count, whenLong } from "../format";
 import { JobLine } from "../JobLine";
@@ -11,7 +10,7 @@ import { setupSteps } from "../nav";
 import type { LabRun, LabState } from "../types";
 import type { Scope } from "../useScope";
 import { VersionSwitch } from "../VersionSwitch";
-import { Button, Label, LabMark, LinkButton, Page, Section, Skeleton, Stat, Strip, TrendBars } from "../ui";
+import { Button, Hero, Label, LabMark, LinkButton, Numbers, Page, Section, Skeleton, type FactRow } from "../ui";
 
 type Go = (to: string) => void;
 
@@ -34,32 +33,28 @@ function Header({ run }: { run: LabRun }) {
 }
 
 /**
- * The run's metric exactly as the service counts it (lab/metric.py), and the previous check's own number beside it.
- * Nothing here is computed on the page; each number opens what it is made of.
+ * lab/metric.py opens with «the one quality number and how far it can be trusted»: the check's accuracy is the page's one big number
+ * (with what it is made of and the previous check's own number under it); the second judge, the human check and the repeats —
+ * how far to trust it — sit beside it, small.
  */
-function Numbers({ scope, go }: { scope: Scope; go: Go }) {
+function Result({ scope, go }: { scope: Scope; go: Go }) {
   const run = scope.finished!;
   const m = run.metric!;
   const before = scope.previous?.metric;
-  const history = scope.sameAgent.filter(r => r.metric?.accuracy !== null && r.metric?.accuracy !== undefined).map(r => r.metric!.accuracy!);
+  const facts: FactRow[] = [
+    { label: "Второй судья", value: m.secondJudge ? `согласен в ${m.secondJudge.agree} из ${m.secondJudge.checked}` : "не оценивал", title: m.secondJudge?.model, onClick: () => go("/lab/judge") },
+    { label: "Сверка с человеком", value: m.human ? `сверено ${m.human.reviewed} из ${m.total}, судья прав в ${m.human.agree}` : "ещё не было", onClick: () => go("/lab/judge") },
+    { label: "Повторы", value: m.repeats ? `одинаковый результат в ${m.repeats.stable} из ${m.repeats.scenarios}` : "не было" },
+  ];
   return (
-    <Strip className="mt-4">
-      <Stat label="Без нарушений" value={m.accuracy === null ? "—" : `${m.accuracy}%`}
+    <Numbers className="mt-8" facts={facts} hero={
+      <Hero
+        label="Без нарушений"
+        value={m.accuracy === null ? "—" : `${m.accuracy}%`}
         sub={<>{m.passed} из {dialogs(m.measured)}{m.unmeasured ? ` · ещё ${m.unmeasured} без оценки` : ""}</>}
-        onClick={() => go("/lab/dialogs")}>
-        {history.length > 1 && <Sparkline values={history} width={96} height={20} className="mt-2" />}
-      </Stat>
-      {scope.previous && before && (
-        <Stat label={`В ${scope.previous.version}`} hue="mute" value={before.accuracy === null ? "—" : `${before.accuracy}%`}
-          sub={`${before.passed} из ${dialogs(before.measured)}`} />
-      )}
-      <Stat label="С нарушениями" value={m.failed} hue={m.failed ? "bad" : undefined} sub={`из ${dialogs(m.measured)}`} onClick={() => go("/lab/dialogs")} />
-      {m.secondJudge && (
-        <Stat label="Второй судья согласен" value={`${m.secondJudge.agree} из ${m.secondJudge.checked}`} sub={m.secondJudge.model} onClick={() => go("/lab/judge")} />
-      )}
-      <Stat label="Сверено с человеком" value={m.human?.reviewed ?? 0}
-        sub={m.human ? `судья прав в ${m.human.agree}` : `из ${dialogs(m.total)}`} onClick={() => go("/lab/judge")} />
-    </Strip>
+        note={scope.previous && before ? `В ${scope.previous.version} — ${before.accuracy === null ? "—" : `${before.accuracy}%`}, ${before.passed} из ${before.measured}` : undefined}
+      />
+    } />
   );
 }
 
@@ -70,7 +65,6 @@ function CriterionRow({ c, scope, onOpen, tone }: { c: Criterion; scope: Scope; 
   const now = c.by.sim;
   const n = now.failed + now.passed;
   const was = scope.previousCriteria.get(c.key)?.by.sim;
-  const trend = scope.history(c.key).map(v => (v === null ? null : 100 - v));
   return (
     <button onClick={onOpen} className="lab-focus-inset group flex w-full items-center gap-4 px-4 py-3 text-left transition-colors duration-100 hover:bg-white/[0.03]">
       <span className="flex size-4 flex-shrink-0 items-center justify-center"><span className={cn("size-1.5 rounded-full", tone ? HUE[tone].solid : "bg-lab-faint")} /></span>
@@ -81,7 +75,6 @@ function CriterionRow({ c, scope, onOpen, tone }: { c: Criterion; scope: Scope; 
           {c.quote && <span className="hidden min-w-0 items-center gap-1.5 sm:flex">{c.kind && <span aria-hidden className="text-lab-faint">·</span>}<span className="truncate" title={c.quote}>«{c.quote}»</span></span>}
         </span>
       </span>
-      {trend.length > 1 && <TrendBars values={trend} labels={scope.versions} className="hidden flex-shrink-0 sm:inline-flex" hue="bad" />}
       <span className="w-[72px] flex-shrink-0 text-right sm:w-[92px]">
         <span className="block text-body tabular-nums text-lab-soft">{n ? <><b className={cn("font-medium", now.failed ? "text-lab-ink" : "text-lab-soft")}>{now.failed}</b> из {n}</> : "—"}</span>
         {scope.previous && was && was.failed + was.passed > 0 && <span className="block text-caption tabular-nums text-lab-faint">в {scope.previous.version}: {was.failed} из {was.failed + was.passed}</span>}
@@ -199,7 +192,7 @@ export function OverviewView({ state, scope, go, onPick }: { state: LabState; sc
   return (
     <Page title={title} icon={FlaskConical} noContext>
       <Header run={scope.finished} />
-      <Numbers scope={scope} go={go} />
+      <Result scope={scope} go={go} />
       <Criteria scope={scope} go={go} />
       <RealLogs state={state} go={go} />
     </Page>

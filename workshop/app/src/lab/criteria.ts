@@ -81,15 +81,15 @@ export function summarize(dialogs: Dialog[]): Summary {
   return { measured: done.length, clean, share: done.length ? Math.round((100 * clean) / done.length) : null, unmeasured: dialogs.length - done.length };
 }
 
-/** A criterion's pass share in each of the given versions (oldest first); null where it was not measured. */
-export function historyOf(key: string, runs: LabRun[]): (number | null)[] {
+/** A criterion's verdicts in each of the given checks (oldest first): the judge's PASS and FAIL rows; null where it was not judged. */
+export function historyOf(key: string, runs: LabRun[]): (Tally | null)[] {
   return runs.map(run => {
     let passed = 0, failed = 0;
     for (const item of run.items ?? []) for (const r of item.rules) {
       if (normRule(r.rule) !== key) continue;
       if (r.status === "PASS") passed++; else if (r.status === "FAIL") failed++;
     }
-    return passed + failed ? Math.round((100 * passed) / (passed + failed)) : null;
+    return passed + failed ? { passed, failed } : null;
   });
 }
 
