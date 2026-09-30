@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Copy, MessageSquare } from "lucide-react";
 import { plural } from "../../lab/format";
 import { problemMarkdown, sourceLabel } from "../../lab/problemReport";
@@ -57,8 +57,8 @@ export function ProblemDetail({ p, data, onBack }: { p: RuleEntry; data: Problem
   const facts: Fact[] = [
     { label: "В логах", value: p.log.failed ? share(p.log) : "—", onClick: p.log.failed && from !== "log" ? () => setFrom("log") : undefined, title: "Нарушено в диалогах логов из тех, где правило удалось проверить" },
     { label: "В симуляции", value: data.sim ? share(p.sim) : "не было", onClick: p.sim.failed && from !== "sim" ? () => setFrom("sim") : undefined, title: "Нарушено в диалогах выбранного прогона" },
-    { label: "Второй судья", value: secondFact(p) },
-    { label: "Люди", value: p.human.agree + p.human.disagree ? `верно ${p.human.agree} · неверно ${p.human.disagree}` : "не проверяли" },
+    { label: "Второй судья", value: secondFact(p), onClick: p.secondJudge.checked > p.secondJudge.agree ? () => navigate(`${LINKS.review}?queue=disputed&rule=${p.id}`) : undefined, title: "Открыть вердикты, где судьи расходятся" },
+    { label: "Люди", value: p.human.agree + p.human.disagree ? `верно ${p.human.agree} · неверно ${p.human.disagree}` : "не проверяли", onClick: () => navigate(`${LINKS.review}?queue=unchecked&rule=${p.id}`), title: "Проверить нарушения этого правила" },
   ];
   const unknown = p.log.unknown + p.sim.unknown;
   return (
@@ -80,7 +80,10 @@ export function ProblemDetail({ p, data, onBack }: { p: RuleEntry; data: Problem
           {p.rule.quote}
         </Quote>
         <dl className="mt-3 space-y-1 pl-[18px] text-small">
-          <div><dt className="inline text-lab-dim">Как судья понимает правило: </dt><dd className="inline text-lab-mute">{p.rule.text}</dd></div>
+          <div>
+            <dt className="inline text-lab-dim">Как судья понимает правило: </dt><dd className="inline text-lab-mute">{p.rule.text}</dd>
+            <Link to={`/rules/${p.id}`} className="ml-2 whitespace-nowrap text-lab-dim underline decoration-white/20 underline-offset-4 transition-colors hover:text-lab-text">правило целиком</Link>
+          </div>
           {p.rule.condition && <div><dt className="inline text-lab-dim">Когда применяется: </dt><dd className="inline text-lab-mute">{p.rule.condition}</dd></div>}
           {p.rule.acceptable && <div><dt className="inline text-lab-dim">Что допустимо: </dt><dd className="inline text-lab-mute">{p.rule.acceptable}</dd></div>}
         </dl>

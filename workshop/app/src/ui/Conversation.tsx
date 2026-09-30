@@ -6,7 +6,7 @@ import { splitQuote } from "./highlight";
 export type Turn = { role: "customer" | "agent"; text: string; events?: { tool: string }[]; ok?: boolean; status?: string };
 
 /** A chat button the agent sent, written into the logged text as «` ` ` transition-code CODE ` ` `». */
-const CONTROL = /`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_]*)\s*`\s*`\s*`/g;
+const CONTROL = /`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_-]*)\s*`\s*`\s*`/g;
 
 /** The words the customer saw, and the buttons the agent sent with them. */
 export function visible(text: string): { text: string; buttons: string[] } {

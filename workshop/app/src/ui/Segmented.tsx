@@ -6,7 +6,7 @@ export function Segmented<T extends string>({ value, options, onChange, classNam
   value: T; options: { value: T; label: ReactNode; count?: number }[]; onChange: (v: T) => void; className?: string;
 }) {
   return (
-    <div role="radiogroup" className={cn("inline-flex flex-shrink-0 gap-0.5 rounded-md border border-white/[0.08] p-0.5", className)}>
+    <div role="radiogroup" className={cn("inline-flex max-w-full flex-shrink-0 gap-0.5 overflow-x-auto rounded-md border border-white/[0.08] p-0.5", className)}>
       {options.map(o => (
         <button
           key={o.value} type="button" role="radio" aria-checked={o.value === value} onClick={() => onChange(o.value)}

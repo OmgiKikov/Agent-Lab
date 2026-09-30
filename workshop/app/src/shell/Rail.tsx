@@ -36,7 +36,7 @@ export function Rail({ problems }: { problems: number }) {
   const main: Item[] = [
     { to: LINKS.problems, label: "Проблемы", icon: TriangleAlert, match: ["/problems"], badge: problems },
     { to: LINKS.dialogs, label: "Диалоги", icon: MessagesSquare, match: ["/runs", "/search", "/saved", "/dialogs", "/lab/dialogs"] },
-    { to: LINKS.rules, label: "Правила", icon: ListChecks, match: ["/rules", "/lab/criteria", "/lab/judge"] },
+    { to: LINKS.rules, label: "Правила", icon: ListChecks, match: ["/rules", "/review"] },
     { to: LINKS.simulations, label: "Симуляции", icon: FlaskConical, match: ["/simulations", "/lab/checks"] },
   ];
   const bottom: Item[] = [

@@ -29,12 +29,16 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { id: "s-agent", group: "Разделы", label: "Агент", icon: Bot, run: go(LINKS.agent) },
       { id: "s-settings", group: "Разделы", label: "Настройки", icon: Settings, run: go(LINKS.settings) },
       { id: "a-assess", group: "Действия", label: "Оценить логи", sub: "Судья проверит диалоги логов по правилам агента", icon: Play, run: go("/problems?assess=1") },
+      { id: "a-review", group: "Действия", label: "Проверить вердикты", sub: "Верно или неверно судья: по одному, клавишами V / N", icon: ListChecks, run: go(LINKS.review) },
       { id: "a-ask", group: "Действия", label: "Спросить", sub: "Ассистент по текущему экрану", icon: MessageSquare, run: () => shell.openAsk() },
     ];
     const byId = new Map((data?.rules ?? []).map(r => [r.id, r]));
     for (const id of data?.problems ?? []) {
       const p = byId.get(id);
       if (p) out.push({ id: `p-${id}`, group: "Проблемы", label: p.title, sub: `в логах ${p.log.failed} · в симуляции ${p.sim.failed}`, icon: TriangleAlert, run: go(`/problems/${id}`) });
+    }
+    for (const r of data?.rules ?? []) {
+      out.push({ id: `r-${r.id}`, group: "Правила", label: r.rule.text, sub: r.rule.origin, icon: ListChecks, run: go(`/rules/${r.id}`) });
     }
     return out;
   }, [data, navigate, shell]);

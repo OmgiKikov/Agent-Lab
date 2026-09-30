@@ -6,6 +6,8 @@ import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ProblemsPage } from "./screens/problems/ProblemsPage";
+import { ReviewPage } from "./screens/review/ReviewPage";
+import { RulesPage } from "./screens/rules/RulesPage";
 
 export const router = createBrowserRouter([
   {
@@ -15,6 +17,14 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/problems" replace /> },
       { path: "problems", element: <ProblemsPage /> },
       { path: "problems/:problemId", element: <ProblemsPage /> },
+      { path: "rules", element: <RulesPage /> },
+      { path: "rules/:ruleId", element: <RulesPage /> },
+      { path: "review", element: <ReviewPage /> },
+      // The earlier Lab screens that «Правила» and «Проверка вердиктов» replace.
+      { path: "lab/criteria", element: <Navigate to="/rules" replace /> },
+      { path: "lab/criteria/:itemId", element: <Navigate to="/rules" replace /> },
+      { path: "lab/judge", element: <Navigate to="/rules" replace /> },
+      { path: "lab/judge/check", element: <Navigate to="/review" replace /> },
       { path: "lab", element: <LabPage /> },
       { path: "lab/:step", element: <LabPage /> },
       { path: "lab/:step/:itemId", element: <LabPage /> },
