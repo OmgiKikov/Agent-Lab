@@ -82,7 +82,7 @@ export function ScenarioDetail({ card, state, onBack, onPlay }: { card: Card; st
           <div className="space-y-5">
             {card.criteria.map(c => (
               <div key={c.id}>
-                <Link to={`/agent?tab=criteria&c=${encodeURIComponent(c.id)}`} className="text-small font-medium text-lab-ink hover:underline hover:decoration-white/40 hover:underline-offset-4">{c.text}</Link>
+                <Link to={`/agent/criteria?c=${encodeURIComponent(c.id)}`} className="text-small font-medium text-lab-ink hover:underline hover:decoration-white/40 hover:underline-offset-4">{c.text}</Link>
                 {c.quote && <div className="mt-2"><Quote label="Промпт требует">{c.quote}</Quote></div>}
               </div>
             ))}

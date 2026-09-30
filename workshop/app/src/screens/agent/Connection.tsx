@@ -1,15 +1,37 @@
-import { useState, type ReactNode } from "react";
-import { Code, Globe, PlugZap, Save } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Check as Tick, PlugZap, Save } from "lucide-react";
 import { api } from "../../lab/api";
 import type { Check, LabState, Target } from "../../lab/types";
 import { useLabState } from "../../shell/LabProvider";
 import { Button } from "../../ui/Button";
+import { Drawer } from "../../ui/Drawer";
 import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 
 type Answer = Check & { question?: string };
+type Last = { target: string; text: string; at: string };
 
+const LAST = "lab.agent.lastCheck", WAY = "lab.agent.way", CHANGED = "lab-agent-connection";
 const words = (text: string) => text.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+
+/** How the three ways are called on the page. */
+export const WAY_NAME: Record<string, string> = { prod: "Тестовый стенд банка", "local-http": "На этом компьютере", "local-code": "Запуск из кода" };
+
+const read = <T,>(key: string): T | null => { try { return JSON.parse(localStorage.getItem(key) ?? "null"); } catch { return null; } };
+const write = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private window: the page still works */ } window.dispatchEvent(new Event(CHANGED)); };
+
+/** What the page remembers of the connection: the last successful check and the way chosen last. */
+export function useConnectionMemory() {
+  const [, tick] = useState(0);
+  useEffect(() => { const f = () => tick(n => n + 1); window.addEventListener(CHANGED, f); return () => window.removeEventListener(CHANGED, f); }, []);
+  return { last: read<Last>(LAST), way: read<string>(WAY) };
+}
+
+/** Where the agent runs, as the page says it: the way chosen, else the one that has an address. */
+export function wayOf(state: LabState, chosen: string | null) {
+  if (chosen && state.targets.some(t => t.id === chosen)) return chosen;
+  return state.settings.prodUrl ? "prod" : state.settings.repo ? "local-code" : null;
+}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
@@ -23,101 +45,104 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 const INPUT = "h-8 w-full rounded-md border border-white/[0.08] bg-transparent px-2.5 font-mono text-small text-lab-text outline-none placeholder:text-lab-faint focus:border-white/25";
 
-/** What «Проверить связь» found: the question, the agent's answer, how long it took and its version; or why it failed. */
 function Reply({ check }: { check: Answer }) {
   if (!check.ok) {
-    return (
-      <p className="mt-3 text-small text-lab-bad">
-        ✗ {check.error ? `Не отвечает: ${check.error}` : `Ответил не обычным ответом (статус ${check.status ?? "?"}): так бывает, когда разговор передан оператору.`}
-      </p>
-    );
+    return <p className="mt-2 text-small text-lab-bad">{check.error ? `Не отвечает: ${check.error}` : `Ответил не обычным ответом (статус ${check.status ?? "?"}): так бывает, когда разговор передан оператору.`}</p>;
   }
-  const version = check.version && check.version !== "не сообщается" ? check.version : null;
   return (
-    <div className="mt-3 space-y-2 text-small">
-      <div className="text-lab-ok">✓ Отвечает{check.seconds !== undefined ? ` за ${check.seconds} с` : ""}{version ? ` · версия ${version}` : ""}</div>
+    <div className="mt-2 space-y-1.5 text-small">
+      <div className="text-lab-ok">Отвечает</div>
       {check.question && <div className="text-lab-mute">Вопрос: «{check.question}»</div>}
       {check.text && <div className="border-l-2 border-white/25 pl-3 text-lab-text">{check.text}</div>}
     </div>
   );
 }
 
-function Way({ target }: { target: Target }) {
-  const toast = useToast();
-  const [check, setCheck] = useState<Answer | "pending" | null>(null);
-  const run = () => {
-    setCheck("pending");
-    api<Answer>(`/api/agents/${encodeURIComponent(target.id)}/check`, {}).then(setCheck).catch(e => { setCheck(null); toast.error(e); });
-  };
-  const Icon = target.kind === "code" ? Code : Globe;
+/** One of the three ways: a choice; the chosen one shows its own field. */
+function Way({ target, on, onPick, children }: { target: Target; on: boolean; onPick: () => void; children?: ReactNode }) {
   return (
-    <div className="border-b border-white/[0.08] py-4">
-      <div className="flex items-start gap-3">
-        <Icon className="mt-0.5 size-4 flex-shrink-0 text-lab-dim" />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className="text-body font-medium text-lab-ink">{target.name}</span>
-            {target.ready ? <span className="text-meta text-lab-dim">настроен</span> : <span className="text-meta text-lab-warn">не настроен</span>}
-          </div>
-          <div className="mt-0.5 truncate font-mono text-meta text-lab-dim">{target.where || "адрес не задан"}</div>
-          <div className="mt-1 text-small text-lab-mute">{target.note}</div>
-          {target.kind === "code" && <div className="mt-1 text-meta text-lab-dim">Запускается только на время прогона: проверить связь заранее нельзя.</div>}
-          {check && check !== "pending" && <Reply check={check} />}
-        </div>
-        {target.kind !== "code" && (
-          <Button size="sm" icon={PlugZap} loading={check === "pending"} disabled={!target.ready} onClick={run}>Проверить связь</Button>
-        )}
-      </div>
+    <div className={`rounded-lg border px-3 py-2.5 ${on ? "border-white/[0.35] bg-white/[0.04]" : "border-white/[0.08]"}`}>
+      <button type="button" onClick={onPick} className="flex w-full items-center gap-2.5 text-left" aria-pressed={on}>
+        <span className={`flex size-3.5 flex-shrink-0 items-center justify-center rounded-full border ${on ? "border-lab-ink bg-lab-ink" : "border-lab-dim"}`}>{on && <Tick className="size-2.5 text-black" strokeWidth={3} />}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-body text-lab-ink">{WAY_NAME[target.id] ?? target.name}</span>
+          <span className="block text-meta text-lab-dim">{target.note}</span>
+        </span>
+        <span className={target.ready ? "text-meta text-lab-ok" : "text-meta text-lab-warn"}>{target.ready ? "готово" : "не настроено"}</span>
+      </button>
+      {on && children && <div className="mt-3 space-y-3 border-t border-white/[0.08] pt-3">{children}</div>}
     </div>
   );
 }
 
-/** Подключение: where the agent is, whose accounts it answers for, where its code is, and the three ways to reach it. */
-/** The form starts from what the service saved, and starts over when that changes: no effect copying props to state. */
-export function Connection({ state }: { state: LabState }) {
+/** Подключение: the way to reach the agent, whose clients the simulator writes for, where the code is; save and check. */
+export function ConnectionDrawer({ open, onClose, state }: { open: boolean; onClose: () => void; state: LabState }) {
   const s = state.settings;
-  return <ConnectionForm key={`${s.prodUrl}|${s.repo}|${s.epk.join(" ")}`} state={state} />;
+  return (
+    <Drawer open={open} onClose={onClose} title="Подключение" sub="Где работает агент и как до него достучаться">
+      <ConnectionForm key={`${s.prodUrl}|${s.repo}|${s.epk.join(" ")}`} state={state} />
+    </Drawer>
+  );
 }
 
 function ConnectionForm({ state }: { state: LabState }) {
   const { refresh } = useLabState();
   const toast = useToast();
   const saved = state.settings;
+  const memory = useConnectionMemory();
+  const [way, setWay] = useState(wayOf(state, memory.way) ?? "prod");
   const [prodUrl, setProdUrl] = useState(saved.prodUrl);
   const [epk, setEpk] = useState(saved.epk.join(" "));
   const [repo, setRepo] = useState(saved.repo);
   const [saving, setSaving] = useState(false);
+  const [check, setCheck] = useState<Answer | "pending" | null>(null);
   const dirty = prodUrl.trim() !== saved.prodUrl || repo.trim() !== saved.repo || words(epk).join(" ") !== saved.epk.join(" ");
+  const target = state.targets.find(t => t.id === way);
+  const pick = (id: string) => { setWay(id); setCheck(null); write(WAY, id); };
   const save = () => {
     setSaving(true);
     api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: repo.trim() })
       .then(() => refresh()).then(() => toast.notify("Сохранено")).catch(toast.error).finally(() => setSaving(false));
   };
+  const run = () => {
+    if (!target) return;
+    setCheck("pending");
+    api<Answer>(`/api/agents/${encodeURIComponent(target.id)}/check`, {}).then(a => {
+      setCheck(a);
+      if (a.ok && a.text) write(LAST, { target: target.id, text: a.text, at: new Date().toISOString() } satisfies Last);
+    }).catch(e => { setCheck(null); toast.error(e); });
+  };
   return (
-    <div className="mx-auto max-w-[760px] px-6 pb-20 pt-6 lg:px-8">
-      <section>
-        <h2 className="text-body font-medium text-lab-ink">Где агент</h2>
-        <div className="mt-4 space-y-4">
-          <Field label="Адрес агента на ИФТ" hint="Ручка в контуре банка; открывается с рабочего компьютера.">
-            <input name="prod-url" type="url" autoComplete="off" value={prodUrl} onChange={e => setProdUrl(e.target.value)} placeholder="https://…" className={INPUT} spellCheck={false} />
-          </Field>
-          <Field label="ЕПК клиентов" hint="Через пробел. На ИФТ синтетический клиент входит как один из этих клиентов; пусто — тестовый клиент.">
-            <input name="epk" autoComplete="off" inputMode="numeric" value={epk} onChange={e => setEpk(e.target.value)} placeholder="Например: 1234567890 2345678901" className={INPUT} spellCheck={false} />
-          </Field>
-          <Field label="Код агента" hint="Папка с исходниками: из неё читаются критерии и запускается агент из исходников.">
-            <input name="repo" autoComplete="off" value={repo} onChange={e => setRepo(e.target.value)} placeholder="~/Desktop/aigw-local" className={INPUT} spellCheck={false} />
-          </Field>
-        </div>
-        <div className="mt-4 flex items-center gap-3">
-          <Button variant="primary" icon={Save} loading={saving} disabled={!dirty} onClick={save}>Сохранить</Button>
-          {dirty && <span className="text-meta text-lab-warn">Есть несохранённые изменения</span>}
-        </div>
-      </section>
-      <section className="mt-10">
-        <h2 className="text-body font-medium text-lab-ink">Как до него достучаться</h2>
-        <p className="mt-1 text-small text-lab-dim">Три способа сыграть с агентом прогон; выбираются при запуске.</p>
-        <div className="mt-2">{state.targets.map(t => <Way key={t.id} target={t} />)}</div>
-      </section>
+    <div className="px-5 py-5">
+      <div className="space-y-2">
+        {state.targets.map(t => (
+          <Way key={t.id} target={t} on={t.id === way} onPick={() => pick(t.id)}>
+            {t.id === "prod" && (
+              <Field label="Адрес агента на тестовом стенде" hint="Открывается с рабочего компьютера.">
+                <input name="prod-url" type="url" autoComplete="off" value={prodUrl} onChange={e => setProdUrl(e.target.value)} placeholder="https://…" className={INPUT} spellCheck={false} />
+              </Field>
+            )}
+            {t.id === "local-code" && (
+              <Field label="Папка с кодом агента" hint="Из неё читаются промпты и запускается агент.">
+                <input name="repo" autoComplete="off" value={repo} onChange={e => setRepo(e.target.value)} placeholder="~/Desktop/aigw-local" className={INPUT} spellCheck={false} />
+              </Field>
+            )}
+            {t.id === "local-http" && <div className="text-small text-lab-mute">Адрес не нужен: агент уже запущен на этом компьютере ({t.where}).</div>}
+          </Way>
+        ))}
+      </div>
+      <div className="mt-5">
+        <Field label="Клиенты, от чьего имени пишет симулятор" hint="Через пробел. Пусто — тестовый клиент.">
+          <input name="epk" autoComplete="off" inputMode="numeric" value={epk} onChange={e => setEpk(e.target.value)} placeholder="Например: 1234567890 2345678901" className={INPUT} spellCheck={false} />
+        </Field>
+      </div>
+      {!dirty ? null : <p className="mt-4 text-meta text-lab-warn">Есть несохранённые изменения</p>}
+      <div className="mt-4 flex items-center gap-2">
+        <Button variant="primary" icon={Save} loading={saving} disabled={!dirty} onClick={save}>Сохранить</Button>
+        {target && target.kind !== "code" && <Button icon={PlugZap} loading={check === "pending"} disabled={!target.ready || dirty} onClick={run} title={dirty ? "Сначала сохраните изменения" : undefined}>Проверить связь</Button>}
+      </div>
+      {target?.kind === "code" && <p className="mt-3 text-meta text-lab-dim">Запускается только на время прогона: проверить связь заранее нельзя.</p>}
+      {check && check !== "pending" && <Reply check={check} />}
     </div>
   );
 }

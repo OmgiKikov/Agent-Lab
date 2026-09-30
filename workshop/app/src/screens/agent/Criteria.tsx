@@ -7,8 +7,10 @@ import type { LabState } from "../../lab/types";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../shell/keys";
 import { useLabState } from "../../shell/LabProvider";
+import { RotateCcw } from "lucide-react";
+import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
-import { EmptyState, Skeleton } from "../../ui/EmptyState";
+import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Summary, type Stat } from "../../ui/Summary";
 import { Modal } from "../../ui/Modal";
 import { useToast } from "../../ui/toast";
@@ -97,7 +99,7 @@ export function Criteria() {
   if (!state.discover || !data) {
     return (
       <EmptyState drop title="Критериев пока нет" className="h-full">
-        {state.sources.length ? "Критерии извлекаются из кода агента при первой оценке логов." : "Критерии извлекаются из кода агента: сначала прочитайте код."}
+        Появятся при первой проверке логов: судья достанет их из промптов агента.
       </EmptyState>
     );
   }
@@ -109,6 +111,27 @@ export function Criteria() {
           : <EmptyState title="Этого критерия нет в текущей оценке">Критерии могли извлечь заново.</EmptyState>)
           : <RuleList rules={shown} filter={filter} onFilter={setFilter} query={query} onQuery={setQuery} onOpen={k => open(k)} />}
       </div>
+    </div>
+  );
+}
+
+/** Критерии: the list under «Агент», crumb «Агент / Критерии»; one opened adds its title. */
+export function CriteriaPage() {
+  const [params] = useSearchParams();
+  const { state, offline } = useLabState();
+  const { data } = useProblems(null);
+  const [reextract, setReextract] = useState(false);
+  if (offline && !state) return <ServiceDown />;
+  const id = params.get("c");
+  const busy = !!state?.job.running;
+  return (
+    <div className="flex h-full flex-col">
+      <SectionHeader
+        crumbs={[{ label: "Агент", to: "/agent" }, { label: "Критерии", to: id ? "/agent/criteria" : undefined }, ...(id ? [{ label: data?.rules.find(r => r.id === id)?.title ?? "Критерий" }] : [])]}
+        actions={<Button icon={RotateCcw} onClick={() => setReextract(true)} disabled={busy || !state?.discover} title={busy ? "Сейчас идёт другая задача" : undefined}>Извлечь заново</Button>}
+      />
+      <div className="min-h-0 flex-1 overflow-auto"><Criteria /></div>
+      <Reextract open={reextract} onClose={() => setReextract(false)} />
     </div>
   );
 }

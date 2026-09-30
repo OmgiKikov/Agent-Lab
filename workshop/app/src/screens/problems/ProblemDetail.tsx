@@ -86,7 +86,7 @@ export function ProblemDetail({ p, source, runId, onBack }: { p: RuleEntry; sour
     { label: "Люди", value: humans.checked || "—", of: humans.checked ? `из ${humans.of}` : undefined, onClick: () => to("review", { queue: "unchecked", rule: p.id }), title: humans.checked ? `верно ${humans.agree}, неверно ${humans.checked - humans.agree}` : "Проверить нарушения этого критерия" },
   ];
   const details: Detail[] = [
-    { label: "Критерий", value: <Link to={`/agent?tab=criteria&c=${encodeURIComponent(p.id)}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-ink">открыть целиком</Link> },
+    { label: "Критерий", value: <Link to={`/agent/criteria?c=${encodeURIComponent(p.id)}`} className="underline decoration-white/20 underline-offset-2 hover:text-lab-ink">открыть целиком</Link> },
     { label: "Источник", value: p.rule.origin ? <button type="button" onClick={p.rule.sourceId ? () => setSourceOpen(true) : undefined} className="break-all text-left font-mono text-meta underline decoration-white/20 underline-offset-2 hover:text-lab-ink">{p.rule.origin}</button> : sourceLabel(p.rule.kind) },
     ...(p.topics.length ? [{ label: plural(p.topics.length, "Тема", "Темы", "Темы"), value: <span className="flex flex-wrap gap-1.5">{p.topics.map(t => <Tag key={t}>{t}</Tag>)}</span> }] : []),
     ...(p.rule.condition ? [{ label: "Когда", value: p.rule.condition }] : []),

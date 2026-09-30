@@ -1,7 +1,7 @@
 /** Where each block of the product lives; every screen links through these, so a block moves in one place. */
 export const LINKS = {
   agent: "/agent",
-  criteria: "/agent?tab=criteria",
+  criteria: "/agent/criteria",
   logs: "/logs",
   scenarios: "/scenarios",
   simulations: "/simulations",
