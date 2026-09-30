@@ -17,6 +17,8 @@ import { VariantB } from "./variants/VariantB";
 import { VariantC } from "./variants/VariantC";
 import { CriteriaLooks } from "./variants/CriteriaLooks";
 import { CriteriaStory } from "./variants/CriteriaStory";
+import { VariantE } from "./variants/VariantE";
+import { VariantF } from "./variants/VariantF";
 
 const READ_AT = "lab.agent.sourcesReadAt";
 const readAt = () => { try { return localStorage.getItem(READ_AT); } catch { return null; } };
@@ -65,6 +67,8 @@ export function AgentPage() {
   if (variant === "b") return <VariantB />;
   if (variant === "c") return <VariantC />;
   if (variant === "d") return <CriteriaStory />;
+  if (variant === "e") return <VariantE />;
+  if (variant === "f") return <VariantF />;
   if (variant === "k1" || variant === "k2" || variant === "k3") return <CriteriaLooks look={variant} />;
   if (params.get("tab") === "criteria") return <Navigate to={`${LINKS.criteria}${params.get("c") ? `?c=${encodeURIComponent(params.get("c")!)}` : ""}`} replace />;
   if (params.get("tab") === "code" || params.get("tab") === "connection") {
