@@ -61,8 +61,8 @@ export function Files({
     );
   };
   return (
-    <nav aria-label="Код агента" className="min-h-0 overflow-auto border-r border-line bg-list px-2 py-3">
-      <Label className="block px-2 pb-2">Промпты</Label>
+    <nav aria-label="Источники критериев" className="min-h-0 overflow-auto border-r border-line bg-list px-2 py-3">
+      <Label className="block px-2 pb-2">Правила и промпты</Label>
       {prompts.map((r) => (
         <Row key={r.s.id} r={r} />
       ))}

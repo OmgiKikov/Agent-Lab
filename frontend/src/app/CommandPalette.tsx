@@ -50,6 +50,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     };
     const out: Entry[] = [
       {
+        id: "s-check",
+        group: "Разделы",
+        label: "Проверка tone of voice",
+        sub: "Разговоры и правила общения → критерии → результат",
+        icon: ClipboardCheck,
+        run: go(SECTIONS.start),
+      },
+      {
         id: "s-overview",
         group: "Разделы",
         label: "Обзор",

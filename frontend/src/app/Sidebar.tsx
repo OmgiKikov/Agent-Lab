@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Bot,
+  ClipboardCheck,
   FlaskConical,
   LayoutGrid,
   ListChecks,
@@ -17,15 +18,27 @@ import { useShell } from "./ShellContext";
 import { TaskCard } from "./TaskCard";
 import { SECTIONS } from "./links";
 
-export type NavItem = { to: string; label: string; icon: LucideIcon; match: string[]; count?: number; step?: 1 | 2 };
+export type NavItem = {
+  to: string;
+  label: string;
+  mobileLabel?: string;
+  icon: LucideIcon;
+  match: string[];
+  count?: number;
+  step?: 1 | 2;
+};
 export type NavCounts = { logs?: number; sims?: number; criteria?: number };
 
-/**
- * The places of the product in the order of the work: how the agent is doing; the two stages of checking it —
- * real conversations from the logs, then synthetic customers playing scenarios; and what it must do, the base of both.
- */
+/** One product: a guided entry and the shared stages, evidence, and criteria. */
 export function useNav({ logs, sims, criteria }: NavCounts): NavItem[] {
   return [
+    {
+      to: SECTIONS.start,
+      label: "Начать проверку",
+      mobileLabel: "Старт",
+      icon: ClipboardCheck,
+      match: ["/start", "/check"],
+    },
     { to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid, match: ["/overview"] },
     {
       to: SECTIONS.logs,
@@ -53,7 +66,7 @@ export function useNav({ logs, sims, criteria }: NavCounts): NavItem[] {
   ];
 }
 
-/** The agent and the settings: what is set up once, below the work. */
+/** The agent and settings stay below the day-to-day work. */
 export const SETUP: NavItem[] = [
   { to: SECTIONS.agent, label: "Агент", icon: Bot, match: ["/agent"] },
   { to: SECTIONS.settings, label: "Настройки", icon: Settings, match: ["/settings"] },
@@ -108,7 +121,7 @@ export function Sidebar({ counts }: { counts: NavCounts }) {
   return (
     <nav aria-label="Разделы" className="hidden w-[248px] flex-shrink-0 flex-col bg-side px-3 pb-3 pt-5 lg:flex">
       <NavLink
-        to={SECTIONS.overview}
+        to={SECTIONS.start}
         className="flex items-center gap-3 rounded-control px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
       >
         <Mark />
@@ -127,8 +140,8 @@ export function Sidebar({ counts }: { counts: NavCounts }) {
         <span className="text-small text-fg-4">⌘K</span>
       </button>
       <div className="mt-1 flex flex-col gap-0.5">
-        {items.map((i) => (
-          <Item key={i.label} item={i} />
+        {items.map((item) => (
+          <Item key={item.label} item={item} />
         ))}
       </div>
       <div className="flex-1" />
@@ -136,8 +149,8 @@ export function Sidebar({ counts }: { counts: NavCounts }) {
         <TaskCard />
       </div>
       <div className="flex flex-col gap-0.5">
-        {SETUP.map((i) => (
-          <Item key={i.label} item={i} />
+        {SETUP.map((item) => (
+          <Item key={item.label} item={item} />
         ))}
       </div>
     </nav>

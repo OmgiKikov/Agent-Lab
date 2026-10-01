@@ -10,7 +10,7 @@ import hashlib
 import json
 from collections.abc import Callable, Sequence
 
-from . import discover, llm, logs, quotes, store
+from . import discover, llm, logs, quotes, store, tone
 from .agents import world
 from .context import sources
 from .prompts import CARD
@@ -102,6 +102,7 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
     rules += [r for r in general if quotes.normalized(r['quote']) not in seen]
     prompts = '\n'.join(source['content'] for source in sources.load())
     rules += [rule for rule in (ANSWERS_THE_QUESTION, FOLLOWS_KNOWLEDGE) if quotes.found(rule['quote'], prompts)]
+    rules = [tone.for_judging(rule) for rule in rules]
     criteria = [
         {
             'id': r['id'],
@@ -111,6 +112,7 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
             'acceptable': r.get('acceptable', ''),
             'quote': r['quote'],
             'observation': r.get('observation', 'reply'),
+            **({'clarifications': list(r['clarifications'])} if r.get('clarifications') else {}),
         }
         for r in rules
     ]
@@ -138,6 +140,12 @@ async def run(progress: Callable[..., None] = lambda **_: None) -> list[dict]:
     analysis = store.load(discover.RESULT)
     if not analysis:
         raise RuntimeError('Сначала оцените логи')
+    if analysis.get('purpose') == tone.KIND:
+        draft = store.load(tone.DRAFT) or {}
+        if draft.get('revision') != analysis.get('criteriaRevision'):
+            raise RuntimeError(
+                'Критерии общения изменились. Сначала повторите проверку разговоров, затем соберите сценарии.'
+            )
     picks = pick(analysis)
     if not picks:
         raise RuntimeError('Нет разговоров с проверяемыми правилами для сборки сценариев')

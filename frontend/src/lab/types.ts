@@ -73,6 +73,7 @@ export type Criterion = {
   condition?: string;
   acceptable?: string;
   sourceId?: string;
+  clarifications?: string[];
 };
 export type World = {
   organization: { name: string; inn: string; merchantName: string; address: string };
@@ -92,6 +93,7 @@ export type Card = {
   openings?: Record<string, string>;
 };
 export type LogResult = {
+  error?: string | null;
   dialogueId: string;
   topicId: string;
   status: Status;
@@ -117,6 +119,10 @@ export type Models = { via: string; main: string | null; second: string | null }
 export type Check = { ok: boolean; error?: string; status?: string; text?: string; seconds?: number; version?: string };
 export type Topic = { id: string; title: string; rules: Criterion[] };
 export type Discover = {
+  checkId?: string;
+  criteriaFingerprint?: string;
+  purpose?: string;
+  criteriaRevision?: string;
   sampled: number;
   model: string;
   finishedAt: string;
@@ -124,6 +130,7 @@ export type Discover = {
   topics: Topic[];
   results: LogResult[];
   summary: {
+    measured: number;
     checked: number;
     failed: number;
     passed: number;
@@ -139,6 +146,7 @@ export type Job = {
   progress: { message?: string; done?: number; total?: number; run?: string };
 };
 export type LabState = {
+  toneOfVoice?: ToneDraft | null;
   job: Job;
   model: string;
   models: Models;
@@ -150,6 +158,15 @@ export type LabState = {
   runs: LabRun[];
   targets: Target[];
   personas: Persona[];
+};
+
+export type ToneCriterion = Criterion & { name: string; condition: string; acceptable: string };
+export type ToneDraft = {
+  revision: string;
+  createdAt: string;
+  sourceSha256: string;
+  criteria: ToneCriterion[];
+  model: string | null;
 };
 
 /** A tool the agent called during its turn, as the service logged it. */

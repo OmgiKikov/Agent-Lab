@@ -284,7 +284,9 @@ export function ProblemPage({ stage }: { stage: Stage }) {
             </summary>
             <div className="mt-4 space-y-3 text-read text-fg-2">
               <div>
-                <span className="text-small text-fg-3">Требование в промпте агента</span>
+                <span className="text-small text-fg-3">
+                  {r.rule.kind === "tone-of-voice" ? "Требование в правилах общения" : "Требование в промпте агента"}
+                </span>
                 <blockquote className="mt-1 border-l-2 border-mark-strong pl-3 text-read text-fg">
                   {quote ? `«${quote}»` : "Цитата из кода не сохранена в этом прогоне."}
                 </blockquote>

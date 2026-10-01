@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useLabState } from "./LabProvider";
 import { useProblems, type Problems, type RuleEntry } from "./problems";
 
 /** Muted hues for the topics of conversations, as Linear's labels: a dot and a faint tint carry the colour. */
@@ -29,7 +30,7 @@ export function nameFromText(text: string) {
 }
 
 /** Numbers every criterion once, for all screens: the ones for every conversation first, then by topic. */
-export function numberCriteria(rules: RuleEntry[]): { list: Criterion[]; topics: Topic[] } {
+export function numberCriteria(rules: RuleEntry[], reference?: string[]): { list: Criterion[]; topics: Topic[] } {
   const titles = [...new Set(rules.flatMap((r) => r.topics))];
   const topics = titles.map((t, i) => ({ topic: t, short: shortTopic(t), hue: HUES[i % HUES.length] }));
   const byTitle = new Map(topics.map((t) => [t.topic, t]));
@@ -46,9 +47,12 @@ export function numberCriteria(rules: RuleEntry[]): { list: Criterion[]; topics:
       titles.indexOf(x.r.topics[0] ?? "") - titles.indexOf(y.r.topics[0] ?? "") ||
       x.r.rule.text.localeCompare(y.r.rule.text),
   );
+  const positions = new Map(reference?.map((quote, i) => [quote, i + 1]));
+  let next = (reference?.length ?? 0) + 1;
   list.forEach((c, i) => {
-    c.n = i + 1;
+    c.n = reference ? (positions.get(c.r.rule.quote) ?? next++) : i + 1;
   });
+  if (reference) list.sort((a, b) => a.n - b.n);
   return { list, topics };
 }
 
@@ -64,15 +68,22 @@ export function useCriteria(runId: string | null = null): {
 } {
   const { data: base } = useProblems(null);
   const { data: withRun } = useProblems(runId);
+  const { state } = useLabState();
+  const draft = state?.discover?.purpose === "tone-of-voice" ? state.toneOfVoice : null;
   return useMemo(() => {
-    const numbered = numberCriteria(base?.rules ?? []);
+    const reference = draft?.criteria.map((c) => c.quote);
+    const numbered = numberCriteria(base?.rules ?? [], reference);
     const data = runId ? withRun : base;
     const unnamed = (base?.rules ?? []).filter((r) => !r.rule.name).length;
     if (!runId) return { data, ...numbered, unnamed };
     const byId = new Map(numbered.list.map((c) => [c.r.id, c]));
-    const extra = numberCriteria((data?.rules ?? []).filter((r) => !byId.has(r.id))).list;
-    extra.forEach((c, i) => {
-      c.n = numbered.list.length + i + 1;
+    const extra = numberCriteria(
+      (data?.rules ?? []).filter((r) => !byId.has(r.id)),
+      reference,
+    ).list;
+    let next = Math.max(reference?.length ?? 0, ...numbered.list.map((c) => c.n), 0) + 1;
+    extra.forEach((c) => {
+      if (!reference?.includes(c.r.rule.quote)) c.n = next++;
     });
     const list = (data?.rules ?? [])
       .map((r) => {
@@ -81,5 +92,5 @@ export function useCriteria(runId: string | null = null): {
       })
       .sort((a, b) => a.n - b.n);
     return { data, list, topics: numbered.topics, unnamed };
-  }, [base, withRun, runId]);
+  }, [base, withRun, runId, draft]);
 }

@@ -13,6 +13,8 @@ import { SettingsPage } from "./sections/settings/SettingsPage";
 import { RunListPage } from "./sections/simulations/RunList";
 import { ScenariosPage } from "./sections/simulations/ScenariosPage";
 import { SimResultPage } from "./sections/simulations/SimResultPage";
+import { StartPage } from "./sections/check/StartPage";
+import { CheckPage } from "./sections/check/CheckPage";
 
 /** An earlier address leads to its block; the query of the old address is kept, what the block needs is added. */
 function To({ to, from }: { to: string; from?: (p: Record<string, string | undefined>) => Record<string, string> }) {
@@ -81,7 +83,9 @@ export const router = createBrowserRouter([
     path: "/",
     element: <Shell />,
     children: [
-      { index: true, element: <Navigate to="/overview" replace /> },
+      { index: true, element: <Navigate to="/start" replace /> },
+      { path: "start", element: <StartPage /> },
+      { path: "check", element: <CheckPage /> },
       { path: "overview", element: <OverviewPage /> },
       // Stage 1: the customers' real conversations, checked against the agent's criteria.
       { path: "logs", element: <LogsPage /> },

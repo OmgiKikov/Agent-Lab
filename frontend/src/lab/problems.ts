@@ -113,11 +113,19 @@ export function useReview() {
   const toast = useToast();
   const { refresh } = useLabState();
   return useMutation({
-    mutationFn: ({ example, decision }: { example: Example; decision: Decision | null }) =>
+    mutationFn: ({
+      example,
+      decision,
+      finishedAt,
+    }: {
+      example: Example;
+      decision: Decision | null;
+      finishedAt?: string;
+    }) =>
       api(
         "/api/review",
         example.source === "log"
-          ? { source: "log", dialogueId: example.dialogueId, ruleId: example.ruleId, decision }
+          ? { source: "log", dialogueId: example.dialogueId, ruleId: example.ruleId, decision, finishedAt }
           : { source: "sim", run: example.runId, index: example.index, ruleId: example.ruleId, decision },
       ),
     onMutate: ({ example, decision }) => {
@@ -129,6 +137,7 @@ export function useReview() {
     onSettled: () => {
       client.invalidateQueries({ queryKey: ["problems"] });
       client.invalidateQueries({ queryKey: ["run"] });
+      client.invalidateQueries({ queryKey: ["tone-history-snapshot"] });
       refresh();
     },
   });

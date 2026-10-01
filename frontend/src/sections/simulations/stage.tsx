@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Hammer, Play } from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
@@ -77,6 +77,8 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
 
   const cards = state?.cards?.cards.length ?? 0;
   const busy = !!state?.job.running;
+  const outdated =
+    state?.discover?.purpose === "tone-of-voice" && state.discover.criteriaRevision !== state.toneOfVoice?.revision;
   const build = () => {
     api("/api/cards", {})
       .then(() => {
@@ -97,14 +99,16 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
               <Button
                 icon={Hammer}
                 onClick={build}
-                disabled={busy || !state?.discover}
+                disabled={busy || !state?.discover || outdated}
                 className="hidden md:inline-flex"
                 title={
                   busy
                     ? "Сейчас идёт другая задача"
-                    : !state?.discover
-                      ? "Сначала оцените логи: сценарии собираются из их ошибок"
-                      : "Собрать сценарии из оценённых логов"
+                    : outdated
+                      ? "Сначала повторите оценку по уточнённым критериям"
+                      : !state?.discover
+                        ? "Сначала оцените логи: сценарии собираются из их ошибок"
+                        : "Собрать сценарии из оценённых логов"
                 }
               >
                 {cards ? "Собрать заново" : "Собрать сценарии"}
@@ -121,7 +125,27 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
             </>
           ) : undefined
         }
-        below={<SectionJob kinds={["run", "rejudge", "cards"]} />}
+        below={
+          <>
+            <SectionJob kinds={["run", "rejudge", "cards"]} />
+            {actions && (
+              <div className="border-t border-line px-4 py-3 md:hidden">
+                <Button size="lg" icon={Hammer} disabled={busy || !state?.discover || outdated} onClick={build}>
+                  {cards ? "Собрать сценарии заново" : "Собрать сценарии"}
+                </Button>
+              </div>
+            )}
+            {outdated && (
+              <p className="px-4 pb-3 text-body text-fg-3 lg:px-10">
+                Критерии изменились.{" "}
+                <Link to="/check?step=criteria" className="text-run underline">
+                  Повторите оценку разговоров
+                </Link>
+                , затем соберите сценарии.
+              </p>
+            )}
+          </>
+        }
       />
       {state && (
         <PlayDialog

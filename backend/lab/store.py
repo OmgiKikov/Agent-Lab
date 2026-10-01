@@ -25,6 +25,14 @@ def _connection() -> Iterator[sqlite3.Connection]:
         DB.chmod(0o600)
         connection.execute('CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
         connection.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        connection.execute(
+            'CREATE TABLE IF NOT EXISTS tone_checks (id TEXT PRIMARY KEY, summary TEXT NOT NULL, value TEXT NOT NULL)'
+        )
+        connection.execute(
+            'CREATE TABLE IF NOT EXISTS tone_check_reviews ('
+            'check_id TEXT NOT NULL, dialogue_id TEXT NOT NULL, rule_id TEXT NOT NULL, '
+            'decision TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (check_id, dialogue_id, rule_id))'
+        )
         with connection:
             yield connection
     finally:
@@ -53,12 +61,17 @@ def update(name: str, mutate: Callable[[Any], None]) -> Any:
     """Read, change and write one document in a single transaction, so concurrent writers do not lose changes."""
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
-        row = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
-        if row is None:
-            raise KeyError(name)
-        value = json.loads(row[0])
-        mutate(value)
-        connection.execute('UPDATE documents SET value = ? WHERE name = ?', (_json(value), name))
+        value = _update_document(connection, name, mutate)
+    return value
+
+
+def _update_document(connection: sqlite3.Connection, name: str, mutate: Callable[[Any], None]) -> Any:
+    row = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
+    if row is None:
+        raise KeyError(name)
+    value = json.loads(row[0])
+    mutate(value)
+    connection.execute('UPDATE documents SET value = ? WHERE name = ?', (_json(value), name))
     return value
 
 
@@ -73,10 +86,100 @@ def replace_inputs(name: str, value: Any) -> None:
             (name, _json(value)),
         )
         # Keep the names: a repeated legacy import must not resurrect intentionally cleared results.
+        cleared = [('discover.json', 'null'), ('cards.json', 'null')]
+        if name == 'sources.json':
+            cleared.append(('tone-of-voice-criteria.json', 'null'))
         connection.executemany(
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            [('discover.json', 'null'), ('cards.json', 'null')],
+            cleared,
         )
+
+
+def tone_checks() -> list[dict]:
+    with _connection() as connection:
+        return [json.loads(row[0]) for row in connection.execute('SELECT summary FROM tone_checks ORDER BY rowid DESC')]
+
+
+def save_tone_draft(draft: dict) -> None:
+    """A new rubric revision invalidates playable cards, while the prior assessment stays reviewable."""
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        row = connection.execute(
+            'SELECT value FROM documents WHERE name = ?', ('tone-of-voice-criteria.json',)
+        ).fetchone()
+        previous = (json.loads(row[0]) if row else None) or {}
+        connection.execute(
+            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+            ('tone-of-voice-criteria.json', _json(draft)),
+        )
+        if previous.get('revision') != draft['revision']:
+            connection.execute(
+                'INSERT INTO documents (name, value) VALUES (?, ?) '
+                'ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+                ('cards.json', 'null'),
+            )
+
+
+def tone_check(check_id: str) -> dict | None:
+    with _connection() as connection:
+        row = connection.execute('SELECT value FROM tone_checks WHERE id = ?', (check_id,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def tone_reviews(check_id: str) -> list[dict]:
+    with _connection() as connection:
+        rows = connection.execute(
+            'SELECT dialogue_id, rule_id, decision, updated_at FROM tone_check_reviews '
+            'WHERE check_id = ? ORDER BY dialogue_id, rule_id',
+            (check_id,),
+        )
+        return [
+            {'dialogueId': dialogue_id, 'ruleId': rule_id, 'decision': decision, 'updatedAt': updated_at}
+            for dialogue_id, rule_id, decision, updated_at in rows
+        ]
+
+
+def _save_tone_review(
+    connection: sqlite3.Connection, check_id: str, dialogue_id: str, rule_id: str, decision: str | None, updated_at: str
+) -> None:
+    connection.execute(
+        'INSERT INTO tone_check_reviews (check_id, dialogue_id, rule_id, decision, updated_at) VALUES (?, ?, ?, ?, ?) '
+        'ON CONFLICT(check_id, dialogue_id, rule_id) DO UPDATE SET '
+        'decision = excluded.decision, updated_at = excluded.updated_at',
+        (check_id, dialogue_id, rule_id, decision, updated_at),
+    )
+
+
+def save_tone_check(snapshot: dict) -> None:
+    """Publish the live result and its immutable evidence snapshot in one transaction.
+
+    Initial carried reviews seed separate annotations; later reviews never rewrite historical model evidence.
+    """
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        connection.execute(
+            'INSERT INTO tone_checks (id, summary, value) VALUES (?, ?, ?)',
+            (snapshot['check']['id'], _json(snapshot['check']), _json(snapshot)),
+        )
+        connection.execute(
+            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+            ('discover.json', _json(snapshot['result'])),
+        )
+        connection.execute(
+            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+            ('cards.json', 'null'),
+        )
+        for result in snapshot['result']['results']:
+            for row in result.get('rules', []):
+                if row.get('review') in ('agree', 'disagree'):
+                    _save_tone_review(
+                        connection,
+                        snapshot['check']['id'],
+                        str(result['dialogueId']),
+                        row['ruleId'],
+                        row['review'],
+                        snapshot['check']['finishedAt'],
+                    )
 
 
 def runs() -> list[dict]:
@@ -183,18 +286,27 @@ def set_review(run_id: str, index: int, decision: str | None, rule_id: str | Non
     return _mutate_run(run_id, mutate)
 
 
-def set_log_review(analysis: str, dialogue_id: str, rule_id: str, decision: str | None) -> None:
+def set_log_review(
+    analysis: str, dialogue_id: str, rule_id: str, decision: str | None, finished_at: str | None = None
+) -> None:
     """A person's decision on one criterion's verdict in a logged conversation, kept in the log assessment."""
     _decision(decision)
 
     def mutate(value: dict | None) -> None:
+        if finished_at and (value or {}).get('finishedAt') != finished_at:
+            raise ValueError('Результат изменился. Откройте актуальную проверку.')
         result = next((r for r in (value or {}).get('results') or [] if str(r.get('dialogueId')) == dialogue_id), None)
         row = next((row for row in (result or {}).get('rules') or [] if row.get('ruleId') == rule_id), None)
         if row is None:
             raise KeyError(rule_id)
         row['review'] = decision
 
-    update(analysis, mutate)
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        value = _update_document(connection, analysis, mutate)
+        check_id = value.get('checkId')
+        if check_id and connection.execute('SELECT 1 FROM tone_checks WHERE id = ?', (check_id,)).fetchone():
+            _save_tone_review(connection, check_id, dialogue_id, rule_id, decision, now())
 
 
 def recover_runs() -> int:
