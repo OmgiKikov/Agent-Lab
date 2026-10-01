@@ -290,7 +290,7 @@ async def read_tone_file(request: Request, name: str) -> dict:
 async def prepare_tone_criteria() -> dict:
     async def work(progress: Progress) -> dict:
         draft = await tone.prepare(progress)
-        store.save(tone.DRAFT, draft)
+        store.save_tone_draft(draft)
         return draft
 
     return start('tone-criteria', work)
@@ -360,7 +360,7 @@ async def tone_advice_command(payload: ToneAdviceCommand) -> dict:
 async def tone_clarification(payload: ToneClarificationCommand) -> dict:
     async def work(progress: Progress) -> dict:
         draft = tone.clarified(payload.revision, payload.ruleId, payload.text)
-        store.save(tone.DRAFT, draft)
+        store.save_tone_draft(draft)
         return draft
 
     try:

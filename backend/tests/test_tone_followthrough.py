@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from test_tone import POLICY
 
-from lab import api, discover, llm, store, tone
+from lab import api, cards, discover, judge, llm, simulate, store, tone
 from lab.jobs import Jobs
 
 
@@ -147,6 +147,112 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             store.set_log_review(discover.RESULT, 'd1', 'pronouns', 'agree', result['finishedAt'])
         self.assertEqual(store.load(discover.RESULT), result)
         self.assertEqual(store.tone_reviews(result['checkId']), [])
+
+    async def test_new_check_invalidates_deck_and_retains_frozen_runs_and_previous_check(self):
+        first = await self.check()
+        previous = store.tone_check(first['checkId'])
+        run = store.create_run({'id': 'played-before', 'status': 'completed', 'items': []})
+        store.save(cards.DECK, {'cards': [{'id': 'stale-scenario'}]})
+        await self.check()
+        self.assertIsNone(store.load(cards.DECK))
+        self.assertEqual(store.run(run['id']), run)
+        self.assertEqual(store.tone_check(first['checkId']), previous)
+        self.assertEqual(len(store.tone_checks()), 2)
+
+    async def test_new_rubric_clears_cards_and_blocks_rebuilding_until_logs_are_rechecked(self):
+        checked = await self.check()
+        draft = store.load(tone.DRAFT)
+        store.save(cards.DECK, {'cards': [{'id': 'stale-scenario'}]})
+        response = await self.client.post(
+            '/api/tone-of-voice/clarification',
+            json={
+                'revision': draft['revision'],
+                'ruleId': 'pronouns',
+                'text': 'Обращение на ты допустимо только в прямой цитате клиента.',
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(store.load(cards.DECK))
+        self.assertEqual(store.load(discover.RESULT), checked)
+        with patch.object(llm, 'chat', AsyncMock()) as model:
+            await self.client.post('/api/cards')
+            await self.wait_job()
+            model.assert_not_awaited()
+        self.assertIn('повторите проверку разговоров', api.jobs.state['error'])
+        store.save(cards.DECK, {'cards': [{'id': 'also-stale'}]})
+        await self.client.post('/api/tone-of-voice/criteria')
+        await self.wait_job()
+        self.assertIsNone(store.load(cards.DECK))
+        self.assertEqual(store.load(discover.RESULT), checked)
+
+    async def test_clarified_log_criterion_reaches_cards_and_both_simulation_judges(self):
+        draft = store.load(tone.DRAFT)
+        original_rule = draft['criteria'][0]
+        note = 'Обращение на ты допустимо только в прямой цитате клиента.'
+        await self.client.post(
+            '/api/tone-of-voice/clarification',
+            json={
+                'revision': draft['revision'],
+                'ruleId': 'pronouns',
+                'text': note,
+            },
+        )
+        await self.check(['pronouns'])
+        with (
+            patch.object(
+                llm,
+                'structured',
+                AsyncMock(
+                    return_value=llm.Answer(
+                        {
+                            'name': 'Передача документов',
+                            'situation': 'Клиент уточняет, как передать документы.',
+                        },
+                        'scenario-model',
+                    )
+                ),
+            ),
+            patch.object(cards.world, 'build', AsyncMock(return_value=None)),
+        ):
+            await self.client.post('/api/cards')
+            await self.wait_job()
+        self.assertIsNone(api.jobs.state['error'])
+        card = store.load(cards.DECK)['cards'][0]
+        self.assertEqual(card['criteria'][0]['quote'], original_rule['quote'])
+        self.assertEqual(card['criteria'][0]['clarifications'], [note])
+        self.assertIn(note, card['criteria'][0]['text'])
+        item = simulate.new_item(card, 'calm', 0)
+        item['conversation'] = [{'role': 'agent', 'text': self.dialogue['messages'][1]['content']}]
+        # A later card rebuild must not alter the criteria saved with the played conversation.
+        card['criteria'][0]['text'] = 'New card criterion'
+        seen = []
+
+        async def chat(system, payload, **kwargs):
+            seen.append(json.loads(payload))
+            return llm.Answer(
+                json.dumps(
+                    {
+                        'customerGoal': 'Передать документы',
+                        'rules': [
+                            {
+                                'ruleId': 'pronouns',
+                                'status': 'PASS',
+                                'reason': 'Проверено с уточнением',
+                                'agentQuote': self.dialogue['messages'][1]['content'],
+                            }
+                        ],
+                    }
+                ),
+                'judge-model',
+            )
+
+        with patch.object(llm, 'chat', side_effect=chat), patch.object(judge.knowledge, 'retrieved', return_value=[]):
+            await judge.evaluate({'criteria': item['criteria']}, item)
+        self.assertEqual(len(seen), 2)
+        self.assertTrue(all(note in data['expectations'][0]['text'] for data in seen))
+        self.assertTrue(all(data['expectations'][0]['quote'] == original_rule['quote'] for data in seen))
+        self.assertEqual((item['status'], item['second']['status']), ('PASS', 'PASS'))
+        self.assertEqual(store.load(tone.DRAFT)['criteria'][0]['text'], original_rule['text'])
 
     async def test_comparison_requires_same_criteria_and_models_and_ignores_selection_order(self):
         first = await self.check()

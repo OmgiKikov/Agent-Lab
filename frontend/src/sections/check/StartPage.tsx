@@ -53,10 +53,13 @@ export function StartPage() {
               to={SECTIONS.overview}
               className="inline-flex min-h-11 items-center justify-center rounded-control text-read text-fg-3 underline decoration-line-strong underline-offset-4 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 sm:justify-start"
             >
-              Открыть рабочую область
+              Обзор результатов
             </Link>
           </div>
           <p className="mt-4 text-body text-fg-3">Для оценки готовых разговоров подключение к агенту не требуется.</p>
+          <p className="mt-2 max-w-[65ch] text-body text-fg-3">
+            После оценки можно собрать карточки сценариев и проверить агента на симуляциях по тем же критериям.
+          </p>
           <History finishedAt={state?.discover?.finishedAt} refreshStamp={String(state?.job.running)} />
         </div>
       </div>

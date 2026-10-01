@@ -100,6 +100,26 @@ def tone_checks() -> list[dict]:
         return [json.loads(row[0]) for row in connection.execute('SELECT summary FROM tone_checks ORDER BY rowid DESC')]
 
 
+def save_tone_draft(draft: dict) -> None:
+    """A new rubric revision invalidates playable cards, while the prior assessment stays reviewable."""
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        row = connection.execute(
+            'SELECT value FROM documents WHERE name = ?', ('tone-of-voice-criteria.json',)
+        ).fetchone()
+        previous = (json.loads(row[0]) if row else None) or {}
+        connection.execute(
+            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+            ('tone-of-voice-criteria.json', _json(draft)),
+        )
+        if previous.get('revision') != draft['revision']:
+            connection.execute(
+                'INSERT INTO documents (name, value) VALUES (?, ?) '
+                'ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+                ('cards.json', 'null'),
+            )
+
+
 def tone_check(check_id: str) -> dict | None:
     with _connection() as connection:
         row = connection.execute('SELECT value FROM tone_checks WHERE id = ?', (check_id,)).fetchone()
@@ -144,6 +164,10 @@ def save_tone_check(snapshot: dict) -> None:
         connection.execute(
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
             ('discover.json', _json(snapshot['result'])),
+        )
+        connection.execute(
+            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+            ('cards.json', 'null'),
         )
         for result in snapshot['result']['results']:
             for row in result.get('rules', []):
