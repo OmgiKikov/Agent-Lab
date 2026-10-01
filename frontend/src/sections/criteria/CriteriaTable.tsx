@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { Criterion } from "../../lab/criteria";
+import { duty, type Criterion } from "../../lab/criteria";
 import { secondOf } from "../../lab/problemStats";
 import { nameOf, toneOf, type SideKey } from "./model";
 import type { Source } from "../../lab/types";
@@ -47,11 +47,11 @@ export function CriteriaTable({
             <th className="w-14 py-2.5 pl-5 font-medium">№</th>
             <th className="py-2.5 pr-4 font-medium">Критерий</th>
             <th className="hidden py-2.5 pr-4 font-medium 2xl:table-cell">Где написан</th>
-            <th className="py-2.5 pr-4 text-right font-medium">Логи</th>
+            <th className="py-2.5 pr-4 text-right font-medium">Диалоги</th>
             {hasSim && <th className="hidden py-2.5 pr-4 text-right font-medium sm:table-cell">Симуляции</th>}
             <th
               className="hidden py-2.5 pr-5 text-right font-medium md:table-cell"
-              title="В скольких ошибках логов две проверки совпали"
+              title="В скольких ошибках в диалогах две проверки совпали"
             >
               Проверки совпали
             </th>
@@ -80,8 +80,8 @@ export function CriteriaTable({
                   >
                     {c.name}
                   </button>
-                  <div className="mt-0.5 line-clamp-2 text-small text-fg-3" title={c.r.rule.text}>
-                    {c.r.rule.text}
+                  <div className="mt-0.5 line-clamp-2 text-small text-fg-3" title={duty(c.r.rule.text)}>
+                    {duty(c.r.rule.text)}
                   </div>
                 </td>
                 <td className="hidden py-3 pr-4 font-mono text-small text-fg-3 2xl:table-cell">

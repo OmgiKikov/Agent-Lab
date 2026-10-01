@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Upload } from "lucide-react";
+import { SECTIONS } from "../app/links";
 import { upload } from "../lab/api";
 import { count } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
@@ -20,10 +21,11 @@ function useUpload() {
     try {
       const { total } = await upload<{ total: number }>("/api/logs", file);
       await refresh();
+      // What to measure on them is chosen at the start: tone of voice or the criteria from the agent's code.
       toast.notify(`Загружено ${count(total, "разговор", "разговора", "разговоров")}`, {
         label: "Оценить",
         run: () => {
-          void navigate("/overview?assess=1");
+          void navigate(SECTIONS.start);
         },
       });
     } catch (e) {
@@ -35,10 +37,10 @@ function useUpload() {
   return { busy, send };
 }
 
-/** «Загрузить логи»: the chat's Excel export (sheet «Данные») or prepared .jsonl. */
+/** «Загрузить диалоги»: the chat's Excel export (sheet «Данные») or prepared .jsonl. */
 export function UploadButton({
   variant = "primary",
-  label = "Загрузить логи",
+  label = "Загрузить диалоги",
 }: {
   variant?: "primary" | "outline";
   label?: string;

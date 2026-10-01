@@ -23,7 +23,7 @@ const WORD: Record<Example["status"], string> = {
 /** Where an example was said: the log's topic, or the simulation's scenario and type of customer. */
 function Where({ example }: { example: Example }) {
   const { state } = useLabState();
-  if (example.source === "log") return <span>{example.topic || "логи"}</span>;
+  if (example.source === "log") return <span>{example.topic || "диалоги"}</span>;
   const run = state?.runs.find((r) => r.id === example.runId);
   const repeat = example.attempt && example.attempt > 1 ? ` · повтор ${example.attempt}` : "";
   return (

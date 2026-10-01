@@ -32,7 +32,7 @@ export const dialogOf = (e: Pick<Example, "source" | "dialogueId" | "runId" | "i
     ? `/logs/conversations?d=${encodeURIComponent(logKey(e.dialogueId ?? ""))}`
     : `/simulations/conversations?run=${encodeURIComponent(e.runId ?? "")}&d=${encodeURIComponent(simKey(e.runId ?? "", e.index ?? 0))}`;
 
-/** The conversation behind a row key, in its stage: a logged one in «Логи», a simulated one in its run. */
+/** The conversation behind a row key, in its stage: a real one in «Диалоги», a simulated one in its run. */
 export function dialogLink(key: string): string {
   const [kind, a, b] = key.split("~");
   if (kind === "sim") return dialogOf({ source: "sim", runId: a, index: Number(b) });
@@ -125,7 +125,7 @@ export function exampleFor(row: DialogRow, rule: Rule): Example {
 
 /** The dialogue as text for a ticket: who said what, then the judge's verdicts. */
 export function transcript(row: DialogRow, turns: { role: string; text: string }[]): string {
-  const lines = [`# ${row.title}`, "", `${row.source === "log" ? "Лог" : "Симуляция"} · ${row.topic}`, ""];
+  const lines = [`# ${row.title}`, "", `${row.source === "log" ? "Диалоги" : "Симуляция"} · ${row.topic}`, ""];
   for (const t of turns) lines.push(`${t.role === "customer" ? "Клиент" : "Агент"}: ${t.text}`, "");
   const judged = row.rules.filter((r) => r.status === "FAIL" || r.status === "PASS");
   if (judged.length) {

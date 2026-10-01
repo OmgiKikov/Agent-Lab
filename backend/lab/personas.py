@@ -9,7 +9,7 @@ DEFAULT = 'default'
 PERSONAS: dict[str, dict] = {
     DEFAULT: {
         'name': 'обычный',
-        'note': 'пишет так же, как в логе',
+        'note': 'пишет так же, как в настоящем разговоре',
         'style': '',
     },
     'impatient': {

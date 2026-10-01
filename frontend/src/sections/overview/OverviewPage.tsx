@@ -8,12 +8,14 @@ import { useCriteria } from "../../lab/criteria";
 import { count, longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { AGENT_SUBTITLE, AGENT_TITLE } from "../../lab/look";
+import { checkedIn, stagesSentence } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import type { LabRun } from "../../lab/types";
+import { toneResult } from "../../lab/tone";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
 import { StageResult } from "../../product/StageResult";
 import { Step } from "../../product/Step";
-import { Button } from "../../ui/Button";
+import { Button, buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { AssessSheet } from "../problems/AssessSheet";
 import { ProblemList } from "../problems/ProblemList";
@@ -72,7 +74,7 @@ export function OverviewPage() {
           setAssess(false);
           drop("assess");
         }}
-        criteria={data?.rules.length ?? 0}
+        criteria={data ? checkedIn(data, "log").length : 0}
       />
       {data && (data.log || data.sim) && (
         <ReportSheet
@@ -109,7 +111,7 @@ export function OverviewPage() {
       <div className="flex h-full flex-col">
         {header}
         <div className="min-h-0 flex-1 overflow-auto">
-          <FirstRun onAssess={() => setAssess(true)} />
+          <FirstRun />
         </div>
         {sheets}
       </div>
@@ -126,12 +128,15 @@ export function OverviewPage() {
           </p>
           <h2 className="mt-1 text-page font-semibold text-fg">Как работает агент</h2>
           <p className="mt-3 max-w-[64ch] text-lead text-fg-2">
-            Два этапа и одни и те же {count(list.length, "критерий", "критерия", "критериев")}. Сначала — настоящие
-            разговоры из логов. Из найденных в них ошибок собираются сценарии, и синтетические клиенты разыгрывают их с
-            агентом. Счёт у каждого этапа свой.
+            {stagesSentence(data)} Сначала — настоящие диалоги из выгрузки чата. Из найденных в них ошибок собираются
+            сценарии, и синтетические клиенты разыгрывают их с агентом. Счёт у каждого этапа свой.
           </p>
           <div className="mt-14 grid gap-x-16 gap-y-20 lg:grid-cols-2">
-            <LogStage data={data} list={list} onAssess={() => setAssess(true)} />
+            <LogStage
+              data={data}
+              list={list}
+              metric={toneResult(state) ? "Tone of voice" : "Точность по коду агента"}
+            />
             <SimStage list={list} run={run} />
           </div>
           <NextSteps
@@ -170,22 +175,24 @@ function StageHead({ n, stage, title, sub }: { n: 1 | 2; stage: Stage; title: st
 function LogStage({
   data,
   list,
-  onAssess,
+  metric,
 }: {
   data: Problems;
   list: ReturnType<typeof useCriteria>["list"];
-  onAssess: () => void;
+  metric: string;
 }) {
   const log = data.log;
   return (
-    <section aria-label="Логи">
+    <section aria-label="Диалоги">
       <StageHead
         n={1}
         stage="log"
-        title="Логи"
+        title="Диалоги"
         sub={
           log ? (
-            <>Настоящие разговоры клиентов из выгрузки чата · {longDay(log.finishedAt)}</>
+            <>
+              {metric} · проверено {longDay(log.finishedAt)}
+            </>
           ) : (
             "Настоящие разговоры клиентов из выгрузки чата"
           )
@@ -208,18 +215,18 @@ function LogStage({
             to={stageLink("log")}
             className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
           >
-            Все проблемы логов
+            Все проблемы диалогов
             <ArrowRight aria-hidden className="size-4" />
           </Link>
         </>
       ) : (
         <div className="mt-8">
           <p className="max-w-[44ch] text-lead text-fg-2">
-            Логи ещё не оценены: разговоры из выгрузки чата проверяются по критериям агента.
+            Диалоги ещё не оценены. Выберите, что проверяем: tone of voice или точность по коду агента.
           </p>
-          <Button className="mt-5" variant="primary" onClick={onAssess}>
-            Оценить логи
-          </Button>
+          <Link to={SECTIONS.start} className={`mt-5 ${buttonClass({ variant: "primary" })}`}>
+            Начать проверку
+          </Link>
         </div>
       )}
     </section>
@@ -237,10 +244,10 @@ function SimStage({ list, run }: { list: ReturnType<typeof useCriteria>["list"];
         sub={
           run ? (
             <span title={run.label || undefined}>
-              Синтетические клиенты по сценариям из ошибок логов · {longDay(run.startedAt)}
+              Синтетические клиенты по сценариям из ошибок в диалогах · {longDay(run.startedAt)}
             </span>
           ) : (
-            "Синтетические клиенты по сценариям из ошибок логов"
+            "Синтетические клиенты по сценариям из ошибок в диалогах"
           )
         }
       />
@@ -268,8 +275,8 @@ function SimStage({ list, run }: { list: ReturnType<typeof useCriteria>["list"];
       ) : (
         <div className="mt-8">
           <p className="max-w-[44ch] text-lead text-fg-2">
-            Симуляций ещё не было. Синтетические клиенты сыграют с агентом сценарии из ошибок в логах, и вы увидите их
-            до настоящих клиентов.
+            Симуляций ещё не было. Синтетические клиенты сыграют с агентом сценарии из ошибок в диалогах, и вы увидите
+            их до настоящих клиентов.
           </p>
           <Link to={SECTIONS.simulations} className="mt-5 inline-flex">
             <Button variant="primary" icon={Play}>
@@ -330,7 +337,7 @@ function NextSteps({
       : {
           icon: Bot,
           title: "Подключите агента",
-          sub: "Тогда исправления можно проверять, не дожидаясь новых логов.",
+          sub: "Тогда исправления можно проверять, не дожидаясь новой выгрузки чата.",
           to: SECTIONS.agent,
         },
   ].filter(Boolean) as { icon: typeof Play; title: string; sub: string; to?: string; run?: () => void }[];

@@ -8,7 +8,8 @@ import { problemLink } from "../../app/links";
 import { useCriteria } from "../../lab/criteria";
 import { longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { summarySentence } from "../../lab/problemReport";
+import { checkedIn, summarySentence } from "../../lab/problemReport";
+import { toneResult } from "../../lab/tone";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
 import { StageResult } from "../../product/StageResult";
 import { UploadButton } from "../../product/UploadLogs";
@@ -35,7 +36,7 @@ export function useLogTabs() {
 }
 
 /**
- * «Логи», the first stage: the customers' real conversations from the chat's export, checked against the agent's criteria.
+ * «Диалоги», the first stage: the customers' real conversations from the chat's export, checked against the agent's criteria.
  * The result as one number, then the problems it is made of. The older addresses of this place lead to its pages.
  */
 export function LogsPage() {
@@ -64,12 +65,18 @@ function LogsResult({
   const { state, offline } = useLabState();
   const { data, list } = useCriteria(null);
   const tabs = useLogTabs();
-  const [assess, setAssess] = useState(params.get("assess") === "1");
+  const asked = params.get("assess");
+  const [assess, setAssess] = useState(asked === "1" || asked === "code");
+  // «code»: the start asked for the assessment by the criteria from the agent's code, whatever the dialogues hold now.
+  const [code, setCode] = useState(asked === "code");
   const [report, setReport] = useState(params.get("report") === "1");
   useEffect(() => {
-    if (params.get("assess") === "1") setAssess(true);
+    if (asked === "1" || asked === "code") {
+      setAssess(true);
+      setCode(asked === "code");
+    }
     if (params.get("report") === "1") setReport(true);
-  }, [params]);
+  }, [asked, params]);
   const drop = (key: string) => {
     if (params.get(key))
       setParams(
@@ -84,7 +91,7 @@ function LogsResult({
 
   const header = (
     <Header
-      title="Логи"
+      title="Диалоги"
       step={1}
       tabs={tabs}
       actions={
@@ -114,7 +121,8 @@ function LogsResult({
           setAssess(false);
           drop("assess");
         }}
-        criteria={data?.rules.length ?? 0}
+        criteria={data ? checkedIn(data, "log").length : 0}
+        code={code}
       />
       {data?.log && (
         <ReportSheet
@@ -151,7 +159,7 @@ function LogsResult({
       <div className="flex h-full flex-col">
         {header}
         <div className="min-h-0 flex-1 overflow-auto">
-          <FirstRun onAssess={() => setAssess(true)} />
+          <FirstRun />
         </div>
         {sheets}
       </div>
@@ -165,12 +173,15 @@ function LogsResult({
         <div className="max-w-[1040px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-read text-fg-3">
             <span>
-              Настоящие разговоры клиентов{state.logs.file ? ` · «${state.logs.file}»` : ""} · проверено{" "}
-              {longDay(log.finishedAt)}
+              {toneResult(state) ? "Tone of voice" : "Точность по коду агента"}
+              {state.logs.file ? ` · «${state.logs.file}»` : ""} · проверено {longDay(log.finishedAt)}
             </span>
             <button
               type="button"
-              onClick={() => setAssess(true)}
+              onClick={() => {
+                setCode(false);
+                setAssess(true);
+              }}
               disabled={!state.logs.total || !!state.job.running}
               title="Проверить разговоры выгрузки заново"
               className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-3 transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"

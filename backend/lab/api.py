@@ -179,7 +179,9 @@ async def check_models() -> dict:
 async def collect_sources() -> dict:
     async def work(progress: Progress) -> list[dict]:
         collected = await asyncio.to_thread(sources.collect, agents.repo())
-        store.replace_inputs(sources.FILE, collected)
+        # The tone-of-voice policy is a person's document, not the agent's code: re-reading the code keeps it.
+        policy = [source for source in sources.load() if source['kind'] == tone.KIND]
+        store.replace_inputs(sources.FILE, [*collected, *policy])
         return collected
 
     return start('sources', work)
@@ -245,7 +247,7 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 
     async def work(progress: Progress) -> dict:
         result = await discover.run(payload.count, progress, payload.replan)
-        store.save(discover.RESULT, result)
+        store.save_audit(result, new_criteria=payload.replan)
         return result
 
     return start('discover', work)
@@ -398,7 +400,7 @@ async def review(payload: ReviewCommand) -> dict:
         if not payload.dialogueId or not payload.ruleId:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')
         if jobs.state['running'] and jobs.state['kind'] in ('discover', 'tone-check'):
-            raise HTTPException(409, 'Идёт оценка логов: ответ не сохранится. Отметьте после неё.')
+            raise HTTPException(409, 'Идёт оценка диалогов: ответ не сохранится. Отметьте после неё.')
         try:
             store.set_log_review(
                 discover.RESULT, payload.dialogueId, payload.ruleId, payload.decision, payload.finishedAt

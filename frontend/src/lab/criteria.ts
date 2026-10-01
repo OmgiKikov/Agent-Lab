@@ -29,6 +29,14 @@ export function nameFromText(text: string) {
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
+/**
+ * What a criterion requires, in the words a person reads. Criteria of a supplied rubric were once saved with its
+ * «### pronouns» headings; the quote keeps them as the rules were written, the wording goes without.
+ */
+export function duty(text: string) {
+  return text.replace(/^#{1,6}[ \t].*(?:\n|$)/gm, "").trim() || text;
+}
+
 /** Numbers every criterion once, for all screens: the ones for every conversation first, then by topic. */
 export function numberCriteria(rules: RuleEntry[], reference?: string[]): { list: Criterion[]; topics: Topic[] } {
   const titles = [...new Set(rules.flatMap((r) => r.topics))];

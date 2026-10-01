@@ -48,18 +48,19 @@ def coded_criteria(source: dict) -> list[dict]:
         return []
     rules = text[section.end() : end.start()].strip()
     headers = list(re.finditer(r'^#{2,3}\s+(?:([^\n:]+):\s*)?([a-z][a-z_-]+)\s*$', rules, re.M))
-    blocks: dict[str, list[str]] = {}
+    blocks: dict[str, list[tuple[str, str]]] = {}
     for index, header in enumerate(headers):
         stop = headers[index + 1].start() if index + 1 < len(headers) else len(rules)
-        block = rules[header.start() : stop].strip()
-        blocks.setdefault(header.group(2), []).append(block)
+        # The quote keeps the passage verbatim; the duty a person reads goes without its «### code» heading.
+        passage = (rules[header.start() : stop].strip(), rules[header.end() : stop].strip())
+        blocks.setdefault(header.group(2), []).append(passage)
     principles = text.split('## Главные принципы', 1)[-1].split('# Правила коммуникаций', 1)[0].strip()
     return [
         {
             'id': code,
             'name': RULE_NAMES.get(code, code),
-            'text': '\n'.join(parts),
-            'quote': ' … '.join(parts),
+            'text': '\n'.join(duty for _, duty in parts if duty) or RULE_NAMES.get(code, code),
+            'quote': ' … '.join(block for block, _ in parts),
             'sourceId': source['id'],
             'observation': 'reply',
             'condition': 'Проверять только ответы агента; реплики клиента — контекст.',

@@ -76,22 +76,53 @@ def _update_document(connection: sqlite3.Connection, name: str, mutate: Callable
 
 
 def replace_inputs(name: str, value: Any) -> None:
-    """Replace sources or logs together with invalidation of their derived audit and scenarios."""
+    """Replace sources or logs together with invalidation of their derived audit and scenarios.
+
+    The tone-of-voice check derives from its own policy, not from the agent's code: while the policy stays the same,
+    its criteria and its result survive re-read code. Scenarios read the code, so they are invalidated either way.
+    """
     if name not in ('sources.json', 'logs.json'):
         raise ValueError('Only source and log documents are inputs')
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
+        cleared = ['discover.json', 'cards.json']
+        if name == 'sources.json':
+            policy = _tone_policy(_document(connection, name))
+            if not policy or policy != _tone_policy(value):
+                cleared.append('tone-of-voice-criteria.json')
+            elif (_document(connection, 'discover.json') or {}).get('purpose') == 'tone-of-voice':
+                cleared.remove('discover.json')
         connection.execute(
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
             (name, _json(value)),
         )
         # Keep the names: a repeated legacy import must not resurrect intentionally cleared results.
-        cleared = [('discover.json', 'null'), ('cards.json', 'null')]
-        if name == 'sources.json':
-            cleared.append(('tone-of-voice-criteria.json', 'null'))
         connection.executemany(
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            cleared,
+            [(document, 'null') for document in cleared],
+        )
+
+
+def _document(connection: sqlite3.Connection, name: str) -> Any:
+    row = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def _tone_policy(items: list[dict] | None) -> list[dict]:
+    """The supplied tone-of-voice policy among the sources (tone.KIND)."""
+    return [item for item in items or [] if item.get('kind') == 'tone-of-voice']
+
+
+def save_audit(value: dict, *, new_criteria: bool) -> None:
+    """Publish a log audit; criteria extracted anew no longer match the playable cards, so those go with it."""
+    documents = [('discover.json', _json(value))]
+    if new_criteria:
+        documents.append(('cards.json', 'null'))
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        connection.executemany(
+            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+            documents,
         )
 
 

@@ -20,6 +20,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { duty } from "../lab/criteria";
 import { day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import { useProblems } from "../lab/problems";
@@ -68,7 +69,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "s-logs",
         group: "Разделы",
-        label: "Логи",
+        label: "Диалоги",
         sub: "Этап 1: настоящие разговоры клиентов",
         icon: MessagesSquare,
         run: go(SECTIONS.logs),
@@ -76,7 +77,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "s-log-talks",
         group: "Разделы",
-        label: "Разговоры логов",
+        label: "Разговоры из диалогов",
         sub: "Каждый разговор выгрузки целиком",
         icon: MessagesSquare,
         run: go(conversationsLink("log")),
@@ -132,8 +133,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "a-assess",
         group: "Действия",
-        label: "Оценить логи",
-        sub: "Проверить разговоры логов по критериям агента",
+        label: "Оценить диалоги",
+        sub: "Проверить настоящие разговоры по критериям",
         icon: Play,
         run: go(`${SECTIONS.logs}?assess=1`),
       },
@@ -149,15 +150,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-report",
         group: "Действия",
         label: "Отчёт для письма",
-        sub: "Проблемы логов листом: скопировать или скачать",
+        sub: "Проблемы диалогов листом: скопировать или скачать",
         icon: FileText,
         run: go(`${SECTIONS.logs}?report=1`),
       },
       {
         id: "a-upload",
         group: "Действия",
-        label: "Загрузить логи",
-        sub: "Выгрузка чата — кнопкой в «Логах»",
+        label: "Загрузить диалоги",
+        sub: "Выгрузка чата — кнопкой в «Диалогах»",
         icon: Upload,
         run: go(conversationsLink("log")),
       },
@@ -165,7 +166,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-cards",
         group: "Действия",
         label: "Собрать сценарии",
-        sub: "Из ошибок в оценённых логах",
+        sub: "Из ошибок в оценённых диалогах",
         icon: Hammer,
         run: go(scenariosLink()),
       },
@@ -192,7 +193,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       if (p?.log.failed)
         out.push({
           id: `v-${id}`,
-          group: "Проблемы в логах",
+          group: "Проблемы в диалогах",
           label: p.title,
           sub: `ошибка в ${p.log.failed} из ${p.log.failed + p.log.passed} разговоров`,
           icon: TriangleAlert,
@@ -204,7 +205,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: `c-${r.id}`,
         group: "Критерии",
         label: r.title,
-        sub: r.rule.origin || r.rule.text,
+        sub: r.rule.origin || duty(r.rule.text),
         icon: ListChecks,
         run: go(criterionLink(r.id)),
       });

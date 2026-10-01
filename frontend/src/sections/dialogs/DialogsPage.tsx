@@ -82,7 +82,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const header =
     stage === "log" ? (
       <Header
-        title="Логи"
+        title="Диалоги"
         step={1}
         tabs={logTabs}
         actions={<UploadButton variant="outline" />}
@@ -141,7 +141,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const showDetail = !!selected && (wide || !!params.get("d"));
   const empty =
     stage === "log"
-      ? "Логи ещё не загружены: кнопка «Загрузить логи» справа вверху."
+      ? "Диалоги ещё не загружены: кнопка «Загрузить диалоги» справа вверху."
       : "В этом прогоне нет разговоров.";
   return (
     <div className="flex h-full flex-col">

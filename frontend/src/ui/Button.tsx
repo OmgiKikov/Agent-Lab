@@ -25,6 +25,15 @@ const SIZE = {
   lg: "h-11 gap-2 px-5 text-read",
 };
 
+const PILL = [
+  "inline-flex flex-shrink-0 select-none items-center justify-center whitespace-nowrap rounded-full font-medium transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97]",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40",
+];
+
+/** The same pill for a link that leads somewhere, so a button is never put inside a link. */
+export const buttonClass = ({ variant = "outline", size = "md" }: Pick<Props, "variant" | "size"> = {}) =>
+  cn(...PILL, SIZE[size], VARIANT[variant]);
+
 /** A pill: the black one is the screen's main action, one per screen; the grey ones are the rest; bare for quiet actions. */
 export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
   {
@@ -51,8 +60,7 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
       disabled={disabled || loading}
       title={kbd ? `${title ?? label} (${kbd})`.trim() : title}
       className={cn(
-        "inline-flex flex-shrink-0 select-none items-center justify-center whitespace-nowrap rounded-full font-medium transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40",
+        ...PILL,
         SIZE[size],
         !children && (size === "sm" ? "w-8 px-0" : size === "lg" ? "w-11 px-0" : "w-9 px-0"),
         VARIANT[variant],

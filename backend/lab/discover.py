@@ -16,6 +16,7 @@ from .prompts import ASSIGN, PLAN
 RESULT = 'discover.json'
 SEED = 20260928  # the same sample of conversations in every audit
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
+TONE = 'tone-of-voice'  # tone.KIND: tone.py imports this module, so the value is repeated, as in store
 OBSERVATIONS = ('reply', 'tool', 'state')
 
 
@@ -238,13 +239,20 @@ def summarize(results: list[dict], topics: list[dict]) -> dict:
 
 
 async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None, replan: bool = False) -> dict:
-    srcs = sources.load()
+    previous = store.load(RESULT) or {}
+    if previous.get('purpose') == TONE and not replan:
+        # Its frozen topic holds the tone criteria: reused here, they would lose the clarifications and the history.
+        raise RuntimeError(
+            'Диалоги проверены по правилам tone of voice: повторите эту проверку в «Начать проверку». '
+            'Чтобы оценить их по коду агента, выберите там «Точность».'
+        )
+    # The tone-of-voice policy (tone.KIND) has its own check in tone.py; the rules here come from the agent's code.
+    srcs = [source for source in sources.load() if source['kind'] != TONE]
     if not srcs:
         raise RuntimeError('Нет источников правил: шаг «агент» → «собрать из кода агента».')
     dialogues = sample(count)
     if not dialogues:
-        raise RuntimeError('Нет разговоров для оценки: сначала загрузите логи.')
-    previous = store.load(RESULT) or {}
+        raise RuntimeError('Нет разговоров для оценки: сначала загрузите диалоги.')
     started = store.now()
     if previous.get('topics') and not replan:
         progress(

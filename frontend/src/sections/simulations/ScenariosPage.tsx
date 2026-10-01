@@ -110,7 +110,7 @@ export function ScenariosPage() {
             <p className="text-read text-fg-3">
               {cards.length ? (
                 <>
-                  {count(cards.length, "сценарий", "сценария", "сценариев")}, {fromErrors} из ошибок в логах
+                  {count(cards.length, "сценарий", "сценария", "сценариев")}, {fromErrors} из ошибок в диалогах
                   {state.cards?.createdAt ? ` · собраны ${day(state.cards.createdAt)}` : ""}
                 </>
               ) : (
@@ -138,7 +138,7 @@ export function ScenariosPage() {
                   ? "Ничего не нашлось"
                   : state.discover
                     ? "Нажмите «Собрать сценарии», чтобы продолжить."
-                    : "Сценарии собираются из оценённых логов."}
+                    : "Сценарии собираются из оценённых диалогов."}
               </p>
             )}
           </div>

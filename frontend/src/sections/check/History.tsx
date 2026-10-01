@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, ChevronDown, History as HistoryIcon, RotateCcw } from "lucide-react";
+import { duty } from "../../lab/criteria";
 import { when } from "../../lab/format";
 import {
   comparisonText,
@@ -59,7 +60,7 @@ function SavedRule({ rule, second, snapshot }: { rule: Rule; second?: Rule; snap
           <div className="space-y-3">
             <p>
               <span className="font-medium text-fg">Требование: </span>
-              {criterion.text}
+              {duty(criterion.text)}
             </p>
             {criterion.condition && (
               <p>
@@ -216,7 +217,7 @@ function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous
                 {index + 1}. {criterion.name}
               </summary>
               <div className="mt-3 space-y-3 whitespace-pre-wrap break-words text-body text-fg-2">
-                <p>{criterion.text}</p>
+                <p>{duty(criterion.text)}</p>
                 {criterion.condition && <p>Когда применяется: {criterion.condition}</p>}
                 {criterion.acceptable && <p>Исключения и допустимое: {criterion.acceptable}</p>}
                 {!!criterion.clarifications?.length && <p>Уточнения команды: {criterion.clarifications.join("\n")}</p>}

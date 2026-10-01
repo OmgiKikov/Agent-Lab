@@ -42,7 +42,7 @@ export function useNav({ logs, sims, criteria }: NavCounts): NavItem[] {
     { to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid, match: ["/overview"] },
     {
       to: SECTIONS.logs,
-      label: "Логи",
+      label: "Диалоги",
       icon: MessagesSquare,
       match: ["/logs", "/problems", "/dialogs", "/review", "/violations"],
       count: logs,

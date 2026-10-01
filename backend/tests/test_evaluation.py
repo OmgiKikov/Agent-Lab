@@ -280,6 +280,34 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('runId', analysis['results'][0])
         save.assert_not_called()
 
+    async def test_audit_never_turns_the_tone_policy_into_agent_rules(self):
+        dialogue = {
+            'id': 'stable',
+            'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
+        }
+        code = {'id': 's1', 'kind': 'prompt', 'content': 'text'}
+        policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь к клиенту на вы.'}
+        tone_topic = {'id': 't1', 'title': 'Tone of voice', 'dialogueIds': ['stable'], 'rules': [criterion('pronouns')]}
+        previous = {'purpose': 'tone-of-voice', 'topics': [tone_topic], 'results': []}
+        topic = {'id': 't1', 'title': 'Возврат', 'dialogueIds': ['stable'], 'rules': [criterion()]}
+        result = {'dialogueId': 'stable', 'topicId': 't1', 'status': 'UNMEASURED', 'rules': [], 'opening': 'Вопрос'}
+        plan = AsyncMock(return_value=([topic], 0))
+        with (
+            patch.object(discover.sources, 'load', return_value=[code, policy]),
+            patch.object(discover, 'sample', return_value=[dialogue]),
+            patch.object(discover.store, 'load', return_value=previous),
+            patch.object(discover, 'plan_topics', plan),
+            patch.object(discover, 'keep_topics', AsyncMock(side_effect=AssertionError('tone criteria are frozen'))),
+            patch.object(discover, 'judge_dialogue', AsyncMock(return_value=result)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, 'tone of voice'):
+                await discover.run()
+            plan.assert_not_awaited()
+            analysis = await discover.run(replan=True)
+        plan.assert_awaited_once_with([code], [dialogue])
+        self.assertEqual([source['id'] for source in analysis['sources']], ['s1'])
+        self.assertNotIn('purpose', analysis)
+
     async def test_card_generation_does_not_commit(self):
         with (
             patch.object(cards.store, 'load', return_value={'topics': [], 'results': []}),

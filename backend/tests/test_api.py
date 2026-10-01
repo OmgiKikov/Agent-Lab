@@ -66,6 +66,22 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(store.load(api.discover.RESULT))
         self.assertIsNone(store.load(api.cards.DECK))
 
+    async def test_criteria_extracted_anew_drop_the_cards_built_from_the_old_ones(self) -> None:
+        audit = {'topics': [], 'results': []}
+        for replan, kept in ((False, True), (True, False)):
+            with self.subTest(replan=replan):
+                store.save(api.cards.DECK, {'cards': ['built from the previous criteria']})
+                with patch.object(api.discover, 'run', AsyncMock(return_value=audit)):
+                    response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    for _ in range(100):
+                        if not api.jobs.state['running']:
+                            break
+                        await asyncio.sleep(0.002)
+                self.assertIsNone(api.jobs.state['error'])
+                self.assertEqual(store.load(api.discover.RESULT), audit)
+                self.assertEqual(store.load(api.cards.DECK) is not None, kept)
+
     async def test_stopped_source_worker_cannot_publish_or_invalidate_previous_analysis(self) -> None:
         entered, release, finished = threading.Event(), threading.Event(), threading.Event()
         store.save(api.sources.FILE, [{'id': 'old'}])

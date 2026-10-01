@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, Building2, Database, Play } from "lucide-react";
 import { criterionLink } from "../../app/links";
-import type { Criterion } from "../../lab/criteria";
+import { duty, type Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
@@ -61,7 +61,7 @@ export function ScenarioView({
               to={dialogOf({ source: "log", dialogueId: card.sourceDialogueId })}
               className="inline-flex items-center gap-1 text-small text-fg-2 underline decoration-line-strong underline-offset-4 hover:text-fg"
             >
-              Разговор из лога, откуда он
+              Настоящий разговор, откуда он
               <ArrowRight aria-hidden className="size-3.5" />
             </Link>
           )}
@@ -106,7 +106,7 @@ export function ScenarioView({
                 ))
               : card.criteria.map((x) => (
                   <li key={x.id} className="py-3 text-body text-fg-2">
-                    {x.text}
+                    {duty(x.text)}
                   </li>
                 ))}
           </ul>

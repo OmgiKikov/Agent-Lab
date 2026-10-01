@@ -139,7 +139,7 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
 async def run(progress: Callable[..., None] = lambda **_: None) -> list[dict]:
     analysis = store.load(discover.RESULT)
     if not analysis:
-        raise RuntimeError('Сначала оцените логи')
+        raise RuntimeError('Сначала оцените диалоги')
     if analysis.get('purpose') == tone.KIND:
         draft = store.load(tone.DRAFT) or {}
         if draft.get('revision') != analysis.get('criteriaRevision'):
