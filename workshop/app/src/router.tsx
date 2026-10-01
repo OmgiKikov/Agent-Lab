@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate, useLocation, useParams } from "react-router-dom";
 import { dialogLink } from "./lab/dialogs";
-import { AppShell } from "./shell/AppShell";
+import { Shell } from "./app/Shell";
+import { ViolationsPage } from "./sections/violations/ViolationsPage";
 import { AgentPage } from "./screens/agent/AgentPage";
 import { RunsPage } from "./pages/RunsPage";
 import { SearchPage } from "./pages/SearchPage";
@@ -32,9 +33,10 @@ function DialogRedirect() {
 export const router = createBrowserRouter([
   {
     path: "/",
-    element: <AppShell />,
+    element: <Shell />,
     children: [
-      { index: true, element: <Navigate to="/logs" replace /> },
+      { index: true, element: <Navigate to="/violations" replace /> },
+      { path: "violations", element: <ViolationsPage /> },
       { path: "agent", element: <AgentPage /> },
       { path: "agent/criteria", element: <AgentPage /> },
       { path: "logs", element: <LogsPage /> },
@@ -44,14 +46,14 @@ export const router = createBrowserRouter([
       { path: "simulations/scenarios/:scenarioId", element: <To to="/scenarios" from={p => ({ s: p.scenarioId ?? "" })} /> },
       { path: "results", element: <ResultsPage /> },
       // The earlier sections: their content became tabs of the blocks.
-      { path: "problems", element: <To to="/logs" /> },
-      { path: "problems/:problemId", element: <To to="/logs" from={p => ({ p: p.problemId ?? "" })} /> },
+      { path: "problems", element: <To to="/violations" /> },
+      { path: "problems/:problemId", element: <To to="/violations" from={p => ({ v: p.problemId ?? "" })} /> },
       { path: "rules", element: <To to="/agent/criteria" /> },
       { path: "rules/:ruleId", element: <To to="/agent/criteria" from={p => ({ c: p.ruleId ?? "" })} /> },
       { path: "review", element: <To to="/logs?tab=review" /> },
       { path: "dialogs", element: <To to="/logs?tab=dialogs" /> },
       { path: "dialogs/:dialogKey", element: <DialogRedirect /> },
-      { path: "lab", element: <Navigate to="/logs" replace /> },
+      { path: "lab", element: <Navigate to="/violations" replace /> },
       { path: "lab/dialogs/*", element: <Navigate to="/results?tab=dialogs" replace /> },
       { path: "lab/logs/*", element: <Navigate to="/logs?tab=dialogs" replace /> },
       { path: "lab/criteria/*", element: <Navigate to="/agent/criteria" replace /> },
@@ -59,7 +61,7 @@ export const router = createBrowserRouter([
       { path: "lab/judge/*", element: <Navigate to="/agent/criteria" replace /> },
       { path: "lab/checks/*", element: <Navigate to="/scenarios" replace /> },
       { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
-      { path: "lab/*", element: <Navigate to="/logs" replace /> },
+      { path: "lab/*", element: <Navigate to="/violations" replace /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId/span/:spanId", element: <RunsPage /> },
       { path: "runs/:runId/spans", element: <RunsPage /> },
@@ -76,7 +78,7 @@ export const router = createBrowserRouter([
       { path: "saved/:runId", element: <SavedPage /> },
       { path: "saved", element: <SavedPage /> },
       { path: "settings", element: <SettingsPage /> },
-      { path: "*", element: <Navigate to="/logs" replace /> },
+      { path: "*", element: <Navigate to="/violations" replace /> },
     ],
   },
 ]);

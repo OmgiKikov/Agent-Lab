@@ -21,7 +21,7 @@ function useUpload() {
     try {
       const { total } = await upload<{ total: number }>("/api/logs", file);
       await refresh();
-      toast.notify(`Загружено ${count(total, "диалог", "диалога", "диалогов")}`, { label: "Оценить", run: () => navigate("/logs?assess=1") });
+      toast.notify(`Загружено ${count(total, "диалог", "диалога", "диалогов")}`, { label: "Оценить", run: () => navigate("/violations?assess=1") });
     } catch (e) {
       toast.error(e);
     } finally {

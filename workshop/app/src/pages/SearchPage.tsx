@@ -502,7 +502,7 @@ function SearchLockedOverlay({ onConnected }: { onConnected: () => void }) {
         <h1
           className="text-center"
           style={{
-            fontFamily: '"Commissioner Variable", sans-serif',
+            fontFamily: '"Onest Variable", sans-serif',
             fontSize: "36px",
             fontWeight: 500,
             lineHeight: 1.08,

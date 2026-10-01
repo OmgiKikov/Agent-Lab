@@ -1,46 +1,17 @@
+@import "./design/tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@layer base {
-  :root {
-    --sidebar-background: 0 0% 7%;
-    --sidebar-foreground: 200 10% 85%;
-    --sidebar-primary: 216 80% 70%;
-    --sidebar-primary-foreground: 0 0% 95%;
-    --sidebar-accent: 0 0% 100% / 0.06;
-    --sidebar-accent-foreground: 200 10% 85%;
-    --sidebar-border: 0 0% 100% / 0.06;
-    --sidebar-ring: 216 80% 70%;
-
-    /* The product's tokens: rgb channels, so `bg-lab-ok/15` style alpha works. */
-    --lab-bg: 29 29 29;
-    --lab-surface: 25 25 25;
-    --lab-raised: 35 35 35;
-    --lab-hover: 37 40 41;
-    --lab-active: 48 52 54;
-    --lab-ink: 225 232 236;
-    --lab-text: 215 220 224;
-    --lab-soft: 194 199 203;
-    --lab-mute: 161 165 168;
-    --lab-dim: 142 150 155;
-    --lab-faint: 116 128 135;
-    --lab-user: 33 52 57;
-    --lab-accent: 166 196 205;
-    --lab-ok: 116 185 142;
-    --lab-bad: 226 138 128;
-    --lab-warn: 253 186 116;
-    --lab-mark: 232 145 45;
-  }
-}
 
 html {
   color-scheme: dark;
 }
 
 body {
-  background: rgb(29 29 29);
-  color: #999;
+  background: rgb(var(--canvas));
+  color: rgb(var(--fg-2));
+  font-family: theme("fontFamily.sans");
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -272,7 +243,7 @@ input.secret-input-saved:focus::placeholder {
 *::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 2px; }
 *::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.14); }
 
-pre { white-space: pre-wrap; word-break: break-word; font-family: 'Geist Mono Variable', ui-monospace, monospace; }
+pre { white-space: pre-wrap; word-break: break-word; font-family: theme("fontFamily.mono"); }
 
 /* Streamdown CSS variable overrides for dark theme */
 .streamdown {
@@ -280,8 +251,8 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: 'Geist Mono Va
   --muted: rgba(255,255,255,0.04);
   --muted-foreground: rgba(255,255,255,0.5);
   --foreground: rgba(255,255,255,0.85);
-  --background: #000;
-  --primary: #5B8DEF;
+  --background: rgb(var(--canvas));
+  --primary: rgb(var(--run));
   min-width: 0;
   max-width: 100%;
   color: rgba(200,213,220,1);
@@ -301,7 +272,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: 'Geist Mono Va
   display: none !important;
 }
 /* Dropdown menus — dark bg, subtle border */
-.streamdown .rounded-md.border { background: #1a1a1a !important; border-color: rgba(255,255,255,0.15) !important; }
+.streamdown .rounded-md.border { background: rgb(var(--raised)) !important; border-color: rgba(255,255,255,0.15) !important; }
 .streamdown .rounded-md.border button { color: rgba(255,255,255,0.7) !important; }
 .streamdown .rounded-md.border button:hover { background: rgba(255,255,255,0.06) !important; }
 

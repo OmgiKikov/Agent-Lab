@@ -1022,7 +1022,7 @@ function TraceNotFound({ runId, backPath }: { runId: string; backPath: string })
         <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04]">
           <SearchX className="h-5 w-5" style={{ color: C.fg1 }} />
         </div>
-        <div className="text-[15px] font-medium" style={{ color: C.fg4, fontFamily: '"Commissioner Variable", sans-serif' }}>Трейс не найден</div>
+        <div className="text-[15px] font-medium" style={{ color: C.fg4, fontFamily: '"Onest Variable", sans-serif' }}>Трейс не найден</div>
         <div className="mt-2 text-sm leading-relaxed" style={{ color: C.fg1 }}>
           Этого трейса нет в текущей рабочей папке: его могли удалить или открыть из другого проекта.
         </div>

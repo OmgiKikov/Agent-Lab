@@ -3,8 +3,8 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router-dom";
 import { router } from "./router";
 import { queryClient } from "./query-client";
-import "@fontsource-variable/commissioner";
-import "@fontsource-variable/geist-mono";
+import "@fontsource-variable/onest";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
