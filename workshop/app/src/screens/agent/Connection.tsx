@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Check as Tick, PlugZap, Save } from "lucide-react";
+import { Code2, Globe, Monitor, PlugZap, Save } from "lucide-react";
 import { api } from "../../lab/api";
 import type { Check, LabState, Target } from "../../lab/types";
 import { useLabState } from "../../shell/LabProvider";
@@ -58,20 +58,23 @@ function Reply({ check }: { check: Answer }) {
   );
 }
 
-/** One of the three ways: a choice; the chosen one shows its own field. */
-function Way({ target, on, onPick, children }: { target: Target; on: boolean; onPick: () => void; children?: ReactNode }) {
+const WAY_LOOK: Record<string, { icon: typeof Globe; how: string }> = {
+  prod: { icon: Globe, how: "снаружи, по адресу" },
+  "local-http": { icon: Monitor, how: "снаружи, уже запущен здесь" },
+  "local-code": { icon: Code2, how: "изнутри, на время прогона" },
+};
+
+/** One of the three ways as a big choice card: an icon, the name, how the Lab reaches it, and whether it is set up. */
+function Way({ target, on, onPick }: { target: Target; on: boolean; onPick: () => void }) {
+  const look = WAY_LOOK[target.id] ?? { icon: Globe, how: target.note };
   return (
-    <div className={`rounded-lg border px-3 py-2.5 ${on ? "border-white/[0.35] bg-white/[0.04]" : "border-white/[0.08]"}`}>
-      <button type="button" onClick={onPick} className="flex w-full items-center gap-2.5 text-left" aria-pressed={on}>
-        <span className={`flex size-3.5 flex-shrink-0 items-center justify-center rounded-full border ${on ? "border-lab-ink bg-lab-ink" : "border-lab-dim"}`}>{on && <Tick className="size-2.5 text-black" strokeWidth={3} />}</span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-body text-lab-ink">{WAY_NAME[target.id] ?? target.name}</span>
-          <span className="block text-meta text-lab-dim">{target.note}</span>
-        </span>
-        <span className={target.ready ? "text-meta text-lab-ok" : "text-meta text-lab-warn"}>{target.ready ? "готово" : "не настроено"}</span>
-      </button>
-      {on && children && <div className="mt-3 space-y-3 border-t border-white/[0.08] pt-3">{children}</div>}
-    </div>
+    <button type="button" onClick={onPick} aria-pressed={on}
+      className={`flex min-h-[112px] flex-col rounded-[12px] border p-3.5 text-left transition-colors ${on ? "border-[rgba(75,180,200,0.55)] bg-[rgba(75,180,200,0.09)] shadow-[0_0_0_3px_rgba(75,180,200,0.10)]" : "border-white/[0.09] bg-white/[0.02] hover:border-white/[0.2]"}`}>
+      <look.icon className={`size-4 ${on ? "text-[rgb(120,205,222)]" : "text-lab-dim"}`} />
+      <span className="mt-3 text-[13.5px] font-medium leading-[18px] text-lab-ink">{WAY_NAME[target.id] ?? target.name}</span>
+      <span className="mt-0.5 text-[11.5px] text-lab-dim">{look.how}</span>
+      <span className={`mt-auto pt-2 text-[11px] ${target.ready ? "text-lab-ok" : "text-lab-faint"}`}>{target.ready ? "готово" : "не настроено"}</span>
+    </button>
   );
 }
 
@@ -114,9 +117,13 @@ function ConnectionForm({ state }: { state: LabState }) {
   };
   return (
     <div className="px-5 py-5">
-      <div className="space-y-2">
-        {state.targets.map(t => (
-          <Way key={t.id} target={t} on={t.id === way} onPick={() => pick(t.id)}>
+      <div className="text-[14px] text-lab-ink">Как подключить агента</div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        {state.targets.map(t => <Way key={t.id} target={t} on={t.id === way} onPick={() => pick(t.id)} />)}
+      </div>
+      <div className="mt-3 space-y-3 rounded-[12px] border border-white/[0.08] bg-[rgb(35,35,35)] p-4">
+        {state.targets.filter(t => t.id === way).map(t => (
+          <div key={t.id}>
             {t.id === "prod" && (
               <Field label="Адрес агента на тестовом стенде" hint="Открывается с рабочего компьютера.">
                 <input name="prod-url" type="url" autoComplete="off" value={prodUrl} onChange={e => setProdUrl(e.target.value)} placeholder="https://…" className={INPUT} spellCheck={false} />
@@ -128,7 +135,7 @@ function ConnectionForm({ state }: { state: LabState }) {
               </Field>
             )}
             {t.id === "local-http" && <div className="text-small text-lab-mute">Адрес не нужен: агент уже запущен на этом компьютере ({t.where}).</div>}
-          </Way>
+          </div>
         ))}
       </div>
       <div className="mt-5">
