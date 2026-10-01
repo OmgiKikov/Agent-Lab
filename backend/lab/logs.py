@@ -17,6 +17,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 from . import store
 
 FILE = 'logs.json'
+META = 'logs-meta.json'  # the name and time of the last upload
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
 MARKER = re.compile(r'\b(CLIENT|AGENT)\b')
@@ -138,6 +139,13 @@ def prepare(name: str, data: bytes) -> list[dict]:
     return _validated(dialogues)
 
 
-def commit(dialogues: list[dict]) -> int:
+def commit(dialogues: list[dict], name: str | None = None) -> int:
     store.replace_inputs(FILE, dialogues)
+    if name:
+        store.save(META, {'file': name, 'updatedAt': store.now()})
     return len(dialogues)
+
+
+def meta() -> dict:
+    """The export the conversations came from: its file name and when it was uploaded, when that is known."""
+    return store.load(META) or {'file': None, 'updatedAt': None}

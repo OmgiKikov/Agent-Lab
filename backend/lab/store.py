@@ -49,6 +49,19 @@ def save(name: str, value: Any) -> None:
         )
 
 
+def update(name: str, mutate: Callable[[Any], None]) -> Any:
+    """Read, change and write one document in a single transaction, so concurrent writers do not lose changes."""
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        row = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
+        if row is None:
+            raise KeyError(name)
+        value = json.loads(row[0])
+        mutate(value)
+        connection.execute('UPDATE documents SET value = ? WHERE name = ?', (_json(value), name))
+    return value
+
+
 def replace_inputs(name: str, value: Any) -> None:
     """Replace sources or logs together with invalidation of their derived audit and scenarios."""
     if name not in ('sources.json', 'logs.json'):
@@ -105,26 +118,83 @@ def update_run(run_id: str, **fields: Any) -> dict:
     return _mutate_run(run_id, lambda record: record.update(fields))
 
 
+def _rule_reviews(rows: list[dict] | None) -> dict[str, tuple[str | None, str]]:
+    return {
+        row['ruleId']: (row.get('status'), row['review'])
+        for row in rows or []
+        if row.get('ruleId') and row.get('review') in ('agree', 'disagree')
+    }
+
+
+def _without_reviews(rows: list[dict] | None) -> list[dict]:
+    return [{key: value for key, value in row.items() if key != 'review'} for row in rows or []]
+
+
 def update_item(run_id: str, index: int, fields: dict) -> dict:
-    """Keep human confirmation through progress, but never attach it to a changed judgment."""
+    """Keep human confirmation through progress, but never attach it to a changed judgment.
+
+    A decision on the whole conversation is dropped when its status or verdicts change. A decision on one criterion
+    belongs to the person, not to the producer's copy: it stays with that criterion while its verdict is the same."""
     patch = {key: value for key, value in fields.items() if key != 'review'}
 
     def mutate(record: dict) -> None:
         item = record['items'][index]
-        changed = any(key in patch and patch[key] != item.get(key) for key in ('status', 'rules'))
+        changed = ('status' in patch and patch['status'] != item.get('status')) or (
+            'rules' in patch and _without_reviews(patch['rules']) != _without_reviews(item.get('rules'))
+        )
+        kept = _rule_reviews(item.get('rules'))
         item.update(patch)
+        if 'rules' in patch:
+            rows = []
+            for row in _without_reviews(patch['rules']):
+                status, decision = kept.get(row.get('ruleId'), (None, None))
+                if decision and status == row.get('status'):
+                    row['review'] = decision
+                rows.append(row)
+            item['rules'] = rows
         if changed:
             item['review'] = None
 
     return _mutate_run(run_id, mutate)
 
 
-def set_review(run_id: str, index: int, decision: str | None) -> dict:
+def _decision(decision: str | None) -> str | None:
     if decision not in ('agree', 'disagree', None):
         raise ValueError('decision: agree | disagree | null')
+    return decision
+
+
+def set_review(run_id: str, index: int, decision: str | None, rule_id: str | None = None) -> dict:
+    """A person's decision on a simulated conversation: on one criterion's verdict, or (older requests) on the whole."""
+    _decision(decision)
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
         raise IndexError(index)
-    return _mutate_run(run_id, lambda record: record['items'][index].update(review=decision))
+
+    def mutate(record: dict) -> None:
+        item = record['items'][index]
+        if not rule_id:
+            item['review'] = decision
+            return
+        row = next((row for row in item.get('rules') or [] if row.get('ruleId') == rule_id), None)
+        if row is None:
+            raise KeyError(rule_id)
+        row['review'] = decision
+
+    return _mutate_run(run_id, mutate)
+
+
+def set_log_review(analysis: str, dialogue_id: str, rule_id: str, decision: str | None) -> None:
+    """A person's decision on one criterion's verdict in a logged conversation, kept in the log assessment."""
+    _decision(decision)
+
+    def mutate(value: dict | None) -> None:
+        result = next((r for r in (value or {}).get('results') or [] if str(r.get('dialogueId')) == dialogue_id), None)
+        row = next((row for row in (result or {}).get('rules') or [] if row.get('ruleId') == rule_id), None)
+        if row is None:
+            raise KeyError(rule_id)
+        row['review'] = decision
+
+    update(analysis, mutate)
 
 
 def recover_runs() -> int:

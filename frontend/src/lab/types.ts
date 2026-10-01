@@ -1,5 +1,13 @@
 export type Status = "PASS" | "FAIL" | "UNMEASURED" | "UNKNOWN" | "NOT_APPLICABLE" | "RUNNING";
-export type Rule = { ruleId: string; rule: string; status: Status; reason: string; agentQuote: string; title?: string };
+export type Rule = {
+  ruleId: string;
+  rule: string;
+  status: Status;
+  reason: string;
+  agentQuote: string;
+  title?: string;
+  review?: "agree" | "disagree" | null;
+};
 export type Metric = {
   accuracy: number | null;
   passed: number;
@@ -12,6 +20,8 @@ export type Metric = {
   human?: { reviewed: number; agree: number };
   personas?: Record<string, { accuracy: number | null; passed: number; measured: number }>;
 };
+/** A call of the agent's tool as the service recorded it. */
+export type ToolEvent = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };
 export type Message = {
   role: "customer" | "agent";
   text: string;
@@ -21,7 +31,7 @@ export type Message = {
   status?: string;
   seconds?: number;
   options?: string[];
-  events?: { tool: string; article?: string }[];
+  events?: ToolEvent[];
 };
 export type Item = {
   cardId: string;
@@ -33,8 +43,6 @@ export type Item = {
   conversation: Message[];
   rules: Rule[];
   error: string | null;
-  conversationId?: string;
-  model?: string;
   runId?: string;
   attempt?: number;
   persona?: string;
@@ -43,19 +51,20 @@ export type Item = {
   world?: boolean;
 };
 export type LabRun = {
-  revision?: number;
   id: string;
   target: string;
   targetName: string;
   version: string;
   startedAt: string;
   finishedAt: string | null;
-  updatedAt: string;
   status: string;
   metric: Metric | null;
   error: string | null;
   repeats?: number;
   items?: Item[];
+  label?: string;
+  personas?: string[] | null;
+  model?: string;
 };
 export type Criterion = {
   id: string;
@@ -79,7 +88,6 @@ export type Card = {
   criteria: Criterion[];
   origin: string;
   sourceDialogueId: string;
-  model?: string;
   world?: World | null;
   openings?: Record<string, string>;
 };
@@ -89,13 +97,8 @@ export type LogResult = {
   status: Status;
   rules: Rule[];
   opening: string;
-  second?: Item["second"];
-  error?: string | null;
-};
-export type LogDialogue = {
-  id: string;
-  messages: { role: "user" | "assistant"; content: string }[];
-  evaluation: LogResult | null;
+  runId?: string;
+  second?: { model?: string; status: string; rules?: Rule[] } | null;
 };
 export type PatternExample = { dialogueId: string; reason: string; agentQuote: string; opening: string; url?: string };
 export type Pattern = {
@@ -109,7 +112,7 @@ export type Pattern = {
 export type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };
 export type Persona = { id: string; name: string; note: string };
 export type Settings = { prodUrl: string; epk: string[]; repo: string };
-export type Source = { id: string; kind: string; origin: string; chars: number; rules: number };
+export type Source = { id: string; kind: string; origin: string; chars: number; rules: number; sha256?: string | null };
 export type Models = { via: string; main: string | null; second: string | null };
 export type Check = { ok: boolean; error?: string; status?: string; text?: string; seconds?: number; version?: string };
 export type Topic = { id: string; title: string; rules: Criterion[] };
@@ -141,11 +144,22 @@ export type LabState = {
   models: Models;
   settings: Settings;
   sources: Source[];
-  logs: { total: number };
+  logs: { total: number; file?: string | null; updatedAt?: string | null };
   discover: null | Discover;
-  cards: null | { cards: Card[] };
+  cards: null | { cards: Card[]; createdAt?: string };
   runs: LabRun[];
   targets: Target[];
   personas: Persona[];
 };
-export type Step = "criteria" | "dialogs" | "judge" | "checks" | "agent" | "logs";
+
+/** A tool the agent called during its turn, as the service logged it. */
+export type ToolCall = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };
+/** One turn of a conversation: who spoke, the logged text, the tools called, and how the turn ended. */
+export type Turn = {
+  role: "customer" | "agent";
+  text: string;
+  events?: ToolCall[];
+  ok?: boolean;
+  status?: string;
+  seconds?: number;
+};

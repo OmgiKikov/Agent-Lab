@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import Body, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import agents, cards, discover, llm, logs, personas, simulate, store
+from . import agents, cards, discover, llm, logs, personas, problems, simulate, store
 from .context import sources
 from .jobs import BusyError, Jobs, Progress, Work
 
@@ -53,8 +53,14 @@ class RunCommand(BaseModel):
 
 
 class ReviewCommand(BaseModel):
-    run: str
-    index: int = Field(ge=0, strict=True)
+    """A person's decision on what the judge found: on one criterion of a logged or simulated conversation, or (older
+    requests without ruleId) on a simulated conversation as a whole."""
+
+    source: Literal['log', 'sim'] = 'sim'
+    run: str = ''
+    index: int | None = Field(default=None, ge=0, strict=True)
+    dialogueId: str = ''
+    ruleId: str = ''
     decision: Literal['agree', 'disagree'] | None = None
 
 
@@ -83,6 +89,7 @@ def source_summary() -> list[dict]:
             'id': source['id'],
             'kind': source['kind'],
             'origin': source['origin'],
+            'sha256': source.get('sha256'),
             'chars': len(source['content']),
             'rules': rules.get(source['id'], 0),
         }
@@ -101,7 +108,7 @@ def state() -> dict:
         'models': llm.describe(),
         'settings': agents.settings(),
         'sources': source_summary(),
-        'logs': {'total': len(logs.load())},
+        'logs': {'total': len(logs.load()), **logs.meta()},
         'discover': analysis,
         'cards': store.load(cards.DECK),
         'runs': [{key: record.get(key) for key in RUN_FIELDS} for record in store.runs()],
@@ -155,7 +162,7 @@ async def collect_sources() -> dict:
 async def upload_logs(request: Request, name: str) -> dict:
     async def work(progress: Progress) -> int:
         dialogues = await asyncio.to_thread(logs.prepare, name, await request.body())
-        return logs.commit(dialogues)
+        return logs.commit(dialogues, name)
 
     try:
         count = await jobs.perform('logs', work)
@@ -178,6 +185,23 @@ def log_detail(dialogue_id: str) -> dict:
         (result for result in analysis.get('results', []) if str(result['dialogueId']) == dialogue_id), None
     )
     return {**dialogue, 'evaluation': evaluation}
+
+
+@app.get('/api/problems')
+def problems_view(run: str | None = None) -> dict:
+    """Every rule with its verdicts in the logs and in one run; the rules found violated are the problems."""
+    if run and store.run(run) is None:
+        raise HTTPException(404, 'Прогон не найден')
+    return problems.build(run)
+
+
+@app.get('/api/sources/{source_id}')
+def source_view(source_id: str) -> dict:
+    """The text of a source the rules are quoted from: a prompt or the list of the agent's tools."""
+    found = next((source for source in sources.load() if source['id'] == source_id), None)
+    if found is None:
+        raise HTTPException(404, 'Источник не найден')
+    return {key: found.get(key) for key in ('id', 'kind', 'origin', 'sha256', 'content')}
 
 
 @app.get('/api/runs/{run_id}')
@@ -233,8 +257,20 @@ async def rejudge(run_id: str) -> dict:
 
 @app.post('/api/review')
 async def review(payload: ReviewCommand) -> dict:
+    if payload.source == 'log':
+        if not payload.dialogueId or not payload.ruleId:
+            raise HTTPException(422, 'Нужны dialogueId и ruleId')
+        if jobs.state['running'] and jobs.state['kind'] == 'discover':
+            raise HTTPException(409, 'Идёт оценка логов: ответ не сохранится. Отметьте после неё.')
+        try:
+            store.set_log_review(discover.RESULT, payload.dialogueId, payload.ruleId, payload.decision)
+        except KeyError as error:
+            raise HTTPException(404, 'Вердикт не найден') from error
+        return {'ok': True}
+    if payload.index is None:
+        raise HTTPException(422, 'Нужны run и index')
     try:
-        record = store.set_review(payload.run, payload.index, payload.decision)
+        record = store.set_review(payload.run, payload.index, payload.decision, payload.ruleId or None)
     except (KeyError, IndexError) as error:
         raise HTTPException(404, 'Разговор не найден') from error
     return {'ok': True, 'metric': record['metric']}

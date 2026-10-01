@@ -42,7 +42,8 @@ from lab import api
 
 async def main():
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-        for path in ('/', '/lab', '/lab/dialogs', '/lab/logs/log-1'):
+        pages = ('/', '/lab', '/lab/logs/log-1', '/overview', '/logs/problems/r-1', '/simulations/review')
+        for path in pages:
             response = await client.get(path)
             assert response.status_code == 200, (path, response.text)
             assert 'Agent Lab fixture' in response.text
@@ -51,6 +52,7 @@ async def main():
         assert (await client.get('/health')).json()['product'] == 'agent-lab'
         assert 'job' in (await client.get('/api/state')).json()
         assert (await client.get('/api/unknown')).status_code == 404
+        assert (await client.get('/api')).status_code == 404
         with patch.object(api.llm, 'check', new=AsyncMock(return_value={'ok': True})) as check:
             for origin in ('https://example.com', 'http://localhost.example.com', 'null', 'http://['):
                 response = await client.post('/api/models/check', headers={'Origin': origin})

@@ -44,9 +44,12 @@ def favicon() -> FileResponse:
 
 
 @app.get('/')
-@app.get('/lab')
-@app.get('/lab/{path:path}')
+@app.get('/{path:path}')
 def frontend(path: str = '') -> FileResponse:
+    """Every page of the product is the same built page, drawn by the browser's router (/overview, /logs/…,
+    /simulations/…, and the earlier /lab/… addresses it redirects). API and asset addresses are never pages."""
+    if path == 'api' or path.startswith(('api/', 'assets/')):
+        raise HTTPException(404, 'Not found')
     index = FRONTEND / 'index.html'
     if not index.is_file():
         raise HTTPException(503, 'Frontend не собран: выполните npm --prefix frontend run build')

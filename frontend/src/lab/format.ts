@@ -19,3 +19,11 @@ export const day = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) : "";
 
 export const thousands = (chars: number) => `${(Math.round(chars / 100) / 10).toLocaleString("ru-RU")} тыс. знаков`;
+
+/** «08:40»: the time of day alone. */
+export const time = (iso?: string | null) =>
+  iso ? new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "";
+
+/** «28 сентября»: a date as people say it, for sentences. */
+export const longDay = (iso?: string | null) =>
+  iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }) : "";

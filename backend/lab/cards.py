@@ -20,6 +20,7 @@ LIMIT = 30
 # Applies to every scenario: instructions must come from the knowledge base, not be invented.
 FOLLOWS_KNOWLEDGE = {
     'id': 'g-knowledge',
+    'name': 'Не выдумывает инструкции',
     'text': (
         'Ответ агента опирается на статьи базы знаний: шаги, разделы, сроки и условия совпадают со статьёй '
         'и не выдуманы.'
@@ -32,6 +33,7 @@ FOLLOWS_KNOWLEDGE = {
 # Applies to every scenario: the agent must answer the question that was asked.
 ANSWERS_THE_QUESTION = {
     'id': 'g-answer',
+    'name': 'Отвечает на заданный вопрос',
     'text': (
         'Каждый ответ агента по существу вопроса клиента: инструкция именно для его задачи '
         'или уточнение недостающего, без ответов на другую тему.'
@@ -103,6 +105,7 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
     criteria = [
         {
             'id': r['id'],
+            'name': r.get('name', ''),
             'text': r['text'],
             'condition': r.get('condition', ''),
             'acceptable': r.get('acceptable', ''),

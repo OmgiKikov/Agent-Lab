@@ -1,0 +1,55 @@
+/*
+ * The product's tokens: every colour of the interface comes from here, sizes and radii from tailwind.config.js.
+ * Quiet and light (docs/DESIGN.md): white content, a light grey navigation, near-black ink in two greys, black pills for
+ * the main action, a highlighter yellow for the agent's words the judge cited, and red only where an error is the point.
+ * Colours are rgb channels, so Tailwind's alpha works (`bg-bad/10`).
+ */
+:root {
+  /* Surfaces: the page, the navigation, a panel, a well, hover, a floating menu, the chosen row. */
+  --canvas: 255 255 255;
+  --side: 245 245 247;
+  --list: 255 255 255;
+  --inset: 245 245 247;
+  --hover: 240 240 243;
+  --raised: 255 255 255;
+  --selected: 232 232 237;
+
+  /* Ink: headings and numbers, body, secondary; the fourth only for hints that are never alone with a meaning. */
+  --fg: 29 29 31;
+  --fg-2: 66 66 69;
+  --fg-3: 110 110 115;
+  --fg-4: 134 134 139;
+
+  /* Meaning only, always with a word. All read on white. */
+  --bad: 215 0 21;
+  --ok: 36 138 61;
+  --warn: 178 80 0;
+  --run: 0 113 227;
+
+  /* The main action: one per screen, a black pill. */
+  --primary: 29 29 31;
+
+  /* The agent's words the judge cited, and their number. */
+  --mark: 255 226 120;
+  --mark-strong: 196 140 0;
+
+  /* The customer's bubble. */
+  --customer: 232 241 253;
+  --customer-fg: 16 37 74;
+
+  /* Hairlines and the well under a segmented control. */
+  --line: rgb(0 0 0 / 0.08);
+  --line-strong: rgb(0 0 0 / 0.13);
+  --well: rgb(0 0 0 / 0.045);
+}
+
+/* The report is a sheet of paper over the product: it is what leaves it, by mail or in a ticket. */
+:root {
+  --paper: 255 255 255;
+  --paper-well: 245 245 247;
+  --ink: 29 29 31;
+  --ink-2: 66 66 69;
+  --ink-3: 110 110 115;
+  --ink-line: 225 225 230;
+  --ink-bad: 190 0 20;
+}

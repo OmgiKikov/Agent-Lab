@@ -2,7 +2,7 @@
 
 Accuracy = conversations where the agent met every applicable criterion / measured conversations.
 "Not measured" (no client answer, or no evidence either way) never counts as a pass or a failure.
-Trust: agreement of the second judge, stability of a scenario across its repeats, a person's review.
+Trust: agreement of the second judge, stability of a scenario across its repeats, a person's decisions on verdicts.
 With several customer types, accuracy per type shows where the agent breaks on how people write.
 """
 
@@ -15,6 +15,12 @@ def _accuracy(statuses: list[str]) -> dict:
     passed, failed = statuses.count('PASS'), statuses.count('FAIL')
     measured = passed + failed
     return {'accuracy': round(100 * passed / measured) if measured else None, 'passed': passed, 'measured': measured}
+
+
+def _decisions(item: dict) -> list[str]:
+    """A person's decisions on the conversation's verdicts, or on the conversation as a whole in older records."""
+    rows = [r['review'] for r in item.get('rules') or [] if r.get('review') in ('agree', 'disagree')]
+    return rows or ([item['review']] if item.get('review') in ('agree', 'disagree') else [])
 
 
 def metric(items: list[dict]) -> dict:
@@ -53,7 +59,7 @@ def metric(items: list[dict]) -> dict:
         by_persona.setdefault(item.get('persona') or DEFAULT, []).append(item['status'])
     if len(by_persona) > 1:
         value['personas'] = {key: _accuracy(statuses) for key, statuses in by_persona.items()}
-    reviewed = [i for i in done if i.get('review') in ('agree', 'disagree')]
-    if reviewed:
-        value['human'] = {'reviewed': len(reviewed), 'agree': sum(1 for i in reviewed if i['review'] == 'agree')}
+    decisions = [d for i in done for d in _decisions(i)]
+    if decisions:
+        value['human'] = {'reviewed': len(decisions), 'agree': decisions.count('agree')}
     return value
