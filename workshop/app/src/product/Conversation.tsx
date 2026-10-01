@@ -36,7 +36,9 @@ function ToolRow({ call, seconds }: { call: ToolCall; seconds?: number }) {
   );
 }
 
-function AgentTurn({ turn, marks, lit, onLit }: { turn: Turn; marks: Mark[]; lit?: boolean; onLit?: (on: boolean) => void }) {
+type Lit = boolean | number | null;
+
+function AgentTurn({ turn, marks, lit, onLit }: { turn: Turn; marks: Mark[]; lit?: Lit; onLit?: (on: boolean, n?: number) => void }) {
   const { text, buttons } = visible(turn.text);
   const pieces = marks.length ? segments(text, marks) : [{ text }];
   const calls = turn.events ?? [];
@@ -49,12 +51,12 @@ function AgentTurn({ turn, marks, lit, onLit }: { turn: Turn; marks: Mark[]; lit
           {pieces.map((piece, i) => (piece.n ? (
             <span key={i}>
               <mark
-                onMouseEnter={() => onLit?.(true)} onMouseLeave={() => onLit?.(false)}
-                className={cn("rounded-sm border-b-2 border-warn px-px text-fg transition-colors duration-150", lit ? "bg-warn/35" : "bg-warn/20")}
+                id={`mark-${piece.n}`} onMouseEnter={() => onLit?.(true, piece.n)} onMouseLeave={() => onLit?.(false, piece.n)}
+                className={cn("scroll-mt-24 rounded-sm border-b-2 border-warn px-px text-fg transition-colors duration-150", lit === true || lit === piece.n ? "bg-warn/35" : "bg-warn/20")}
               >
                 {piece.text}
               </mark>
-              <MarkNo n={piece.n} on={lit} className="ml-1 -translate-y-px align-middle" />
+              <MarkNo n={piece.n} on={lit === true || lit === piece.n} className="ml-1 -translate-y-px align-middle" />
             </span>
           ) : <span key={i}>{piece.text}</span>))}
         </p>
@@ -73,7 +75,7 @@ function AgentTurn({ turn, marks, lit, onLit }: { turn: Turn; marks: Mark[]; lit
  * A conversation as a chat: the customer's bubble on the right, the agent's words on the left with the judge's quote
  * marked and numbered. Turns long before the mark fold into «ещё N реплик выше».
  */
-export function Conversation({ turns, marks = [], lit, onLit }: { turns: Turn[]; marks?: Mark[]; lit?: boolean; onLit?: (on: boolean) => void }) {
+export function Conversation({ turns, marks = [], lit, onLit }: { turns: Turn[]; marks?: Mark[]; lit?: Lit; onLit?: (on: boolean, n?: number) => void }) {
   const at = marks.length ? turns.findIndex(t => t.role === "agent" && marks.some(m => splitQuote(visible(t.text).text, m.quote))) : -1;
   const [open, setOpen] = useState(false);
   const from = at > 2 && !open ? at - 1 : 0;

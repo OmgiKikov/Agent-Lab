@@ -70,7 +70,7 @@ export function CriteriaPage() {
     <Header title="Критерии"
       actions={<>
         <Button icon={RotateCcw} onClick={() => setReextract(true)} disabled={busy || !state?.sources.length} className="hidden md:inline-flex" title="Судья прочитает код заново и извлечёт критерии">Извлечь заново</Button>
-        <Button variant="primary" onClick={() => navigate("/logs?tab=review")} disabled={!data?.log}>Проверить вердикты</Button>
+        <Button variant="primary" onClick={() => navigate(side === "sim" && data?.sim ? `/review?src=sim&run=${encodeURIComponent(data.sim.runId)}` : "/review")} disabled={!data?.log}>Проверить вердикты</Button>
       </>}
       below={<SectionJob kinds={["discover", "names", "sources"]} />} />
   );

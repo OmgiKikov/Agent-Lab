@@ -32,8 +32,8 @@ export function Summary({ data, onRun }: { data: Problems; onRun: (runId: string
       </h2>
       <div className="mt-1.5 flex flex-col items-start gap-1 text-small text-fg-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2">
         <Link to={SECTIONS.criteria} className={link}>{criteria} из кода агента</Link>
-        {log && <><span aria-hidden className="hidden text-fg-4 sm:inline">·</span><Link to="/logs?tab=dialogs" className={link}>{log.assessed} из {log.sampled} диалогов логов оценены {day(log.finishedAt)}</Link></>}
-        {log && log.unassessed > 0 && <><span aria-hidden className="hidden text-fg-4 sm:inline">·</span><Link to="/logs?tab=dialogs&v=none" className={link}>{log.unassessed} без оценки</Link></>}
+        {log && <><span aria-hidden className="hidden text-fg-4 sm:inline">·</span><Link to="/dialogs" className={link}>{log.assessed} из {log.sampled} диалогов логов оценены {day(log.finishedAt)}</Link></>}
+        {log && log.unassessed > 0 && <><span aria-hidden className="hidden text-fg-4 sm:inline">·</span><Link to="/dialogs?v=none" className={link}>{log.unassessed} без оценки</Link></>}
         <span aria-hidden className="hidden text-fg-4 sm:inline">·</span>
         {sim && runs.length ? (
           <Menu

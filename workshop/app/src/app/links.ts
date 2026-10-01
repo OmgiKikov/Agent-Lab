@@ -1,7 +1,8 @@
 /** Where each section lives; screens link through these, so a section moves in one place. */
 export const SECTIONS = {
   violations: "/violations",
-  dialogs: "/logs?tab=dialogs",
+  dialogs: "/dialogs",
+  review: "/review",
   criteria: "/criteria",
   simulations: "/simulations",
   agent: "/agent",

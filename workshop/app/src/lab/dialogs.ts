@@ -17,15 +17,15 @@ export const simKey = (runId: string, index: number) => `sim~${runId}~${index}`;
 /** The dialogue an example of a problem or a rule comes from. */
 export const dialogOf = (e: Pick<Example, "source" | "dialogueId" | "runId" | "index">) =>
   e.source === "log"
-    ? `/logs?tab=dialogs&d=${encodeURIComponent(logKey(e.dialogueId ?? ""))}`
-    : `/results?run=${encodeURIComponent(e.runId ?? "")}&tab=dialogs&d=${encodeURIComponent(simKey(e.runId ?? "", e.index ?? 0))}`;
+    ? `/dialogs?d=${encodeURIComponent(logKey(e.dialogueId ?? ""))}`
+    : `/dialogs?src=sim&run=${encodeURIComponent(e.runId ?? "")}&d=${encodeURIComponent(simKey(e.runId ?? "", e.index ?? 0))}`;
 
 /** The dialogue behind a row key, at its block: a logged one in «Логи», a simulated one in «Результаты» of its run. */
 export function dialogLink(key: string): string {
   const [kind, a, b] = key.split("~");
   if (kind === "sim") return dialogOf({ source: "sim", runId: a, index: Number(b) });
   if (kind === "log") return dialogOf({ source: "log", dialogueId: a });
-  return `/runs/${encodeURIComponent(a)}`;
+  return `/dialogs?src=traces&d=${encodeURIComponent(key)}`;
 }
 
 const failTitles = (rules: Rule[]) => [...new Set(rules.filter(r => r.status === "FAIL").map(r => r.title || r.rule))];

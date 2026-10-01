@@ -55,10 +55,10 @@ export function Case({ c, side, onSide, at, onAt, runId, hasLog, hasSim, onBack 
   const second = secondOf(s.examples);
   const humans = humansOf(s);
   const disputed = s.examples.some(e => e.status === "FAIL" && e.second === "disagree");
-  const review$ = (queue: string) => `/logs?tab=review&queue=${queue}&rule=${enc(r.id)}`;
+  const review$ = (queue: string) => `/review?${side === "sim" && runId ? `src=sim&run=${enc(runId)}&` : ""}queue=${queue}&rule=${enc(r.id)}`;
   const facts: Fact[] = [
-    ...(hasLog ? [{ label: "В логах", value: <Count n={r.log.failed} of={checked(r.log)} bad />, to: `/logs?tab=dialogs&v=fail&rule=${enc(r.id)}`, title: "Диалоги логов, где критерий нарушен, из тех, где его удалось проверить" }] : []),
-    ...(hasSim ? [{ label: "В симуляции", value: <Count n={r.sim.failed} of={checked(r.sim)} bad />, to: runId ? `/results?run=${enc(runId)}&tab=dialogs&v=fail&rule=${enc(r.id)}` : undefined, title: "Диалоги прогона, где критерий нарушен" }] : []),
+    ...(hasLog ? [{ label: "В логах", value: <Count n={r.log.failed} of={checked(r.log)} bad />, to: `/dialogs?v=fail&rule=${enc(r.id)}`, title: "Диалоги логов, где критерий нарушен, из тех, где его удалось проверить" }] : []),
+    ...(hasSim ? [{ label: "В симуляции", value: <Count n={r.sim.failed} of={checked(r.sim)} bad />, to: `/dialogs?src=sim${runId ? `&run=${enc(runId)}` : ""}&v=fail&rule=${enc(r.id)}`, title: "Диалоги прогона, где критерий нарушен" }] : []),
     { label: "Второй судья", value: second.checked ? <>согласен в <Count n={second.agree} of={second.checked} /></> : "не проверял", to: disputed ? review$("disputed") : undefined, title: disputed ? "Открыть вердикты, где судьи расходятся" : undefined },
     { label: "Люди", value: humans.checked ? <>верно <span className="font-mono">{humans.agree}</span> · неверно <span className="font-mono">{humans.checked - humans.agree}</span></> : "ещё не проверяли", to: review$("unchecked"), title: "Проверить вердикты этого критерия" },
   ];

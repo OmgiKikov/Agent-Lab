@@ -10,17 +10,15 @@ export type NavItem = { to: string; label: string; icon: LucideIcon; match: stri
 /** The sections in the order of the work, with what each holds; the agent and settings below. */
 export function useNav({ violations, dialogs, criteria }: { violations?: number; dialogs?: number; criteria?: number }): NavItem[] {
   return [
-    { to: SECTIONS.violations, label: "Нарушения", icon: TriangleAlert, match: ["/violations", "/logs", "/results", "/review"], count: violations, tone: violations ? "bad" : undefined },
+    { to: SECTIONS.violations, label: "Нарушения", icon: TriangleAlert, match: ["/violations", "/logs", "/results"], count: violations, tone: violations ? "bad" : undefined },
     { to: SECTIONS.dialogs, label: "Диалоги", icon: MessagesSquare, match: ["/dialogs", "/runs", "/search", "/saved"], count: dialogs },
-    { to: SECTIONS.criteria, label: "Критерии", icon: ListChecks, match: ["/criteria", "/agent/criteria"], count: criteria },
+    { to: SECTIONS.criteria, label: "Критерии", icon: ListChecks, match: ["/criteria", "/agent/criteria", "/review"], count: criteria },
     { to: SECTIONS.simulations, label: "Симуляции", icon: FlaskConical, match: ["/simulations", "/scenarios"] },
     { to: SECTIONS.agent, label: "Агент", icon: Bot, match: ["/agent"] },
   ];
 }
 
 export function isActive(item: NavItem, pathname: string, search: string) {
-  if (item.match.includes("/logs") && pathname === "/logs" && new URLSearchParams(search).get("tab") === "dialogs") return false;
-  if (item.to.startsWith("/logs?tab=dialogs") && pathname === "/logs") return new URLSearchParams(search).get("tab") === "dialogs";
   if (pathname.startsWith("/agent/criteria")) return item.match.includes("/agent/criteria");
   return item.match.some(m => pathname === m || pathname.startsWith(`${m}/`));
 }
