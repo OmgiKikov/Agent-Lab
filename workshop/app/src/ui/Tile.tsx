@@ -82,11 +82,13 @@ export function PageTitle({ title, sub, actions }: { title: ReactNode; sub?: Rea
   );
 }
 
+export const SOFT = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 text-[12px] text-lab-soft transition-colors hover:border-white/[0.2] hover:text-lab-ink disabled:pointer-events-none disabled:opacity-40";
+
 /** A quiet outlined button of the page title row. */
 export function Soft({ onClick, disabled, title, children, className }: { onClick: () => void; disabled?: boolean; title?: string; children: ReactNode; className?: string }) {
   return (
     <button type="button" onClick={onClick} disabled={disabled} title={title}
-      className={cn("inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 text-[12px] text-lab-soft transition-colors hover:border-white/[0.2] hover:text-lab-ink disabled:pointer-events-none disabled:opacity-40", className)}>
+      className={cn(SOFT, className)}>
       {children}
     </button>
   );

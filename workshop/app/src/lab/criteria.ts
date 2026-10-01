@@ -45,13 +45,27 @@ export function numberCriteria(rules: RuleEntry[]): { list: Criterion[]; topics:
   return { list, topics };
 }
 
-/** The numbered criteria of the current rules (the logs' assessment and the chosen run share them). */
+/**
+ * The numbered criteria. Numbers come from the logs' rules (the contract), so a criterion keeps its number in a
+ * run's results; a rule only a run has gets the next free number.
+ */
 export function useCriteria(runId: string | null = null): { data: Problems | undefined; list: Criterion[]; topics: Topic[]; unnamed: number } {
-  const { data } = useProblems(runId);
+  const { data: base } = useProblems(null);
+  const { data: withRun } = useProblems(runId);
   return useMemo(() => {
-    const { list, topics } = numberCriteria(data?.rules ?? []);
-    return { data, list, topics, unnamed: (data?.rules ?? []).filter(r => !r.rule.name).length };
-  }, [data]);
+    const numbered = numberCriteria(base?.rules ?? []);
+    const data = runId ? withRun : base;
+    const unnamed = (base?.rules ?? []).filter(r => !r.rule.name).length;
+    if (!runId) return { data, ...numbered, unnamed };
+    const byId = new Map(numbered.list.map(c => [c.r.id, c]));
+    const extra = numberCriteria((data?.rules ?? []).filter(r => !byId.has(r.id))).list;
+    extra.forEach((c, i) => { c.n = numbered.list.length + i + 1; });
+    const list = (data?.rules ?? []).map(r => {
+      const known = byId.get(r.id);
+      return known ? { ...known, r } : extra.find(c => c.r.id === r.id)!;
+    }).sort((a, b) => a.n - b.n);
+    return { data, list, topics: numbered.topics, unnamed };
+  }, [base, withRun, runId]);
 }
 
 /** The prompt's words around a criterion's quote: a little before, the quote, a little after; null when absent. */
