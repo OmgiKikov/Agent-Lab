@@ -5,7 +5,7 @@
 
 Что наше поверх Raindrop Workshop:
 
-- раздел Agent Lab: `app/src/pages/LabPage.tsx`, пункт в меню (`app/src/components/NavSidebar.tsx`) и маршруты `/lab`;
+- интерфейс Agent Lab: `app/src/{app,sections,product,ui,lab,design}` — обзор, проблемы, разговоры, критерии, симуляции; устройство и правила — `docs/DESIGN.md`;
 - заметки судьи как автор «Судья · Agent Lab» (`app/src/api/annotations.ts`, `AnnotationChip.tsx`);
 - кнопка «Спросить Agent Lab» в разговоре (`MessagePane.tsx`);
 - всё внутри сборки: шрифты лежат в ней, счётчика Raindrop нет, `update` не подменяет сборку их релизом;
