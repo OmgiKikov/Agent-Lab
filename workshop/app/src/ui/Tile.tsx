@@ -16,8 +16,8 @@ export function Tile({ on, onClick, children, className }: { on?: boolean; onCli
 }
 
 /** The grid the tiles sit in; it leaves room on the right while a floating panel is open. */
-export function TileGrid({ children, roomy }: { children: ReactNode; roomy?: boolean }) {
-  return <div className={cn("grid gap-3", roomy ? "grid-cols-[repeat(auto-fill,minmax(280px,1fr))]" : "grid-cols-[repeat(auto-fill,minmax(280px,1fr))]")}>{children}</div>;
+export function TileGrid({ children }: { children: ReactNode }) {
+  return <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">{children}</div>;
 }
 
 export const DEEP = "shadow-[0_28px_70px_-18px_rgba(0,0,0,0.85),0_0_0_1px_rgba(255,255,255,0.09)]";
@@ -26,14 +26,14 @@ export const DEEP = "shadow-[0_28px_70px_-18px_rgba(0,0,0,0.85),0_0_0_1px_rgba(2
  * A panel floating over the grid, not a sheet that hides it: the grid stays in view and clickable.
  * Esc closes it. Below 1280 px it covers the width.
  */
-export function Floating({ head, onClose, children }: { head: ReactNode; onClose: () => void; children: ReactNode }) {
+export function Floating({ head, onClose, children, wide }: { head: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const f = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector('[role="dialog"][data-state="open"]')) onClose(); };
     window.addEventListener("keydown", f);
     return () => window.removeEventListener("keydown", f);
   }, [onClose]);
   return (
-    <aside className={cn("absolute inset-2 z-30 flex flex-col overflow-hidden rounded-[14px] bg-[rgb(29,29,29)] xl:inset-auto xl:bottom-3 xl:right-3 xl:top-3 xl:w-[520px]", DEEP, "animate-in fade-in-0 slide-in-from-right-4")}>
+    <aside className={cn("absolute inset-2 z-30 flex flex-col overflow-hidden rounded-[14px] bg-[rgb(29,29,29)] xl:inset-auto xl:bottom-3 xl:right-3 xl:top-3", wide ? "xl:w-[620px]" : "xl:w-[520px]", DEEP, "animate-in fade-in-0 slide-in-from-right-4")}>
       <div className="flex min-h-[46px] items-center gap-2 border-b border-white/[0.08] px-4 py-2">
         <div className="flex min-w-0 flex-1 items-center gap-2">{head}</div>
         <button type="button" onClick={onClose} aria-label="Закрыть (Esc)" title="Закрыть (Esc)" className="rounded-md p-1 text-lab-dim transition-colors hover:bg-white/[0.08] hover:text-lab-text"><X className="size-4" /></button>
@@ -44,11 +44,11 @@ export function Floating({ head, onClose, children }: { head: ReactNode; onClose
 }
 
 /** The page under a floating panel: a scrolling column that makes room for the panel on wide screens. */
-export function WithFloating({ open, children, panel }: { open: boolean; children: ReactNode; panel: ReactNode }) {
+export function WithFloating({ open, children, panel, wide }: { open: boolean; children: ReactNode; panel: ReactNode; wide?: boolean }) {
   return (
     <div className="relative min-h-0 flex-1">
       <div className="h-full overflow-auto">
-        <div className={cn("px-6 pb-16 pt-6 transition-[padding] duration-200", open && "xl:pr-[548px]")}>{children}</div>
+        <div className={cn("px-6 pb-16 pt-6 transition-[padding] duration-200", open && (wide ? "xl:pr-[648px]" : "xl:pr-[548px]"))}>{children}</div>
       </div>
       {panel}
     </div>
