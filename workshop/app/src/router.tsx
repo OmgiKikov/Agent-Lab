@@ -9,9 +9,8 @@ import { AgentPage } from "./screens/agent/AgentPage";
 import { RunsPage } from "./pages/RunsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
-import { ScenariosPage } from "./screens/scenarios/ScenariosPage";
 import { SettingsPage } from "./screens/settings/SettingsPage";
-import { SimulationsPage } from "./screens/simulations/SimulationsPage";
+import { SimulationsPage } from "./sections/simulations/SimulationsPage";
 
 /** An earlier address leads to its block; the query of the old address is kept, what the block needs is added. */
 function To({ to, from }: { to: string; from?: (p: Record<string, string | undefined>) => Record<string, string> }) {
@@ -62,10 +61,10 @@ export const router = createBrowserRouter([
       { path: "logs", element: <OldBlock /> },
       { path: "dialogs", element: <DialogsPage /> },
       { path: "review", element: <ReviewPage /> },
-      { path: "scenarios", element: <ScenariosPage /> },
+      { path: "scenarios", element: <To to="/simulations?mode=scenarios" /> },
       { path: "simulations", element: <SimulationsPage /> },
       { path: "simulations/runs/:runId", element: <To to="/simulations" from={p => ({ r: p.runId ?? "" })} /> },
-      { path: "simulations/scenarios/:scenarioId", element: <To to="/scenarios" from={p => ({ s: p.scenarioId ?? "" })} /> },
+      { path: "simulations/scenarios/:scenarioId", element: <To to="/simulations?mode=scenarios" from={p => ({ s: p.scenarioId ?? "" })} /> },
       { path: "results", element: <OldBlock sim /> },
       // The earlier sections: their content became tabs of the blocks.
       { path: "problems", element: <To to="/violations" /> },
@@ -79,7 +78,7 @@ export const router = createBrowserRouter([
       { path: "lab/criteria/*", element: <Navigate to="/criteria" replace /> },
       { path: "lab/judge/check", element: <Navigate to="/review" replace /> },
       { path: "lab/judge/*", element: <Navigate to="/criteria" replace /> },
-      { path: "lab/checks/*", element: <Navigate to="/scenarios" replace /> },
+      { path: "lab/checks/*", element: <Navigate to="/simulations?mode=scenarios" replace /> },
       { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
       { path: "lab/*", element: <Navigate to="/violations" replace /> },
       { path: "runs", element: <RunsPage /> },

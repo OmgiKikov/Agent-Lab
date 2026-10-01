@@ -3,7 +3,7 @@ export const LINKS = {
   agent: "/agent",
   criteria: "/criteria",
   logs: "/logs",
-  scenarios: "/scenarios",
+  scenarios: "/simulations?mode=scenarios",
   simulations: "/simulations",
   results: "/results",
   settings: "/settings",
