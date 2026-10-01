@@ -23,6 +23,8 @@ export type Example = {
   reason: string;
   second: Decision | null;
   secondScope: Scope | null;
+  /** What the second check said on what it judged: this criterion, or the whole conversation. */
+  secondStatus?: "PASS" | "FAIL" | null;
   review: Decision | null;
   reviewScope: Scope | null;
 };

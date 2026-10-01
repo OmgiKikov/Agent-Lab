@@ -19,7 +19,8 @@ def _recompute_verdict(value: dict) -> tuple[int, int]:
         value['review'] = None
     value['status'] = status
     second = value.get('second')
-    if second and second.get('status') != 'ERROR':
+    # Older second judges gave one verdict on the whole conversation, without rows: nothing to reaggregate.
+    if second and second.get('status') != 'ERROR' and second.get('rules'):
         second_changed, second_reset = _recompute_verdict(second)
         changed += second_changed
         reset += second_reset

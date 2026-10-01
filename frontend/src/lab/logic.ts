@@ -1,9 +1,6 @@
 import type { Item, LabRun, Persona } from "./types";
 import { DEFAULT_PERSONA } from "./look";
 
-export const disputed = (i: Item) =>
-  !!i.second && ["PASS", "FAIL", "UNMEASURED"].includes(i.second.status) && i.second.status !== i.status;
-
 export const personaOf = (i: Item) => i.persona ?? DEFAULT_PERSONA;
 
 /** The customer types that played in a run, in the order the service lists them. */

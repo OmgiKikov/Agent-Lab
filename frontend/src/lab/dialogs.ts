@@ -1,4 +1,4 @@
-import type { Decision, Example, Scope } from "./problems";
+import type { Decision, Example } from "./problems";
 import type { LabRun, LabState, Rule, Status } from "./types";
 
 /** One row of a stage's conversations: a logged conversation or a simulated one. */
@@ -43,8 +43,15 @@ export function dialogLink(key: string): string {
 const failTitles = (rules: Rule[]) => [
   ...new Set(rules.filter((r) => r.status === "FAIL").map((r) => r.title || r.rule)),
 ];
-const disputedOf = (status: Status, second?: DialogRow["second"]) =>
-  !!second && ["PASS", "FAIL", "UNMEASURED"].includes(second.status) && second.status !== status;
+/** Only two decided verdicts agree or disagree; a check that decided nothing is no second opinion. */
+const decided = (status: string | null | undefined): status is "PASS" | "FAIL" =>
+  status === "PASS" || status === "FAIL";
+
+/** The two checks on a whole conversation: agree, disagree, or nothing to compare. */
+export const twoChecks = (status: Status | null, second?: DialogRow["second"]): Decision | null =>
+  decided(status) && decided(second?.status) ? (second.status === status ? "agree" : "disagree") : null;
+
+const disputedOf = (status: Status, second?: DialogRow["second"]) => twoChecks(status, second) === "disagree";
 
 export function logRows(state: LabState): DialogRow[] {
   const d = state.discover;
@@ -87,20 +94,24 @@ export function simRows(run: LabRun | null | undefined): DialogRow[] {
   }));
 }
 
-function secondFor(row: DialogRow, rule: Rule): [Decision | null, Scope | null] {
+/** The second check on one verdict, as backend/lab/problems.py second_of: per rule, or on the whole conversation. */
+function secondFor(row: DialogRow, rule: Rule): Pick<Example, "second" | "secondScope" | "secondStatus"> {
+  const none = { second: null, secondScope: null, secondStatus: null };
   const second = row.second;
-  if (!second || !["PASS", "FAIL", "UNMEASURED"].includes(second.status)) return [null, null];
+  if (!second || !["PASS", "FAIL", "UNMEASURED"].includes(second.status)) return none;
   if (second.rules?.length) {
     const own = second.rules.find((r) => r.ruleId === rule.ruleId);
-    if (!own || (own.status !== "PASS" && own.status !== "FAIL")) return [null, null];
-    return [own.status === rule.status ? "agree" : "disagree", "rule"];
+    if (!own || !decided(own.status)) return none;
+    return { second: own.status === rule.status ? "agree" : "disagree", secondScope: "rule", secondStatus: own.status };
   }
-  return [second.status === row.status ? "agree" : "disagree", "dialogue"];
+  const decision = twoChecks(row.status, second);
+  return decision
+    ? { second: decision, secondScope: "dialogue", secondStatus: second.status as "PASS" | "FAIL" }
+    : none;
 }
 
 /** A rule's verdict in this dialogue, in the shape the review and the judge's note take. */
 export function exampleFor(row: DialogRow, rule: Rule): Example {
-  const [second, secondScope] = secondFor(row, rule);
   const review = rule.review ?? (row.source === "sim" ? (row.review ?? null) : null);
   return {
     source: row.source === "sim" ? "sim" : "log",
@@ -116,8 +127,7 @@ export function exampleFor(row: DialogRow, rule: Rule): Example {
     attempt: row.attempt,
     agentQuote: rule.agentQuote,
     reason: rule.reason,
-    second,
-    secondScope,
+    ...secondFor(row, rule),
     review,
     reviewScope: rule.review ? "rule" : review ? "dialogue" : null,
   };

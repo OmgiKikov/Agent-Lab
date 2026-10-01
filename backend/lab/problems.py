@@ -16,6 +16,7 @@ COUNTED = {'FAIL': 'failed', 'PASS': 'passed', 'UNKNOWN': 'unknown'}
 WORSE = {'FAIL': 2, 'PASS': 1, 'UNKNOWN': 0}
 ORDER = {'FAIL': 0, 'PASS': 1, 'UNKNOWN': 2}
 MEASURED = ('PASS', 'FAIL', 'UNMEASURED')
+DECIDED = ('PASS', 'FAIL')
 
 
 def rule_key(quote: str) -> str:
@@ -30,17 +31,22 @@ def chosen_run(run_id: str | None) -> dict | None:
     return next(finished, None)
 
 
-def second_of(second: dict | None, rule_id: str, status: str, dialogue_status: str) -> tuple[str | None, str | None]:
-    """The second judge on this verdict: per rule when it gave rows, else on the whole conversation (older records)."""
+def second_of(
+    second: dict | None, rule_id: str, status: str, dialogue_status: str
+) -> tuple[str | None, str | None, str | None]:
+    """The second judge on this verdict and what it said: per rule when it gave rows, else on the whole conversation
+    (older records). Only two decided verdicts agree or disagree; a check that decided nothing is no second opinion."""
     if not second or second.get('status') not in MEASURED:
-        return None, None
+        return None, None, None
     rows = second.get('rules')
     if rows:
         row = next((r for r in rows if r.get('ruleId') == rule_id), None)
-        if not row or row.get('status') not in ('PASS', 'FAIL'):
-            return None, None
-        return ('agree' if row['status'] == status else 'disagree'), 'rule'
-    return ('agree' if second['status'] == dialogue_status else 'disagree'), 'dialogue'
+        if not row or row.get('status') not in DECIDED:
+            return None, None, None
+        return ('agree' if row['status'] == status else 'disagree'), 'rule', row['status']
+    if second['status'] not in DECIDED or dialogue_status not in DECIDED:
+        return None, None, None
+    return ('agree' if second['status'] == dialogue_status else 'disagree'), 'dialogue', second['status']
 
 
 def review_of(row: dict, item: dict | None = None) -> tuple[str | None, str | None]:
@@ -125,7 +131,9 @@ def from_logs(book: Book, analysis: dict) -> dict | None:
             if row.get('status') not in COUNTED or row.get('ruleId') not in rules:
                 continue
             topic, rule = rules[row['ruleId']]
-            second, second_scope = second_of(result.get('second'), row['ruleId'], row['status'], result['status'])
+            second, second_scope, second_status = second_of(
+                result.get('second'), row['ruleId'], row['status'], result['status']
+            )
             review, review_scope = review_of(row)
             example = {
                 'source': 'log',
@@ -138,6 +146,7 @@ def from_logs(book: Book, analysis: dict) -> dict | None:
                 'reason': row.get('reason', ''),
                 'second': second,
                 'secondScope': second_scope,
+                'secondStatus': second_status,
                 'review': review,
                 'reviewScope': review_scope,
             }
@@ -187,7 +196,9 @@ def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
             rule = recorded_rule(book, row, known, isinstance(item.get('criteria'), list))
             if row.get('status') not in COUNTED or not rule:
                 continue
-            second, second_scope = second_of(item.get('second'), row['ruleId'], row['status'], item['status'])
+            second, second_scope, second_status = second_of(
+                item.get('second'), row['ruleId'], row['status'], item['status']
+            )
             review, review_scope = review_of(row, item)
             example = {
                 'source': 'sim',
@@ -204,6 +215,7 @@ def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
                 'reason': row.get('reason', ''),
                 'second': second,
                 'secondScope': second_scope,
+                'secondStatus': second_status,
                 'review': review,
                 'reviewScope': review_scope,
             }
