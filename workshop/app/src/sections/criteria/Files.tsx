@@ -36,7 +36,7 @@ export function Files({ sources, list, side, current, onOpen }: { sources: Sourc
       {tools.length > 0 && <Label className="block px-2 pb-2 pt-4">Инструменты</Label>}
       {tools.map(r => <Row key={r.s.id} r={r} />)}
       <div className="mx-2 mt-5 space-y-1.5 border-t border-line pt-3 text-meta text-fg-3">
-        <p className="flex items-center gap-2"><span aria-hidden className="h-3.5 w-1 rounded-sm bg-bad" />нарушен хотя бы в одном диалоге</p>
+        <p className="flex items-center gap-2"><span aria-hidden className="h-3.5 w-1 rounded-sm bg-bad" />нарушен хотя бы в одном разговоре</p>
         <p className="flex items-center gap-2"><span aria-hidden className="h-3.5 w-1 rounded-sm bg-ok/80" />выполнен, нарушений не найдено</p>
         <p className="flex items-center gap-2"><span aria-hidden className="stripe-unknown h-3.5 w-1 rounded-sm" />не проверен: нет доказательств</p>
       </div>

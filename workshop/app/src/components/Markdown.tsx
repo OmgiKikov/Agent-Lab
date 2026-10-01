@@ -24,10 +24,10 @@ function CodeBlock({ children, ...props }: React.HTMLAttributes<HTMLPreElement>)
 
   return (
     <div className="relative group my-2 rounded-lg overflow-hidden"
-      style={{ background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.08)` }}>
+      style={{ background: "rgba(16,24,32,0.04)", border: `1px solid rgba(16,24,32,0.08)` }}>
       <button
         className="absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{ background: "rgba(255,255,255,0.08)" }}
+        style={{ background: "rgba(16,24,32,0.08)" }}
         onClick={handleCopy}
       >
         {copied ? <Check className="size-3" style={{ color: C.green }} /> : <Copy className="size-3" style={{ color: C.fg1 }} />}
@@ -46,7 +46,7 @@ const components = {
     }
     return (
       <code className="px-1 py-0.5 rounded text-[0.9em]"
-        style={{ background: "rgba(255,255,255,0.06)", color: C.fg3 }}
+        style={{ background: "rgba(16,24,32,0.06)", color: C.fg3 }}
         {...props}>
         {children}
       </code>

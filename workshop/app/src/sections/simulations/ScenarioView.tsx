@@ -46,7 +46,7 @@ export function ScenarioView({ card, state, mine, onPlay, onBack }: { card: Card
             {mine.length ? mine.map(c => (
               <li key={c.r.id} className="border-b border-line">
                 <Link to={criterionLink(c.r.id)} className="grid grid-cols-[32px_minmax(0,1fr)_auto] items-start gap-2 py-3 hover:bg-hover">
-                  <span className="pt-0.5 font-mono text-small text-fg-3">{c.n}</span>
+                  <span className="pt-0.5 text-small tabular-nums text-fg-3">{c.n}</span>
                   <span className="min-w-0"><span className="block text-body font-medium text-fg">{c.name}</span><span className="mt-0.5 block text-small text-fg-3">«{c.r.rule.quote}»</span></span>
                   <ArrowRight aria-hidden className="mt-1 size-3.5 text-fg-4" />
                 </Link>

@@ -20,7 +20,7 @@ function CollapsibleSection({ title, preview, data, maxExpand = 3 }: { title: st
         {!open && <span className="text-[10px] font-mono truncate flex-1" style={{ color: C.fg0 }}>{preview}</span>}
       </button>
       {open && (
-        <div className="mt-1 p-2 rounded" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}` }}>
+        <div className="mt-1 p-2 rounded" style={{ background: "rgba(16,24,32,0.02)", border: `1px solid ${C.border}` }}>
           <JsonView data={data} maxExpand={maxExpand} />
         </div>
       )}
@@ -33,7 +33,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       className="text-[10px] font-mono px-1.5 py-0.5 rounded transition"
-      style={{ color: copied ? C.green : C.fg0, background: "rgba(255,255,255,0.03)" }}
+      style={{ color: copied ? C.green : C.fg0, background: "rgba(16,24,32,0.03)" }}
       onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
     >
       {copied ? "скопировано" : "копировать"}
@@ -75,8 +75,8 @@ function SpanRow({ span, depth, minTime, totalDur, selected, flashing, onClick, 
       className="flex items-center cursor-pointer"
       style={{
         minHeight: 28,
-        borderBottom: "1px solid rgba(255,255,255,0.03)",
-        background: flashing ? "rgba(96,165,250,0.15)" : selected ? "rgba(255,255,255,0.04)" : isErr ? "rgba(204,102,102,0.04)" : "transparent",
+        borderBottom: "1px solid rgba(16,24,32,0.03)",
+        background: flashing ? "rgba(96,165,250,0.15)" : selected ? "rgba(16,24,32,0.04)" : isErr ? "rgba(204,102,102,0.04)" : "transparent",
         borderLeft: flashing ? `2px solid #60a5fa` : selected ? `2px solid ${C.fg2}` : isErr ? `2px solid ${C.red}` : "2px solid transparent",
         transition: "background 0.4s ease, border-left 0.4s ease",
       }}
@@ -133,7 +133,7 @@ function SpanDetail({ span }: { span: Span }) {
             {info.label}
           </span>
           {isErr && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ color: C.red, background: "rgba(204,102,102,0.1)" }}>ошибка</span>}
-          {(() => { const p = detectProvider(span.model, span.provider); return p ? <span className="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded" style={{ color: C.fg1, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>{p.label}</span> : null; })()}
+          {(() => { const p = detectProvider(span.model, span.provider); return p ? <span className="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded" style={{ color: C.fg1, background: "rgba(16,24,32,0.06)", border: "1px solid rgba(16,24,32,0.08)" }}>{p.label}</span> : null; })()}
         </div>
         <div className="text-sm font-mono font-medium" style={{ color: C.fg4 }}>{span.name}</div>
       </div>
@@ -231,7 +231,7 @@ function SpanDetail({ span }: { span: Span }) {
             <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Вход</div>
             <CopyButton text={tryJson(span.input_payload) ?? span.input_payload} />
           </div>
-          <div className="p-2 rounded" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}` }}>
+          <div className="p-2 rounded" style={{ background: "rgba(16,24,32,0.02)", border: `1px solid ${C.border}` }}>
             <JsonView data={span.input_payload} />
           </div>
         </div>
@@ -244,7 +244,7 @@ function SpanDetail({ span }: { span: Span }) {
             <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Выход</div>
             <CopyButton text={tryJson(span.output_payload) ?? span.output_payload} />
           </div>
-          <div className="p-2 rounded" style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}` }}>
+          <div className="p-2 rounded" style={{ background: "rgba(16,24,32,0.02)", border: `1px solid ${C.border}` }}>
             <JsonView data={span.output_payload} />
           </div>
         </div>
@@ -435,7 +435,7 @@ export function SpanTree({
                   {(annotationsBySpan.get(span.id) ?? []).map((a) => {
                     const st = KIND_STYLES[a.kind];
                     return (
-                      <div key={a.id} style={{ padding: "7px 9px", border: `1px solid ${st.border}`, background: `linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015)), ${st.bg}`, borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                      <div key={a.id} style={{ padding: "7px 9px", border: `1px solid ${st.border}`, background: `linear-gradient(180deg, rgba(16,24,32,0.035), rgba(16,24,32,0.015)), ${st.bg}`, borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 8 }}>
                         <div style={{ flex: 1, fontSize: 11, color: C.fg4, lineHeight: 1.45 }}>
                           <span style={{ color: C.fg0, fontSize: 10, marginRight: 6 }}>
                             {SOURCE_GLYPH[a.source]} {annotationSourceLabel(a.source)}
@@ -518,7 +518,7 @@ function SpanContextMenu({ x, y, onClose, onMarkKind, onAddNote }: {
               padding: "6px 12px", background: "transparent", border: 0, color: C.fg3,
               cursor: "pointer", textAlign: "left",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(16,24,32,0.04)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <span style={{ width: 14, textAlign: "center", color: s.fg, fontWeight: 700 }}>{s.icon}</span>

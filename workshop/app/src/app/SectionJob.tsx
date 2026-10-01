@@ -15,7 +15,7 @@ export function SectionJob({ kinds }: { kinds: string[] }) {
       <div className="flex h-8 items-center gap-3 px-4 text-meta text-fg-3 lg:px-5">
         <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-run" />
         <span className="min-w-0 flex-1 truncate text-fg-2">{message}</span>
-        {total > 0 && <span className="font-mono">{done} из {total}</span>}
+        {total > 0 && <span className="tabular-nums">{done} из {total}</span>}
         <button type="button" onClick={() => api("/api/job/stop", {}).catch(toast.error)} className="inline-flex items-center gap-1 rounded-sm transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60">
           <Square aria-hidden className="size-2.5 fill-current" />Остановить
         </button>

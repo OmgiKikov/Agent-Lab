@@ -17,8 +17,8 @@ function spanTypeInfo(span: Span): { color: string; label: string } {
   return { color: C.fg0, label: "спан" };
 }
 
-const LLM_BAR_COLOR = "rgba(255,255,255,0.38)";
-const LLM_LABEL_COLOR = "rgba(255,255,255,0.55)";
+const LLM_BAR_COLOR = "rgba(16,24,32,0.38)";
+const LLM_LABEL_COLOR = "rgba(16,24,32,0.55)";
 
 function TooltipPayloadBlock({
   label,
@@ -44,7 +44,7 @@ function TooltipPayloadBlock({
         <div className="text-[9px] uppercase tracking-wide font-medium" style={{ color: C.fg0 }}>{label}</div>
         <button
           type="button"
-          className="flex-shrink-0 p-1 rounded transition-colors hover:bg-white/10"
+          className="flex-shrink-0 p-1 rounded transition-colors hover:bg-fg/10"
           style={{ color: copied ? C.green : C.fg0 }}
           title="Копировать"
           onClick={(e) => {
@@ -124,7 +124,7 @@ function SpanTooltip({
         <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded"
           style={{
             color: type.color,
-            background: "rgba(255,255,255,0.06)",
+            background: "rgba(16,24,32,0.06)",
           }}>
           {type.label}
         </span>
@@ -290,7 +290,7 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
                 style={{
                   padding: 0,
                   border: 0,
-                  background: labelHovered ? "rgba(255,255,255,0.075)" : "transparent",
+                  background: labelHovered ? "rgba(16,24,32,0.075)" : "transparent",
                   boxShadow: labelHovered ? `inset 2px 0 0 ${spanColor(name, colorMap)}` : undefined,
                   cursor: "pointer",
                   transition: "background 120ms ease, box-shadow 120ms ease",
@@ -321,7 +321,7 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
             const x = i * gridMs * pxPerMs;
             return (
               <Fragment key={i}>
-                <div style={{ position: "absolute", left: x, top: 0, bottom: AXIS_H, borderLeft: "1px solid rgba(255,255,255,0.04)" }} />
+                <div style={{ position: "absolute", left: x, top: 0, bottom: AXIS_H, borderLeft: "1px solid rgba(16,24,32,0.04)" }} />
                 {i > 0 && (
                   <div style={{ position: "absolute", left: x, bottom: 0, transform: "translateX(-50%)", fontSize: 9, color: C.fg0, fontFamily: "JetBrains Mono Variable, monospace" }}>
                     {fmt(i * gridMs)}
@@ -363,7 +363,7 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
             }
             return (
               <div key={span.id} className="timeline-bar absolute rounded-full flex items-center justify-center cursor-pointer"
-                style={{ left, top: row * ROW + BAR_Y_OFF, width: w, height: BAR_H, backgroundColor: isErr ? C.red : color, zIndex: idx, border: isLLM ? "1px solid rgba(255,255,255,0.12)" : "1.5px solid #000", boxSizing: "border-box" }}
+                style={{ left, top: row * ROW + BAR_Y_OFF, width: w, height: BAR_H, backgroundColor: isErr ? C.red : color, zIndex: idx, border: isLLM ? "1px solid rgba(16,24,32,0.12)" : "1.5px solid #000", boxSizing: "border-box" }}
                 onMouseEnter={(e) => handleBarEnter(span, e)}
                 onMouseLeave={handleBarLeave}
                 onClick={focusBarTool}>

@@ -12,7 +12,7 @@ export function Reextract({ open, onClose }: { open: boolean; onClose: () => voi
   const toast = useToast();
   const [starting, setStarting] = useState(false);
   const count = state?.discover?.sampled ?? 100;
-  const dialogs = `${count} ${plural(count, "диалог", "диалога", "диалогов")}`;
+  const dialogs = `${count} ${plural(count, "разговор", "разговора", "разговоров")}`;
   const start = async () => {
     setStarting(true);
     try {

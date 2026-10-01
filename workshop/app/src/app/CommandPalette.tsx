@@ -36,10 +36,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { id: "s-traces", group: "Разделы", label: "Трейсы", sub: "Всё, что записал Workshop", icon: Waypoints, run: go(`${SECTIONS.dialogs}?src=traces`) },
       { id: "s-agent", group: "Разделы", label: "Агент", sub: "Подключение и прочитанный код", icon: Bot, run: go(SECTIONS.agent) },
       { id: "s-settings", group: "Разделы", label: "Настройки", sub: "Модели, ключи, ассистент, повтор трейсов", icon: Settings, run: go(SECTIONS.settings) },
-      { id: "a-assess", group: "Действия", label: "Оценить логи", sub: "Судья проверит диалоги логов по критериям агента", icon: Play, run: go(`${SECTIONS.overview}?assess=1`) },
+      { id: "a-assess", group: "Действия", label: "Оценить логи", sub: "Судья проверит разговоры логов по критериям агента", icon: Play, run: go(`${SECTIONS.overview}?assess=1`) },
       { id: "a-review", group: "Действия", label: "Проверить вердикты", sub: "Верно или неверно судья: по одному, клавишами V и N", icon: ClipboardCheck, run: go(SECTIONS.review) },
       { id: "a-report", group: "Действия", label: "Отчёт для письма", sub: "Проблемы листом: скопировать или скачать", icon: FileText, run: go(`${SECTIONS.overview}?report=1`) },
-      { id: "a-upload", group: "Действия", label: "Загрузить логи", sub: "Выгрузка чата — кнопкой в «Диалогах»", icon: Upload, run: go(SECTIONS.dialogs) },
+      { id: "a-upload", group: "Действия", label: "Загрузить логи", sub: "Выгрузка чата — кнопкой в «Разговорах»", icon: Upload, run: go(SECTIONS.dialogs) },
       { id: "a-cards", group: "Действия", label: "Собрать сценарии", sub: "Из оценённых логов", icon: Hammer, run: go(scenariosLink()) },
       { id: "a-play", group: "Действия", label: "Запустить симуляцию", sub: "Синтетический клиент сыграет сценарии с агентом", icon: Play, run: go(`${SECTIONS.simulations}?play=1`) },
       { id: "a-code", group: "Действия", label: "Прочитать код агента", sub: "Промпты и инструменты — в «Агенте»", icon: FileText, run: go(SECTIONS.agent) },
@@ -48,7 +48,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     const byId = new Map((data?.rules ?? []).map(r => [r.id, r]));
     for (const id of data?.problems ?? []) {
       const p = byId.get(id);
-      if (p?.log.failed) out.push({ id: `v-${id}`, group: "Проблемы в логах", label: p.title, sub: `${p.log.failed} из ${p.log.failed + p.log.passed} диалогов`, icon: TriangleAlert, run: go(problemLink(id)) });
+      if (p?.log.failed) out.push({ id: `v-${id}`, group: "Проблемы в логах", label: p.title, sub: `${p.log.failed} из ${p.log.failed + p.log.passed} разговоров`, icon: TriangleAlert, run: go(problemLink(id)) });
     }
     for (const r of data?.rules ?? []) {
       out.push({ id: `c-${r.id}`, group: "Критерии", label: r.title, sub: r.rule.origin || r.rule.text, icon: ListChecks, run: go(criterionLink(r.id)) });

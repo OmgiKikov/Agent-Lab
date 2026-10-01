@@ -22,7 +22,7 @@ export function Segmented<T extends string>({ value, options, onChange, classNam
             )}
           >
             {o.label}
-            {o.count !== undefined && <span className={cn("font-mono text-meta", on ? "text-fg-3" : "text-fg-4")}>{o.count}</span>}
+            {o.count !== undefined && <span className={cn("text-meta tabular-nums", on ? "text-fg-3" : "text-fg-4")}>{o.count}</span>}
           </button>
         );
       })}

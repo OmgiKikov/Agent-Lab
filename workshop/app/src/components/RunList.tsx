@@ -25,11 +25,11 @@ export function RunListItem({ run, selected, highlighted, faded, onClick }: {
     <div data-run-id={run.id} style={{ opacity: faded ? 0.4 : 1, transition: "opacity 150ms" }}>
       <button className="w-full text-left p-2.5 rounded-lg transition-all duration-150"
         style={{
-          background: selected ? "rgba(255,255,255,0.08)" : highlighted ? "rgba(255,255,255,0.06)" : "transparent",
-          border: selected ? "1px solid rgba(255,255,255,0.15)" : highlighted ? "1px solid rgba(255,255,255,0.10)" : "1px solid transparent",
+          background: selected ? "rgba(16,24,32,0.08)" : highlighted ? "rgba(16,24,32,0.06)" : "transparent",
+          border: selected ? "1px solid rgba(16,24,32,0.15)" : highlighted ? "1px solid rgba(16,24,32,0.10)" : "1px solid transparent",
         }}
-        onMouseEnter={(e) => { if (!selected && !highlighted) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = selected ? "rgba(255,255,255,0.08)" : highlighted ? "rgba(255,255,255,0.06)" : "transparent"; }}
+        onMouseEnter={(e) => { if (!selected && !highlighted) e.currentTarget.style.background = "rgba(16,24,32,0.04)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = selected ? "rgba(16,24,32,0.08)" : highlighted ? "rgba(16,24,32,0.06)" : "transparent"; }}
         onClick={onClick}>
         <div className="flex items-center gap-2">
           {active && <div className="size-2 rounded-full flex-shrink-0 pulse-dot" style={{ background: C.green }} />}
@@ -39,7 +39,7 @@ export function RunListItem({ run, selected, highlighted, faded, onClick }: {
               <span className="text-sm font-medium truncate" style={{ color: C.fg4, opacity: saved ? 1 : 0.9 }}>
                 {displayTitle}
               </span>
-              {saved && <span className="shrink-0 flex items-center justify-center size-5 rounded-full" style={{ background: "rgba(255,255,255,0.12)" }}><Star className="size-3" style={{ color: "#fff", fill: "#fff" }} /></span>}
+              {saved && <span className="shrink-0 flex items-center justify-center size-5 rounded-full" style={{ background: "rgba(16,24,32,0.12)" }}><Star className="size-3" style={{ color: "#fff", fill: "#fff" }} /></span>}
             </div>
             <div className="flex items-center gap-2 mt-0.5 overflow-hidden">
               {isReplay && (

@@ -21,7 +21,7 @@ import { Rows } from "./Rows";
 const link = "rounded-sm text-fg-2 decoration-line-strong decoration-dotted underline underline-offset-4 hover:text-fg";
 
 /**
- * «Диалоги»: every conversation in one list, the logs', a run's and any trace the Workshop recorded; one dialogue in full
+ * «Разговоры»: every conversation in one list, the logs', a run's and any trace the Workshop recorded; one dialogue in full
  * with the judge's quotes, every verdict and its trace. Where a count of another screen leads, filtered by its criterion.
  */
 export function DialogsPage() {
@@ -56,7 +56,7 @@ export function DialogsPage() {
   };
   useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
 
-  const header = <Header title="Диалоги" actions={<UploadButton />} below={<SectionJob kinds={["discover", "run", "rejudge"]} />} />;
+  const header = <Header title="Разговоры" actions={<UploadButton />} below={<SectionJob kinds={["discover", "run", "rejudge"]} />} />;
   if (offline && !state) return <div className="flex h-full flex-col">{header}<ServiceDown /></div>;
   if (!state) return <div className="flex h-full flex-col">{header}<div className="p-5"><Skeleton className="h-[480px]" /></div></div>;
 
@@ -64,11 +64,11 @@ export function DialogsPage() {
   const r = run.data;
   const summary = src === "log"
     ? <>
-        <span className="text-fg-2">{state.logs.total} {plural(state.logs.total, "диалог", "диалога", "диалогов")} в выгрузке{state.logs.file ? ` «${state.logs.file}»` : ""}{state.logs.updatedAt ? ` от ${day(state.logs.updatedAt)}` : ""}</span>
+        <span className="text-fg-2">{state.logs.total} {plural(state.logs.total, "разговор", "разговора", "разговоров")} в выгрузке{state.logs.file ? ` «${state.logs.file}»` : ""}{state.logs.updatedAt ? ` от ${day(state.logs.updatedAt)}` : ""}</span>
         {log && <> · оценены {log.assessed} из {log.sampled} {day(log.finishedAt)} · без оценки {log.unassessed}</>}
       </>
     : src === "sim"
-    ? r ? <><span className="text-fg-2">{r.label || runTitle(r)}</span> · прогон {day(r.startedAt)} · {r.items?.length ?? 0} диалогов{r.metric ? ` · нарушения в ${r.metric.failed} из ${r.metric.measured}` : ""}</> : "Прогонов ещё не было"
+    ? r ? <><span className="text-fg-2">{r.label || runTitle(r)}</span> · прогон {day(r.startedAt)} · {r.items?.length ?? 0} разговоров{r.metric ? ` · нарушения в ${r.metric.failed} из ${r.metric.measured}` : ""}</> : "Прогонов ещё не было"
     : <>Трейсы всех агентов, которые записал Workshop · <Link to="/saved" className={link}>Сохранённые</Link> · <Link to="/search" className={link}>Поиск по содержимому</Link></>;
   const runMenu = src === "sim" && finished.length > 1 ? (
     <Menu trigger={<span className="inline-flex h-8 items-center gap-1.5 rounded-control border border-line-strong px-2.5 text-small text-fg-2 hover:text-fg">прогон {day(r?.startedAt)}<ChevronDown aria-hidden className="size-3.5" /></span>}
@@ -88,7 +88,7 @@ export function DialogsPage() {
           query={query} onQuery={setQuery} selected={key} onOpen={k => open(k)} criteria={criteria} personas={state.personas} runMenu={runMenu} />
         {showDetail && selected
           ? <Dialog key={selected.key} row={selected} criteria={criteria} onBack={wide ? undefined : () => open(null)} />
-          : wide && <EmptyState drop title={all.length ? "Выберите диалог" : "Диалогов нет"} className="justify-center">{all.length ? "Слева разговоры. J и K листают." : src === "log" ? "Загрузите выгрузку чата: кнопка справа вверху." : src === "sim" ? "Запустите прогон в «Симуляциях»." : "Workshop ещё ничего не записал."}</EmptyState>}
+          : wide && <EmptyState drop title={all.length ? "Выберите разговор" : "Разговоров нет"} className="justify-center">{all.length ? "Слева разговоры. J и K листают." : src === "log" ? "Загрузите выгрузку чата: кнопка справа вверху." : src === "sim" ? "Запустите прогон в «Симуляциях»." : "Workshop ещё ничего не записал."}</EmptyState>}
       </div>
     </div>
   );

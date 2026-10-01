@@ -49,11 +49,11 @@ function PreviousMessages({ messages }: { messages: { role: string; content: str
   return (
     <div>
       <div className="flex items-center gap-3 py-3">
-        <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.18)" }} />
+        <div className="flex-1 h-px" style={{ background: "rgba(16,24,32,0.18)" }} />
         <button
           className="flex flex-col items-center text-[11px] font-mono whitespace-pre leading-tight px-4 py-1 rounded-xl transition-all duration-200"
           style={{ color: C.fg2, background: "transparent" }}
-          onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(16,24,32,0.08)"; }}
           onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
           onClick={() => setExpanded(!expanded)}
         >
@@ -70,7 +70,7 @@ function PreviousMessages({ messages }: { messages: { role: string; content: str
             </>
           )}
         </button>
-        <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.18)" }} />
+        <div className="flex-1 h-px" style={{ background: "rgba(16,24,32,0.18)" }} />
       </div>
       {expanded && <div className="mt-1"><MessageList messages={messages} /></div>}
     </div>
@@ -142,7 +142,7 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
                 <div className="flex flex-wrap gap-1">
                   {agentToolSpans.map(s => (
                     <span key={s.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono"
-                      style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`, color: C.fg3 }}>
+                      style={{ background: "rgba(16,24,32,0.04)", border: `1px solid ${C.border}`, color: C.fg3 }}>
                       <Check /> {s.name} <span style={{ color: C.fg0 }}>{fmt(s.duration_ms)}</span>
                     </span>
                   ))}
@@ -199,7 +199,7 @@ function UserBubble({ content, collapsible }: { content: string; collapsible?: b
         {content}
       </pre>
       {canCollapse && (
-        <button className="text-[10px] font-mono mt-0.5 px-1.5 py-0.5 -ml-1.5 rounded transition-colors hover:bg-white/10"
+        <button className="text-[10px] font-mono mt-0.5 px-1.5 py-0.5 -ml-1.5 rounded transition-colors hover:bg-fg/10"
           style={{ color: C.fg1 }}
           onClick={() => setCollapsed(!collapsed)}>{collapsed ? "развернуть" : "свернуть"}</button>
       )}
@@ -232,9 +232,9 @@ function UserMessage({ content, parts, images, onEdit }: { content: string; part
           <button
             className="absolute -bottom-1.5 -right-1.5 p-1.5 rounded-full opacity-0 group-hover/usermsg:opacity-100 transition-opacity"
             style={{
-              background: "rgba(255,255,255,0.08)",
+              background: "rgba(16,24,32,0.08)",
               backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
-              border: "1px solid rgba(255,255,255,0.15)",
+              border: "1px solid rgba(16,24,32,0.15)",
               boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
               color: C.fg2,
             }}
@@ -280,7 +280,7 @@ function RenderModeToggle({ md, onChange }: { md: boolean; onChange: (md: boolea
     background: "transparent",
   };
   return (
-    <div className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5" style={{ border: `1px solid rgba(255,255,255,0.17)` }}>
+    <div className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5" style={{ border: `1px solid rgba(16,24,32,0.17)` }}>
       <button
         type="button"
         aria-pressed={md}
@@ -631,7 +631,7 @@ export function ChatFlow({ spans, liveEvents, subAgents = EMPTY_SUB_AGENTS, onDi
                 </span>
               ) : lt.type === "live_tool_result" ? (
                 <span key={`ltr${j}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium"
-                  style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, color: C.fg2 }}>
+                  style={{ background: "rgba(16,24,32,0.02)", border: `1px solid ${C.border}`, color: C.fg2 }}>
                   <Check /> <span style={{ color: C.fg4 }}>{lt.name}</span>
                 </span>
               ) : null; })}

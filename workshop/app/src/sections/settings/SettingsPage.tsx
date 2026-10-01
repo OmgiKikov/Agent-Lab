@@ -56,7 +56,7 @@ function Models({ state }: { state: LabState }) {
       .catch(e => { const failed = { ok: false, error: String(e?.message ?? e) }; setChecks({ main: failed, second: failed }); });
   };
   const rows = [
-    { role: "main" as const, name: "Судья и клиент", use: "Оценивает диалоги и играет клиента в симуляциях.", model: state.models.main },
+    { role: "main" as const, name: "Судья и клиент", use: "Оценивает разговоры и играет клиента в симуляциях.", model: state.models.main },
     { role: "second" as const, name: "Второй судья", use: "Модель другого вендора, проверяет вердикты первой.", model: state.models.second },
   ];
   return (

@@ -12,10 +12,10 @@ import type { Problems } from "../../lab/problems";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { AssessSheet } from "../violations/AssessSheet";
-import { FirstRun } from "../violations/FirstRun";
-import { ReportSheet } from "../violations/ReportSheet";
-import { queueOf } from "../violations/model";
+import { AssessSheet } from "../problems/AssessSheet";
+import { FirstRun } from "./FirstRun";
+import { ReportSheet } from "../problems/ReportSheet";
+import { queueOf } from "../problems/model";
 import { ProblemRow } from "../problems/ProblemRow";
 
 /**

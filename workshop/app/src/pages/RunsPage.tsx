@@ -234,8 +234,8 @@ export function RunsPage() {
   return (
     <div className="h-full flex">
       {/* Run list sidebar */}
-      <div className={`w-full md:w-[248px] flex-shrink-0 flex-col ${selectedId ? "hidden md:flex" : "flex"}`} style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
-        <div className="p-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className={`w-full md:w-[248px] flex-shrink-0 flex-col ${selectedId ? "hidden md:flex" : "flex"}`} style={{ borderRight: "1px solid rgba(16,24,32,0.06)" }}>
+        <div className="p-3" style={{ borderBottom: "1px solid rgba(16,24,32,0.06)" }}>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-1.5">
               {/* WebSocket connection indicator */}
@@ -252,7 +252,7 @@ export function RunsPage() {
             <input
               ref={searchRef}
               className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none"
-              style={{ background: "rgba(255,255,255,0.04)", color: C.fg3, border: `1px solid ${search ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)"}` }}
+              style={{ background: "rgba(16,24,32,0.04)", color: C.fg3, border: `1px solid ${search ? "rgba(16,24,32,0.12)" : "rgba(16,24,32,0.06)"}` }}
               placeholder="Поиск по трейсам…"
               value={search}
               onChange={e => setSearch(e.target.value)}
@@ -269,7 +269,7 @@ export function RunsPage() {
             <div className="relative mb-2">
               <select
                 className="w-full appearance-none px-2 py-1.5 pr-6 rounded text-[11px] font-mono outline-none cursor-pointer"
-                style={{ background: "rgba(255,255,255,0.04)", color: agentFilter === "all" ? C.fg1 : C.fg3, border: `1px solid ${agentFilter !== "all" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)"}` }}
+                style={{ background: "rgba(16,24,32,0.04)", color: agentFilter === "all" ? C.fg1 : C.fg3, border: `1px solid ${agentFilter !== "all" ? "rgba(16,24,32,0.12)" : "rgba(16,24,32,0.06)"}` }}
                 value={agentFilter}
                 onChange={e => setAgentFilter(e.target.value)}
               >
@@ -335,7 +335,7 @@ export function RunsPage() {
                           {/* Replay (left) header */}
                           <div
                             className="flex items-center justify-between px-3 py-1.5 min-w-0"
-                            style={{ background: "rgba(255,255,255,0.10)", width: replayCompare ? "50%" : "100%" }}
+                            style={{ background: "rgba(16,24,32,0.10)", width: replayCompare ? "50%" : "100%" }}
                           >
                             <div className="flex items-center gap-2 min-w-0">
                               <RotateCcw style={{ width: 12, height: 12, color: C.fg1, flexShrink: 0 }} />
@@ -360,8 +360,8 @@ export function RunsPage() {
                               </span>
                               {!replayCompare && (
                                 <button
-                                  className="flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded transition-colors hover:bg-white/10 flex-shrink-0"
-                                  style={{ color: C.fg2, border: `1px solid rgba(255,255,255,0.15)` }}
+                                  className="flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded transition-colors hover:bg-fg/10 flex-shrink-0"
+                                  style={{ color: C.fg2, border: `1px solid rgba(16,24,32,0.15)` }}
                                   onClick={() => setReplayCompare(true)}>
                                   сравнить <ArrowRight className="w-3 h-3" />
                                 </button>
@@ -375,13 +375,13 @@ export function RunsPage() {
                               <div className="flex-shrink-0 w-[1px]" style={{ background: C.border }} />
                               <div
                                 className="flex items-center justify-between px-3 py-1.5 min-w-0"
-                                style={{ background: "rgba(255,255,255,0.04)", flex: 1 }}
+                                style={{ background: "rgba(16,24,32,0.04)", flex: 1 }}
                               >
                                 <span className="text-[12px] truncate" style={{ color: C.fg1 }}>
                                   исходный — <span style={{ color: C.fg3 }}>{srcName}</span>
                                 </span>
                                 <button
-                                  className="p-0.5 rounded transition-colors hover:bg-white/10 flex-shrink-0"
+                                  className="p-0.5 rounded transition-colors hover:bg-fg/10 flex-shrink-0"
                                   onClick={() => setReplayCompare(false)}
                                 >
                                   <X className="h-3.5 w-3.5" style={{ color: C.fg1 }} />

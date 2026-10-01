@@ -16,7 +16,7 @@ const signOf = (status: Status) => SIGN[status] ?? SIGN.UNMEASURED;
 /** The verdict of one dialogue as a sign; its word is in the title and in the legend. */
 export function Sign({ status, className }: { status: Status; className?: string }) {
   const s = signOf(status);
-  return <span title={s.word} aria-label={s.word} className={cn("w-3 flex-shrink-0 text-center font-mono text-small", s.tone, className)}>{s.sign}</span>;
+  return <span title={s.word} aria-label={s.word} className={cn("w-3 flex-shrink-0 text-center text-small font-semibold", s.tone, className)}>{s.sign}</span>;
 }
 
 /** Scenarios down, customer types across: each cell the verdicts of that scenario for that type, one sign per repeat. */
@@ -28,13 +28,13 @@ export function RunMatrix({ run, items, hrefOf, scores }: { run: LabRun; items: 
   return (
     <div className="mt-4">
       <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-meta text-fg-3">
-        {["FAIL", "PASS", "UNMEASURED"].map(k => <span key={k}><span className={cn("font-mono", SIGN[k].tone)}>{SIGN[k].sign}</span> {SIGN[k].word}</span>)}
+        {["FAIL", "PASS", "UNMEASURED"].map(k => <span key={k}><span className={cn("font-semibold", SIGN[k].tone)}>{SIGN[k].sign}</span> {SIGN[k].word}</span>)}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-line">
-              <th className="py-2 pr-4 align-bottom font-mono text-label font-normal uppercase tracking-caps text-fg-3">Сценарий</th>
+              <th className="py-2 pr-4 align-bottom text-small font-medium text-fg-3">Сценарий</th>
               {types.map(t => {
                 // The service's per-type numbers when it has them, else counted from the dialogues themselves.
                 const own = items.filter(i => personaOf(i) === t.id && (i.status === "PASS" || i.status === "FAIL"));

@@ -764,7 +764,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
 
   return (
     <aside
-      className="relative flex h-screen origin-right flex-col overflow-hidden border-l border-white/10 bg-zinc-950/40"
+      className="relative flex h-screen origin-right flex-col overflow-hidden border-l border-fg/10 bg-raised"
       style={{
         width: paneWidth,
         minWidth: paneWidth,
@@ -783,7 +783,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
       aria-hidden={springClosing}
     >
       <div
-        className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-ew-resize transition-colors hover:bg-white/10"
+        className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-ew-resize transition-colors hover:bg-fg/10"
         onPointerDown={(event) => {
           if (springClosing) return;
           resizeRef.current = { x: event.clientX, width, shouldCollapse: false };
@@ -793,7 +793,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
       />
       {!showProviderIntro && (
         showList ? (
-          <header className="flex items-start justify-between gap-3 border-b border-white/10 px-3 py-2">
+          <header className="flex items-start justify-between gap-3 border-b border-fg/10 px-3 py-2">
             <div className="flex min-w-0 flex-col gap-1">
               <ProviderDropdown
                 provider={provider}
@@ -809,7 +809,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
             <div className="flex shrink-0 items-center gap-1">
               <button
                 onClick={() => setCollapsed(true)}
-                className="min-h-8 rounded-md px-2.5 text-xs font-medium text-white/55 transition-[transform,background-color,color] hover:bg-white/5 hover:text-white active:scale-[0.96]"
+                className="min-h-8 rounded-md px-2.5 text-xs font-medium text-fg/55 transition-[transform,background-color,color] hover:bg-fg/5 hover:text-fg active:scale-[0.96]"
                 title="Свернуть чат"
               >
                 Свернуть
@@ -817,10 +817,10 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
             </div>
           </header>
         ) : (
-          <header className="relative z-10 border-b border-white/10 px-3 pb-2 pt-0.5 shadow-[0_18px_34px_rgba(0,0,0,0.92)]">
+          <header className="relative z-10 border-b border-fg/10 px-3 pb-2 pt-0.5 shadow-card">
             <button
               onClick={() => { setShowList(true); void refreshSessions(); }}
-              className="mb-1 -ml-1.5 inline-flex items-center gap-0.5 rounded text-xs font-medium text-white/45 transition-colors hover:text-white/80"
+              className="mb-1 -ml-1.5 inline-flex items-center gap-0.5 rounded text-xs font-medium text-fg/45 transition-colors hover:text-fg/80"
               title="Показать все чаты"
             >
               <ChevronLeft className="h-3 w-3" />
@@ -828,17 +828,17 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
             </button>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-white/85" title={detail?.preview ?? detail?.last_prompt ?? "Новый чат"}>
+                <div className="truncate text-sm font-medium text-fg/85" title={detail?.preview ?? detail?.last_prompt ?? "Новый чат"}>
                   {detail?.preview ?? detail?.last_prompt ?? "Новый чат"}
                 </div>
-                <div className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-white/35">
+                <div className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-fg/35">
                   <FolderIcon className="h-3 w-3 shrink-0" />
                   <span className="min-w-0 flex-1 truncate leading-snug" title={currentCwd ?? undefined}>{currentCwdDisplay}</span>
                   {canChangeConversationCwd ? (
                     <button
                       type="button"
                       onClick={() => setShowDirectoryPicker(true)}
-                      className="shrink-0 rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-white/45 transition-colors hover:bg-white/5 hover:text-white/75"
+                      className="shrink-0 rounded border border-fg/10 px-1.5 py-0.5 text-[10px] text-fg/45 transition-colors hover:bg-fg/5 hover:text-fg/75"
                     >
                       Сменить
                     </button>
@@ -851,16 +851,16 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                     <HeaderIconTooltip label="Открыть в терминале">
                       <button
                         onClick={() => void copyOpenInTerminalCommand()}
-                        className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/[0.04] text-white/50 transition-[transform,background-color,border-color,color] hover:border-white/18 hover:bg-white/[0.08] hover:text-white active:scale-[0.96]"
+                        className="grid h-7 w-7 place-items-center rounded-md border border-fg/10 bg-fg/[0.04] text-fg/50 transition-[transform,background-color,border-color,color] hover:border-fg/18 hover:bg-fg/[0.08] hover:text-fg active:scale-[0.96]"
                         aria-label="Открыть в терминале"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                       </button>
                     </HeaderIconTooltip>
                     {terminalCommandCopied && (
-                    <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-white/10 bg-zinc-900/95 px-3 py-2 text-[11px] leading-relaxed text-white/75 shadow-2xl backdrop-blur">
+                    <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-fg/10 bg-raised px-3 py-2 text-[11px] leading-relaxed text-fg/75 shadow-2xl backdrop-blur">
                       <div>Команда скопирована. Выполните её в терминале.</div>
-                      <code className="mt-2 block select-all break-all rounded bg-black/35 px-2 py-1.5 font-mono text-[10px] text-white/85">
+                      <code className="mt-2 block select-all break-all rounded bg-inset px-2 py-1.5 font-mono text-[10px] text-fg/85">
                         {terminalCommand}
                       </code>
                       </div>
@@ -870,7 +870,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 <HeaderIconTooltip label="Новый чат">
                   <button
                     onClick={startNewChat}
-                    className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/[0.04] text-white/50 transition-[transform,background-color,border-color,color] hover:border-white/18 hover:bg-white/[0.08] hover:text-white active:scale-[0.96]"
+                    className="grid h-7 w-7 place-items-center rounded-md border border-fg/10 bg-fg/[0.04] text-fg/50 transition-[transform,background-color,border-color,color] hover:border-fg/18 hover:bg-fg/[0.08] hover:text-fg active:scale-[0.96]"
                     aria-label="Новый чат"
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -879,7 +879,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 <HeaderIconTooltip label="Скрыть">
                   <button
                     onClick={() => setCollapsed(true)}
-                    className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/[0.04] text-white/50 transition-[transform,background-color,border-color,color] hover:border-white/18 hover:bg-white/[0.08] hover:text-white active:scale-[0.96]"
+                    className="grid h-7 w-7 place-items-center rounded-md border border-fg/10 bg-fg/[0.04] text-fg/50 transition-[transform,background-color,border-color,color] hover:border-fg/18 hover:bg-fg/[0.08] hover:text-fg active:scale-[0.96]"
                     aria-label="Скрыть чат"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -921,14 +921,14 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
               />
             ))}
             {sending && visiblePendingQuestions.length === 0 && visibleLiveBlocks.length === 0 && <ProviderThinking provider={provider} />}
-            {error && <div className="rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-xs text-red-100">{error}</div>}
+            {error && <div className="rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-xs text-fg-2">{error}</div>}
           </div>
 
           <footer className="absolute inset-x-0 bottom-0 z-20 px-2 pb-[10px] pt-3">
             {showTraceDebugPrompt && <TraceDebugPrompt onPrompt={(prompt) => void sendMessage(prompt)} />}
             {showCloudMcpNudge && <CloudMcpNudge onDismiss={dismissCloudMcpNudge} />}
             {showSlash && slashItems.length > 0 && (
-              <div id="claude-slash-menu" className="absolute bottom-full left-2 right-2 mb-2 max-h-64 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900/95 p-1 text-xs shadow-2xl">
+              <div id="claude-slash-menu" className="absolute bottom-full left-2 right-2 mb-2 max-h-64 overflow-y-auto rounded-lg border border-fg/10 bg-raised p-1 text-xs shadow-2xl">
                 {slashItems.map((item, index) => (
                   <button
                     key={`${item.value}-${item.label}`}
@@ -938,20 +938,20 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                     onMouseEnter={() => setActiveSlashIndex(index)}
                     className={`flex w-full items-center justify-between gap-3 rounded px-2 py-1.5 text-left transition-[background-color,color] ${
                       index === activeSlashIndex
-                        ? "bg-white/10 text-white"
-                        : "text-white/70 hover:bg-white/5 hover:text-white"
+                        ? "bg-fg/10 text-fg"
+                        : "text-fg/70 hover:bg-fg/5 hover:text-fg"
                     }`}
                   >
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{item.label}</span>
-                      {item.description && <span className="block truncate text-[10px] text-white/40">{item.description}</span>}
+                      {item.description && <span className="block truncate text-[10px] text-fg/40">{item.description}</span>}
                     </span>
-                    <span className="shrink-0 truncate font-mono text-[10px] text-white/35">{item.value}</span>
+                    <span className="shrink-0 truncate font-mono text-[10px] text-fg/35">{item.value}</span>
                   </button>
                 ))}
               </div>
             )}
-            <div className="relative overflow-hidden rounded-[12px] border border-white/[0.2] bg-[#101010]/[80%] shadow-[0_14px_36px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-sm backdrop-saturate-150 transition-[border-color,background-color,box-shadow] focus-within:border-white/30 focus-within:bg-[#080808]/88 focus-within:shadow-[0_14px_36px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.07)]">
+            <div className="relative overflow-hidden rounded-[12px] border border-fg/[0.2] bg-list shadow-card backdrop-blur-sm backdrop-saturate-150 transition-[border-color,background-color,box-shadow] focus-within:border-fg/30 focus-within:bg-list focus-within:shadow-card">
               <textarea
                 value={draft}
                 onChange={(e) => {
@@ -988,12 +988,12 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
                 rows={2}
                 aria-expanded={showSlash}
                 aria-controls="claude-slash-menu"
-                className="block min-h-24 w-full resize-none rounded-[11px] bg-transparent px-3 py-3 pb-12 pr-14 text-sm text-white/90 placeholder:text-white/55 focus:outline-none focus-visible:outline-none"
+                className="block min-h-24 w-full resize-none rounded-[11px] bg-transparent px-3 py-3 pb-12 pr-14 text-sm text-fg/90 placeholder:text-fg/55 focus:outline-none focus-visible:outline-none"
               />
               <button
                 onClick={() => void sendMessage()}
                 disabled={!draft.trim() || sending}
-                className="absolute bottom-2 right-2 grid min-h-10 min-w-10 place-items-center rounded-[6px] bg-white/10 text-white/75 transition-[transform,background-color,color,opacity] hover:bg-white/15 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-30 disabled:active:scale-100"
+                className="absolute bottom-2 right-2 grid min-h-10 min-w-10 place-items-center rounded-[6px] bg-fg/10 text-fg/75 transition-[transform,background-color,color,opacity] hover:bg-fg/15 hover:text-fg active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-30 disabled:active:scale-100"
                 title="Отправить"
               >
                 <ArrowRight className="h-4 w-4" />
@@ -1005,7 +1005,7 @@ export function MessagePane({ activeRunId }: MessagePaneProps) {
       {showProviderIntro && (
         <button
           onClick={() => setCollapsed(true)}
-          className="absolute right-3 top-3 min-h-8 rounded-md px-2.5 text-xs font-medium text-white/45 transition-[transform,background-color,color] hover:bg-white/5 hover:text-white active:scale-[0.96]"
+          className="absolute right-3 top-3 min-h-8 rounded-md px-2.5 text-xs font-medium text-fg/45 transition-[transform,background-color,color] hover:bg-fg/5 hover:text-fg active:scale-[0.96]"
           title="Скрыть чат"
         >
           Скрыть
@@ -1063,17 +1063,17 @@ function DirectoryPicker({
   }, [currentCwd, loadDirectory]);
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-[440px] rounded-xl border border-white/10 bg-zinc-950/95 p-3 shadow-2xl">
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-fg/30 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-[440px] rounded-xl border border-fg/10 bg-raised p-3 shadow-2xl">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium text-white/85">Выберите рабочую папку</div>
-            <div className="mt-0.5 text-[11px] text-white/40">Перейдите к папке или введите путь. Кнопка «Выбрать» подтвердит выбор.</div>
+            <div className="text-sm font-medium text-fg/85">Выберите рабочую папку</div>
+            <div className="mt-0.5 text-[11px] text-fg/40">Перейдите к папке или введите путь. Кнопка «Выбрать» подтвердит выбор.</div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="grid h-7 w-7 place-items-center rounded-md text-white/45 transition-colors hover:bg-white/5 hover:text-white"
+            className="grid h-7 w-7 place-items-center rounded-md text-fg/45 transition-colors hover:bg-fg/5 hover:text-fg"
             aria-label="Закрыть выбор папки"
           >
             <X className="h-3.5 w-3.5" />
@@ -1090,12 +1090,12 @@ function DirectoryPicker({
           <input
             value={pathInput}
             onChange={(event) => setPathInput(event.target.value)}
-            className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/25 px-2 py-1.5 font-mono text-xs text-white/80 placeholder:text-white/30 focus:border-white/25 focus:outline-none"
+            className="min-w-0 flex-1 rounded-md border border-fg/10 bg-inset px-2 py-1.5 font-mono text-xs text-fg/80 placeholder:text-fg/30 focus:border-fg/25 focus:outline-none"
             placeholder="~/Projects/my-agent"
           />
           <button
             type="submit"
-            className="rounded-md border border-white/10 bg-white/[0.06] px-2.5 py-1.5 text-xs text-white/65 transition-colors hover:bg-white/[0.1] hover:text-white"
+            className="rounded-md border border-fg/10 bg-fg/[0.06] px-2.5 py-1.5 text-xs text-fg/65 transition-colors hover:bg-fg/[0.1] hover:text-fg"
           >
             Перейти
           </button>
@@ -1105,7 +1105,7 @@ function DirectoryPicker({
           <button
             type="button"
             onClick={() => listing?.home && void loadDirectory(listing.home)}
-            className="flex min-h-7 items-center gap-1 rounded-md border border-white/10 px-2 text-[11px] text-white/50 transition-colors hover:bg-white/5 hover:text-white/75"
+            className="flex min-h-7 items-center gap-1 rounded-md border border-fg/10 px-2 text-[11px] text-fg/50 transition-colors hover:bg-fg/5 hover:text-fg/75"
           >
             <Home className="h-3 w-3" />
             Домой
@@ -1114,34 +1114,34 @@ function DirectoryPicker({
             type="button"
             disabled={!listing?.parent}
             onClick={() => listing?.parent && void loadDirectory(listing.parent)}
-            className="flex min-h-7 items-center gap-1 rounded-md border border-white/10 px-2 text-[11px] text-white/50 transition-colors hover:bg-white/5 hover:text-white/75 disabled:cursor-not-allowed disabled:opacity-35"
+            className="flex min-h-7 items-center gap-1 rounded-md border border-fg/10 px-2 text-[11px] text-fg/50 transition-colors hover:bg-fg/5 hover:text-fg/75 disabled:cursor-not-allowed disabled:opacity-35"
           >
             <ChevronLeft className="h-3 w-3" />
             Вверх
           </button>
         </div>
 
-        <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-1">
+        <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-fg/10 bg-inset p-1">
           {loading && (
-            <div className="flex items-center justify-center gap-2 py-8 text-xs text-white/45">
+            <div className="flex items-center justify-center gap-2 py-8 text-xs text-fg/45">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Загрузка папок…
             </div>
           )}
           {!loading && error && (
-            <div className="px-2 py-2 text-xs text-red-100/80">{error}</div>
+            <div className="px-2 py-2 text-xs text-fg-2">{error}</div>
           )}
           {!loading && !error && listing?.entries.length === 0 && (
-            <div className="px-2 py-8 text-center text-xs text-white/35">Вложенных папок нет.</div>
+            <div className="px-2 py-8 text-center text-xs text-fg/35">Вложенных папок нет.</div>
           )}
           {!loading && !error && listing?.entries.map((entry) => (
             <button
               key={entry.path}
               type="button"
               onClick={() => void loadDirectory(entry.path)}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-white/65 transition-colors hover:bg-white/5 hover:text-white"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-fg/65 transition-colors hover:bg-fg/5 hover:text-fg"
             >
-              <FolderIcon className="h-3.5 w-3.5 shrink-0 text-white/35" />
+              <FolderIcon className="h-3.5 w-3.5 shrink-0 text-fg/35" />
               <span className="min-w-0 flex-1 truncate">{entry.name}</span>
             </button>
           ))}
@@ -1150,7 +1150,7 @@ function DirectoryPicker({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs text-white/50 transition-colors hover:bg-white/5 hover:text-white/75"
+              className="rounded-md border border-fg/10 px-2.5 py-1.5 text-xs text-fg/50 transition-colors hover:bg-fg/5 hover:text-fg/75"
             >
               Отмена
             </button>
@@ -1158,7 +1158,7 @@ function DirectoryPicker({
               type="button"
               disabled={!listing}
               onClick={() => listing && onSelect(listing.path)}
-              className="rounded-md border border-white/15 bg-white/[0.08] px-2.5 py-1.5 text-xs font-medium text-white/70 transition-colors hover:bg-white/[0.13] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+              className="rounded-md border border-fg/15 bg-fg/[0.08] px-2.5 py-1.5 text-xs font-medium text-fg/70 transition-colors hover:bg-fg/[0.13] hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
             >
               Выбрать
             </button>
@@ -1196,7 +1196,7 @@ function CloudMcpNudge({ onDismiss }: { onDismiss: () => void }) {
 
   return (
     <div
-      className={`cloud-mcp-nudge ${dismissing ? "cloud-mcp-nudge-dismissing" : ""} relative mb-2 overflow-hidden rounded-[12px] border border-white/10 bg-[#101010]/90 px-3 py-2 text-xs text-white/80 shadow-[0_14px_34px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.05)] backdrop-blur-sm`}
+      className={`cloud-mcp-nudge ${dismissing ? "cloud-mcp-nudge-dismissing" : ""} relative mb-2 overflow-hidden rounded-[12px] border border-fg/10 bg-list px-3 py-2 text-xs text-fg/80 shadow-card backdrop-blur-sm`}
     >
       {dismissing && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center" aria-hidden="true">
@@ -1214,19 +1214,19 @@ function CloudMcpNudge({ onDismiss }: { onDismiss: () => void }) {
         </div>
       )}
       <div className="relative flex items-center gap-2.5">
-        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-white/70">
+        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-fg/10 bg-fg/[0.04] text-fg/70">
           <KeyRound className="h-3.5 w-3.5" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-medium text-white/90">Облачные трейсы</div>
-          <div className="mt-0.5 leading-relaxed text-white/55">
+          <div className="font-medium text-fg/90">Облачные трейсы</div>
+          <div className="mt-0.5 leading-relaxed text-fg/55">
             Добавьте ключ Query API в настройках, чтобы искать в Raindrop прямо из чата.
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => window.open("https://auth.raindrop.ai/org/api_keys", "_blank", "noopener,noreferrer")}
-              className="inline-flex items-center gap-1 rounded-md border border-white/[0.12] bg-white/[0.06] px-2 py-1 text-[11px] font-medium text-white/[0.82] transition-[background-color,border-color,color] hover:border-white/20 hover:bg-white/[0.1] hover:text-white"
+              className="inline-flex items-center gap-1 rounded-md border border-fg/[0.12] bg-fg/[0.06] px-2 py-1 text-[11px] font-medium text-fg/[0.82] transition-[background-color,border-color,color] hover:border-fg/20 hover:bg-fg/[0.1] hover:text-fg"
             >
               Ключи API
               <ExternalLink className="h-3 w-3" />
@@ -1234,7 +1234,7 @@ function CloudMcpNudge({ onDismiss }: { onDismiss: () => void }) {
             <button
               type="button"
               onClick={dismissWithPoof}
-              className="rounded-md px-2 py-1 text-[11px] font-medium text-white/[0.42] transition-[background-color,color] hover:bg-white/[0.06] hover:text-white/70"
+              className="rounded-md px-2 py-1 text-[11px] font-medium text-fg/[0.42] transition-[background-color,color] hover:bg-fg/[0.06] hover:text-fg/70"
             >
               Скрыть
             </button>
@@ -1261,7 +1261,7 @@ function ProviderMark({ provider, open }: { provider: AgentProviderId; open: boo
     return <img src={claudeCodeLogo} alt="" className={`h-8 w-8 object-contain ${open ? "" : "opacity-80"}`} />;
   }
   return (
-    <span className="grid h-8 w-8 place-items-center rounded-full bg-white shadow-[0_0_24px_rgba(255,255,255,0.12)]">
+    <span className="grid h-8 w-8 place-items-center rounded-full bg-list shadow-[0_0_24px_rgba(16,24,32,0.12)]">
       <img src={codexLogo} alt="" className="h-7 w-7 object-contain" />
     </span>
   );
@@ -1305,15 +1305,15 @@ function ProviderDropdown({
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-white/75 transition-colors hover:bg-white/5 hover:text-white"
+        className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-fg/75 transition-colors hover:bg-fg/5 hover:text-fg"
         aria-expanded={open}
       >
         <SmallProviderIcon provider={provider} />
         <span>{providerLabel(provider)}</span>
-        <ChevronDown className={`h-3.5 w-3.5 text-white/35 transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown className={`h-3.5 w-3.5 text-fg/35 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 min-w-44 rounded-lg border border-white/10 bg-zinc-900/95 p-1 text-xs shadow-2xl backdrop-blur">
+        <div className="absolute left-0 top-full z-50 mt-1 min-w-44 rounded-lg border border-fg/10 bg-raised p-1 text-xs shadow-2xl backdrop-blur">
           {(["claude", "codex"] as AgentProviderId[]).map((option) => (
             <button
               key={option}
@@ -1324,7 +1324,7 @@ function ProviderDropdown({
                 onProviderChange(option);
               }}
               className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                provider === option ? "bg-white/10 text-white" : "text-white/65 hover:bg-white/5 hover:text-white"
+                provider === option ? "bg-fg/10 text-fg" : "text-fg/65 hover:bg-fg/5 hover:text-fg"
               }`}
             >
               <SmallProviderIcon provider={option} />
@@ -1339,11 +1339,11 @@ function ProviderDropdown({
 
 function ProviderThinking({ provider }: { provider: AgentProviderId }) {
   if (provider === "claude") {
-    return <div className="text-xs text-white/40">Claude Code думает…</div>;
+    return <div className="text-xs text-fg/40">Claude Code думает…</div>;
   }
   return (
-    <div className="flex items-center gap-2 text-xs text-white/45">
-      <span className="grid h-6 w-6 animate-pulse place-items-center rounded-full bg-white">
+    <div className="flex items-center gap-2 text-xs text-fg/45">
+      <span className="grid h-6 w-6 animate-pulse place-items-center rounded-full bg-list">
         <img src={codexLogo} alt="" className="h-5 w-5 object-contain" />
       </span>
       <span>Codex работает…</span>
@@ -1530,16 +1530,16 @@ function AskUserQuestionCard({
   const complete = Object.keys(answers).length === prompt.questions.length;
 
   return (
-    <div className="message-arrive w-[90%] rounded-[4px] border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-white/85">
-      <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-amber-100/70">Claude ждёт ответа</div>
+    <div className="message-arrive w-[90%] rounded-[4px] border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-fg/85">
+      <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-fg-2">Claude ждёт ответа</div>
       <div className="space-y-3">
         {prompt.questions.map((question, questionIndex) => {
           const selected = choices[questionIndex] ?? [];
           return (
             <div key={`${prompt.id}-${questionIndex}`} className="space-y-2">
               <div>
-                {question.header && <div className="text-[11px] text-white/45">{question.header}</div>}
-                <div className="text-sm text-white/90">{question.question}</div>
+                {question.header && <div className="text-[11px] text-fg/45">{question.header}</div>}
+                <div className="text-sm text-fg/90">{question.question}</div>
               </div>
               <div className="grid gap-1.5">
                 {question.options.map((option) => {
@@ -1551,12 +1551,12 @@ function AskUserQuestionCard({
                       onClick={() => toggle(questionIndex, option.label, question.multiSelect)}
                       className={`rounded-[4px] border px-2 py-1.5 text-left transition-[background-color,border-color,color] ${
                         active
-                          ? "border-amber-200/45 bg-amber-200/15 text-white"
-                          : "border-white/10 bg-black/15 text-white/70 hover:bg-white/5 hover:text-white"
+                          ? "border-amber-200/45 bg-amber-200/15 text-fg"
+                          : "border-fg/10 bg-inset text-fg/70 hover:bg-fg/5 hover:text-fg"
                       }`}
                     >
                       <div className="text-xs font-medium">{option.label}</div>
-                      {option.description && <div className="mt-0.5 text-[11px] text-white/45">{option.description}</div>}
+                      {option.description && <div className="mt-0.5 text-[11px] text-fg/45">{option.description}</div>}
                     </button>
                   );
                 })}
@@ -1565,7 +1565,7 @@ function AskUserQuestionCard({
                 value={otherText[questionIndex] ?? ""}
                 onChange={(event) => setOtherText((current) => ({ ...current, [questionIndex]: event.target.value }))}
                 placeholder="Другое"
-                className="w-full rounded-[4px] border border-white/10 bg-black/20 px-2 py-1.5 text-xs text-white/80 placeholder:text-white/30 focus:outline-none focus:border-white/20"
+                className="w-full rounded-[4px] border border-fg/10 bg-inset px-2 py-1.5 text-xs text-fg/80 placeholder:text-fg/30 focus:outline-none focus:border-fg/20"
               />
             </div>
           );
@@ -1575,7 +1575,7 @@ function AskUserQuestionCard({
         type="button"
         disabled={!complete}
         onClick={() => onAnswer(answers)}
-        className="mt-3 flex min-h-9 items-center justify-center gap-2 rounded-[4px] border border-white/10 bg-white/10 px-3 text-xs text-white/75 hover:bg-white/15 active:scale-[0.98] transition-[transform,background-color,color] disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100"
+        className="mt-3 flex min-h-9 items-center justify-center gap-2 rounded-[4px] border border-fg/10 bg-fg/10 px-3 text-xs text-fg/75 hover:bg-fg/15 active:scale-[0.98] transition-[transform,background-color,color] disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100"
       >
         <Send className="h-3.5 w-3.5" />
         Отправить ответ
@@ -1660,13 +1660,13 @@ function ChatList({
               onProviderChange={onProviderIntroChoice}
             />
           </div>
-          <div className="h-[210px] overflow-y-auto border-t border-white/10 px-4 py-3">
-            <div className="mb-2 text-[11px] text-white/35">
+          <div className="h-[210px] overflow-y-auto border-t border-fg/10 px-4 py-3">
+            <div className="mb-2 text-[11px] text-fg/35">
               Недавние чаты в {providerLabel(introProvider)}
             </div>
             <div className="space-y-1.5 opacity-60">
               {introSessions.length === 0 ? (
-                <div className="flex h-[150px] items-center justify-center text-xs text-white/35">Чатов пока нет.</div>
+                <div className="flex h-[150px] items-center justify-center text-xs text-fg/35">Чатов пока нет.</div>
               ) : introSessions.slice(0, 4).map((session) => (
                 <ChatPreviewItem
                   key={session.id}
@@ -1680,18 +1680,18 @@ function ChatList({
       ) : (
         <div className="h-full overflow-y-auto p-2">
           {providerError && (
-        <div className="mb-2 rounded-md border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-xs text-red-100">{providerError}</div>
+        <div className="mb-2 rounded-md border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-xs text-fg-2">{providerError}</div>
       )}
           <button
             onClick={onNew}
-            className="mb-2 flex w-full items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white active:scale-[0.99] transition-[transform,background-color,color]"
+            className="mb-2 flex w-full items-center gap-2 rounded-md border border-fg/10 bg-fg/5 px-3 py-2 text-left text-sm text-fg/75 hover:bg-fg/10 hover:text-fg active:scale-[0.99] transition-[transform,background-color,color]"
           >
             <Plus className="h-4 w-4" />
             Новый чат
           </button>
           <div className="space-y-1">
             {sessions.length === 0 ? (
-              <div className="px-3 py-8 text-center text-xs text-white/40">Чатов в {providerLabel(provider)} пока нет.</div>
+              <div className="px-3 py-8 text-center text-xs text-fg/40">Чатов в {providerLabel(provider)} пока нет.</div>
             ) : sessions.map((session) => (
               <ChatListItem
                 key={session.id}
@@ -1728,11 +1728,11 @@ function AgentConnectCard({
 }) {
   return (
     <section className="w-full max-w-[340px] text-center">
-      <div className="text-[18px] font-medium text-white/90">Подключите агента для кода</div>
-      <p className="mx-auto mt-2 max-w-[300px] text-sm leading-relaxed text-white/48">
+      <div className="text-[18px] font-medium text-fg/90">Подключите агента для кода</div>
+      <p className="mx-auto mt-2 max-w-[300px] text-sm leading-relaxed text-fg/48">
         Задавайте вопросы о трейсах и продолжайте чаты в терминале.
       </p>
-      <div className="mt-5 grid grid-cols-2 gap-1.5 rounded-xl border border-white/10 bg-black/15 p-1">
+      <div className="mt-5 grid grid-cols-2 gap-1.5 rounded-xl border border-fg/10 bg-inset p-1">
         {(["claude", "codex"] as AgentProviderId[]).map((option) => {
           const active = selectedProvider === option;
           return (
@@ -1743,8 +1743,8 @@ function AgentConnectCard({
               disabled={busy}
               className={`flex min-h-12 items-center justify-center gap-2 rounded-lg border px-2.5 text-xs transition-[transform,background-color,border-color,color] active:scale-[0.98] ${
                 active
-                  ? "border-white/18 bg-white/[0.08] text-white"
-                  : "border-transparent text-white/50 hover:bg-white/[0.04] hover:text-white/80"
+                  ? "border-fg/18 bg-fg/[0.08] text-fg"
+                  : "border-transparent text-fg/50 hover:bg-fg/[0.04] hover:text-fg/80"
               } disabled:cursor-not-allowed disabled:opacity-55`}
               aria-pressed={active}
             >
@@ -1758,11 +1758,11 @@ function AgentConnectCard({
         type="button"
         disabled={busy}
         onClick={() => onProviderChange(selectedProvider)}
-        className="mt-3 flex min-h-10 w-full items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.07] px-4 text-sm font-medium text-white transition-[transform,background-color,border-color,opacity] hover:border-white/[0.14] hover:bg-white/[0.11] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-55"
+        className="mt-3 flex min-h-10 w-full items-center justify-center rounded-lg border border-fg/[0.08] bg-fg/[0.07] px-4 text-sm font-medium text-fg transition-[transform,background-color,border-color,opacity] hover:border-fg/[0.14] hover:bg-fg/[0.11] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-55"
       >
         {busy ? "Подключаем…" : `Подключить ${providerLabel(selectedProvider)}`}
       </button>
-      {error && <div className="mt-3 rounded-lg border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-xs text-red-100">{error}</div>}
+      {error && <div className="mt-3 rounded-lg border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-xs text-fg-2">{error}</div>}
     </section>
   );
 }
@@ -1798,23 +1798,23 @@ function ChatListItem({
       }}
       className={`w-full rounded-md border px-3 py-2 text-left transition-[background-color,border-color,color] ${
         selected
-          ? "border-white/20 bg-white/10 text-white"
-          : "border-transparent text-white/65 hover:border-white/10 hover:bg-white/5 hover:text-white"
+          ? "border-fg/20 bg-fg/10 text-fg"
+          : "border-transparent text-fg/65 hover:border-fg/10 hover:bg-fg/5 hover:text-fg"
       }`}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="truncate text-xs font-medium">{session.preview || "Чат без названия"}</div>
-        <div className="shrink-0 text-[10px] text-white/35">{formatSessionTime(session.updated_at)}</div>
+        <div className="shrink-0 text-[10px] text-fg/35">{formatSessionTime(session.updated_at)}</div>
       </div>
-      <div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-white/35">
+      <div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-fg/35">
         <Terminal className="h-3 w-3 shrink-0" />
         <span className="truncate" title={cwd ?? "Рабочая папка недоступна"}>
           {cwdDisplay}
         </span>
       </div>
-      <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-white/30">
+      <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-fg/30">
         <span>{session.id.slice(0, 8)} · {session.message_count} {ruPlural(session.message_count, "сообщение", "сообщения", "сообщений")}</span>
-        <span className="h-3 w-px bg-white/10" />
+        <span className="h-3 w-px bg-fg/10" />
         <button
           type="button"
           title={`Копировать: ${resumeCommandForSession(session, workspaceCwd, provider)}`}
@@ -1823,7 +1823,7 @@ function ChatListItem({
           className={`grid h-5 w-5 place-items-center rounded transition-colors focus:outline-none focus-visible:outline-none ${
             copied
               ? "text-emerald-300"
-              : "text-white/35 hover:text-white"
+              : "text-fg/35 hover:text-fg"
           }`}
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -1844,10 +1844,10 @@ function ChatPreviewItem({
   return (
     <div className="px-1 py-1">
       <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1 truncate text-xs text-white/70">{session.preview || "Чат без названия"}</div>
-        <div className="shrink-0 text-[10px] text-white/35">{formatSessionTime(session.updated_at)}</div>
+        <div className="min-w-0 flex-1 truncate text-xs text-fg/70">{session.preview || "Чат без названия"}</div>
+        <div className="shrink-0 text-[10px] text-fg/35">{formatSessionTime(session.updated_at)}</div>
       </div>
-      <div className="mt-0.5 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-white/30">
+      <div className="mt-0.5 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-fg/30">
         <Terminal className="h-3 w-3 shrink-0" />
         <span className="truncate">{cwd}</span>
       </div>
@@ -1899,7 +1899,7 @@ function TraceDebugPrompt({ onPrompt }: { onPrompt: (prompt: string) => void }) 
           key={prompt}
           type="button"
           onClick={() => onPrompt(prompt)}
-          className="min-h-8 shrink-0 rounded-[6px] border border-white/10 bg-black/20 px-2.5 py-1 text-left text-xs text-white/60 shadow-[0_6px_18px_rgba(0,0,0,0.14)] transition-[transform,background-color,border-color,color] hover:border-white/20 hover:bg-white/[0.06] hover:text-white/85 active:scale-[0.96]"
+          className="min-h-8 shrink-0 rounded-[6px] border border-fg/10 bg-inset px-2.5 py-1 text-left text-xs text-fg/60 shadow-card transition-[transform,background-color,border-color,color] hover:border-fg/20 hover:bg-fg/[0.06] hover:text-fg/85 active:scale-[0.96]"
         >
           {prompt}
         </button>
@@ -1922,7 +1922,7 @@ function MessageBubble({ message }: { message: ClaudeChatMessage }) {
   return (
     <div className="message-arrive flex flex-col items-end">
       <div
-        className="max-w-[90%] min-w-0 overflow-hidden rounded-[4px] border border-blue-400/20 bg-blue-500/15 px-3 py-2 text-white/90"
+        className="max-w-[90%] min-w-0 overflow-hidden rounded-[4px] border border-blue-400/20 bg-blue-500/15 px-3 py-2 text-fg/90"
         onClick={handleDeepLinkClick}
       >
         <MessageText text={message.content} />
@@ -1941,7 +1941,7 @@ function AssistantBlocks({ blocks, isLive }: { blocks: AssistantMessageBlock[]; 
           return (
             <div
               key={index}
-              className={`stream-block assistant-bubble min-w-0 overflow-hidden rounded-[4px] border border-white/10 bg-white/5 text-white/85 ${wide ? "assistant-bubble-wide w-full max-w-none px-2 py-2" : "max-w-[90%] px-3 py-2"} ${isLive ? "assistant-bubble-live" : ""}`}
+              className={`stream-block assistant-bubble min-w-0 overflow-hidden rounded-[4px] border border-fg/10 bg-fg/5 text-fg/85 ${wide ? "assistant-bubble-wide w-full max-w-none px-2 py-2" : "max-w-[90%] px-3 py-2"} ${isLive ? "assistant-bubble-live" : ""}`}
               onClick={handleDeepLinkClick}
             >
               <MessageText text={block.text} />
@@ -1949,7 +1949,7 @@ function AssistantBlocks({ blocks, isLive }: { blocks: AssistantMessageBlock[]; 
           );
         }
         if (block.type === "error") {
-          return <div key={index} className="stream-block whitespace-pre-wrap rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-red-100">{block.text}</div>;
+          return <div key={index} className="stream-block whitespace-pre-wrap rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-fg-2">{block.text}</div>;
         }
         if (block.type === "thinking") {
           return <ThinkingActivityCard key={index} text={block.text} />;
@@ -1966,7 +1966,7 @@ function AssistantBlocks({ blocks, isLive }: { blocks: AssistantMessageBlock[]; 
 function ThinkingActivityCard({ text }: { text: string }) {
   return (
     <details
-      className="stream-block tool-card activity-inline max-w-[90%] text-[11px] text-white/40"
+      className="stream-block tool-card activity-inline max-w-[90%] text-[11px] text-fg/40"
       title="размышления"
     >
       <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 outline-none">
@@ -1991,26 +1991,26 @@ function ToolActivityCard({ block }: { block: Extract<AssistantMessageBlock, { t
 
   return (
     <details
-      className="stream-block tool-card activity-inline max-w-[90%] text-[11px] text-white/40"
+      className="stream-block tool-card activity-inline max-w-[90%] text-[11px] text-fg/40"
       title={block.name}
     >
       <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 outline-none">
         {isRaindropCloudTool ? (
           <Cloud
             className={`activity-icon h-3.5 w-3.5 shrink-0 ${
-              failed ? "text-red-200/75" : running ? "animate-pulse text-sky-100/70" : "text-sky-100/65"
+              failed ? "text-fg-2" : running ? "animate-pulse text-fg-2" : "text-fg-2"
             }`}
           />
         ) : isRaindropTool ? (
           <RaindropLogo
             size={14}
             className={`activity-icon shrink-0 ${running ? "animate-pulse" : ""}`}
-            style={{ color: failed ? "rgba(254,202,202,0.78)" : "rgba(255,255,255,0.72)" }}
+            style={{ color: failed ? "rgba(254,202,202,0.78)" : "rgba(16,24,32,0.72)" }}
           />
         ) : (
           <Wrench
             className={`activity-icon h-3.5 w-3.5 shrink-0 ${
-              failed ? "text-red-200/75" : running ? "animate-pulse text-amber-100/70" : "text-cyan-100/65"
+              failed ? "text-fg-2" : running ? "animate-pulse text-fg-2" : "text-cyan-100/65"
             }`}
           />
         )}
@@ -2090,36 +2090,36 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
 
   if (block.state === "running") {
     return (
-      <div className="stream-block w-[90%] rounded-[8px] border border-sky-300/20 bg-sky-300/[0.07] px-3 py-3 text-white/80 shadow-[0_8px_24px_rgba(0,0,0,0.18)]">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-sky-100/70">
+      <div className="stream-block w-[90%] rounded-[8px] border border-sky-300/20 bg-sky-300/[0.07] px-3 py-3 text-fg/80 shadow-card">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-fg-2">
           Спрашиваем агента
         </div>
-        {question && <div className="mt-2 text-sm text-white/90">{question}</div>}
-        <div className="mt-2 text-xs text-white/45">Продолжаем сохранённый контекст агента…</div>
+        {question && <div className="mt-2 text-sm text-fg/90">{question}</div>}
+        <div className="mt-2 text-xs text-fg/45">Продолжаем сохранённый контекст агента…</div>
       </div>
     );
   }
 
   if (!result) {
     return (
-      <div className="stream-block w-[90%] rounded-[8px] border border-sky-300/15 bg-sky-300/[0.05] px-3 py-3 text-white/75">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-sky-100/65">
+      <div className="stream-block w-[90%] rounded-[8px] border border-sky-300/15 bg-sky-300/[0.05] px-3 py-3 text-fg/75">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-fg-2">
           Вопрос агенту
         </div>
-        {question && <div className="mt-2 text-sm text-white/85">{question}</div>}
-        <div className="mt-2 text-xs text-white/45">Чат Workshop общается с вашим агентом…</div>
+        {question && <div className="mt-2 text-sm text-fg/85">{question}</div>}
+        <div className="mt-2 text-xs text-fg/45">Чат Workshop общается с вашим агентом…</div>
       </div>
     );
   }
 
   if (status === "answered") {
     return (
-      <div className="stream-block w-[90%] rounded-[8px] border border-emerald-300/20 bg-emerald-300/[0.07] px-3 py-3 text-white/85 shadow-[0_8px_24px_rgba(0,0,0,0.18)]">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-100/70">
+      <div className="stream-block w-[90%] rounded-[8px] border border-emerald-300/20 bg-emerald-300/[0.07] px-3 py-3 text-fg/85 shadow-card">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-fg-2">
           Агент ответил
         </div>
-        {question && <div className="mt-2 text-xs text-white/45">{question}</div>}
-        <div className="mt-2 text-sm leading-relaxed text-white/90">
+        {question && <div className="mt-2 text-xs text-fg/45">{question}</div>}
+        <div className="mt-2 text-sm leading-relaxed text-fg/90">
           <MessageText text={String(result.answer ?? "")} />
         </div>
       </div>
@@ -2129,13 +2129,13 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
   if (status === "missing_provider_key") {
     const envVar = typeof result.env_var === "string" ? result.env_var : "ANTHROPIC_API_KEY";
     return (
-      <div className="stream-block w-[90%] rounded-[8px] border border-amber-300/25 bg-amber-300/[0.08] px-3 py-3 text-white/85">
-        <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-amber-100/75">
+      <div className="stream-block w-[90%] rounded-[8px] border border-amber-300/25 bg-amber-300/[0.08] px-3 py-3 text-fg/85">
+        <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-fg-2">
           <KeyRound className="h-3.5 w-3.5" />
           Агенту нужен ключ API
         </div>
-        <div className="mt-2 text-sm text-white/90">Добавьте ключ в настройках Workshop или задайте переменную окружения и перезапустите Workshop.</div>
-        <code className="mt-2 block rounded-[6px] border border-white/10 bg-black/25 px-2 py-1.5 font-mono text-[11px] text-amber-50/90">
+        <div className="mt-2 text-sm text-fg/90">Добавьте ключ в настройках Workshop или задайте переменную окружения и перезапустите Workshop.</div>
+        <code className="mt-2 block rounded-[6px] border border-fg/10 bg-inset px-2 py-1.5 font-mono text-[11px] text-fg-2">
           {envVar}=...
         </code>
       </div>
@@ -2144,22 +2144,22 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
 
   if (status === "missing_context") {
     return (
-      <div className="stream-block w-[90%] rounded-[8px] border border-amber-300/20 bg-amber-300/[0.07] px-3 py-3 text-white/85">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-amber-100/70">
+      <div className="stream-block w-[90%] rounded-[8px] border border-amber-300/20 bg-amber-300/[0.07] px-3 py-3 text-fg/85">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-fg-2">
           Контекст агента недоступен
         </div>
-        <div className="mt-2 text-sm leading-relaxed text-white/85">{String(result.message ?? "В этом трейсе нет входа LLM, с которого Workshop мог бы продолжить.")}</div>
+        <div className="mt-2 text-sm leading-relaxed text-fg/85">{String(result.message ?? "В этом трейсе нет входа LLM, с которого Workshop мог бы продолжить.")}</div>
       </div>
     );
   }
 
   return (
-    <div className="stream-block w-[90%] rounded-[8px] border border-red-300/20 bg-red-400/[0.08] px-3 py-3 text-white/85">
-      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-red-100/75">
+    <div className="stream-block w-[90%] rounded-[8px] border border-red-300/20 bg-red-400/[0.08] px-3 py-3 text-fg/85">
+      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-fg-2">
         <AlertTriangle className="h-3.5 w-3.5" />
         Не удалось спросить агента
       </div>
-      <div className="mt-2 whitespace-pre-wrap text-sm text-white/85">{String(result.message ?? result.error ?? "Сохранённый контекст агента не дал пригодного ответа.")}</div>
+      <div className="mt-2 whitespace-pre-wrap text-sm text-fg/85">{String(result.message ?? result.error ?? "Сохранённый контекст агента не дал пригодного ответа.")}</div>
     </div>
   );
 }

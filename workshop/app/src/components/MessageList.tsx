@@ -12,9 +12,9 @@ function ruPlural(n: number, one: string, few: string, many: string): string {
 }
 
 const ROLE_STYLES: Record<string, { bg: string; border: string; text: string; label: string }> = {
-  system:    { bg: "rgba(255,255,255,0.08)", border: "rgba(255,255,255,0.13)", text: "#b0bcc2", label: "#7d8a90" },
-  user:      { bg: "rgba(255,255,255,0.03)", border: "rgba(255,255,255,0.07)", text: "#c8d5dc", label: "#9aa5ab" },
-  assistant: { bg: "rgba(255,255,255,0.025)", border: "rgba(255,255,255,0.06)", text: "#c8d5dc", label: "#9aa5ab" },
+  system:    { bg: "rgba(16,24,32,0.08)", border: "rgba(16,24,32,0.13)", text: "#b0bcc2", label: "#7d8a90" },
+  user:      { bg: "rgba(16,24,32,0.03)", border: "rgba(16,24,32,0.07)", text: "#c8d5dc", label: "#9aa5ab" },
+  assistant: { bg: "rgba(16,24,32,0.025)", border: "rgba(16,24,32,0.06)", text: "#c8d5dc", label: "#9aa5ab" },
   tool:      { bg: "rgba(165,124,245,0.03)",  border: "rgba(165,124,245,0.08)", text: "#b0bcc2", label: "#A57CF5" },
 };
 
@@ -30,7 +30,7 @@ export function MessageImages({ images, outlineColor }: { images: string[]; outl
             target="_blank"
             rel="noopener noreferrer"
             aria-label={`Открыть ${label.toLowerCase()} в новой вкладке`}
-            className="block max-w-full rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+            className="block max-w-full rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/50"
           >
             <img
               src={src}

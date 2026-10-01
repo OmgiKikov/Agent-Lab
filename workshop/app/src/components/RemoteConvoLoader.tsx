@@ -93,7 +93,7 @@ export function RemoteConvoLoader({ convoId, highlightEventId }: { convoId: stri
             return (
               <div key={idx} id={`convo-turn-${ev.event.id}`} className="flex items-center gap-2 py-2">
                 <div className="h-px flex-1" style={{ background: C.border }} />
-                <div className="text-[10px] font-mono px-2 py-1 rounded-full" style={{ background: isHighlight ? "rgba(165,124,245,0.18)" : "rgba(255,255,255,0.04)", color: isHighlight ? C.purple : C.fg0 }}>
+                <div className="text-[10px] font-mono px-2 py-1 rounded-full" style={{ background: isHighlight ? "rgba(165,124,245,0.18)" : "rgba(16,24,32,0.04)", color: isHighlight ? C.purple : C.fg0 }}>
                   Шаг {ev.turnIndex + 1} | {ago(new Date(ev.event.timestamp).getTime())}
                 </div>
                 <div className="h-px flex-1" style={{ background: C.border }} />
@@ -103,7 +103,7 @@ export function RemoteConvoLoader({ convoId, highlightEventId }: { convoId: stri
           if (ev.type === "user_msg") {
             return (
               <div key={idx} className="flex justify-end">
-                <div className="max-w-[80%] rounded-2xl px-4 py-2.5" style={{ background: "rgba(255,255,255,0.06)", color: C.fg4 }}>
+                <div className="max-w-[80%] rounded-2xl px-4 py-2.5" style={{ background: "rgba(16,24,32,0.06)", color: C.fg4 }}>
                   <div className="text-[13px] whitespace-pre-wrap">{ev.content}</div>
                 </div>
               </div>

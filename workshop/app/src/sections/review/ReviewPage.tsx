@@ -7,7 +7,7 @@ import { SECTIONS } from "../../app/links";
 import { plural } from "../../lab/format";
 import { useProblems, useReview, type Decision } from "../../lab/problems";
 import { exampleKey, queueOf, QUEUE_TITLE, type Queue } from "../../lab/verdicts";
-import { CodeQuote } from "../../product/CodeQuote";
+import { Requirement } from "../../product/Requirement";
 import { ExampleCard } from "../../product/ExampleCard";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
@@ -100,7 +100,7 @@ export function ReviewPage() {
                 <Label>{ONE[queue]} · {source === "log" ? "логи" : "симуляция"}</Label>
                 <Progress keys={keys} at={at} stateOf={stateOf} onAt={setAt} />
                 <span className="flex items-center gap-1.5">
-                  <span className="mr-1 font-mono text-meta text-fg-3">{at + 1} из {keys.length}</span>
+                  <span className="mr-1 text-small tabular-nums text-fg-3">{at + 1} из {keys.length}</span>
                   <Button size="sm" icon={ChevronLeft} aria-label="Предыдущий вердикт" kbd="←" disabled={at <= 0} onClick={back} />
                   <Button size="sm" icon={ChevronRight} aria-label="Следующий вердикт" kbd="→" onClick={next} />
                 </span>
@@ -119,9 +119,9 @@ export function ReviewPage() {
                   <p className="mt-1.5 text-small text-fg-3">
                     Судья считает, что критерий {current.example.status === "FAIL" ? <span className="text-bad">нарушен</span> : <span className="text-ok">выполнен</span>}. Верно ли это?
                   </p>
-                  <div className="mt-6"><CodeQuote r={current.rule} lit={lit} onLit={setLit} /></div>
+                  <Requirement r={current.rule} className="mt-6" />
                   <div className="mt-7">
-                    <Label>Доказательство</Label>
+                    <Label>Пример из разговора</Label>
                     <div className="mt-2.5"><ExampleCard example={current.example} lit={lit} onLit={setLit} onDecide={decide} onSkip={next} /></div>
                   </div>
                   <p className="mt-4 text-meta text-fg-3">

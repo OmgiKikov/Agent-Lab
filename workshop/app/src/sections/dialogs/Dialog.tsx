@@ -46,7 +46,7 @@ function Verdicts({ row, rules, find, lit, onLit, onDecide, decided }: {
           return (
             <li key={r.ruleId} onMouseEnter={() => n && r.status === "FAIL" && onLit(n)} onMouseLeave={() => onLit(null)}
               className={cn("grid grid-cols-[24px_minmax(0,1fr)] gap-x-2 border-b border-line py-3.5 transition-colors", n && lit === n && "bg-raised/60")}>
-              <span className="pt-0.5">{r.status === "FAIL" && r.agentQuote && n ? <MarkNo n={n} on={lit === n} /> : <span className="font-mono text-meta text-fg-4">{n ?? "·"}</span>}</span>
+              <span className="pt-0.5">{r.status === "FAIL" && r.agentQuote && n ? <MarkNo n={n} on={lit === n} /> : <span className="text-meta tabular-nums text-fg-4">{n ?? "·"}</span>}</span>
               <div className="min-w-0">
                 <p className="text-body text-fg"><span className="font-medium">{c?.name ?? r.title ?? r.rule}</span> <span className={cn("text-small", tone)}>· {word}</span></p>
                 <p className="mt-1 text-small text-fg-2"><span className="text-fg-3">Судья: </span>{r.reason}</p>
@@ -78,7 +78,7 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
   if (row.source === "trace" && row.traceId) {
     return (
       <div className="min-h-0 overflow-auto">
-        {onBack && <button type="button" onClick={onBack} className="sticky top-0 z-10 flex h-11 w-full items-center gap-1.5 border-b border-line bg-canvas px-3 text-body text-fg-2 lg:hidden"><ArrowLeft aria-hidden className="size-4" />Диалоги</button>}
+        {onBack && <button type="button" onClick={onBack} className="sticky top-0 z-10 flex h-11 w-full items-center gap-1.5 border-b border-line bg-canvas px-3 text-body text-fg-2 lg:hidden"><ArrowLeft aria-hidden className="size-4" />Разговоры</button>}
         <RunDetail key={row.traceId} runId={row.traceId} />
       </div>
     );
@@ -100,20 +100,20 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
   const reviewed = rules.filter(r => r.status === "FAIL" && (decided[r.ruleId] !== undefined ? decided[r.ruleId] : r.review)).length;
   return (
     <article className="min-h-0 overflow-auto" aria-label={row.title}>
-      {onBack && <button type="button" onClick={onBack} className="sticky top-0 z-10 flex h-11 w-full items-center gap-1.5 border-b border-line bg-canvas px-3 text-body text-fg-2 lg:hidden"><ArrowLeft aria-hidden className="size-4" />Диалоги</button>}
+      {onBack && <button type="button" onClick={onBack} className="sticky top-0 z-10 flex h-11 w-full items-center gap-1.5 border-b border-line bg-canvas px-3 text-body text-fg-2 lg:hidden"><ArrowLeft aria-hidden className="size-4" />Разговоры</button>}
       <div className="max-w-4xl px-4 pb-16 pt-5 lg:px-10 lg:pt-7">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><VerdictWord status={row.status} />{row.disputed && <span className="text-meta text-warn">судьи расходятся</span>}<span className="text-meta text-fg-3">{where}</span></div>
         <div className="mt-2 flex items-start gap-5">
           <h2 className="min-w-0 flex-1 text-balance text-title font-semibold text-fg">{row.title}</h2>
           <div className="hidden flex-shrink-0 items-center gap-1 sm:flex">
             <Button icon={Download} disabled={!turns} onClick={() => turns && download(`dialog-${row.dialogueId ?? row.index}.md`, transcript(row, turns))}>Скачать</Button>
-            <Button variant="ghost" icon={MessageSquare} aria-label="Спросить ассистента об этом диалоге" onClick={() => shell.openAsk(row.traceId)} />
+            <Button variant="ghost" icon={MessageSquare} aria-label="Спросить ассистента об этом разговоре" onClick={() => shell.openAsk(row.traceId)} />
           </div>
         </div>
         <div className="mt-5">
           <Facts facts={[
-            { label: "Нарушено", value: judged ? <><span className={cn("font-mono font-medium", broken && "text-bad")}>{broken}</span> <span className="text-fg-3">из</span> <span className="font-mono">{judged}</span></> : "—", title: "Критериев с нарушением из тех, что судья смог проверить" },
-            { label: "Выполнено", value: judged ? <><span className="font-mono">{kept}</span> <span className="text-fg-3">из</span> <span className="font-mono">{judged}</span></> : "—" },
+            { label: "Нарушено", value: judged ? <><span className={cn("font-semibold tabular-nums", broken && "text-bad")}>{broken}</span> <span className="text-fg-3">из</span> <span className="tabular-nums">{judged}</span></> : "—", title: "Критериев с нарушением из тех, что судья смог проверить" },
+            { label: "Выполнено", value: judged ? <><span className="tabular-nums">{kept}</span> <span className="text-fg-3">из</span> <span className="tabular-nums">{judged}</span></> : "—" },
             { label: "Второй судья", value: row.second ? (row.disputed ? "вынес другой вердикт" : "согласен") : "не проверял", title: row.second?.model },
             { label: "Люди", value: reviewed ? `проверили ${reviewed} из ${broken}` : "ещё не проверяли" },
           ]} />
@@ -137,7 +137,7 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
         {tab === "trace" && row.traceId && <div className="mt-4 overflow-hidden rounded-block border border-line"><RunDetail key={row.traceId} runId={row.traceId} /></div>}
         {tab === "details" && (
           <pre className="mt-4 overflow-auto rounded-block border border-line bg-inset p-4 font-mono text-meta text-fg-3">
-            {JSON.stringify({ источник: row.source, диалог: row.dialogueId, прогон: row.runId, номер: row.index, трейс: row.traceId, вердикт: row.status, второй_судья: row.second, критерии: row.rules }, null, 2)}
+            {JSON.stringify({ источник: row.source, разговор: row.dialogueId, прогон: row.runId, номер: row.index, трейс: row.traceId, вердикт: row.status, второй_судья: row.second, критерии: row.rules }, null, 2)}
           </pre>
         )}
       </div>

@@ -356,10 +356,10 @@ export function SearchPage() {
         aria-hidden={!hasQueryKey}
       >
 
-      <div className="w-80 flex-shrink-0 flex flex-col" style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
-        <div className="p-3 space-y-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+      <div className="w-80 flex-shrink-0 flex flex-col" style={{ borderRight: "1px solid rgba(16,24,32,0.06)" }}>
+        <div className="p-3 space-y-2" style={{ borderBottom: "1px solid rgba(16,24,32,0.06)" }}>
           <form onSubmit={handleSubmit} className="flex gap-1.5">
-            <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${query ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)"}` }}>
+            <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded" style={{ background: "rgba(16,24,32,0.04)", border: `1px solid ${query ? "rgba(16,24,32,0.12)" : "rgba(16,24,32,0.06)"}` }}>
               <Search className="h-3 w-3 shrink-0" style={{ color: C.fg0 }} />
               <input ref={inputRef} className="flex-1 min-w-0 bg-transparent text-[11px] font-mono outline-none" style={{ color: C.fg3 }}
                 placeholder="Поиск по событиям…" value={query} onChange={e => setQuery(e.target.value)} />
@@ -371,15 +371,15 @@ export function SearchPage() {
             </button>
           </form>
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex rounded overflow-hidden" style={{ background: "rgba(255,255,255,0.03)" }}>
+            <div className="flex rounded overflow-hidden" style={{ background: "rgba(16,24,32,0.03)" }}>
               {(["text", "semantic", "regex"] as const).map(m => (
                 <button key={m} className="px-2 py-0.5 text-[10px] font-mono transition-colors"
-                  style={{ background: mode === m ? "rgba(255,255,255,0.06)" : "transparent", color: mode === m ? C.fg3 : C.fg0 }}
+                  style={{ background: mode === m ? "rgba(16,24,32,0.06)" : "transparent", color: mode === m ? C.fg3 : C.fg0 }}
                   title={MODE_HINTS[m]}
                   onClick={() => handleModeChange(m)}>{MODE_LABELS[m]}</button>
               ))}
             </div>
-            <div className="flex rounded overflow-hidden" style={{ background: "rgba(255,255,255,0.03)" }}>
+            <div className="flex rounded overflow-hidden" style={{ background: "rgba(16,24,32,0.03)" }}>
               {DATE_PRESETS.map(p => {
                 const allowed = isPresetAllowed(mode, Number(p.value));
                 const tooltip = allowed
@@ -389,7 +389,7 @@ export function SearchPage() {
                   <button key={p.value}
                     className="px-2 py-0.5 text-[10px] font-mono transition-colors"
                     style={{
-                      background: dateRange === p.value ? "rgba(255,255,255,0.06)" : "transparent",
+                      background: dateRange === p.value ? "rgba(16,24,32,0.06)" : "transparent",
                       color: dateRange === p.value ? C.fg3 : C.fg0,
                       opacity: allowed ? 1 : 0.35,
                       cursor: allowed ? "pointer" : "not-allowed",
@@ -403,7 +403,7 @@ export function SearchPage() {
           </div>
           <div className="relative">
             <select className="w-full appearance-none pl-2 pr-5 py-1 rounded text-[10px] font-mono outline-none cursor-pointer"
-              style={{ background: "rgba(255,255,255,0.04)", color: C.fg2, border: `1px solid rgba(255,255,255,0.06)` }}
+              style={{ background: "rgba(16,24,32,0.04)", color: C.fg2, border: `1px solid rgba(16,24,32,0.06)` }}
               value={selectedSignal} onChange={e => setSelectedSignal(e.target.value)} disabled={signalsLoading}>
               <option value="">Все сигналы</option>
               {signals.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -439,7 +439,7 @@ export function SearchPage() {
           {!loading && hasMore && (
             <div className="pt-1">
               <button onClick={handleLoadMore} disabled={loadingMore}
-                className="w-full py-1.5 rounded text-[10px] font-mono" style={{ background: "rgba(255,255,255,0.03)", color: C.fg1 }}>
+                className="w-full py-1.5 rounded text-[10px] font-mono" style={{ background: "rgba(16,24,32,0.03)", color: C.fg1 }}>
                 {loadingMore ? <Loader2 className="h-3 w-3 animate-spin mx-auto" /> : "загрузить ещё"}
               </button>
             </div>
@@ -491,7 +491,7 @@ function SearchLockedOverlay({ onConnected }: { onConnected: () => void }) {
   };
 
   return (
-    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/45 px-6">
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-inset px-6">
       <div className="w-[640px] max-w-full px-10 py-11 text-center">
         <div
           className="mx-auto mb-6 flex h-20 w-20 items-center justify-center"
@@ -644,7 +644,7 @@ function ExampleQueries({ onExample }: { onExample: (q: string, mode: SearchMode
             onClick={() => onExample(ex.query, ex.mode)}
             className="text-[11px] font-mono px-2 py-1 rounded transition-colors"
             style={{
-              background: "rgba(255,255,255,0.04)",
+              background: "rgba(16,24,32,0.04)",
               color: C.fg2,
               border: `1px solid ${C.border}`,
             }}
@@ -666,11 +666,11 @@ function ResultItem({ event, selected, onClick }: { event: QueryEvent; selected:
   return (
     <button className="w-full text-left px-3 py-2.5 rounded-lg transition-all duration-150"
       style={{
-        background: selected ? "rgba(255,255,255,0.08)" : "transparent",
-        border: selected ? "1px solid rgba(255,255,255,0.15)" : "1px solid transparent",
+        background: selected ? "rgba(16,24,32,0.08)" : "transparent",
+        border: selected ? "1px solid rgba(16,24,32,0.15)" : "1px solid transparent",
       }}
-      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = selected ? "rgba(255,255,255,0.08)" : "transparent"; }}
+      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "rgba(16,24,32,0.04)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = selected ? "rgba(16,24,32,0.08)" : "transparent"; }}
       onClick={onClick}>
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1 overflow-hidden">
@@ -950,10 +950,10 @@ function RemoteConvoDetail({ turns, loading, highlightEventId }: { turns: ConvoT
               <div key={`td${i}`} id={`convo-turn-${evt.event.id}`}
                 style={{ opacity: dimmed ? 0.35 : 1, transition: "opacity 0.15s" }}>
                 <div className="flex items-center gap-3 px-4 pt-6 pb-2">
-                  <div className="flex-1 h-px" style={{ background: isHighlightedTurn ? "rgba(91,141,239,0.3)" : "rgba(255,255,255,0.08)" }} />
+                  <div className="flex-1 h-px" style={{ background: isHighlightedTurn ? "rgba(91,141,239,0.3)" : "rgba(16,24,32,0.08)" }} />
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{
                     color: isHighlightedTurn ? C.accent : C.fg1,
-                    background: isHighlightedTurn ? "rgba(91,141,239,0.1)" : "rgba(255,255,255,0.04)",
+                    background: isHighlightedTurn ? "rgba(91,141,239,0.1)" : "rgba(16,24,32,0.04)",
                   }}>
                     трейс {evt.turnIndex + 1}
                   </span>
@@ -964,7 +964,7 @@ function RemoteConvoDetail({ turns, loading, highlightEventId }: { turns: ConvoT
                     <span key={sig.id} className="text-[8px] font-mono px-1 py-px rounded-full"
                       style={{ background: "rgba(165,124,245,0.08)", color: C.purple }}>{sig.name}</span>
                   ))}
-                  <div className="flex-1 h-px" style={{ background: isHighlightedTurn ? "rgba(91,141,239,0.3)" : "rgba(255,255,255,0.08)" }} />
+                  <div className="flex-1 h-px" style={{ background: isHighlightedTurn ? "rgba(91,141,239,0.3)" : "rgba(16,24,32,0.08)" }} />
                 </div>
               </div>
             );

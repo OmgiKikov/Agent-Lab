@@ -28,8 +28,8 @@ function Lens({ c, side, on, onSelect }: { c: Criterion; side: SideKey; on: bool
       <span aria-hidden>·</span>
       {tone === "bad" && <span className="font-medium text-bad">нарушен в {s.failed} из {checked}</span>}
       {tone === "ok" && <span className="font-medium text-fg-2">выполнен в {s.passed} из {checked}, нарушений не найдено</span>}
-      {tone === "unknown" && <span className="font-medium text-fg-2">не проверен в {s.unknown} {plural(s.unknown, "диалоге", "диалогах", "диалогах")}: нет доказательств</span>}
-      {tone === "none" && <span>не встречался в этих диалогах</span>}
+      {tone === "unknown" && <span className="font-medium text-fg-2">не проверен в {s.unknown} {plural(s.unknown, "разговоре", "разговорах", "разговорах")}: нет доказательств</span>}
+      {tone === "none" && <span>не встречался в этих разговорах</span>}
       {tone === "bad" && second.checked > 0 && <><span aria-hidden>·</span><span>второй судья согласен в {second.agree} из {second.checked}</span></>}
       {tone !== "unknown" && s.unknown > 0 && <><span aria-hidden>·</span><span>не проверен в {s.unknown}</span></>}
     </button>

@@ -15,7 +15,7 @@ export function FirstRun({ onAssess }: { onAssess: () => void }) {
   const runs = state?.runs.length ?? 0;
   const steps = [
     { done: sources > 0, title: "Подключите агента и прочитайте его код", result: sources ? `${sources} ${plural(sources, "источник", "источника", "источников")}` : null, to: SECTIONS.agent, action: "Открыть «Агента»" },
-    { done: logs > 0, title: "Загрузите логи: выгрузку чата", result: logs ? `${logs} ${plural(logs, "диалог", "диалога", "диалогов")}` : null, to: "/dialogs", action: "Открыть «Диалоги»" },
+    { done: logs > 0, title: "Загрузите логи: выгрузку чата", result: logs ? `${logs} ${plural(logs, "разговор", "разговора", "разговоров")}` : null, to: "/dialogs", action: "Открыть «Разговоры»" },
     { done: false, title: "Найдите нарушения", result: null, run: onAssess, action: "Оценить логи" },
     { done: runs > 0, title: "Сыграйте сценарии, по желанию", result: runs ? `${runs} ${plural(runs, "прогон", "прогона", "прогонов")}` : null, to: SECTIONS.simulations, action: "Открыть «Симуляции»" },
   ];

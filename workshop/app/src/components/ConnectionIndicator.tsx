@@ -89,10 +89,10 @@ export function ConnectionIndicator({
         style={{ background: COLORS[status.state] }}
       />
       {status.state !== "green" && (
-        <span className="truncate text-xs text-white/70">{providerLabel(provider)} недоступен</span>
+        <span className="truncate text-xs text-fg/70">{providerLabel(provider)} недоступен</span>
       )}
       {dir && (
-        <span className="flex min-w-0 items-center gap-1 text-xs text-white/45">
+        <span className="flex min-w-0 items-center gap-1 text-xs text-fg/45">
           <Folder className="h-3 w-3 shrink-0" />
           <span className="truncate">{dir}</span>
         </span>
@@ -104,7 +104,7 @@ export function ConnectionIndicator({
     <div className="relative" data-workspace-switcher>
       {status.state === "green" ? (
         <button
-          className="flex min-w-0 items-center gap-2 rounded px-2 py-1 transition hover:bg-white/5"
+          className="flex min-w-0 items-center gap-2 rounded px-2 py-1 transition hover:bg-fg/5"
           onClick={() => {
             setShowWorkspaceMenu((value) => !value);
             void loadRegisteredWorkspaces(setWorkspaces, setWorkspaceError);
@@ -115,18 +115,18 @@ export function ConnectionIndicator({
         </button>
       ) : (
         <button
-          className="flex items-center gap-2 px-2 py-1 rounded hover:bg-white/5 transition"
+          className="flex items-center gap-2 px-2 py-1 rounded hover:bg-fg/5 transition"
           onClick={() => setShowRemediation((v) => !v)}
         >
           {statusContent}
         </button>
       )}
       {showWorkspaceMenu && status.state === "green" && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-80 rounded-lg border border-white/10 bg-zinc-900/95 p-1 text-xs shadow-2xl backdrop-blur">
+        <div className="absolute left-0 top-full z-50 mt-2 w-80 rounded-lg border border-fg/10 bg-raised p-1 text-xs shadow-2xl backdrop-blur">
           {onChooseFolder && (
             <button
               type="button"
-              className="mb-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-white/75 transition-colors hover:bg-white/5 hover:text-white"
+              className="mb-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-fg/75 transition-colors hover:bg-fg/5 hover:text-fg"
               onClick={() => {
                 setShowWorkspaceMenu(false);
                 onChooseFolder();
@@ -137,66 +137,66 @@ export function ConnectionIndicator({
             </button>
           )}
           {workspaceError && (
-            <div className="px-2 py-1.5 text-red-100/80">{workspaceError}</div>
+            <div className="px-2 py-1.5 text-fg-2">{workspaceError}</div>
           )}
           {!workspaceError && workspaces.length === 0 && (
-            <div className="px-2 py-2 text-white/40">Рабочих папок пока нет.</div>
+            <div className="px-2 py-2 text-fg/40">Рабочих папок пока нет.</div>
           )}
           {!workspaceError && workspaces.map((workspace) => (
             <button
               key={workspace.cwd}
               type="button"
               className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                workspace.cwd === cwd ? "bg-white/10 text-white" : "text-white/65 hover:bg-white/5 hover:text-white"
+                workspace.cwd === cwd ? "bg-fg/10 text-fg" : "text-fg/65 hover:bg-fg/5 hover:text-fg"
               }`}
               onClick={() => void switchWorkspace(workspace.cwd, setShowWorkspaceMenu, setWorkspaceError)}
             >
               <Folder className="h-3.5 w-3.5 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{cwdLabel(workspace.cwd)}</span>
               {workspace.agents && workspace.agents.length > 0 && (
-                <span className="shrink-0 truncate text-[10px] text-white/30">{workspace.agents.join(", ")}</span>
+                <span className="shrink-0 truncate text-[10px] text-fg/30">{workspace.agents.join(", ")}</span>
               )}
             </button>
           ))}
         </div>
       )}
       {showRemediation && status.state !== "green" && (
-        <div className="absolute right-0 top-full mt-2 w-80 rounded-lg border border-white/10 bg-zinc-900/95 backdrop-blur p-3 z-50 text-xs">
-          <div className="text-white/80 mb-2 leading-relaxed">
+        <div className="absolute right-0 top-full mt-2 w-80 rounded-lg border border-fg/10 bg-raised backdrop-blur p-3 z-50 text-xs">
+          <div className="text-fg/80 mb-2 leading-relaxed">
             Чат Workshop работает через локальный CLI {providerLabel(provider)}. Проверьте, что
-            <code className="mx-1 rounded bg-black/40 px-1 font-mono">{provider === "codex" ? "codex" : "claude"}</code>
+            <code className="mx-1 rounded bg-inset px-1 font-mono">{provider === "codex" ? "codex" : "claude"}</code>
             есть в PATH и вы вошли в аккаунт.
           </div>
           <button
-            className="mt-1 text-white/50 hover:text-white/80"
+            className="mt-1 text-fg/50 hover:text-fg/80"
             onClick={() => setFirstTimeOpen((v) => !v)}
           >
             Впервые? {firstTimeOpen ? "▾" : "▸"}
           </button>
           {firstTimeOpen && (
-            <div className="mt-2 text-white/60 leading-relaxed space-y-2">
+            <div className="mt-2 text-fg/60 leading-relaxed space-y-2">
               <div>
                 Выполните один раз: команда установит CLI raindrop и добавит MCP
                 и файлы навыков в настройки вашего инструмента для кода:
               </div>
-              <div className="flex items-center gap-2 rounded bg-black/40 px-2 py-1.5 font-mono text-[10px] text-white/90">
+              <div className="flex items-center gap-2 rounded bg-inset px-2 py-1.5 font-mono text-[10px] text-fg/90">
                 <span className="flex-1 select-all break-all">{installer}</span>
               </div>
               <div>
                 Для разработки из исходников один раз зарегистрируйте MCP-команду stdio:
               </div>
-              <div className="flex items-center gap-2 rounded bg-black/40 px-2 py-1.5 font-mono text-[10px] text-white/90">
+              <div className="flex items-center gap-2 rounded bg-inset px-2 py-1.5 font-mono text-[10px] text-fg/90">
                 <span className="flex-1 select-all break-all">{mcpAddCommand}</span>
               </div>
               <div>
                 Чат Workshop работает через {providerLabel(provider)} и
                 подключает к этой сессии MCP Raindrop. Запись MCP для Claude Code
                 хранится в{" "}
-                <code className="font-mono bg-black/40 px-1 rounded">
+                <code className="font-mono bg-inset px-1 rounded">
                   ~/.claude.json
                 </code>
                 ; Codex также читает MCP-серверы из{" "}
-                <code className="font-mono bg-black/40 px-1 rounded">
+                <code className="font-mono bg-inset px-1 rounded">
                   ~/.codex/config.toml
                 </code>
                 .

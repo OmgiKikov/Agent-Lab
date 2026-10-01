@@ -41,7 +41,7 @@ export function CriteriaPage() {
   const set = (edit: (n: URLSearchParams) => void, replace = true) => setParams(prev => { const n = new URLSearchParams(prev); edit(n); return n; }, { replace });
 
   const side: SideKey = params.get("s") === "sim" || (params.get("s") !== "log" && !data?.log && !!data?.sim) ? "sim" : "log";
-  const view: View = params.get("view") === "list" || params.get("view") === "code" ? (params.get("view") as View) : wide ? "code" : "list";
+  const view: View = params.get("view") === "list" || params.get("view") === "code" ? (params.get("view") as View) : "list";
   const ordered = useMemo(() => byFrequency(list, side), [list, side]);
   const sources = state?.sources ?? [];
   const asked = params.get("c");
@@ -98,7 +98,7 @@ export function CriteriaPage() {
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {sideOptions.length > 1 && <Segmented<SideKey> size="sm" label="Чьи вердикты" value={side} onChange={v => set(n => { n.set("s", v); n.delete("x"); })} options={sideOptions.map(([k, l]) => ({ value: k, label: l }))} />}
-          <Segmented<View> size="sm" label="Вид" value={view} onChange={v => set(n => n.set("view", v))} options={[{ value: "code", label: "В коде" }, { value: "list", label: "Списком" }]} />
+          <Segmented<View> size="sm" label="Вид" value={view} onChange={v => set(n => n.set("view", v))} options={[{ value: "list", label: "Списком" }, { value: "code", label: "В коде агента" }]} />
         </div>
       </div>
       <div className={`grid min-h-0 flex-1 ${view === "code" ? "lg:grid-cols-[232px_minmax(0,1fr)_400px] xl:grid-cols-[248px_minmax(0,1fr)_440px]" : "lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_440px]"}`}>

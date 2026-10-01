@@ -67,7 +67,7 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
       <div
         className="pointer-events-none absolute inset-0"
         style={{
-          background: "linear-gradient(180deg, rgba(255,255,255,0.018), transparent 42%)",
+          background: "linear-gradient(180deg, rgba(16,24,32,0.018), transparent 42%)",
         }}
       />
       <div className="relative mx-auto flex min-h-full max-w-2xl flex-col items-center justify-center text-center">
@@ -98,7 +98,7 @@ export function EmptyState({ onSeeDemoTraces }: EmptyStateProps) {
             type="button"
             onClick={handleSeeDemoTraces}
             disabled={demoLoading}
-            className="mt-3 text-[14px] underline underline-offset-4 decoration-white/20 transition-all duration-150 hover:-translate-y-0.5 hover:decoration-white/70 hover:text-white/85 disabled:cursor-wait disabled:opacity-60 disabled:hover:translate-y-0"
+            className="mt-3 text-[14px] underline underline-offset-4 decoration-fg/20 transition-all duration-150 hover:-translate-y-0.5 hover:decoration-fg/70 hover:text-fg/85 disabled:cursor-wait disabled:opacity-60 disabled:hover:translate-y-0"
             style={{
               color: C.fg2,
               background: "transparent",
@@ -132,11 +132,11 @@ function CommandPill({ value, large = false }: { value: string; large?: boolean 
   return (
     <button
       onClick={copy}
-      className={`group mt-4 inline-flex items-center gap-0 overflow-hidden rounded-full font-mono transition-all duration-200 hover:scale-[1.02] hover:gap-1.5 hover:bg-white/15 ${large ? "px-5 py-2 text-lg" : "px-3 py-1 text-[13px]"}`}
+      className={`group mt-4 inline-flex items-center gap-0 overflow-hidden rounded-full font-mono transition-all duration-200 hover:scale-[1.02] hover:gap-1.5 hover:bg-fg/15 ${large ? "px-5 py-2 text-lg" : "px-3 py-1 text-[13px]"}`}
       style={{
         color: copied ? C.green : C.fg5,
-        background: "rgba(255,255,255,0.075)",
-        border: "1px solid rgba(255,255,255,0.13)",
+        background: "rgba(16,24,32,0.075)",
+        border: "1px solid rgba(16,24,32,0.13)",
         boxShadow: large ? "0 12px 40px rgba(0,0,0,0.28)" : "none",
       }}
       title={copied ? "Скопировано" : "Нажмите, чтобы скопировать"}
@@ -183,8 +183,8 @@ function AgentName({ agent }: { agent: Agent }) {
     return (
       <a
         href={agent.localHref}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:bg-white/10"
-        style={{ color: C.fg1, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.06)" }}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-full transition hover:bg-fg/10"
+        style={{ color: C.fg1, background: "rgba(16,24,32,0.035)", border: "1px solid rgba(16,24,32,0.06)" }}
         title={`Открыть ${agent.name}`}
       >
         {content}
@@ -195,7 +195,7 @@ function AgentName({ agent }: { agent: Agent }) {
   return (
     <span
       className="inline-flex h-8 w-8 items-center justify-center rounded-full"
-      style={{ color: C.fg1, background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.05)" }}
+      style={{ color: C.fg1, background: "rgba(16,24,32,0.025)", border: "1px solid rgba(16,24,32,0.05)" }}
       title={agent.name}
     >
       {content}
@@ -207,7 +207,7 @@ function AgentGlyph({ agent }: { agent: Agent }) {
   return (
     <span
       className="flex h-5 w-5 items-center justify-center rounded-full"
-      style={{ background: "invertIcon" in agent && agent.invertIcon ? "rgba(255,255,255,0.86)" : "transparent" }}
+      style={{ background: "invertIcon" in agent && agent.invertIcon ? "rgba(16,24,32,0.86)" : "transparent" }}
     >
       <img src={agent.icon} alt="" className="h-3.5 w-3.5 object-contain opacity-75" />
     </span>

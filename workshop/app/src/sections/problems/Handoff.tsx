@@ -4,7 +4,7 @@ import type { RuleEntry } from "../../lab/problems";
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
-import type { SideKey } from "../violations/model";
+import type { SideKey } from "./model";
 
 /**
  * «Задача для разработчика»: the problem as a brief to paste into a ticket or a coding assistant — what is wrong, how often,

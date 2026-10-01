@@ -67,8 +67,8 @@ export function SecretInput({
       <div className="flex gap-1.5">
         <input
           ref={inputRef}
-          className={`flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-[12px] font-mono outline-none transition-colors focus:ring-1 focus:ring-white/20 ${saved ? "secret-input-saved" : ""}`}
-          style={{ background: "rgba(255,255,255,0.05)", color: C.fg3, border: `1px solid ${C.border}` }}
+          className={`flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-[12px] font-mono outline-none transition-colors focus:ring-1 focus:ring-fg/20 ${saved ? "secret-input-saved" : ""}`}
+          style={{ background: "rgba(16,24,32,0.05)", color: C.fg3, border: `1px solid ${C.border}` }}
           type={show ? "text" : "password"}
           placeholder={displayPlaceholder}
           value={value}
@@ -91,8 +91,8 @@ export function SecretInput({
         {canReveal && (
           <button
             type="button"
-            className="px-2 py-1.5 rounded-md transition-colors hover:bg-white/10 flex-shrink-0"
-            style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`, color: C.fg1 }}
+            className="px-2 py-1.5 rounded-md transition-colors hover:bg-fg/10 flex-shrink-0"
+            style={{ background: "rgba(16,24,32,0.04)", border: `1px solid ${C.border}`, color: C.fg1 }}
             onMouseDown={e => e.preventDefault()}
             onClick={() => setShow(!show)}
             title={show ? "Скрыть ключ" : "Показать ключ"}
@@ -103,9 +103,9 @@ export function SecretInput({
         {canClear && (
           <button
             type="button"
-            className="px-2 py-1.5 rounded-md transition-colors hover:bg-white/10 flex-shrink-0"
+            className="px-2 py-1.5 rounded-md transition-colors hover:bg-fg/10 flex-shrink-0"
             style={{
-              background: "rgba(255,255,255,0.04)",
+              background: "rgba(16,24,32,0.04)",
               border: `1px solid ${C.border}`,
               color: saving ? C.fg0 : C.red,
               cursor: saving ? "default" : "pointer",
@@ -128,10 +128,10 @@ export function SecretInput({
             {showSave ? (
               <button
                 type="button"
-                className="text-[10px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap flex-shrink-0 transition-colors hover:bg-white/10"
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap flex-shrink-0 transition-colors hover:bg-fg/10"
                 style={{
                   color: saving || !canSave ? C.fg0 : C.green,
-                  background: saving || !canSave ? "rgba(255,255,255,0.04)" : "rgba(96,227,109,0.08)",
+                  background: saving || !canSave ? "rgba(16,24,32,0.04)" : "rgba(96,227,109,0.08)",
                   border: `1px solid ${saving || !canSave ? C.border : "rgba(96,227,109,0.16)"}`,
                   cursor: saving || !canSave ? "default" : "pointer",
                 }}

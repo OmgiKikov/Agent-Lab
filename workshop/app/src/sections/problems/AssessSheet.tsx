@@ -42,7 +42,7 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
             {total ? (
               <>
                 <div className="mt-2 font-mono text-count text-fg">{total}</div>
-                <div className="text-small text-fg-3">{plural(total, "диалог", "диалога", "диалогов")}{state?.logs.updatedAt ? `, выгрузка от ${day(state.logs.updatedAt)}` : ""}</div>
+                <div className="text-small text-fg-3">{plural(total, "разговор", "разговора", "разговоров")}{state?.logs.updatedAt ? `, выгрузка от ${day(state.logs.updatedAt)}` : ""}</div>
                 <div className="mt-3"><UploadButton variant="outline" label="Другая выгрузка" /></div>
               </>
             ) : <div className="mt-3"><UploadButton label="Загрузить логи" /></div>}
@@ -61,13 +61,13 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
         </div>
         {sizes.length > 1 && (
           <div>
-            <Label>Сколько диалогов взять</Label>
-            <div className="mt-2"><Segmented<string> label="Сколько диалогов" value={String(size)} onChange={v => setPicked(Number(v))} options={sizes.map(n => ({ value: String(n), label: String(n) }))} /></div>
+            <Label>Сколько разговоров взять</Label>
+            <div className="mt-2"><Segmented<string> label="Сколько разговоров" value={String(size)} onChange={v => setPicked(Number(v))} options={sizes.map(n => ({ value: String(n), label: String(n) }))} /></div>
           </div>
         )}
         <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">
           <Button variant="primary" loading={starting} disabled={!!why || !size} title={why} onClick={start}>
-            Оценить {size} {plural(size, "диалог", "диалога", "диалогов")}{criteria ? ` по ${criteria} ${plural(criteria, "критерию", "критериям", "критериям")}` : ""}
+            Оценить {size} {plural(size, "разговор", "разговора", "разговоров")}{criteria ? ` по ${criteria} ${plural(criteria, "критерию", "критериям", "критериям")}` : ""}
           </Button>
           {why && <span className="text-small text-fg-3">{why}</span>}
         </div>

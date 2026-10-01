@@ -62,9 +62,9 @@ export function ToolCallPill({ span, colorMap }: { span: Span; colorMap: Map<str
         className={`inline-flex items-center gap-1.5 ${pending ? '' : 'px-2.5'} py-1 rounded text-xs font-medium transition-colors w-fit max-w-full`}
         style={{
           ...(pending ? { paddingLeft: 7, paddingRight: 12 } : {}),
-          background: err ? "rgba(204,85,85,0.08)" : pending ? `color-mix(in srgb, ${color} 12%, transparent)` : "rgba(255,255,255,0.08)",
+          background: err ? "rgba(204,85,85,0.08)" : pending ? `color-mix(in srgb, ${color} 12%, transparent)` : "rgba(16,24,32,0.08)",
           color: err ? C.red : pending ? color : C.fg2,
-          border: `1px solid ${err ? "rgba(204,85,85,0.15)" : pending ? `color-mix(in srgb, ${color} 20%, transparent)` : "rgba(255,255,255,0.15)"}`,
+          border: `1px solid ${err ? "rgba(204,85,85,0.15)" : pending ? `color-mix(in srgb, ${color} 20%, transparent)` : "rgba(16,24,32,0.15)"}`,
         }}
         onClick={() => setOpen(!open)}
       >

@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import type { Criterion } from "../../lab/criteria";
 import { pct, plural } from "../../lab/format";
-import { checked, violationsOf, type SideKey } from "../violations/model";
+import { checked, violationsOf, type SideKey } from "./model";
 
 /**
  * One problem in a list: the agent's behaviour as a sentence, its topics, one real exchange with the agent's words

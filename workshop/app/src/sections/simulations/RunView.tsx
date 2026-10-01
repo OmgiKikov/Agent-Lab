@@ -37,27 +37,27 @@ export function RunView({ summary, state, onBack }: { summary: LabRun; state: La
         <h2 className="mt-2 text-balance text-title font-semibold text-fg">{summary.label || runTitle(summary)}</h2>
         {summary.label && <p className="mt-1 text-small text-fg-3">{runTitle(summary)}</p>}
         {summary.status === "failed" && <p className="mt-2 text-small text-bad">Прогон прервался: {summary.error}</p>}
-        {live && <p className="mt-2 text-small text-run">Идёт: {job ? `${job.done ?? 0} из ${job.total ?? "…"}` : "диалоги появляются по мере готовности"}.</p>}
+        {live && <p className="mt-2 text-small text-run">Идёт: {job ? `${job.done ?? 0} из ${job.total ?? "…"}` : "разговоры появляются по мере готовности"}.</p>}
         <div className="mt-5">
           <Facts facts={[
-            { label: "Диалогов", value: <span className="font-mono">{items.length || m?.total || 0}</span> },
+            { label: "Разговоров", value: <span className="tabular-nums">{items.length || m?.total || 0}</span> },
             { label: "Нарушения", value: m?.measured ? <>в <Count n={m.failed} of={m.measured} bad /></> : "ещё не оценены", to: m?.measured ? `/violations?s=sim&run=${enc(summary.id)}` : undefined },
             { label: "Типы клиентов", value: types.length ? types.map(t => t.name).join(", ") : "—" },
             { label: "Повторы", value: summary.repeats && summary.repeats > 1 ? `×${summary.repeats}` : "без повторов" },
           ]} />
         </div>
         <div className="mt-5 flex flex-wrap gap-2">
-          {!live && m?.measured ? <Link to={`/violations?s=sim&run=${enc(summary.id)}`}><Button variant="primary" icon={ArrowRight}>Нарушения прогона</Button></Link> : null}
-          <Link to={`/dialogs?src=sim&run=${enc(summary.id)}`}><Button icon={ArrowRight}>Диалоги прогона</Button></Link>
+          {!live && m?.measured ? <Link to={`/problems?src=sim&run=${enc(summary.id)}`}><Button variant="primary" icon={ArrowRight}>Проблемы прогона</Button></Link> : null}
+          <Link to={`/dialogs?src=sim&run=${enc(summary.id)}`}><Button icon={ArrowRight}>Разговоры прогона</Button></Link>
           <Button variant="ghost" icon={RotateCcw} onClick={rejudge} disabled={state.job.running || live}
-            title={state.job.running ? "Сейчас идёт другая задача" : "Судьи оценят диалоги этого прогона заново; агента не вызываем"}>Переоценить</Button>
+            title={state.job.running ? "Сейчас идёт другая задача" : "Судьи оценят разговоры этого прогона заново; агента не вызываем"}>Переоценить</Button>
         </div>
         <section className="mt-8" aria-label="Сценарии и типы клиентов">
           <Label>Сценарии × типы клиентов</Label>
           {isLoading ? <Skeleton className="mt-3 h-64" />
             : error ? <p className="mt-3 text-small text-bad">Не удалось открыть прогон: {error instanceof Error ? error.message : String(error)}</p>
             : run && items.length ? <RunMatrix run={run} items={items} hrefOf={i => dialogOf({ source: "sim", runId: summary.id, index: i })} scores />
-            : <p className="mt-3 text-small text-fg-3">{live ? "Первые диалоги появятся, когда агент ответит." : "В этом прогоне не сыграно ни одного диалога."}</p>}
+            : <p className="mt-3 text-small text-fg-3">{live ? "Первые разговоры появятся, когда агент ответит." : "В этом прогоне не сыграно ни одного разговора."}</p>}
         </section>
       </div>
     </article>

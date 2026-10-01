@@ -34,7 +34,7 @@ function Row({ r, on, onOpen, numbers, personas }: { r: DialogRow; on: boolean; 
       <span className="mt-1 flex flex-wrap gap-x-1.5 text-meta text-fg-3">
         {r.topic && <span className="truncate">{r.topic}</span>}
         {who && <><span aria-hidden>·</span><span>{who}</span></>}
-        {numbers.length > 0 && <><span aria-hidden>·</span><span>нарушены <span className="font-mono text-fg-2">{numbers.join(", ")}</span></span></>}
+        {numbers.length > 0 && <><span aria-hidden>·</span><span>нарушены <span className="tabular-nums text-fg-2">{numbers.join(", ")}</span></span></>}
       </span>
     </button>
   );
@@ -53,7 +53,7 @@ export function Rows({ src, onSrc, counts, all, rows, verdict, onVerdict, rule, 
   return (
     <div className={cn("flex min-h-0 flex-col border-line bg-list lg:border-r", className)}>
       <div className="space-y-2 border-b border-line px-4 py-3">
-        <Segmented<Src> label="Чьи диалоги" value={src} onChange={onSrc} className="w-full" options={[
+        <Segmented<Src> label="Чьи разговоры" value={src} onChange={onSrc} className="w-full" options={[
           { value: "log", label: "Логи", count: counts.log }, { value: "sim", label: "Симуляция", count: counts.sim }, { value: "traces", label: "Трейсы", count: counts.traces },
         ]} />
         <div className="flex flex-wrap items-center gap-2">
@@ -71,9 +71,9 @@ export function Rows({ src, onSrc, counts, all, rows, verdict, onVerdict, rule, 
           </span>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto" role="list" aria-label="Диалоги">
+      <div className="min-h-0 flex-1 overflow-auto" role="list" aria-label="Разговоры">
         {rows.map(r => <Row key={r.key} r={r} on={r.key === selected} onOpen={() => onOpen(r.key)} numbers={numbers(r)} personas={personas} />)}
-        {!rows.length && <p className="px-5 py-10 text-center text-small text-fg-3">{all.length ? "В этом отборе диалогов нет" : src === "log" ? "Логи ещё не загружены" : src === "sim" ? "В этом прогоне нет диалогов" : "Workshop ещё не записал трейсов"}</p>}
+        {!rows.length && <p className="px-5 py-10 text-center text-small text-fg-3">{all.length ? "В этом отборе разговоров нет" : src === "log" ? "Логи ещё не загружены" : src === "sim" ? "В этом прогоне нет разговоров" : "Workshop ещё не записал трейсов"}</p>}
       </div>
       {rows.length > 0 && <div className="border-t border-line px-4 py-2 text-meta text-fg-3">{rows.length} из {all.length} · J и K листают</div>}
     </div>

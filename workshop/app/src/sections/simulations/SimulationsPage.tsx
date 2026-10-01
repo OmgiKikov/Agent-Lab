@@ -122,7 +122,7 @@ export function SimulationsPage() {
                 <RowButton key={r.id} on={r.id === runId} onClick={() => pick(r.id)}>
                   <span className="flex items-center gap-2"><RunWord run={r} /><span className="text-meta text-fg-3">{when(r.startedAt)}</span></span>
                   <span className="mt-1 block text-body font-medium text-fg">{r.label || runTitle(r)}</span>
-                  <span className="mt-1 block text-meta text-fg-3">{r.label ? `${runTitle(r)} · ` : ""}{m ? `${m.total} ${plural(m.total, "диалог", "диалога", "диалогов")}${m.measured ? ` · нарушения в ${m.failed} из ${m.measured}` : ""}` : isRunning(r) ? "идёт" : "диалогов нет"}</span>
+                  <span className="mt-1 block text-meta text-fg-3">{r.label ? `${runTitle(r)} · ` : ""}{m ? `${m.total} ${plural(m.total, "разговор", "разговора", "разговоров")}${m.measured ? ` · нарушения в ${m.failed} из ${m.measured}` : ""}` : isRunning(r) ? "идёт" : "разговоров нет"}</span>
                   {job && job.total ? <span className="mt-2 block h-1 overflow-hidden rounded-full bg-well"><span className="block h-full rounded-full bg-run transition-[width] duration-500" style={{ width: `${Math.max(4, (100 * (job.done ?? 0)) / job.total)}%` }} /></span> : null}
                 </RowButton>
               );
@@ -131,7 +131,7 @@ export function SimulationsPage() {
                 <span className="block text-meta text-fg-3">{c.topic} · <span className="text-fg-2">{originWord(c.origin, FROM_LOG)}</span></span>
                 <span className="mt-1 block text-body font-medium text-fg">{c.name}</span>
                 <span className="mt-1 block line-clamp-1 text-small text-fg-3">«{c.opening}»</span>
-                <span className="mt-1 block text-meta text-fg-3">проверит {mine(c).length ? <span className="font-mono text-fg-2">{mine(c).map(x => x.n).join(", ")}</span> : `${c.criteria.length} ${plural(c.criteria.length, "критерий", "критерия", "критериев")}`}</span>
+                <span className="mt-1 block text-meta text-fg-3">проверит {mine(c).length ? <span className="tabular-nums text-fg-2">{mine(c).map(x => x.n).join(", ")}</span> : `${c.criteria.length} ${plural(c.criteria.length, "критерий", "критерия", "критериев")}`}</span>
               </RowButton>
             ))}
             {mode === "runs" && !shownRuns.length && <p className="px-5 py-10 text-center text-small text-fg-3">{runs.length ? "Ничего не нашлось" : cards.length ? "Прогонов ещё не было: «Сыграть» справа вверху." : "Сначала соберите сценарии."}</p>}

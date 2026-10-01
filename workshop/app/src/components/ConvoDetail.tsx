@@ -53,21 +53,21 @@ function UserMessage({ content }: { content: string }) {
 function TurnDivider({ index, run, onOpen, onHover }: { index: number; run: Run; onOpen: () => void; onHover: (hovering: boolean) => void }) {
   return (
     <div className="flex items-center gap-3 px-4 pt-6 pb-2">
-      <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />
-      <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ color: C.fg1, background: "rgba(255,255,255,0.04)" }}>
+      <div className="flex-1 h-px" style={{ background: "rgba(16,24,32,0.08)" }} />
+      <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ color: C.fg1, background: "rgba(16,24,32,0.04)" }}>
         трейс {index + 1}
       </span>
       <span className="text-[10px]" style={{ color: C.fg0 }}>{ago(run.started_at)}</span>
       <button
         className="text-[10px] font-mono px-2 py-0.5 rounded transition-colors"
-        style={{ color: C.fg1, background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.08)` }}
-        onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.1)"; onHover(true); }}
-        onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; onHover(false); }}
+        style={{ color: C.fg1, background: "rgba(16,24,32,0.04)", border: `1px solid rgba(16,24,32,0.08)` }}
+        onMouseEnter={e => { e.currentTarget.style.background = "rgba(16,24,32,0.1)"; onHover(true); }}
+        onMouseLeave={e => { e.currentTarget.style.background = "rgba(16,24,32,0.04)"; onHover(false); }}
         onClick={onOpen}
       >
         открыть &rarr;
       </button>
-      <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />
+      <div className="flex-1 h-px" style={{ background: "rgba(16,24,32,0.08)" }} />
     </div>
   );
 }

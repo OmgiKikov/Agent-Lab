@@ -58,7 +58,7 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
       footer={<>
         <Button variant="ghost" onClick={onClose}>Отмена</Button>
         <Button variant="primary" icon={Play} loading={sending} disabled={!target || !deck.length || busy} onClick={start} title={busy ? "Сейчас идёт другая задача" : undefined}>
-          Сыграть {count(total, "диалог", "диалога", "диалогов")}
+          Сыграть {count(total, "разговор", "разговора", "разговоров")}
         </Button>
       </>}
     >
@@ -133,7 +133,7 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
         </Block>
         <p className="mt-5 text-small text-fg-3">
           {count(deck.length, "сценарий", "сценария", "сценариев")} × {types.length} {plural(types.length, "тип", "типа", "типов")} клиента
-          {repeats !== "1" ? ` × ${repeats} раза` : ""} = <span className="text-fg">{count(total, "диалог", "диалога", "диалогов")}</span>
+          {repeats !== "1" ? ` × ${repeats} раза` : ""} = <span className="text-fg">{count(total, "разговор", "разговора", "разговоров")}</span>
         </p>
       </div>
     </Modal>

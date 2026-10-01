@@ -44,11 +44,11 @@ input.secret-input-saved:focus::placeholder {
   46%, 100% { opacity: 0.18; }
 }
 @keyframes assistant-breathe {
-  0%, 100% { border-color: rgba(255,255,255,0.10); background: rgba(255,255,255,0.05); }
-  50% { border-color: rgba(91,141,239,0.24); background: rgba(91,141,239,0.07); }
+  0%, 100% { border-color: rgba(16,24,32,0.10); background: rgba(16,24,32,0.04); }
+  50% { border-color: rgba(29,92,214,0.24); background: rgba(29,92,214,0.06); }
 }
 @keyframes tool-running {
-  0%, 100% { border-color: rgba(255,255,255,0.10); }
+  0%, 100% { border-color: rgba(16,24,32,0.10); }
   50% { border-color: rgba(251,191,36,0.28); }
 }
 @keyframes tool-dot {
@@ -95,13 +95,13 @@ input.secret-input-saved:focus::placeholder {
   margin-left: 2px;
   transform: translateY(2px);
   border-radius: 1px;
-  background: rgba(147,197,253,0.8);
+  background: rgba(29,92,214,0.8);
   animation: stream-caret 1s steps(1, end) infinite;
 }
 .thinking-block-live {
   background:
-    linear-gradient(100deg, transparent 0%, rgba(255,255,255,0.055) 35%, transparent 70%),
-    rgba(0,0,0,0.20);
+    linear-gradient(100deg, transparent 0%, rgba(16,24,32,0.055) 35%, transparent 70%),
+    rgba(16,24,32,0.04);
   background-size: 220% 100%, auto;
   animation:
     stream-block-arrive 160ms ease-out both,
@@ -117,8 +117,8 @@ input.secret-input-saved:focus::placeholder {
   width: 3px;
   height: 3px;
   border-radius: 1px;
-  background: rgba(225,232,236,0.9);
-  box-shadow: 0 0 10px rgba(255,255,255,0.26);
+  background: rgba(102,110,121,0.9);
+  box-shadow: 0 0 10px rgba(16,24,32,0.26);
   animation: cloud-nudge-dot-poof 260ms ease-out both;
 }
 .tool-block {
@@ -142,30 +142,30 @@ input.secret-input-saved:focus::placeholder {
 }
 .activity-inline summary:hover,
 .activity-inline[open] summary {
-  background: rgba(255,255,255,0.07);
+  background: rgba(16,24,32,0.07);
 }
 .activity-label {
-  color: rgba(255,255,255,0.75);
+  color: rgba(16,24,32,0.75);
   transition: color 140ms ease;
 }
 .activity-label-error {
-  color: rgba(254,226,226,0.75);
+  color: rgba(186,38,30,0.75);
 }
 .activity-icon {
   opacity: 0.82;
   transition: opacity 140ms ease, filter 140ms ease;
 }
 .activity-chevron {
-  color: rgba(255,255,255,0.28);
+  color: rgba(16,24,32,0.28);
   transition: color 140ms ease, transform 150ms ease;
 }
 .activity-inline summary:hover .activity-label,
 .activity-inline[open] .activity-label {
-  color: rgba(255,255,255,0.96);
+  color: rgba(16,24,32,0.96);
 }
 .activity-inline summary:hover .activity-label-error,
 .activity-inline[open] .activity-label-error {
-  color: rgba(254,226,226,0.96);
+  color: rgba(186,38,30,0.96);
 }
 .activity-inline summary:hover .activity-icon,
 .activity-inline[open] .activity-icon {
@@ -173,20 +173,20 @@ input.secret-input-saved:focus::placeholder {
 }
 .activity-inline summary:hover .activity-chevron,
 .activity-inline[open] .activity-chevron {
-  color: rgba(255,255,255,0.62);
+  color: rgba(16,24,32,0.62);
 }
 .activity-content {
   border-left: 1px solid transparent;
   transition: border-color 140ms ease;
 }
 .activity-inline[open] .activity-content {
-  border-left-color: rgba(255,255,255,0.14);
+  border-left-color: rgba(16,24,32,0.14);
 }
 .activity-content pre {
-  color: rgba(255,255,255,0.68);
+  color: rgba(16,24,32,0.68);
 }
 .activity-kicker {
-  color: rgba(255,255,255,0.42);
+  color: rgba(16,24,32,0.42);
 }
 .tool-block-running {
   animation:
@@ -250,24 +250,24 @@ input.secret-input-saved:focus::placeholder {
 
 pre { white-space: pre-wrap; word-break: break-word; font-family: theme("fontFamily.mono"); }
 
-/* Streamdown CSS variable overrides for dark theme */
+/* Streamdown (the assistant's answers and the traces' text) on the product's light tokens. */
 .streamdown {
-  --border: rgba(255,255,255,0.12);
-  --muted: rgba(255,255,255,0.04);
-  --muted-foreground: rgba(255,255,255,0.5);
-  --foreground: rgba(255,255,255,0.85);
+  --border: var(--line-strong);
+  --muted: var(--well);
+  --muted-foreground: rgb(var(--fg-3));
+  --foreground: rgb(var(--fg));
   --background: rgb(var(--canvas));
   --primary: rgb(var(--run));
   min-width: 0;
   max-width: 100%;
-  color: rgba(200,213,220,1);
+  color: rgb(var(--fg-2));
   overflow-wrap: anywhere;
 }
 /* Tables stay inside the markdown container and scroll when they need width. */
 .streamdown hr { opacity: 0.35 !important; }
-.streamdown table { width: max-content !important; min-width: 100% !important; max-width: none !important; border: none !important; background: rgba(255,255,255,0.03) !important; }
-.streamdown th, .streamdown td { max-width: 280px !important; white-space: normal !important; overflow-wrap: anywhere !important; border: none !important; border-bottom: 1px solid rgba(255,255,255,0.06) !important; }
-.streamdown th { background: rgba(255,255,255,0.05) !important; }
+.streamdown table { width: max-content !important; min-width: 100% !important; max-width: none !important; border: none !important; background: rgb(var(--list)) !important; }
+.streamdown th, .streamdown td { max-width: 280px !important; white-space: normal !important; overflow-wrap: anywhere !important; border: none !important; border-bottom: 1px solid var(--line) !important; }
+.streamdown th { background: var(--well) !important; }
 .streamdown [data-streamdown="table-wrapper"] { display: block !important; max-width: 100% !important; overflow-x: auto !important; overflow-y: hidden !important; margin-top: 4px !important; margin-bottom: 20px !important; border: none !important; padding: 0 !important; border-radius: 4px !important; background: transparent !important; }
 .assistant-bubble-wide .streamdown [data-streamdown="table-wrapper"] { margin-bottom: 0 !important; }
 .assistant-bubble-wide .streamdown th,
@@ -276,10 +276,10 @@ pre { white-space: pre-wrap; word-break: break-word; font-family: theme("fontFam
 .streamdown [data-streamdown="table-wrapper"] > div:first-child {
   display: none !important;
 }
-/* Dropdown menus — dark bg, subtle border */
-.streamdown .rounded-md.border { background: rgb(var(--raised)) !important; border-color: rgba(255,255,255,0.15) !important; }
-.streamdown .rounded-md.border button { color: rgba(255,255,255,0.7) !important; }
-.streamdown .rounded-md.border button:hover { background: rgba(255,255,255,0.06) !important; }
+/* Dropdown menus inside the answers. */
+.streamdown .rounded-md.border { background: rgb(var(--raised)) !important; border-color: var(--line-strong) !important; }
+.streamdown .rounded-md.border button { color: rgb(var(--fg-2)) !important; }
+.streamdown .rounded-md.border button:hover { background: rgb(var(--hover)) !important; }
 
 .timeline-bar { transition: filter .12s ease; }
 .timeline-bar:hover { filter: brightness(1.2); z-index: 999 !important; }

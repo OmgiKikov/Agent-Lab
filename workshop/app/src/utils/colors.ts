@@ -1,33 +1,37 @@
+/**
+ * The Workshop's colours, light like the rest of the product (design/tokens.css): the same roles as before, from the
+ * page to the darkest ink. Hex on purpose: some screens append an alpha to them.
+ */
 export const C = {
-  bg:        "#000000",
-  surface:   "#0a0a0a",
-  elevated:  "#111111",
-  border:    "rgba(255,255,255,0.06)",
-  borderLight: "rgba(255,255,255,0.1)",
+  bg:        "#F8F9FA",
+  surface:   "#FFFFFF",
+  elevated:  "#F3F4F6",
+  border:    "rgba(16,24,32,0.08)",
+  borderLight: "rgba(16,24,32,0.14)",
 
-  fg0:       "#5a6a72",
-  fg1:       "#7d8a90",
-  fg2:       "#a0acb2",
-  fg3:       "#c8d5dc",
-  fg4:       "#e1e8ec",
-  fg5:       "#f2f5f7",
+  fg0:       "#868E98",
+  fg1:       "#6B7380",
+  fg2:       "#565E69",
+  fg3:       "#3F4650",
+  fg4:       "#23282E",
+  fg5:       "#15181C",
 
-  accent:    "#5B8DEF",
-  green:     "#60E36D",
-  red:       "#EB1414",
-  purple:    "#A57CF5",
-  orange:    "#F0AD4E",
-  cyan:      "#4FCAE3",
-  user:      "#0D3442",
+  accent:    "#1D5CD6",
+  green:     "#187842",
+  red:       "#BA261E",
+  purple:    "#7C4DDB",
+  orange:    "#B76E00",
+  cyan:      "#0E7C93",
+  user:      "#E5EEFB",
 
-  selected:  "rgba(91,141,239,0.08)",
-  selectedBorder: "rgba(91,141,239,0.2)",
+  selected:  "rgba(29,92,214,0.08)",
+  selectedBorder: "rgba(29,92,214,0.2)",
 } as const;
 
 const SPAN_COLORS = [
-  "#60E36D", "#F0AD4E", "#A57CF5", "#4FCAE3",
-  "#5B8DEF", "#94A3B8", "#F5CE4E", "#45B5AA",
-  "#7C8CF5", "#8BC34A", "#B08968", "#6DB3F2",
+  "#2E9E57", "#D98A1F", "#8A63D2", "#1F9AB5",
+  "#3F73DA", "#7A8799", "#C9A21E", "#2F9C8F",
+  "#6475D9", "#6E9E2E", "#9A7351", "#3E8FD0",
 ];
 
 export function spanColor(name: string, map: Map<string, string>): string {

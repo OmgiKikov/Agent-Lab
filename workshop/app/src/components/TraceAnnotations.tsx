@@ -4,8 +4,8 @@ import type { Annotation, AnnotationKind } from "../hooks/use-annotations";
 import { DeepLinkedText } from "../utils/deep-links";
 
 const C = {
-  bg: "#000", panel: "#0b0b0c", border: "rgba(255,255,255,0.08)",
-  fg: "rgba(255,255,255,0.9)", muted: "rgba(255,255,255,0.5)",
+  bg: "#F8F9FA", panel: "#FFFFFF", border: "rgba(16,24,32,0.08)",
+  fg: "rgba(16,24,32,0.9)", muted: "rgba(16,24,32,0.5)",
 };
 
 interface TraceAnnotationsProps {
@@ -81,8 +81,8 @@ function TraceAnnotationRow({
         padding: "8px 10px",
         border: `1px solid ${style.border}`,
         borderRadius: 8,
-        background: `linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015)), ${style.bg}`,
-        boxShadow: "0 1px 0 rgba(255,255,255,0.03) inset",
+        background: `linear-gradient(180deg, rgba(16,24,32,0.035), rgba(16,24,32,0.015)), ${style.bg}`,
+        boxShadow: "0 1px 0 rgba(16,24,32,0.03) inset",
       }}
     >
       <span style={{ color: C.muted, width: 14, flex: "0 0 14px", fontSize: 11, textAlign: "center", marginTop: 1 }}>
@@ -150,7 +150,7 @@ export function InlineCreateForm({
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        boxShadow: frameless ? "none" : "0 1px 0 rgba(255,255,255,0.04) inset",
+        boxShadow: frameless ? "none" : "0 1px 0 rgba(16,24,32,0.04) inset",
       }}
     >
       {title && (
@@ -175,7 +175,7 @@ export function InlineCreateForm({
                 lineHeight: "18px",
                 cursor: "pointer",
                 color: selected ? s.fg : C.muted,
-                background: selected ? s.bg : "rgba(255,255,255,0.025)",
+                background: selected ? s.bg : "rgba(16,24,32,0.025)",
                 border: `1px solid ${selected ? s.border : C.border}`,
               }}
             >
@@ -186,8 +186,8 @@ export function InlineCreateForm({
         })}
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 10, color: C.muted, whiteSpace: "nowrap" }}>
-          <kbd style={{ background: "rgba(255,255,255,0.06)", padding: "0 4px", borderRadius: 3 }}>⌘↵</kbd> сохранить ·{" "}
-          <kbd style={{ background: "rgba(255,255,255,0.06)", padding: "0 4px", borderRadius: 3 }}>esc</kbd> отмена
+          <kbd style={{ background: "rgba(16,24,32,0.06)", padding: "0 4px", borderRadius: 3 }}>⌘↵</kbd> сохранить ·{" "}
+          <kbd style={{ background: "rgba(16,24,32,0.06)", padding: "0 4px", borderRadius: 3 }}>esc</kbd> отмена
         </span>
       </div>
       <textarea
@@ -263,8 +263,8 @@ export function AnnotationCreatePopover({
         background: "rgba(20,20,20,0.85)",
         backdropFilter: "blur(20px)",
         WebkitBackdropFilter: "blur(20px)",
-        border: "1px solid rgba(255,255,255,0.12)",
-        boxShadow: "0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05)",
+        border: "1px solid rgba(16,24,32,0.12)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(16,24,32,0.05)",
         width: "min(360px, calc(100vw - 32px))",
       }}
     >

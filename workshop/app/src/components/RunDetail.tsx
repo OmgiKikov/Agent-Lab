@@ -173,7 +173,7 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
               <div key={s.id} className="px-3 py-2" style={{ borderBottom: idx < errorSpans.length - 1 ? "1px solid rgba(235,20,20,0.1)" : "none" }}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded"
-                    style={{ color: s.span_type === "TOOL_CALL" ? "#b08c5a" : s.span_type?.includes("LLM") ? "#5a8ab0" : C.fg0, background: "rgba(255,255,255,0.05)" }}>
+                    style={{ color: s.span_type === "TOOL_CALL" ? "#b08c5a" : s.span_type?.includes("LLM") ? "#5a8ab0" : C.fg0, background: "rgba(16,24,32,0.05)" }}>
                     {s.span_type === "TOOL_CALL" ? "инструмент" : s.span_type?.includes("LLM") ? "LLM" : "спан"}
                   </span>
                   <span className="text-[11px] font-mono truncate" style={{ color: C.red }}>{s.name}</span>
@@ -201,7 +201,7 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
 
   if (!copyValue) {
     return (
-      <span className="text-[9px] font-medium uppercase tracking-wide px-1 rounded" style={{ background: "rgba(255,255,255,0.09)", color: C.fg0, lineHeight: "16px" }}>
+      <span className="text-[9px] font-medium uppercase tracking-wide px-1 rounded" style={{ background: "rgba(16,24,32,0.09)", color: C.fg0, lineHeight: "16px" }}>
         {label}
       </span>
     );
@@ -211,7 +211,7 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
     <button
       type="button"
       className="text-[9px] font-medium uppercase tracking-wide px-1 rounded transition-[color,background-color,transform] active:scale-[0.96]"
-      style={{ background: copied ? "rgba(96,227,109,0.12)" : "rgba(255,255,255,0.09)", color: copied ? C.green : C.fg0, lineHeight: "16px" }}
+      style={{ background: copied ? "rgba(96,227,109,0.12)" : "rgba(16,24,32,0.09)", color: copied ? C.green : C.fg0, lineHeight: "16px" }}
       title={`Копировать: ${label}`}
       aria-label={`Копировать: ${label}`}
       onClick={(event) => {
@@ -336,7 +336,7 @@ function MoreMenu({ runId, deleteRedirectPath = "/runs" }: { runId?: string; del
   return (
     <div ref={ref} className="relative">
       <button
-        className="flex items-center justify-center w-7 h-7 rounded-md transition-colors hover:bg-white/10"
+        className="flex items-center justify-center w-7 h-7 rounded-md transition-colors hover:bg-fg/10"
         style={{ color: C.fg1 }}
         onClick={() => setOpen(!open)}
       >
@@ -344,9 +344,9 @@ function MoreMenu({ runId, deleteRedirectPath = "/runs" }: { runId?: string; del
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 z-50 rounded-lg overflow-hidden shadow-xl"
-          style={{ background: "rgba(20,20,20,0.85)", backdropFilter: "blur(16px)", border: "1px solid rgba(255,255,255,0.12)", minWidth: 140 }}>
+          style={{ background: "rgba(20,20,20,0.85)", backdropFilter: "blur(16px)", border: "1px solid rgba(16,24,32,0.12)", minWidth: 140 }}>
           <button
-            className="w-full text-left px-3 py-2 text-[11px] transition-colors hover:bg-white/5"
+            className="w-full text-left px-3 py-2 text-[11px] transition-colors hover:bg-fg/5"
             style={{ color: C.red }}
             onClick={handleDelete}
           >
@@ -377,7 +377,7 @@ function InlineEdit({ value, onConfirm, className, style, inputStyle }: {
     return (
       <span className="inline-flex items-center gap-1">
         <input ref={inputRef} className={`outline-none ${className ?? ""}`}
-          style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 4, padding: "1px 6px", ...style, ...inputStyle }}
+          style={{ background: "rgba(16,24,32,0.08)", border: "1px solid rgba(16,24,32,0.2)", borderRadius: 4, padding: "1px 6px", ...style, ...inputStyle }}
           value={draft} onChange={e => setDraft(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") { onConfirm(draft); setEditing(false); } if (e.key === "Escape") setEditing(false); }}
           onBlur={() => setEditing(false)}
@@ -574,9 +574,9 @@ function ViewHeader({
             <div>
               <div className="flex items-center gap-2 mb-1">
                 <h2 style={{ fontSize: "18px", fontWeight: 600, color: C.fg5 }}>{displayTitle}</h2>
-                {model && <span className="text-[10px] px-2 py-0.5 rounded font-mono" style={{ background: "rgba(255,255,255,0.04)", color: C.fg1 }}>{model}</span>}
+                {model && <span className="text-[10px] px-2 py-0.5 rounded font-mono" style={{ background: "rgba(16,24,32,0.04)", color: C.fg1 }}>{model}</span>}
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                  style={{ background: active ? "rgba(102,170,187,0.1)" : "rgba(255,255,255,0.03)", color: active ? C.green : C.fg0 }}>
+                  style={{ background: active ? "rgba(102,170,187,0.1)" : "rgba(16,24,32,0.03)", color: active ? C.green : C.fg0 }}>
                   {active ? "Идёт" : "Готово"}
                 </span>
               </div>
@@ -588,7 +588,7 @@ function ViewHeader({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[12px] font-medium" style={{ color: C.fg3 }}>{displayTitle}</span>
-            {model && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "rgba(255,255,255,0.04)", color: C.fg0 }}>{model}</span>}
+            {model && <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "rgba(16,24,32,0.04)", color: C.fg0 }}>{model}</span>}
             <span style={{ color: C.fg0, opacity: 0.4 }}>|</span>
             <StatsLine stats={stats} model={model} spans={allSpans} active={active} startedAt={startedAt} />
           </div>
@@ -598,7 +598,7 @@ function ViewHeader({
         <>
           <div className="flex items-center mb-1 justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0">
-              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${active ? "pulse-dot" : ""}`} style={{ background: active ? C.green : "rgba(255,255,255,0.18)" }} title={active ? "Идёт" : "Готово"} />
+              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${active ? "pulse-dot" : ""}`} style={{ background: active ? C.green : "rgba(16,24,32,0.18)" }} title={active ? "Идёт" : "Готово"} />
               {onFork && !active ? (
                 <InlineEdit value={displayTitle}
                   onConfirm={handleRename}
@@ -614,8 +614,8 @@ function ViewHeader({
                   <>
                     <button
                       ref={annotationBtnRef}
-                      className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors hover:bg-white/10"
-                      style={{ color: C.fg3, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)" }}
+                      className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors hover:bg-fg/10"
+                      style={{ color: C.fg3, background: "rgba(16,24,32,0.06)", border: "1px solid rgba(16,24,32,0.1)" }}
                       onClick={() => {
                         setSavePopoverOpen(false);
                         setOptionsOpen(false);
@@ -636,8 +636,8 @@ function ViewHeader({
                   </>
                 )}
                 <button
-                  className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors hover:bg-white/10"
-                  style={{ color: C.fg3, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)" }}
+                  className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors hover:bg-fg/10"
+                  style={{ color: C.fg3, background: "rgba(16,24,32,0.06)", border: "1px solid rgba(16,24,32,0.1)" }}
                   onClick={() => {
                     setSavePopoverOpen(false);
                     setAnnotationPopoverOpen(false);
@@ -651,8 +651,8 @@ function ViewHeader({
                 </button>
                 {onDownload && (
                   <button
-                    className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors hover:bg-white/10"
-                    style={{ color: C.fg3, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)" }}
+                    className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors hover:bg-fg/10"
+                    style={{ color: C.fg3, background: "rgba(16,24,32,0.06)", border: "1px solid rgba(16,24,32,0.1)" }}
                     onClick={onDownload}
                     title="Скачать трейс в JSON"
                   >
@@ -663,7 +663,7 @@ function ViewHeader({
                 <button
                   ref={saveBtnRef}
                   className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-md font-medium transition-colors"
-                  style={{ color: isSaved ? C.green : C.fg3, background: isSaved ? "rgba(96,227,109,0.08)" : "rgba(255,255,255,0.06)", border: `1px solid ${isSaved ? "rgba(96,227,109,0.2)" : "rgba(255,255,255,0.1)"}` }}
+                  style={{ color: isSaved ? C.green : C.fg3, background: isSaved ? "rgba(96,227,109,0.08)" : "rgba(16,24,32,0.06)", border: `1px solid ${isSaved ? "rgba(96,227,109,0.2)" : "rgba(16,24,32,0.1)"}` }}
                   onClick={() => {
                     setAnnotationPopoverOpen(false);
                     if (!isSaved) handleSave();
@@ -686,12 +686,12 @@ function ViewHeader({
                 {onFork && (() => {
                   return <>
                   {/* Split button: Replay | ▾ */}
-                  <div className="flex items-stretch rounded-md overflow-hidden" style={{ border: `1px solid rgba(255,255,255,0.1)` }}>
+                  <div className="flex items-stretch rounded-md overflow-hidden" style={{ border: `1px solid rgba(16,24,32,0.1)` }}>
                     <button
-                      className="flex items-center gap-1.5 text-[11px] px-3 py-1 font-medium transition-colors hover:bg-white/10"
+                      className="flex items-center gap-1.5 text-[11px] px-3 py-1 font-medium transition-colors hover:bg-fg/10"
                       style={{
                         color: C.fg3,
-                        background: "rgba(255,255,255,0.06)",
+                        background: "rgba(16,24,32,0.06)",
                       }}
                       onClick={() => {
                         if (agentConfigured) {
@@ -705,8 +705,8 @@ function ViewHeader({
                       Повторить
                     </button>
                     <button
-                      className="flex items-center justify-center px-1.5 transition-colors hover:bg-white/10"
-                      style={{ color: C.fg1, background: "rgba(255,255,255,0.06)", borderLeft: "1px solid rgba(255,255,255,0.1)" }}
+                      className="flex items-center justify-center px-1.5 transition-colors hover:bg-fg/10"
+                      style={{ color: C.fg1, background: "rgba(16,24,32,0.06)", borderLeft: "1px solid rgba(16,24,32,0.1)" }}
                       onClick={() => {
                         setAnnotationPopoverOpen(false);
                         setOptionsOpen(!optionsOpen);
@@ -729,7 +729,7 @@ function ViewHeader({
                         el.style.top = `${btn.bottom + 4}px`;
                         el.style.right = `${window.innerWidth - btn.right}px`;
                       }}
-                      style={{ background: "rgba(20,20,20,0.75)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05)", width: "min(384px, calc(100vw - 32px))" }}>
+                      style={{ background: "rgba(20,20,20,0.75)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", border: "1px solid rgba(16,24,32,0.12)", boxShadow: "0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(16,24,32,0.05)", width: "min(384px, calc(100vw - 32px))" }}>
                       {/* Local Agent setup CTA when not configured */}
                       {!agentConfigured && (
                         <LocalAgentSetupCTA eventName={run?.event_name ?? undefined} />
@@ -739,7 +739,7 @@ function ViewHeader({
                         <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Модель</div>
                         <select
                           className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none appearance-none"
-                          style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)" }}
+                          style={{ background: "rgba(16,24,32,0.06)", color: C.fg3, border: "1px solid rgba(16,24,32,0.1)" }}
                           value={forkModel}
                           onChange={e => setForkModel(e.target.value)}
                         >
@@ -758,7 +758,7 @@ function ViewHeader({
                         <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Сообщение пользователя</div>
                         <textarea
                           className="w-full px-2 py-1.5 rounded text-[11px] font-mono outline-none resize-y"
-                          style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: `1px solid rgba(255,255,255,0.1)`, minHeight: 60, maxHeight: 200 }}
+                          style={{ background: "rgba(16,24,32,0.06)", color: C.fg3, border: `1px solid rgba(16,24,32,0.1)`, minHeight: 60, maxHeight: 200 }}
                           value={forkMsg}
                           onChange={e => setForkMsg(e.target.value)}
                           placeholder="Введите сообщение пользователя…"
@@ -774,7 +774,7 @@ function ViewHeader({
                                 <span className="text-[10px] font-mono flex-shrink-0 w-24 truncate" style={{ color: C.fg1 }} title={key}>{key}</span>
                                 <input
                                   className="flex-1 min-w-0 px-2 py-1 rounded text-[10px] font-mono outline-none"
-                                  style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)" }}
+                                  style={{ background: "rgba(16,24,32,0.06)", color: C.fg3, border: "1px solid rgba(16,24,32,0.1)" }}
                                   value={val}
                                   onChange={e => setContextEdits(prev => ({ ...prev, [key]: e.target.value }))}
                                 />
@@ -786,9 +786,9 @@ function ViewHeader({
                       <button
                         className="w-full py-1.5 rounded text-[11px] font-medium transition-colors hover:brightness-110"
                         style={{
-                          background: "rgba(255,255,255,0.08)",
+                          background: "rgba(16,24,32,0.08)",
                           color: C.fg4,
-                          border: `1px solid rgba(255,255,255,0.1)`,
+                          border: `1px solid rgba(16,24,32,0.1)`,
                         }}
                         onClick={() => {
                           if (!agentConfigured) {
@@ -898,7 +898,7 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
       <div className="rounded-xl p-4 space-y-4 w-full max-w-md"
         style={{
           background: "rgba(20,20,20,0.85)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)",
-          border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 16px 48px rgba(0,0,0,0.5)",
+          border: "1px solid rgba(16,24,32,0.12)", boxShadow: "0 16px 48px rgba(0,0,0,0.5)",
         }}>
         <div className="text-[13px] font-medium" style={{ color: C.fg3 }}>Изменить и повторить</div>
 
@@ -907,7 +907,7 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
           <div className="text-[10px] font-medium mb-1" style={{ color: C.fg0 }}>Модель</div>
           <select
             className="w-full px-2.5 py-2 rounded-lg text-[11px] font-mono outline-none appearance-none"
-            style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)" }}
+            style={{ background: "rgba(16,24,32,0.06)", color: C.fg3, border: "1px solid rgba(16,24,32,0.1)" }}
             value={mdl}
             onChange={e => setMdl(e.target.value)}
           >
@@ -928,7 +928,7 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
           <textarea
             autoFocus
             className="w-full px-2.5 py-2 rounded-lg text-[11px] font-mono outline-none resize-y"
-            style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)", minHeight: 100, maxHeight: 300 }}
+            style={{ background: "rgba(16,24,32,0.06)", color: C.fg3, border: "1px solid rgba(16,24,32,0.1)", minHeight: 100, maxHeight: 300 }}
             value={msg} onChange={e => setMsg(e.target.value)}
             placeholder="Введите сообщение пользователя…"
           />
@@ -944,7 +944,7 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
                   <span className="text-[10px] font-mono flex-shrink-0 w-28 truncate" style={{ color: C.fg1 }} title={key}>{key}</span>
                   <input
                     className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg text-[10px] font-mono outline-none"
-                    style={{ background: "rgba(255,255,255,0.06)", color: C.fg3, border: "1px solid rgba(255,255,255,0.1)" }}
+                    style={{ background: "rgba(16,24,32,0.06)", color: C.fg3, border: "1px solid rgba(16,24,32,0.1)" }}
                     value={val}
                     onChange={e => setContextEdits(prev => ({ ...prev, [key]: e.target.value }))}
                   />
@@ -957,8 +957,8 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
         {/* Actions */}
         <div className="flex justify-end gap-2">
           <button
-            className="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors hover:bg-white/10"
-            style={{ color: C.fg1, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+            className="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors hover:bg-fg/10"
+            style={{ color: C.fg1, background: "rgba(16,24,32,0.04)", border: "1px solid rgba(16,24,32,0.08)" }}
             onClick={onClose}
           >
             Отмена
@@ -967,8 +967,8 @@ function EditReplayModal({ userMessage, model, runId, eventName, traceModelFromM
             className="px-4 py-1.5 rounded-lg text-[11px] font-medium transition-colors hover:brightness-110"
             style={{
               color: C.fg4,
-              background: "rgba(255,255,255,0.1)",
-              border: "1px solid rgba(255,255,255,0.15)",
+              background: "rgba(16,24,32,0.1)",
+              border: "1px solid rgba(16,24,32,0.15)",
             }}
             onClick={handleReplay}
           >
@@ -986,8 +986,8 @@ function ScrollToBottomButton() {
   const [pressed, setPressed] = useState(false);
   const spring = useSpring({
     transform: `translateX(-50%) translateY(${hovered ? -2 : 0}px) scale(${pressed ? 0.97 : hovered ? 1.04 : 1})`,
-    background: hovered ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.09)",
-    borderColor: hovered ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
+    background: hovered ? "rgba(16,24,32,0.14)" : "rgba(16,24,32,0.09)",
+    borderColor: hovered ? "rgba(16,24,32,0.24)" : "rgba(16,24,32,0.14)",
     boxShadow: hovered ? "0 8px 24px rgba(0,0,0,0.26)" : "0 4px 14px rgba(0,0,0,0.18)",
     config: { tension: 360, friction: 24 },
   });
@@ -1019,19 +1019,19 @@ function TraceNotFound({ runId, backPath }: { runId: string; backPath: string })
   return (
     <div className="flex h-full items-center justify-center px-6">
       <div className="max-w-sm text-center">
-        <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-white/[0.04]">
+        <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full border border-fg/10 bg-fg/[0.04]">
           <SearchX className="h-5 w-5" style={{ color: C.fg1 }} />
         </div>
         <div className="text-[15px] font-medium" style={{ color: C.fg4, fontFamily: '"Onest Variable", sans-serif' }}>Трейс не найден</div>
         <div className="mt-2 text-sm leading-relaxed" style={{ color: C.fg1 }}>
           Этого трейса нет в текущей рабочей папке: его могли удалить или открыть из другого проекта.
         </div>
-        <code className="mt-3 block truncate rounded-md border border-white/10 bg-black/20 px-2 py-1.5 text-[11px]" style={{ color: C.fg0 }}>
+        <code className="mt-3 block truncate rounded-md border border-fg/10 bg-inset px-2 py-1.5 text-[11px]" style={{ color: C.fg0 }}>
           {runId}
         </code>
         <button
           type="button"
-          className="mt-4 rounded-md border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-white/70 transition-colors hover:bg-white/[0.10] hover:text-white"
+          className="mt-4 rounded-md border border-fg/10 bg-fg/[0.06] px-3 py-1.5 text-xs font-medium text-fg/70 transition-colors hover:bg-fg/[0.10] hover:text-fg"
           onClick={() => navigate(backPath, { replace: true })}
         >
           Назад к трейсам

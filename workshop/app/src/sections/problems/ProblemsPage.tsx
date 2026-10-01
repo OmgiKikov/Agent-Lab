@@ -8,7 +8,7 @@ import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Segmented } from "../../ui/Segmented";
-import { queueOf, type SideKey } from "../violations/model";
+import { queueOf, type SideKey } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
 /** «Проблемы»: every criterion the agent breaks, most frequent first, in the logs or in the last simulation, never mixed. */

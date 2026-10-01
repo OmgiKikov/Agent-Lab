@@ -11,14 +11,14 @@ import { useLabState } from "../../lab/LabProvider";
 import { useReview, type Decision, type Example } from "../../lab/problems";
 import { humansOf, secondOf } from "../../lab/problemStats";
 import { ExampleCard } from "../../product/ExampleCard";
+import { Requirement } from "../../product/Requirement";
 import { shortOrigin } from "../../product/text";
 import { SourceSheet } from "../../product/SourceSheet";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
-import { Reproduce } from "../violations/Reproduce";
-import { checked, violationsOf, type SideKey } from "../violations/model";
+import { Reproduce } from "./Reproduce";
+import { checked, violationsOf, type SideKey } from "./model";
 import { Handoff } from "./Handoff";
 
 const enc = encodeURIComponent;
@@ -89,7 +89,7 @@ export function ProblemPage() {
   const humans = humansOf(s);
   const simQuery = side === "sim" && data.sim ? `src=sim&run=${enc(data.sim.runId)}&` : "";
   const link = `${window.location.origin}${problemLink(r.id, side === "sim" ? { src: "sim", run: data.sim?.runId } : {})}`;
-  const { quote, origin, condition, acceptable } = r.rule;
+  const { quote, origin } = r.rule;
 
   return (
     <div className="flex h-full flex-col">
@@ -102,16 +102,7 @@ export function ProblemPage() {
               {r.topics.length > 0 && <p className="mt-2 text-small text-fg-3">{r.topics.join(" · ")}</p>}
             </div>
 
-            <section aria-label="Что должен делать агент">
-              <Label>Что должен делать агент</Label>
-              <p className="mt-1.5 text-read text-fg">{r.rule.text}</p>
-              {(condition || acceptable) && (
-                <dl className="mt-3 space-y-1.5 text-small text-fg-2">
-                  {condition && <div><dt className="inline font-medium text-fg">Когда это важно: </dt><dd className="inline">{condition}</dd></div>}
-                  {acceptable && <div><dt className="inline font-medium text-fg">Допустимо: </dt><dd className="inline">{acceptable}</dd></div>}
-                </dl>
-              )}
-            </section>
+            <Requirement r={r} />
 
             <section aria-label="Насколько часто" className="grid grid-cols-2 gap-3">
               <Fact label="В логах" to={r.log.failed ? `${SECTIONS.dialogs}?v=fail&rule=${enc(r.id)}` : undefined} title="Разговоры логов, где агент это нарушил">

@@ -48,7 +48,7 @@ export function TaskCard({ compact }: { compact?: boolean }) {
           <div className={share === null ? "h-full w-1/3 animate-pulse rounded-full bg-run" : "h-full rounded-full bg-run transition-[width] duration-500 ease-out"} style={share === null ? undefined : { width: `${Math.max(4, share * 100)}%` }} />
         </div>
         <div className="mt-2 flex items-center justify-between gap-2 text-meta text-fg-3">
-          <span className="font-mono">{total ? `${done} из ${total}` : "идёт"}</span>
+          <span className="tabular-nums">{total ? `${done} из ${total}` : "идёт"}</span>
           <button type="button" onClick={() => api("/api/job/stop", {}).catch(toast.error)} className="inline-flex items-center gap-1 rounded px-1 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60">
             <Square aria-hidden className="size-2.5 fill-current" />Остановить
           </button>

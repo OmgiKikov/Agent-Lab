@@ -12,13 +12,13 @@ export function CriteriaTable({ list, sources, selected, onSelect, hasSim, class
     const s = c.r[k];
     const tone = toneOf(c.r, k);
     return tone === "none" ? <span className="text-fg-4">—</span>
-      : <span className="whitespace-nowrap font-mono"><b className={cn("font-medium", tone === "bad" ? "text-bad" : "text-fg-2")}>{s.failed}</b><span className="text-fg-3"> из {s.failed + s.passed}</span></span>;
+      : <span className="whitespace-nowrap tabular-nums"><b className={cn("font-semibold", tone === "bad" ? "text-bad" : "text-fg-2")}>{s.failed}</b><span className="text-fg-3"> из {s.failed + s.passed}</span></span>;
   };
   return (
     <div className={cn("min-h-0 overflow-auto", className)}>
       <table className="w-full border-collapse text-left">
-        <thead className="sticky top-0 z-10 bg-canvas">
-          <tr className="border-b border-line font-mono text-label uppercase tracking-caps text-fg-3">
+        <thead className="sticky top-0 z-10 bg-list">
+          <tr className="border-b border-line text-small text-fg-3">
             <th className="w-14 py-2.5 pl-5 font-medium">№</th>
             <th className="py-2.5 pr-4 font-medium">Критерий</th>
             <th className="hidden py-2.5 pr-4 font-medium 2xl:table-cell">Где написан</th>
@@ -33,16 +33,16 @@ export function CriteriaTable({ list, sources, selected, onSelect, hasSim, class
             const on = c.r.id === selected;
             return (
               <tr key={c.r.id} onClick={() => onSelect(c.r.id)} aria-selected={on}
-                className={cn("cursor-pointer border-b border-line align-top transition-colors", on ? "bg-raised" : "hover:bg-hover")}>
-                <td className="py-3 pl-5 font-mono text-small text-fg-3">{c.n}</td>
+                className={cn("cursor-pointer border-b border-line align-top transition-colors", on ? "bg-selected" : "hover:bg-hover")}>
+                <td className="py-3 pl-5 text-small tabular-nums text-fg-3">{c.n}</td>
                 <td className="py-3 pr-4">
                   <button type="button" onClick={() => onSelect(c.r.id)} className="text-left text-body font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60">{c.name}</button>
-                  <div className="mt-0.5 line-clamp-2 text-small text-fg-3" title={c.r.rule.quote}>«{c.r.rule.quote}»</div>
+                  <div className="mt-0.5 line-clamp-2 text-small text-fg-3" title={c.r.rule.text}>{c.r.rule.text}</div>
                 </td>
                 <td className="hidden py-3 pr-4 font-mono text-small text-fg-3 2xl:table-cell">{file(c.r.rule.sourceId)}</td>
                 <td className="py-3 pr-4 text-right text-small">{side(c, "log")}</td>
                 {hasSim && <td className="hidden py-3 pr-4 text-right text-small sm:table-cell">{side(c, "sim")}</td>}
-                <td className="hidden py-3 pr-5 text-right font-mono text-small text-fg-3 md:table-cell">{second.checked ? `${second.agree} из ${second.checked}` : "—"}</td>
+                <td className="hidden py-3 pr-5 text-right text-small tabular-nums text-fg-3 md:table-cell">{second.checked ? `${second.agree} из ${second.checked}` : "—"}</td>
               </tr>
             );
           })}
