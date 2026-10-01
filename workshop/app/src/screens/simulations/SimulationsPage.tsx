@@ -1,38 +1,70 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Play } from "lucide-react";
-import { when } from "../../lab/format";
-import { isRunning, runTitle } from "../../lab/runs";
+import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import { Activity, Play, Users } from "lucide-react";
+import { plural, when } from "../../lab/format";
+import { isRunning, runTitle, runTypes } from "../../lab/runs";
+import type { LabRun, LabState } from "../../lab/types";
 import { JobStrip } from "../../shell/Activity";
+import { FirstRun } from "../../shell/FirstRun";
 import { useKeys } from "../../shell/keys";
 import { useLabState } from "../../shell/LabProvider";
 import { SectionHeader } from "../../shell/SectionHeader";
 import { Button } from "../../ui/Button";
-import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { FirstRun } from "../../shell/FirstRun";
-import { Summary } from "../../ui/Summary";
+import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { Chips, Pill } from "../../ui/Pill";
+import { PageTitle, SOFT, Tile, TileGrid, WithFloating } from "../../ui/Tile";
 import { PlayDialog } from "./PlayDialog";
-import { RunDetail } from "./RunDetail";
-import { RunList } from "./SimList";
+import { DialogStrip, RunPanel, RunState } from "./RunDetail";
 
-const link = "text-small text-lab-ink underline underline-offset-4";
+type Filter = "done" | "live" | "broken";
+const kind = (r: LabRun): Filter => (isRunning(r) ? "live" : r.status === "failed" || r.status === "stopped" ? "broken" : "done");
+
+function RunTile({ run, state, on, onOpen }: { run: LabRun; state: LabState; on: boolean; onOpen: () => void }) {
+  const job = state.job.running && state.job.progress.run === run.id ? state.job.progress : null;
+  const m = run.metric;
+  return (
+    <Tile on={on} onClick={onOpen} className="min-h-[190px]">
+      <div className="flex items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap gap-1.5"><RunState run={run} />{runTypes(run, state).slice(0, 2).map(t => <Pill key={t} icon={Users}>{t}</Pill>)}</div>
+        <span className="flex-shrink-0 text-[11px] text-lab-dim">{when(run.startedAt)}</span>
+      </div>
+      <div className="mt-3 line-clamp-2 text-[14px] font-medium leading-[20px] text-lab-ink" title={runTitle(run)}>{runTitle(run)}</div>
+      {run.label && <div className="mt-0.5 truncate text-[12px] text-lab-dim">{run.label}</div>}
+      <div className="mt-auto pt-4">
+        {m ? (
+          <>
+            <div className="flex items-baseline gap-1.5 text-[12px] text-lab-mute">
+              <span className="text-[18px] font-medium text-lab-ink">{m.total}</span>{plural(m.total, "диалог", "диалога", "диалогов")}
+              {run.repeats && run.repeats > 1 && <span className="text-lab-dim">· повторы ×{run.repeats}</span>}
+            </div>
+            <DialogStrip total={m.total} className="mt-2" />
+          </>
+        ) : job ? (
+          <>
+            <div className="text-[12px] text-lab-accent">идёт · {job.done ?? 0} из {job.total ?? "…"}</div>
+            {job.total ? <DialogStrip total={job.done ?? 0} pending={(job.total ?? 0) - (job.done ?? 0)} className="mt-2" /> : null}
+          </>
+        )
+          : <div className="text-[12px] text-lab-faint">диалогов нет</div>}
+      </div>
+    </Tile>
+  );
+}
 
 /** Прогоны: synthetic customers play the scenarios against the agent; each run keeps its dialogues and their traces. */
 export function SimulationsPage() {
   const { runId } = useParams<{ runId?: string }>();
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
   const { state, offline } = useLabState();
   const [play, setPlay] = useState<{ preset: string[] | null } | null>(null);
   const [follow, setFollow] = useState(false);
+  const [filter, setFilter] = useState<Filter | null>(null);
   const runs = useMemo(() => [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)), [state?.runs]);
   const cards = state?.cards?.cards ?? [];
-  const st = params.get("st") ?? "all";
-  const setParam = (k: string, v: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (v) n.set(k, v); else n.delete(k); return n; }, { replace: true });
-  const shownRuns = runs.filter(r => st === "all" || (st === "live" ? isRunning(r) : st === "broken" ? r.status === "failed" || r.status === "stopped" : !isRunning(r) && r.status !== "failed" && r.status !== "stopped"));
+  const shown = runs.filter(r => !filter || kind(r) === filter);
   const sel = runId ?? params.get("r");
-  const run = runs.find(r => r.id === sel);
-  const setRun = (id: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (id) n.set("r", id); else n.delete("r"); n.delete("d"); n.delete("tab"); return n; }, { replace: !!id });
+  const run = runs.find(r => r.id === sel) ?? null;
+  const setRun = (id: string | null) => setParams(prev => { const n = new URLSearchParams(prev); if (id) n.set("r", id); else n.delete("r"); n.delete("d"); return n; }, { replace: true });
 
   // «Сыграть этот сценарий» comes with ?play=<id>, ⌘K with ?play=1: the dialog opens, nothing starts until it is confirmed.
   const asked = params.get("play");
@@ -48,51 +80,49 @@ export function SimulationsPage() {
     if (follow && started) { setFollow(false); setRun(started); }
   }, [follow, started]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const step = (d: 1 | -1) => {
-    if (!sel || !runs.length) return;
-    const at = runs.findIndex(r => r.id === sel);
-    setRun(runs[Math.max(0, Math.min(runs.length - 1, (at < 0 ? 0 : at) + d))].id);
-  };
-  useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
+  const at = shown.findIndex(r => r.id === sel);
+  useKeys({ KeyJ: () => shown.length && setRun(shown[Math.min(shown.length - 1, at + 1)].id), KeyK: () => shown.length && setRun(shown[Math.max(0, at - 1)].id) });
 
   if (params.get("mode") === "scenarios") return <Navigate to="/scenarios" replace />;
   if (offline && !state) return <ServiceDown />;
   const busy = !!state?.job.running;
-  
   const playButton = (
     <Button variant="primary" icon={Play} onClick={() => setPlay({ preset: null })} disabled={busy || !cards.length}
       title={busy ? "Сейчас идёт другая задача" : !cards.length ? "Сначала соберите сценарии" : undefined}>Сыграть</Button>
   );
   const hints = [{ title: "Клиенты-симуляторы", text: "Играют сценарии в чате с агентом, обычные и трудные." }, { title: "Трейсы", text: "Каждый диалог остаётся в Workshop со всеми вызовами." }, { title: "Что дальше", text: "Судья оценит диалоги: это блок «Результаты»." }];
-  const empty = cards.length
-    ? <FirstRun here="simulations" title="Ещё ни одного прогона" action={playButton} hints={hints}>Выберите сценарии и типы клиентов, агент ответит на каждый.</FirstRun>
-    : <FirstRun here="simulations" title="Для прогона нужны сценарии" action={<Link to="/scenarios"><Button variant="primary">Открыть сценарии</Button></Link>} hints={hints}>Сценарии собираются из оценённых логов.</FirstRun>;
+
+  let body;
+  if (!state) body = <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div>;
+  else if (!runs.length) {
+    body = cards.length
+      ? <FirstRun here="simulations" title="Ещё ни одного прогона" action={playButton} hints={hints}>Выберите сценарии и типы клиентов, агент ответит на каждый.</FirstRun>
+      : <FirstRun here="simulations" title="Для прогона нужны сценарии" action={<Link to="/scenarios"><Button variant="primary">Открыть сценарии</Button></Link>} hints={hints}>Сценарии собираются из оценённых логов.</FirstRun>;
+  } else {
+    body = (
+      <WithFloating wide open={!!run} panel={run && <RunPanel key={run.id} summary={run} state={state} onClose={() => setRun(null)} />}>
+        <PageTitle title="Прогоны" sub="синтетические клиенты играют сценарии с агентом" actions={<>
+          <Link to="/runs" className={SOFT} title="Все трейсы Workshop"><Activity className="size-3.5" />Трейсы</Link>
+          {playButton}
+        </>} />
+        <Chips<Filter> className="mt-4" value={filter} onChange={setFilter} options={[
+          { value: null, label: "Все", count: runs.length },
+          { value: "done", label: "Завершены", count: runs.filter(r => kind(r) === "done").length },
+          ...(runs.some(r => kind(r) === "live") ? [{ value: "live" as const, label: "Идут", count: runs.filter(r => kind(r) === "live").length }] : []),
+          ...(runs.some(r => kind(r) === "broken") ? [{ value: "broken" as const, label: "Прерваны", count: runs.filter(r => kind(r) === "broken").length }] : []),
+        ]} />
+        <div className="mt-5">
+          <TileGrid>{shown.map(r => <RunTile key={r.id} run={r} state={state} on={r.id === sel} onOpen={() => setRun(r.id === sel ? null : r.id)} />)}</TileGrid>
+        </div>
+        <p className="mt-4 text-[11px] text-lab-faint">Квадратик — сыгранный диалог · оценка судьи и нарушения — в «Результатах» · J и K листают</p>
+      </WithFloating>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col">
-      <SectionHeader
-        crumbs={[{ label: "Прогоны", to: run ? "/simulations" : undefined }, ...(run ? [{ label: runTitle(run) }] : [])]}
-        actions={<>
-          <Button variant="ghost" className="hidden sm:inline-flex" onClick={() => navigate("/runs")} title="Все трейсы Workshop">Трейсы</Button>
-          {playButton}
-        </>}
-        below={<JobStrip kinds={["run", "rejudge"]} />}
-      />
-      {!state ? <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div> : !runs.length ? empty : (
-        <>
-          {!sel && <Summary stats={[
-            { label: "Прогонов", value: runs.length, active: st === "all", onClick: () => setParam("st", null) },
-            { label: "Завершены", value: runs.filter(r => !isRunning(r) && r.status !== "failed" && r.status !== "stopped").length, of: `из ${runs.length}`, active: st === "done", onClick: () => setParam("st", "done") },
-            ...(runs.some(isRunning) ? [{ label: "Идут сейчас", value: runs.filter(isRunning).length, active: st === "live", onClick: () => setParam("st", "live") }] : []),
-            ...(runs.some(r => r.status === "failed" || r.status === "stopped") ? [{ label: "Прерваны", value: runs.filter(r => r.status === "failed" || r.status === "stopped").length, active: st === "broken", onClick: () => setParam("st", "broken") }] : []),
-          ]} />}
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {run ? <RunDetail key={run.id} summary={run} state={state} onBack={() => setRun(null)} />
-              : sel ? <EmptyState title="Такого прогона нет" action={<Link to="/simulations" className={link}>Все прогоны</Link>} />
-              : <RunList runs={shownRuns} state={state} onOpen={setRun} />}
-          </div>
-        </>
-      )}
+      <SectionHeader crumbs={[{ label: "Прогоны" }]} meta={runs.length ? `${runs.length}` : undefined} below={<JobStrip kinds={["run", "rejudge"]} />} />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{body}</div>
       {state && <PlayDialog open={!!play} onClose={() => setPlay(null)} state={state} preset={play?.preset} onStarted={() => setFollow(true)} />}
     </div>
   );
