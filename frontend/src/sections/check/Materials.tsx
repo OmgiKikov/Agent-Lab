@@ -11,7 +11,8 @@ import { Modal } from "../../ui/Modal";
 
 export function Materials({ state, onNext }: { state: LabState; onNext: () => void }) {
   const { refresh } = useLabState();
-  const source = useSource(state.sources.some((s) => s.id === TONE_ID) ? TONE_ID : null);
+  const hasSource = state.sources.some((s) => s.id === TONE_ID);
+  const source = useSource(hasSource ? TONE_ID : null);
   const [text, setText] = useState(savedText);
   const [name, setName] = useState(savedName);
   const [busy, setBusy] = useState(false);
@@ -56,15 +57,17 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       setName(parsed.name);
       rememberName(parsed.name);
     });
+  const unchanged = source.data?.content.trim() === text.trim();
+  const reusable = unchanged && !!state.toneOfVoice;
   const prepare = () =>
     run(async () => {
-      await api("/api/tone-of-voice/policy", { text: text.trim(), name });
-      await api("/api/tone-of-voice/criteria", {});
+      if (!unchanged) await api("/api/tone-of-voice/policy", { text: text.trim(), name });
+      if (!reusable) await api("/api/tone-of-voice/criteria", {});
       await refresh();
       onNext();
     });
   const next = () => {
-    if (state.discover) setPending({ next: true });
+    if (state.discover && !reusable) setPending({ next: true });
     else prepare();
   };
   const disabled = busy || state.job.running;
@@ -153,16 +156,24 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
           {error}
         </p>
       )}
+      {hasSource && source.isError && (
+        <div role="alert" className="mt-5 text-read text-bad">
+          <p>Не удалось загрузить сохранённые правила. Повторите загрузку перед продолжением.</p>
+          <Button className="mt-3" onClick={() => void source.refetch()}>
+            Загрузить сохранённые правила
+          </Button>
+        </div>
+      )}
       <div className="mt-8 border-t border-line pt-5">
         <Button
           variant="primary"
           size="lg"
           icon={ArrowRight}
           loading={busy}
-          disabled={disabled || !state.logs.total || text.trim().length < 20}
+          disabled={disabled || !state.logs.total || text.trim().length < 20 || (hasSource && !source.data)}
           onClick={next}
         >
-          Собрать критерии
+          {reusable ? "Продолжить с этими критериями" : "Собрать критерии"}
         </Button>
         {!state.logs.total && <p className="mt-2 text-body text-fg-3">Сначала загрузите разговоры.</p>}
       </div>
@@ -190,8 +201,12 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
         }
       >
         <p className="text-read text-fg-2">
-          Текущая оценка разговоров и собранные сценарии будут заменены. Сохранённые прогоны симуляций останутся
-          доступны.
+          Текущая рабочая выборка и собранные сценарии будут заменены. Сохранённые проверки в истории и прогоны
+          симуляций останутся доступны.
+          {pending?.file && state.toneOfVoice && " Критерии и ваши уточнения сохранятся для новой выгрузки."}
+          {state.discover?.purpose === TONE_ID &&
+            !state.discover.checkId &&
+            " Текущая оценка создана до появления истории; при необходимости сначала скачайте её отчёт."}
         </p>
       </Modal>
     </section>

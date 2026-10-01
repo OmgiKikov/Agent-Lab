@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import Body, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import agents, cards, discover, llm, logs, personas, policy_files, problems, simulate, store, tone
+from . import agents, cards, discover, llm, logs, personas, policy_files, problems, simulate, store, tone, tone_advice
 from .context import sources
 from .jobs import BusyError, Jobs, Progress, Work
 
@@ -60,6 +60,21 @@ class TonePolicyCommand(BaseModel):
 class ToneCheckCommand(BaseModel):
     ruleIds: list[str] = Field(min_length=1, max_length=20)
     count: int = Field(default=300, ge=1, le=300)
+    revision: str | None = None
+
+
+class ToneAdviceCommand(BaseModel):
+    finishedAt: str = Field(min_length=1)
+    dialogueId: str = Field(min_length=1)
+    ruleId: str = Field(min_length=1)
+    mode: Literal['rewrite', 'clarify']
+    note: str = Field(default='', max_length=2000)
+
+
+class ToneClarificationCommand(BaseModel):
+    revision: str = Field(min_length=1)
+    ruleId: str = Field(min_length=1)
+    text: str = Field(min_length=10, max_length=2000)
 
 
 class ReviewCommand(BaseModel):
@@ -72,6 +87,7 @@ class ReviewCommand(BaseModel):
     dialogueId: str = ''
     ruleId: str = ''
     decision: Literal['agree', 'disagree'] | None = None
+    finishedAt: str | None = None
 
 
 def start(kind: str, work: Work) -> dict:
@@ -283,16 +299,76 @@ async def prepare_tone_criteria() -> dict:
 @app.post('/api/tone-of-voice/check')
 async def check_tone(payload: ToneCheckCommand) -> dict:
     try:
-        criteria = tone.selection(payload.ruleIds)
+        criteria = tone.selection(payload.ruleIds, payload.revision)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
 
     async def work(progress: Progress) -> dict:
         result = await tone.assess(criteria, payload.count, progress)
-        store.save(discover.RESULT, result)
+        tone.commit(result)
         return result
 
     return start('tone-check', work)
+
+
+@app.get('/api/tone-of-voice/history')
+def tone_history() -> dict:
+    result = store.load(discover.RESULT) or {}
+    return {
+        'checks': store.tone_checks(),
+        'hasLegacyResult': result.get('purpose') == tone.KIND and not result.get('checkId'),
+    }
+
+
+@app.get('/api/tone-of-voice/history/{check_id}')
+def tone_history_detail(check_id: str) -> dict:
+    snapshot = store.tone_check(check_id)
+    if snapshot is None:
+        raise HTTPException(404, 'Проверка не найдена')
+    reviews = store.tone_reviews(check_id)
+    decisions = {(row['dialogueId'], row['ruleId']): row['decision'] for row in reviews}
+    for result in snapshot['result']['results']:
+        for row in result.get('rules', []):
+            key = (str(result['dialogueId']), row['ruleId'])
+            if key in decisions:
+                row['review'] = decisions[key]
+    snapshot.update(reviews=reviews, reviewSemantics='latest-saved')
+    return snapshot
+
+
+@app.post('/api/tone-of-voice/advice')
+async def tone_advice_command(payload: ToneAdviceCommand) -> dict:
+    async def work(progress: Progress) -> dict:
+        progress(message='Готовлю предложение по найденной ошибке')
+        return await tone_advice.suggest(
+            payload.finishedAt, payload.dialogueId, payload.ruleId, payload.mode, payload.note
+        )
+
+    try:
+        return await jobs.perform('tone-advice', work)
+    except BusyError as error:
+        raise HTTPException(409, str(error)) from error
+    except asyncio.CancelledError as error:
+        raise HTTPException(409, 'Подготовка предложения остановлена') from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    except llm.ModelError as error:
+        raise HTTPException(502, str(error)) from error
+
+
+@app.post('/api/tone-of-voice/clarification')
+async def tone_clarification(payload: ToneClarificationCommand) -> dict:
+    async def work(progress: Progress) -> dict:
+        draft = tone.clarified(payload.revision, payload.ruleId, payload.text)
+        store.save(tone.DRAFT, draft)
+        return draft
+
+    try:
+        return await jobs.perform('tone-clarification', work)
+    except BusyError as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
 
 
 @app.post('/api/runs')
@@ -324,9 +400,13 @@ async def review(payload: ReviewCommand) -> dict:
         if jobs.state['running'] and jobs.state['kind'] in ('discover', 'tone-check'):
             raise HTTPException(409, 'Идёт оценка логов: ответ не сохранится. Отметьте после неё.')
         try:
-            store.set_log_review(discover.RESULT, payload.dialogueId, payload.ruleId, payload.decision)
+            store.set_log_review(
+                discover.RESULT, payload.dialogueId, payload.ruleId, payload.decision, payload.finishedAt
+            )
         except KeyError as error:
             raise HTTPException(404, 'Вердикт не найден') from error
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
         return {'ok': True}
     if payload.index is None:
         raise HTTPException(422, 'Нужны run и index')

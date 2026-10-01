@@ -47,35 +47,37 @@ export function CheckPage() {
       {header}
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-[980px] px-4 pb-24 pt-6 lg:px-10 lg:pt-8">
-          <nav aria-label="Шаги проверки">
-            <ol className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:gap-x-5">
-              {CHECK_STEPS.map((s, i) => (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    disabled={state.job.running || i > at || (s.id === "result" && !finished)}
-                    onClick={() => go(s.id)}
-                    aria-current={s.id === step ? "step" : undefined}
-                    className={cn(
-                      "flex items-center gap-2 rounded-full text-body disabled:cursor-default",
-                      i === at ? "font-semibold text-fg" : "text-fg-3",
-                    )}
-                  >
-                    <span
+          {step !== "result" && (
+            <nav aria-label="Шаги проверки">
+              <ol className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:gap-x-5">
+                {CHECK_STEPS.map((s, i) => (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      disabled={state.job.running || i > at || (s.id === "result" && !finished)}
+                      onClick={() => go(s.id)}
+                      aria-current={s.id === step ? "step" : undefined}
                       className={cn(
-                        "grid size-6 place-items-center rounded-full text-small tabular-nums",
-                        i === at ? "bg-fg text-canvas" : "bg-hover",
+                        "flex items-center gap-2 rounded-full text-body disabled:cursor-default",
+                        i === at ? "font-semibold text-fg" : "text-fg-3",
                       )}
                     >
-                      {i + 1}
-                    </span>
-                    {s.label}
-                  </button>
-                </li>
-              ))}
-            </ol>
-          </nav>
-          <div className="mt-9">
+                      <span
+                        className={cn(
+                          "grid size-6 place-items-center rounded-full text-small tabular-nums",
+                          i === at ? "bg-fg text-canvas" : "bg-hover",
+                        )}
+                      >
+                        {i + 1}
+                      </span>
+                      {s.label}
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </nav>
+          )}
+          <div className={step === "result" ? "" : "mt-9"}>
             {offline && (
               <p role="alert" className="mb-5 text-body text-bad">
                 Связь с сервисом потеряна.{" "}

@@ -5,7 +5,7 @@ import hashlib
 import re
 import uuid
 
-from . import discover, llm, quotes, store
+from . import discover, llm, quotes, store, tone_history
 from .context import sources
 from .jobs import Progress
 
@@ -121,6 +121,7 @@ async def prepare(progress: Progress) -> dict:
     if not criteria:
         answer = await llm.structured(PROMPT, {'policy': source['content']}, parse=lambda value: _parse(value, source))
         criteria, model = answer.value, answer.model
+    ensure_active()
     return {
         'revision': uuid.uuid4().hex,
         'createdAt': store.now(),
@@ -130,14 +131,48 @@ async def prepare(progress: Progress) -> dict:
     }
 
 
-def selection(rule_ids: list[str]) -> list[dict]:
+def ensure_active() -> None:
+    """A dependency swallowing cancellation must not publish a completed result."""
+    task = asyncio.current_task()
+    if task and task.cancelling():
+        raise asyncio.CancelledError
+
+
+def selection(rule_ids: list[str], revision: str | None = None) -> list[dict]:
     draft = store.load(DRAFT)
     if not draft or draft['sourceSha256'] != current_policy()['sha256']:
         raise ValueError('Сначала соберите критерии по текущим правилам общения.')
+    if revision is not None and revision != draft['revision']:
+        raise ValueError('Критерии изменились. Обновите страницу перед проверкой.')
     by_id = {rule['id']: rule for rule in draft['criteria']}
     if not rule_ids or len(set(rule_ids)) != len(rule_ids) or not set(rule_ids) <= by_id.keys():
         raise ValueError('Выберите хотя бы один критерий из текущей проверки.')
     return [by_id[key] for key in rule_ids]
+
+
+def clarified(revision: str, rule_id: str, text: str) -> dict:
+    """Only an explicit human confirmation changes the rubric, without touching source evidence."""
+    text = text.strip()
+    if not 10 <= len(text) <= 2000:
+        raise ValueError('Уточнение должно содержать от 10 до 2000 символов.')
+    selection([rule_id], revision)
+    draft = store.load(DRAFT)
+    rule = next(rule for rule in draft['criteria'] if rule['id'] == rule_id)
+    entries = rule.setdefault('clarifications', [])
+    if text in entries:
+        raise ValueError('Такое уточнение уже сохранено.')
+    if len(entries) >= 20:
+        raise ValueError('Сохранено уже 20 уточнений. Соберите критерии заново из обновлённых правил.')
+    entries.append(text)
+    draft.update(revision=uuid.uuid4().hex, updatedAt=store.now())
+    return draft
+
+
+def for_judging(rule: dict) -> dict:
+    notes = rule.get('clarifications') or []
+    if not notes:
+        return rule
+    return {**rule, 'text': rule['text'] + '\n\nУточнения, подтверждённые человеком:\n' + '\n'.join(notes)}
 
 
 async def _judge(dialogues: list[dict], topic: dict, progress: Progress) -> list[dict]:
@@ -166,13 +201,17 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
     started = store.now()
     topic = {'id': 't1', 'title': 'Tone of voice', 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
     progress(done=0, total=len(dialogues), message='Начинаю проверку tone of voice')
-    results = await _judge(dialogues, topic, progress)
+    results = await _judge(dialogues, {**topic, 'rules': [for_judging(rule) for rule in criteria]}, progress)
+    ensure_active()
     previous = store.load(discover.RESULT) or {}
     if previous.get('criteriaRevision') == draft['revision']:
         discover.carry_reviews(previous, results)
     return {
         'purpose': KIND,
+        'checkId': uuid.uuid4().hex,
         'criteriaRevision': draft['revision'],
+        'criteriaFingerprint': tone_history.criteria_fingerprint(criteria, source),
+        'datasetFingerprint': tone_history.fingerprint(sorted(dialogues, key=lambda dialogue: str(dialogue['id']))),
         'startedAt': started,
         'finishedAt': store.now(),
         'rulesSince': draft['createdAt'],
@@ -188,3 +227,20 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
         ],
         'summary': discover.summarize(results, [topic]),
     }
+
+
+def commit(result: dict) -> None:
+    ensure_active()
+    source = current_policy()
+    draft = store.load(DRAFT) or {}
+    dialogues = discover.sample(result['sampled'])
+    criteria = result['topics'][0]['rules']
+    if (
+        result['criteriaRevision'] != draft.get('revision')
+        or result['criteriaFingerprint'] != tone_history.criteria_fingerprint(criteria, source)
+        or result['datasetFingerprint']
+        != tone_history.fingerprint(sorted(dialogues, key=lambda dialogue: str(dialogue['id'])))
+    ):
+        raise ValueError('Материалы проверки изменились. Запустите проверку заново.')
+    snapshot = tone_history.snapshot(result, dialogues, criteria, source)
+    store.save_tone_check(snapshot)

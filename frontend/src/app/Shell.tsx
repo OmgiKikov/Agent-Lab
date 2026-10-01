@@ -46,7 +46,7 @@ function Frame() {
         <main
           id="main"
           tabIndex={-1}
-          className="relative flex min-w-0 flex-1 flex-col overflow-hidden pb-14 focus:outline-none lg:pb-0"
+          className="relative flex min-w-0 flex-1 flex-col overflow-hidden pb-[calc(56px+env(safe-area-inset-bottom))] focus:outline-none lg:pb-0"
         >
           <div className="min-h-0 flex-1 overflow-auto">
             <Outlet />

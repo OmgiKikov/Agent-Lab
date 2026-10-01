@@ -202,10 +202,16 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (0, 1))
 
     async def test_unknown_or_stale_selection_cannot_start_a_check(self):
-        await self.prepared()
+        draft = await self.prepared()
         response = await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['invented'], 'count': 1})
         self.assertEqual(response.status_code, 400)
         await self.client.post('/api/logs?name=other.jsonl', content=json.dumps(self.dialogue))
+        self.assertEqual(store.load(tone.DRAFT), draft)
+        response = await self.client.post(
+            '/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1, 'revision': 'stale'}
+        )
+        self.assertEqual(response.status_code, 400)
+        await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция'})
         self.assertIsNone(store.load(tone.DRAFT))
         response = await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
         self.assertEqual(response.status_code, 400)

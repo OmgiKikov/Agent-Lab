@@ -73,6 +73,7 @@ export type Criterion = {
   condition?: string;
   acceptable?: string;
   sourceId?: string;
+  clarifications?: string[];
 };
 export type World = {
   organization: { name: string; inn: string; merchantName: string; address: string };
@@ -118,6 +119,8 @@ export type Models = { via: string; main: string | null; second: string | null }
 export type Check = { ok: boolean; error?: string; status?: string; text?: string; seconds?: number; version?: string };
 export type Topic = { id: string; title: string; rules: Criterion[] };
 export type Discover = {
+  checkId?: string;
+  criteriaFingerprint?: string;
   purpose?: string;
   criteriaRevision?: string;
   sampled: number;

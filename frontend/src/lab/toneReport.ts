@@ -1,0 +1,116 @@
+import { reliabilityWord, problemPath } from "./problemReport";
+import type { Problems, RuleEntry } from "./problems";
+import type { Discover } from "./types";
+import { count } from "./format";
+
+const excerpt = (value: string, limit = 300) => value.trim().slice(0, limit).trimEnd();
+const short = (value: string, limit = 300) => excerpt(value, limit) + (value.trim().length > limit ? "…" : "");
+const quote = (value: string) =>
+  excerpt(value)
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+const date = (value: string) => new Date(value).toLocaleString("ru-RU", { dateStyle: "long", timeStyle: "short" });
+
+function nextAction(problem: RuleEntry): string {
+  const errors = problem.log.examples.filter((e) => e.status === "FAIL");
+  if (errors.some((e) => e.review === "disagree" || (!e.review && e.second === "disagree")))
+    return "Разобрать спорные оценки с владельцем tone of voice и уточнить применение критерия.";
+  if (errors.some((e) => e.review === "agree"))
+    return "Передать подтверждённые примеры команде агента, согласовать правку и проверить новые ответы после неё.";
+  return "Подтвердить оценку на примерах перед передачей задачи команде агента.";
+}
+
+/** A short meeting brief; complete criteria and evidence remain in the immutable saved check. */
+export function toneBrief(data: Problems, result: Discover, base: string, filename?: string): string {
+  const criteria = result.topics.flatMap((topic) => topic.rules);
+  const quotes = new Set(criteria.map((criterion) => criterion.quote));
+  const rules = data.rules.filter((rule) => quotes.has(rule.rule.quote));
+  const top = rules
+    .filter((rule) => rule.log.failed > 0)
+    .sort((a, b) => b.log.failed - a.log.failed)
+    .slice(0, 3);
+  const measured = result.summary.measured;
+  const share = measured ? `${Math.round((100 * result.summary.passed) / measured)}%` : "нет оценки";
+  const reviews = rules.flatMap((rule) => rule.log.examples).filter((example) => example.review);
+  const agrees = reviews.filter((example) => example.review === "agree").length;
+  const origin = base.replace(/\/$/, "");
+  const saved = result.checkId ? `${origin}/start?history=${encodeURIComponent(result.checkId)}` : null;
+  const lines = [
+    "# Tone of voice: сводка для команды",
+    "",
+    `Проверка завершена: ${date(result.finishedAt)}.`,
+    ...(filename ? [`Выгрузка: ${short(filename, 160)}.`] : []),
+    `Выборка: ${count(result.sampled, "разговор", "разговора", "разговоров")}. Критериев: ${criteria.length}.`,
+    `Без найденных ошибок: ${result.summary.passed} из ${measured} разговоров, которые удалось оценить (${share}).`,
+    `С ошибкой: ${result.summary.failed}. Не удалось оценить: ${result.summary.unmeasured} из ${result.sampled}; в процент они не входят.`,
+    `Ответы человека по отдельным оценкам критериев: ${reviews.length}; согласие с оценкой — ${agrees}, несогласие — ${reviews.length - agrees}. Это число оценок, а не разговоров.`,
+    "",
+    "Автоматическая оценка относится к выбранным критериям и этой выборке. Процент не измеряет точность самого оценщика.",
+    "",
+  ];
+  if (!top.length)
+    lines.push(
+      measured ? "## По выбранным критериям ошибок не найдено" : "## Проверка не дала достаточной оценки",
+      "",
+      measured
+        ? "Следующее действие: вручную просмотреть несколько разговоров без найденных ошибок и проверить, не пропускает ли оценщик важные случаи."
+        : "Следующее действие: посмотреть причины неоценённых разговоров, проверить настройки модели и повторить оценку.",
+      "",
+    );
+  for (const [index, problem] of top.entries()) {
+    const criterion = criteria.find((item) => item.quote === problem.rule.quote);
+    const errors = problem.log.examples.filter((example) => example.status === "FAIL");
+    const example =
+      errors.find((e) => e.review === "agree") ?? errors.find((e) => e.review !== "disagree") ?? errors[0];
+    lines.push(
+      `## ${index + 1}. ${short(problem.title, 140)}`,
+      "",
+      `Ошибка найдена в ${problem.log.failed} из ${problem.log.failed + problem.log.passed} разговоров, в которых удалось проверить этот критерий. Не удалось проверить критерий: ${problem.log.unknown}.`,
+      "",
+      "Основание — фрагмент документа:",
+      problem.rule.quote ? quote(problem.rule.quote) : "Цитата источника не сохранена.",
+      ...(problem.rule.quote.trim().length > 300 ? ["… Продолжение — в полном основании ниже."] : []),
+      ...(problem.rule.condition
+        ? [
+            `Условие применения${problem.rule.condition.length > 180 ? " (фрагмент)" : ""}: ${short(problem.rule.condition, 180)}`,
+          ]
+        : []),
+      ...(problem.rule.acceptable
+        ? [
+            `Исключения и допустимое${problem.rule.acceptable.length > 180 ? " (фрагмент)" : ""}: ${short(problem.rule.acceptable, 180)}`,
+          ]
+        : []),
+      ...(criterion?.clarifications?.length
+        ? [`Уточнения команды (фрагмент): ${short(criterion.clarifications.join("; "), 200)}`]
+        : []),
+    );
+    if (example)
+      lines.push(
+        "",
+        `Пример${example.dialogueId ? ` — разговор ${short(example.dialogueId, 80)}` : ""}:`,
+        `Клиент${example.opening.length > 160 ? " (фрагмент)" : ""}: ${short(example.opening, 160)}`,
+        `Реплика агента${example.agentQuote.length > 300 ? " (фрагмент)" : ""}:\n${quote(example.agentQuote || "Цитата не сохранена.")}`,
+        ...(example.agentQuote.length > 300 ? ["… Продолжение — в сохранённом разговоре."] : []),
+        `Объяснение оценки${example.reason.length > 300 ? " (фрагмент)" : ""}: ${short(example.reason)}`,
+        `Проверка примера: ${reliabilityWord(example)}.`,
+      );
+    lines.push("", `Следующее действие: ${nextAction(problem)}`, "");
+    if (!saved)
+      lines.push(`Полное основание в текущей рабочей области: ${origin}${problemPath(problem.id, "log")}`, "");
+  }
+  if (rules.filter((rule) => rule.log.failed > 0).length > 3)
+    lines.push("В сводке — три наиболее частые проблемы. Полный список доступен в результате проверки.", "");
+  if (saved)
+    lines.push(
+      "## Полное основание проверки",
+      "",
+      `[Сохранённые разговоры, критерии, условия и исключения](${saved}).`,
+      "Фрагменты выше сокращены. По ссылке — полные материалы на момент завершения проверки; ответы человека в этой сводке учтены на момент экспорта.",
+    );
+  else
+    lines.push(
+      "Текст и числа сохранены на момент экспорта. Ссылки ведут в текущую рабочую область: после новой загрузки её содержимое может измениться.",
+    );
+  return lines.join("\n");
+}

@@ -6,6 +6,8 @@ export const JOBS: Record<string, { label: string; to: string }> = {
   "tone-policy": { label: "Правила tone of voice", to: "/check?step=materials" },
   "tone-criteria": { label: "Критерии tone of voice", to: "/check?step=criteria" },
   "tone-check": { label: "Проверка tone of voice", to: "/check?step=result" },
+  "tone-advice": { label: "Предложение по находке", to: "/check?step=result" },
+  "tone-clarification": { label: "Уточнение критерия", to: "/check?step=criteria" },
   sources: { label: "Чтение кода агента", to: SECTIONS.agent },
   discover: { label: "Оценка логов", to: SECTIONS.logs },
   cards: { label: "Сборка сценариев", to: scenariosLink() },

@@ -12,11 +12,16 @@ import { Skeleton } from "../../ui/EmptyState";
 export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack: () => void; onStarted: () => void }) {
   const { refresh } = useLabState();
   const draft = state.toneOfVoice;
+  const result = toneResult(state);
   const [choice, setChoice] = useState<{ revision: string; ids: string[] } | null>(null);
   const ids =
     choice?.revision === draft?.revision
       ? choice!.ids
-      : (toneResult(state)?.topics.flatMap((t) => t.rules.map((c) => c.id)) ?? draft?.criteria.map((c) => c.id) ?? []);
+      : ((result?.criteriaRevision === draft?.revision
+          ? result?.topics.flatMap((t) => t.rules.map((c) => c.id))
+          : null) ??
+        draft?.criteria.map((c) => c.id) ??
+        []);
   const [size, setSize] = useState(100);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +42,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
     setStarting(true);
     setError(null);
     try {
-      await api("/api/tone-of-voice/check", { ruleIds: ids, count: total });
+      await api("/api/tone-of-voice/check", { ruleIds: ids, count: total, revision: draft?.revision });
       await refresh();
       onStarted();
     } catch (e) {
@@ -100,6 +105,16 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
                     {c.quote}
                   </blockquote>
                   {c.acceptable && <p className="mt-2 whitespace-pre-wrap text-body text-fg-3">{c.acceptable}</p>}
+                  {!!c.clarifications?.length && (
+                    <div className="mt-3 border-l-2 border-run pl-3">
+                      <p className="font-medium text-fg">Ваши уточнения</p>
+                      {c.clarifications.map((text, index) => (
+                        <p key={index} className="mt-2 whitespace-pre-wrap text-read text-fg-2">
+                          {text}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </details>
               </li>
             ))}

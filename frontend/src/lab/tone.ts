@@ -11,15 +11,14 @@ export const CHECK_STEPS: { id: CheckStep; label: string }[] = [
 
 export function toneResult(state: LabState | null) {
   const assessment = state?.discover;
-  return assessment?.purpose === TONE_ID && assessment.criteriaRevision === state?.toneOfVoice?.revision
-    ? assessment
-    : null;
+  return assessment?.purpose === TONE_ID ? assessment : null;
 }
 
 export function nextStep(state: LabState | null): CheckStep {
   if (state?.job.running && state.job.kind === "tone-check") return "checking";
   if (state?.toneOfVoice && state.job.kind === "tone-check" && state.job.error) return "checking";
-  if (toneResult(state)) return "result";
+  const result = toneResult(state);
+  if (result && result.criteriaRevision === state?.toneOfVoice?.revision) return "result";
   if (state?.toneOfVoice || (state?.job.running && state.job.kind === "tone-criteria")) return "criteria";
   return "materials";
 }

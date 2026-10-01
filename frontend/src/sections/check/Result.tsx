@@ -1,106 +1,261 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Download, RotateCcw } from "lucide-react";
+import { ArrowRight, Check, Copy, Download, FileText, RotateCcw } from "lucide-react";
 import { conversationsLink, reviewLink } from "../../app/links";
 import { useCriteria } from "../../lab/criteria";
-import { download, problemsReport } from "../../lab/problemReport";
+import { download } from "../../lab/problemReport";
+import { useProblems } from "../../lab/problems";
 import { toneResult } from "../../lab/tone";
+import { toneBrief } from "../../lab/toneReport";
 import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
-import { ProblemList } from "../problems/ProblemList";
+import { Sheet } from "../../ui/Sheet";
+import { queueOf } from "../problems/model";
+import { Finding } from "./Finding";
+import { History } from "./History";
+import { BriefPreview } from "./BriefPreview";
 
 export function Result({ state, onAgain }: { state: LabState; onAgain: () => void }) {
   const result = toneResult(state);
   const { data, list } = useCriteria(null);
+  const evidence = useProblems(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [showReport, setShowReport] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   if (!result) return null;
-  const summary = result.summary;
+  const { summary } = result;
   const measured = summary.measured;
   const percentage = measured ? Math.round((100 * summary.passed) / measured) : null;
   const quotes = new Set(result.topics.flatMap((t) => t.rules.map((r) => r.quote)));
   const own = list.filter((c) => quotes.has(c.r.rule.quote));
+  const problems = queueOf(own, "log");
+  const selectedFinding = problems.find((c) => c.r.id === selected) ?? problems[0];
   const current = data?.log?.finishedAt === result.finishedAt;
-  const report = data && current ? { ...data, rules: data.rules.filter((r) => quotes.has(r.rule.quote)) } : null;
+  const report = data && current ? { ...data, rules: own.map((c) => c.r) } : null;
+  const brief = report ? toneBrief(report, result, window.location.origin, state.logs.file ?? undefined) : "";
+  const previousRevision = result.criteriaRevision !== state.toneOfVoice?.revision;
   const modelError = !measured ? result.results.find((r) => r.error)?.error : null;
   const outcomes = [
     { label: "Без найденных ошибок", n: summary.passed, verdict: "pass", cls: "text-fg" },
-    { label: "С ошибкой tone of voice", n: summary.failed, verdict: "fail", cls: "text-bad" },
-    { label: "Не удалось оценить", n: summary.unmeasured, verdict: "none", cls: "text-fg-3" },
+    { label: "С ошибками", n: summary.failed, verdict: "fail", cls: "text-bad" },
+    { label: "Без оценки", n: summary.unmeasured, verdict: "none", cls: "text-fg-3" },
   ];
   return (
     <section aria-labelledby="tone-result-title">
-      <h2 id="tone-result-title" className="text-title font-semibold text-fg">
-        Результат проверки tone of voice
-      </h2>
-      {percentage !== null ? (
-        <Link
-          to={conversationsLink("log", { v: "pass" })}
-          className="mt-7 inline-block rounded-block text-hero font-semibold tabular-nums text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run"
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-small font-medium text-fg-3">Проверка завершена</p>
+          <h2 id="tone-result-title" className="mt-2 text-page font-semibold text-fg">
+            {summary.failed
+              ? "Что стоит разобрать"
+              : measured
+                ? "Ошибок общения не найдено"
+                : "Пока не удалось оценить"}
+          </h2>
+          <p className="mt-2 text-body text-fg-3">
+            В выборке {result.sampled} из {state.logs.total} разговоров · {result.topics.flatMap((t) => t.rules).length}{" "}
+            критериев
+          </p>
+        </div>
+        <Button
+          className="hidden sm:inline-flex"
+          size="lg"
+          icon={FileText}
+          disabled={!brief}
+          onClick={() => setShowReport(true)}
         >
-          {percentage === null ? "—" : `${percentage}%`}
-        </Link>
-      ) : (
-        <p className="mt-7 text-hero font-semibold text-fg">—</p>
+          Короткий отчёт
+        </Button>
+      </div>
+      {previousRevision && (
+        <div role="status" className="mt-5 rounded-block bg-inset p-4 text-read text-fg-2">
+          Вы уточнили критерии. Этот результат относится к предыдущей версии.
+          <Button className="mt-3 block" size="lg" onClick={onAgain} disabled={state.job.running}>
+            Проверить по новым критериям
+          </Button>
+        </div>
       )}
-      <p className="mt-2 text-lead text-fg-2">
-        {measured
-          ? `${summary.passed} из ${measured} проверенных разговоров — без найденных ошибок`
-          : modelError
-            ? "Модель проверки не ответила. Проверьте настройки и запустите оценку снова."
-            : "Не хватило данных для оценки. Посмотрите разговоры и уточните критерии."}
-      </p>
-      <p className="mt-2 text-body text-fg-3">
-        В выборке {result.sampled} из {state.logs.total} разговоров. Критериев:{" "}
-        {result.topics.flatMap((t) => t.rules).length}.
-      </p>
+      <div className="my-6 flex flex-col gap-4 border-y border-line py-4 sm:flex-row sm:items-center sm:gap-7">
+        <div className="min-w-0 flex-1">
+          <Link
+            to={conversationsLink("log", { v: "pass" })}
+            className="text-title font-semibold tabular-nums text-fg hover:underline"
+          >
+            {percentage === null ? "—" : percentage + "%"}
+          </Link>
+          <span className="mt-1 block text-body text-fg-2">
+            {measured
+              ? summary.passed + " из " + measured + " оценённых разговоров — без найденных ошибок"
+              : "Для расчёта нужны оценённые разговоры"}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-5 sm:max-w-[390px]">
+          {outcomes.map((o) => (
+            <Link
+              key={o.verdict}
+              to={conversationsLink("log", { v: o.verdict })}
+              className="rounded-control py-1 hover:bg-hover"
+            >
+              <span className={"text-count font-semibold tabular-nums " + o.cls}>{o.n}</span>
+              <span className="mt-1 block text-small text-fg-3">{o.label}</span>
+            </Link>
+          ))}
+        </div>
+      </div>
       {modelError && (
-        <div className="mt-4 text-body text-fg-3">
-          <Link to="/settings" className="text-run underline">
+        <div role="alert" className="mb-6 text-read text-fg-2">
+          <p>Модель проверки не ответила. Проверьте настройки и запустите оценку снова.</p>
+          <Link to="/settings" className="mt-2 inline-block text-run underline">
             Настройки моделей
           </Link>
-          <details className="mt-2">
+          <details className="mt-2 text-body text-fg-3">
             <summary className="cursor-pointer">Причина</summary>
-            <p className="mt-1">{modelError}</p>
+            <p className="mt-1 break-words">{modelError}</p>
           </details>
         </div>
       )}
-      <div className="mt-7 grid grid-cols-3 gap-3 border-y border-line py-5 sm:gap-5">
-        {outcomes.map((o) => (
-          <Link
-            key={o.verdict}
-            to={conversationsLink("log", { v: o.verdict })}
-            className="rounded-control hover:bg-hover"
+      {!current ? (
+        evidence.error ? (
+          <div role="alert" className="py-5 text-read text-fg-2">
+            <p>Не удалось загрузить находки. Результат проверки сохранён.</p>
+            <Button className="mt-3" size="lg" onClick={() => void evidence.refetch()}>
+              Загрузить находки
+            </Button>
+          </div>
+        ) : (
+          <Skeleton className="h-80" />
+        )
+      ) : selectedFinding ? (
+        <>
+          <div
+            id="tone-finding"
+            tabIndex={-1}
+            className="mb-3 flex scroll-mt-6 flex-wrap items-baseline justify-between gap-2 outline-none"
           >
-            <span className={`block text-page font-semibold tabular-nums ${o.cls}`}>{o.n}</span>
-            <span className="mt-1 block text-body text-fg-3">{o.label}</span>
-          </Link>
-        ))}
-      </div>
-      <div className="mt-7 flex flex-wrap items-center gap-3">
-        <Link to={conversationsLink("log", { v: summary.failed ? "fail" : "all" })}>
-          <Button variant="primary" size="lg">
-            Посмотреть разговоры
+            <h3 className="text-lead font-semibold text-fg">
+              {selected ? "Выбранная находка" : "Начните с этой находки"}
+            </h3>
+            <span className="text-small text-fg-3">По частоте в этой выборке</span>
+          </div>
+          <Finding
+            key={result.finishedAt + "-" + selectedFinding.r.id}
+            criterion={selectedFinding}
+            result={result}
+            draft={state.toneOfVoice}
+            busy={state.job.running}
+          />
+          {problems.length > 1 && (
+            <div className="mt-8">
+              <h3 className="text-lead font-semibold text-fg">Другие находки</h3>
+              <ul className="mt-3 divide-y divide-line">
+                {problems
+                  .filter((c) => c.r.id !== selectedFinding.r.id)
+                  .map((c) => (
+                    <li key={c.r.id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelected(c.r.id);
+                          document.getElementById("tone-finding")?.scrollIntoView({ block: "start" });
+                          document.getElementById("tone-finding")?.focus({ preventScroll: true });
+                        }}
+                        className="flex min-h-16 w-full items-center gap-4 rounded-control px-2 py-4 text-left hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-read font-medium text-fg">
+                            {c.r.title.replace(/^Ошибка:\s*/i, "")}
+                          </span>
+                          <span className="mt-1 block text-small text-fg-3">
+                            Критерий {c.n} · {c.name}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-body tabular-nums text-fg-2">
+                          {c.r.log.failed} из {c.r.log.failed + c.r.log.passed}
+                        </span>
+                        <ArrowRight aria-hidden className="size-4 shrink-0 text-fg-3" />
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="py-5 text-read text-fg-2">
+          <p>
+            {measured
+              ? "Проверьте несколько оценок вручную, чтобы убедиться, что критерии применены верно."
+              : "Посмотрите разговоры без оценки и уточните, какие критерии можно к ним применить."}
+          </p>
+          <Link
+            to={measured ? reviewLink("log") : conversationsLink("log", { v: "none" })}
+            className="mt-4 inline-flex min-h-11 items-center gap-2 font-medium text-run hover:underline"
+          >
+            {measured ? "Проверить примеры вручную" : "Посмотреть разговоры"}
             <ArrowRight aria-hidden className="size-4" />
-          </Button>
-        </Link>
-        <Button
-          icon={Download}
-          disabled={!report}
-          onClick={() => report && download("tone-of-voice.md", problemsReport(report, window.location.origin, "log"))}
-        >
-          Скачать отчёт
+          </Link>
+        </div>
+      )}
+      <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-line pt-5">
+        <Button className="sm:hidden" size="lg" icon={FileText} disabled={!brief} onClick={() => setShowReport(true)}>
+          Короткий отчёт
         </Button>
-        <Button variant="ghost" icon={RotateCcw} onClick={onAgain}>
+        <Link
+          to={reviewLink("log")}
+          className="inline-flex min-h-11 items-center gap-1 text-body font-medium text-run hover:underline"
+        >
+          Проверить оценки вручную
+          <ArrowRight aria-hidden className="size-4" />
+        </Link>
+        <Button variant="ghost" size="lg" icon={RotateCcw} disabled={state.job.running} onClick={onAgain}>
           Проверить снова
         </Button>
+        <Link
+          to="/check?step=materials"
+          className="inline-flex min-h-11 items-center text-body text-fg-2 hover:underline"
+        >
+          Следующая выгрузка
+        </Link>
       </div>
-      <div className="mt-12">
-        <h3 className="text-lead font-semibold text-fg">Где агент ошибается</h3>
-        {current ? <ProblemList list={own} stage="log" /> : <Skeleton className="mt-4 h-32" />}
-      </div>
-      <Link to={reviewLink("log")} className="mt-4 inline-flex items-center gap-1 text-read text-run hover:underline">
-        Проверить оценки вручную
-        <ArrowRight aria-hidden className="size-4" />
-      </Link>
+      <History finishedAt={result.finishedAt} refreshStamp={result.finishedAt + "-" + state.job.running} />
+      <Sheet open={showReport} onClose={() => setShowReport(false)} title="Короткий отчёт для команды" width="lg">
+        <div className="px-5 py-6 sm:px-7">
+          <div className="mb-6 flex flex-wrap gap-3">
+            <Button
+              size="lg"
+              icon={Download}
+              disabled={!brief}
+              onClick={() => download("tone-of-voice-brief.md", brief)}
+            >
+              Скачать отчёт
+            </Button>
+            <Button
+              size="lg"
+              icon={copied ? Check : Copy}
+              disabled={!brief}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(brief);
+                  setCopied(true);
+                  setCopyError(false);
+                } catch {
+                  setCopyError(true);
+                }
+              }}
+            >
+              {copied ? "Скопировано" : "Скопировать"}
+            </Button>
+          </div>
+          {copyError && (
+            <p role="alert" className="mb-4 text-body text-bad">
+              Не удалось скопировать. Скачайте отчёт или выделите текст.
+            </p>
+          )}
+          <BriefPreview text={brief} />
+        </div>
+      </Sheet>
     </section>
   );
 }
