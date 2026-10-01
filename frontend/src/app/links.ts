@@ -5,6 +5,8 @@
 export type Stage = "log" | "sim";
 
 export const SECTIONS = {
+  start: "/start",
+  check: "/check",
   overview: "/overview",
   logs: "/logs",
   simulations: "/simulations",

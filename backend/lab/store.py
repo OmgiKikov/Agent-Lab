@@ -75,7 +75,7 @@ def replace_inputs(name: str, value: Any) -> None:
         # Keep the names: a repeated legacy import must not resurrect intentionally cleared results.
         connection.executemany(
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            [('discover.json', 'null'), ('cards.json', 'null')],
+            [('discover.json', 'null'), ('cards.json', 'null'), ('tone-of-voice-criteria.json', 'null')],
         )
 
 

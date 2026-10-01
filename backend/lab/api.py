@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import Body, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import agents, cards, discover, llm, logs, personas, problems, simulate, store
+from . import agents, cards, discover, llm, logs, personas, policy_files, problems, simulate, store, tone
 from .context import sources
 from .jobs import BusyError, Jobs, Progress, Work
 
@@ -50,6 +50,16 @@ class RunCommand(BaseModel):
     repeats: int = Field(default=1, ge=1, le=3)
     personas: list[str] = Field(default_factory=list)
     cardIds: list[str] | None = None
+
+
+class TonePolicyCommand(BaseModel):
+    text: str = Field(min_length=20, max_length=50000)
+    name: str = Field(default='Правила tone of voice', min_length=1, max_length=160)
+
+
+class ToneCheckCommand(BaseModel):
+    ruleIds: list[str] = Field(min_length=1, max_length=20)
+    count: int = Field(default=300, ge=1, le=300)
 
 
 class ReviewCommand(BaseModel):
@@ -110,6 +120,7 @@ def state() -> dict:
         'sources': source_summary(),
         'logs': {'total': len(logs.load()), **logs.meta()},
         'discover': analysis,
+        'toneOfVoice': store.load(tone.DRAFT),
         'cards': store.load(cards.DECK),
         'runs': [{key: record.get(key) for key in RUN_FIELDS} for record in store.runs()],
         'targets': [agents.public(key, config) for key, config in agents.configs().items()],
@@ -234,6 +245,56 @@ async def start_cards() -> dict:
     return start('cards', work)
 
 
+@app.post('/api/tone-of-voice/policy')
+async def save_tone_policy(payload: TonePolicyCommand) -> dict:
+    async def work(progress: Progress) -> dict:
+        source = tone.policy(payload.name.strip(), payload.text)
+        kept = [item for item in sources.load() if item['kind'] != tone.KIND]
+        store.replace_inputs(sources.FILE, [*kept, source])
+        return {'ok': True}
+
+    try:
+        return await jobs.perform('tone-policy', work)
+    except BusyError as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.post('/api/tone-of-voice/read-file')
+async def read_tone_file(request: Request, name: str) -> dict:
+    try:
+        text = await asyncio.to_thread(policy_files.read, name, await request.body())
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    return {'text': text, 'name': name}
+
+
+@app.post('/api/tone-of-voice/criteria')
+async def prepare_tone_criteria() -> dict:
+    async def work(progress: Progress) -> dict:
+        draft = await tone.prepare(progress)
+        store.save(tone.DRAFT, draft)
+        return draft
+
+    return start('tone-criteria', work)
+
+
+@app.post('/api/tone-of-voice/check')
+async def check_tone(payload: ToneCheckCommand) -> dict:
+    try:
+        criteria = tone.selection(payload.ruleIds)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+    async def work(progress: Progress) -> dict:
+        result = await tone.assess(criteria, payload.count, progress)
+        store.save(discover.RESULT, result)
+        return result
+
+    return start('tone-check', work)
+
+
 @app.post('/api/runs')
 async def start_run(payload: RunCommand) -> dict:
     if payload.target not in agents.configs():
@@ -260,7 +321,7 @@ async def review(payload: ReviewCommand) -> dict:
     if payload.source == 'log':
         if not payload.dialogueId or not payload.ruleId:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')
-        if jobs.state['running'] and jobs.state['kind'] == 'discover':
+        if jobs.state['running'] and jobs.state['kind'] in ('discover', 'tone-check'):
             raise HTTPException(409, 'Идёт оценка логов: ответ не сохранится. Отметьте после неё.')
         try:
             store.set_log_review(discover.RESULT, payload.dialogueId, payload.ruleId, payload.decision)

@@ -1,7 +1,11 @@
 import { day, plural } from "./format";
 import type { Example, Problems, RuleEntry } from "./problems";
 
-const SOURCE_LABEL: Record<string, string> = { prompt: "Промпт требует", tools: "Инструменты агента" };
+const SOURCE_LABEL: Record<string, string> = {
+  prompt: "Промпт требует",
+  tools: "Инструменты агента",
+  "tone-of-voice": "Правила tone of voice требуют",
+};
 export const sourceLabel = (kind: string) => SOURCE_LABEL[kind] ?? "Источник критерия";
 
 /**

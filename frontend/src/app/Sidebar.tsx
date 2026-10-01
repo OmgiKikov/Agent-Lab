@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Bot,
+  ClipboardCheck,
   FlaskConical,
   LayoutGrid,
   ListChecks,
@@ -26,6 +27,7 @@ export type NavCounts = { logs?: number; sims?: number; criteria?: number };
  */
 export function useNav({ logs, sims, criteria }: NavCounts): NavItem[] {
   return [
+    { to: SECTIONS.start, label: "Проверка", icon: ClipboardCheck, match: ["/start", "/check"] },
     { to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid, match: ["/overview"] },
     {
       to: SECTIONS.logs,
@@ -108,7 +110,7 @@ export function Sidebar({ counts }: { counts: NavCounts }) {
   return (
     <nav aria-label="Разделы" className="hidden w-[248px] flex-shrink-0 flex-col bg-side px-3 pb-3 pt-5 lg:flex">
       <NavLink
-        to={SECTIONS.overview}
+        to={SECTIONS.start}
         className="flex items-center gap-3 rounded-control px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
       >
         <Mark />
