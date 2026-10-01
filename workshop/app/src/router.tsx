@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, useLocation, useParams } from "react-rou
 import { dialogLink } from "./lab/dialogs";
 import { Shell } from "./app/Shell";
 import { ViolationsPage } from "./sections/violations/ViolationsPage";
+import { CriteriaPage } from "./sections/criteria/CriteriaPage";
 import { AgentPage } from "./screens/agent/AgentPage";
 import { RunsPage } from "./pages/RunsPage";
 import { SearchPage } from "./pages/SearchPage";
@@ -37,8 +38,9 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/violations" replace /> },
       { path: "violations", element: <ViolationsPage /> },
+      { path: "criteria", element: <CriteriaPage /> },
       { path: "agent", element: <AgentPage /> },
-      { path: "agent/criteria", element: <AgentPage /> },
+      { path: "agent/criteria", element: <To to="/criteria" /> },
       { path: "logs", element: <LogsPage /> },
       { path: "scenarios", element: <ScenariosPage /> },
       { path: "simulations", element: <SimulationsPage /> },
@@ -48,17 +50,17 @@ export const router = createBrowserRouter([
       // The earlier sections: their content became tabs of the blocks.
       { path: "problems", element: <To to="/violations" /> },
       { path: "problems/:problemId", element: <To to="/violations" from={p => ({ v: p.problemId ?? "" })} /> },
-      { path: "rules", element: <To to="/agent/criteria" /> },
-      { path: "rules/:ruleId", element: <To to="/agent/criteria" from={p => ({ c: p.ruleId ?? "" })} /> },
+      { path: "rules", element: <To to="/criteria" /> },
+      { path: "rules/:ruleId", element: <To to="/criteria" from={p => ({ c: p.ruleId ?? "" })} /> },
       { path: "review", element: <To to="/logs?tab=review" /> },
       { path: "dialogs", element: <To to="/logs?tab=dialogs" /> },
       { path: "dialogs/:dialogKey", element: <DialogRedirect /> },
       { path: "lab", element: <Navigate to="/violations" replace /> },
       { path: "lab/dialogs/*", element: <Navigate to="/results?tab=dialogs" replace /> },
       { path: "lab/logs/*", element: <Navigate to="/logs?tab=dialogs" replace /> },
-      { path: "lab/criteria/*", element: <Navigate to="/agent/criteria" replace /> },
+      { path: "lab/criteria/*", element: <Navigate to="/criteria" replace /> },
       { path: "lab/judge/check", element: <Navigate to="/logs?tab=review" replace /> },
-      { path: "lab/judge/*", element: <Navigate to="/agent/criteria" replace /> },
+      { path: "lab/judge/*", element: <Navigate to="/criteria" replace /> },
       { path: "lab/checks/*", element: <Navigate to="/scenarios" replace /> },
       { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
       { path: "lab/*", element: <Navigate to="/violations" replace /> },

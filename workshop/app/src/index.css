@@ -4,6 +4,11 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  /* A criterion the judge could not decide: a dashed bar in the margin of the code. */
+  .stripe-unknown { background: repeating-linear-gradient(180deg, rgb(var(--fg-4)) 0 3px, transparent 3px 6px); }
+}
+
 html {
   color-scheme: dark;
 }
