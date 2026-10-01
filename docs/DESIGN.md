@@ -34,10 +34,11 @@
 | Симуляции · Сценарии | `/simulations/scenarios` | Сценарии: как начинает клиент каждого типа, что проверят, тестовые данные (`?s=`) | «Сыграть этот сценарий» |
 | Симуляции · Разговоры, Проверка, Проблема | `/simulations/conversations`, `/simulations/review`, `/simulations/problems/:id` | То же, что у логов, для одного прогона (`?run=`) | — |
 | **Критерии** | `/criteria` | Требования к агенту списком или «В коде агента» (`?view=code`), этап `?s=log|sim` | «Извлечь заново» |
-| **Агент**, **Настройки** | `/agent`, `/settings` | Подключение, прочитанный код, ссылка на трейсы Workshop (`/runs`); модели, ключи, ассистент | — |
+| **Агент**, **Настройки** | `/agent`, `/settings` | Подключение и прочитанный код агента; модели и где что работает | «Прочитать код» |
 
 Старые адреса (`/problems`, `/dialogs`, `/review` с `?src=`, `/violations`, `/results`, `/scenarios`, `/rules`, `/lab/*`)
-ведут в свой этап (`router.tsx`). Ссылки строятся только через `app/links.ts` (`stageLink`, `problemLink`,
+ведут в свой этап (`router.tsx`); адреса трейсов Workshop (`/runs`, `/search`, `/saved`) — на «Обзор». Python отдаёт
+одну и ту же собранную страницу на любой адрес, кроме `/api/*` и `/assets/*` (`backend/lab/app.py`). Ссылки строятся только через `app/links.ts` (`stageLink`, `problemLink`,
 `conversationsLink`, `reviewLink`, `runLink`, `scenariosLink`, `criterionLink`) и `lab/dialogs.ts` (`dialogOf`, `dialogLink`).
 ⌘K ищет разделы, проблемы, критерии, прогоны, сценарии и действия.
 
@@ -70,11 +71,9 @@
 - Движение со смыслом: числа досчитывают до значения, полоски растут, строки появляются друг за другом
   (`product/motion.ts`); пример сменяется сдвигом в сторону листания; после ответа — следующий случай и «Отменить».
   При `prefers-reduced-motion` всё сразу.
-- Знак продукта — `app/Mark.tsx` (облачко разговора с галочкой).
-- Workshop (трейсы, ассистент «Спросить») в той же светлой палитре: `utils/colors.ts`, подписи обычным регистром,
-  время по-русски («5 мин назад»).
+- Знак продукта — `app/Mark.tsx` (облачко разговора с галочкой); серый он же стоит над пустыми местами.
 
-## Что где лежит (`workshop/app/src`)
+## Что где лежит (`frontend/src`)
 
 - `design/tokens.css` — цвета; `tailwind.config.js` — шкала, радиусы, тени.
 - `app/` — оболочка: `Shell`, `Sidebar`, `BottomNav`, `Header` (номер этапа, крошки, действия, вкладки), `StageTabs`,
@@ -86,9 +85,11 @@
   `Facts`, `Reliability`, `UploadLogs`, `SourceSheet`, `motion`.
 - `ui/` — примитивы без знания о продукте: `Button`, `Label`, `Segmented`, `Menu`, `Sheet`, `Modal`, `Search`, `Tag`,
   `EmptyState`, `toast`.
-- `lab/` — данные сервиса проверок: запросы, типы, `useProblems`, `useCriteria`, счёт, формат, отчёт.
-- `components/`, `hooks/`, `pages/`, `api/`, `utils/` — Workshop в раскладке форка Raindrop (не переставляем, чтобы
-  сверяться с upstream).
+- `lab/` — данные бэкенда: запросы, типы, `useProblems`, `useCriteria`, счёт, формат, отчёт.
+
+Сводку проблем собирает бэкенд: `backend/lab/problems.py` (`GET /api/problems?run=`). Ответ человека пишется на один
+критерий одного разговора (`POST /api/review` с `ruleId`; для логов `source: "log"`) и остаётся при переоценке,
+пока вердикт по этому критерию тот же (`store.update_item`, `discover.carry_reviews`).
 
 ## Честность чисел
 

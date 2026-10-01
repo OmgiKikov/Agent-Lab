@@ -1,0 +1,67 @@
+@import "./design/tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  /* A criterion the checks could not decide: a dashed bar in the margin of the code. */
+  .stripe-unknown {
+    background: repeating-linear-gradient(180deg, rgb(var(--fg-4)) 0 3px, transparent 3px 6px);
+  }
+  /* What could not be checked: hatched, so it reads as «нет данных», not as a third result. */
+  .hatch {
+    background: repeating-linear-gradient(135deg, rgb(var(--fg-4) / 0.55) 0 2px, transparent 2px 5px);
+  }
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: rgb(var(--canvas));
+  color: rgb(var(--fg-2));
+  font-family: theme("fontFamily.sans");
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Thin scrollbars: the thumb only, no track. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 134, 142, 0.35) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(128, 134, 142, 0.35);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 134, 142, 0.55);
+}
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: theme("fontFamily.mono");
+}
+
+/* Motion off for those who ask: dialogs, drawers, numbers, spinners and skeletons stop moving. */
+@media (prefers-reduced-motion: reduce) {
+  [class*="animate-in"],
+  [class*="animate-spin"],
+  [class*="animate-pulse"] {
+    animation: none !important;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
+}
