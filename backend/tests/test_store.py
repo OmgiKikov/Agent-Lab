@@ -117,6 +117,17 @@ class StoreTests(unittest.TestCase):
         self.assertIsNone(store.load('cards.json'))
         self.assertEqual(store.run('run-1')['items'][0]['review'], 'disagree')
 
+    def test_new_code_invalidates_its_audit_but_not_the_criteria_of_an_unchanged_tone_policy(self) -> None:
+        policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь на вы.', 'sha256': 'p1'}
+        store.save('sources.json', [{'id': 's1', 'kind': 'prompt', 'content': 'old'}, policy])
+        store.save('tone-of-voice-criteria.json', {'revision': 'r1'})
+        store.save('discover.json', {'results': ['by the code']})
+        store.replace_inputs('sources.json', [{'id': 's1', 'kind': 'prompt', 'content': 'new'}, policy])
+        self.assertIsNone(store.load('discover.json'))
+        self.assertEqual(store.load('tone-of-voice-criteria.json'), {'revision': 'r1'})
+        store.replace_inputs('sources.json', [{'id': 's1', 'kind': 'prompt', 'content': 'new'}])
+        self.assertIsNone(store.load('tone-of-voice-criteria.json'))
+
     def test_migration_normalizes_log_ids_and_reaggregates_existing_evidence(self) -> None:
         legacy = self.path / 'legacy'
         (legacy / 'runs').mkdir(parents=True)

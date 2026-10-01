@@ -52,8 +52,9 @@ class PolicyTests(unittest.TestCase):
         source = tone.policy('rules', POLICY)
         rules = tone.coded_criteria(source)
         self.assertEqual([rule['id'] for rule in rules], ['pronouns', 'simple_language'])
-        self.assertIn('канцеляризмы', rules[1]['text'])
-        self.assertIn('активный залог', rules[1]['text'])
+        self.assertEqual(rules[0]['text'], 'Обращайтесь к клиенту на «вы» со строчной буквы.')
+        self.assertEqual(rules[1]['text'], 'Не используйте канцеляризмы.\nИспользуйте активный залог.')
+        self.assertIn('## Лексика и синтаксис: simple_language', rules[1]['quote'])
         self.assertIn('Отказ сам по себе', rules[0]['acceptable'])
         self.assertNotIn('Только JSON', rules[1]['text'])
         self.assertTrue(all(quotes.found(rule['quote'], source['content']) for rule in rules))
@@ -133,6 +134,39 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(store.load(discover.RESULT))
         state = (await self.client.get('/api/state')).json()
         self.assertEqual(state['toneOfVoice']['revision'], draft['revision'])
+
+    async def test_rereading_agent_code_keeps_the_policy_its_criteria_and_result(self):
+        store.save(api.sources.FILE, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'old prompt'}])
+        draft = await self.prepared()
+        response = await self.client.post(
+            '/api/tone-of-voice/clarification',
+            json={'revision': draft['revision'], 'ruleId': 'pronouns', 'text': '«Вы» с прописной буквы — тоже ошибка.'},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        draft = store.load(tone.DRAFT)
+        rows = [
+            {'ruleId': rule['id'], 'rule': rule['text'], 'status': 'PASS', 'reason': '', 'agentQuote': '', 'title': ''}
+            for rule in draft['criteria']
+        ]
+        value = {'dialogueId': 'd1', 'topicId': 't1', 'status': 'PASS', 'rules': rows, 'opening': '', 'second': None}
+        with patch.object(discover, 'judge_dialogue', AsyncMock(return_value=value)):
+            await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
+            await self.wait_job()
+        result = store.load(discover.RESULT)
+        store.save(api.cards.DECK, {'cards': ['built from the code']})
+        policy = api.sources.load()[-1]
+        code = [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'new prompt'}]
+        with patch.object(api.sources, 'collect', return_value=code):
+            await self.client.post('/api/sources')
+            await self.wait_job()
+        self.assertIsNone(api.jobs.state['error'])
+        self.assertEqual(api.sources.load(), [*code, policy])
+        self.assertEqual(store.load(tone.DRAFT), draft)
+        self.assertEqual(store.load(discover.RESULT), result)
+        self.assertIsNone(store.load(api.cards.DECK))
+        await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция'})
+        self.assertIsNone(store.load(tone.DRAFT))
+        self.assertIsNone(store.load(discover.RESULT))
 
     async def test_check_uses_existing_judge_and_saves_tone_scope(self):
         draft = await self.prepared()

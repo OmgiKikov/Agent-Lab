@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, Play, RotateCcw } from "lucide-react";
 import { api } from "../../lab/api";
+import { duty } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { toneResult } from "../../lab/tone";
@@ -100,7 +101,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
                 </label>
                 <details className="ml-7 mt-2 text-body">
                   <summary className="cursor-pointer text-fg-3 hover:text-fg">Требование и источник</summary>
-                  <p className="mt-2 whitespace-pre-wrap text-read text-fg-2">{c.text}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-read text-fg-2">{duty(c.text)}</p>
                   <blockquote className="mt-3 whitespace-pre-wrap border-l-2 border-mark pl-3 text-body text-fg-3">
                     {c.quote}
                   </blockquote>

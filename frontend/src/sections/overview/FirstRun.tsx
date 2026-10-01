@@ -5,12 +5,13 @@ import { Mark } from "../../app/Mark";
 import { plural } from "../../lab/format";
 import { conversationsLink, SECTIONS } from "../../app/links";
 import { useLabState } from "../../lab/LabProvider";
+import { codeSources } from "../../lab/tone";
 import { Button } from "../../ui/Button";
 
 /** Before the first assessment: what the product does in one sentence, and four steps, each ticked with its result. */
 export function FirstRun({ onAssess }: { onAssess: () => void }) {
   const { state } = useLabState();
-  const sources = state?.sources.length ?? 0;
+  const sources = codeSources(state).length;
   const logs = state?.logs.total ?? 0;
   const runs = state?.runs.length ?? 0;
   const steps = [

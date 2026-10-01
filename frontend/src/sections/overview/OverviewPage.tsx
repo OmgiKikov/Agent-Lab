@@ -8,6 +8,7 @@ import { useCriteria } from "../../lab/criteria";
 import { count, longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { AGENT_SUBTITLE, AGENT_TITLE } from "../../lab/look";
+import { checkedIn, stagesSentence } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import type { LabRun } from "../../lab/types";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
@@ -72,7 +73,7 @@ export function OverviewPage() {
           setAssess(false);
           drop("assess");
         }}
-        criteria={data?.rules.length ?? 0}
+        criteria={data ? checkedIn(data, "log").length : 0}
       />
       {data && (data.log || data.sim) && (
         <ReportSheet
@@ -126,9 +127,8 @@ export function OverviewPage() {
           </p>
           <h2 className="mt-1 text-page font-semibold text-fg">Как работает агент</h2>
           <p className="mt-3 max-w-[64ch] text-lead text-fg-2">
-            Два этапа и одни и те же {count(list.length, "критерий", "критерия", "критериев")}. Сначала — настоящие
-            разговоры из логов. Из найденных в них ошибок собираются сценарии, и синтетические клиенты разыгрывают их с
-            агентом. Счёт у каждого этапа свой.
+            {stagesSentence(data)} Сначала — настоящие разговоры из логов. Из найденных в них ошибок собираются
+            сценарии, и синтетические клиенты разыгрывают их с агентом. Счёт у каждого этапа свой.
           </p>
           <div className="mt-14 grid gap-x-16 gap-y-20 lg:grid-cols-2">
             <LogStage data={data} list={list} onAssess={() => setAssess(true)} />

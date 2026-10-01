@@ -8,7 +8,7 @@ import { problemLink } from "../../app/links";
 import { useCriteria } from "../../lab/criteria";
 import { longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { summarySentence } from "../../lab/problemReport";
+import { checkedIn, summarySentence } from "../../lab/problemReport";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
 import { StageResult } from "../../product/StageResult";
 import { UploadButton } from "../../product/UploadLogs";
@@ -114,7 +114,7 @@ function LogsResult({
           setAssess(false);
           drop("assess");
         }}
-        criteria={data?.rules.length ?? 0}
+        criteria={data ? checkedIn(data, "log").length : 0}
       />
       {data?.log && (
         <ReportSheet

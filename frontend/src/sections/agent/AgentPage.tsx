@@ -8,6 +8,7 @@ import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
 import { day, plural, thousands } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
+import { codeSources } from "../../lab/tone";
 import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -59,7 +60,7 @@ export function AgentPage() {
             state?.settings.repo ? `Папка с кодом: ${state.settings.repo}` : "Сначала укажите папку с кодом агента"
           }
         >
-          {state?.sources.length ? "Прочитать код заново" : "Прочитать код"}
+          {codeSources(state).length ? "Прочитать код заново" : "Прочитать код"}
         </Button>
       }
       below={<SectionJob kinds={["sources", "names"]} />}
@@ -81,7 +82,7 @@ export function AgentPage() {
         </div>
       </div>
     );
-  const sources = [...state.sources].sort((a, b) => b.rules - a.rules || b.chars - a.chars);
+  const sources = codeSources(state).sort((a, b) => b.rules - a.rules || b.chars - a.chars);
   const date = day(readAt());
   return (
     <div className="flex h-full flex-col">

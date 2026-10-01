@@ -1,4 +1,5 @@
-import { day, plural } from "./format";
+import { duty } from "./criteria";
+import { count, day, plural } from "./format";
 import type { Example, Problems, RuleEntry } from "./problems";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -33,14 +34,31 @@ export function secondLine(e: Example, model: string | null): string {
 
 type Source = "log" | "sim";
 
+/** The criteria one stage checked: with an error or without one in some conversation of that stage. */
+export const checkedIn = (data: Problems, source: Source) =>
+  data.rules.filter((r) => r[source].failed + r[source].passed > 0);
+
 /** «Агент ошибается по 6 из 18 критериев» in one source, or the good result said as plainly. */
 export function summarySentence(data: Problems, source: Source): string {
-  const total = data.rules.length;
+  const total = checkedIn(data, source).length;
   const failed = data.rules.filter((r) => r[source].failed > 0).length;
   if (failed) return `Агент ошибается по ${failed} из ${total} ${plural(total, "критерию", "критериям", "критериям")}`;
   const n = source === "log" ? (data.log?.assessed ?? 0) : (data.sim?.assessed ?? 0);
   if (!n) return "Разговоры пока не удалось проверить";
   return `Ошибок не найдено ни по одному из ${total} ${plural(total, "критерия", "критериев", "критериев")} в ${n} ${plural(n, "разговоре", "разговорах", "разговорах")}`;
+}
+
+/**
+ * The criteria of the two stages in one sentence: «одни и те же» only while both checked the same ones. A run played
+ * before the logs were checked by other criteria (tone of voice, say) keeps its own until the next run.
+ */
+export function stagesSentence(data: Problems): string {
+  const log = checkedIn(data, "log").length;
+  const sim = checkedIn(data, "sim");
+  const shared = sim.filter((r) => r.log.failed + r.log.passed > 0).length;
+  if (log && sim.length && (shared < log || shared < sim.length))
+    return `Два этапа: ${count(log, "критерий", "критерия", "критериев")} в логах и ${sim.length} в симуляциях.`;
+  return `Два этапа и одни и те же ${count(data.rules.length, "критерий", "критерия", "критериев")}.`;
 }
 
 const where = (p: RuleEntry, source?: Source) =>
@@ -68,7 +86,7 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
     "",
     `Ошибка ${where(p, source)}.`,
     "",
-    `Агент должен: ${p.rule.text}`,
+    `Агент должен: ${duty(p.rule.text)}`,
     "",
     p.rule.quote
       ? `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${p.rule.origin})` : ""}: «${p.rule.quote}»`

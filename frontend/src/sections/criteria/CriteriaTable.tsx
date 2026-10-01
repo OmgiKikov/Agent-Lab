@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { Criterion } from "../../lab/criteria";
+import { duty, type Criterion } from "../../lab/criteria";
 import { secondOf } from "../../lab/problemStats";
 import { nameOf, toneOf, type SideKey } from "./model";
 import type { Source } from "../../lab/types";
@@ -80,8 +80,8 @@ export function CriteriaTable({
                   >
                     {c.name}
                   </button>
-                  <div className="mt-0.5 line-clamp-2 text-small text-fg-3" title={c.r.rule.text}>
-                    {c.r.rule.text}
+                  <div className="mt-0.5 line-clamp-2 text-small text-fg-3" title={duty(c.r.rule.text)}>
+                    {duty(c.r.rule.text)}
                   </div>
                 </td>
                 <td className="hidden py-3 pr-4 font-mono text-small text-fg-3 2xl:table-cell">

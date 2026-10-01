@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ArrowUpRight, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { problemLink } from "../../app/links";
-import type { Criterion } from "../../lab/criteria";
+import { duty, type Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
 import type { Example } from "../../lab/problems";
@@ -89,7 +89,7 @@ export function CriterionPanel({
       <div className="px-5 pb-10 pt-5">
         <p className="text-small text-fg-3">Критерий {c.n}</p>
         <h2 className="mt-1 text-balance text-title font-semibold text-fg">{c.name}</h2>
-        <p className="mt-2 text-body text-fg-2">{r.rule.text}</p>
+        <p className="mt-2 text-body text-fg-2">{duty(r.rule.text)}</p>
         {r.rule.origin && (
           <p
             className="mt-2 flex items-center gap-1.5 text-small text-fg-3"

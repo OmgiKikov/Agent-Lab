@@ -179,7 +179,9 @@ async def check_models() -> dict:
 async def collect_sources() -> dict:
     async def work(progress: Progress) -> list[dict]:
         collected = await asyncio.to_thread(sources.collect, agents.repo())
-        store.replace_inputs(sources.FILE, collected)
+        # The tone-of-voice policy is a person's document, not the agent's code: re-reading the code keeps it.
+        policy = [source for source in sources.load() if source['kind'] == tone.KIND]
+        store.replace_inputs(sources.FILE, [*collected, *policy])
         return collected
 
     return start('sources', work)

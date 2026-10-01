@@ -14,6 +14,9 @@ export function toneResult(state: LabState | null) {
   return assessment?.purpose === TONE_ID ? assessment : null;
 }
 
+/** What was read from the agent's code; the rules of communication beside it are a person's own document. */
+export const codeSources = (state: LabState | null) => state?.sources.filter((s) => s.id !== TONE_ID) ?? [];
+
 export function nextStep(state: LabState | null): CheckStep {
   if (state?.job.running && state.job.kind === "tone-check") return "checking";
   if (state?.toneOfVoice && state.job.kind === "tone-check" && state.job.error) return "checking";

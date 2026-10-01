@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
 import { stageLink, type Stage } from "../../app/links";
+import { duty } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useProblems, useReview, type Decision } from "../../lab/problems";
@@ -248,7 +249,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               <h2 className="mt-8 text-balance text-page font-semibold text-fg">{current.rule.title}</h2>
               <p className="mt-3 max-w-[68ch] text-lead text-fg-2">
                 <span className="text-fg-3">Агент должен: </span>
-                {current.rule.rule.text}
+                {duty(current.rule.rule.text)}
               </p>
               <div className="mt-8">
                 <ExampleCard

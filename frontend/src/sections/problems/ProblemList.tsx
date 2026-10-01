@@ -20,7 +20,7 @@ export function ProblemList({
 }) {
   const rows = queueOf(list, stage);
   const shown = limit ? rows.slice(0, limit) : rows;
-  const clean = list.length - rows.length;
+  const clean = list.filter((c) => c.r[stage].passed > 0 && !c.r[stage].failed).length;
   if (!rows.length) return <p className="py-6 text-read text-fg-3">Ошибок не найдено ни по одному критерию.</p>;
   return (
     <>

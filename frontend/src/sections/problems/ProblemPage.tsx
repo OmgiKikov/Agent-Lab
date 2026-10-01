@@ -6,7 +6,7 @@ import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
 import { conversationsLink, criterionLink, problemLink, reviewLink, stageLink, type Stage } from "../../app/links";
 import { dialogOf } from "../../lab/dialogs";
-import { useCriteria } from "../../lab/criteria";
+import { duty, useCriteria } from "../../lab/criteria";
 import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useReview, type Decision, type Example } from "../../lab/problems";
@@ -153,7 +153,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
           <h2 className="mt-1 text-balance text-page font-semibold text-fg">{r.title}</h2>
           <p className="mt-4 max-w-[68ch] text-lead text-fg-2">
             <span className="text-fg-3">Агент должен: </span>
-            {r.rule.text}
+            {duty(r.rule.text)}
             {(condition || acceptable) && !more && (
               <>
                 {" "}

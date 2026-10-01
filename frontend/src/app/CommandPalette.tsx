@@ -20,6 +20,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { duty } from "../lab/criteria";
 import { day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import { useProblems } from "../lab/problems";
@@ -204,7 +205,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: `c-${r.id}`,
         group: "Критерии",
         label: r.title,
-        sub: r.rule.origin || r.rule.text,
+        sub: r.rule.origin || duty(r.rule.text),
         icon: ListChecks,
         run: go(criterionLink(r.id)),
       });

@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../lab/api";
 import { day, plural } from "../../lab/format";
 import { SECTIONS } from "../../app/links";
 import { useLabState } from "../../lab/LabProvider";
+import { codeSources, toneResult } from "../../lab/tone";
 import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
@@ -33,8 +34,35 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
           ? 100
           : (sizes[sizes.length - 1] ?? 0);
   const [starting, setStarting] = useState(false);
+  const navigate = useNavigate();
   const busy = !!state?.job.running;
-  const sources = state?.sources.length ?? 0;
+  const sources = codeSources(state).length;
+  if (toneResult(state))
+    return (
+      <Sheet
+        open={open}
+        onClose={onClose}
+        title="Оценить логи заново"
+        sub="Сейчас разговоры проверены по правилам общения — tone of voice."
+      >
+        <div className="space-y-5 px-5 py-5">
+          <p className="max-w-[52ch] text-read text-fg-2">
+            Эта проверка повторяется на своей странице: там её критерии и уточнения, которые вы подтвердили. Прошлые
+            результаты остаются в истории.
+          </p>
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={() => {
+              onClose();
+              void navigate("/check?step=criteria");
+            }}
+          >
+            Повторить проверку tone of voice
+          </Button>
+        </div>
+      </Sheet>
+    );
   const start = () => {
     setStarting(true);
     api("/api/discover", { count: Math.max(5, size) })
