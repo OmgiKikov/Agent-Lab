@@ -45,7 +45,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
     <label className="block">
       <span className="mb-1.5 block text-small font-medium text-fg-2">{label}</span>
       {children}
-      {hint && <span className="mt-1.5 block text-meta text-fg-3">{hint}</span>}
+      {hint && <span className="mt-1.5 block text-small text-fg-3">{hint}</span>}
     </label>
   );
 }
@@ -60,7 +60,7 @@ function Way({ target, on, onPick }: { target: Target; on: boolean; onPick: () =
         <span className="flex items-center gap-2 text-body font-medium"><look.icon aria-hidden className="size-4 text-fg-3" />{WAY_NAME[target.id] ?? target.name}</span>
         <span className="mt-0.5 block text-small text-fg-3">{look.how}{target.where ? ` · ${target.where}` : ""}</span>
       </span>
-      <span className={cn("inline-flex items-center gap-1 text-meta", target.ready ? "text-ok" : "text-fg-3")}>{target.ready ? <><CheckIcon aria-hidden className="size-3.5" />готово</> : "не настроено"}</span>
+      <span className={cn("inline-flex items-center gap-1 text-small", target.ready ? "text-ok" : "text-fg-3")}>{target.ready ? <><CheckIcon aria-hidden className="size-3.5" />готово</> : "не настроено"}</span>
     </button>
   );
 }
@@ -107,16 +107,16 @@ export function ConnectionForm({ state }: { state: LabState }) {
           <input name="epk" autoComplete="off" inputMode="numeric" value={epk} onChange={e => setEpk(e.target.value)} placeholder="Например: 1234567890 2345678901" className={INPUT} spellCheck={false} />
         </Field>
       </div>
-      {dirty && <p className="mt-4 text-meta text-warn">Есть несохранённые изменения</p>}
+      {dirty && <p className="mt-4 text-small text-warn">Есть несохранённые изменения</p>}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button icon={Save} loading={saving} disabled={!dirty} onClick={save}>Сохранить</Button>
         {target && target.kind !== "code" && <Button icon={PlugZap} loading={check === "pending"} disabled={!target.ready || dirty} onClick={run} title={dirty ? "Сначала сохраните изменения" : undefined}>Проверить связь</Button>}
       </div>
-      {target?.kind === "code" && <p className="mt-3 text-meta text-fg-3">Запускается только на время прогона: проверить связь заранее нельзя.</p>}
+      {target?.kind === "code" && <p className="mt-3 text-small text-fg-3">Запускается только на время прогона: проверить связь заранее нельзя.</p>}
       {check && check !== "pending" && (check.ok
         ? <div className="mt-4 space-y-1.5 text-small"><p className="text-ok">Отвечает{check.seconds ? ` · ${check.seconds.toFixed(1).replace(".", ",")} с` : ""}{check.version ? ` · версия ${check.version}` : ""}</p>{check.question && <p className="text-fg-3">Вопрос: «{check.question}»</p>}{check.text && <p className="border-l-2 border-fg-4/60 pl-3 text-fg-2">{check.text}</p>}</div>
         : <p className="mt-4 text-small text-bad">{check.error ? `Не отвечает: ${check.error}` : `Ответил не обычным ответом (статус ${check.status ?? "?"}): так бывает, когда разговор передан оператору.`}</p>)}
-      {memory.last && !check && <p className="mt-4 text-meta text-fg-3">Последняя проверка: отвечал {new Date(memory.last.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</p>}
+      {memory.last && !check && <p className="mt-4 text-small text-fg-3">Последняя проверка: отвечал {new Date(memory.last.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</p>}
     </section>
   );
 }

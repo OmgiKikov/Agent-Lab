@@ -17,15 +17,15 @@ export const simKey = (runId: string, index: number) => `sim~${runId}~${index}`;
 /** The dialogue an example of a problem or a rule comes from. */
 export const dialogOf = (e: Pick<Example, "source" | "dialogueId" | "runId" | "index">) =>
   e.source === "log"
-    ? `/dialogs?d=${encodeURIComponent(logKey(e.dialogueId ?? ""))}`
-    : `/dialogs?src=sim&run=${encodeURIComponent(e.runId ?? "")}&d=${encodeURIComponent(simKey(e.runId ?? "", e.index ?? 0))}`;
+    ? `/logs/conversations?d=${encodeURIComponent(logKey(e.dialogueId ?? ""))}`
+    : `/simulations/conversations?run=${encodeURIComponent(e.runId ?? "")}&d=${encodeURIComponent(simKey(e.runId ?? "", e.index ?? 0))}`;
 
 /** The dialogue behind a row key, at its block: a logged one in «Логи», a simulated one in «Результаты» of its run. */
 export function dialogLink(key: string): string {
   const [kind, a, b] = key.split("~");
   if (kind === "sim") return dialogOf({ source: "sim", runId: a, index: Number(b) });
   if (kind === "log") return dialogOf({ source: "log", dialogueId: a });
-  return `/dialogs?src=traces&d=${encodeURIComponent(key)}`;
+  return `/runs/${encodeURIComponent(a ?? key)}`;
 }
 
 const failTitles = (rules: Rule[]) => [...new Set(rules.filter(r => r.status === "FAIL").map(r => r.title || r.rule))];
@@ -90,8 +90,8 @@ export function transcript(row: DialogRow, turns: { role: string; text: string }
   for (const t of turns) lines.push(`${t.role === "customer" ? "Клиент" : "Агент"}: ${t.text}`, "");
   const judged = row.rules.filter(r => r.status === "FAIL" || r.status === "PASS");
   if (judged.length) {
-    lines.push("## Вердикты судьи", "");
-    for (const r of judged) lines.push(`- ${r.status === "FAIL" ? "✗ нарушено" : "✓ выполнено"}: ${r.rule}`, `  ${r.reason}${r.agentQuote ? ` «${r.agentQuote}»` : ""}`);
+    lines.push("## Проверка по критериям", "");
+    for (const r of judged) lines.push(`- ${r.status === "FAIL" ? "✗ ошибка" : "✓ без ошибки"}: ${r.rule}`, `  ${r.reason}${r.agentQuote ? ` «${r.agentQuote}»` : ""}`);
   }
   return lines.join("\n");
 }

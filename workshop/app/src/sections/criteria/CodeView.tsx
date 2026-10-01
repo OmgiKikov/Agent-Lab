@@ -22,15 +22,15 @@ function Lens({ c, side, on, onSelect }: { c: Criterion; side: SideKey; on: bool
   const checked = s.failed + s.passed;
   return (
     <button type="button" onClick={onSelect} aria-pressed={on}
-      className={cn("flex w-full flex-wrap items-center gap-x-2 rounded-sm py-0.5 text-left font-sans text-meta transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60", on ? "text-fg-2" : "text-fg-3 hover:text-fg-2")}>
+      className={cn("flex w-full flex-wrap items-center gap-x-2 rounded-sm py-0.5 text-left font-sans text-small transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60", on ? "text-fg-2" : "text-fg-3 hover:text-fg-2")}>
       <span aria-hidden className={cn("size-1.5 rounded-full", tone === "bad" ? "bg-bad" : tone === "ok" ? "bg-ok" : "border border-dashed border-fg-4")} />
       <span>Критерий {c.n}</span>
       <span aria-hidden>·</span>
-      {tone === "bad" && <span className="font-medium text-bad">нарушен в {s.failed} из {checked}</span>}
-      {tone === "ok" && <span className="font-medium text-fg-2">выполнен в {s.passed} из {checked}, нарушений не найдено</span>}
+      {tone === "bad" && <span className="font-medium text-bad">ошибка в {s.failed} из {checked}</span>}
+      {tone === "ok" && <span className="font-medium text-fg-2">ошибок не найдено в {s.passed} из {checked}</span>}
       {tone === "unknown" && <span className="font-medium text-fg-2">не проверен в {s.unknown} {plural(s.unknown, "разговоре", "разговорах", "разговорах")}: нет доказательств</span>}
       {tone === "none" && <span>не встречался в этих разговорах</span>}
-      {tone === "bad" && second.checked > 0 && <><span aria-hidden>·</span><span>второй судья согласен в {second.agree} из {second.checked}</span></>}
+      {tone === "bad" && second.checked > 0 && <><span aria-hidden>·</span><span>две проверки совпали в {second.agree} из {second.checked}</span></>}
       {tone !== "unknown" && s.unknown > 0 && <><span aria-hidden>·</span><span>не проверен в {s.unknown}</span></>}
     </button>
   );
@@ -83,7 +83,7 @@ export function CodeView({ source, content, items, side, selected, onSelect }: {
         );
       })}
       {missing.length > 0 && (
-        <p className="mx-6 mt-6 border-t border-line pt-3 font-sans text-meta text-warn">
+        <p className="mx-6 mt-6 border-t border-line pt-3 font-sans text-small text-warn">
           {missing.length === 1 ? "Цитаты одного критерия" : `Цитат ${missing.length} критериев`} нет в нынешнем тексте: код мог измениться после того, как критерии извлекли ({missing.map(c => c.n).join(", ")}).
         </p>
       )}

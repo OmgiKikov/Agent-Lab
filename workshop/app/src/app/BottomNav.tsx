@@ -1,6 +1,7 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Step } from "../product/Step";
 import { Menu } from "../ui/Menu";
 import { isActive, SETUP, useNav, type NavCounts } from "./Sidebar";
 
@@ -19,9 +20,8 @@ export function BottomNav({ counts }: { counts: NavCounts }) {
         return (
           <NavLink key={item.label} to={item.to} aria-current={on ? "page" : undefined}
             className={cn("relative flex flex-col items-center justify-center gap-0.5 text-label font-medium transition-colors", on ? "text-fg" : "text-fg-3")}>
-            <span className="relative">
-              <item.icon aria-hidden className="size-5" strokeWidth={1.75} />
-              {item.tone === "bad" && !!item.count && <span className="absolute -right-1 -top-0.5 size-2 rounded-full border-2 border-list bg-bad" aria-label={`${item.count} проблем`} />}
+            <span className="flex h-5 items-center">
+              {item.step ? <Step n={item.step} on={on} size="sm" /> : <item.icon aria-hidden className="size-5" strokeWidth={1.75} />}
             </span>
             {item.label}
           </NavLink>

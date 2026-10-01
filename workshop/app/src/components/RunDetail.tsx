@@ -155,16 +155,16 @@ function ErrorsTooltip({ spans }: { spans: Span[] }) {
         <div className="absolute left-0 top-full mt-1 z-50 rounded-xl shadow-2xl overflow-hidden"
           style={{
             width: 380, maxHeight: 350,
-            background: "rgba(20,8,8,0.85)",
+            background: "rgba(255,255,255,0.97)",
             backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)",
-            border: "1px solid rgba(235,20,20,0.25)",
-            boxShadow: "0 8px 32px rgba(235,20,20,0.15), 0 0 0 1px rgba(235,20,20,0.1)",
+            border: "1px solid rgba(215,0,21,0.18)",
+            boxShadow: "0 12px 32px rgba(16,24,32,0.14)",
           }}>
           <div className="px-3 py-2 flex items-center gap-2" style={{ borderBottom: "1px solid rgba(235,20,20,0.15)" }}>
             <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth={2.5} strokeLinecap="round">
               <circle cx={12} cy={12} r={10} /><line x1={12} y1={8} x2={12} y2={12} /><line x1={12} y1={16} x2={12.01} y2={16} />
             </svg>
-            <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>
+            <span className="text-[11px] font-semibold" style={{ color: C.red }}>
               {errorSpans.length} {ruPlural(errorSpans.length, "ошибка", "ошибки", "ошибок")}
             </span>
           </div>
@@ -201,7 +201,7 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
 
   if (!copyValue) {
     return (
-      <span className="text-[9px] font-medium uppercase tracking-wide px-1 rounded" style={{ background: "rgba(16,24,32,0.09)", color: C.fg0, lineHeight: "16px" }}>
+      <span className="text-[11px] font-medium px-1 rounded" style={{ background: "rgba(16,24,32,0.09)", color: C.fg0, lineHeight: "16px" }}>
         {label}
       </span>
     );
@@ -210,7 +210,7 @@ function Badge({ label, copyValue }: { label: string; copyValue?: string }) {
   return (
     <button
       type="button"
-      className="text-[9px] font-medium uppercase tracking-wide px-1 rounded transition-[color,background-color,transform] active:scale-[0.96]"
+      className="text-[11px] font-medium px-1 rounded transition-[color,background-color,transform] active:scale-[0.96]"
       style={{ background: copied ? "rgba(96,227,109,0.12)" : "rgba(16,24,32,0.09)", color: copied ? C.green : C.fg0, lineHeight: "16px" }}
       title={`Копировать: ${label}`}
       aria-label={`Копировать: ${label}`}
@@ -282,7 +282,7 @@ function StatsLine({ stats, model, spans, active, startedAt }: {
             {showCost && breakdown.length > 0 && (
               <div className="absolute left-0 top-full mt-1 z-50 rounded-lg p-2.5 shadow-xl whitespace-nowrap"
                 style={{ background: C.elevated, border: `1px solid ${C.borderLight}` }}>
-                <div className="text-[9px] uppercase tracking-wide mb-2 font-medium" style={{ color: C.fg0 }}>Стоимость</div>
+                <div className="text-[11px] mb-2 font-medium" style={{ color: C.fg0 }}>Стоимость</div>
                 {breakdown.map(b => (
                   <div key={b.model} className="mb-2 last:mb-0">
                     <div className="text-[10px] font-medium mb-0.5" style={{ color: C.fg2 }}>{b.model}</div>

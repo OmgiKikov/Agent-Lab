@@ -1531,7 +1531,7 @@ function AskUserQuestionCard({
 
   return (
     <div className="message-arrive w-[90%] rounded-[4px] border border-amber-300/20 bg-amber-300/[0.08] px-3 py-3 text-fg/85">
-      <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-fg-2">Claude ждёт ответа</div>
+      <div className="mb-2 text-[11px] font-medium text-fg-2">Claude ждёт ответа</div>
       <div className="space-y-3">
         {prompt.questions.map((question, questionIndex) => {
           const selected = choices[questionIndex] ?? [];
@@ -2021,13 +2021,13 @@ function ToolActivityCard({ block }: { block: Extract<AssistantMessageBlock, { t
         <div className="activity-content mt-1 pl-5">
           {block.input_preview && (
             <div>
-              <div className="activity-kicker mb-0.5 text-[9px] font-medium uppercase tracking-[0.16em]">Вход</div>
+              <div className="activity-kicker mb-0.5 text-[11px] font-medium tracking-[0.16em]">Вход</div>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed">{block.input_preview}</pre>
             </div>
           )}
           {block.output_preview && (
             <div className={block.input_preview ? "mt-2" : ""}>
-              <div className="activity-kicker mb-0.5 text-[9px] font-medium uppercase tracking-[0.16em]">Выход</div>
+              <div className="activity-kicker mb-0.5 text-[11px] font-medium tracking-[0.16em]">Выход</div>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed">{block.output_preview}</pre>
             </div>
           )}
@@ -2091,7 +2091,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
   if (block.state === "running") {
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-sky-300/20 bg-sky-300/[0.07] px-3 py-3 text-fg/80 shadow-card">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-fg-2">
+        <div className="text-[11px] font-medium text-fg-2">
           Спрашиваем агента
         </div>
         {question && <div className="mt-2 text-sm text-fg/90">{question}</div>}
@@ -2103,7 +2103,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
   if (!result) {
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-sky-300/15 bg-sky-300/[0.05] px-3 py-3 text-fg/75">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-fg-2">
+        <div className="text-[11px] font-medium text-fg-2">
           Вопрос агенту
         </div>
         {question && <div className="mt-2 text-sm text-fg/85">{question}</div>}
@@ -2115,7 +2115,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
   if (status === "answered") {
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-emerald-300/20 bg-emerald-300/[0.07] px-3 py-3 text-fg/85 shadow-card">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-fg-2">
+        <div className="text-[11px] font-medium text-fg-2">
           Агент ответил
         </div>
         {question && <div className="mt-2 text-xs text-fg/45">{question}</div>}
@@ -2130,7 +2130,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
     const envVar = typeof result.env_var === "string" ? result.env_var : "ANTHROPIC_API_KEY";
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-amber-300/25 bg-amber-300/[0.08] px-3 py-3 text-fg/85">
-        <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-fg-2">
+        <div className="flex items-center gap-2 text-[11px] font-medium text-fg-2">
           <KeyRound className="h-3.5 w-3.5" />
           Агенту нужен ключ API
         </div>
@@ -2145,7 +2145,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
   if (status === "missing_context") {
     return (
       <div className="stream-block w-[90%] rounded-[8px] border border-amber-300/20 bg-amber-300/[0.07] px-3 py-3 text-fg/85">
-        <div className="text-[11px] font-medium uppercase tracking-wide text-fg-2">
+        <div className="text-[11px] font-medium text-fg-2">
           Контекст агента недоступен
         </div>
         <div className="mt-2 text-sm leading-relaxed text-fg/85">{String(result.message ?? "В этом трейсе нет входа LLM, с которого Workshop мог бы продолжить.")}</div>
@@ -2155,7 +2155,7 @@ function AgentAskCard({ block }: { block: Extract<AssistantMessageBlock, { type:
 
   return (
     <div className="stream-block w-[90%] rounded-[8px] border border-red-300/20 bg-red-400/[0.08] px-3 py-3 text-fg/85">
-      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-fg-2">
+      <div className="flex items-center gap-2 text-[11px] font-medium text-fg-2">
         <AlertTriangle className="h-3.5 w-3.5" />
         Не удалось спросить агента
       </div>

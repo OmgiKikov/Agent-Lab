@@ -588,7 +588,7 @@ function ModeKey() {
   ];
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.fg0 }}>
+      <div className="text-[11px] mb-1.5" style={{ color: C.fg0 }}>
         Режимы поиска
       </div>
       <dl className="text-[11px] leading-snug">
@@ -606,7 +606,7 @@ function ModeKey() {
 function FilterKey() {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.fg0 }}>
+      <div className="text-[11px] mb-1.5" style={{ color: C.fg0 }}>
         Фильтры
       </div>
       <dl className="text-[11px] leading-snug">
@@ -634,7 +634,7 @@ function ExampleQueries({ onExample }: { onExample: (q: string, mode: SearchMode
   ];
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.fg0 }}>
+      <div className="text-[11px] mb-1.5" style={{ color: C.fg0 }}>
         Попробуйте
       </div>
       <div className="flex flex-wrap gap-1.5">

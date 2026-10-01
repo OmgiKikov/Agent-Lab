@@ -25,7 +25,7 @@ export function Files({ sources, list, side, current, onOpen }: { sources: Sourc
           <span className={cn("block truncate font-mono text-small", on ? "text-fg" : "text-fg-2")}>{file}</span>
           {dir && <span className="block truncate font-mono text-label text-fg-4">{dir}</span>}
         </span>
-        <span className="font-mono text-meta text-fg-3">{r.n ? <><b className={cn("font-medium", r.broken ? "text-bad" : "text-ok")}>{r.broken}</b> из {r.n}</> : "—"}</span>
+        <span className="text-small tabular-nums text-fg-3">{r.n ? <><b className={cn("font-medium", r.broken ? "text-bad" : "text-ok")}>{r.broken}</b> из {r.n}</> : "—"}</span>
       </button>
     );
   };
@@ -35,9 +35,9 @@ export function Files({ sources, list, side, current, onOpen }: { sources: Sourc
       {prompts.map(r => <Row key={r.s.id} r={r} />)}
       {tools.length > 0 && <Label className="block px-2 pb-2 pt-4">Инструменты</Label>}
       {tools.map(r => <Row key={r.s.id} r={r} />)}
-      <div className="mx-2 mt-5 space-y-1.5 border-t border-line pt-3 text-meta text-fg-3">
-        <p className="flex items-center gap-2"><span aria-hidden className="h-3.5 w-1 rounded-sm bg-bad" />нарушен хотя бы в одном разговоре</p>
-        <p className="flex items-center gap-2"><span aria-hidden className="h-3.5 w-1 rounded-sm bg-ok/80" />выполнен, нарушений не найдено</p>
+      <div className="mx-2 mt-5 space-y-1.5 border-t border-line pt-3 text-small text-fg-3">
+        <p className="flex items-center gap-2"><span aria-hidden className="h-3.5 w-1 rounded-sm bg-bad" />есть ошибка хотя бы в одном разговоре</p>
+        <p className="flex items-center gap-2"><span aria-hidden className="h-3.5 w-1 rounded-sm bg-ok/80" />ошибок не найдено</p>
         <p className="flex items-center gap-2"><span aria-hidden className="stripe-unknown h-3.5 w-1 rounded-sm" />не проверен: нет доказательств</p>
       </div>
     </nav>

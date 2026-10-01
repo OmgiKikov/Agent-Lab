@@ -76,8 +76,8 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
                 <span className={cn("mt-1 size-3 flex-shrink-0 rounded-full border", t.id === target ? "border-fg bg-fg" : "border-fg-4")} />
                 <span className="min-w-0 flex-1">
                   <span className="block text-small text-fg">{t.name}</span>
-                  <span className="block text-meta text-fg-3">{t.note}</span>
-                  {!t.ready && <span className="mt-0.5 block text-meta text-warn">Не настроен · <Link to={SECTIONS.agent} onClick={onClose} className="underline underline-offset-4">Агент</Link></span>}
+                  <span className="block text-small text-fg-3">{t.note}</span>
+                  {!t.ready && <span className="mt-0.5 block text-small text-warn">Не настроен · <Link to={SECTIONS.agent} onClick={onClose} className="underline underline-offset-4">Агент</Link></span>}
                 </span>
               </button>
             ))}
@@ -96,7 +96,7 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
                   <input type="checkbox" checked={chosen.has(c.id)} onChange={() => setChosen(s => toggle(s, c.id))} className="mt-0.5 accent-white" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-small text-fg">{c.name}</span>
-                    <span className="block truncate text-meta text-fg-3">{c.topic}</span>
+                    <span className="block truncate text-small text-fg-3">{c.topic}</span>
                   </span>
                 </label>
               ))}
@@ -111,7 +111,7 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
                 <button
                   key={p.id} type="button" aria-pressed={on} onClick={() => flip(p.id)} title={p.note}
                   className={cn(
-                    "inline-flex h-7 items-center gap-1.5 rounded-control border px-2.5 text-meta transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+                    "inline-flex h-7 items-center gap-1.5 rounded-control border px-2.5 text-small transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
                     on ? "border-fg-3 bg-selected text-fg" : "border-line text-fg-3 hover:text-fg",
                   )}
                 >
@@ -123,7 +123,7 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
         </Block>
         <Block label="Повторы">
           <Segmented value={repeats} onChange={setRepeats} options={["1", "2", "3"].map(n => ({ value: n, label: n === "1" ? "Один раз" : `${n} раза` }))} />
-          <p className="mt-1.5 text-meta text-fg-3">Повтор показывает, одинаково ли агент ведёт себя в той же ситуации.</p>
+          <p className="mt-1.5 text-small text-fg-3">Повтор показывает, одинаково ли агент ведёт себя в той же ситуации.</p>
         </Block>
         <Block label="Подпись">
           <input

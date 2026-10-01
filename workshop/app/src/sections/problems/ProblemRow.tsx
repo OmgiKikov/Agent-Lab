@@ -1,34 +1,33 @@
 import { Link } from "react-router-dom";
+import { ChevronRight } from "lucide-react";
 import type { Criterion } from "../../lab/criteria";
-import { pct, plural } from "../../lab/format";
+import { pct } from "../../lab/format";
 import { checked, violationsOf, type SideKey } from "./model";
 
 /**
- * One problem in a list: the agent's behaviour as a sentence, its topics, one real exchange with the agent's words
- * marked, and how often, «N из M» with M the conversations where it could be checked. The rank is the order by frequency.
+ * One problem in a list, on the page itself, no box: its rank by frequency, the agent's behaviour as a sentence, one real
+ * exchange (the customer's words and the agent's, marked), and «N из M» with a quiet bar. Red stays in the result above.
  */
 export function ProblemRow({ c, side, rank, to }: { c: Criterion; side: SideKey; rank?: number; to: string }) {
   const s = c.r[side];
   const of = checked(s);
   const e = violationsOf(c, side)[0];
   return (
-    <Link to={to} className="grid grid-cols-[28px_minmax(0,1fr)] gap-x-3 gap-y-3 px-5 py-4 transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:outline-none sm:grid-cols-[28px_minmax(0,1fr)_200px] sm:gap-x-5">
-      <span className="pt-0.5 text-body font-semibold tabular-nums text-fg-3">{rank ?? ""}</span>
+    <Link to={to} className="group -mx-3 grid grid-cols-[22px_minmax(0,1fr)_auto] items-start gap-x-4 rounded-block px-3 py-4 transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:outline-none sm:grid-cols-[22px_minmax(0,1fr)_auto_16px]">
+      <span className="pt-0.5 text-read tabular-nums text-fg-4">{rank ?? ""}</span>
       <span className="min-w-0">
         <span className="block text-lead font-medium text-fg">{c.r.title}</span>
-        {c.r.topics.length > 0 && <span className="mt-0.5 block truncate text-small text-fg-3">{c.r.topics.slice(0, 3).join(" · ")}{c.r.topics.length > 3 ? ` и ещё ${c.r.topics.length - 3}` : ""}</span>}
         {e && (
-          <span className="mt-2.5 block space-y-1 text-small">
-            <span className="block truncate text-fg-2"><span className="text-fg-3">Клиент: </span>{e.opening}</span>
-            {e.agentQuote && <span className="block truncate text-fg-2"><span className="text-fg-3">Агент: </span><mark className="rounded-sm bg-mark/70 px-0.5 text-fg">{e.agentQuote}</mark></span>}
+          <span className="mt-1 block truncate text-body text-fg-3">
+            «{e.opening}»{e.agentQuote && <> <span aria-hidden>→</span> <mark className="rounded-sm bg-mark/60 px-0.5 text-fg-2">{e.agentQuote}</mark></>}
           </span>
         )}
       </span>
-      <span className="col-start-2 sm:col-start-auto sm:text-right">
-        <span className="block text-count font-semibold tabular-nums text-fg"><span className="text-bad">{s.failed}</span> <span className="text-body font-normal text-fg-3">из {of}</span></span>
-        <span className="block text-small text-fg-3" title="Из разговоров, где судья смог это проверить">{plural(of, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")}</span>
-        <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-well sm:ml-auto sm:w-40"><span className="block h-full rounded-full bg-bad" style={{ width: `${Math.max(3, pct(s.failed, of))}%` }} /></span>
+      <span className="pt-0.5 text-right">
+        <span className="block whitespace-nowrap text-read font-semibold tabular-nums text-fg">{s.failed}<span className="font-normal text-fg-3"> из {of}</span></span>
+        <span className="ml-auto mt-2 block h-1 w-16 overflow-hidden rounded-full bg-well" aria-hidden><span className="block h-full rounded-full bg-fg/60" style={{ width: `${Math.max(4, pct(s.failed, of))}%` }} /></span>
       </span>
+      <ChevronRight aria-hidden className="mt-1 hidden size-4 text-fg-4 transition-transform group-hover:translate-x-0.5 sm:block" />
     </Link>
   );
 }

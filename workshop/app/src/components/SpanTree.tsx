@@ -16,7 +16,7 @@ function CollapsibleSection({ title, preview, data, maxExpand = 3 }: { title: st
     <div>
       <button className="flex items-center gap-2 w-full text-left" onClick={() => setOpen(!open)}>
         <Chevron open={open} size={8} />
-        <span className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>{title}</span>
+        <span className="text-[11px] font-medium" style={{ color: C.fg1 }}>{title}</span>
         {!open && <span className="text-[10px] font-mono truncate flex-1" style={{ color: C.fg0 }}>{preview}</span>}
       </button>
       {open && (
@@ -141,7 +141,7 @@ function SpanDetail({ span }: { span: Span }) {
       {/* Error banner */}
       {isErr && span.output_payload && (
         <div className="rounded-lg p-2.5" style={{ background: "rgba(204,102,102,0.06)", border: "1px solid rgba(204,102,102,0.12)" }}>
-          <div className="text-[9px] uppercase tracking-wide mb-1 font-medium" style={{ color: C.red }}>Ошибка</div>
+          <div className="text-[11px] mb-1 font-medium" style={{ color: C.red }}>Ошибка</div>
           <pre className="text-[11px] font-mono leading-relaxed" style={{ color: C.red }}>{tryJson(span.output_payload)}</pre>
         </div>
       )}
@@ -228,7 +228,7 @@ function SpanDetail({ span }: { span: Span }) {
       {span.input_payload && (
         <div>
           <div className="flex items-center justify-between mb-1">
-            <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Вход</div>
+            <div className="text-[11px] font-medium" style={{ color: C.fg1 }}>Вход</div>
             <CopyButton text={tryJson(span.input_payload) ?? span.input_payload} />
           </div>
           <div className="p-2 rounded" style={{ background: "rgba(16,24,32,0.02)", border: `1px solid ${C.border}` }}>
@@ -241,7 +241,7 @@ function SpanDetail({ span }: { span: Span }) {
       {span.output_payload && (
         <div>
           <div className="flex items-center justify-between mb-1">
-            <div className="text-[10px] uppercase tracking-wide font-medium" style={{ color: C.fg1 }}>Выход</div>
+            <div className="text-[11px] font-medium" style={{ color: C.fg1 }}>Выход</div>
             <CopyButton text={tryJson(span.output_payload) ?? span.output_payload} />
           </div>
           <div className="p-2 rounded" style={{ background: "rgba(16,24,32,0.02)", border: `1px solid ${C.border}` }}>
@@ -400,9 +400,9 @@ export function SpanTree({
         <div className="overflow-auto sb" style={{ flex: selectedSpan ? "0 0 50%" : "1 1 auto", borderRight: selectedSpan ? `1px solid ${C.border}` : "none" }}>
           {/* Header */}
           <div className="flex items-center px-2 py-1.5 sticky top-0 z-10" style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
-            <div className="text-[9px] uppercase tracking-wider font-medium" style={{ color: C.fg0, width: 220 }}>Спан</div>
-            <div className="flex-1 text-[9px] uppercase tracking-wider font-medium" style={{ color: C.fg0 }}>Шкала времени</div>
-            <div className="text-[9px] uppercase tracking-wider font-medium text-right pr-3" style={{ color: C.fg0, width: 55 }}>Длит.</div>
+            <div className="text-[11px] font-medium" style={{ color: C.fg0, width: 220 }}>Спан</div>
+            <div className="flex-1 text-[11px] font-medium" style={{ color: C.fg0 }}>Шкала времени</div>
+            <div className="text-[11px] font-medium text-right pr-3" style={{ color: C.fg0, width: 55 }}>Длит.</div>
           </div>
           {flat.map(({ span, depth }) => (
             <div key={span.id}>

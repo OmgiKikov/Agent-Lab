@@ -63,7 +63,7 @@ function MessageBubble({ msg, defaultExpanded }: { msg: Message; defaultExpanded
         onClick={() => setExpanded(!expanded)}
       >
         <Chevron open={expanded} size={8} />
-        <span className="text-[11px] font-mono font-medium uppercase tracking-wide" style={{ color: style.label }}>
+        <span className="text-[11px] font-mono font-medium" style={{ color: style.label }}>
           {msg.role}
         </span>
         {!expanded && (

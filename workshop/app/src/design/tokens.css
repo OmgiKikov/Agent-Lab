@@ -1,55 +1,55 @@
 /*
  * The product's tokens: every colour of the interface comes from here, sizes and radii from tailwind.config.js.
- * A light product, as the quality tools a support lead already uses (docs/DESIGN.md): a cool off-white page, white panels,
- * dark ink, one petrol colour for the main action, yellow for the agent's words the judge cited, and the status colours
- * only for status, always with a word. Colours are rgb channels, so Tailwind's alpha works (`bg-bad/10`).
+ * Quiet and light (docs/DESIGN.md): white content, a light grey navigation, near-black ink in two greys, black pills for
+ * the main action, a highlighter yellow for the agent's words the judge cited, and red only where an error is the point.
+ * Colours are rgb channels, so Tailwind's alpha works (`bg-bad/10`).
  */
 :root {
-  /* Surfaces: the page, the navigation, a panel, a well inside a panel, hover, a floating menu, the chosen row. */
-  --canvas: 248 249 250;
-  --side: 242 244 246;
+  /* Surfaces: the page, the navigation, a panel, a well, hover, a floating menu, the chosen row. */
+  --canvas: 255 255 255;
+  --side: 245 245 247;
   --list: 255 255 255;
-  --inset: 246 247 249;
-  --hover: 240 242 245;
+  --inset: 245 245 247;
+  --hover: 240 240 243;
   --raised: 255 255 255;
-  --selected: 232 236 241;
+  --selected: 232 232 237;
 
-  /* Text: headings and numbers, body, secondary (4.9:1 on white), the quietest hint (never alone for meaning). */
-  --fg: 21 24 28;
-  --fg-2: 69 77 87;
-  --fg-3: 102 110 121;
-  --fg-4: 146 153 162;
+  /* Ink: headings and numbers, body, secondary; the fourth only for hints that are never alone with a meaning. */
+  --fg: 29 29 31;
+  --fg-2: 66 66 69;
+  --fg-3: 110 110 115;
+  --fg-4: 134 134 139;
 
-  /* Meaning only, always with a word: a violation, none found, uncertain, running now. All read on white. */
-  --bad: 186 38 30;
-  --ok: 24 120 66;
-  --warn: 158 96 0;
-  --run: 29 92 214;
+  /* Meaning only, always with a word. All read on white. */
+  --bad: 215 0 21;
+  --ok: 36 138 61;
+  --warn: 178 80 0;
+  --run: 0 113 227;
 
-  /* The main action: one per screen. */
-  --primary: 14 52 61;
+  /* The main action: one per screen, a black pill. */
+  --primary: 29 29 31;
 
   /* The agent's words the judge cited, and their number. */
-  --mark: 247 226 140;
-  --mark-strong: 196 140 10;
+  --mark: 255 226 120;
+  --mark-strong: 196 140 0;
 
   /* The customer's bubble. */
-  --customer: 229 238 251;
+  --customer: 232 241 253;
   --customer-fg: 16 37 74;
 
-  /* Hairlines and the well under a segmented control: ink over any surface. */
-  --line: rgb(16 24 32 / 0.08);
-  --line-strong: rgb(16 24 32 / 0.14);
-  --well: rgb(16 24 32 / 0.045);
+  /* Hairlines and the well under a segmented control. */
+  --line: rgb(0 0 0 / 0.08);
+  --line-strong: rgb(0 0 0 / 0.13);
+  --well: rgb(0 0 0 / 0.045);
 }
 
 /* The report is a sheet of paper over the product: it is what leaves it, by mail or in a ticket. */
 :root {
   --paper: 255 255 255;
-  --paper-well: 243 244 246;
-  --ink: 22 25 29;
-  --ink-2: 67 73 81;
-  --ink-3: 98 106 116;
-  --ink-line: 225 228 232;
-  --ink-bad: 178 38 30;
+  --paper-well: 245 245 247;
+  --ink: 29 29 31;
+  --ink-2: 66 66 69;
+  --ink-3: 110 110 115;
+  --ink-line: 225 225 230;
+  --ink-bad: 190 0 20;
 }

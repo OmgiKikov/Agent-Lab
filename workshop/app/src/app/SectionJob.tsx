@@ -12,7 +12,7 @@ export function SectionJob({ kinds }: { kinds: string[] }) {
   const { done = 0, total = 0, message } = job.progress;
   return (
     <div className="border-t border-line" role="status">
-      <div className="flex h-8 items-center gap-3 px-4 text-meta text-fg-3 lg:px-5">
+      <div className="flex h-8 items-center gap-3 px-4 text-small text-fg-3 lg:px-5">
         <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-run" />
         <span className="min-w-0 flex-1 truncate text-fg-2">{message}</span>
         {total > 0 && <span className="tabular-nums">{done} из {total}</span>}

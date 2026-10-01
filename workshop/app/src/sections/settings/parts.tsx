@@ -23,7 +23,7 @@ export function Row({ name, use, children, below }: { name: ReactNode; use?: Rea
       <div className="flex items-center gap-x-4">
         <div className="min-w-0 flex-1">
           <div className="text-body font-medium text-fg">{name}</div>
-          {use && <div className="text-meta text-fg-3">{use}</div>}
+          {use && <div className="text-small text-fg-3">{use}</div>}
         </div>
         {children && <div className="flex flex-shrink-0 items-center gap-3">{children}</div>}
       </div>

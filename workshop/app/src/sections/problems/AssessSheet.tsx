@@ -34,7 +34,7 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
   };
   const why = busy ? "Сейчас идёт другая задача" : !sources ? "Сначала прочитайте код агента" : !total ? "Сначала загрузите логи" : undefined;
   return (
-    <Sheet open={open} onClose={onClose} title="Оценить логи" sub="Судья читает настоящие разговоры и по каждому критерию отмечает: нарушен, выполнен или не ясно. Сам агент не запускается.">
+    <Sheet open={open} onClose={onClose} title="Оценить логи" sub="Модель читает настоящие разговоры и по каждому критерию отмечает: ошибка, без ошибки или не ясно. Сам агент не запускается.">
       <div className="space-y-6 px-5 py-5">
         <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-4">
           <div className="rounded-block border border-line p-4">
@@ -55,7 +55,7 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
                 <div className="mt-2 font-mono text-count text-fg">{criteria}</div>
                 <div className="text-small text-fg-3">из кода агента</div>
               </>
-            ) : <p className="mt-2 text-small text-fg-2">Судья достанет их дословно из промптов при первой оценке.</p>}
+            ) : <p className="mt-2 text-small text-fg-2">Они извлекаются дословно из промптов при первой оценке.</p>}
             {!sources && <Link to={SECTIONS.agent} onClick={onClose} className="mt-3 inline-block text-small text-fg underline decoration-line-strong underline-offset-4">Прочитать код агента</Link>}
           </div>
         </div>

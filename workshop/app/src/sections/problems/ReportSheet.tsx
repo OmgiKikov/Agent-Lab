@@ -25,8 +25,8 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
         <span className="font-mono text-lead text-ink-3">{i}</span>
         <h3 className="text-balance text-lead font-semibold text-ink">{c.r.title}</h3>
         <p className="col-start-2 mt-1 text-small text-ink-2">
-          Нарушено в <b className="font-semibold text-ink-bad">{s.failed} из {checked(s)}</b> {plural(checked(s), "разговора", "разговоров", "разговоров")}, где критерий удалось проверить.
-          {second.checked > 0 && ` Второй судья согласен в ${second.agree} из ${second.checked}.`}
+          Ошибка в <b className="font-semibold text-ink-bad">{s.failed} из {checked(s)}</b> {plural(checked(s), "разговора", "разговоров", "разговоров")}, где критерий удалось проверить.
+          {second.checked > 0 && ` Две проверки совпали в ${second.agree} из ${second.checked}.`}
           {c.r.topics.length > 0 && ` Темы: ${c.r.topics.join(", ").toLowerCase()}.`}
         </p>
       </div>
@@ -36,12 +36,12 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
           <p className="mt-2.5 text-read text-ink">«{c.r.rule.quote}»</p>
         </div>
         <div className="border-t border-ink-line p-4 sm:border-l sm:border-t-0">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"><Cap>Агент ответил</Cap>{e && <span className="text-meta text-ink-3">{reliabilityWord(e)}</span>}</div>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"><Cap>Агент ответил</Cap>{e && <span className="text-small text-ink-3">{reliabilityWord(e)}</span>}</div>
           {e ? (
             <>
               <p className="mt-2.5 inline-block rounded-xl rounded-br-sm bg-paper-well px-3 py-1.5 text-small text-ink-2">{e.opening}</p>
               <p className="mt-2 text-read text-ink"><mark className="rounded-sm bg-warn/40 px-0.5 text-ink">{e.agentQuote}</mark></p>
-              <p className="mt-2 text-small text-ink-2">Судья: {e.reason}</p>
+              <p className="mt-2 text-small text-ink-2">Почему это ошибка: {e.reason}</p>
             </>
           ) : <p className="mt-2.5 text-small text-ink-3">Примера нет.</p>}
         </div>
@@ -64,8 +64,8 @@ export function ReportSheet({ open, onClose, data, list }: { open: boolean; onCl
   const log = data.log;
   const sim = data.sim;
   const figures = side === "log" && log
-    ? [[`${log.assessed}`, `из ${log.sampled}`, "разговоров оценено"], [`${log.withViolations}`, "", "с нарушениями"], [`${log.assessed - log.withViolations}`, "", "без обнаруженных нарушений"], [`${log.unassessed}`, "", "без оценки"]]
-    : sim ? [[`${sim.dialogs}`, "", "разговоров сыграно"], [`${sim.withViolations}`, "", "с нарушениями"], [`${sim.dialogs - sim.withViolations}`, "", "без обнаруженных нарушений"]] : [];
+    ? [[`${log.assessed}`, `из ${log.sampled}`, "разговоров проверено"], [`${log.withViolations}`, "", "с ошибкой агента"], [`${log.assessed - log.withViolations}`, "", "без найденных ошибок"], [`${log.unassessed}`, "", "не удалось проверить"]]
+    : sim ? [[`${sim.dialogs}`, "", "разговоров сыграно"], [`${sim.withViolations}`, "", "с ошибкой агента"], [`${sim.dialogs - sim.withViolations}`, "", "без найденных ошибок"]] : [];
   return (
     <Sheet open={open} onClose={onClose} width="lg" title="Отчёт" sub="Протокол текущей оценки: так он уйдёт в письмо или тикет"
       actions={<>
@@ -77,8 +77,8 @@ export function ReportSheet({ open, onClose, data, list }: { open: boolean; onCl
         <article className="mx-auto max-w-3xl rounded-block bg-paper px-6 pb-12 pt-9 text-ink shadow-pop sm:px-12">
           <Cap>{side === "log" ? `Протокол проверки · логи · ${day(log?.finishedAt)}` : `Протокол проверки · симуляция · ${day(sim?.finishedAt)}`}</Cap>
           <h2 className="mt-3 text-balance text-title font-semibold text-ink">{summarySentence(data, side)}</h2>
-          {side === "log" && log && <p className="mt-3 text-read text-ink-2">Судья проверил {log.assessed} из {log.sampled} разговоров логов. В {log.withViolations} есть хотя бы одно нарушение, {log.unassessed} {plural(log.unassessed, "остался", "остались", "остались")} без оценки.</p>}
-          {side === "sim" && sim && <p className="mt-3 text-read text-ink-2">Прогон {sim.target} · {sim.version}: {sim.dialogs} разговоров, нарушения в {sim.withViolations}.</p>}
+          {side === "log" && log && <p className="mt-3 text-read text-ink-2">Проверено {log.assessed} из {log.sampled} разговоров логов. В {log.withViolations} агент ошибся хотя бы раз, {log.unassessed} проверить не удалось.</p>}
+          {side === "sim" && sim && <p className="mt-3 text-read text-ink-2">Прогон {sim.target} · {sim.version}: {sim.dialogs} разговоров, ошибка в {sim.withViolations}.</p>}
           <dl className="mt-6 grid grid-cols-2 border-t border-ink sm:grid-cols-4">
             {figures.map(([v, of, l], i) => (
               <div key={l} className={i > 0 ? "border-ink-line pt-3 sm:border-l sm:pl-4" : "pt-3"}>
@@ -88,8 +88,8 @@ export function ReportSheet({ open, onClose, data, list }: { open: boolean; onCl
             ))}
           </dl>
           {items.map((c, i) => <Section key={c.r.id} c={c} i={i + 1} side={side} />)}
-          {!items.length && <p className="mt-10 text-read text-ink-2">Нарушений не найдено.</p>}
-          <p className="mt-12 border-t border-ink-line pt-4 text-meta text-ink-3">Счёт «N из M»: M — разговоры, где критерий удалось проверить. Логи и симуляция считаются отдельно и не складываются. «Без обнаруженных нарушений» не означает, что агент исправен.</p>
+          {!items.length && <p className="mt-10 text-read text-ink-2">Ошибок не найдено.</p>}
+          <p className="mt-12 border-t border-ink-line pt-4 text-small text-ink-3">Счёт «N из M»: M — разговоры, где критерий удалось проверить. Логи и симуляция считаются отдельно и не складываются. «Без найденных ошибок» не означает, что агент исправен.</p>
         </article>
       </div>
     </Sheet>

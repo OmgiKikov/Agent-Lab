@@ -4,21 +4,22 @@ const INACTIVE_MS = 30_000;
 const AFTERGLOW_MS = 3_000;
 
 export function fmt(ms: number | null | undefined): string {
-  if (!ms || ms < 1) return "<1ms";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
+  if (!ms || ms < 1) return "<1 мс";
+  if (ms < 1000) return `${Math.round(ms)} мс`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1).replace(".", ",")} с`;
+  return `${(ms / 60000).toFixed(1).replace(".", ",")} мин`;
 }
 
+/** «5 мин назад»: how long ago, the way a person says it. */
 export function ago(t: number): string {
   const d = Date.now() - t;
-  if (d < 5000) return "just now";
-  if (d < 60000) return `${Math.floor(d / 1000)}s ago`;
-  if (d < 3600000) return `${Math.floor(d / 60000)}m ago`;
-  if (d < 86400000) return `${Math.floor(d / 3600000)}h ago`;
-  if (d < 2592000000) return `${Math.floor(d / 86400000)}d ago`;
-  if (d < 31536000000) return `${Math.floor(d / 2592000000)}mo ago`;
-  return `${Math.floor(d / 31536000000)}y ago`;
+  if (d < 5000) return "только что";
+  if (d < 60000) return `${Math.floor(d / 1000)} с назад`;
+  if (d < 3600000) return `${Math.floor(d / 60000)} мин назад`;
+  if (d < 86400000) return `${Math.floor(d / 3600000)} ч назад`;
+  if (d < 2592000000) return `${Math.floor(d / 86400000)} дн. назад`;
+  if (d < 31536000000) return `${Math.floor(d / 2592000000)} мес. назад`;
+  return `${Math.floor(d / 31536000000)} г. назад`;
 }
 
 export function isActive(run: { last_updated_at: number; finished?: number | null }): boolean {

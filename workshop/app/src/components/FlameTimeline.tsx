@@ -41,7 +41,7 @@ function TooltipPayloadBlock({
       style={{ flex: 1, ...(showTopBorder ? { borderTop: `1px solid ${C.border}` } : {}) }}
     >
       <div className="flex items-center justify-between gap-2 mb-0.5 flex-shrink-0">
-        <div className="text-[9px] uppercase tracking-wide font-medium" style={{ color: C.fg0 }}>{label}</div>
+        <div className="text-[11px] font-medium" style={{ color: C.fg0 }}>{label}</div>
         <button
           type="button"
           className="flex-shrink-0 p-1 rounded transition-colors hover:bg-fg/10"
@@ -257,7 +257,7 @@ export function FlameTimeline({ spans }: { spans: Span[] }) {
     <div ref={containerRef} className="rounded-lg mb-4" style={{ background: C.surface, border: `1px solid ${C.border}`, overflow: "hidden" }}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <span className="text-[10px] uppercase tracking-wider font-medium" style={{ color: C.fg1 }}>Траектория</span>
+        <span className="text-[11px] font-medium" style={{ color: C.fg1 }}>Траектория</span>
         <span className="text-[10px] font-mono" style={{ color: C.fg0 }}>{vizSpans.length} {ruPlural(vizSpans.length, "спан", "спана", "спанов")} &middot; {fmt(dur)}</span>
       </div>
 

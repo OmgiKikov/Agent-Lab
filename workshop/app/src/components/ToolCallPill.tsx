@@ -100,13 +100,13 @@ export function ToolCallPill({ span, colorMap }: { span: Span; colorMap: Map<str
           <div className="flex flex-col md:flex-row" style={{ maxHeight: 400 }}>
             {span.input_payload && (
               <div className="flex-1 min-w-0 p-2.5 overflow-auto sb" style={{ borderRight: span.output_payload ? `1px solid ${C.border}` : "none" }}>
-                <div className="text-[9px] uppercase tracking-wide mb-1 font-sans font-medium" style={{ color: C.fg0 }}>Вход</div>
+                <div className="text-[11px] mb-1 font-sans font-medium" style={{ color: C.fg0 }}>Вход</div>
                 <pre className="text-[11px] font-mono leading-relaxed select-all whitespace-pre-wrap break-words" style={{ color: C.fg2 }}>{tryJson(span.input_payload)}</pre>
               </div>
             )}
             {span.output_payload && (
               <div className="flex-1 min-w-0 p-2.5 overflow-auto sb">
-                <div className="text-[9px] uppercase tracking-wide mb-1 font-sans font-medium" style={{ color: C.fg0 }}>Выход</div>
+                <div className="text-[11px] mb-1 font-sans font-medium" style={{ color: C.fg0 }}>Выход</div>
                 <pre className="text-[11px] font-mono leading-relaxed select-all whitespace-pre-wrap break-words" style={{ color: err ? C.red : C.fg2 }}>{tryJson(span.output_payload)}</pre>
               </div>
             )}

@@ -58,7 +58,7 @@ export function Replay() {
             const h = HEALTH[health[n] ?? "checking"];
             return (
               <Row key={n} name={n} use={<span className="block truncate font-mono" title={c.url}>{c.url}</span>}>
-                <span className={`text-meta ${h.tone}`}>{h.text}</span>
+                <span className={`text-small ${h.tone}`}>{h.text}</span>
                 <Button size="sm" variant="ghost" icon={Trash2} aria-label={`Убрать адрес «${n}»`} title="Убрать адрес" onClick={() => remove(n)} />
               </Row>
             );

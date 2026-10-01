@@ -19,23 +19,23 @@ export type Shown = "FAIL" | "PASS" | "UNKNOWN";
 
 function ExampleRow({ e }: { e: Example }) {
   return (
-    <li className="border-b border-line py-3.5">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-fg-3">
-        {e.status === "FAIL" ? <Reliability example={e} /> : <span>{e.status === "PASS" ? "выполнен" : "не проверен"}</span>}
+    <li className="py-4">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-fg-3">
+        {e.status === "FAIL" ? <Reliability example={e} /> : <span>{e.status === "PASS" ? "без ошибки" : "не удалось проверить"}</span>}
         <span aria-hidden>·</span>
-        <span className="truncate">{e.source === "log" ? `лог${e.topic ? ` · ${e.topic}` : ""}` : `симуляция · ${e.name ?? ""}`}</span>
+        <span className="truncate">{e.source === "log" ? `Логи${e.topic ? ` · ${e.topic}` : ""}` : `Симуляции · ${e.name ?? ""}`}</span>
         <Link to={dialogOf(e)} className="ml-auto inline-flex items-center gap-1 text-fg-2 hover:text-fg">разговор<ArrowUpRight aria-hidden className="size-3" /></Link>
       </div>
       <p className="mt-1.5 text-small text-fg-3">Клиент: {e.opening}</p>
       {e.agentQuote && <p className="mt-1.5 text-body text-fg"><mark className={cn("rounded-sm px-0.5 text-fg", e.status === "FAIL" ? "bg-mark/70" : "bg-well")}>{e.agentQuote}</mark></p>}
-      <p className="mt-1.5 text-small text-fg-2"><span className="text-fg-3">Судья: </span>{e.reason}</p>
+      <p className="mt-1.5 text-small text-fg-2">{e.reason}</p>
     </li>
   );
 }
 
-/** The chosen criterion: what it requires, how it went on this side, and the dialogues behind each count. */
-export function CriterionPanel({ c, side, shown, onShown, onBack, className }: {
-  c: Criterion; side: SideKey; shown: Shown; onShown: (s: Shown) => void; onBack?: () => void; className?: string;
+/** The chosen criterion: what it requires, how it went in this stage, and the conversations behind each count. */
+export function CriterionPanel({ c, side, runId, shown, onShown, onBack, className }: {
+  c: Criterion; side: SideKey; runId?: string | null; shown: Shown; onShown: (s: Shown) => void; onBack?: () => void; className?: string;
 }) {
   const r = c.r;
   const s = r[side];
@@ -49,30 +49,30 @@ export function CriterionPanel({ c, side, shown, onShown, onBack, className }: {
         <p className="text-small text-fg-3">Критерий {c.n}</p>
         <h2 className="mt-1 text-balance text-title font-semibold text-fg">{c.name}</h2>
         <p className="mt-2 text-body text-fg-2">{r.rule.text}</p>
-        {r.rule.origin && <p className="mt-2 flex items-center gap-1.5 text-meta text-fg-3" title="Где это требование записано в коде агента"><Code2 aria-hidden className="size-3.5" /><span className="font-mono">{shortOrigin(r.rule.origin)}</span></p>}
+        {r.rule.origin && <p className="mt-2 flex items-center gap-1.5 text-small text-fg-3" title="Где это требование записано в коде агента"><Code2 aria-hidden className="size-3.5" /><span className="font-mono">{shortOrigin(r.rule.origin)}</span></p>}
         <div className="mt-4">
           <Facts facts={[
-            { label: side === "log" ? "В логах" : "В симуляции", value: <Count n={s.failed} of={s.failed + s.passed} bad /> },
-            { label: "Не проверен", value: s.unknown ? `в ${s.unknown} ${plural(s.unknown, "разговоре", "разговорах", "разговорах")}` : "—" },
-            { label: "Второй судья", value: second.checked ? <>согласен в <Count n={second.agree} of={second.checked} /></> : "не проверял" },
-            { label: "Люди", value: humans.checked ? `подтвердили ${humans.agree}, не согласились ${humans.checked - humans.agree}` : "не проверяли" },
+            { label: side === "log" ? "Ошибка в логах" : "Ошибка в симуляции", value: <Count n={s.failed} of={s.failed + s.passed} bad /> },
+            { label: "Не удалось проверить", value: s.unknown ? `в ${s.unknown} ${plural(s.unknown, "разговоре", "разговорах", "разговорах")}` : "—" },
+            { label: "Две проверки", value: second.checked ? <>совпали в <Count n={second.agree} of={second.checked} /></> : "проверено один раз" },
+            { label: "Ваши ответы", value: humans.checked ? `подтвердили ${humans.agree}, не согласились ${humans.checked - humans.agree}` : "ещё нет" },
           ]} />
         </div>
         {s.failed > 0 && (
-          <Link to={problemLink(r.id, { src: side })} className="mt-4 inline-flex items-center gap-1.5 rounded-sm text-body font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3">
+          <Link to={problemLink(r.id, side, runId)} className="mt-4 inline-flex items-center gap-1.5 rounded-sm text-body font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3">
             Разбор проблемы<ArrowRight aria-hidden className="size-4" />
           </Link>
         )}
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <Label>Разговоры</Label>
           <Segmented<Shown> size="sm" label="Какие разговоры" value={shown} onChange={onShown} options={[
-            { value: "FAIL", label: "Нарушен", count: s.examples.filter(e => e.status === "FAIL").length },
-            { value: "PASS", label: "Выполнен", count: s.examples.filter(e => e.status === "PASS").length },
-            { value: "UNKNOWN", label: "Не проверен", count: s.examples.filter(e => e.status === "UNKNOWN").length },
+            { value: "FAIL", label: "С ошибкой", count: s.examples.filter(e => e.status === "FAIL").length },
+            { value: "PASS", label: "Без ошибки", count: s.examples.filter(e => e.status === "PASS").length },
+            { value: "UNKNOWN", label: "Не проверено", count: s.examples.filter(e => e.status === "UNKNOWN").length },
           ]} />
         </div>
-        <ul className="mt-2">{list.map((e, i) => <ExampleRow key={`${e.dialogueId ?? e.runId}-${e.index ?? i}`} e={e} />)}</ul>
-        {!list.length && <p className="mt-4 text-small text-fg-3">{shown === "FAIL" ? "Нарушений этого критерия не найдено." : shown === "PASS" ? "Выполнений с доказательством нет." : "Все разговоры, где критерий встречался, оценены."}</p>}
+        <ul className="mt-2 divide-y divide-line">{list.map((e, i) => <ExampleRow key={`${e.dialogueId ?? e.runId}-${e.index ?? i}`} e={e} />)}</ul>
+        {!list.length && <p className="mt-4 text-small text-fg-3">{shown === "FAIL" ? "Ошибок по этому критерию не найдено." : shown === "PASS" ? "Разговоров без ошибки с доказательством нет." : "Все разговоры, где критерий встречался, проверены."}</p>}
       </div>
     </aside>
   );

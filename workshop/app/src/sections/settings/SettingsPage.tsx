@@ -56,8 +56,8 @@ function Models({ state }: { state: LabState }) {
       .catch(e => { const failed = { ok: false, error: String(e?.message ?? e) }; setChecks({ main: failed, second: failed }); });
   };
   const rows = [
-    { role: "main" as const, name: "Судья и клиент", use: "Оценивает разговоры и играет клиента в симуляциях.", model: state.models.main },
-    { role: "second" as const, name: "Второй судья", use: "Модель другого вендора, проверяет вердикты первой.", model: state.models.second },
+    { role: "main" as const, name: "Основная модель", use: "Проверяет разговоры и играет клиента в симуляциях.", model: state.models.main },
+    { role: "second" as const, name: "Вторая проверка", use: "Модель другого вендора: проверяет найденные ошибки независимо от первой.", model: state.models.second },
   ];
   return (
     <>
@@ -65,9 +65,9 @@ function Models({ state }: { state: LabState }) {
         {rows.map(r => {
           const c = checks && checks !== "pending" ? checks[r.role] : null;
           return (
-            <Row key={r.role} name={r.name} use={r.use} below={c && !c.ok && <p role="alert" className="mt-1 break-words text-meta text-fg-2">{c.error ?? "Модель не ответила."}</p>}>
-              {c?.ok && <span className="inline-flex items-center gap-1 text-meta text-ok"><CheckIcon aria-hidden className="size-3.5" />отвечает</span>}
-              {c && !c.ok && <span className="text-meta text-bad">не отвечает</span>}
+            <Row key={r.role} name={r.name} use={r.use} below={c && !c.ok && <p role="alert" className="mt-1 break-words text-small text-fg-2">{c.error ?? "Модель не ответила."}</p>}>
+              {c?.ok && <span className="inline-flex items-center gap-1 text-small text-ok"><CheckIcon aria-hidden className="size-3.5" />отвечает</span>}
+              {c && !c.ok && <span className="text-small text-bad">не отвечает</span>}
               <span className="font-mono text-small text-fg">{r.model ?? <span className="font-sans text-fg-3">не задана</span>}</span>
             </Row>
           );

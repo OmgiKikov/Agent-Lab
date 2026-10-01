@@ -17,14 +17,14 @@ export function CriteriaTable({ list, sources, selected, onSelect, hasSim, class
   return (
     <div className={cn("min-h-0 overflow-auto", className)}>
       <table className="w-full border-collapse text-left">
-        <thead className="sticky top-0 z-10 bg-list">
+        <thead className="sticky top-0 z-10 bg-canvas">
           <tr className="border-b border-line text-small text-fg-3">
             <th className="w-14 py-2.5 pl-5 font-medium">№</th>
             <th className="py-2.5 pr-4 font-medium">Критерий</th>
             <th className="hidden py-2.5 pr-4 font-medium 2xl:table-cell">Где написан</th>
             <th className="py-2.5 pr-4 text-right font-medium">Логи</th>
-            {hasSim && <th className="hidden py-2.5 pr-4 text-right font-medium sm:table-cell">Симуляция</th>}
-            <th className="hidden py-2.5 pr-5 text-right font-medium md:table-cell">Второй судья</th>
+            {hasSim && <th className="hidden py-2.5 pr-4 text-right font-medium sm:table-cell">Симуляции</th>}
+            <th className="hidden py-2.5 pr-5 text-right font-medium md:table-cell" title="В скольких ошибках логов две проверки совпали">Проверки совпали</th>
           </tr>
         </thead>
         <tbody>

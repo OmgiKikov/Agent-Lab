@@ -159,7 +159,7 @@ function CommandPill({ value, large = false }: { value: string; large?: boolean 
 function WorksWith() {
   return (
     <div className="mt-9 flex max-w-xl flex-col items-center gap-2.5">
-      <div className="text-[10px] uppercase tracking-[0.22em]" style={{ color: C.fg0 }}>
+      <div className="text-[11px] tracking-[0.22em]" style={{ color: C.fg0 }}>
         Работает с
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2.5">

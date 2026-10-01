@@ -5,7 +5,7 @@ import { Kbd } from "./Kbd";
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "outline" | "ghost";
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "lg";
   icon?: LucideIcon;
   loading?: boolean;
   /** The key that does the same; shown in the tooltip, and on the button with `showKbd`. */
@@ -14,12 +14,18 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const VARIANT = {
-  primary: "border-transparent bg-primary text-white shadow-card hover:bg-primary/90",
-  outline: "border-line-strong bg-list text-fg shadow-card hover:bg-hover",
-  ghost: "border-transparent text-fg-2 hover:bg-hover hover:text-fg",
+  primary: "bg-primary text-white hover:bg-primary/85",
+  outline: "bg-hover text-fg hover:bg-selected",
+  ghost: "bg-transparent text-fg-2 hover:bg-hover hover:text-fg",
 };
 
-/** A button: the light one is the screen's main action, one per screen; the rest are outlined or bare. */
+const SIZE = {
+  sm: "h-8 gap-1.5 px-3 text-small",
+  md: "h-9 gap-1.5 px-4 text-body",
+  lg: "h-11 gap-2 px-5 text-read",
+};
+
+/** A pill: the black one is the screen's main action, one per screen; the grey ones are the rest; bare for quiet actions. */
 export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
   { variant = "outline", size = "md", icon: Icon, loading, kbd, showKbd, className, children, disabled, type = "button", title, ...rest }, ref,
 ) {
@@ -28,15 +34,14 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
     <button
       ref={ref} type={type} disabled={disabled || loading} title={kbd ? `${title ?? label} (${kbd})`.trim() : title}
       className={cn(
-        "inline-flex flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control border text-small font-medium transition-colors duration-150 ease-out",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:pointer-events-none disabled:opacity-40",
-        size === "sm" ? "h-7 px-2.5" : "h-8 px-3",
-        !children && (size === "sm" ? "w-7 px-0" : "w-8 px-0"),
+        "inline-flex flex-shrink-0 select-none items-center justify-center whitespace-nowrap rounded-full font-medium transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40",
+        SIZE[size], !children && (size === "sm" ? "w-8 px-0" : size === "lg" ? "w-11 px-0" : "w-9 px-0"),
         VARIANT[variant], className,
       )}
       {...rest}
     >
-      {loading ? <Loader2 aria-hidden className="size-3.5 animate-spin" /> : Icon && <Icon aria-hidden className="size-3.5" />}
+      {loading ? <Loader2 aria-hidden className={size === "lg" ? "size-4 animate-spin" : "size-3.5 animate-spin"} /> : Icon && <Icon aria-hidden className={size === "lg" ? "size-4" : "size-3.5"} />}
       {children}
       {kbd && showKbd && <Kbd className="ml-0.5">{kbd}</Kbd>}
     </button>

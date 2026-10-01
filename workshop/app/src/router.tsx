@@ -1,9 +1,10 @@
 import { createBrowserRouter, Navigate, useLocation, useParams } from "react-router-dom";
+import { problemLink } from "./app/links";
 import { dialogLink } from "./lab/dialogs";
 import { Shell } from "./app/Shell";
 import { OverviewPage } from "./sections/overview/OverviewPage";
 import { ProblemPage } from "./sections/problems/ProblemPage";
-import { ProblemsPage } from "./sections/problems/ProblemsPage";
+import { LogsPage } from "./sections/logs/LogsPage";
 import { CriteriaPage } from "./sections/criteria/CriteriaPage";
 import { DialogsPage } from "./sections/dialogs/DialogsPage";
 import { ReviewPage } from "./sections/review/ReviewPage";
@@ -12,7 +13,9 @@ import { RunsPage } from "./pages/RunsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
 import { SettingsPage } from "./sections/settings/SettingsPage";
-import { SimulationsPage } from "./sections/simulations/SimulationsPage";
+import { RunListPage } from "./sections/simulations/RunList";
+import { ScenariosPage } from "./sections/simulations/ScenariosPage";
+import { SimResultPage } from "./sections/simulations/SimResultPage";
 
 /** An earlier address leads to its block; the query of the old address is kept, what the block needs is added. */
 function To({ to, from }: { to: string; from?: (p: Record<string, string | undefined>) => Record<string, string> }) {
@@ -26,35 +29,46 @@ function To({ to, from }: { to: string; from?: (p: Record<string, string | undef
   return <Navigate to={`${path}${q ? `?${q}` : ""}`} replace />;
 }
 
-/** The earlier blocks «Логи» and «Результаты»: their tabs now live in «Нарушения», «Диалоги» and «Проверка вердиктов». */
-function OldBlock({ sim }: { sim?: boolean }) {
+/** An address of the time when both stages lived together: by its source (?src=, ?s=) it leads into its stage. */
+function ByStage({ log, sim, traces }: { log: string; sim: string; traces?: string }) {
+  const { search } = useLocation();
+  const params = useParams();
+  const p = new URLSearchParams(search);
+  const src = p.get("src") ?? p.get("s");
+  p.delete("src");
+  p.delete("s");
+  const fill = (to: string) => to.replace(":id", encodeURIComponent(params.id ?? ""));
+  const to = src === "traces" && traces ? traces : src === "sim" ? sim : log;
+  if (src !== "sim") p.delete("run");
+  const q = p.toString();
+  return <Navigate to={`${fill(to)}${q ? `?${q}` : ""}`} replace />;
+}
+
+/** «Результаты» of a run became the result of the simulation; its tabs became the stage's pages. */
+function OldResults() {
   const { search } = useLocation();
   const p = new URLSearchParams(search);
   const tab = p.get("tab");
   p.delete("tab");
-  const run = p.get("run");
-  if (tab === "dialogs") { if (sim) p.set("src", "sim"); return <Navigate to={`/dialogs?${p}`} replace />; }
-  if (tab === "review") { if (sim) p.set("src", "sim"); return <Navigate to={`/review?${p}`} replace />; }
-  const next = new URLSearchParams();
-  if (sim) { next.set("s", "sim"); if (run) next.set("run", run); }
   const v = p.get("p");
-  if (v) next.set("v", v);
-  if (p.get("assess")) next.set("assess", "1");
-  const q = next.toString();
-  return <Navigate to={`/violations${q ? `?${q}` : ""}`} replace />;
+  p.delete("p");
+  const run = p.get("run");
+  if (v) return <Navigate to={problemLink(v, "sim", run)} replace />;
+  const to = tab === "dialogs" ? "/simulations/conversations" : tab === "review" ? "/simulations/review" : "/simulations";
+  const q = p.toString();
+  return <Navigate to={`${to}${q ? `?${q}` : ""}`} replace />;
 }
 
-/** «Нарушения» became «Обзор» and «Проблемы»: a chosen violation opens as its problem, the sheets open on the overview. */
+/** «Нарушения» became the two stages: a chosen violation opens as its problem, the sheets open on the logs. */
 function OldViolations() {
   const { search } = useLocation();
   const p = new URLSearchParams(search);
-  const next = new URLSearchParams();
-  if (p.get("s") === "sim") { next.set("src", "sim"); const run = p.get("run"); if (run) next.set("run", run); }
-  const q = next.toString();
+  const sim = p.get("s") === "sim";
+  const run = p.get("run");
   const v = p.get("v");
-  if (v) return <Navigate to={`/problems/${encodeURIComponent(v)}${q ? `?${q}` : ""}`} replace />;
-  if (p.get("assess") || p.get("report")) return <Navigate to={`/overview?${p.get("assess") ? "assess=1" : "report=1"}`} replace />;
-  return <Navigate to={`/problems${q ? `?${q}` : ""}`} replace />;
+  if (v) return <Navigate to={problemLink(v, sim ? "sim" : "log", run)} replace />;
+  if (p.get("assess") || p.get("report")) return <Navigate to={`/logs?${p.get("assess") ? "assess=1" : "report=1"}`} replace />;
+  return <Navigate to={sim ? `/simulations${run ? `?run=${encodeURIComponent(run)}` : ""}` : "/logs"} replace />;
 }
 
 /** /dialogs/<key>: the dialogue at its block. */
@@ -70,31 +84,41 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/overview" replace /> },
       { path: "overview", element: <OverviewPage /> },
-      { path: "problems", element: <ProblemsPage /> },
-      { path: "problems/:id", element: <ProblemPage /> },
-      { path: "violations", element: <OldViolations /> },
+      // Stage 1: the customers' real conversations, checked against the agent's criteria.
+      { path: "logs", element: <LogsPage /> },
+      { path: "logs/problems/:id", element: <ProblemPage stage="log" /> },
+      { path: "logs/conversations", element: <DialogsPage stage="log" /> },
+      { path: "logs/review", element: <ReviewPage stage="log" /> },
+      // Stage 2: synthetic customers play business scenarios, the same criteria check them.
+      { path: "simulations", element: <SimResultPage /> },
+      { path: "simulations/runs", element: <RunListPage /> },
+      { path: "simulations/scenarios", element: <ScenariosPage /> },
+      { path: "simulations/problems/:id", element: <ProblemPage stage="sim" /> },
+      { path: "simulations/conversations", element: <DialogsPage stage="sim" /> },
+      { path: "simulations/review", element: <ReviewPage stage="sim" /> },
+      { path: "simulations/runs/:runId", element: <To to="/simulations" from={p => ({ run: p.runId ?? "" })} /> },
+      { path: "simulations/scenarios/:scenarioId", element: <To to="/simulations/scenarios" from={p => ({ s: p.scenarioId ?? "" })} /> },
       { path: "criteria", element: <CriteriaPage /> },
       { path: "agent", element: <AgentPage /> },
       { path: "agent/criteria", element: <To to="/criteria" /> },
-      { path: "logs", element: <OldBlock /> },
-      { path: "dialogs", element: <DialogsPage /> },
-      { path: "review", element: <ReviewPage /> },
-      { path: "scenarios", element: <To to="/simulations?mode=scenarios" /> },
-      { path: "simulations", element: <SimulationsPage /> },
-      { path: "simulations/runs/:runId", element: <To to="/simulations" from={p => ({ r: p.runId ?? "" })} /> },
-      { path: "simulations/scenarios/:scenarioId", element: <To to="/simulations?mode=scenarios" from={p => ({ s: p.scenarioId ?? "" })} /> },
-      { path: "results", element: <OldBlock sim /> },
-      // The earlier sections: their content became tabs of the blocks.
+      // The addresses of the time when both stages lived in one place.
+      { path: "problems", element: <ByStage log="/logs" sim="/simulations" /> },
+      { path: "problems/:id", element: <ByStage log="/logs/problems/:id" sim="/simulations/problems/:id" /> },
+      { path: "dialogs", element: <ByStage log="/logs/conversations" sim="/simulations/conversations" traces="/runs" /> },
+      { path: "dialogs/:dialogKey", element: <DialogRedirect /> },
+      { path: "review", element: <ByStage log="/logs/review" sim="/simulations/review" /> },
+      { path: "violations", element: <OldViolations /> },
+      { path: "results", element: <OldResults /> },
+      { path: "scenarios", element: <To to="/simulations/scenarios" /> },
       { path: "rules", element: <To to="/criteria" /> },
       { path: "rules/:ruleId", element: <To to="/criteria" from={p => ({ c: p.ruleId ?? "" })} /> },
-      { path: "dialogs/:dialogKey", element: <DialogRedirect /> },
       { path: "lab", element: <Navigate to="/overview" replace /> },
-      { path: "lab/dialogs/*", element: <Navigate to="/dialogs?src=sim" replace /> },
-      { path: "lab/logs/*", element: <Navigate to="/dialogs" replace /> },
+      { path: "lab/dialogs/*", element: <Navigate to="/simulations/conversations" replace /> },
+      { path: "lab/logs/*", element: <Navigate to="/logs/conversations" replace /> },
       { path: "lab/criteria/*", element: <Navigate to="/criteria" replace /> },
-      { path: "lab/judge/check", element: <Navigate to="/review" replace /> },
+      { path: "lab/judge/check", element: <Navigate to="/logs/review" replace /> },
       { path: "lab/judge/*", element: <Navigate to="/criteria" replace /> },
-      { path: "lab/checks/*", element: <Navigate to="/simulations?mode=scenarios" replace /> },
+      { path: "lab/checks/*", element: <Navigate to="/simulations/scenarios" replace /> },
       { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
       { path: "lab/*", element: <Navigate to="/overview" replace /> },
       { path: "runs", element: <RunsPage /> },

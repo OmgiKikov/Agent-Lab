@@ -75,10 +75,10 @@ function KeyRow({ spec, status, onStatus }: { spec: (typeof KEYS)[number]; statu
       <Button type="submit" loading={busy} disabled={!value.trim()}>Сохранить</Button>
       <Button variant="ghost" onClick={close}>Отмена</Button>
       {known?.source === "store" && <Button variant="ghost" icon={Trash2} disabled={busy} onClick={() => run(() => deleteSecret(spec.key))}>Удалить</Button>}
-      <a href={spec.url} target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 rounded text-meta text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60">
+      <a href={spec.url} target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 rounded text-small text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60">
         Где взять ключ<ArrowUpRight aria-hidden className="size-3" />
       </a>
-      {error && <p role="alert" className="basis-full text-meta text-bad">Не сохранилось: {error}</p>}
+      {error && <p role="alert" className="basis-full text-small text-bad">Не сохранилось: {error}</p>}
     </form>
   );
   return (
@@ -90,9 +90,9 @@ function KeyRow({ spec, status, onStatus }: { spec: (typeof KEYS)[number]; statu
 }
 
 function KeyWord({ status }: { status: Known }) {
-  if (status === "down") return <span className="text-meta text-fg-4">не видно</span>;
-  if (!status) return <span className="text-meta text-fg-4">проверяю…</span>;
-  if (!status.configured) return <span className="text-meta text-fg-3">не задан</span>;
-  if (status.source === "env") return <span className="text-meta text-fg-2">из окружения</span>;
-  return <span className="inline-flex items-center gap-1 text-meta text-ok"><Check aria-hidden className="size-3.5" />сохранён</span>;
+  if (status === "down") return <span className="text-small text-fg-4">не видно</span>;
+  if (!status) return <span className="text-small text-fg-4">проверяю…</span>;
+  if (!status.configured) return <span className="text-small text-fg-3">не задан</span>;
+  if (status.source === "env") return <span className="text-small text-fg-2">из окружения</span>;
+  return <span className="inline-flex items-center gap-1 text-small text-ok"><Check aria-hidden className="size-3.5" />сохранён</span>;
 }

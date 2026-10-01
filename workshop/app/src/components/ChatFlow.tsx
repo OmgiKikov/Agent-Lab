@@ -114,7 +114,7 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
         style={{ background: "rgba(90,138,176,0.10)", border: "1px solid rgba(90,138,176,0.22)", color: C.fg2 }}
         onClick={() => setOpen(!open)}
       >
-        <span className="text-[10px] font-bold uppercase tracking-wider px-1 rounded leading-none"
+        <span className="text-[11px] font-bold px-1 rounded leading-none"
           style={{ color: "#7aaccc", background: "rgba(90,138,176,0.15)", padding: "2px 4px" }}>агент</span>
         <span style={{ color: C.fg4 }}>{a.name}</span>
         <span style={{ color: C.fg0, fontSize: "10px" }}>{a.tool_count} {ruPlural(a.tool_count, "инструмент", "инструмента", "инструментов")} &middot; {fmt(a.duration_ms)}</span>
@@ -152,7 +152,7 @@ function SubAgentBlock({ agent, spans, onDiveIn }: { agent: SubAgent; spans: Spa
               {/* Output */}
               {agentOutput?.output_payload && (
                 <div>
-                  <div className="text-[9px] uppercase tracking-wide mb-0.5 font-medium" style={{ color: C.fg0 }}>Выход</div>
+                  <div className="text-[11px] mb-0.5 font-medium" style={{ color: C.fg0 }}>Выход</div>
                   <pre className="text-[11px] font-sans leading-relaxed whitespace-pre-wrap" style={{ color: C.fg2 }}>{trunc(agentOutput.output_payload, 150)}</pre>
                 </div>
               )}
@@ -384,7 +384,7 @@ function LLMErrorBanner({ content }: { content: string }) {
           }}>
           <div className="px-3 py-2 flex items-center gap-2" style={{ borderBottom: "1px solid rgba(235,20,20,0.15)" }}>
             <AlertCircle />
-            <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: C.red }}>Подробности ошибки</span>
+            <span className="text-[11px] font-semibold" style={{ color: C.red }}>Подробности ошибки</span>
           </div>
           <div className="p-3 overflow-auto" style={{ maxHeight: 270 }}>
             <pre className="text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words" style={{ color: "rgba(235,100,100,0.9)" }}>

@@ -1,0 +1,96 @@
+import { useEffect, useState } from "react";
+import { Navigate, useSearchParams } from "react-router-dom";
+import { FileText, RotateCcw } from "lucide-react";
+import { Header } from "../../app/Header";
+import { SectionJob } from "../../app/SectionJob";
+import { StageTabs } from "../../app/StageTabs";
+import { problemLink } from "../../app/links";
+import { useCriteria } from "../../lab/criteria";
+import { longDay } from "../../lab/format";
+import { useLabState } from "../../lab/LabProvider";
+import { summarySentence } from "../../lab/problemReport";
+import { queueOf as verdictQueue } from "../../lab/verdicts";
+import { StageResult } from "../../product/StageResult";
+import { UploadButton } from "../../product/UploadLogs";
+import { Button } from "../../ui/Button";
+import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { FirstRun } from "../overview/FirstRun";
+import { AssessSheet } from "../problems/AssessSheet";
+import { ProblemList } from "../problems/ProblemList";
+import { ReportSheet } from "../problems/ReportSheet";
+
+/** The tabs of the logs with their counts: every conversation of the export, the verdicts where the two checks disagree. */
+export function useLogTabs() {
+  const { state } = useLabState();
+  const { data } = useCriteria(null);
+  return <StageTabs stage="log" counts={{ conversations: state?.discover?.results.length, review: data ? verdictQueue(data, "disputed", null, "log").length : undefined }} />;
+}
+
+/**
+ * «Логи», the first stage: the customers' real conversations from the chat's export, checked against the agent's criteria.
+ * The result as one number, then the problems it is made of. The older addresses of this place lead to its pages.
+ */
+export function LogsPage() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab");
+  const legacy = params.get("p");
+  if (tab === "dialogs") return <Navigate to={`/logs/conversations?${strip(params, ["tab"])}`} replace />;
+  if (tab === "review") return <Navigate to={`/logs/review?${strip(params, ["tab"])}`} replace />;
+  if (legacy) return <Navigate to={problemLink(legacy, "log")} replace />;
+  return <LogsResult params={params} setParams={setParams} />;
+}
+
+const strip = (p: URLSearchParams, keys: string[]) => { const n = new URLSearchParams(p); keys.forEach(k => n.delete(k)); return n.toString(); };
+
+function LogsResult({ params, setParams }: { params: URLSearchParams; setParams: ReturnType<typeof useSearchParams>[1] }) {
+  const { state, offline } = useLabState();
+  const { data, list } = useCriteria(null);
+  const tabs = useLogTabs();
+  const [assess, setAssess] = useState(params.get("assess") === "1");
+  const [report, setReport] = useState(params.get("report") === "1");
+  useEffect(() => { if (params.get("assess") === "1") setAssess(true); if (params.get("report") === "1") setReport(true); }, [params]);
+  const drop = (key: string) => { if (params.get(key)) setParams(prev => { const n = new URLSearchParams(prev); n.delete(key); return n; }, { replace: true }); };
+
+  const header = (
+    <Header title="Логи" step={1} tabs={tabs}
+      actions={<>
+        <span className="hidden sm:contents"><UploadButton variant="outline" /></span>
+        <Button variant="primary" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)} disabled={!data?.log}><span className="hidden sm:inline">Отчёт для письма</span></Button>
+      </>}
+      below={<SectionJob kinds={["discover"]} />} />
+  );
+  const sheets = <>
+    <AssessSheet open={assess} onClose={() => { setAssess(false); drop("assess"); }} criteria={data?.rules.length ?? 0} />
+    {data?.log && <ReportSheet open={report} onClose={() => { setReport(false); drop("report"); }} data={data} list={list} />}
+  </>;
+  if (offline && !state) return <div className="flex h-full flex-col">{header}<ServiceDown /></div>;
+  if (!state || !data) return <div className="flex h-full flex-col">{header}<div className="space-y-6 px-4 pt-10 lg:px-10"><Skeleton className="h-36 max-w-3xl" /><Skeleton className="h-80 max-w-5xl" /></div></div>;
+  if (!data.log) return <div className="flex h-full flex-col">{header}<div className="min-h-0 flex-1 overflow-auto"><FirstRun onAssess={() => setAssess(true)} /></div>{sheets}</div>;
+
+  const log = data.log;
+  return (
+    <div className="flex h-full flex-col">
+      {header}
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className="max-w-[1040px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-read text-fg-3">
+            <span>Настоящие разговоры клиентов{state.logs.file ? ` · «${state.logs.file}»` : ""} · проверено {longDay(log.finishedAt)}</span>
+            <button type="button" onClick={() => setAssess(true)} disabled={!state.logs.total || !!state.job.running} title="Проверить разговоры выгрузки заново"
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-3 transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40">
+              <RotateCcw aria-hidden className="size-3.5" />Оценить заново
+            </button>
+          </div>
+          <StageResult className="mt-4" failed={log.withViolations} checked={log.assessed} unchecked={log.unassessed} />
+          <section aria-label="Проблемы" className="mt-16">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">
+              <h2 className="text-title font-semibold text-fg">Проблемы</h2>
+              <p className="text-read text-fg-3">{summarySentence(data, "log")}</p>
+            </div>
+            <div className="mt-2"><ProblemList list={list} stage="log" /></div>
+          </section>
+        </div>
+      </div>
+      {sheets}
+    </div>
+  );
+}

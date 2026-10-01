@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { ChevronDown, RotateCcw } from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
@@ -34,7 +34,6 @@ const byFrequency = (list: Criterion[], side: SideKey) => [...list].sort((a, b) 
 export function CriteriaPage() {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
   const wide = useWide();
   const { data, list } = useCriteria(null);
   const [reextract, setReextract] = useState(false);
@@ -65,12 +64,11 @@ export function CriteriaPage() {
   useKeys({ KeyJ: () => step(1), KeyK: () => step(-1), Escape: () => { if (!wide && asked) set(n => n.delete("c"), false); } });
 
   const busy = !!state?.job.running;
-  const sideOptions = ([["log", "Логи"], ["sim", "Симуляция"]] as const).filter(([k]) => (k === "log" ? !!data?.log : !!data?.sim));
+  const sideOptions = ([["log", "Логи"], ["sim", "Симуляции"]] as const).filter(([k]) => (k === "log" ? !!data?.log : !!data?.sim));
   const header = (
     <Header title="Критерии"
       actions={<>
-        <Button icon={RotateCcw} onClick={() => setReextract(true)} disabled={busy || !state?.sources.length} className="hidden md:inline-flex" title="Судья прочитает код заново и извлечёт критерии">Извлечь заново</Button>
-        <Button variant="primary" onClick={() => navigate(side === "sim" && data?.sim ? `/review?src=sim&run=${encodeURIComponent(data.sim.runId)}` : "/review")} disabled={!data?.log}>Проверить вердикты</Button>
+        <Button icon={RotateCcw} onClick={() => setReextract(true)} disabled={busy || !state?.sources.length} title="Модель прочитает код агента заново и извлечёт критерии дословно">Извлечь заново</Button>
       </>}
       below={<SectionJob kinds={["discover", "names", "sources"]} />} />
   );
@@ -78,7 +76,7 @@ export function CriteriaPage() {
   if (!state || !data) return <div className="flex h-full flex-col">{header}<div className="p-5"><Skeleton className="h-6 w-[min(640px,90%)]" /><Skeleton className="mt-6 h-[480px]" /></div></div>;
   if (!list.length) return (
     <div className="flex h-full flex-col">{header}
-      <EmptyState drop title="Критериев пока нет" className="flex-1 justify-center">Судья достанет их дословно из промптов агента при первой оценке логов. Сначала прочитайте код в «Агенте».</EmptyState>
+      <EmptyState drop title="Критериев пока нет" className="flex-1 justify-center">Они извлекаются дословно из промптов агента при первой оценке логов. Сначала прочитайте код в «Агенте».</EmptyState>
     </div>
   );
 
@@ -93,11 +91,11 @@ export function CriteriaPage() {
         <p className="min-w-0 text-small text-fg-3 lg:flex-1">
           <span className="text-fg-2">{list.length} {plural(list.length, "критерий", "критерия", "критериев")} из {usedSources} {plural(usedSources, "источника", "источников", "источников")} кода</span>
           {data.log?.rulesSince && <>, зафиксированы {day(data.log.rulesSince)}</>}
-          {second.checked > 0 && <> · второй судья согласен с первым в {second.agree} из {second.checked} нарушений логов</>}
-          {people.agree + people.disagree > 0 && <> · люди проверили {people.agree + people.disagree} {plural(people.agree + people.disagree, "вердикт", "вердикта", "вердиктов")}, согласны с судьёй в {people.agree}</>}
+          {second.checked > 0 && <> · две проверки совпали в {second.agree} из {second.checked} ошибок логов</>}
+          {people.agree + people.disagree > 0 && <> · вы ответили на {people.agree + people.disagree} {plural(people.agree + people.disagree, "случай", "случая", "случаев")}, подтвердили {people.agree}</>}
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          {sideOptions.length > 1 && <Segmented<SideKey> size="sm" label="Чьи вердикты" value={side} onChange={v => set(n => { n.set("s", v); n.delete("x"); })} options={sideOptions.map(([k, l]) => ({ value: k, label: l }))} />}
+          {sideOptions.length > 1 && <Segmented<SideKey> size="sm" label="Этап" value={side} onChange={v => set(n => { n.set("s", v); n.delete("x"); })} options={sideOptions.map(([k, l]) => ({ value: k, label: l }))} />}
           <Segmented<View> size="sm" label="Вид" value={view} onChange={v => set(n => n.set("view", v))} options={[{ value: "list", label: "Списком" }, { value: "code", label: "В коде агента" }]} />
         </div>
       </div>
@@ -113,7 +111,7 @@ export function CriteriaPage() {
                       items={sources.map(s => ({ key: s.id, label: nameOf(s).file, sub: `${list.filter(c => c.r.rule.sourceId === s.id).length} критериев`, on: s.id === fileId, run: () => set(n => { n.set("f", s.id); n.delete("c"); }) }))} />
                   </div>
                   <span className="hidden truncate font-mono text-meta text-fg-3 lg:inline" title={source.origin}>{source.origin}</span>
-                  <span className="ml-auto whitespace-nowrap text-meta text-fg-3">{items.length} {plural(items.length, "критерий", "критерия", "критериев")} · <span className="text-bad">{items.filter(c => c.r[side].failed > 0).length} нарушено</span></span>
+                  <span className="ml-auto whitespace-nowrap text-small text-fg-3">{items.length} {plural(items.length, "критерий", "критерия", "критериев")} · <span className="text-bad">{items.filter(c => c.r[side].failed > 0).length} с ошибкой</span></span>
                 </div>
               )}
               {isLoading || !text ? <div className="p-6"><Skeleton className="h-[420px]" /></div>
@@ -124,7 +122,7 @@ export function CriteriaPage() {
           <CriteriaTable className={panelOpen && !wide ? "hidden" : undefined} list={list} sources={sources} selected={chosen?.r.id ?? null} onSelect={select} hasSim={!!data.sim} />
         )}
         {panelOpen && chosen && (
-          <CriterionPanel key={`${chosen.r.id}-${side}`} c={chosen} side={side} shown={shown} onShown={v => set(n => n.set("x", v))}
+          <CriterionPanel key={`${chosen.r.id}-${side}`} c={chosen} side={side} runId={data.sim?.runId} shown={shown} onShown={v => set(n => n.set("x", v))}
             onBack={wide ? undefined : () => set(n => n.delete("c"), false)} />
         )}
       </div>

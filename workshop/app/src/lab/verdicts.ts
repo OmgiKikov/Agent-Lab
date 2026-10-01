@@ -5,7 +5,7 @@ export const exampleKey = (e: Example) => `${e.source}|${e.source === "log" ? e.
 
 export type Queue = "disputed" | "unchecked" | "all";
 
-export const QUEUE_TITLE: Record<Queue, string> = { disputed: "спорные", unchecked: "не проверенные нарушения", all: "все вердикты" };
+export const QUEUE_TITLE: Record<Queue, string> = { disputed: "Спорные случаи", unchecked: "Без вашего ответа", all: "Все случаи" };
 
 /** Every verdict with evidence (a violation or a fulfilment), with its criterion; of one criterion and one source when given. */
 export function verdictsOf(data: Problems, ruleId?: string | null, source?: "log" | "sim"): { rule: RuleEntry; example: Example }[] {

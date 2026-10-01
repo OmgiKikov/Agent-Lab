@@ -72,8 +72,8 @@ function Frame() {
   useEffect(() => { document.getElementById("main")?.focus({ preventScroll: true }); }, [location.pathname]);
 
   const counts = {
-    problems: data?.log ? data.rules.filter(r => r.log.failed > 0).length : undefined,
-    dialogs: state?.logs.total || undefined,
+    logs: data?.log ? data.rules.filter(r => r.log.failed > 0).length : undefined,
+    sims: data?.sim ? data.rules.filter(r => r.sim.failed > 0).length : undefined,
     criteria: data?.rules.length || undefined,
   };
   const traceRoute = /^\/(runs|search|saved)(\/|$)/.test(location.pathname);
