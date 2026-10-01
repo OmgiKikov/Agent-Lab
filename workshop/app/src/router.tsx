@@ -5,11 +5,11 @@ import { ViolationsPage } from "./sections/violations/ViolationsPage";
 import { CriteriaPage } from "./sections/criteria/CriteriaPage";
 import { DialogsPage } from "./sections/dialogs/DialogsPage";
 import { ReviewPage } from "./sections/review/ReviewPage";
-import { AgentPage } from "./screens/agent/AgentPage";
+import { AgentPage } from "./sections/agent/AgentPage";
 import { RunsPage } from "./pages/RunsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SavedPage } from "./pages/SavedPage";
-import { SettingsPage } from "./screens/settings/SettingsPage";
+import { SettingsPage } from "./sections/settings/SettingsPage";
 import { SimulationsPage } from "./sections/simulations/SimulationsPage";
 
 /** An earlier address leads to its block; the query of the old address is kept, what the block needs is added. */
