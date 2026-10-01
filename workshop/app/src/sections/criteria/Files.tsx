@@ -2,7 +2,7 @@ import { Database, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Criterion } from "../../lab/criteria";
 import type { Source } from "../../lab/types";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { nameOf, toneOf, type SideKey } from "./model";
 
 /** The agent's code as it was read: prompts and tools, each with how many of its criteria are broken on this side. */
@@ -31,9 +31,9 @@ export function Files({ sources, list, side, current, onOpen }: { sources: Sourc
   };
   return (
     <nav aria-label="Код агента" className="min-h-0 overflow-auto border-r border-line bg-list px-2 py-3">
-      <Caps className="block px-2 pb-2">Промпты</Caps>
+      <Label className="block px-2 pb-2">Промпты</Label>
       {prompts.map(r => <Row key={r.s.id} r={r} />)}
-      {tools.length > 0 && <Caps className="block px-2 pb-2 pt-4">Инструменты</Caps>}
+      {tools.length > 0 && <Label className="block px-2 pb-2 pt-4">Инструменты</Label>}
       {tools.map(r => <Row key={r.s.id} r={r} />)}
       <div className="mx-2 mt-5 space-y-1.5 border-t border-line pt-3 text-meta text-fg-3">
         <p className="flex items-center gap-2"><span aria-hidden className="h-3.5 w-1 rounded-sm bg-bad" />нарушен хотя бы в одном диалоге</p>

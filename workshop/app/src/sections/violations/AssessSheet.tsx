@@ -5,7 +5,7 @@ import { day, plural } from "../../lab/format";
 import { SECTIONS } from "../../app/links";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
@@ -38,7 +38,7 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
       <div className="space-y-6 px-5 py-5">
         <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-4">
           <div className="rounded-block border border-line p-4">
-            <Caps>Логи</Caps>
+            <Label>Логи</Label>
             {total ? (
               <>
                 <div className="mt-2 font-mono text-count text-fg">{total}</div>
@@ -49,7 +49,7 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
           </div>
           <span aria-hidden className="self-center text-title text-fg-4">×</span>
           <div className="rounded-block border border-line p-4">
-            <Caps>Критерии</Caps>
+            <Label>Критерии</Label>
             {criteria ? (
               <>
                 <div className="mt-2 font-mono text-count text-fg">{criteria}</div>
@@ -61,7 +61,7 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
         </div>
         {sizes.length > 1 && (
           <div>
-            <Caps>Сколько диалогов взять</Caps>
+            <Label>Сколько диалогов взять</Label>
             <div className="mt-2"><Segmented<string> label="Сколько диалогов" value={String(size)} onChange={v => setPicked(Number(v))} options={sizes.map(n => ({ value: String(n), label: String(n) }))} /></div>
           </div>
         )}

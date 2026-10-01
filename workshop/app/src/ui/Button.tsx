@@ -14,8 +14,8 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const VARIANT = {
-  primary: "border-transparent bg-fg text-canvas hover:bg-white",
-  outline: "border-line-strong text-fg hover:bg-hover",
+  primary: "border-transparent bg-primary text-white shadow-card hover:bg-primary/90",
+  outline: "border-line-strong bg-list text-fg shadow-card hover:bg-hover",
   ghost: "border-transparent text-fg-2 hover:bg-hover hover:text-fg",
 };
 

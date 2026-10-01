@@ -72,7 +72,7 @@ function Frame() {
   useEffect(() => { document.getElementById("main")?.focus({ preventScroll: true }); }, [location.pathname]);
 
   const counts = {
-    violations: data?.log ? data.rules.filter(r => r.log.failed > 0).length : undefined,
+    problems: data?.log ? data.rules.filter(r => r.log.failed > 0).length : undefined,
     dialogs: state?.logs.total || undefined,
     criteria: data?.rules.length || undefined,
   };

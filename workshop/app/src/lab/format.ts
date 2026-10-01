@@ -16,3 +16,7 @@ export const day = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) : "";
 
 export const thousands = (chars: number) => `${(Math.round(chars / 100) / 10).toLocaleString("ru-RU")} тыс. знаков`;
+
+/** «28 сентября»: a date as people say it, for sentences. */
+export const longDay = (iso?: string | null) =>
+  iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }) : "";

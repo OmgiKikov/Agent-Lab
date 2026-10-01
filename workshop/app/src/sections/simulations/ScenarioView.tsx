@@ -8,7 +8,7 @@ import { personaName } from "../../lab/look";
 import { FROM_LOG } from "../../lab/runs";
 import type { Card, LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { originWord } from "./parts";
 
 /** A scenario: the situation, how the customer begins (for each type), what the judge will check, the test data, and «Сыграть». */
@@ -30,7 +30,7 @@ export function ScenarioView({ card, state, mine, onPlay, onBack }: { card: Card
           )}
         </div>
         <section className="mt-8" aria-label="Клиент начинает так">
-          <Caps>Клиент начинает так</Caps>
+          <Label>Клиент начинает так</Label>
           <div className="mt-3 space-y-3 rounded-block border border-line bg-inset px-4 py-4">
             {[["обычный клиент", card.opening] as const, ...openings.map(([id, text]) => [personaName(state.personas, id), text] as const)].map(([who, text]) => (
               <div key={who} className="flex flex-col items-end gap-1">
@@ -41,7 +41,7 @@ export function ScenarioView({ card, state, mine, onPlay, onBack }: { card: Card
           </div>
         </section>
         <section className="mt-8" aria-label="Судья проверит">
-          <Caps>Судья проверит · {mine.length || card.criteria.length} {plural(mine.length || card.criteria.length, "критерий", "критерия", "критериев")}</Caps>
+          <Label>Судья проверит · {mine.length || card.criteria.length} {plural(mine.length || card.criteria.length, "критерий", "критерия", "критериев")}</Label>
           <ul className="mt-2 border-t border-line">
             {mine.length ? mine.map(c => (
               <li key={c.r.id} className="border-b border-line">
@@ -56,7 +56,7 @@ export function ScenarioView({ card, state, mine, onPlay, onBack }: { card: Card
         </section>
         {world && (
           <section className="mt-8" aria-label="Тестовые данные">
-            <Caps>Тестовые данные · подставятся вместо систем банка</Caps>
+            <Label>Тестовые данные · подставятся вместо систем банка</Label>
             <div className="mt-3 rounded-block border border-line px-4 py-3.5">
               <p className="flex items-center gap-2 text-body text-fg"><Building2 aria-hidden className="size-4 text-fg-3" />{world.organization.name}</p>
               <p className="mt-1 flex flex-wrap gap-x-4 text-small text-fg-3"><span>ИНН <span className="font-mono text-fg-2">{world.organization.inn}</span></span><span>точка «{world.organization.merchantName}»</span></p>

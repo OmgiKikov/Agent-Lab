@@ -14,7 +14,7 @@ import { SourceSheet } from "../../product/SourceSheet";
 import { useKeys } from "../../app/keys";
 import { useShell } from "../../app/ShellContext";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 import { Evidence } from "./Evidence";
 import { checked, violationsOf, type SideKey } from "./model";
@@ -88,7 +88,7 @@ export function Case({ c, side, onSide, at, onAt, runId, hasLog, hasSim, onBack 
         </div>
         {s.unknown > 0 && (
           <section className="mt-7" aria-label="Не известно">
-            <Caps>Не известно</Caps>
+            <Label>Не известно</Label>
             <p className="mt-2 max-w-[62ch] text-body text-fg-2">
               В {s.unknown} {plural(s.unknown, "диалоге", "диалогах", "диалогах")} этих тем критерий не проверен: судья не нашёл доказательств ни выполнения, ни нарушения. В счёт «{s.failed} из {checked(s)}» они не входят.
             </p>

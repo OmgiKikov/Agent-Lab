@@ -10,7 +10,7 @@ import { Facts } from "../../product/Facts";
 import { Count } from "../../product/Count";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
 import { RunMatrix } from "./RunMatrix";
@@ -53,7 +53,7 @@ export function RunView({ summary, state, onBack }: { summary: LabRun; state: La
             title={state.job.running ? "Сейчас идёт другая задача" : "Судьи оценят диалоги этого прогона заново; агента не вызываем"}>Переоценить</Button>
         </div>
         <section className="mt-8" aria-label="Сценарии и типы клиентов">
-          <Caps>Сценарии × типы клиентов</Caps>
+          <Label>Сценарии × типы клиентов</Label>
           {isLoading ? <Skeleton className="mt-3 h-64" />
             : error ? <p className="mt-3 text-small text-bad">Не удалось открыть прогон: {error instanceof Error ? error.message : String(error)}</p>
             : run && items.length ? <RunMatrix run={run} items={items} hrefOf={i => dialogOf({ source: "sim", runId: summary.id, index: i })} scores />

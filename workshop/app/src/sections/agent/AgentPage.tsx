@@ -9,7 +9,7 @@ import { useCriteria } from "../../lab/criteria";
 import { day, plural, thousands } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
@@ -58,7 +58,7 @@ export function AgentPage() {
             </p>
             {sources.length > 0 && (
               <>
-                <Caps>Промпты и инструменты</Caps>
+                <Label>Промпты и инструменты</Label>
                 <ul className="mt-2 border-t border-line">
                   {sources.map(s => {
                     const mine = list.filter(c => c.r.rule.sourceId === s.id);

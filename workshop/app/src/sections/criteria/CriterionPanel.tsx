@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ArrowUpRight, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { violationLink } from "../../app/links";
+import { problemLink } from "../../app/links";
 import type { Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
@@ -11,7 +11,7 @@ import { Count } from "../../product/Count";
 import { Facts } from "../../product/Facts";
 import { Reliability } from "../../product/Reliability";
 import { shortOrigin } from "../../product/text";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
 import { type SideKey } from "./model";
 
@@ -58,12 +58,12 @@ export function CriterionPanel({ c, side, shown, onShown, onBack, className }: {
           ]} />
         </div>
         {s.failed > 0 && (
-          <Link to={violationLink(r.id, { es: side })} className="mt-4 inline-flex items-center gap-1.5 rounded-sm text-body font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3">
+          <Link to={problemLink(r.id, { src: side })} className="mt-4 inline-flex items-center gap-1.5 rounded-sm text-body font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3">
             Разбор нарушения<ArrowRight aria-hidden className="size-4" />
           </Link>
         )}
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Caps>Диалоги</Caps>
+          <Label>Диалоги</Label>
           <Segmented<Shown> size="sm" label="Какие диалоги" value={shown} onChange={onShown} options={[
             { value: "FAIL", label: "Нарушен", count: s.examples.filter(e => e.status === "FAIL").length },
             { value: "PASS", label: "Выполнен", count: s.examples.filter(e => e.status === "PASS").length },

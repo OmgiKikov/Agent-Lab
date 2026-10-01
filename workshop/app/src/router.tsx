@@ -1,7 +1,9 @@
 import { createBrowserRouter, Navigate, useLocation, useParams } from "react-router-dom";
 import { dialogLink } from "./lab/dialogs";
 import { Shell } from "./app/Shell";
-import { ViolationsPage } from "./sections/violations/ViolationsPage";
+import { OverviewPage } from "./sections/overview/OverviewPage";
+import { ProblemPage } from "./sections/problems/ProblemPage";
+import { ProblemsPage } from "./sections/problems/ProblemsPage";
 import { CriteriaPage } from "./sections/criteria/CriteriaPage";
 import { DialogsPage } from "./sections/dialogs/DialogsPage";
 import { ReviewPage } from "./sections/review/ReviewPage";
@@ -42,6 +44,19 @@ function OldBlock({ sim }: { sim?: boolean }) {
   return <Navigate to={`/violations${q ? `?${q}` : ""}`} replace />;
 }
 
+/** «Нарушения» became «Обзор» and «Проблемы»: a chosen violation opens as its problem, the sheets open on the overview. */
+function OldViolations() {
+  const { search } = useLocation();
+  const p = new URLSearchParams(search);
+  const next = new URLSearchParams();
+  if (p.get("s") === "sim") { next.set("src", "sim"); const run = p.get("run"); if (run) next.set("run", run); }
+  const q = next.toString();
+  const v = p.get("v");
+  if (v) return <Navigate to={`/problems/${encodeURIComponent(v)}${q ? `?${q}` : ""}`} replace />;
+  if (p.get("assess") || p.get("report")) return <Navigate to={`/overview?${p.get("assess") ? "assess=1" : "report=1"}`} replace />;
+  return <Navigate to={`/problems${q ? `?${q}` : ""}`} replace />;
+}
+
 /** /dialogs/<key>: the dialogue at its block. */
 function DialogRedirect() {
   const { dialogKey } = useParams();
@@ -53,8 +68,11 @@ export const router = createBrowserRouter([
     path: "/",
     element: <Shell />,
     children: [
-      { index: true, element: <Navigate to="/violations" replace /> },
-      { path: "violations", element: <ViolationsPage /> },
+      { index: true, element: <Navigate to="/overview" replace /> },
+      { path: "overview", element: <OverviewPage /> },
+      { path: "problems", element: <ProblemsPage /> },
+      { path: "problems/:id", element: <ProblemPage /> },
+      { path: "violations", element: <OldViolations /> },
       { path: "criteria", element: <CriteriaPage /> },
       { path: "agent", element: <AgentPage /> },
       { path: "agent/criteria", element: <To to="/criteria" /> },
@@ -67,12 +85,10 @@ export const router = createBrowserRouter([
       { path: "simulations/scenarios/:scenarioId", element: <To to="/simulations?mode=scenarios" from={p => ({ s: p.scenarioId ?? "" })} /> },
       { path: "results", element: <OldBlock sim /> },
       // The earlier sections: their content became tabs of the blocks.
-      { path: "problems", element: <To to="/violations" /> },
-      { path: "problems/:problemId", element: <To to="/violations" from={p => ({ v: p.problemId ?? "" })} /> },
       { path: "rules", element: <To to="/criteria" /> },
       { path: "rules/:ruleId", element: <To to="/criteria" from={p => ({ c: p.ruleId ?? "" })} /> },
       { path: "dialogs/:dialogKey", element: <DialogRedirect /> },
-      { path: "lab", element: <Navigate to="/violations" replace /> },
+      { path: "lab", element: <Navigate to="/overview" replace /> },
       { path: "lab/dialogs/*", element: <Navigate to="/dialogs?src=sim" replace /> },
       { path: "lab/logs/*", element: <Navigate to="/dialogs" replace /> },
       { path: "lab/criteria/*", element: <Navigate to="/criteria" replace /> },
@@ -80,7 +96,7 @@ export const router = createBrowserRouter([
       { path: "lab/judge/*", element: <Navigate to="/criteria" replace /> },
       { path: "lab/checks/*", element: <Navigate to="/simulations?mode=scenarios" replace /> },
       { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
-      { path: "lab/*", element: <Navigate to="/violations" replace /> },
+      { path: "lab/*", element: <Navigate to="/overview" replace /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId/span/:spanId", element: <RunsPage /> },
       { path: "runs/:runId/spans", element: <RunsPage /> },
@@ -97,7 +113,7 @@ export const router = createBrowserRouter([
       { path: "saved/:runId", element: <SavedPage /> },
       { path: "saved", element: <SavedPage /> },
       { path: "settings", element: <SettingsPage /> },
-      { path: "*", element: <Navigate to="/violations" replace /> },
+      { path: "*", element: <Navigate to="/overview" replace /> },
     ],
   },
 ]);

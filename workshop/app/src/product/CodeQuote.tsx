@@ -1,7 +1,7 @@
 import { ArrowUpRight, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { RuleEntry } from "../lab/problems";
-import { Caps } from "../ui/Caps";
+import { Label } from "../ui/Label";
 import { shortOrigin } from "./text";
 
 /**
@@ -13,7 +13,7 @@ export function CodeQuote({ r, n, lit, onLit, onOpen }: { r: RuleEntry; n?: numb
   return (
     <section>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <Caps>{n ? `Критерий ${n} в коде агента` : "Критерий в коде агента"}</Caps>
+        <Label>{n ? `Критерий ${n} в коде агента` : "Критерий в коде агента"}</Label>
         <span className="flex-1" />
         {origin && (onOpen
           ? <button type="button" onClick={onOpen} title="Открыть текст промпта с этой цитатой" className="inline-flex items-center gap-1.5 rounded-sm font-mono text-meta text-fg-2 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"><Code2 aria-hidden className="size-3.5" />{shortOrigin(origin)}<ArrowUpRight aria-hidden className="size-3.5" /></button>

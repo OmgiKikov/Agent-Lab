@@ -12,7 +12,7 @@ import { ExampleCard } from "../../product/ExampleCard";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Menu } from "../../ui/Menu";
 
@@ -67,7 +67,7 @@ export function ReviewPage() {
   const agree = made.filter(d => d === "agree").length;
   const rule = ruleId && data ? data.rules.find(r => r.id === ruleId) : undefined;
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
-  const toViolations = () => navigate(source === "sim" && runId ? `${SECTIONS.violations}?s=sim&run=${encodeURIComponent(runId)}` : SECTIONS.violations);
+  const toViolations = () => navigate(source === "sim" && runId ? `${SECTIONS.problems}?src=sim&run=${encodeURIComponent(runId)}` : SECTIONS.problems);
 
   const header = (
     <Header title="Проверка вердиктов" sub={`${source === "log" ? "логи" : "симуляция"} · ${QUEUE_TITLE[queue]}`}
@@ -97,7 +97,7 @@ export function ReviewPage() {
           ) : (
             <div className="max-w-4xl px-4 pb-16 pt-5 lg:px-10 lg:pt-7">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <Caps>{ONE[queue]} · {source === "log" ? "логи" : "симуляция"}</Caps>
+                <Label>{ONE[queue]} · {source === "log" ? "логи" : "симуляция"}</Label>
                 <Progress keys={keys} at={at} stateOf={stateOf} onAt={setAt} />
                 <span className="flex items-center gap-1.5">
                   <span className="mr-1 font-mono text-meta text-fg-3">{at + 1} из {keys.length}</span>
@@ -121,7 +121,7 @@ export function ReviewPage() {
                   </p>
                   <div className="mt-6"><CodeQuote r={current.rule} lit={lit} onLit={setLit} /></div>
                   <div className="mt-7">
-                    <Caps>Доказательство</Caps>
+                    <Label>Доказательство</Label>
                     <div className="mt-2.5"><ExampleCard example={current.example} lit={lit} onLit={setLit} onDecide={decide} onSkip={next} /></div>
                   </div>
                   <p className="mt-4 text-meta text-fg-3">

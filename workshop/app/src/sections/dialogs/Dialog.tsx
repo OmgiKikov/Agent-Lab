@@ -17,7 +17,7 @@ import { ReviewButtons } from "../../product/ReviewButtons";
 import { useLabState } from "../../lab/LabProvider";
 import { useShell } from "../../app/ShellContext";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { Skeleton } from "../../ui/EmptyState";
 import { Segmented } from "../../ui/Segmented";
 import { VerdictWord } from "./Rows";
@@ -35,7 +35,7 @@ function Verdicts({ row, rules, find, lit, onLit, onDecide, decided }: {
   const { state } = useLabState();
   return (
     <section className="mt-7" aria-label="Вердикты судьи">
-      <Caps>Вердикты судьи · {rules.length}</Caps>
+      <Label>Вердикты судьи · {rules.length}</Label>
       <ul className="mt-2 border-t border-line">
         {rules.map(r => {
           const c = find(r.rule);

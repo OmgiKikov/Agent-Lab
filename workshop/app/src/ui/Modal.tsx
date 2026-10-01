@@ -6,7 +6,7 @@ export function Modal({ open, onClose, title, children, footer }: { open: boolea
   return (
     <Dialog.Root open={open} onOpenChange={o => { if (!o) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-fg/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
         <Dialog.Content
           aria-describedby={undefined}
           className="fixed left-1/2 top-[18%] z-50 w-[calc(100vw-32px)] max-w-[500px] -translate-x-1/2 rounded-sheet bg-side shadow-pop outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"

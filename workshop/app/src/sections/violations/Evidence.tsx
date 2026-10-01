@@ -2,7 +2,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { Decision, Example } from "../../lab/problems";
 import { ExampleCard } from "../../product/ExampleCard";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
 import type { SideKey } from "./model";
 
@@ -19,7 +19,7 @@ export function Evidence({ list, at, onAt, side, onSide, counts, lit, onLit, onD
   return (
     <section aria-label="Доказательство">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <Caps>Доказательство</Caps>
+        <Label>Доказательство</Label>
         {sides.length > 1 && <Segmented<SideKey> size="sm" label="Источник примеров" value={side} onChange={onSide} options={sides.map(([k, l]) => ({ value: k, label: l, count: counts[k] }))} />}
         <span className="flex-1" />
         {list.length > 0 && (

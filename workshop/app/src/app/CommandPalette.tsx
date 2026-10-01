@@ -1,14 +1,14 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, ClipboardCheck, CornerDownLeft, FileText, FlaskConical, Hammer, ListChecks, MessageSquare, MessagesSquare, Play, Route, Search, Settings, TriangleAlert, Upload, Waypoints, type LucideIcon } from "lucide-react";
+import { Bot, ClipboardCheck, LayoutDashboard, CornerDownLeft, FileText, FlaskConical, Hammer, ListChecks, MessageSquare, MessagesSquare, Play, Route, Search, Settings, TriangleAlert, Upload, Waypoints, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import { useProblems } from "../lab/problems";
 import { runTitle } from "../lab/runs";
-import { Caps } from "../ui/Caps";
-import { criterionLink, runLink, scenariosLink, SECTIONS, violationLink } from "./links";
+import { Label } from "../ui/Label";
+import { criterionLink, runLink, scenariosLink, SECTIONS, problemLink } from "./links";
 import { useShell } from "./ShellContext";
 
 type Entry = { id: string; group: string; label: string; sub?: string; icon: LucideIcon; run: () => void };
@@ -27,17 +27,18 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const entries = useMemo<Entry[]>(() => {
     const go = (to: string) => () => navigate(to);
     const out: Entry[] = [
-      { id: "s-violations", group: "Разделы", label: "Нарушения", sub: "Что агент делает не так, с доказательствами", icon: TriangleAlert, run: go(SECTIONS.violations) },
-      { id: "s-dialogs", group: "Разделы", label: "Диалоги", sub: "Логи, симуляции и трейсы, каждый целиком", icon: MessagesSquare, run: go(SECTIONS.dialogs) },
+      { id: "s-overview", group: "Разделы", label: "Обзор", sub: "Как работает агент и что делать дальше", icon: LayoutDashboard, run: go(SECTIONS.overview) },
+      { id: "s-problems", group: "Разделы", label: "Проблемы", sub: "Где агент ошибается, с примерами из разговоров", icon: TriangleAlert, run: go(SECTIONS.problems) },
+      { id: "s-dialogs", group: "Разделы", label: "Разговоры", sub: "Логи, симуляции и трейсы, каждый целиком", icon: MessagesSquare, run: go(SECTIONS.dialogs) },
       { id: "s-criteria", group: "Разделы", label: "Критерии", sub: "Что агент обязан делать, прямо в его коде", icon: ListChecks, run: go(SECTIONS.criteria) },
       { id: "s-simulations", group: "Разделы", label: "Симуляции", sub: "Синтетические клиенты играют сценарии с агентом", icon: FlaskConical, run: go(SECTIONS.simulations) },
       { id: "s-scenarios", group: "Разделы", label: "Сценарии", sub: "Карточки бизнес-сценариев для симуляций", icon: Route, run: go(scenariosLink()) },
       { id: "s-traces", group: "Разделы", label: "Трейсы", sub: "Всё, что записал Workshop", icon: Waypoints, run: go(`${SECTIONS.dialogs}?src=traces`) },
       { id: "s-agent", group: "Разделы", label: "Агент", sub: "Подключение и прочитанный код", icon: Bot, run: go(SECTIONS.agent) },
       { id: "s-settings", group: "Разделы", label: "Настройки", sub: "Модели, ключи, ассистент, повтор трейсов", icon: Settings, run: go(SECTIONS.settings) },
-      { id: "a-assess", group: "Действия", label: "Оценить логи", sub: "Судья проверит диалоги логов по критериям агента", icon: Play, run: go(`${SECTIONS.violations}?assess=1`) },
+      { id: "a-assess", group: "Действия", label: "Оценить логи", sub: "Судья проверит диалоги логов по критериям агента", icon: Play, run: go(`${SECTIONS.overview}?assess=1`) },
       { id: "a-review", group: "Действия", label: "Проверить вердикты", sub: "Верно или неверно судья: по одному, клавишами V и N", icon: ClipboardCheck, run: go(SECTIONS.review) },
-      { id: "a-report", group: "Действия", label: "Отчёт для письма", sub: "Нарушения листом: скопировать или скачать", icon: FileText, run: go(`${SECTIONS.violations}?report=1`) },
+      { id: "a-report", group: "Действия", label: "Отчёт для письма", sub: "Проблемы листом: скопировать или скачать", icon: FileText, run: go(`${SECTIONS.overview}?report=1`) },
       { id: "a-upload", group: "Действия", label: "Загрузить логи", sub: "Выгрузка чата — кнопкой в «Диалогах»", icon: Upload, run: go(SECTIONS.dialogs) },
       { id: "a-cards", group: "Действия", label: "Собрать сценарии", sub: "Из оценённых логов", icon: Hammer, run: go(scenariosLink()) },
       { id: "a-play", group: "Действия", label: "Запустить симуляцию", sub: "Синтетический клиент сыграет сценарии с агентом", icon: Play, run: go(`${SECTIONS.simulations}?play=1`) },
@@ -47,7 +48,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     const byId = new Map((data?.rules ?? []).map(r => [r.id, r]));
     for (const id of data?.problems ?? []) {
       const p = byId.get(id);
-      if (p?.log.failed) out.push({ id: `v-${id}`, group: "Нарушения в логах", label: p.title, sub: `${p.log.failed} из ${p.log.failed + p.log.passed} диалогов`, icon: TriangleAlert, run: go(violationLink(id)) });
+      if (p?.log.failed) out.push({ id: `v-${id}`, group: "Проблемы в логах", label: p.title, sub: `${p.log.failed} из ${p.log.failed + p.log.passed} диалогов`, icon: TriangleAlert, run: go(problemLink(id)) });
     }
     for (const r of data?.rules ?? []) {
       out.push({ id: `c-${r.id}`, group: "Критерии", label: r.title, sub: r.rule.origin || r.rule.text, icon: ListChecks, run: go(criterionLink(r.id)) });
@@ -71,7 +72,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   return (
     <Dialog.Root open={open} onOpenChange={o => { if (!o) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-fg/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
         <Dialog.Content
           aria-describedby={undefined}
           onKeyDown={e => {
@@ -93,7 +94,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <div ref={list} className="max-h-[min(420px,60dvh)] overflow-auto p-1.5">
             {shown.map((e, i) => (
               <div key={e.id}>
-                {(i === 0 || shown[i - 1].group !== e.group) && <Caps className="block px-2.5 pb-1 pt-2.5">{e.group}</Caps>}
+                {(i === 0 || shown[i - 1].group !== e.group) && <Label className="block px-2.5 pb-1 pt-2.5">{e.group}</Label>}
                 <button
                   type="button" data-index={i} onClick={() => choose(e)} onMouseMove={() => setAt(i)}
                   className={cn("flex w-full items-center gap-3 rounded-control px-2.5 py-2 text-left transition-colors", i === at ? "bg-selected" : "hover:bg-hover")}

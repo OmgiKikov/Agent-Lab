@@ -1,6 +1,7 @@
 /** Where each section lives; screens link through these, so a section moves in one place. */
 export const SECTIONS = {
-  violations: "/violations",
+  overview: "/overview",
+  problems: "/problems",
   dialogs: "/dialogs",
   review: "/review",
   criteria: "/criteria",
@@ -9,11 +10,12 @@ export const SECTIONS = {
   settings: "/settings",
 };
 
-/** A violation in its section: the criterion, the side of its examples and the run of the simulation when chosen. */
-export function violationLink(ruleId: string, extra: Record<string, string | null | undefined> = {}) {
-  const p = new URLSearchParams({ v: ruleId });
+/** A problem on its own page: the criterion the agent breaks; the source of its examples and the run when chosen. */
+export function problemLink(ruleId: string, extra: Record<string, string | null | undefined> = {}) {
+  const p = new URLSearchParams();
   for (const [k, v] of Object.entries(extra)) if (v) p.set(k, v);
-  return `${SECTIONS.violations}?${p}`;
+  const q = p.toString();
+  return `${SECTIONS.problems}/${encodeURIComponent(ruleId)}${q ? `?${q}` : ""}`;
 }
 
 /** A criterion where it is written: the agent's code with the criterion marked. */

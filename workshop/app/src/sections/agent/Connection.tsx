@@ -5,7 +5,7 @@ import { api } from "../../lab/api";
 import type { Check, LabState, Target } from "../../lab/types";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 
 type Answer = Check & { question?: string };
@@ -95,7 +95,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
   };
   return (
     <section aria-label="Подключение">
-      <Caps>Как подключить агента</Caps>
+      <Label>Как подключить агента</Label>
       <div role="radiogroup" aria-label="Способ подключения" className="mt-2 border-t border-line">
         {state.targets.map(t => <Way key={t.id} target={t} on={t.id === way} onPick={() => pick(t.id)} />)}
       </div>

@@ -7,7 +7,7 @@ import type { RuleEntry } from "../../lab/problems";
 import { scenariosLink, SECTIONS } from "../../app/links";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
-import { Caps } from "../../ui/Caps";
+import { Label } from "../../ui/Label";
 import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
 
@@ -40,11 +40,11 @@ export function Reproduce({ r }: { r: RuleEntry }) {
     }
   };
   return (
-    <section id="reproduce" aria-label="Воспроизвести" className="scroll-mt-4">
-      <Caps>Воспроизвести</Caps>
+    <section id="reproduce" aria-label="Проверить на симуляции" className="scroll-mt-4">
+      <Label>Проверить на симуляции</Label>
       {n ? (
         <div className="mt-2 flex flex-wrap items-center gap-3 text-body text-fg-2">
-          <span>Из этих диалогов {plural(n, "собран", "собрано", "собрано")} {n} {plural(n, "сценарий", "сценария", "сценариев")} симулятора.</span>
+          <span>Из этих разговоров {plural(n, "собран", "собрано", "собрано")} {n} {plural(n, "сценарий", "сценария", "сценариев")}: синтетический клиент сыграет их с агентом.</span>
           {chosen ? (
             <span className="flex items-center gap-2">
               <Menu
@@ -56,7 +56,7 @@ export function Reproduce({ r }: { r: RuleEntry }) {
           ) : <Link to={SECTIONS.agent} className={link}>Подключите агента</Link>}
         </div>
       ) : (
-        <p className="mt-2 text-body text-fg-2">Сценарии из этих диалогов не собраны. <Link to={scenariosLink()} className={link}>Собрать в «Симуляциях»</Link></p>
+        <p className="mt-2 text-body text-fg-2">Сценарии из этих разговоров ещё не собраны. <Link to={scenariosLink()} className={link}>Собрать в «Симуляциях»</Link></p>
       )}
     </section>
   );
