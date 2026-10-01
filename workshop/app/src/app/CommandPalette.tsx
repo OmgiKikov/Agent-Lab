@@ -25,7 +25,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   useEffect(() => { if (open) { setQuery(""); setAt(0); } }, [open]);
 
   const entries = useMemo<Entry[]>(() => {
-    const go = (to: string) => () => navigate(to);
+    const go = (to: string) => () => { void navigate(to); };
     const out: Entry[] = [
       { id: "s-overview", group: "Разделы", label: "Обзор", sub: "Как работает агент и что делать дальше", icon: LayoutDashboard, run: go(SECTIONS.overview) },
       { id: "s-problems", group: "Разделы", label: "Проблемы", sub: "Где агент ошибается, с примерами из разговоров", icon: TriangleAlert, run: go(SECTIONS.problems) },

@@ -29,7 +29,7 @@ export function TaskCard({ compact }: { compact?: boolean }) {
     const label = info?.label ?? "Задача";
     if (job.error === STOPPED) toast.notify(`${label}: остановлено`);
     else if (job.error) toast.error(`${label}: ${job.error}`);
-    else toast.notify(`${label}: готово`, info ? { label: "Открыть", run: () => navigate(info.to) } : undefined);
+    else toast.notify(`${label}: готово`, info ? { label: "Открыть", run: () => { void navigate(info.to); } } : undefined);
   }, [job, toast, navigate]);
   if (!job?.kind) return null;
   const info = jobOf(job);
