@@ -42,7 +42,9 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
             <Cap>Код агента требует</Cap>
             <span className="font-mono text-meta text-ink-3">{shortOrigin(c.r.rule.origin)}</span>
           </div>
-          <p className="mt-2.5 text-read text-ink">«{c.r.rule.quote}»</p>
+          <p className="mt-2.5 text-read text-ink">
+            {c.r.rule.quote ? `«${c.r.rule.quote}»` : "Цитата из кода не сохранена в этом прогоне."}
+          </p>
         </div>
         <div className="border-t border-ink-line p-4 sm:border-l sm:border-t-0">
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -109,9 +111,10 @@ export function ReportSheet({
         ]
       : sim
         ? [
-            [`${sim.dialogs}`, "", "разговоров сыграно"],
+            [`${sim.assessed}`, `из ${sim.dialogs}`, "разговоров проверено"],
             [`${sim.withViolations}`, "", "с ошибкой агента"],
-            [`${sim.dialogs - sim.withViolations}`, "", "без найденных ошибок"],
+            [`${sim.assessed - sim.withViolations}`, "", "без найденных ошибок"],
+            [`${sim.unassessed}`, "", "не удалось проверить"],
           ]
         : [];
   return (
@@ -160,7 +163,8 @@ export function ReportSheet({
           )}
           {side === "sim" && sim && (
             <p className="mt-3 text-read text-ink-2">
-              Прогон {sim.target} · {sim.version}: {sim.dialogs} разговоров, ошибка в {sim.withViolations}.
+              Прогон {sim.target} · {sim.version}: проверено {sim.assessed} из {sim.dialogs} разговоров, ошибка в{" "}
+              {sim.withViolations}, {sim.unassessed} проверить не удалось.
             </p>
           )}
           <dl className="mt-6 grid grid-cols-2 border-t border-ink sm:grid-cols-4">
@@ -183,7 +187,13 @@ export function ReportSheet({
           {items.map((c, i) => (
             <Section key={c.r.id} c={c} i={i + 1} side={side} />
           ))}
-          {!items.length && <p className="mt-10 text-read text-ink-2">Ошибок не найдено.</p>}
+          {!items.length && (
+            <p className="mt-10 text-read text-ink-2">
+              {(side === "log" ? log?.assessed : sim?.assessed)
+                ? "Ошибок не найдено."
+                : "Разговоры пока не удалось проверить."}
+            </p>
+          )}
           <p className="mt-12 border-t border-ink-line pt-4 text-small text-ink-3">
             Счёт «N из M»: M — разговоры, где критерий удалось проверить. Логи и симуляция считаются отдельно и не
             складываются. «Без найденных ошибок» не означает, что агент исправен.

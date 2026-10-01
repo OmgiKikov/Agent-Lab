@@ -34,7 +34,8 @@ export function summarySentence(data: Problems, source: Source): string {
   const total = data.rules.length;
   const failed = data.rules.filter((r) => r[source].failed > 0).length;
   if (failed) return `Агент ошибается по ${failed} из ${total} ${plural(total, "критерию", "критериям", "критериям")}`;
-  const n = source === "log" ? (data.log?.assessed ?? 0) : (data.sim?.dialogs ?? 0);
+  const n = source === "log" ? (data.log?.assessed ?? 0) : (data.sim?.assessed ?? 0);
+  if (!n) return "Разговоры пока не удалось проверить";
   return `Ошибок не найдено ни по одному из ${total} ${plural(total, "критерия", "критериев", "критериев")} в ${n} ${plural(n, "разговоре", "разговорах", "разговорах")}`;
 }
 
@@ -65,7 +66,9 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
     "",
     `Агент должен: ${p.rule.text}`,
     "",
-    `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${p.rule.origin})` : ""}: «${p.rule.quote}»`,
+    p.rule.quote
+      ? `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${p.rule.origin})` : ""}: «${p.rule.quote}»`
+      : "Цитата из кода не сохранена в этом прогоне.",
   ];
   if (e)
     lines.push(
@@ -90,7 +93,7 @@ export function problemsReport(data: Problems, base: string, source: Source): st
     );
   if (source === "sim" && data.sim)
     lines.push(
-      `Симуляция: ${data.sim.target} · ${data.sim.version} от ${day(data.sim.finishedAt)}, ${data.sim.dialogs} разговоров, ошибка в ${data.sim.withViolations}.`,
+      `Симуляция: ${data.sim.target} · ${data.sim.version} от ${day(data.sim.finishedAt)}, проверено ${data.sim.assessed} из ${data.sim.dialogs} разговоров, ошибка в ${data.sim.withViolations}, не удалось проверить ${data.sim.unassessed}.`,
     );
   lines.push("");
   const list = data.rules.filter((r) => r[source].failed > 0).sort((a, b) => b[source].failed - a[source].failed);

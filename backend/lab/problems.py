@@ -71,7 +71,7 @@ class Book:
 
     def source(self, rule: dict) -> dict:
         known = self.srcs.get(rule.get('sourceId') or '')
-        if known:
+        if known and quotes.found(rule.get('quote', ''), known['content']):
             return known
         return next((s for s in self.srcs.values() if quotes.found(rule.get('quote', ''), s['content'])), {})
 
@@ -154,6 +154,24 @@ def from_logs(book: Book, analysis: dict) -> dict | None:
     }
 
 
+def recorded_rule(book: Book, row: dict, known: dict, has_snapshot: bool) -> dict | None:
+    """Keep legacy verdicts even when their deck is gone; never invent their missing source quote."""
+    rule = known.get(row.get('ruleId'))
+    if rule:
+        return rule
+    text = row.get('rule', '')
+    if not text:
+        return None
+    if not has_snapshot:
+        rule = book.by_text.get(quotes.normalized(text))
+        if rule:
+            return rule
+        for builtin in (cards.ANSWERS_THE_QUESTION, cards.FOLLOWS_KNOWLEDGE):
+            if row.get('ruleId') == builtin['id'] and quotes.normalized(text) == quotes.normalized(builtin['text']):
+                return builtin
+    return {'text': text, 'quote': ''}
+
+
 def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
     """The run's verdicts into the book; its line of counts. A rule is the criterion frozen in the played item (else
     its scenario's), or the audit's rule with the same text."""
@@ -166,7 +184,7 @@ def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
         known = {criterion['id']: criterion for criterion in frozen}
         conversation = item.get('conversation') or []
         for row in item.get('rules') or []:
-            rule = known.get(row.get('ruleId')) or book.by_text.get(quotes.normalized(row.get('rule', '')))
+            rule = recorded_rule(book, row, known, isinstance(item.get('criteria'), list))
             if row.get('status') not in COUNTED or not rule:
                 continue
             second, second_scope = second_of(item.get('second'), row['ruleId'], row['status'], item['status'])
@@ -192,11 +210,14 @@ def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
             entry = book.entry(rule, item.get('topic', ''))
             book.add(entry, 'sim', f'{run["id"]}#{index}', example, row.get('title', ''))
     done = [i for i in items if i.get('status') in MEASURED]
+    assessed = sum(1 for i in done if i['status'] in ('PASS', 'FAIL'))
     return {
         'runId': run['id'],
         'target': run.get('targetName', ''),
         'version': run.get('version', ''),
         'dialogs': len(done),
+        'assessed': assessed,
+        'unassessed': len(done) - assessed,
         'withViolations': sum(1 for i in done if i['status'] == 'FAIL'),
         'finishedAt': run.get('finishedAt'),
     }

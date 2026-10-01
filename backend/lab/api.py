@@ -89,6 +89,7 @@ def source_summary() -> list[dict]:
             'id': source['id'],
             'kind': source['kind'],
             'origin': source['origin'],
+            'sha256': source.get('sha256'),
             'chars': len(source['content']),
             'rules': rules.get(source['id'], 0),
         }

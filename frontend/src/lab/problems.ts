@@ -61,6 +61,8 @@ export type Problems = {
     target: string;
     version: string;
     dialogs: number;
+    assessed: number;
+    unassessed: number;
     withViolations: number;
     finishedAt: string | null;
   } | null;
@@ -75,7 +77,8 @@ export type SourceText = { id: string; kind: string; origin: string; sha256?: st
 export function problemsStamp(state: LabState | null): string {
   if (!state) return "";
   const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}`).join(",");
-  return `${state.discover?.finishedAt ?? ""}|${runs}|${state.job.running}`;
+  const sources = state.sources.map((s) => `${s.id}:${s.sha256 ?? ""}`).join(",");
+  return `${state.logs.updatedAt ?? ""}|${state.discover?.finishedAt ?? ""}|${sources}|${runs}|${state.job.running}`;
 }
 
 export function useProblems(runId: string | null) {
@@ -133,8 +136,9 @@ export function useReview() {
 
 /** The whole conversation of an example: a logged one from the logs, a simulated one from its run. */
 export function useTurns(example?: Example): { turns?: Turn[]; loading: boolean; error: unknown } {
+  const { state } = useLabState();
   const log = useQuery({
-    queryKey: ["dialogue", example?.dialogueId],
+    queryKey: ["dialogue", example?.dialogueId, state?.logs.updatedAt],
     queryFn: () => api<LogDialogue>(`/api/logs/${encodeURIComponent(example!.dialogueId!)}`),
     enabled: example?.source === "log",
     staleTime: Infinity,
@@ -166,8 +170,10 @@ export function useTurns(example?: Example): { turns?: Turn[]; loading: boolean;
 }
 
 export function useSource(id: string | null | undefined) {
+  const { state } = useLabState();
+  const revision = state?.sources.find((s) => s.id === id)?.sha256;
   return useQuery({
-    queryKey: ["source", id],
+    queryKey: ["source", id, revision],
     queryFn: () => api<SourceText>(`/api/sources/${encodeURIComponent(id!)}`),
     enabled: !!id,
     staleTime: Infinity,

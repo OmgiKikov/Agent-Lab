@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import httpx
 
-from lab import api, discover, problems, store
+from lab import api, cards, discover, problems, store
 from lab.jobs import Jobs
 
 SOURCE = {'id': 'src-1', 'kind': 'prompt', 'origin': 'prompts/main.txt', 'content': 'Не отправляй клиента в поддержку.'}
@@ -115,6 +115,60 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rule['sim']['examples'][0]['opening'], 'Не работает')
         self.assertEqual(value['sim']['runId'], 'run-1')
         self.assertEqual(value['sim']['withViolations'], 1)
+
+    def test_legacy_general_rule_survives_a_rebuilt_deck(self) -> None:
+        record = played_run()
+        item = record['items'][0]
+        del item['criteria']
+        criterion = cards.FOLLOWS_KNOWLEDGE
+        item['rules'] = [{'ruleId': criterion['id'], 'rule': criterion['text'], 'status': 'FAIL'}]
+        store.create_run(record)
+        value = problems.build('run-1')
+        found = next(rule for rule in value['rules'] if rule['sim']['failed'])
+        self.assertEqual(found['rule']['quote'], criterion['quote'])
+        self.assertEqual(found['sim']['failed'], 1)
+
+    def test_legacy_custom_verdicts_count_without_fabricated_source_quotes(self) -> None:
+        record = played_run()
+        item = record['items'][0]
+        del item['criteria']
+        item['rules'] = [
+            {'ruleId': 'lost-1', 'rule': 'Уточняет реквизиты клиента', 'status': 'FAIL'},
+            {'ruleId': 'lost-2', 'rule': 'Сообщает время работы', 'status': 'FAIL'},
+        ]
+        store.create_run(record)
+        found = [rule for rule in problems.build('run-1')['rules'] if rule['sim']['failed']]
+        self.assertEqual(len(found), 2)
+        self.assertEqual(len({rule['id'] for rule in found}), 2)
+        self.assertTrue(all(rule['rule']['quote'] == '' and rule['sim']['failed'] == 1 for rule in found))
+
+    async def test_run_summary_excludes_unmeasured_conversations_from_checked_count(self) -> None:
+        record = played_run()
+        record['items'].extend([{'status': 'PASS', 'cardId': 'pass'}, {'status': 'UNMEASURED', 'cardId': 'unknown'}])
+        store.create_run(record)
+        summary = (await self.client.get('/api/problems?run=run-1')).json()['sim']
+        self.assertEqual((summary['dialogs'], summary['assessed'], summary['unassessed']), (3, 2, 1))
+        self.assertEqual(summary['assessed'] - summary['withViolations'], 1)
+
+    async def test_state_exposes_the_revision_used_by_source_cache(self) -> None:
+        store.replace_inputs(api.sources.FILE, [dict(SOURCE, sha256='source-revision')])
+        state = (await self.client.get('/api/state')).json()
+        source = (await self.client.get('/api/sources/src-1')).json()
+        self.assertEqual(state['sources'][0]['sha256'], source['sha256'])
+
+    async def test_new_export_does_not_reuse_old_verdicts_for_the_same_dialogue_id(self) -> None:
+        dialogue = {
+            'id': 'd1',
+            'messages': [{'role': 'user', 'content': 'Новый вопрос'}, {'role': 'assistant', 'content': 'Новый ответ'}],
+        }
+        response = await self.client.post('/api/logs?name=new.jsonl', content=json.dumps(dialogue))
+        self.assertEqual(response.status_code, 200, response.text)
+        state = (await self.client.get('/api/state')).json()
+        self.assertIsNone(state['discover'])
+        detail = (await self.client.get('/api/logs/d1')).json()
+        self.assertIsNone(detail['evaluation'])
+        self.assertEqual(detail['messages'][1]['content'], 'Новый ответ')
+        self.assertIsNone((await self.client.get('/api/problems')).json()['log'])
 
     async def test_problems_and_source_routes(self) -> None:
         response = await self.client.get('/api/problems')

@@ -37,7 +37,7 @@ export function AssessSheet({ open, onClose, criteria }: { open: boolean; onClos
   const sources = state?.sources.length ?? 0;
   const start = () => {
     setStarting(true);
-    api("/api/discover", { count: size })
+    api("/api/discover", { count: Math.max(5, size) })
       .then(() => {
         refresh();
         onClose();

@@ -30,10 +30,11 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const runId = stage === "sim" ? params.get("run") : null;
-  const { data } = useProblems(runId);
+  const { data, isPlaceholderData } = useProblems(runId);
   const review = useReview();
   const ruleId = params.get("rule");
-  const wanted = params.get("queue") as Queue | null;
+  const rawQueue = params.get("queue");
+  const wanted = QUEUES.find((q) => q === rawQueue) ?? null;
   const set = (edit: (n: URLSearchParams) => void) =>
     setParams(
       (prev) => {
@@ -53,19 +54,22 @@ export function ReviewPage({ stage }: { stage: Stage }) {
       >,
     [data, ruleId, stage],
   );
-  const queue: Queue = wanted ?? (counts.disputed ? "disputed" : counts.unchecked ? "unchecked" : "all");
-  const id = `${stage}|${runId ?? ""}|${queue}|${ruleId ?? ""}`;
-  const [frozen, setFrozen] = useState<{ id: string; keys: string[] } | null>(null);
+  const context = stage === "sim" ? (runId ?? data?.sim?.runId ?? "") : (data?.log?.finishedAt ?? "");
+  const id = `${stage}|${context}|${wanted ?? "default"}|${ruleId ?? ""}`;
+  const [frozen, setFrozen] = useState<{ id: string; queue: Queue; keys: string[] } | null>(null);
+  const queue: Queue =
+    wanted ??
+    (frozen?.id === id ? frozen.queue : counts.disputed ? "disputed" : counts.unchecked ? "unchecked" : "all");
   const [at, setAt] = useState(0);
   const [dir, setDir] = useState<1 | -1>(1);
   const [answered, setAnswered] = useState<Record<string, Decision>>({});
   const [lit, setLit] = useState(false);
   useEffect(() => {
-    if (!data || frozen?.id === id) return;
-    setFrozen({ id, keys: queueOf(data, queue, ruleId, stage).map((v) => exampleKey(v.example)) });
+    if (!data || isPlaceholderData || frozen?.id === id) return;
+    setFrozen({ id, queue, keys: queueOf(data, queue, ruleId, stage).map((v) => exampleKey(v.example)) });
     setAt(0);
     setAnswered({});
-  }, [data, id, queue, ruleId, stage, frozen?.id]);
+  }, [data, isPlaceholderData, id, queue, ruleId, stage, frozen?.id]);
   const byKey = useMemo(
     () => new Map((data ? queueOf(data, "all", ruleId, stage) : []).map((v) => [exampleKey(v.example), v])),
     [data, ruleId, stage],
@@ -180,7 +184,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
             </p>
           )}
 
-          {!data || !frozen ? (
+          {!data || frozen?.id !== id ? (
             <Skeleton className="mt-8 h-[480px]" />
           ) : !keys.length ? (
             <EmptyState
