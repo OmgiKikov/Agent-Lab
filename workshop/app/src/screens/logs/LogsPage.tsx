@@ -32,7 +32,7 @@ export function LogsPage() {
   const assessed = !!state?.discover && !!log;
   const dialogId = tab === "dialogs" ? params.get("d") : null;
   const dialogTitle = dialogId && state ? logRows(state).find(r => r.key === dialogId)?.title : undefined;
-  const total = state?.logs.total ?? 0;
+  const total = state ? logRows(state).length : 0;
 
   let body;
   if (!state || (state.discover && !data)) body = <div className="p-6"><Skeleton className="h-7 w-96" /><Skeleton className="mt-8 h-[420px]" /></div>;

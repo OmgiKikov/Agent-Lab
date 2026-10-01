@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lab/api";
 import { logKey, logRows, simKey, simRows } from "../../lab/dialogs";
-import { useProblems } from "../../lab/problems";
+import { useCriteria } from "../../lab/criteria";
 import type { LabRun } from "../../lab/types";
 import { useKeys } from "../../shell/keys";
 import { useLabState } from "../../shell/LabProvider";
@@ -15,7 +15,7 @@ import { DialogView } from "./DialogView";
 export function DialogsView({ source, runId }: { source: "log" | "sim"; runId?: string | null }) {
   const [params, setParams] = useSearchParams();
   const { state } = useLabState();
-  const { data: problems } = useProblems(runId ?? null);
+  const { data: problems, list: criteria, topics } = useCriteria(source === "sim" ? runId ?? null : null);
   const simRunId = source === "sim" ? (runId ?? problems?.sim?.runId ?? null) : null;
   const run = useQuery({ queryKey: ["run", simRunId], queryFn: () => api<LabRun>(`/api/runs/${encodeURIComponent(simRunId!)}`), enabled: !!simRunId, staleTime: 60_000 });
   const [query, setQuery] = useState("");
@@ -42,6 +42,7 @@ export function DialogsView({ source, runId }: { source: "log" | "sim"; runId?: 
   if (key) return selected ? <DialogView key={selected.key} row={selected} onBack={() => open(null)} /> : <EmptyState title="Этого диалога нет среди загруженных" />;
   return (
     <DialogList rows={rows} all={all} verdict={verdict} onVerdict={v => set("v", v)} query={query} onQuery={setQuery}
-      rule={rule?.title ?? null} onClearRule={() => set("rule", null)} onOpen={pick} personas={state.personas} />
+      rule={criteria.find(c => c.r.id === ruleId) ?? null} onClearRule={() => set("rule", null)} onOpen={pick} personas={state.personas}
+      criteria={criteria} topics={topics} />
   );
 }

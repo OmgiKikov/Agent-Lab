@@ -1,11 +1,12 @@
-import { ChevronDown, X } from "lucide-react";
+import { useMemo } from "react";
+import { AlertCircle, CheckCircle2, CircleDashed, Search, Swords, Users, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { Criterion, Topic } from "../../lab/criteria";
 import type { DialogRow, Source } from "../../lab/dialogs";
 import { personaName } from "../../lab/look";
 import type { Persona } from "../../lab/types";
-import { Tag } from "../../ui/Details";
-import { Menu } from "../../ui/Menu";
-import { Lead, ListBar, Share, Table, type Col } from "../../ui/Table";
+import { MarkStack } from "../../ui/Mark";
+import { Chips, Pill } from "../../ui/Pill";
 
 export type Verdict = "all" | "fail" | "pass" | "none" | "disputed";
 export type SourceFilter = "all" | Source;
@@ -21,72 +22,80 @@ export function matchesRow(r: DialogRow, source: SourceFilter, verdict: Verdict,
   return !q || [r.title, r.topic, ...r.fails].some(s => s.toLowerCase().includes(q));
 }
 
-const SOURCE: Record<Source, string> = { log: "лог", sim: "симуляция", trace: "трейс" };
+const textKey = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
 
-const VERDICT_WORD: Record<string, { word: string; tone: string }> = {
-  FAIL: { word: "нарушение", tone: "text-lab-bad" },
-  PASS: { word: "без нарушений", tone: "text-lab-ok" },
-  UNMEASURED: { word: "не оценён", tone: "text-lab-warn" },
-  RUNNING: { word: "идёт", tone: "text-lab-accent" },
-};
-const dash = <span className="text-lab-faint">—</span>;
-const judgedOf = (r: DialogRow) => r.rules.filter(x => x.status === "FAIL" || x.status === "PASS").length;
-const humansOf = (r: DialogRow) => { const f = r.rules.filter(x => x.status === "FAIL"); return { of: f.length, checked: f.filter(x => x.review).length }; };
+/** The verdict of a dialogue as a small pill: the colour of the status, the word beside it. */
+function VerdictPill({ status }: { status: DialogRow["status"] }) {
+  if (status === "FAIL") return <Pill dot="rgb(226,138,128)" className="border-lab-bad/30 bg-lab-bad/[0.08] text-[rgb(236,170,162)]">нарушение</Pill>;
+  if (status === "PASS") return <Pill dot="rgb(116,185,142)" className="border-lab-ok/25 bg-lab-ok/[0.07] text-lab-ok">без нарушений</Pill>;
+  if (status === "RUNNING") return <Pill dot="rgb(166,196,205)">идёт</Pill>;
+  return <Pill dot="rgba(255,255,255,0.35)">не оценён</Pill>;
+}
 
-const VERDICTS: { value: Verdict; label: string }[] = [
-  { value: "all", label: "Все" }, { value: "fail", label: "Нарушения" }, { value: "pass", label: "Без нарушений" },
-  { value: "none", label: "Не оценены" }, { value: "disputed", label: "Спорные" },
-];
-
-/** The dialogues of one source as a table: the opening words, the judge's verdict and the counts; a verdict filter and a search in one bar. */
-export function DialogList({ rows, all, verdict, onVerdict, query, onQuery, rule, onClearRule, onOpen, personas }: {
+/**
+ * The dialogues of one source as a list of rows: the customer's first words, the topic, the verdict, and the
+ * numbers of the criteria broken in it (the same numbers as everywhere). Filters as chips and a search.
+ */
+export function DialogList({ rows, all, verdict, onVerdict, query, onQuery, rule, onClearRule, onOpen, personas, criteria, topics }: {
   rows: DialogRow[]; all: DialogRow[];
   verdict: Verdict; onVerdict: (v: Verdict) => void; query: string; onQuery: (q: string) => void;
-  rule: string | null; onClearRule: () => void; onOpen: (key: string) => void; personas: Persona[];
+  rule: Criterion | null; onClearRule: () => void; onOpen: (key: string) => void; personas: Persona[];
+  criteria: Criterion[]; topics: Topic[];
 }) {
   const count = (v: Verdict) => all.filter(r => matchesRow(r, "all", v, "", null)).length;
-  const cols: Col<DialogRow>[] = [
-    {
-      key: "title", label: "Диалог", sort: (a, b) => a.title.localeCompare(b.title, "ru"),
-      cell: r => {
-        const who = r.source === "sim" ? [personaName(personas, r.persona), r.attempt && r.attempt > 1 ? `повтор ${r.attempt}` : ""].filter(Boolean).join(" · ") : "";
-        return (
-          <Lead title={r.title} sub={[r.topic, who].filter(Boolean).join(" · ") || SOURCE[r.source]}
-            tags={r.fails.length || r.disputed || r.status === "UNMEASURED" ? <>
-              {r.fails.slice(0, 1).map(f => <Tag key={f} className="max-w-[320px]">{f}</Tag>)}
-              {r.fails.length > 1 && <Tag>+{r.fails.length - 1}</Tag>}
-              {r.status === "UNMEASURED" && <Tag>не оценён</Tag>}
-              {r.disputed && <Tag>судьи расходятся</Tag>}
-            </> : undefined} />
-        );
-      },
-    },
-    { key: "verdict", label: "Вердикт", width: "128px", sort: (a, b) => (a.status ?? "").localeCompare(b.status ?? ""),
-      cell: r => { const v = r.status ? VERDICT_WORD[r.status] : undefined; return v ? <span className={cn("text-small", v.tone)}>{v.word}</span> : dash; } },
-    { key: "fails", label: "Нарушено", width: "128px", align: "right", title: "Критериев с нарушением из тех, что судья смог проверить", sort: (a, b) => a.fails.length - b.fails.length,
-      cell: r => (judgedOf(r) ? <Share n={r.fails.length} of={judgedOf(r)} title={`нарушено ${r.fails.length} из ${judgedOf(r)} критериев`} /> : dash) },
-    { key: "second", label: "Второй судья", width: "112px", align: "right", sort: (a, b) => Number(!!a.second) - Number(!!b.second),
-      cell: r => (r.second ? <span className={cn("text-small", r.disputed ? "text-lab-warn" : "text-lab-soft")}>{r.disputed ? "расходится" : "согласен"}</span> : dash) },
-    { key: "people", label: "Люди", width: "72px", align: "right", sort: (a, b) => humansOf(a).checked - humansOf(b).checked,
-      cell: r => { const h = humansOf(r); return h.checked ? <span className="whitespace-nowrap text-small text-lab-soft">{h.checked} из {h.of}</span> : dash; } },
-  ];
+  const byText = useMemo(() => new Map(criteria.map(c => [textKey(c.r.rule.text), c.n])), [criteria]);
+  const broken = (r: DialogRow) => [...new Set(r.rules.filter(x => x.status === "FAIL").flatMap(x => { const n = byText.get(textKey(x.rule)); return n ? [n] : []; }))].sort((a, b) => a - b);
+  const hue = (topic: string) => topics.find(t => t.topic === topic);
+
   return (
-    <div className="h-full overflow-auto px-4 py-4">
-      <ListBar query={query} onQuery={onQuery} placeholder="Найти диалог…" label="Найти диалог"
-        filter={rule ? (
-          <span className="inline-flex max-w-[280px] items-center gap-1 rounded border border-white/[0.1] bg-lab-raised px-1.5 py-0.5 text-meta text-lab-text">
-            <span className="truncate">нарушено: {rule}</span>
-            <button type="button" onClick={onClearRule} aria-label="Снять отбор по критерию" className="text-lab-dim hover:text-lab-text"><X className="size-3" /></button>
+    <div className="h-full overflow-auto px-6 pb-16 pt-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Chips<Verdict> value={verdict === "all" ? null : verdict} onChange={v => onVerdict(v ?? "all")} options={[
+          { value: null, label: "Все", count: all.length },
+          { value: "fail", label: "С нарушениями", count: count("fail"), icon: AlertCircle },
+          { value: "pass", label: "Без нарушений", count: count("pass"), icon: CheckCircle2 },
+          { value: "none", label: "Не оценены", count: count("none"), icon: CircleDashed },
+          { value: "disputed", label: "Судьи расходятся", count: count("disputed"), icon: Swords },
+        ]} />
+        {rule && (
+          <span className="inline-flex h-7 max-w-[340px] items-center gap-1.5 rounded-full border border-[rgba(232,145,45,0.4)] bg-[rgba(232,145,45,0.08)] px-2.5 text-[12px] text-[rgb(255,212,163)]">
+            <span className="truncate">нарушен критерий {rule.n}: {rule.name}</span>
+            <button type="button" onClick={onClearRule} aria-label="Снять отбор по критерию" className="text-[rgb(255,212,163)]/70 hover:text-white"><X className="size-3.5" /></button>
           </span>
-        ) : undefined}
-        end={
-          <Menu align="right"
-            trigger={<span className="inline-flex h-9 items-center gap-2 rounded border border-white/[0.08] px-3 text-small text-lab-text hover:border-white/25">{VERDICTS.find(v => v.value === verdict)?.label}<ChevronDown className="size-3.5 text-lab-dim" /></span>}
-            items={VERDICTS.map(v => ({ key: v.value, label: v.label, sub: `${count(v.value)}`, on: v.value === verdict, run: () => onVerdict(v.value) }))} />
-        } />
-      <Table className="mt-4" rows={rows} cols={cols} rowKey={r => r.key} onOpen={r => onOpen(r.key)}
-        empty={<div className="px-4 py-10 text-center text-small text-lab-dim">В этом отборе диалогов нет</div>} />
-      {rows.length > 0 && <p className="mt-2 text-meta text-lab-dim">{rows.length} из {all.length}</p>}
+        )}
+        <label className="ml-auto flex h-8 w-[220px] items-center gap-2 rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 focus-within:border-white/[0.22]">
+          <Search className="size-3.5 text-lab-dim" />
+          <input value={query} onChange={e => onQuery(e.target.value)} placeholder="Найти разговор" aria-label="Найти разговор" className="min-w-0 flex-1 bg-transparent text-[12px] text-lab-ink outline-none placeholder:text-lab-faint" />
+        </label>
+      </div>
+
+      {rows.length ? (
+        <div className="mt-4 overflow-hidden rounded-[12px] border border-white/[0.08] bg-[rgb(31,31,31)]">
+          {rows.map(r => {
+            const t = hue(r.topic);
+            const who = r.source === "sim" ? [personaName(personas, r.persona), r.attempt && r.attempt > 1 ? `повтор ${r.attempt}` : ""].filter(Boolean).join(" · ") : "";
+            const ns = broken(r);
+            const humans = r.rules.filter(x => x.status === "FAIL" && x.review).length;
+            return (
+              <button key={r.key} type="button" onClick={() => onOpen(r.key)}
+                className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-white/[0.06] px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-white/[0.03] md:grid-cols-[minmax(0,1fr)_130px_150px]">
+                <span className="min-w-0">
+                  <span className="block truncate text-[13px] text-lab-ink">{r.title}</span>
+                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {r.topic && <Pill dot={t?.hue} hue={t?.hue} title={r.topic}>{t?.short ?? r.topic.split(",")[0]}</Pill>}
+                    {who && <Pill icon={Users}>{who}</Pill>}
+                    {r.disputed && <Pill icon={Swords} title="Второй судья вынес другой вердикт">судьи расходятся</Pill>}
+                    {humans > 0 && <span className="text-[11px] text-lab-dim">проверено людьми: {humans}</span>}
+                  </span>
+                </span>
+                <span className="hidden md:block"><VerdictPill status={r.status} /></span>
+                <span className={cn("flex justify-end")}>{ns.length ? <MarkStack ns={ns} max={5} ring="ring-[rgb(31,31,31)]" /> : <span className="text-[11px] text-lab-faint">—</span>}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : <p className="mt-10 text-center text-[13px] text-lab-dim">В этом отборе разговоров нет</p>}
+      {rows.length > 0 && <p className="mt-3 text-[11px] text-lab-faint">{rows.length} из {all.length} · номера справа — нарушенные критерии · J и K листают открытый разговор</p>}
     </div>
   );
 }
