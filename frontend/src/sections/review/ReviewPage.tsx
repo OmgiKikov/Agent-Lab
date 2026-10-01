@@ -117,7 +117,9 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
 
   const tabs = stage === "log" ? logTabs : <SimTabs state={state} runId={runId ?? data?.sim?.runId ?? null} />;
-  const header = <Header title={stage === "log" ? "Логи" : "Симуляции"} step={stage === "log" ? 1 : 2} tabs={tabs} />;
+  const header = (
+    <Header title={stage === "log" ? "Диалоги" : "Симуляции"} step={stage === "log" ? 1 : 2} tabs={tabs} />
+  );
   if (offline && !data)
     return (
       <div className="flex h-full flex-col">

@@ -9,7 +9,7 @@ export type SegmentedOption<T extends string> = {
   disabled?: boolean;
 };
 
-/** A choice of a few over a list or a block: «Все 7 · Логи 6 · Симуляция 5». The count sits beside each word. */
+/** A choice of a few over a list or a block: «Все 7 · Диалоги 6 · Симуляция 5». The count sits beside each word. */
 export function Segmented<T extends string>({
   value,
   options,

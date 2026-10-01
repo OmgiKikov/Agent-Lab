@@ -247,7 +247,7 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 
     async def work(progress: Progress) -> dict:
         result = await discover.run(payload.count, progress, payload.replan)
-        store.save(discover.RESULT, result)
+        store.save_audit(result, new_criteria=payload.replan)
         return result
 
     return start('discover', work)
@@ -400,7 +400,7 @@ async def review(payload: ReviewCommand) -> dict:
         if not payload.dialogueId or not payload.ruleId:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')
         if jobs.state['running'] and jobs.state['kind'] in ('discover', 'tone-check'):
-            raise HTTPException(409, 'Идёт оценка логов: ответ не сохранится. Отметьте после неё.')
+            raise HTTPException(409, 'Идёт оценка диалогов: ответ не сохранится. Отметьте после неё.')
         try:
             store.set_log_review(
                 discover.RESULT, payload.dialogueId, payload.ruleId, payload.decision, payload.finishedAt

@@ -96,7 +96,7 @@ export function CriteriaPage() {
   const busy = !!state?.job.running;
   const sideOptions = (
     [
-      ["log", "Логи"],
+      ["log", "Диалоги"],
       ["sim", "Симуляции"],
     ] as const
   ).filter(([k]) => (k === "log" ? !!data?.log : !!data?.sim));
@@ -140,7 +140,7 @@ export function CriteriaPage() {
       <div className="flex h-full flex-col">
         {header}
         <EmptyState drop title="Критериев пока нет" className="flex-1 justify-center">
-          Они извлекаются дословно из промптов агента при первой оценке логов. Сначала прочитайте код в «Агенте».
+          Они извлекаются дословно из промптов агента при первой оценке диалогов. Сначала прочитайте код в «Агенте».
         </EmptyState>
       </div>
     );
@@ -168,7 +168,7 @@ export function CriteriaPage() {
           {second.checked > 0 && (
             <>
               {" "}
-              · две проверки совпали в {second.agree} из {second.checked} ошибок логов
+              · две проверки совпали в {second.agree} из {second.checked} ошибок в диалогах
             </>
           )}
           {people.agree + people.disagree > 0 && (

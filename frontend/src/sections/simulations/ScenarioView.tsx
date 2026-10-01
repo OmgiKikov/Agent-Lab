@@ -61,7 +61,7 @@ export function ScenarioView({
               to={dialogOf({ source: "log", dialogueId: card.sourceDialogueId })}
               className="inline-flex items-center gap-1 text-small text-fg-2 underline decoration-line-strong underline-offset-4 hover:text-fg"
             >
-              Разговор из лога, откуда он
+              Настоящий разговор, откуда он
               <ArrowRight aria-hidden className="size-3.5" />
             </Link>
           )}

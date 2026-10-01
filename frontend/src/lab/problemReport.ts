@@ -57,13 +57,15 @@ export function stagesSentence(data: Problems): string {
   const sim = checkedIn(data, "sim");
   const shared = sim.filter((r) => r.log.failed + r.log.passed > 0).length;
   if (log && sim.length && (shared < log || shared < sim.length))
-    return `Два этапа: ${count(log, "критерий", "критерия", "критериев")} в логах и ${sim.length} в симуляциях.`;
+    return `Два этапа: ${count(log, "критерий", "критерия", "критериев")} в диалогах и ${sim.length} в симуляциях.`;
   return `Два этапа и одни и те же ${count(data.rules.length, "критерий", "критерия", "критериев")}.`;
 }
 
 const where = (p: RuleEntry, source?: Source) =>
   [
-    source !== "sim" && p.log.failed ? `в ${p.log.failed} из ${p.log.failed + p.log.passed} разговоров логов` : null,
+    source !== "sim" && p.log.failed
+      ? `в ${p.log.failed} из ${p.log.failed + p.log.passed} ${plural(p.log.failed + p.log.passed, "диалога", "диалогов", "диалогов")}`
+      : null,
     source !== "log" && p.sim.failed
       ? `в ${p.sim.failed} из ${p.sim.failed + p.sim.passed} разговоров симуляции`
       : null,
@@ -111,7 +113,7 @@ export function problemsReport(data: Problems, base: string, source: Source): st
   const lines = [`# ${summarySentence(data, source)}`, ""];
   if (source === "log" && data.log)
     lines.push(
-      `Логи: проверено ${data.log.assessed} из ${data.log.sampled} разговоров ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,
+      `Диалоги: проверено ${data.log.assessed} из ${data.log.sampled} разговоров ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,
     );
   if (source === "sim" && data.sim)
     lines.push(

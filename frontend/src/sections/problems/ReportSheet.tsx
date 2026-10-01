@@ -88,7 +88,7 @@ export function ReportSheet({
   const toast = useToast();
   const sides = (
     [
-      ["log", "Логи"],
+      ["log", "Диалоги"],
       ["sim", "Симуляция"],
     ] as const
   ).filter(([k]) => (k === "log" ? !!data.log : !!data.sim));
@@ -151,14 +151,14 @@ export function ReportSheet({
         <article className="mx-auto max-w-3xl rounded-block bg-paper px-6 pb-12 pt-9 text-ink shadow-pop sm:px-12">
           <Cap>
             {side === "log"
-              ? `Протокол проверки · логи · ${day(log?.finishedAt)}`
+              ? `Протокол проверки · диалоги · ${day(log?.finishedAt)}`
               : `Протокол проверки · симуляция · ${day(sim?.finishedAt)}`}
           </Cap>
           <h2 className="mt-3 text-balance text-title font-semibold text-ink">{summarySentence(data, side)}</h2>
           {side === "log" && log && (
             <p className="mt-3 text-read text-ink-2">
-              Проверено {log.assessed} из {log.sampled} разговоров логов. В {log.withViolations} агент ошибся хотя бы
-              раз, {log.unassessed} проверить не удалось.
+              Проверено {log.assessed} из {log.sampled} диалогов. В {log.withViolations} агент ошибся хотя бы раз,{" "}
+              {log.unassessed} проверить не удалось.
             </p>
           )}
           {side === "sim" && sim && (
@@ -195,7 +195,7 @@ export function ReportSheet({
             </p>
           )}
           <p className="mt-12 border-t border-ink-line pt-4 text-small text-ink-3">
-            Счёт «N из M»: M — разговоры, где критерий удалось проверить. Логи и симуляция считаются отдельно и не
+            Счёт «N из M»: M — разговоры, где критерий удалось проверить. Диалоги и симуляция считаются отдельно и не
             складываются. «Без найденных ошибок» не означает, что агент исправен.
           </p>
         </article>

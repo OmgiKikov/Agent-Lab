@@ -81,7 +81,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
     },
   });
 
-  const place = stage === "log" ? "Логи" : "Симуляции";
+  const place = stage === "log" ? "Диалоги" : "Симуляции";
   const header = (
     <Header
       title={c?.r.title ?? "Проблема"}
@@ -147,7 +147,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
         <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
           <p className="text-read text-fg-3">
             {stage === "log"
-              ? "Проблема в логах"
+              ? "Проблема в диалогах"
               : `Проблема в симуляции${run ? ` · прогон ${longDay(run.startedAt)}` : ""}`}
           </p>
           <h2 className="mt-1 text-balance text-page font-semibold text-fg">{r.title}</h2>
@@ -224,7 +224,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
               to={problemLink(r.id, other)}
               className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
             >
-              {other === "sim" ? "В симуляции" : "В логах"} тоже: {r[other].failed} из {checked(r[other])}
+              {other === "sim" ? "В симуляции" : "В диалогах"} тоже: {r[other].failed} из {checked(r[other])}
               <ArrowRight aria-hidden className="size-4" />
             </Link>
           )}

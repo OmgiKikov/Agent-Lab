@@ -137,7 +137,7 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
   const run = row.runId ? state?.runs.find((r) => r.id === row.runId) : undefined;
   const where =
     row.source === "log"
-      ? ["Логи", row.topic].filter(Boolean).join(" · ")
+      ? ["Диалоги", row.topic].filter(Boolean).join(" · ")
       : [
           "Симуляция",
           run ? longDay(run.startedAt) : "",

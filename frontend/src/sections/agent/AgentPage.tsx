@@ -92,7 +92,7 @@ export function AgentPage() {
           <div>
             <h2 className="text-title font-semibold text-fg">Подключение</h2>
             <p className="mb-5 mt-1 text-small text-fg-3">
-              Где работает агент и как до него достучаться. Нужно для симуляций; оценка логов агента не запускает.
+              Где работает агент и как до него достучаться. Нужно для симуляций; оценка диалогов агента не запускает.
             </p>
             <ConnectionForm
               key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}`}

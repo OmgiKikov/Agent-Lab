@@ -9,7 +9,7 @@ export const JOBS: Record<string, { label: string; to: string }> = {
   "tone-advice": { label: "Предложение по находке", to: "/check?step=result" },
   "tone-clarification": { label: "Уточнение критерия", to: "/check?step=criteria" },
   sources: { label: "Чтение кода агента", to: SECTIONS.agent },
-  discover: { label: "Оценка логов", to: SECTIONS.logs },
+  discover: { label: "Оценка диалогов", to: SECTIONS.logs },
   cards: { label: "Сборка сценариев", to: scenariosLink() },
   run: { label: "Симуляция", to: SECTIONS.simulations },
   rejudge: { label: "Переоценка прогона", to: SECTIONS.simulations },

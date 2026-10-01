@@ -243,8 +243,8 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     if previous.get('purpose') == TONE and not replan:
         # Its frozen topic holds the tone criteria: reused here, they would lose the clarifications and the history.
         raise RuntimeError(
-            'Логи проверены по правилам tone of voice: повторите эту проверку в «Начать проверку». '
-            'Чтобы оценить логи по коду агента, извлеките критерии заново.'
+            'Диалоги проверены по правилам tone of voice: повторите эту проверку в «Начать проверку». '
+            'Чтобы оценить их по коду агента, выберите там «Точность».'
         )
     # The tone-of-voice policy (tone.KIND) has its own check in tone.py; the rules here come from the agent's code.
     srcs = [source for source in sources.load() if source['kind'] != TONE]
@@ -252,7 +252,7 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
         raise RuntimeError('Нет источников правил: шаг «агент» → «собрать из кода агента».')
     dialogues = sample(count)
     if not dialogues:
-        raise RuntimeError('Нет разговоров для оценки: сначала загрузите логи.')
+        raise RuntimeError('Нет разговоров для оценки: сначала загрузите диалоги.')
     started = store.now()
     if previous.get('topics') and not replan:
         progress(

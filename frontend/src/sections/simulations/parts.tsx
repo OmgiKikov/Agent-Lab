@@ -19,6 +19,6 @@ export function RunWord({ run, className }: { run: LabRun; className?: string })
   );
 }
 
-/** «из ошибки в логе» or «покрытие темы»: why the scenario exists. */
+/** «из ошибки в диалоге» or «покрытие темы»: why the scenario exists. */
 export const originWord = (origin: string, fromLog: string) =>
-  origin === fromLog ? "из ошибки в логе" : "покрытие темы";
+  origin === fromLog ? "из ошибки в диалоге" : "покрытие темы";

@@ -113,6 +113,19 @@ def _tone_policy(items: list[dict] | None) -> list[dict]:
     return [item for item in items or [] if item.get('kind') == 'tone-of-voice']
 
 
+def save_audit(value: dict, *, new_criteria: bool) -> None:
+    """Publish a log audit; criteria extracted anew no longer match the playable cards, so those go with it."""
+    documents = [('discover.json', _json(value))]
+    if new_criteria:
+        documents.append(('cards.json', 'null'))
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        connection.executemany(
+            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+            documents,
+        )
+
+
 def tone_checks() -> list[dict]:
     with _connection() as connection:
         return [json.loads(row[0]) for row in connection.execute('SELECT summary FROM tone_checks ORDER BY rowid DESC')]
