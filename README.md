@@ -28,7 +28,7 @@
 Backend:
 
     uv sync --project backend
-    uv run --project backend --directory backend uvicorn lab.app:app --reload --host 127.0.0.1 --port 5901
+    uv run --directory backend uvicorn lab.app:app --reload --host 127.0.0.1 --port 5901
 
 Frontend в другом терминале:
 
@@ -86,7 +86,7 @@ CI запускает те же проверки, включая формати�
 
 Прежние JSON/JSONL не удаляются. Импорт выполняется явной командой при остановленном backend:
 
-    uv run --project backend --directory backend python -m lab.migrate --source /absolute/path/to/old/data
+    uv run --directory backend python -m lab.migrate --source /absolute/path/to/old/data
 
 Сначала сохранить копию прежней data/; проверить отчёт импорта и результаты в интерфейсе.
 Агрегаты вердиктов и точность пересчитываются из сохранённых правил по исправленному смыслу PASS.
