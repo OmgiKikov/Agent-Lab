@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from . import agents, cards, discover, llm, logs, personas, policy_files, problems, simulate, store, tone, tone_advice
-from .context import sources
+from .context import knowledge, sources
 from .jobs import BusyError, Jobs, Progress, Work
 
 jobs = Jobs()
@@ -231,6 +231,15 @@ def source_view(source_id: str) -> dict:
     if found is None:
         raise HTTPException(404, 'Источник не найден')
     return {key: found.get(key) for key in ('id', 'kind', 'origin', 'sha256', 'content')}
+
+
+@app.get('/api/articles/{article_id}')
+def article_view(article_id: str) -> dict:
+    """A knowledge-base article the agent read during a simulated turn: its title and text."""
+    found = knowledge.article(article_id)
+    if found is None:
+        raise HTTPException(404, 'Статьи нет в базе знаний агента')
+    return found
 
 
 @app.get('/api/runs/{run_id}')
