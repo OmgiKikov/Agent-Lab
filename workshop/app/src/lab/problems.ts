@@ -1,9 +1,8 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLabState } from "../shell/LabProvider";
-import type { Turn } from "../ui/Conversation";
+import { useLabState } from "./LabProvider";
 import { useToast } from "../ui/toast";
 import { api } from "./api";
-import type { LabRun, LabState } from "./types";
+import type { LabRun, LabState, Turn } from "./types";
 
 /** The service's record of rules and problems (lab/problems.py; spec, section 8). */
 export type Decision = "agree" | "disagree";

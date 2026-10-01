@@ -1,6 +1,6 @@
 import { Square } from "lucide-react";
 import { api } from "../lab/api";
-import { useLabState } from "../shell/LabProvider";
+import { useLabState } from "../lab/LabProvider";
 import { useToast } from "../ui/toast";
 
 /** Under a section's head while its own task runs: what it does, how far, «Остановить», and a hairline of progress. */

@@ -29,16 +29,9 @@ export function useRun(id: string | null | undefined, state: LabState | null) {
 /** «Агент из исходников · 14704e1»: which agent played, and which version of it. */
 export const runTitle = (run: LabRun) => [run.targetName, run.version].filter(Boolean).join(" · ");
 
-/** The customer types a run was played with, by name; runs before the types existed played the usual one. */
-export const runTypes = (run: LabRun, state: LabState) =>
-  (run.personas?.length ? run.personas : [DEFAULT_PERSONA]).map(id => personaName(state.personas, id));
-
 export const isRunning = (run: LabRun) => run.status === "running";
 
 /** The scenarios a new run may play: all, the ones built from errors in the logs, or chosen by hand. */
 export type Pick = "all" | "errors" | "chosen";
 export const pickOf = (cards: Card[], pick: Pick, chosen: Set<string>) =>
   pick === "all" ? cards : pick === "errors" ? cards.filter(c => c.origin === FROM_LOG) : cards.filter(c => chosen.has(c.id));
-
-/** Where a dialogue of a run opens: «Диалоги» with this run as the simulation shown there. */
-export const simDialog = (runId: string, index: number) => dialogOf({ source: "sim", runId, index });

@@ -8,12 +8,12 @@ import { isRunning, runTitle, useRun } from "../../lab/runs";
 import type { LabRun, LabState } from "../../lab/types";
 import { Facts } from "../../product/Facts";
 import { Count } from "../../product/Count";
-import { useLabState } from "../../shell/LabProvider";
+import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Caps } from "../../ui/Caps";
 import { Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
-import { RunMatrix } from "../../screens/simulations/RunMatrix";
+import { RunMatrix } from "./RunMatrix";
 import { RunWord } from "./parts";
 
 const enc = encodeURIComponent;

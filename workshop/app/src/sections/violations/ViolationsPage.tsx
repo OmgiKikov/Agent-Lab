@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { FileText } from "lucide-react";
 import { Header } from "../../app/Header";
@@ -6,8 +6,8 @@ import { SectionJob } from "../../app/SectionJob";
 import { useWide } from "../../app/useWide";
 import { useCriteria } from "../../lab/criteria";
 import { plural } from "../../lab/format";
-import { useKeys } from "../../shell/keys";
-import { useLabState } from "../../shell/LabProvider";
+import { useKeys } from "../../app/keys";
+import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { AssessSheet } from "./AssessSheet";
@@ -31,7 +31,9 @@ export function ViolationsPage() {
   const filter = toFilter(params.get("s"));
   const [query, setQuery] = useState("");
   const [assess, setAssess] = useState(params.get("assess") === "1");
-  const [report, setReport] = useState(false);
+  const [report, setReport] = useState(params.get("report") === "1");
+  // ⌘K opens either sheet by the address, also when this page is already open.
+  useEffect(() => { if (params.get("assess") === "1") setAssess(true); if (params.get("report") === "1") setReport(true); }, [params]);
   const items = useMemo(() => queueOf(list, filter).filter(c => matches(c, query)), [list, filter, query]);
 
   const set = (edit: (n: URLSearchParams) => void, replace = true) => setParams(prev => { const n = new URLSearchParams(prev); edit(n); return n; }, { replace });
@@ -90,7 +92,7 @@ export function ViolationsPage() {
       />
       <div className="flex min-h-0 flex-1 flex-col">{body}</div>
       <AssessSheet open={assess} onClose={() => { setAssess(false); if (params.get("assess")) set(n => n.delete("assess")); }} criteria={data?.rules.length ?? 0} />
-      {data && (data.log || data.sim) && <ReportSheet open={report} onClose={() => setReport(false)} data={data} list={list} />}
+      {data && (data.log || data.sim) && <ReportSheet open={report} onClose={() => { setReport(false); if (params.get("report")) set(n => n.delete("report")); }} data={data} list={list} />}
     </div>
   );
 }

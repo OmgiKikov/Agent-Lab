@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { thousands } from "../lab/format";
 import { useSource } from "../lab/problems";
-import { splitQuote } from "../ui/highlight";
+import { splitQuote } from "../lab/quote";
 import { Skeleton } from "../ui/EmptyState";
 import { Sheet } from "../ui/Sheet";
 

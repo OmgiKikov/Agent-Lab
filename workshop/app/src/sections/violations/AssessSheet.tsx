@@ -3,13 +3,13 @@ import { Link } from "react-router-dom";
 import { api } from "../../lab/api";
 import { day, plural } from "../../lab/format";
 import { SECTIONS } from "../../app/links";
-import { useLabState } from "../../shell/LabProvider";
+import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Caps } from "../../ui/Caps";
 import { Segmented } from "../../ui/Segmented";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
-import { UploadButton } from "../../screens/dialogs/UploadLogs";
+import { UploadButton } from "../../product/UploadLogs";
 
 const SIZES = [100, 200, 300];
 

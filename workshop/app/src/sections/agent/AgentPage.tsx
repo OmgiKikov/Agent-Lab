@@ -7,7 +7,7 @@ import { SECTIONS } from "../../app/links";
 import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
 import { day, plural, thousands } from "../../lab/format";
-import { useLabState } from "../../shell/LabProvider";
+import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Caps } from "../../ui/Caps";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";

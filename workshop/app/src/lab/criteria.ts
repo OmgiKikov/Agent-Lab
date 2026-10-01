@@ -1,11 +1,9 @@
 import { useMemo } from "react";
-import { splitQuote } from "../ui/highlight";
+import { splitQuote } from "./quote";
 import { useProblems, useSource, type Problems, type RuleEntry } from "./problems";
 
 /** Muted hues for the topics of conversations, as Linear's labels: a dot and a faint tint carry the colour. */
 const HUES = ["#6DB3F2", "#A57CF5", "#5FC98A", "#F0AD4E", "#4FCAE3", "#E28A80", "#C9B458"];
-
-export const EVERY = "Во всех разговорах";
 
 export type Topic = { topic: string; short: string; hue: string };
 /** A criterion as the whole product shows it: one number everywhere, a short name, where it applies. */
@@ -66,17 +64,4 @@ export function useCriteria(runId: string | null = null): { data: Problems | und
     }).sort((a, b) => a.n - b.n);
     return { data, list, topics: numbered.topics, unnamed };
   }, [base, withRun, runId]);
-}
-
-/** The prompt's words around a criterion's quote: a little before, the quote, a little after; null when absent. */
-export function useQuoteContext(r: RuleEntry | undefined, around = 200) {
-  const { data, isLoading } = useSource(r?.rule.sourceId);
-  if (!r || !data) return { loading: isLoading, parts: null as null | [string, string, string] };
-  const parts = splitQuote(data.content, r.rule.quote);
-  if (!parts) return { loading: false, parts: null };
-  const [before, quote, after] = parts;
-  const head = before.length > around ? `…${before.slice(-around).replace(/^\S*\s/, "")}` : before;
-  const tail = after.length > around ? `${after.slice(0, around).replace(/\s\S*$/, "")}…` : after;
-  const plain = (t: string) => t.replace(/\*\*/g, "").replace(/^#{2,}\s*/gm, "");
-  return { loading: false, parts: [plain(head.trimStart()), plain(quote), plain(tail.trimEnd())] as [string, string, string] };
 }

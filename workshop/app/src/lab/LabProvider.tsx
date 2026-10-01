@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api } from "../lab/api";
-import type { LabState } from "../lab/types";
+import { api } from "./api";
+import type { LabState } from "./types";
 
 type Lab = { state: LabState | null; offline: boolean; refresh: () => Promise<void> };
 

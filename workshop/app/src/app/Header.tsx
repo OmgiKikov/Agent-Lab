@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { MessageSquare, Search } from "lucide-react";
-import { useShell } from "../shell/ShellContext";
+import { useShell } from "./ShellContext";
 import { Button } from "../ui/Button";
 import { Kbd } from "../ui/Kbd";
 

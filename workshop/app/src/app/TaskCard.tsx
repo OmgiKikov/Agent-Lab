@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { Square, X } from "lucide-react";
 import { api } from "../lab/api";
 import type { Job } from "../lab/types";
-import { jobOf } from "../shell/jobs";
-import { useLabState } from "../shell/LabProvider";
+import { jobOf } from "./jobs";
+import { useLabState } from "../lab/LabProvider";
 import { useToast } from "../ui/toast";
 
 const STOPPED = "Остановлено";

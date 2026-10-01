@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { DropPixelGrid } from "../../components/DropPixelGrid";
 import { plural } from "../../lab/format";
 import { SECTIONS } from "../../app/links";
-import { useLabState } from "../../shell/LabProvider";
+import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 
 /** Before the first assessment: what the product does in one sentence, and four steps, each ticked with its result. */

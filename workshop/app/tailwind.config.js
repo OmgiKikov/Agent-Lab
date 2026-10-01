@@ -12,7 +12,7 @@ export default {
         sans: ["Onest Variable", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono Variable", "ui-monospace", "monospace"],
       },
-      // The named scale (docs/DESIGN.md). Reading text is 15, nothing under 13 except mono labels.
+      // The named scale (docs/DESIGN.md): reading text is 15; 11 and 12 only for mono labels and hints.
       fontSize: {
         label: ["11px", { lineHeight: "16px" }],
         meta: ["12px", { lineHeight: "16px" }],
@@ -22,22 +22,13 @@ export default {
         lead: ["16px", { lineHeight: "26px" }],
         count: ["20px", { lineHeight: "24px" }],
         title: ["22px", { lineHeight: "28px", letterSpacing: "-0.01em" }],
-        // The screens not rebuilt yet use these names.
-        micro: ["11px", { lineHeight: "16px" }],
-        page: ["22px", { lineHeight: "28px" }],
-        stat: ["16px", { lineHeight: "22px" }],
-        heading: ["14px", { lineHeight: "20px" }],
-        default: "12px",
+        // The Workshop's message text (components/ChatFlow, ConvoDetail, pages/SearchPage).
         message: "14px",
-        header: "21px",
       },
       letterSpacing: { caps: "0.06em" },
       borderRadius: { control: "7px", block: "10px", sheet: "14px" },
       boxShadow: { pop: "0 16px 40px -12px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.08)" },
       transitionTimingFunction: { out: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
-      borderColor: { border: "var(--line-strong)" },
-      backgroundColor: { background: "rgb(var(--canvas))", muted: "var(--well)" },
-      textColor: { foreground: "rgb(var(--fg))", "muted-foreground": "rgb(var(--fg-3))", primary: "rgb(var(--run))" },
       colors: {
         canvas: rgb("canvas"),
         side: rgb("side"),
@@ -56,20 +47,6 @@ export default {
         well: "var(--well)",
         paper: { DEFAULT: rgb("paper"), well: rgb("paper-well") },
         ink: { DEFAULT: rgb("ink"), 2: rgb("ink-2"), 3: rgb("ink-3"), line: rgb("ink-line"), bad: rgb("ink-bad") },
-        lab: Object.fromEntries(
-          ["bg", "surface", "raised", "hover", "active", "ink", "text", "soft", "mute", "dim", "faint", "user", "accent", "ok", "bad", "warn", "mark"]
-            .map(name => [name, `rgb(var(--lab-${name}) / <alpha-value>)`]),
-        ),
-        sidebar: {
-          DEFAULT: "hsl(var(--sidebar-background))",
-          foreground: "hsl(var(--sidebar-foreground))",
-          primary: "hsl(var(--sidebar-primary))",
-          "primary-foreground": "hsl(var(--sidebar-primary-foreground))",
-          accent: "hsl(var(--sidebar-accent))",
-          "accent-foreground": "hsl(var(--sidebar-accent-foreground))",
-          border: "hsl(var(--sidebar-border))",
-          ring: "hsl(var(--sidebar-ring))",
-        },
       },
     },
   },

@@ -32,34 +32,6 @@
   --line: rgb(255 255 255 / 0.07);
   --line-strong: rgb(255 255 255 / 0.12);
   --well: rgb(255 255 255 / 0.05);
-
-  /* The screens not rebuilt yet read the earlier names; they point at the same values. */
-  --lab-bg: var(--canvas);
-  --lab-surface: var(--list);
-  --lab-raised: var(--raised);
-  --lab-hover: var(--hover);
-  --lab-active: var(--selected);
-  --lab-ink: var(--fg);
-  --lab-text: 214 218 223;
-  --lab-soft: var(--fg-2);
-  --lab-mute: var(--fg-3);
-  --lab-dim: var(--fg-3);
-  --lab-faint: var(--fg-4);
-  --lab-user: var(--customer);
-  --lab-accent: var(--run);
-  --lab-ok: var(--ok);
-  --lab-bad: var(--bad);
-  --lab-warn: var(--warn);
-  --lab-mark: var(--warn);
-
-  --sidebar-background: 220 7% 7%;
-  --sidebar-foreground: 215 10% 76%;
-  --sidebar-primary: 222 100% 75%;
-  --sidebar-primary-foreground: 0 0% 95%;
-  --sidebar-accent: 0 0% 100% / 0.06;
-  --sidebar-accent-foreground: 215 10% 76%;
-  --sidebar-border: 0 0% 100% / 0.07;
-  --sidebar-ring: 222 100% 75%;
 }
 
 /* The report is a sheet of paper inside the dark product: it is what leaves it, by mail or in a ticket. */

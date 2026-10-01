@@ -7,16 +7,15 @@ import { count, plural } from "../../lab/format";
 import { DEFAULT_PERSONA } from "../../lab/look";
 import { FROM_LOG, pickOf, type Pick } from "../../lab/runs";
 import type { LabState } from "../../lab/types";
-import { useLabState } from "../../shell/LabProvider";
-import { LINKS } from "../../shell/links";
+import { useLabState } from "../../lab/LabProvider";
+import { SECTIONS } from "../../app/links";
 import { Button } from "../../ui/Button";
-import { Label } from "../../ui/Label";
 import { Modal } from "../../ui/Modal";
 import { Segmented } from "../../ui/Segmented";
 import { useToast } from "../../ui/toast";
 
 function Block({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="mt-5 first:mt-0"><Label className="mb-2">{label}</Label>{children}</div>;
+  return <div className="mt-5 first:mt-0"><div className="mb-2 text-small font-medium text-fg-2">{label}</div>{children}</div>;
 }
 
 /** «Сыграть»: which agent, which scenarios, which customer types and how many times; then the run starts. */
@@ -70,15 +69,15 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
               <button
                 key={t.id} type="button" role="radio" aria-checked={t.id === target} disabled={!t.ready} onClick={() => setTarget(t.id)}
                 className={cn(
-                  "flex items-start gap-2.5 rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-lab-accent",
-                  t.id === target ? "border-white/25 bg-lab-active" : "border-white/[0.08] hover:bg-lab-hover", !t.ready && "cursor-default opacity-60 hover:bg-transparent",
+                  "flex items-start gap-2.5 rounded-control border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+                  t.id === target ? "border-fg-3 bg-selected" : "border-line hover:bg-hover", !t.ready && "cursor-default opacity-60 hover:bg-transparent",
                 )}
               >
-                <span className={cn("mt-1 size-3 flex-shrink-0 rounded-full border", t.id === target ? "border-lab-ink bg-lab-ink" : "border-white/30")} />
+                <span className={cn("mt-1 size-3 flex-shrink-0 rounded-full border", t.id === target ? "border-fg bg-fg" : "border-fg-4")} />
                 <span className="min-w-0 flex-1">
-                  <span className="block text-small text-lab-ink">{t.name}</span>
-                  <span className="block text-meta text-lab-dim">{t.note}</span>
-                  {!t.ready && <span className="mt-0.5 block text-meta text-lab-warn">Не настроен · <Link to={LINKS.agent} onClick={onClose} className="underline underline-offset-4">Агент</Link></span>}
+                  <span className="block text-small text-fg">{t.name}</span>
+                  <span className="block text-meta text-fg-3">{t.note}</span>
+                  {!t.ready && <span className="mt-0.5 block text-meta text-warn">Не настроен · <Link to={SECTIONS.agent} onClick={onClose} className="underline underline-offset-4">Агент</Link></span>}
                 </span>
               </button>
             ))}
@@ -91,13 +90,13 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
             { value: "chosen", label: "Выбранные", count: chosen.size },
           ]} />
           {pick === "chosen" && (
-            <div className="mt-2 max-h-[200px] overflow-auto rounded-md border border-white/[0.08]">
+            <div className="mt-2 max-h-[200px] overflow-auto rounded-control border border-line">
               {cards.map(c => (
-                <label key={c.id} className="flex cursor-pointer items-start gap-2.5 border-b border-white/[0.08] px-3 py-2 last:border-0 hover:bg-lab-hover">
+                <label key={c.id} className="flex cursor-pointer items-start gap-2.5 border-b border-line px-3 py-2 last:border-0 hover:bg-hover">
                   <input type="checkbox" checked={chosen.has(c.id)} onChange={() => setChosen(s => toggle(s, c.id))} className="mt-0.5 accent-white" />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-small text-lab-text">{c.name}</span>
-                    <span className="block truncate text-meta text-lab-dim">{c.topic}</span>
+                    <span className="block text-small text-fg">{c.name}</span>
+                    <span className="block truncate text-meta text-fg-3">{c.topic}</span>
                   </span>
                 </label>
               ))}
@@ -112,8 +111,8 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
                 <button
                   key={p.id} type="button" aria-pressed={on} onClick={() => flip(p.id)} title={p.note}
                   className={cn(
-                    "inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-meta transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-lab-accent",
-                    on ? "border-white/25 bg-lab-active text-lab-ink" : "border-white/[0.08] text-lab-mute hover:text-lab-text",
+                    "inline-flex h-7 items-center gap-1.5 rounded-control border px-2.5 text-meta transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+                    on ? "border-fg-3 bg-selected text-fg" : "border-line text-fg-3 hover:text-fg",
                   )}
                 >
                   {on && <Check className="size-3" />}{p.name}
@@ -124,17 +123,17 @@ export function PlayDialog({ open, onClose, state, preset, onStarted }: {
         </Block>
         <Block label="Повторы">
           <Segmented value={repeats} onChange={setRepeats} options={["1", "2", "3"].map(n => ({ value: n, label: n === "1" ? "Один раз" : `${n} раза` }))} />
-          <p className="mt-1.5 text-meta text-lab-dim">Повтор показывает, одинаково ли агент ведёт себя в той же ситуации.</p>
+          <p className="mt-1.5 text-meta text-fg-3">Повтор показывает, одинаково ли агент ведёт себя в той же ситуации.</p>
         </Block>
         <Block label="Подпись">
           <input
             name="label" autoComplete="off" aria-label="Подпись прогона" value={label} onChange={e => setLabel(e.target.value)} placeholder="Необязательно: что проверяете этим прогоном"
-            className="h-8 w-full rounded-md border border-white/[0.08] bg-transparent px-2.5 text-small text-lab-text outline-none placeholder:text-lab-faint focus:border-white/25"
+            className="h-8 w-full rounded-control border border-line bg-transparent px-2.5 text-small text-fg outline-none placeholder:text-fg-4 focus:border-fg-3"
           />
         </Block>
-        <p className="mt-5 text-small text-lab-mute">
+        <p className="mt-5 text-small text-fg-3">
           {count(deck.length, "сценарий", "сценария", "сценариев")} × {types.length} {plural(types.length, "тип", "типа", "типов")} клиента
-          {repeats !== "1" ? ` × ${repeats} раза` : ""} = <span className="text-lab-ink">{count(total, "диалог", "диалога", "диалогов")}</span>
+          {repeats !== "1" ? ` × ${repeats} раза` : ""} = <span className="text-fg">{count(total, "диалог", "диалога", "диалогов")}</span>
         </p>
       </div>
     </Modal>

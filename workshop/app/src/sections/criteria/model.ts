@@ -1,7 +1,7 @@
 import type { Criterion } from "../../lab/criteria";
 import type { RuleEntry } from "../../lab/problems";
 import type { Source } from "../../lab/types";
-import { splitQuote } from "../../ui/highlight";
+import { splitQuote } from "../../lab/quote";
 
 export type SideKey = "log" | "sim";
 /** A criterion on one side: broken somewhere, kept with no breach found, never decided, or not met in these dialogues. */

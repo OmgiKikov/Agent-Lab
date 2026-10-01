@@ -22,3 +22,7 @@ export function criterionLink(ruleId: string, extra: Record<string, string | nul
   for (const [k, v] of Object.entries(extra)) if (v) p.set(k, v);
   return `${SECTIONS.criteria}?${p}`;
 }
+
+/** A run of the simulation, or the scenario cards (one of them when given), in «Симуляции». */
+export const runLink = (runId: string) => `${SECTIONS.simulations}?r=${encodeURIComponent(runId)}`;
+export const scenariosLink = (cardId?: string) => `${SECTIONS.simulations}?mode=scenarios${cardId ? `&s=${encodeURIComponent(cardId)}` : ""}`;

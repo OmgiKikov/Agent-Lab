@@ -69,4 +69,8 @@ export type LabState = {
   targets: Target[];
   personas: Persona[];
 };
-export type Step = "criteria" | "dialogs" | "judge" | "checks" | "agent" | "logs";
+
+/** A tool the agent called during its turn, as the service logged it. */
+export type ToolCall = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };
+/** One turn of a conversation: who spoke, the logged text, the tools called, and how the turn ended. */
+export type Turn = { role: "customer" | "agent"; text: string; events?: ToolCall[]; ok?: boolean; status?: string; seconds?: number };

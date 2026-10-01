@@ -2,7 +2,7 @@ import { AlertTriangle, ArrowRight, Brain, Check, ChevronDown, ChevronLeft, Clou
 import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import claudeCodeLogo from "../assets/claude-code-logo.png";
 import codexLogo from "../assets/codex-logo.svg";
-import { ASK_EVENT } from "../shell/ShellContext";
+import { ASK_EVENT } from "../app/ShellContext";
 import { useWorkshopEvent } from "../hooks/use-workshop-ws";
 import { router } from "../router";
 import { runPath } from "../utils/navigation";

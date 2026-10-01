@@ -4,8 +4,8 @@ import { ChevronDown, Play } from "lucide-react";
 import { api } from "../../lab/api";
 import { plural } from "../../lab/format";
 import type { RuleEntry } from "../../lab/problems";
-import { SECTIONS } from "../../app/links";
-import { useLabState } from "../../shell/LabProvider";
+import { scenariosLink, SECTIONS } from "../../app/links";
+import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Caps } from "../../ui/Caps";
 import { Menu } from "../../ui/Menu";
@@ -56,7 +56,7 @@ export function Reproduce({ r }: { r: RuleEntry }) {
           ) : <Link to={SECTIONS.agent} className={link}>Подключите агента</Link>}
         </div>
       ) : (
-        <p className="mt-2 text-body text-fg-2">Сценарии из этих диалогов не собраны. <Link to={SECTIONS.simulations} className={link}>Собрать в «Симуляциях»</Link></p>
+        <p className="mt-2 text-body text-fg-2">Сценарии из этих диалогов не собраны. <Link to={scenariosLink()} className={link}>Собрать в «Симуляциях»</Link></p>
       )}
     </section>
   );

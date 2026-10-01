@@ -29,13 +29,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[360px] max-w-[calc(100vw-32px)] flex-col gap-2">
         {items.map(t => (
-          <div key={t.id} role={t.tone === "error" ? "alert" : "status"} className={cn("message-arrive pointer-events-auto flex items-start gap-2.5 rounded-lg border bg-lab-hover px-3.5 py-3 shadow-2xl", t.tone === "error" ? "border-lab-bad/40" : "border-white/10")}>
-            {t.tone === "error" ? <CircleAlert aria-hidden className="mt-0.5 size-4 flex-shrink-0 text-lab-bad" /> : <Info aria-hidden className="mt-0.5 size-4 flex-shrink-0 text-lab-accent" />}
-            <div className="min-w-0 flex-1 text-small text-lab-text">{t.text}</div>
+          <div key={t.id} role={t.tone === "error" ? "alert" : "status"} className={cn("message-arrive pointer-events-auto flex items-start gap-2.5 rounded-block border bg-hover px-3.5 py-3 shadow-pop", t.tone === "error" ? "border-bad/40" : "border-line-strong")}>
+            {t.tone === "error" ? <CircleAlert aria-hidden className="mt-0.5 size-4 flex-shrink-0 text-bad" /> : <Info aria-hidden className="mt-0.5 size-4 flex-shrink-0 text-run" />}
+            <div className="min-w-0 flex-1 text-small text-fg">{t.text}</div>
             {t.action && (
-              <button type="button" onClick={() => { t.action?.run(); dismiss(t.id); }} className="text-small font-medium text-lab-ink underline underline-offset-4">{t.action.label}</button>
+              <button type="button" onClick={() => { t.action?.run(); dismiss(t.id); }} className="text-small font-medium text-fg underline underline-offset-4">{t.action.label}</button>
             )}
-            <button type="button" onClick={() => dismiss(t.id)} aria-label="Закрыть" className="text-lab-dim transition-colors hover:text-lab-text"><X aria-hidden className="size-3.5" /></button>
+            <button type="button" onClick={() => dismiss(t.id)} aria-label="Закрыть" className="text-fg-3 transition-colors hover:text-fg"><X aria-hidden className="size-3.5" /></button>
           </div>
         ))}
       </div>

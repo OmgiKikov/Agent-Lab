@@ -3,7 +3,7 @@ import { Check as CheckIcon, Code2, Globe, Monitor, PlugZap, Save } from "lucide
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
 import type { Check, LabState, Target } from "../../lab/types";
-import { useLabState } from "../../shell/LabProvider";
+import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Caps } from "../../ui/Caps";
 import { useToast } from "../../ui/toast";

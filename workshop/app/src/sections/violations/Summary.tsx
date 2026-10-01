@@ -3,7 +3,7 @@ import { ChevronDown } from "lucide-react";
 import { day, plural } from "../../lab/format";
 import type { Problems } from "../../lab/problems";
 import { runTitle } from "../../lab/runs";
-import { useLabState } from "../../shell/LabProvider";
+import { useLabState } from "../../lab/LabProvider";
 import { SECTIONS } from "../../app/links";
 import { Menu } from "../../ui/Menu";
 

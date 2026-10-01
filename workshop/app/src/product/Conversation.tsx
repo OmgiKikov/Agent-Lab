@@ -2,10 +2,11 @@ import { useState } from "react";
 import { ChevronDown, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { plural } from "../lab/format";
-import { visible, type ToolCall, type Turn } from "../ui/Conversation";
-import { segments, splitQuote } from "../ui/highlight";
+import type { ToolCall, Turn } from "../lab/types";
+import { segments, splitQuote } from "../lab/quote";
 import { Caps } from "../ui/Caps";
 import { MarkNo } from "./MarkNo";
+import { visible } from "./text";
 
 export type Mark = { quote: string; n: number };
 
