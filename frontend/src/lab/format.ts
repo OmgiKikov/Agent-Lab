@@ -6,7 +6,8 @@ export const plural = (n: number, one: string, few: string, many: string) => {
 };
 
 /** «5 сценариев» */
-export const count = (n: number, one: string, few: string, many: string) => `${n} ${plural(n, one, few, many)}`;
+/** «300 разговоров» — the number never parts from its word at a line break. */
+export const count = (n: number, one: string, few: string, many: string) => `${n}\u00a0${plural(n, one, few, many)}`;
 
 export const pct = (a: number, b: number) => (b ? Math.round((100 * a) / b) : 0);
 

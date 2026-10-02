@@ -12,6 +12,7 @@ import { checkedIn, summarySentence } from "../../lab/problemReport";
 import { toneResult } from "../../lab/tone";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
 import { StageResult } from "../../product/StageResult";
+import { Trust } from "../../product/Trust";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -191,6 +192,7 @@ function LogsResult({
             </button>
           </div>
           <StageResult className="mt-4" failed={log.withViolations} checked={log.assessed} unchecked={log.unassessed} />
+          <Trust data={data} stage="log" checked={log.assessed} />
           <section aria-label="Проблемы" className="mt-16">
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">
               <h2 className="text-title font-semibold text-fg">Проблемы</h2>

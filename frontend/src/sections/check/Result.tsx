@@ -12,6 +12,8 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
 import { queueOf } from "../problems/model";
+import { StageResult } from "../../product/StageResult";
+import { Trust } from "../../product/Trust";
 import { Finding } from "./Finding";
 import { BriefPreview } from "./BriefPreview";
 import { NextStage } from "./NextStage";
@@ -28,7 +30,6 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
   if (!result) return null;
   const { summary } = result;
   const measured = summary.measured;
-  const percentage = measured ? Math.round((100 * summary.passed) / measured) : null;
   const quotes = new Set(result.topics.flatMap((t) => t.rules.map((r) => r.quote)));
   const own = list.filter((c) => quotes.has(c.r.rule.quote));
   const problems = queueOf(own, "log");
@@ -38,11 +39,6 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
   const brief = report ? toneBrief(report, result, window.location.origin, state.logs.file ?? undefined) : "";
   const previousRevision = result.criteriaRevision !== state.toneOfVoice?.revision;
   const modelError = !measured ? result.results.find((r) => r.error)?.error : null;
-  const outcomes = [
-    { label: "Без найденных ошибок", n: summary.passed, verdict: "pass", cls: "text-fg" },
-    { label: "С ошибками", n: summary.failed, verdict: "fail", cls: "text-bad" },
-    { label: "Без оценки", n: summary.unmeasured, verdict: "none", cls: "text-fg-3" },
-  ];
   return (
     <section aria-labelledby="tone-result-title">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -78,33 +74,25 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           </Button>
         </div>
       )}
-      <div className="my-6 flex flex-col gap-4 border-y border-line py-4 sm:flex-row sm:items-center sm:gap-7">
-        <div className="min-w-0 flex-1">
+      {measured > 0 && (
+        <div className="my-8">
+          <StageResult
+            failed={summary.failed}
+            checked={measured}
+            unchecked={summary.unmeasured}
+            size="display"
+            link={(part) => conversationsLink("log", { v: { bad: "fail", ok: "pass", none: "none" }[part] })}
+          />
+          {data && current && <Trust data={data} stage="log" checked={measured} />}
           <Link
-            to={conversationsLink("log", { v: "pass" })}
-            className="text-title font-semibold tabular-nums text-fg hover:underline"
+            to={conversationsLink("log")}
+            className="mt-4 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
           >
-            {percentage === null ? "—" : percentage + "%"}
+            Все разговоры
+            <ArrowRight aria-hidden className="size-4" />
           </Link>
-          <span className="mt-1 block text-body text-fg-2">
-            {measured
-              ? summary.passed + " из " + measured + " оценённых разговоров — без найденных ошибок"
-              : "Для расчёта нужны оценённые разговоры"}
-          </span>
         </div>
-        <div className="grid grid-cols-3 gap-5 sm:max-w-[390px]">
-          {outcomes.map((o) => (
-            <Link
-              key={o.verdict}
-              to={conversationsLink("log", { v: o.verdict })}
-              className="rounded-control py-1 hover:bg-hover"
-            >
-              <span className={"text-count font-semibold tabular-nums " + o.cls}>{o.n}</span>
-              <span className="mt-1 block text-small text-fg-3">{o.label}</span>
-            </Link>
-          ))}
-        </div>
-      </div>
+      )}
       {modelError && (
         <div role="alert" className="mb-6 text-read text-fg-2">
           <p>Модель проверки не ответила. Проверьте настройки и запустите оценку снова.</p>

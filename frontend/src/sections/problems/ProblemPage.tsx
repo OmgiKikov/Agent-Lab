@@ -6,7 +6,8 @@ import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
 import { conversationsLink, criterionLink, problemLink, reviewLink, stageLink, type Stage } from "../../app/links";
 import { dialogOf } from "../../lab/dialogs";
-import { duty, useCriteria } from "../../lab/criteria";
+import { useCriteria } from "../../lab/criteria";
+import { Duty } from "../../product/Duty";
 import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useReview, type Decision, type Example } from "../../lab/problems";
@@ -151,22 +152,16 @@ export function ProblemPage({ stage }: { stage: Stage }) {
               : `Проблема в симуляции${run ? ` · прогон ${longDay(run.startedAt)}` : ""}`}
           </p>
           <h2 className="mt-1 text-balance text-page font-semibold text-fg">{r.title}</h2>
-          <p className="mt-4 max-w-[68ch] text-lead text-fg-2">
-            <span className="text-fg-3">Агент должен: </span>
-            {duty(r.rule.text)}
-            {(condition || acceptable) && !more && (
-              <>
-                {" "}
-                <button
-                  type="button"
-                  onClick={() => setMore(true)}
-                  className="text-read font-medium text-run hover:underline"
-                >
-                  Когда и что допустимо
-                </button>
-              </>
-            )}
-          </p>
+          <Duty key={r.id} text={r.rule.text} className="mt-4 max-w-[68ch] text-lead text-fg-2" />
+          {(condition || acceptable) && !more && (
+            <button
+              type="button"
+              onClick={() => setMore(true)}
+              className="mt-2 text-read font-medium text-run hover:underline"
+            >
+              Когда и что допустимо
+            </button>
+          )}
           {more && (
             <dl className="mt-3 max-w-[68ch] space-y-1.5 text-read text-fg-2">
               {condition && (

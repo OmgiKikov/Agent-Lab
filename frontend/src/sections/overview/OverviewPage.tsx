@@ -14,6 +14,7 @@ import type { LabRun } from "../../lab/types";
 import { toneResult } from "../../lab/tone";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
 import { StageResult } from "../../product/StageResult";
+import { Trust } from "../../product/Trust";
 import { Step } from "../../product/Step";
 import { Button, buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -213,6 +214,7 @@ function LogStage({
             checked={log.assessed}
             unchecked={log.unassessed}
           />
+          <Trust data={data} stage="log" checked={log.assessed} />
           <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>
           <div className="mt-1">
             <ProblemList list={list} stage="log" limit={3} />
