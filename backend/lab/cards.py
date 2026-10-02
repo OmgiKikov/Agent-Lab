@@ -61,6 +61,19 @@ MASKED_VALUE = re.compile(r'[#*]+(?:[\s\\/.:,\w-]{0,6}?[#*]+)*')
 FOREIGN = re.compile(r'[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]')  # the model sometimes slips into CJK
 # An observation is the customer's own try in the world; one about the chat or the agent is the old agent's answer.
 ABOUT_CHAT = re.compile(r'\b(агент|бот|чат|ассистент|оператор|ответил|отказал|посоветовал|сказал)\w*', re.I)
+# What the agent's message must show for a trigger to name it; the other triggers are judged by the extractor alone.
+ASKS = re.compile(r'\?|\b(уточните|укажите|напишите|выберите|назовите|сообщите|подскажите)\b', re.I)
+TRIGGER_NEEDS = {
+    'unclear_question': (ASKS,),
+    'repeated_clarification': (ASKS,),
+    'choice_offer': (ASKS,),
+    'identifier_request': (ASKS, re.compile(r'номер|инн|реквизит|мерчант|терминал|точк|tid|договор', re.I)),
+    'handoff_offer': (re.compile(r'оператор|специалист|поддержк|горяч\w* лини|позвон|отделени|менеджер', re.I),),
+    'instruction': (
+        re.compile(r'перейдите|нажмите|выберите|откройте|зайдите|войдите|проверьте|оформите|заполните|\b\d\.\s', re.I),
+    ),
+}
+PAST = re.compile(r'раньше|ранее|как (уже )?(делал|было|раньше)|в прошлый|прошлом|обычно', re.I)
 TRANSITION = re.compile(r'`\s*`\s*`\s*transition-code\s*([\w-]*)\s*`\s*`\s*`\.?')
 RARE = {
     'Четыре и больше реплик клиента': lambda d: sum(m['role'] == 'user' for m in d['messages']) >= 4,
@@ -200,6 +213,16 @@ def _found(quote: object, text: str) -> bool:
     return sum(ch.isalnum() for ch in needle) >= 2 and needle in re.sub(r'\s+', '', quotes.normalized(text))
 
 
+def _holds_value(quote: str) -> bool:
+    """A quote that carries an identifier itself: five or more digits, or a value the export masked."""
+    return len(re.sub(r'\D', '', quote)) >= 5 or bool(MASK.search(quote))
+
+
+def _fits(trigger: str, agent_text: str) -> bool:
+    """The agent's message shows what the trigger says it did: a question, a request for a number, a handoff, steps."""
+    return all(pattern.search(agent_text) for pattern in TRIGGER_NEEDS.get(trigger, ()))
+
+
 def _grounded(value: dict, messages: list[dict]) -> tuple[dict, Counter]:
     """Only items whose quotes stand in the cited message of the right speaker; the rest is counted, not kept."""
 
@@ -228,23 +251,35 @@ def _grounded(value: dict, messages: list[dict]) -> tuple[dict, Counter]:
         and x['trigger'] in TRIGGERS
         and said(x.get('n'), x.get('quote'), 'user')
         and said(x.get('agentN'), x.get('agentQuote'), 'assistant')
-        and x['agentN'] < x['n'],
+        and x['agentN'] < x['n']
+        and _fits(x['trigger'], messages[x['agentN'] - 1]['content']),
     }
     for field, valid in lists.items():
         items = [x for x in value.get(field) or [] if isinstance(x, dict)]
         kept[field] = [x for x in items if valid(x)]
         dropped[field] = len(items) - len(kept[field])
+    # A guess only where nothing was observed, about how the customer answers: no past, no numbers.
+    observed = {x['trigger'] for x in kept['reactions']}
+    offered = [x for x in value.get('hypotheses') or [] if isinstance(x, dict)]
     hypotheses = [
         x
-        for x in value.get('hypotheses') or []
-        if isinstance(x, dict) and text(x, 'trigger', 'response') and x['trigger'] in TRIGGERS
+        for x in offered
+        if text(x, 'trigger', 'response')
+        and x['trigger'] in TRIGGERS
+        and x['trigger'] not in observed
+        and not PAST.search(x['response'])
+        and not re.search(r'\d', x['response'])
     ]
+    dropped['hypotheses'] = len(offered) - len(hypotheses)
     kept['hypotheses'] = [{'trigger': x.get('trigger'), 'response': x['response']} for x in hypotheses[:2]]
     kept['notEstablished'] = [str(x) for x in value.get('notEstablished') or [] if str(x).strip()]
     for name in IDENTIFIERS:
         item = (value.get('identifiers') or {}).get(name) or {}
         status = item.get('status') if isinstance(item, dict) else None
-        if status in ('knows', 'masked_in_source', 'does_not_know') and said(item.get('n'), item.get('quote'), 'user'):
+        # Knowing it means the customer typed the value: a merchant's name is not its INN or terminal number.
+        shown = status == 'does_not_know' or _holds_value(str(item.get('quote') or ''))
+        cited = said(item.get('n'), item.get('quote'), 'user')
+        if status in ('knows', 'masked_in_source', 'does_not_know') and shown and cited:
             kept[name] = {'status': status, 'quote': item['quote']}
         else:
             dropped['identifiers'] += status in ('knows', 'masked_in_source', 'does_not_know')
@@ -392,7 +427,9 @@ async def build_card(topic: dict, dialogue: dict, sets: Sequence[str], general: 
         start, dropped['episode'] = 1, 1
     for fact in kept['facts']:
         # When it was said follows from where its quote stands, not from the model's label.
-        if fact['n'] < start:
+        if fact.get('status') == 'learned_from_agent':
+            fact['said'] = None  # the agent said it; the customer brings nothing
+        elif fact['n'] < start:
             fact['said'] = 'before'
         elif fact['n'] == start:
             fact['said'] = 'opening'
@@ -429,7 +466,7 @@ async def build_card(topic: dict, dialogue: dict, sets: Sequence[str], general: 
     card['situation'] = brief(card)
     card['criteria'] = _criteria(topic, general)
     try:
-        card['world'] = await world.build(card['situation'], [opening, *customer[1:]])
+        card['world'] = await world.build(card['situation'], [opening, *customer[1:]], seed=source)
     except llm.ModelError:
         card['world'] = None
     card['checks']['worldUsesOpeningIds'] = _uses(card['world'], customer[0], opening)

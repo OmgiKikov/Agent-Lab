@@ -7,7 +7,8 @@
   not against an invented threshold;
 - diversity: how alike the cards' openings are, against random real openings; how alike the text the model wrote is,
   against the customers' own messages; near-duplicate briefs; distinct behaviour signatures;
-- knowledge: statuses of the customers' facts, observed reactions and untested hypotheses.
+- knowledge: statuses of the customers' facts, observed reactions and untested hypotheses;
+- worlds: how alike the mocked clients are (repeated INN and terminal numbers, terminals per client).
 """
 
 import random
@@ -149,6 +150,22 @@ def knowledge(deck: list[dict]) -> dict:
     }
 
 
+def worlds(deck: list[dict]) -> dict | None:
+    """How alike the mocked clients are: the most repeated INN and terminal number, and terminals per client."""
+    built = [card['world'] for card in deck if card.get('world')]
+    if not built:
+        return None
+    inns = Counter(w['organization']['inn'] for w in built)
+    terminals = Counter(t['terminalId'] for w in built for t in w['terminals'])
+    return {
+        'worlds': len(built),
+        'distinctInn': len(inns),
+        'topInnShare': round(inns.most_common(1)[0][1] / len(built), 3),
+        'topTerminalShare': round(terminals.most_common(1)[0][1] / len(built), 3),
+        'terminalsPerClient': dict(sorted(Counter(len(w['terminals']) for w in built).items())),
+    }
+
+
 def report(value: dict, pool: list[dict]) -> dict:
     """The report on a deck (cards.run) against the imported conversations it was drawn from."""
     deck = [card for card in value.get('cards') or [] if card.get('checks')]
@@ -164,6 +181,7 @@ def report(value: dict, pool: list[dict]) -> dict:
         },
         'grounding': grounding(deck),
         'knowledge': knowledge(deck),
+        'worlds': worlds(deck),
         'population': population(represented, pool) if represented and pool else None,
         'diversity': diversity(deck, pool) if len(deck) > 1 and len(pool) >= len(deck) else None,
     }

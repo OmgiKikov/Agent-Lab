@@ -109,7 +109,18 @@ def normalize(raw: dict, shapes: dict) -> dict:
     }
 
 
-async def build(situation: str, customer: list[str]) -> dict | None:
+def identity(seed: str) -> dict:
+    """The client's numbers, chosen here so worlds differ: the model copies the templates' client otherwise.
+    How many terminals customers have is not calibrated yet: one, two or three, the same for the same seed."""
+    rng = random.Random(f'world:{seed}')
+    count = rng.choices((1, 2, 3), weights=(5, 3, 2))[0]
+    return {
+        'inn': str(rng.randint(1, 9)) + ''.join(str(rng.randint(0, 9)) for _ in range(9)),
+        'terminalIds': [str(rng.randint(10_000_000, 99_999_999)) for _ in range(count)],
+    }
+
+
+async def build(situation: str, customer: list[str], seed: str = '') -> dict | None:
     shapes = templates()
     if shapes is None:
         return None
@@ -124,6 +135,7 @@ async def build(situation: str, customer: list[str]) -> dict | None:
         {
             'situation': situation,
             'customerMessages': customer,
+            'identity': identity(seed or situation),
             'templates': {name: shapes[name] for name in SCENARIO_TOOLS if name in shapes},
         },
         parse=parse,

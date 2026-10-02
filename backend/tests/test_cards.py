@@ -130,7 +130,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             'observations': [
                 {'action': 'спросил в чате', 'result': 'бот ответил про тариф', 'n': 3, 'quote': 'Такого раздела нет'}
             ],
-            'identifiers': {'terminal': {'status': 'masked_in_source', 'n': 1, 'quote': 'терминала'}},
+            'identifiers': {'terminal': {'status': 'masked_in_source', 'n': 1, 'quote': 'терминала ########'}},
             'openingFilled': 'Какой тариф у терминала 48213907?',
         }
         with (
@@ -141,7 +141,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             card = await cards.build_card(analysis()['topics'][0], chat, ['representative'])
         self.assertEqual(card['model'], 'actual-model')
         self.assertEqual(card['opening'], 'Какой тариф у терминала 48213907?')
-        self.assertEqual([f['status'] for f in card['facts']], ['learned_from_agent'])
+        self.assertEqual([(f['status'], f['said']) for f in card['facts']], [('learned_from_agent', None)])
         self.assertEqual((card['checks']['dropped']['facts'], card['checks']['dropped']['observations']), (1, 1))
         self.assertNotIn('1,8%', card['situation'])
         self.assertIn('раздела нет', card['situation'])
@@ -229,3 +229,74 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(sizes), [1, cards.TOPIC_BATCH, cards.TOPIC_BATCH])
         self.assertEqual(set(topic_of), {'d', *(d['id'] for d in many)})
         self.assertEqual({t['title'] for t in topic_of.values()}, {'Тариф'})
+
+    def test_doubtful_identifiers_triggers_and_guesses_are_dropped(self):
+        messages = [
+            {'role': 'user', 'content': 'Вопрос по мерчанту Ромашка Тверская'},
+            {'role': 'assistant', 'content': 'Перейдите в раздел «Эквайринг» и нажмите «Тарифы»'},
+            {'role': 'user', 'content': 'Не вижу такого раздела'},
+        ]
+        value = {
+            'identifiers': {
+                'organization': {'status': 'knows', 'n': 1, 'quote': 'мерчанту Ромашка Тверская'},
+                'terminal': {'status': 'knows', 'n': 3, 'quote': 'такого раздела'},
+            },
+            'reactions': [
+                {
+                    'trigger': 'handoff_offer',
+                    'response': 'не нашёл раздел',
+                    'agentN': 2,
+                    'agentQuote': 'Перейдите в раздел',
+                    'n': 3,
+                    'quote': 'Не вижу такого раздела',
+                },
+                {
+                    'trigger': 'instruction',
+                    'response': 'не нашёл раздел',
+                    'agentN': 2,
+                    'agentQuote': 'Перейдите в раздел',
+                    'n': 3,
+                    'quote': 'Не вижу такого раздела',
+                },
+            ],
+            'hypotheses': [
+                {'trigger': 'instruction', 'response': 'попробуешь шаги'},
+                {'trigger': 'identifier_request', 'response': 'назовёшь номер, как делал раньше'},
+                {'trigger': 'handoff_offer', 'response': 'попросишь оператора'},
+            ],
+        }
+        kept, dropped = cards._grounded(value, messages)
+        self.assertEqual((kept['organization'], kept['terminal']), ({'status': 'not_established'},) * 2)
+        self.assertEqual(dropped['identifiers'], 2)
+        self.assertEqual([r['trigger'] for r in kept['reactions']], ['instruction'])
+        self.assertEqual(kept['hypotheses'], [{'trigger': 'handoff_offer', 'response': 'попросишь оператора'}])
+        self.assertEqual(dropped['hypotheses'], 2)
+
+    def test_world_identity_is_fixed_per_card_and_varies_between_cards(self):
+        self.assertEqual(cards.world.identity('a'), cards.world.identity('a'))
+        many = [cards.world.identity(str(i)) for i in range(60)]
+        self.assertEqual({len(x['terminalIds']) for x in many}, {1, 2, 3})
+        self.assertGreater(len({x['inn'] for x in many}), 55)
+        self.assertTrue(all(len(x['inn']) == 10 and len(t) == 8 for x in many for t in x['terminalIds']))
+
+    def test_report_shows_how_alike_the_mocked_clients_are(self):
+        world = lambda inn, *tids: {  # noqa: E731
+            'organization': {'inn': inn},
+            'terminals': [{'terminalId': t} for t in tids],
+        }
+        deck = [
+            {'world': world('1', 'a')},
+            {'world': world('1', 'a', 'b')},
+            {'world': world('2', 'c')},
+            {'world': None},
+        ]
+        self.assertEqual(
+            bench.worlds(deck),
+            {
+                'worlds': 3,
+                'distinctInn': 2,
+                'topInnShare': 0.667,
+                'topTerminalShare': 0.667,
+                'terminalsPerClient': {1: 2, 2: 1},
+            },
+        )
