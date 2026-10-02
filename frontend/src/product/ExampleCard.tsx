@@ -7,12 +7,11 @@ import { useLabState } from "../lab/LabProvider";
 import { personaName } from "../lab/look";
 import { reliabilityWord } from "../lab/problemReport";
 import { useTurns, type Decision, type Example } from "../lab/problems";
-import { splitQuote } from "../lab/quote";
 import { Skeleton } from "../ui/EmptyState";
 import { Conversation } from "./Conversation";
 import { MarkNo } from "./MarkNo";
 import { ReviewButtons } from "./ReviewButtons";
-import { visible } from "./text";
+import { shows } from "./steps";
 
 const WORD: Record<Example["status"], string> = {
   FAIL: "Почему это ошибка",
@@ -57,9 +56,8 @@ export function ExampleCard({
 }) {
   const { state } = useLabState();
   const { turns, loading, error } = useTurns(example);
-  const marked =
-    !!example.agentQuote &&
-    !!turns?.some((t) => t.role === "agent" && splitQuote(visible(t.text).text, example.agentQuote));
+  // The quote is in the agent's words, or names a step it took (a tool criterion is proved by the call itself).
+  const marked = !!example.agentQuote && !!turns?.some((t) => shows(t, example.agentQuote));
   const judged = example.status !== "UNKNOWN";
   return (
     <article className="rounded-sheet bg-list shadow-card ring-1 ring-line">

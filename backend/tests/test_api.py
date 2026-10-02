@@ -44,6 +44,21 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()['evaluation'], evaluation)
         self.assertEqual((await self.client.get('/api/logs/missing')).status_code, 404)
 
+    async def test_an_article_the_agent_read_comes_from_its_knowledge_base(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder)
+            kb = repo / api.knowledge.KB
+            kb.parent.mkdir(parents=True)
+            article = {'id': 'возвраты', 'title': 'Как оформить возврат', 'passages': ['Откройте раздел.', 'Нажмите.']}
+            kb.write_text(json.dumps({'articles': [article]}))
+            with patch.object(api.knowledge.agents, 'repo', return_value=repo):
+                response = await self.client.get('/api/articles/возвраты')
+                self.assertEqual(
+                    response.json(),
+                    {'article': 'возвраты', 'title': 'Как оформить возврат', 'text': 'Откройте раздел.\nНажмите.'},
+                )
+                self.assertEqual((await self.client.get('/api/articles/нет-такой')).status_code, 404)
+
     async def test_failed_upload_keeps_inputs_and_derived_documents(self) -> None:
         store.save(api.logs.FILE, [{'id': 'old'}])
         store.save(api.discover.RESULT, {'results': ['old']})
