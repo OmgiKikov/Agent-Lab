@@ -2,23 +2,41 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from . import agents, cards, discover, llm, logs, personas, policy_files, problems, simulate, store, tone, tone_advice
+from . import (
+    agents,
+    cards,
+    discover,
+    llm,
+    logs,
+    personas,
+    policy_files,
+    problems,
+    registry,
+    simulate,
+    store,
+    tone,
+    tone_advice,
+)
 from .context import knowledge, sources
-from .jobs import BusyError, Jobs, Progress, Work
+from .jobs import BusyError, PerAgent, Progress, Work
 
-jobs = Jobs()
+jobs = PerAgent()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     store.recover_runs()
+    for agent in registry.listed():
+        with registry.using(agent['id']):
+            store.recover_runs()
     try:
         yield
     finally:
@@ -26,6 +44,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title='Agent Lab', lifespan=lifespan)
+
+
+@app.middleware('http')
+async def agent_of_request(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """A product request works inside one agent: the X-Agent header, or the first agent. Its jobs keep that agent."""
+    path = request.url.path
+    if not path.startswith('/api/') or path == '/api/agents' or path.startswith('/api/agents/'):
+        return await call_next(request)
+    agent_id = request.headers.get('x-agent') or registry.default_id()
+    if agent_id is None:
+        return await call_next(request)
+    if registry.get(agent_id) is None:
+        return JSONResponse({'detail': 'Агент не найден'}, status_code=404)
+    token = store.AGENT.set(registry.db_of(agent_id))
+    try:
+        return await call_next(request)
+    finally:
+        store.AGENT.reset(token)
+
+
 RUN_FIELDS = (
     'id', 'target', 'targetName', 'version', 'label', 'startedAt', 'finishedAt', 'status', 'metric', 'error',
     'model', 'repeats', 'personas', 'updatedAt', 'revision',

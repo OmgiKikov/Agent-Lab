@@ -4,6 +4,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from . import store
+
 Progress = Callable[..., None]
 Work = Callable[[Progress], Awaitable[Any]]
 STOPPED = 'Остановлено'
@@ -76,3 +78,31 @@ class Jobs:
     async def close(self) -> None:
         if self.state['running']:
             await self.stop()
+
+
+class PerAgent:
+    """One owner of long work per agent (the database the request works in, store.AGENT): agents are checked in
+    parallel, and each screen sees only its own agent's work. Same interface as Jobs."""
+
+    def __init__(self) -> None:
+        self._owners: dict[str, Jobs] = {}
+
+    def _jobs(self) -> Jobs:
+        return self._owners.setdefault(str(store.AGENT.get() or ''), Jobs())
+
+    @property
+    def state(self) -> dict:
+        return self._jobs().state
+
+    def start(self, kind: str, work: Work) -> dict:
+        return self._jobs().start(kind, work)
+
+    async def perform(self, kind: str, work: Work) -> Any:
+        return await self._jobs().perform(kind, work)
+
+    async def stop(self) -> None:
+        await self._jobs().stop()
+
+    async def close(self) -> None:
+        for owner in self._owners.values():
+            await owner.close()
