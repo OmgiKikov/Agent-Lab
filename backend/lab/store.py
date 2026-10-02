@@ -21,6 +21,8 @@ def now() -> str:
 def _connection() -> Iterator[sqlite3.Connection]:
     DB.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB, timeout=10)
+    # Write-ahead log: a screen reads while a job writes, instead of waiting for it.
+    connection.execute('PRAGMA journal_mode=WAL')
     try:
         DB.chmod(0o600)
         connection.execute('CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')

@@ -17,6 +17,8 @@ import { Mark } from "./Mark";
 import { useShell } from "./ShellContext";
 import { TaskCard } from "./TaskCard";
 import { SECTIONS } from "./links";
+import { useLabState } from "../lab/LabProvider";
+import { dialoguesShown, TONE_ONLY } from "./product";
 
 export type NavItem = {
   to: string;
@@ -31,7 +33,8 @@ export type NavCounts = { logs?: number; sims?: number; criteria?: number };
 
 /** One product: a guided entry and the shared stages, evidence, and criteria. */
 export function useNav({ logs, sims, criteria }: NavCounts): NavItem[] {
-  return [
+  const { state } = useLabState();
+  const items: NavItem[] = [
     {
       to: SECTIONS.start,
       label: "Начать проверку",
@@ -64,11 +67,15 @@ export function useNav({ logs, sims, criteria }: NavCounts): NavItem[] {
       count: criteria,
     },
   ];
+  if (!TONE_ONLY) return items;
+  return items.filter(
+    (i) => i.to === SECTIONS.start || i.to === SECTIONS.overview || (i.to === SECTIONS.logs && dialoguesShown(state)),
+  );
 }
 
 /** The agent and settings stay below the day-to-day work. */
 export const SETUP: NavItem[] = [
-  { to: SECTIONS.agent, label: "Агент", icon: Bot, match: ["/agent"] },
+  ...(TONE_ONLY ? [] : [{ to: SECTIONS.agent, label: "Агент", icon: Bot, match: ["/agent"] }]),
   { to: SECTIONS.settings, label: "Настройки", icon: Settings, match: ["/settings"] },
 ];
 
@@ -130,15 +137,17 @@ export function Sidebar({ counts }: { counts: NavCounts }) {
           <span className="block truncate text-small text-fg-3">{AGENT_TITLE}</span>
         </span>
       </NavLink>
-      <button
-        type="button"
-        onClick={shell.openPalette}
-        className="mt-5 flex h-9 items-center gap-3 rounded-control px-3 text-body text-fg-3 transition-colors hover:bg-hover hover:text-fg-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-      >
-        <Search aria-hidden className="size-[18px]" strokeWidth={1.6} />
-        <span className="flex-1 text-left">Поиск</span>
-        <span className="text-small text-fg-4">⌘K</span>
-      </button>
+      {!TONE_ONLY && (
+        <button
+          type="button"
+          onClick={shell.openPalette}
+          className="mt-5 flex h-9 items-center gap-3 rounded-control px-3 text-body text-fg-3 transition-colors hover:bg-hover hover:text-fg-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+        >
+          <Search aria-hidden className="size-[18px]" strokeWidth={1.6} />
+          <span className="flex-1 text-left">Поиск</span>
+          <span className="text-small text-fg-4">⌘K</span>
+        </button>
+      )}
       <div className="mt-1 flex flex-col gap-0.5">
         {items.map((item) => (
           <Item key={item.label} item={item} />

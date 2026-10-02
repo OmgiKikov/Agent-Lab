@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { pct, plural } from "../lab/format";
 import { useArrived, useCountUp } from "./motion";
@@ -12,18 +13,21 @@ export function StageResult({
   checked,
   unchecked = 0,
   size = "hero",
+  link,
   className,
 }: {
   failed: number;
   checked: number;
   unchecked?: number;
   size?: "hero" | "display";
+  /** Where each part's conversations open: every number leads to what it is made of (DESIGN.md, честность 5). */
+  link?: (part: "bad" | "ok" | "none") => string;
   className?: string;
 }) {
   const clean = Math.max(0, checked - failed);
   const parts = [
     { key: "bad", n: failed, word: "с ошибкой агента", dot: "bg-bad", bar: "bg-bad" },
-    { key: "ok", n: clean, word: "без найденных ошибок", dot: "bg-fg-3", bar: "bg-fg/15" },
+    { key: "ok", n: clean, word: "без найденных ошибок", dot: "bg-ok", bar: "bg-ok" },
     { key: "none", n: unchecked, word: "не удалось проверить", dot: "border border-fg-4", bar: "hatch" },
   ].filter((p) => p.n > 0);
   const total = parts.reduce((s, p) => s + p.n, 0) || 1;
@@ -34,7 +38,7 @@ export function StageResult({
     <div className={className}>
       <p
         className={cn(
-          "font-semibold tabular-nums text-fg",
+          "whitespace-nowrap font-semibold tabular-nums text-fg",
           size === "hero" ? "text-display sm:text-hero" : "text-page sm:text-display",
         )}
         aria-label={`${failed} из ${checked}`}
@@ -51,7 +55,12 @@ export function StageResult({
       <p className={cn("text-fg-2", size === "hero" ? "mt-3 text-lead" : "mt-2 text-read")}>
         {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
         агента
-        {checked > 0 && <span className="text-fg-3"> · {pct(failed, checked)}%</span>}
+        {checked > 0 && (
+          <span className="text-fg-3">
+            {"\u00a0·\u00a0"}
+            {pct(failed, checked)}%
+          </span>
+        )}
       </p>
       <div
         className={cn(
@@ -65,7 +74,7 @@ export function StageResult({
           <div
             key={p.key}
             className={cn(
-              "h-full rounded-full transition-[width] duration-1000 ease-out motion-reduce:transition-none",
+              "h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none",
               p.bar,
             )}
             style={{ width: arrived ? `${(100 * p.n) / total}%` : "0%" }}
@@ -74,9 +83,21 @@ export function StageResult({
       </div>
       <ul className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-small text-fg-3">
         {parts.map((p) => (
-          <li key={p.key} className="flex items-center gap-1.5">
-            <span aria-hidden className={cn("size-2 rounded-full", p.dot)} />
-            <span className="font-semibold tabular-nums text-fg-2">{p.n}</span> {p.word}
+          <li key={p.key}>
+            {link ? (
+              <Link
+                to={link(p.key as "bad" | "ok" | "none")}
+                className="flex items-center gap-1.5 rounded-sm hover:text-fg hover:underline"
+              >
+                <span aria-hidden className={cn("size-2 rounded-full", p.dot)} />
+                <span className="font-semibold tabular-nums text-fg-2">{p.n}</span> {p.word}
+              </Link>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <span aria-hidden className={cn("size-2 rounded-full", p.dot)} />
+                <span className="font-semibold tabular-nums text-fg-2">{p.n}</span> {p.word}
+              </span>
+            )}
           </li>
         ))}
       </ul>

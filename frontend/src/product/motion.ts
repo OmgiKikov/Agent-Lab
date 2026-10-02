@@ -7,7 +7,7 @@ const reduced = () =>
  * A number that counts up to its value when it first shows, and glides to a new one: the result arrives instead of
  * sitting there. Eases out over `ms`; with reduced motion it is the value at once.
  */
-export function useCountUp(value: number, ms = 900) {
+export function useCountUp(value: number, ms = 500) {
   const [shown, setShown] = useState(() => (reduced() ? value : 0));
   const from = useRef(reduced() ? value : 0);
   useEffect(() => {
@@ -47,6 +47,6 @@ export function useArrived() {
 }
 
 /** Rows of a list come in one after another, a beat apart, never longer than the whole beat. */
-export const stagger = (i: number, step = 40, cap = 480) => ({ animationDelay: `${Math.min(i * step, cap)}ms` });
+export const stagger = (i: number, step = 30, cap = 240) => ({ animationDelay: `${Math.min(i * step, cap)}ms` });
 export const ENTER =
-  "animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-both duration-500 ease-out motion-reduce:animate-none";
+  "animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-both duration-300 ease-out motion-reduce:animate-none";

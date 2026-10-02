@@ -68,6 +68,25 @@ asyncio.run(main())
             built=True,
         )
 
+    def test_the_page_is_revalidated_and_hashed_assets_are_kept(self) -> None:
+        self.probe(
+            """
+import asyncio
+import httpx
+from lab.app import app
+
+async def main():
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        page = await client.get('/overview')
+        assert page.headers.get('cache-control') == 'no-cache', page.headers
+        asset = await client.get('/assets/app.js')
+        assert 'immutable' in asset.headers.get('cache-control', ''), asset.headers
+
+asyncio.run(main())
+""",
+            built=True,
+        )
+
     def test_missing_frontend_is_an_actionable_error_and_api_still_works(self) -> None:
         self.probe(
             """

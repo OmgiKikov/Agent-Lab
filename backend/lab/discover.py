@@ -164,6 +164,21 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
     return result
 
 
+async def judge_each(todo: list[tuple[dict, dict]], done: Callable[[dict], None]) -> None:
+    """Judge conversations a few at a time, each with both checks, so the count moves from the first seconds.
+    All at once, the model gate would run every first check before any second one and the count would wait minutes."""
+    slots = asyncio.Semaphore(llm.CONCURRENCY)
+
+    async def one(dialogue: dict, topic: dict) -> None:
+        async with slots:
+            result = await judge_dialogue(dialogue, topic)
+        done(result)
+
+    async with asyncio.TaskGroup() as tasks:
+        for dialogue, topic in todo:
+            tasks.create_task(one(dialogue, topic))
+
+
 def carry_reviews(previous: dict, results: list[dict]) -> None:
     """A person's decision stays with a verdict that did not change: the same conversation, rule and status.
     Only with frozen rules: extracted anew, the same rule id may be another rule."""
@@ -222,7 +237,8 @@ def summarize(results: list[dict], topics: list[dict]) -> dict:
     for item in patterns.values():
         item['count'] = len(item['dialogues'])
         item['topic'] = ', '.join(item['topics'])
-    twice = [r for r in results if (r.get('second') or {}).get('status') in ('PASS', 'FAIL', 'UNMEASURED')]
+    decided = ('PASS', 'FAIL')
+    twice = [r for r in results if r['status'] in decided and (r.get('second') or {}).get('status') in decided]
     second = None
     if twice:
         agree = sum(1 for r in twice if r['second']['status'] == r['status'])
@@ -274,13 +290,11 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     progress(stage='judge', done=0, total=len(todo), message=f'Оцениваю {len(todo)} разговоров')
     results = []
 
-    async def one(dialogue: dict, topic: dict) -> None:
-        results.append(await judge_dialogue(dialogue, topic))
+    def done(result: dict) -> None:
+        results.append(result)
         progress(stage='judge', done=len(results), total=len(todo), message=f'Оценено {len(results)} из {len(todo)}')
 
-    async with asyncio.TaskGroup() as tasks:
-        for item in todo:
-            tasks.create_task(one(*item))
+    await judge_each(todo, done)
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     results.sort(key=lambda r: order.get(str(r['dialogueId']), 0))
     if previous.get('topics') and not replan:

@@ -5,11 +5,11 @@ import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
 import { stageLink, type Stage } from "../../app/links";
-import { duty } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useProblems, useReview, type Decision } from "../../lab/problems";
 import { exampleKey, queueOf, QUEUE_TITLE, type Queue } from "../../lab/verdicts";
+import { Duty } from "../../product/Duty";
 import { ExampleCard } from "../../product/ExampleCard";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -249,10 +249,11 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               )}
             >
               <h2 className="mt-8 text-balance text-page font-semibold text-fg">{current.rule.title}</h2>
-              <p className="mt-3 max-w-[68ch] text-lead text-fg-2">
-                <span className="text-fg-3">Агент должен: </span>
-                {duty(current.rule.rule.text)}
-              </p>
+              <Duty
+                key={current.rule.id}
+                text={current.rule.rule.text}
+                className="mt-3 max-w-[68ch] text-lead text-fg-2"
+              />
               <div className="mt-8">
                 <ExampleCard
                   example={current.example}

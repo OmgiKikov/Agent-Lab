@@ -57,7 +57,20 @@ def checked(
     by_rule = {row.rule_id: row for row in rows}
     out = []
     for rule in rules:
-        row = by_rule[rule['id']]
+        row = by_rule.get(rule['id'])
+        if row is None:
+            # The model gave no verdict here (it did not answer at all): the criterion stays unmeasured.
+            out.append(
+                {
+                    'ruleId': rule['id'],
+                    'rule': rule['text'],
+                    'status': 'UNKNOWN',
+                    'reason': '',
+                    'agentQuote': '',
+                    'title': '',
+                }
+            )
+            continue
         status, reason, quote = row.status, row.reason, row.agent_quote
         if status in ('PASS', 'FAIL'):
             observation = rule.get('observation', 'reply')

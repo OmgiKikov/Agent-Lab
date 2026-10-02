@@ -13,6 +13,24 @@ const STOPPED = "Остановлено";
  * The service's task, seen from every screen at the foot of the navigation: what runs, how far it is, «Остановить».
  * When it ends, one notice with the way to its result; when it fails, the reason stays here until closed.
  */
+const MARK = /^(Готово|Не удалось) · /;
+
+/**
+ * A finished task seen from another tab: the tab's title says so until the person comes back (NN/g: visibility of
+ * system status for work longer than ten seconds).
+ */
+function markTab(word: string) {
+  if (!document.hidden) return;
+  const base = document.title.replace(MARK, "");
+  document.title = `${word} · ${base}`;
+  const back = () => {
+    if (document.hidden) return;
+    document.title = document.title.replace(MARK, "");
+    document.removeEventListener("visibilitychange", back);
+  };
+  document.addEventListener("visibilitychange", back);
+}
+
 export function TaskCard({ compact }: { compact?: boolean }) {
   const { state } = useLabState();
   const toast = useToast();
@@ -27,6 +45,7 @@ export function TaskCard({ compact }: { compact?: boolean }) {
     if (!before?.running || job.running || before.kind !== job.kind) return;
     const info = jobOf(job);
     const label = info?.label ?? "Задача";
+    if (job.error !== STOPPED) markTab(job.error ? "Не удалось" : "Готово");
     if (job.error === STOPPED) toast.notify(`${label}: остановлено`);
     else if (job.error) toast.error(`${label}: ${job.error}`);
     else
@@ -68,6 +87,7 @@ export function TaskCard({ compact }: { compact?: boolean }) {
             {message}
           </div>
         )}
+        {!compact && <div className="mt-1 text-small text-fg-4">Можно закрыть страницу: результат сохранится.</div>}
         <div className="mt-2 h-1 overflow-hidden rounded-full bg-well">
           <div
             className={

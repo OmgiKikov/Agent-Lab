@@ -29,6 +29,12 @@ def _articles(repo: Path) -> dict:
     }
 
 
+def article(article_id: str) -> dict | None:
+    """One article of the agent's knowledge base, as the agent read it on the stand; None when the base lacks it."""
+    found = _articles(agents.repo()).get(article_id)
+    return {'article': article_id, **found} if found else None
+
+
 def _norm(text: str) -> str:
     return re.sub(r'\s+', ' ', re.sub(r'[«»"*#_`]', '', text.replace('ё', 'е'))).strip().lower()
 

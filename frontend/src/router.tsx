@@ -15,6 +15,10 @@ import { ScenariosPage } from "./sections/simulations/ScenariosPage";
 import { SimResultPage } from "./sections/simulations/SimResultPage";
 import { StartPage } from "./sections/check/StartPage";
 import { CheckPage } from "./sections/check/CheckPage";
+import type { ReactElement } from "react";
+import { useLabState } from "./lab/LabProvider";
+import { dialoguesShown, TONE_ONLY } from "./app/product";
+import { ScreenError } from "./app/ScreenError";
 
 /** An earlier address leads to its block; the query of the old address is kept, what the block needs is added. */
 function To({ to, from }: { to: string; from?: (p: Record<string, string | undefined>) => Record<string, string> }) {
@@ -78,34 +82,74 @@ function DialogRedirect() {
   return <Navigate to={dialogLink(decodeURIComponent(dialogKey ?? ""))} replace />;
 }
 
+/** A place hidden while the product shows only tone of voice (app/product.ts): its address leads to the start. */
+const hidden = (element: ReactElement) => (TONE_ONLY ? <Navigate to="/start" replace /> : element);
+
+/** «Диалоги» in tone-only mode: shown once they hold a tone-of-voice result, never the accuracy one. */
+function Dialogues({ children }: { children: ReactElement }) {
+  const { state } = useLabState();
+  if (!TONE_ONLY) return children;
+  if (!state) return null;
+  return dialoguesShown(state) ? children : <Navigate to="/start" replace />;
+}
+
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <Shell />,
+    errorElement: <ScreenError />,
     children: [
       { index: true, element: <Navigate to="/start" replace /> },
       { path: "start", element: <StartPage /> },
       { path: "check", element: <CheckPage /> },
       { path: "overview", element: <OverviewPage /> },
       // Stage 1: the customers' real conversations, checked against the agent's criteria.
-      { path: "logs", element: <LogsPage /> },
-      { path: "logs/problems/:id", element: <ProblemPage stage="log" /> },
-      { path: "logs/conversations", element: <DialogsPage stage="log" /> },
-      { path: "logs/review", element: <ReviewPage stage="log" /> },
+      {
+        path: "logs",
+        element: (
+          <Dialogues>
+            <LogsPage />
+          </Dialogues>
+        ),
+      },
+      {
+        path: "logs/problems/:id",
+        element: (
+          <Dialogues>
+            <ProblemPage stage="log" />
+          </Dialogues>
+        ),
+      },
+      {
+        path: "logs/conversations",
+        element: (
+          <Dialogues>
+            <DialogsPage stage="log" />
+          </Dialogues>
+        ),
+      },
+      {
+        path: "logs/review",
+        element: (
+          <Dialogues>
+            <ReviewPage stage="log" />
+          </Dialogues>
+        ),
+      },
       // Stage 2: synthetic customers play business scenarios, the same criteria check them.
-      { path: "simulations", element: <SimResultPage /> },
-      { path: "simulations/runs", element: <RunListPage /> },
-      { path: "simulations/scenarios", element: <ScenariosPage /> },
-      { path: "simulations/problems/:id", element: <ProblemPage stage="sim" /> },
-      { path: "simulations/conversations", element: <DialogsPage stage="sim" /> },
-      { path: "simulations/review", element: <ReviewPage stage="sim" /> },
+      { path: "simulations", element: hidden(<SimResultPage />) },
+      { path: "simulations/runs", element: hidden(<RunListPage />) },
+      { path: "simulations/scenarios", element: hidden(<ScenariosPage />) },
+      { path: "simulations/problems/:id", element: hidden(<ProblemPage stage="sim" />) },
+      { path: "simulations/conversations", element: hidden(<DialogsPage stage="sim" />) },
+      { path: "simulations/review", element: hidden(<ReviewPage stage="sim" />) },
       { path: "simulations/runs/:runId", element: <To to="/simulations" from={(p) => ({ run: p.runId ?? "" })} /> },
       {
         path: "simulations/scenarios/:scenarioId",
         element: <To to="/simulations/scenarios" from={(p) => ({ s: p.scenarioId ?? "" })} />,
       },
-      { path: "criteria", element: <CriteriaPage /> },
-      { path: "agent", element: <AgentPage /> },
+      { path: "criteria", element: hidden(<CriteriaPage />) },
+      { path: "agent", element: hidden(<AgentPage />) },
       { path: "agent/criteria", element: <To to="/criteria" /> },
       // The addresses of the time when both stages lived in one place.
       { path: "problems", element: <ByStage log="/logs" sim="/simulations" /> },
