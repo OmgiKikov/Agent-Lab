@@ -76,7 +76,13 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
       )}
       {measured > 0 && (
         <div className="my-8">
-          <StageResult failed={summary.failed} checked={measured} unchecked={summary.unmeasured} size="display" />
+          <StageResult
+            failed={summary.failed}
+            checked={measured}
+            unchecked={summary.unmeasured}
+            size="display"
+            link={(part) => conversationsLink("log", { v: { bad: "fail", ok: "pass", none: "none" }[part] })}
+          />
           {data && current && <Trust data={data} stage="log" checked={measured} />}
           <Link
             to={conversationsLink("log")}

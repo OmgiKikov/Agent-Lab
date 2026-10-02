@@ -23,7 +23,7 @@ export function Trust({ data, stage, checked }: { data: Problems; stage: Stage; 
       {answered > 0 ? (
         <p>
           Вы проверили {count(answered, "найденную ошибку", "найденные ошибки", "найденных ошибок")}: {yes}{" "}
-          {plural(yes, "действительно ошибка", "действительно ошибки", "действительно ошибки")}, {no} — нет.{" "}
+          {plural(yes, "действительно ошибка", "действительно ошибки", "действительно ошибок")}, {no} — нет.{" "}
           {answered < errors.length && (
             <Link to={reviewLink(stage, { queue: "unchecked" })} className="font-medium text-run hover:underline">
               Проверить ещё
@@ -38,7 +38,7 @@ export function Trust({ data, stage, checked }: { data: Problems; stage: Stage; 
               to={reviewLink(stage, { queue: "unchecked" })}
               className="inline-flex items-center gap-1 font-medium text-run hover:underline"
             >
-              Проверьте 10–20 из них, чтобы убедиться, что она права
+              {errors.length <= 20 ? "Проверьте их" : "Проверьте 10–20 из них"}, чтобы убедиться, что она права
               <ArrowRight aria-hidden className="size-4" />
             </Link>
           </p>

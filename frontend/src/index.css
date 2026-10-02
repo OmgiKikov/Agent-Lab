@@ -19,8 +19,9 @@ html {
   color-scheme: light;
 }
 
-/* One visible focus for whatever the keyboard reaches and has no ring of its own (WCAG 2.4.7). */
-:focus-visible {
+/* One visible focus for whatever the keyboard reaches and has no ring of its own (WCAG 2.4.7); :where() keeps it
+   below every component's own focus style. */
+:where(:focus-visible) {
   outline: 2px solid rgb(var(--run));
   outline-offset: 2px;
 }

@@ -146,7 +146,10 @@ export function Finding({
             </Button>
             <Button
               size="lg"
-              className="flex-1 sm:min-w-[104px] sm:flex-none"
+              className={cn(
+                "flex-1 sm:min-w-[104px] sm:flex-none",
+                e.review === "agree" && "bg-ok/10 text-ok hover:bg-ok/15",
+              )}
               variant={e.review === "agree" ? "outline" : "primary"}
               icon={Check}
               disabled={busy || review.isPending}
