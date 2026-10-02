@@ -18,6 +18,7 @@ import { CheckPage } from "./sections/check/CheckPage";
 import type { ReactElement } from "react";
 import { useLabState } from "./lab/LabProvider";
 import { dialoguesShown, TONE_ONLY } from "./app/product";
+import { ScreenError } from "./app/ScreenError";
 
 /** An earlier address leads to its block; the query of the old address is kept, what the block needs is added. */
 function To({ to, from }: { to: string; from?: (p: Record<string, string | undefined>) => Record<string, string> }) {
@@ -96,6 +97,7 @@ export const router = createBrowserRouter([
   {
     path: "/",
     element: <Shell />,
+    errorElement: <ScreenError />,
     children: [
       { index: true, element: <Navigate to="/start" replace /> },
       { path: "start", element: <StartPage /> },

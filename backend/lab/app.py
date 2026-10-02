@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from .api import app
 from .settings import FRONTEND
@@ -31,8 +32,18 @@ def health() -> dict:
     return {'status': 'ok', 'product': 'agent-lab'}
 
 
+class Assets(StaticFiles):
+    """Built files carry a hash in their names: a browser keeps them, the page itself is always revalidated."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        return response
+
+
 if (FRONTEND / 'assets').is_dir():
-    app.mount('/assets', StaticFiles(directory=FRONTEND / 'assets'), name='assets')
+    app.mount('/assets', Assets(directory=FRONTEND / 'assets'), name='assets')
 
 
 @app.get('/favicon.svg')
@@ -53,4 +64,5 @@ def frontend(path: str = '') -> FileResponse:
     index = FRONTEND / 'index.html'
     if not index.is_file():
         raise HTTPException(503, 'Frontend не собран: выполните npm --prefix frontend run build')
-    return FileResponse(index)
+    # After a rebuild the browser asks again and gets the new page, never yesterday's interface from its cache.
+    return FileResponse(index, headers={'Cache-Control': 'no-cache'})
