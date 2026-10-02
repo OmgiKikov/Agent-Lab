@@ -306,3 +306,26 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cards._fits('identifier_request', 'Предоставьте, пожалуйста, номер терминала.'))
         self.assertFalse(cards._fits('handoff_offer', '#. Перейдите в раздел «Эквайринг». #. Нажмите «Добавить».'))
         self.assertTrue(cards._fits('resolved', 'Любой текст'))
+
+    def test_numbered_steps_are_list_items_and_a_masked_id_ending_a_sentence_is_not_one(self):
+        self.assertTrue(cards._fits('instruction', '1) Снимите крышку. 2) Протрите контакты.'))
+        self.assertTrue(cards._fits('instruction', 'Сделать это так: #) Снимите крышку. #) Протрите контакты.'))
+        self.assertFalse(cards._fits('instruction', 'Ваш номер обращения #####. Ожидайте ответа.'))
+        self.assertFalse(cards._fits('instruction', 'Списано 12.05. Ожидайте зачисления'))
+
+    def test_guesses_about_the_future_keep_words_that_only_contain_a_past_marker(self):
+        messages = [{'role': 'user', 'content': 'Не печатает чек'}]
+        value = {
+            'identifiers': {'terminal': 'знает', 'organization': ['knows']},
+            'hypotheses': [
+                {'trigger': 'instruction', 'response': 'попросишь обычное объяснение без терминов'},
+                {'trigger': 'identifier_request', 'response': 'заранее уточнишь, какие данные нужны'},
+                {'trigger': 'handoff_offer', 'response': 'попросишь оператора, как обычно'},
+            ],
+        }
+        kept, dropped = cards._grounded(value, messages)
+        self.assertEqual([h['trigger'] for h in kept['hypotheses']], ['instruction', 'identifier_request'])
+        self.assertEqual(dropped['hypotheses'], 1)
+        self.assertEqual((kept['terminal'], kept['organization']), ({'status': 'not_established'},) * 2)
+        kept, _ = cards._grounded({'identifiers': ['terminal']}, messages)
+        self.assertEqual(kept['terminal'], {'status': 'not_established'})

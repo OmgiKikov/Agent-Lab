@@ -62,13 +62,16 @@ FOREIGN = re.compile(r'[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]')  # the model 
 # An observation is the customer's own try in the world; one about the chat or the agent is the old agent's answer.
 ABOUT_CHAT = re.compile(r'\b(агент|бот|чат|ассистент|оператор|ответил|отказал|посоветовал|сказал)\w*', re.I)
 # What the agent's message must show for a trigger to name it; the other triggers are judged by the extractor alone.
-# The export masks digits, so numbered steps read «#.» as often as «1.».
+# The export masks digits, so numbered steps read «#.» as often as «1.». A step number is short and opens a sentence
+# or a line; a masked id at the end of a sentence («обращения #####.») is not one.
 ASKS = re.compile(
     r'\?|\b(уточните|укажите|напишите|выберите|назовите|сообщите|подскажите|предоставьте|пришлите|отправьте)\b', re.I
 )
 STEPS = re.compile(
-    r'(^|\s)[#\d]+\.\s|\b(перейдите|нажмите|выберите|откройте|зайдите|войдите|проверьте|оформите|заполните|повторите'
-    r'|воспользуйтесь|обратитесь|используйте|сделайте|подключите|скачайте|установите|отправьте|подпишите)\b'
+    r'(^|(?<![#\d])[\n:.!?;])\s*[#\d]{1,2}[.)]\s'
+    r'|\b(перейдите|нажмите|выберите|откройте|зайдите|войдите|проверьте|оформите|заполните|повторите'
+    r'|воспользуйтесь|обратитесь|используйте|сделайте|подключите|скачайте|установите|отправьте|подпишите'
+    r'|перезагрузите|отключите|включите|выключите|подождите|введите|вставьте)\b'
     r'|следующими способами',
     re.I,
 )
@@ -80,7 +83,7 @@ TRIGGER_NEEDS = {
     'handoff_offer': (re.compile(r'оператор|специалист|поддержк|горяч\w* лини|позвон|отделени|менеджер', re.I),),
     'instruction': (STEPS,),
 }
-PAST = re.compile(r'раньше|ранее|как (уже )?(делал|было|раньше)|в прошлый|прошлом|обычно', re.I)
+PAST = re.compile(r'\b(раньше|ранее|как (уже )?(делал|было)|в прошлый|в прошлом|обычно)\b', re.I)
 TRANSITION = re.compile(r'`\s*`\s*`\s*transition-code\s*([\w-]*)\s*`\s*`\s*`\.?')
 RARE = {
     'Четыре и больше реплик клиента': lambda d: sum(m['role'] == 'user' for m in d['messages']) >= 4,
@@ -280,9 +283,10 @@ def _grounded(value: dict, messages: list[dict]) -> tuple[dict, Counter]:
     dropped['hypotheses'] = len(offered) - len(hypotheses)
     kept['hypotheses'] = [{'trigger': x.get('trigger'), 'response': x['response']} for x in hypotheses[:2]]
     kept['notEstablished'] = [str(x) for x in value.get('notEstablished') or [] if str(x).strip()]
+    given = value.get('identifiers') if isinstance(value.get('identifiers'), dict) else {}
     for name in IDENTIFIERS:
-        item = (value.get('identifiers') or {}).get(name) or {}
-        status = item.get('status') if isinstance(item, dict) else None
+        item = given.get(name) if isinstance(given.get(name), dict) else {}  # a malformed one is not established
+        status = item.get('status')
         # Knowing it means the customer typed the value: a merchant's name is not its INN or terminal number.
         shown = status == 'does_not_know' or _holds_value(str(item.get('quote') or ''))
         cited = said(item.get('n'), item.get('quote'), 'user')
