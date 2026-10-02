@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowUpRight, Check, ChevronLeft, ChevronRight, PencilLine } from "lucide-react";
+import { ArrowUpRight, Check, ChevronLeft, ChevronRight, PencilLine, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { conversationsLink } from "../../app/links";
 import type { Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
@@ -132,23 +133,27 @@ export function Finding({
           <div className="flex w-full gap-2 sm:w-auto">
             <Button
               size="lg"
-              className="flex-1 sm:flex-none"
+              icon={X}
+              className={cn(
+                "flex-1 sm:min-w-[104px] sm:flex-none",
+                e.review === "disagree" && "bg-bad/10 text-bad hover:bg-bad/15",
+              )}
               disabled={busy || review.isPending}
               aria-pressed={e.review === "disagree"}
               onClick={() => decide("disagree")}
             >
-              {e.review === "disagree" ? "Оспорено" : "Оспорить"}
+              Нет
             </Button>
             <Button
               size="lg"
-              className="flex-1 sm:flex-none"
+              className="flex-1 sm:min-w-[104px] sm:flex-none"
               variant={e.review === "agree" ? "outline" : "primary"}
               icon={Check}
               disabled={busy || review.isPending}
               aria-pressed={e.review === "agree"}
               onClick={() => decide("agree")}
             >
-              {e.review === "agree" ? "Подтверждено" : "Подтвердить"}
+              Да
             </Button>
           </div>
         </div>
