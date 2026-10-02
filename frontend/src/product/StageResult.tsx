@@ -23,7 +23,7 @@ export function StageResult({
   const clean = Math.max(0, checked - failed);
   const parts = [
     { key: "bad", n: failed, word: "с ошибкой агента", dot: "bg-bad", bar: "bg-bad" },
-    { key: "ok", n: clean, word: "без найденных ошибок", dot: "bg-fg-3", bar: "bg-fg/15" },
+    { key: "ok", n: clean, word: "без найденных ошибок", dot: "bg-ok", bar: "bg-ok" },
     { key: "none", n: unchecked, word: "не удалось проверить", dot: "border border-fg-4", bar: "hatch" },
   ].filter((p) => p.n > 0);
   const total = parts.reduce((s, p) => s + p.n, 0) || 1;
