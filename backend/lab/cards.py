@@ -59,7 +59,7 @@ MASK = re.compile(r'[#*]+')
 MASKED_VALUE = re.compile(r'[#*]+(?:[\s\\/.:,\w-]{0,6}?[#*]+)*')
 FOREIGN = re.compile(r'[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]')  # the model sometimes slips into CJK
 # An observation is the customer's own try in the world; one about the chat or the agent is the old agent's answer.
-ABOUT_CHAT = re.compile(r'агент|бот|чат|ассистент|оператор|ответил|отказал|посоветовал|сказали', re.I)
+ABOUT_CHAT = re.compile(r'\b(агент|бот|чат|ассистент|оператор|ответил|отказал|посоветовал|сказал)\w*', re.I)
 TRANSITION = re.compile(r'`\s*`\s*`\s*transition-code\s*([\w-]*)\s*`\s*`\s*`\.?')
 RARE = {
     'Четыре и больше реплик клиента': lambda d: sum(m['role'] == 'user' for m in d['messages']) >= 4,
@@ -428,10 +428,22 @@ async def build_card(topic: dict, dialogue: dict, sets: Sequence[str], general: 
     card['situation'] = brief(card)
     card['criteria'] = _criteria(topic, general)
     try:
-        card['world'] = await world.build(card['situation'], customer)
+        card['world'] = await world.build(card['situation'], [opening, *customer[1:]])
     except llm.ModelError:
         card['world'] = None
+    card['checks']['worldUsesOpeningIds'] = _uses(card['world'], customer[0], opening)
     return card
+
+
+def _uses(test_data: dict | None, raw: str, opening: str) -> bool | None:
+    """Whether the mock world contains every identifier-long number (6+ digits: terminal, INN, contract) the filled
+    opening gave the customer; None when it gave none. Shorter numbers are amounts, counts or models the world need
+    not contain. The world is told to use them; nothing is rewritten here: the code does not know what they mean."""
+    given = [n for n in re.findall(r'\d{6,}', opening) if n not in raw]
+    if not test_data or not given:
+        return None
+    text = json.dumps(test_data, ensure_ascii=False)
+    return all(n in text for n in given)
 
 
 def _criteria(topic: dict, general: Sequence[dict]) -> list[dict]:

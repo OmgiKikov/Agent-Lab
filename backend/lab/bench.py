@@ -128,7 +128,15 @@ def grounding(deck: list[dict]) -> dict:
             kept[field] += len(card[field])
     masked = [card for card in deck if cards.MASK.search(card['opening'])]
     basis = Counter(f'{name}:{value["basis"]}' for card in deck for name, value in card['identifiers'].items())
-    return {'kept': dict(kept), 'dropped': dict(dropped), 'unfilledOpenings': len(masked), 'identifiers': dict(basis)}
+    # A world that misses the terminal or INN the customer's first message names makes the agent's first lookup fail.
+    unmatched = sum(card['checks'].get('worldUsesOpeningIds') is False for card in deck)
+    return {
+        'kept': dict(kept),
+        'dropped': dict(dropped),
+        'unfilledOpenings': len(masked),
+        'worldMissesOpeningIds': unmatched,
+        'identifiers': dict(basis),
+    }
 
 
 def knowledge(deck: list[dict]) -> dict:

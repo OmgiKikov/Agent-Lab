@@ -69,6 +69,7 @@ Return {"organization":{"name","inn","merchantName","address"},"terminals":[{"na
 - tools: only tools whose data matters for this situation, from: getLkkTariff, terminalInfoByTidV2, acquiringSettlements, getLkkTransactionList, getServicesListInfoByUcpid, MakeReqToSM2.
   Each value is the full response with EXACTLY the template's keys and value types; change values and the number of list items only.
   Make the data consistent with the situation and with the organization/terminals (e.g. two identical successful refunds for a doubled refund).
+- If the customer's messages name a terminal number or an INN, use exactly that value for the terminal or the organization, and in every tool response that refers to it.
 - Never copy masked values (# or *) and never use real people's personal data.
 Use Russian for human-readable values."""
 

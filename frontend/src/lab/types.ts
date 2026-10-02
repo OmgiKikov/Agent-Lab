@@ -19,6 +19,8 @@ export type Metric = {
   repeats?: { scenarios: number; stable: number; attempts: number };
   human?: { reviewed: number; agree: number };
   personas?: Record<string, { accuracy: number | null; passed: number; measured: number }>;
+  /** Scenario sets (representative, regression, stress), each measured on its own. */
+  sets?: Record<string, { accuracy: number | null; passed: number; measured: number }>;
 };
 /** A call of the agent's tool as the service recorded it. */
 export type ToolEvent = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };

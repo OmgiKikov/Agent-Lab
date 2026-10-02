@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from lab import api, bench, cards, llm, store
+from lab import api, bench, cards, llm, metric, simulate, store
 from lab.jobs import Jobs
 
 
@@ -189,3 +189,29 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['grounding']['identifiers'], {'terminal:variant': 5})
         self.assertEqual(result['sets']['representative'], {'weight': 6.0, 'cards': 1})
         self.assertEqual(result['diversity']['signatures'], 1)
+
+    def test_observations_about_the_equipment_survive_the_chat_filter(self):
+        self.assertIsNone(cards.ABOUT_CHAT.search('терминал не работает, чек не печатает'))
+        self.assertTrue(cards.ABOUT_CHAT.search('бот ответил про тариф'))
+
+    def test_world_is_checked_for_the_numbers_of_the_filled_opening_but_never_rewritten(self):
+        test_data = {'terminals': [{'terminalId': '48213907'}], 'tools': {'refund': [{'terminalId': '48213907'}]}}
+        raw = 'Терминал ######## не работает, заявка ########'
+        self.assertTrue(cards._uses(test_data, raw, 'Терминал 48213907 не работает, заявка'))
+        self.assertFalse(cards._uses(test_data, raw, 'Терминал 48213907 не работает, заявка 55512345'))
+        self.assertEqual(test_data['terminals'][0]['terminalId'], '48213907')
+        self.assertIsNone(cards._uses(test_data, 'Без масок', 'Без масок'))
+        # A short filled number is an amount or a count, not an identifier the world must contain.
+        self.assertIsNone(cards._uses({'terminals': [{'terminalId': '99999999'}]}, 'Терминал ####', 'Терминал 1234'))
+
+    def test_sets_reach_the_run_and_are_measured_apart(self):
+        card = {'id': 'c', 'name': 'n', 'topic': 't', 'origin': 'o', 'situation': 's', 'criteria': []}
+        item = simulate.new_item({**card, 'sets': ['regression', 'representative']}, 'default', 1)
+        self.assertEqual(item['sets'], ['regression', 'representative'])
+        items = [
+            {**item, 'status': 'FAIL'},
+            {**simulate.new_item({**card, 'id': 'd', 'sets': ['representative']}, 'default', 1), 'status': 'PASS'},
+        ]
+        value = metric.metric(items)
+        self.assertEqual(value['sets']['regression'], {'accuracy': 0, 'passed': 0, 'measured': 1})
+        self.assertEqual(value['sets']['representative'], {'accuracy': 50, 'passed': 1, 'measured': 2})

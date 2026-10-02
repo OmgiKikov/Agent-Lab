@@ -4,6 +4,7 @@ Accuracy = conversations where the agent met every applicable criterion / measur
 "Not measured" (no client answer, or no evidence either way) never counts as a pass or a failure.
 Trust: agreement of the second judge, stability of a scenario across its repeats, a person's decisions on verdicts.
 With several customer types, accuracy per type shows where the agent breaks on how people write.
+Scenario sets (representative, regression, stress) each get their own accuracy.
 """
 
 from .personas import DEFAULT
@@ -59,6 +60,13 @@ def metric(items: list[dict]) -> dict:
         by_persona.setdefault(item.get('persona') or DEFAULT, []).append(item['status'])
     if len(by_persona) > 1:
         value['personas'] = {key: _accuracy(statuses) for key, statuses in by_persona.items()}
+    # Scenario sets answer different questions and are never averaged: each gets its own number.
+    by_set: dict[str, list[str]] = {}
+    for item in done:
+        for key in item.get('sets') or []:
+            by_set.setdefault(key, []).append(item['status'])
+    if by_set:
+        value['sets'] = {key: _accuracy(statuses) for key, statuses in by_set.items()}
     decisions = [d for i in done for d in _decisions(i)]
     if decisions:
         value['human'] = {'reviewed': len(decisions), 'agree': decisions.count('agree')}

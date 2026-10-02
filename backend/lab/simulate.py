@@ -126,6 +126,7 @@ def new_item(card: dict, persona: str, attempt: int) -> dict:
         'topic': card['topic'],
         'attempt': attempt,
         'origin': card['origin'],
+        'sets': list(card.get('sets') or []),
         'situation': card['situation'],
         'criteria': deepcopy(card['criteria']),
         'status': 'RUNNING',
