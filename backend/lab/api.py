@@ -34,8 +34,10 @@ jobs = PerAgent()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     registry.adopt_legacy()
-    store.recover_runs()
-    for agent in registry.listed():
+    agents = registry.listed()
+    if not agents:
+        store.recover_runs()  # before any agent: the default database
+    for agent in agents:
         with registry.using(agent['id']):
             store.recover_runs()
     try:

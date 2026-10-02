@@ -47,7 +47,7 @@ function AgentCard({ agent }: { agent: Agent }) {
   return (
     <a
       href={agentHref(agent.id)}
-      className="group flex min-h-[220px] flex-col rounded-block border border-line bg-canvas p-5 transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-card"
+      className="group flex min-h-[176px] flex-col rounded-block md:min-h-[220px] border border-line bg-canvas p-5 transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-card"
     >
       <h2 className="text-count font-semibold text-fg">{agent.name}</h2>
       {agent.description && <p className="mt-1 line-clamp-2 text-body text-fg-3">{agent.description}</p>}
@@ -129,7 +129,7 @@ export function AgentsPage() {
               <button
                 type="button"
                 onClick={() => setCreating(true)}
-                className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-block border border-dashed border-line-strong p-5 text-fg-3 transition-colors hover:border-fg-3 hover:text-fg"
+                className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-block border border-dashed md:min-h-[220px] border-line-strong p-5 text-fg-3 transition-colors hover:border-fg-3 hover:text-fg"
               >
                 <Plus aria-hidden className="size-5" />
                 <span className="text-read font-medium">Новый агент</span>

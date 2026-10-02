@@ -164,6 +164,18 @@ class AdoptionTests(unittest.TestCase):
         registry.adopt_legacy()
         self.assertEqual(len(registry.listed()), 1)
 
+    def test_starting_after_the_adoption_leaves_no_empty_database_behind(self) -> None:
+        store.save('logs.json', [{'id': 'd1'}])
+
+        async def start() -> None:
+            async with api.lifespan(api.app):
+                pass
+
+        with patch.object(api, 'jobs', jobs.PerAgent()):
+            asyncio.run(start())
+        self.assertEqual([a['id'] for a in registry.listed()], ['acquiring'])
+        self.assertFalse((self.root / 'lab.sqlite3').exists())
+
     def test_a_fresh_install_starts_without_agents(self) -> None:
         registry.adopt_legacy()
         self.assertEqual(registry.listed(), [])

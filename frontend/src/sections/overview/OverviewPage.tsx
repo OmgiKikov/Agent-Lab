@@ -7,7 +7,7 @@ import { reviewLink, SECTIONS, stageLink, type Stage } from "../../app/links";
 import { useCriteria } from "../../lab/criteria";
 import { count, longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { AGENT_SUBTITLE, AGENT_TITLE } from "../../lab/look";
+import { useAgent } from "../../lab/agents";
 import { checkedIn, stagesSentence } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import type { LabRun } from "../../lab/types";
@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
  */
 export function OverviewPage() {
   const { state, offline } = useLabState();
+  const agent = useAgent();
   const [params, setParams] = useSearchParams();
   const { data, list } = useCriteria(null);
   const [assess, setAssess] = useState(params.get("assess") === "1");
@@ -127,9 +128,7 @@ export function OverviewPage() {
       {header}
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-[1180px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
-          <p className="text-read text-fg-3">
-            {AGENT_TITLE} · {AGENT_SUBTITLE}
-          </p>
+          <p className="text-read text-fg-3">{[agent?.name, agent?.description].filter(Boolean).join(" · ")}</p>
           <h2 className="mt-1 text-page font-semibold text-fg">
             {TONE_ONLY ? "Как агент общается с клиентами" : "Как работает агент"}
           </h2>
