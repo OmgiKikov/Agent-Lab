@@ -11,7 +11,6 @@ Two backends, chosen at start:
 import asyncio
 import json
 import os
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
@@ -172,10 +171,11 @@ def parse_json(text: str) -> dict:
     try:
         value = json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r'\{.*\}', text, re.S)
-        if not match:
+        # The first complete object; a model may add an explanation (with its own braces) after it.
+        start = text.find('{')
+        if start < 0:
             raise
-        value = json.loads(match.group(0))
+        value, _ = json.JSONDecoder().raw_decode(text, start)
     if not isinstance(value, dict):
         raise ValueError('expected a JSON object')
     return value

@@ -182,3 +182,15 @@ class DefaultModelsTests(unittest.TestCase):
         self.assertEqual(
             self.second(LAB_SECOND_MODEL='openai/gpt-5.2'), "('http://127.0.0.1:11437/v1', 'openai/gpt-5.2')"
         )
+
+
+class GlmReplyTests(unittest.TestCase):
+    def test_text_after_the_json_object_is_ignored(self) -> None:
+        reply = '{"rules": [{"ruleId": "r1"}]}\n\nПояснение: правило {pronouns} выполнено.'
+        self.assertEqual(llm.parse_json(reply), {'rules': [{'ruleId': 'r1'}]})
+
+    def test_a_null_title_reads_as_no_title(self) -> None:
+        from lab.judge_reply import JudgeReply
+
+        row = {'ruleId': 'r1', 'status': 'PASS', 'reason': 'Верно', 'agentQuote': 'Откройте', 'title': None}
+        self.assertEqual(JudgeReply.model_validate({'rules': [row]}).rules[0].title, '')
