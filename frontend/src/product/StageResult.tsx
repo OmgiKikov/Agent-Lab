@@ -34,7 +34,7 @@ export function StageResult({
     <div className={className}>
       <p
         className={cn(
-          "font-semibold tabular-nums text-fg",
+          "whitespace-nowrap font-semibold tabular-nums text-fg",
           size === "hero" ? "text-display sm:text-hero" : "text-page sm:text-display",
         )}
         aria-label={`${failed} из ${checked}`}
@@ -51,7 +51,12 @@ export function StageResult({
       <p className={cn("text-fg-2", size === "hero" ? "mt-3 text-lead" : "mt-2 text-read")}>
         {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
         агента
-        {checked > 0 && <span className="text-fg-3"> · {pct(failed, checked)}%</span>}
+        {checked > 0 && (
+          <span className="text-fg-3">
+            {"\u00a0·\u00a0"}
+            {pct(failed, checked)}%
+          </span>
+        )}
       </p>
       <div
         className={cn(
@@ -65,7 +70,7 @@ export function StageResult({
           <div
             key={p.key}
             className={cn(
-              "h-full rounded-full transition-[width] duration-1000 ease-out motion-reduce:transition-none",
+              "h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none",
               p.bar,
             )}
             style={{ width: arrived ? `${(100 * p.n) / total}%` : "0%" }}

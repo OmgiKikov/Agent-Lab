@@ -3,8 +3,13 @@ import { cn } from "@/lib/utils";
 import { Mark } from "../app/Mark";
 
 /** The shape of content that is still loading. */
+/** A placeholder in the shape of what loads. It shows only after 200 ms, so a fast answer never flashes it. */
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-control bg-raised/70", className)} />;
+  return (
+    <div className="delay-200 duration-150 animate-in fade-in-0 fill-mode-both motion-reduce:animate-none">
+      <div className={cn("animate-pulse rounded-control bg-raised/70", className)} />
+    </div>
+  );
 }
 
 /** An empty place with its reason and the next step; the quiet mark of the product over it. */

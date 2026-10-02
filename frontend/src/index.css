@@ -19,6 +19,22 @@ html {
   color-scheme: light;
 }
 
+/* One visible focus for whatever the keyboard reaches and has no ring of its own (WCAG 2.4.7). */
+:focus-visible {
+  outline: 2px solid rgb(var(--run));
+  outline-offset: 2px;
+}
+
+/* Headings break into even lines, paragraphs avoid a lone last word. */
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+p {
+  text-wrap: pretty;
+}
+
 body {
   background: rgb(var(--canvas));
   color: rgb(var(--fg-2));
