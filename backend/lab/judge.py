@@ -156,12 +156,16 @@ async def run_verdict(card: dict, conversation: list[dict], endpoint: llm.Endpoi
     return await _run_prepared(await _prepare_run(card, conversation), endpoint)
 
 
-async def second_opinion(verdict: Callable[..., Awaitable[Verdict]], *args) -> dict:
-    """Another configured judge call, with the same rules and evidence checks; model identity comes from its call."""
+async def second_opinion(verdict: Callable[..., Awaitable[Verdict]], *args) -> dict | None:
+    """Another model's verdict on the same rules and evidence; model identity comes from its call. None when only one
+    model is available: asking it twice is not a second opinion."""
+    endpoint = llm.second_judge()
+    if endpoint is None:
+        return None
     try:
-        result = await verdict(*args, endpoint=llm.SECOND)
+        result = await verdict(*args, endpoint=endpoint)
     except llm.ModelError as error:
-        return {'model': llm.SECOND[1], 'status': 'ERROR', 'error': str(error)}
+        return {'model': endpoint[1], 'status': 'ERROR', 'error': str(error)}
     return {'model': result.model, 'status': result.status, 'rules': result.rows}
 
 

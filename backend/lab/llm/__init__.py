@@ -3,8 +3,9 @@
 Two backends, chosen at start:
 - the bank's model gateway (gateway.py) when its certificates are in certs/: the work computer;
 - an OpenAI-compatible endpoint otherwise: the Pi bridges to OpenRouter started by bin/start.sh.
-  LAB_MODEL_URL / LAB_MODEL_KEY / LAB_MODEL; the second judge LAB_SECOND_URL / LAB_SECOND_MODEL.
-A second configured judge call re-checks every verdict; its actual model is recorded in that result.
+  LAB_MODEL_URL / LAB_MODEL_KEY / LAB_MODEL; a second judge of another vendor only with LAB_SECOND_MODEL
+  (+ LAB_SECOND_URL). It re-checks every verdict; its actual model is recorded in that result. Without it, or when it is
+  the main model again, there is no second check (second_judge).
 """
 
 import asyncio
@@ -32,9 +33,11 @@ else:
         os.environ.get('LAB_MODEL_URL', 'http://127.0.0.1:11436/v1').rstrip('/'),
         os.environ.get('LAB_MODEL', 'z-ai/glm-5.3'),
     )
+    # One model by default, as on the work computer; a second vendor only when named.
     SECOND = (
-        os.environ.get('LAB_SECOND_URL', 'http://127.0.0.1:11437/v1').rstrip('/'),
-        os.environ.get('LAB_SECOND_MODEL', 'openai/gpt-5.2'),
+        (os.environ.get('LAB_SECOND_URL', 'http://127.0.0.1:11437/v1').rstrip('/'), os.environ['LAB_SECOND_MODEL'])
+        if os.environ.get('LAB_SECOND_MODEL')
+        else MAIN
     )
 MODEL = MAIN[1]
 API_KEY = os.environ.get('LAB_MODEL_KEY', os.environ.get('PI_PROXY_TOKEN', 'pi-local-bridge'))
@@ -124,13 +127,30 @@ def models_used(records: list[dict]) -> str:
     return ', '.join(names) or MODEL
 
 
-def describe() -> dict:
-    """Which models judge and play the customer, and through what."""
+def _names() -> tuple[str | None, str | None]:
+    """The main and the second model by name, as configured or chosen from the gateway's catalog."""
     chosen = gateway.chosen_models() if MAIN[0] == GATEWAY else {}
+    main = chosen.get('model') if MAIN[1] == 'auto' else MAIN[1]
+    second = chosen.get('second') if SECOND[1] == 'auto' else SECOND[1]
+    return main, second
+
+
+def second_judge() -> Endpoint | None:
+    """The second judge, only when it is another model. The same model asked twice mostly agrees with itself, which
+    says nothing about being right (Kim et al. 2025): with one model, trust comes from a person's answers."""
+    main, second = _names()
+    if SECOND == MAIN or (second is not None and second == main):
+        return None
+    return SECOND
+
+
+def describe() -> dict:
+    """Which models judge and play the customer, and through what; no second when only one model is available."""
+    main, second = _names()
     return {
         'via': 'шлюз банка' if MAIN[0] == GATEWAY else 'OpenRouter',
-        'main': chosen.get('model') if MAIN[1] == 'auto' else MAIN[1],
-        'second': chosen.get('second') if SECOND[1] == 'auto' else SECOND[1],
+        'main': main,
+        'second': second if second_judge() else None,
     }
 
 

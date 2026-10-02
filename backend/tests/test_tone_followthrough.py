@@ -15,6 +15,10 @@ from lab.jobs import Jobs
 
 class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # The flow is checked with both judges: a second vendor configured.
+        second = patch.object(llm, 'SECOND', ('http://second/v1', 'second-judge'))
+        second.start()
+        self.addCleanup(second.stop)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         for mocked in (

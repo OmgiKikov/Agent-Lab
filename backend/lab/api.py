@@ -171,7 +171,10 @@ async def check_agent(key: str) -> dict:
 
 @app.post('/api/models/check')
 async def check_models() -> dict:
-    main, second = await asyncio.gather(llm.check(llm.MAIN), llm.check(llm.SECOND))
+    endpoint = llm.second_judge()
+    if endpoint is None:
+        return {'main': await llm.check(llm.MAIN), 'second': None}
+    main, second = await asyncio.gather(llm.check(llm.MAIN), llm.check(endpoint))
     return {'main': main, 'second': second}
 
 
