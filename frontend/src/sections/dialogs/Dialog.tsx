@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Criterion } from "../../lab/criteria";
-import { exampleFor, transcript, type DialogRow } from "../../lab/dialogs";
+import { exampleFor, transcript, twoChecks, type DialogRow } from "../../lab/dialogs";
 import { longDay, plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
 import { download, secondLine } from "../../lab/problemReport";
@@ -134,6 +134,7 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
   const judged = rules.filter((r) => r.status === "PASS" || r.status === "FAIL").length;
   const broken = rules.filter((r) => r.status === "FAIL").length;
   const kept = rules.filter((r) => r.status === "PASS").length;
+  const checks = twoChecks(row.status, row.second);
   const run = row.runId ? state?.runs.find((r) => r.id === row.runId) : undefined;
   const where =
     row.source === "log"
@@ -214,7 +215,7 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
               },
               {
                 label: "Две проверки",
-                value: row.second ? (row.disputed ? "разошлись" : "совпали") : "проверено один раз",
+                value: checks === "agree" ? "совпали" : checks === "disagree" ? "разошлись" : "проверено один раз",
                 title: row.second?.model,
               },
               { label: "Ваши ответы", value: reviewed ? `${reviewed} из ${broken}` : "ещё нет" },

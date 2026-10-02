@@ -26,9 +26,9 @@ export function secondLine(e: Example, model: string | null): string {
   const who = model ? `Вторая проверка (${model})` : "Вторая проверка";
   if (!e.second) return `${who} этот разговор не смотрела.`;
   if (e.secondScope === "dialogue")
-    return e.second === "agree"
-      ? `${who} смотрела разговор целиком и тоже нашла ошибку.`
-      : `${who} смотрела разговор целиком и ошибки не нашла.`;
+    return e.secondStatus === "FAIL"
+      ? `${who} смотрела разговор целиком и нашла в нём ошибку.`
+      : `${who} смотрела разговор целиком и ошибок не нашла.`;
   return e.second === "agree" ? "Две проверки совпали." : "Проверки разошлись: нужен ваш ответ.";
 }
 

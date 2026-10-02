@@ -222,7 +222,8 @@ def summarize(results: list[dict], topics: list[dict]) -> dict:
     for item in patterns.values():
         item['count'] = len(item['dialogues'])
         item['topic'] = ', '.join(item['topics'])
-    twice = [r for r in results if (r.get('second') or {}).get('status') in ('PASS', 'FAIL', 'UNMEASURED')]
+    decided = ('PASS', 'FAIL')
+    twice = [r for r in results if r['status'] in decided and (r.get('second') or {}).get('status') in decided]
     second = None
     if twice:
         agree = sum(1 for r in twice if r['second']['status'] == r['status'])

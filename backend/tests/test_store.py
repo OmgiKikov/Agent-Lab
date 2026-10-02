@@ -161,6 +161,16 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(analysis['summary']['unmeasured'], 1)
         self.assertEqual((legacy / 'runs' / 'run-1.json').read_text(), original)
 
+    def test_migration_keeps_a_second_verdict_given_for_the_whole_conversation(self) -> None:
+        legacy = self.path / 'legacy'
+        legacy.mkdir()
+        rows = [{'ruleId': 'r1', 'status': 'FAIL'}]
+        second = {'model': 'second-model', 'status': 'FAIL'}
+        audit = {'topics': [], 'results': [{'dialogueId': 7, 'status': 'FAIL', 'rules': rows, 'second': second}]}
+        (legacy / 'discover.json').write_text(json.dumps(audit))
+        migrate(legacy)
+        self.assertEqual(store.load('discover.json')['results'][0]['second'], second)
+
     def test_changed_primary_judgment_clears_old_confirmation(self) -> None:
         source = record()
         source['items'][0].update(status='FAIL', rules=[{'status': 'FAIL'}])
