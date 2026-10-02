@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { useProblems } from "../lab/problems";
+import { useAgents } from "../lab/agents";
 import { LabProvider } from "../lab/LabProvider";
+import { AGENT } from "./agent";
 import { ToastProvider } from "../ui/toast";
 import { BottomNav } from "./BottomNav";
 import { CommandPalette } from "./CommandPalette";
@@ -60,11 +62,24 @@ function Frame() {
   );
 }
 
+/** The agent of the address names the tab; an agent that does not exist leads to the list of agents. */
+function AgentTitle() {
+  const { data } = useAgents();
+  useEffect(() => {
+    if (!data) return;
+    const agent = data.find((a) => a.id === AGENT);
+    if (!agent) window.location.replace("/agents");
+    else document.title = `${agent.name} · Agent Lab`;
+  }, [data]);
+  return null;
+}
+
 /** The frame of every screen: the navigation, the screen, the search; the service's state and the notices for all of them. */
 export function Shell() {
   return (
     <LabProvider>
       <ToastProvider>
+        <AgentTitle />
         <Frame />
       </ToastProvider>
     </LabProvider>

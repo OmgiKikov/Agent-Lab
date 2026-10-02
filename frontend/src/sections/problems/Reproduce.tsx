@@ -10,8 +10,9 @@ import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
+import { agentKey } from "../../app/agent";
 
-const TARGET_KEY = "lab.target";
+const TARGET_KEY = agentKey("lab.target");
 const readTarget = () => {
   try {
     return localStorage.getItem(TARGET_KEY);

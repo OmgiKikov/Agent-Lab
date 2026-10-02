@@ -4,13 +4,17 @@ import json
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from .metric import metric
 from .settings import DATA
 
 DB = DATA / 'lab.sqlite3'
+# The database of the agent a request works in (registry.using, api.py); without one, DB above.
+AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 
 
 def now() -> str:
@@ -19,12 +23,13 @@ def now() -> str:
 
 @contextmanager
 def _connection() -> Iterator[sqlite3.Connection]:
-    DB.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB, timeout=10)
+    path = AGENT.get() or DB
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=10)
     # Write-ahead log: a screen reads while a job writes, instead of waiting for it.
     connection.execute('PRAGMA journal_mode=WAL')
     try:
-        DB.chmod(0o600)
+        path.chmod(0o600)
         connection.execute('CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
         connection.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
         connection.execute(

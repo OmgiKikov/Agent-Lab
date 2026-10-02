@@ -2,23 +2,44 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from . import agents, cards, discover, llm, logs, personas, policy_files, problems, simulate, store, tone, tone_advice
+from . import (
+    agents,
+    cards,
+    discover,
+    llm,
+    logs,
+    personas,
+    policy_files,
+    problems,
+    registry,
+    simulate,
+    store,
+    tone,
+    tone_advice,
+)
 from .context import knowledge, sources
-from .jobs import BusyError, Jobs, Progress, Work
+from .jobs import BusyError, PerAgent, Progress, Work
 
-jobs = Jobs()
+jobs = PerAgent()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    store.recover_runs()
+    registry.adopt_legacy()
+    agents = registry.listed()
+    if not agents and store.DB.exists():
+        store.recover_runs()  # before any agent: the default database, never created here
+    for agent in agents:
+        with registry.using(agent['id']):
+            store.recover_runs()
     try:
         yield
     finally:
@@ -26,6 +47,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title='Agent Lab', lifespan=lifespan)
+
+
+@app.middleware('http')
+async def agent_of_request(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """A product request works inside one agent: the X-Agent header, or the first agent. Its jobs keep that agent."""
+    path = request.url.path
+    if not path.startswith('/api/') or path == '/api/agents':  # the list of agents is above any agent
+        return await call_next(request)
+    agent_id = request.headers.get('x-agent') or registry.default_id()
+    if agent_id is None:
+        return await call_next(request)
+    if registry.get(agent_id) is None:
+        return JSONResponse({'detail': 'Агент не найден'}, status_code=404)
+    token = store.AGENT.set(registry.db_of(agent_id))
+    try:
+        return await call_next(request)
+    finally:
+        store.AGENT.reset(token)
+
+
 RUN_FIELDS = (
     'id', 'target', 'targetName', 'version', 'label', 'startedAt', 'finishedAt', 'status', 'metric', 'error',
     'model', 'repeats', 'personas', 'updatedAt', 'revision',
@@ -95,6 +136,45 @@ def start(kind: str, work: Work) -> dict:
         return jobs.start(kind, work)
     except BusyError as error:
         raise HTTPException(409, str(error)) from error
+
+
+class AgentCommand(BaseModel):
+    name: str = Field(max_length=80)
+    description: str = Field(default='', max_length=200)
+
+
+def last_result() -> dict | None:
+    """The current agent's last check in one line: errors of measured, not checked, when, which metric."""
+    value = store.load(discover.RESULT) or {}
+    summary = value.get('summary') or {}
+    if not value.get('finishedAt') or any(key not in summary for key in ('failed', 'measured', 'unmeasured')):
+        return None  # nothing finished, or a record of another shape: never a reason to hide the other agents
+    return {
+        'failed': summary['failed'],
+        'measured': summary['measured'],
+        'unmeasured': summary['unmeasured'],
+        'finishedAt': value['finishedAt'],
+        'metric': 'Tone of voice' if value.get('purpose') == discover.TONE else 'Точность по коду агента',
+    }
+
+
+@app.get('/api/agents')
+def agents_view() -> list[dict]:
+    """Every agent with its last result, read from its own database. Never ranked: the agents have other dialogues
+    and other rules."""
+    listed = []
+    for agent in registry.listed():
+        with registry.using(agent['id']):
+            listed.append({**agent, 'result': last_result()})
+    return listed
+
+
+@app.post('/api/agents')
+def create_agent(payload: AgentCommand) -> dict:
+    try:
+        return registry.create(payload.name, payload.description)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
 
 
 @app.post('/api/job/stop')

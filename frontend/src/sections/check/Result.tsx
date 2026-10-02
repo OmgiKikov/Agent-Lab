@@ -18,6 +18,7 @@ import { Finding } from "./Finding";
 import { BriefPreview } from "./BriefPreview";
 import { NextStage } from "./NextStage";
 import { TONE_ONLY } from "../../app/product";
+import { shareBase } from "../../app/agent";
 
 export function Result({ state, onAgain }: { state: LabState; onAgain: () => void }) {
   const result = toneResult(state);
@@ -36,7 +37,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
   const selectedFinding = problems.find((c) => c.r.id === selected) ?? problems[0];
   const current = data?.log?.finishedAt === result.finishedAt;
   const report = data && current ? { ...data, rules: own.map((c) => c.r) } : null;
-  const brief = report ? toneBrief(report, result, window.location.origin, state.logs.file ?? undefined) : "";
+  const brief = report ? toneBrief(report, result, shareBase(), state.logs.file ?? undefined) : "";
   const previousRevision = result.criteriaRevision !== state.toneOfVoice?.revision;
   const modelError = !measured ? result.results.find((r) => r.error)?.error : null;
   return (

@@ -11,9 +11,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { AGENT_TITLE } from "../lab/look";
 import { Step } from "../product/Step";
-import { Mark } from "./Mark";
+import { AgentSwitch } from "./AgentSwitch";
 import { useShell } from "./ShellContext";
 import { TaskCard } from "./TaskCard";
 import { SECTIONS } from "./links";
@@ -127,16 +126,7 @@ export function Sidebar({ counts }: { counts: NavCounts }) {
   const shell = useShell();
   return (
     <nav aria-label="Разделы" className="hidden w-[248px] flex-shrink-0 flex-col bg-side px-3 pb-3 pt-5 lg:flex">
-      <NavLink
-        to={SECTIONS.start}
-        className="flex items-center gap-3 rounded-control px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-      >
-        <Mark />
-        <span className="min-w-0">
-          <span className="block text-read font-semibold leading-5 text-fg">Agent Lab</span>
-          <span className="block truncate text-small text-fg-3">{AGENT_TITLE}</span>
-        </span>
-      </NavLink>
+      <AgentSwitch />
       {!TONE_ONLY && (
         <button
           type="button"

@@ -60,12 +60,16 @@ export function BottomNav({ counts }: { counts: NavCounts }) {
             Ещё
           </span>
         }
-        items={rest.map((i) => ({
-          key: i.label,
-          label: i.label,
-          on: isActive(i, pathname),
-          run: () => navigate(i.to),
-        }))}
+        items={[
+          ...rest.map((i) => ({
+            key: i.label,
+            label: i.label,
+            on: isActive(i, pathname),
+            run: () => navigate(i.to),
+          })),
+          // Another agent is another address: a full move, outside this agent's router.
+          { key: "agents", label: "Все агенты", run: () => window.location.assign("/agents") },
+        ]}
       />
     </nav>
   );

@@ -7,12 +7,13 @@ import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
+import { agentKey } from "../../app/agent";
 
 type Answer = Check & { question?: string };
 type Last = { target: string; text: string; at: string };
 
-const LAST = "lab.agent.lastCheck",
-  WAY = "lab.agent.way",
+const LAST = agentKey("lab.agent.lastCheck"),
+  WAY = agentKey("lab.agent.way"),
   CHANGED = "lab-agent-connection";
 const words = (text: string) =>
   text

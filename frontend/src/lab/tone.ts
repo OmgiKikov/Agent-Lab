@@ -1,4 +1,5 @@
 import type { LabState } from "./types";
+import { agentKey } from "../app/agent";
 
 export const TONE_ID = "tone-of-voice";
 export type CheckStep = "materials" | "criteria" | "checking" | "result";
@@ -26,8 +27,8 @@ export function nextStep(state: LabState | null): CheckStep {
   return "materials";
 }
 
-const TEXT_KEY = "tone-of-voice:policy-draft";
-const NAME_KEY = "tone-of-voice:policy-name";
+const TEXT_KEY = agentKey("tone-of-voice:policy-draft");
+const NAME_KEY = agentKey("tone-of-voice:policy-name");
 export function savedName(): string {
   try {
     return sessionStorage.getItem(NAME_KEY) ?? "Правила tone of voice";

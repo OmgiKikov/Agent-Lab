@@ -11,6 +11,7 @@ import { Segmented } from "../../ui/Segmented";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
 import { checked, queueOf, violationsOf, type SideKey } from "./model";
+import { shareBase } from "../../app/agent";
 
 const Cap = ({ children }: { children: string }) => (
   <span className="font-mono text-label uppercase tracking-caps text-ink-3">{children}</span>
@@ -94,7 +95,7 @@ export function ReportSheet({
   ).filter(([k]) => (k === "log" ? !!data.log : !!data.sim));
   const [side, setSide] = useState<SideKey>(data.log ? "log" : "sim");
   const items = queueOf(list, side);
-  const markdown = () => problemsReport(data, window.location.origin, side);
+  const markdown = () => problemsReport(data, shareBase(), side);
   const copy = () =>
     navigator.clipboard
       .writeText(markdown())
