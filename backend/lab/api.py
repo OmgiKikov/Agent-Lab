@@ -35,8 +35,8 @@ jobs = PerAgent()
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     registry.adopt_legacy()
     agents = registry.listed()
-    if not agents:
-        store.recover_runs()  # before any agent: the default database
+    if not agents and store.DB.exists():
+        store.recover_runs()  # before any agent: the default database, never created here
     for agent in agents:
         with registry.using(agent['id']):
             store.recover_runs()
@@ -53,7 +53,7 @@ app = FastAPI(title='Agent Lab', lifespan=lifespan)
 async def agent_of_request(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """A product request works inside one agent: the X-Agent header, or the first agent. Its jobs keep that agent."""
     path = request.url.path
-    if not path.startswith('/api/') or path == '/api/agents' or path.startswith('/api/agents/'):
+    if not path.startswith('/api/') or path == '/api/agents':  # the list of agents is above any agent
         return await call_next(request)
     agent_id = request.headers.get('x-agent') or registry.default_id()
     if agent_id is None:
@@ -146,9 +146,9 @@ class AgentCommand(BaseModel):
 def last_result() -> dict | None:
     """The current agent's last check in one line: errors of measured, not checked, when, which metric."""
     value = store.load(discover.RESULT) or {}
-    summary = value.get('summary')
-    if not summary or not value.get('finishedAt'):
-        return None
+    summary = value.get('summary') or {}
+    if not value.get('finishedAt') or any(key not in summary for key in ('failed', 'measured', 'unmeasured')):
+        return None  # nothing finished, or a record of another shape: never a reason to hide the other agents
     return {
         'failed': summary['failed'],
         'measured': summary['measured'],

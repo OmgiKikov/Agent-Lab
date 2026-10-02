@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -140,6 +141,27 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(listed[1]['result'])
 
+    async def test_the_agent_connection_check_works_inside_the_agent(self) -> None:
+        with registry.using(self.first):
+            store.save('settings.json', {'prodUrl': 'http://agent.example/chat'})
+        seen = {}
+        original = api.agents.configs
+
+        def configs() -> dict:
+            seen['url'] = original()['prod']['url']
+            return {}
+
+        with patch.object(api.agents, 'configs', side_effect=configs):
+            await self.client.post('/api/agents/prod/check', headers={'X-Agent': self.first})
+        self.assertEqual(seen.get('url'), 'http://agent.example/chat')
+
+    async def test_a_broken_result_of_one_agent_does_not_hide_the_others(self) -> None:
+        with registry.using(self.first):
+            store.save('discover.json', {'finishedAt': '2026-10-02T20:41:53+00:00', 'summary': {'checked': 3}})
+        response = await self.client.get('/api/agents')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([a['result'] for a in response.json()], [None, None])
+
 
 class AdoptionTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -174,6 +196,34 @@ class AdoptionTests(unittest.TestCase):
         with patch.object(api, 'jobs', jobs.PerAgent()):
             asyncio.run(start())
         self.assertEqual([a['id'] for a in registry.listed()], ['acquiring'])
+        self.assertFalse((self.root / 'lab.sqlite3').exists())
+
+    def test_adoption_never_overwrites_an_adopted_database_or_its_backup(self) -> None:
+        store.save('logs.json', [{'id': 'real'}])
+        registry.adopt_legacy()
+        (self.root / 'agents.sqlite3').unlink()  # the registry lost
+        store.save('logs.json', [{'id': 'stray'}])
+        registry.adopt_legacy()
+        with registry.using('acquiring'):
+            self.assertEqual(store.load('logs.json'), [{'id': 'real'}])
+        with sqlite3.connect(self.root / 'lab.sqlite3.before-agents') as backup:
+            row = backup.execute("SELECT value FROM documents WHERE name = 'logs.json'").fetchone()
+        self.assertEqual(json.loads(row[0]), [{'id': 'real'}])
+        self.assertEqual([a['id'] for a in registry.listed()], ['acquiring'])
+
+    def test_an_empty_database_is_not_adopted(self) -> None:
+        with sqlite3.connect(self.root / 'lab.sqlite3'):
+            pass
+        registry.adopt_legacy()
+        self.assertEqual(registry.listed(), [])
+
+    def test_a_fresh_start_creates_no_database(self) -> None:
+        async def start() -> None:
+            async with api.lifespan(api.app):
+                pass
+
+        with patch.object(api, 'jobs', jobs.PerAgent()):
+            asyncio.run(start())
         self.assertFalse((self.root / 'lab.sqlite3').exists())
 
     def test_a_fresh_install_starts_without_agents(self) -> None:

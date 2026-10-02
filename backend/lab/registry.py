@@ -145,26 +145,44 @@ def using(agent_id: str) -> Iterator[None]:
 FIRST = {'id': 'acquiring', 'name': 'Агент эквайринга', 'description': 'СберБизнес · чат поддержки'}
 
 
+def _has_data(path: Path) -> bool:
+    """A database worth adopting: it holds documents or runs, not just empty tables."""
+    connection = sqlite3.connect(path)
+    try:
+        documents = connection.execute('SELECT count(*) FROM documents').fetchone()[0]
+        runs = connection.execute('SELECT count(*) FROM runs').fetchone()[0]
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        connection.close()
+    return documents + runs > 0
+
+
 def adopt_legacy() -> None:
-    """Before agents, everything lived in one database: it becomes the first agent, once. The old file is renamed to
-    lab.sqlite3.before-agents and kept. A copy finished on disk precedes the registry entry, so an interrupted start
-    simply repeats the adoption."""
+    """Before agents, everything lived in one database: it becomes the first agent, once. Nothing is ever overwritten:
+    an adopted database already on disk stays (the registry was lost: it is registered again), and the old file is
+    renamed to lab.sqlite3.before-agents, or to a dated name if that backup exists. An empty database is not adopted.
+    A copy finished on disk precedes the registry entry, so an interrupted start simply repeats the adoption."""
     old = store.DB
-    if listed() or not old.exists():
+    if listed() or not old.exists() or not _has_data(old):
         return
     target = db_of(FIRST['id'])
-    target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(target.name + '.partial')
-    source, copy = sqlite3.connect(old), sqlite3.connect(partial)
-    try:
-        source.backup(copy)  # consistent with a write-ahead log, unlike copying the file
-    finally:
-        copy.close()
-        source.close()
-    partial.replace(target)
-    target.chmod(0o600)
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(target.name + '.partial')
+        source, copy = sqlite3.connect(old), sqlite3.connect(partial)
+        try:
+            source.backup(copy)  # consistent with a write-ahead log, unlike copying the file
+        finally:
+            copy.close()
+            source.close()
+        partial.replace(target)
+        target.chmod(0o600)
     create(FIRST['name'], FIRST['description'], agent_id=FIRST['id'])
+    backup = old.name + '.before-agents'
+    if old.with_name(backup).exists():
+        backup += '-' + re.sub(r'[^0-9]', '', store.now())[:14]
     for suffix in ('', '-wal', '-shm'):
         path = old.with_name(old.name + suffix)
         if path.exists():
-            path.replace(old.with_name(old.name + '.before-agents' + suffix))
+            path.replace(old.with_name(backup + suffix))
