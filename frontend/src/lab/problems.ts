@@ -21,6 +21,8 @@ export type Example = {
   attempt?: number;
   agentQuote: string;
   reason: string;
+  /** The check's short name for this violation; the problem's title is the most frequent one. */
+  title?: string;
   second: Decision | null;
   secondScope: Scope | null;
   /** What the second check said on what it judged: this criterion, or the whole conversation. */

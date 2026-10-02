@@ -239,7 +239,8 @@ def verdicts(entry: dict, where: str) -> tuple[dict, list[str]]:
     """Counts and examples of one side: violations first, the best backed first, then fulfilled, then unchecked."""
     rows = list(entry['found'][where].values())
     examples = sorted(
-        (e for e, _ in rows), key=lambda e: (ORDER[e['status']], reliability(e) if e['status'] == 'FAIL' else 0)
+        ({**e, 'title': t} for e, t in rows),
+        key=lambda e: (ORDER[e['status']], reliability(e) if e['status'] == 'FAIL' else 0),
     )
     counts = Counter(COUNTED[e['status']] for e in examples)
     titles = [t for e, t in rows if e['status'] == 'FAIL' and t]
@@ -255,9 +256,13 @@ def finish(entry: dict, deck: list[dict]) -> dict:
     reviewed = [e['review'] for e in failed if e['review']]
     dialogues = {e['dialogueId'] for e in log['examples'] if e['status'] == 'FAIL'}
     common = Counter(log_titles).most_common(1) or Counter(sim_titles).most_common(1)
+    title = common[0][0] if common else entry['rule']['text']
+    # The first violation shown is one of those the title names; the rest keep their order (stable sort).
+    for side in (log, sim):
+        side['examples'].sort(key=lambda e: e['status'] != 'FAIL' or e['title'] != title)
     return {
         'id': entry['id'],
-        'title': common[0][0] if common else entry['rule']['text'],
+        'title': title,
         'rule': entry['rule'],
         'topics': entry['topics'],
         'log': log,

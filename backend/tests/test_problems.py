@@ -107,6 +107,24 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value['problems'], [rule['id']])
         self.assertIsNone(value['sim'])
 
+    def test_the_first_example_of_a_problem_shows_what_its_title_says(self) -> None:
+        def failed(dialogue_id: str, title: str, second: dict | None = None) -> dict:
+            row = {'ruleId': 't1r1', 'status': 'FAIL', 'reason': title, 'agentQuote': 'звоните', 'title': title}
+            result = {'dialogueId': dialogue_id, 'status': 'FAIL', 'opening': dialogue_id, 'rules': [row]}
+            return {**result, 'second': second} if second else result
+
+        value = audit()
+        agreed = {'model': 'm', 'status': 'FAIL', 'rules': [{'ruleId': 't1r1', 'status': 'FAIL'}]}
+        value['results'] = [
+            failed('d1', 'Отправляет звонить', agreed),
+            failed('d2', 'Пишет канцеляритом'),
+            failed('d3', 'Пишет канцеляритом'),
+        ]
+        store.save(discover.RESULT, value)
+        rule = problems.build()['rules'][0]
+        self.assertEqual(rule['title'], 'Пишет канцеляритом')
+        self.assertEqual(rule['log']['examples'][0]['title'], 'Пишет канцеляритом')
+
     def test_a_second_check_without_a_verdict_is_not_a_disagreement(self) -> None:
         value = audit()
         value['results'][0]['second'] = {'model': 'm', 'status': 'UNMEASURED'}
