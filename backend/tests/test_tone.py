@@ -72,6 +72,26 @@ class PolicyTests(unittest.TestCase):
             tone._parse({'criteria': [row]}, source)
 
 
+class JudgingOrderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_conversations_are_judged_a_few_at_a_time_so_the_count_moves_from_the_start(self):
+        active, most, done = 0, 0, []
+
+        async def judged(dialogue, topic):
+            nonlocal active, most
+            active += 1
+            most = max(most, active)
+            await asyncio.sleep(0)
+            active -= 1
+            return {'dialogueId': dialogue['id'], 'status': 'PASS', 'rules': [], 'second': None}
+
+        dialogues = [{'id': str(i)} for i in range(llm.CONCURRENCY * 4)]
+        with patch.object(discover, 'judge_dialogue', judged):
+            results = await tone._judge(dialogues, {'id': 't', 'rules': []}, lambda **values: done.append(values))
+        self.assertLessEqual(most, llm.CONCURRENCY)
+        self.assertEqual([r['dialogueId'] for r in results], [d['id'] for d in dialogues])
+        self.assertEqual(done[-1]['done'], len(dialogues))
+
+
 class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         directory = tempfile.TemporaryDirectory()
