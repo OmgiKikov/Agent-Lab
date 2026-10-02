@@ -95,7 +95,10 @@ export function StartPage() {
               ? "Загрузите выгрузку чата и правила общения. Из правил соберём критерии и проверим по ним настоящие диалоги."
               : "Выберите метрику. Её критерии оценят настоящие диалоги, а потом — сценарии, которые сыграют с агентом синтетические клиенты."}
           </p>
-          <div role="radiogroup" aria-label="Метрика" className="mt-8 grid gap-3 md:grid-cols-2">
+          <div
+            {...(TONE_ONLY ? {} : { role: "radiogroup", "aria-label": "Метрика" })}
+            className="mt-8 grid gap-3 md:grid-cols-2"
+          >
             {(TONE_ONLY ? (["tone"] as const) : (["tone", "code"] as const)).map((m) => (
               <MetricOption
                 key={m}
@@ -148,28 +151,34 @@ function MetricOption({
   state: LabState | null;
   onPick: () => void;
 }) {
+  // With one metric there is nothing to choose: the card says what is checked and what is already there.
+  const Card = TONE_ONLY ? "div" : "button";
+  const choice = TONE_ONLY ? {} : { type: "button" as const, role: "radio", "aria-checked": on, onClick: onPick };
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={on}
-      onClick={onPick}
+    <Card
+      {...choice}
       className={cn(
-        "flex h-full flex-col rounded-block border p-5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
-        on ? "border-fg ring-1 ring-fg" : "border-line hover:border-line-strong",
+        "flex h-full flex-col rounded-block border p-5 text-left transition-colors",
+        TONE_ONLY
+          ? "border-line"
+          : on
+            ? "border-fg ring-1 ring-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+            : "border-line hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
       )}
     >
       <span className="flex w-full items-center justify-between gap-3">
         <span className="text-count font-semibold text-fg">{METRICS[metric].name}</span>
-        <span
-          aria-hidden
-          className={cn(
-            "flex size-5 flex-shrink-0 items-center justify-center rounded-full border",
-            on ? "border-fg bg-fg" : "border-fg-4",
-          )}
-        >
-          {on && <span className="size-2 rounded-full bg-canvas" />}
-        </span>
+        {!TONE_ONLY && (
+          <span
+            aria-hidden
+            className={cn(
+              "flex size-5 flex-shrink-0 items-center justify-center rounded-full border",
+              on ? "border-fg bg-fg" : "border-fg-4",
+            )}
+          >
+            {on && <span className="size-2 rounded-full bg-canvas" />}
+          </span>
+        )}
       </span>
       <span className="mt-2 block text-body text-fg-2">{METRICS[metric].what}</span>
       {current && <span className="mt-2 block text-small text-fg-3">Сейчас в «Диалогах» · проверено {current}</span>}
@@ -188,7 +197,7 @@ function MetricOption({
           </span>
         ))}
       </span>
-    </button>
+    </Card>
   );
 }
 
