@@ -68,7 +68,9 @@ export function useNav({ logs, sims, criteria }: NavCounts): NavItem[] {
     },
   ];
   if (!TONE_ONLY) return items;
-  return items.filter((i) => i.to === SECTIONS.start || (i.to === SECTIONS.logs && dialoguesShown(state)));
+  return items.filter(
+    (i) => i.to === SECTIONS.start || i.to === SECTIONS.overview || (i.to === SECTIONS.logs && dialoguesShown(state)),
+  );
 }
 
 /** The agent and settings stay below the day-to-day work. */

@@ -21,6 +21,8 @@ import { AssessSheet } from "../problems/AssessSheet";
 import { ProblemList } from "../problems/ProblemList";
 import { ReportSheet } from "../problems/ReportSheet";
 import { FirstRun } from "./FirstRun";
+import { TONE_ONLY } from "../../app/product";
+import { cn } from "@/lib/utils";
 
 /**
  * «Обзор»: how the agent is doing, in the two stages it is checked — the customers' real conversations, then synthetic
@@ -58,7 +60,7 @@ export function OverviewPage() {
           icon={FileText}
           aria-label="Отчёт для письма"
           onClick={() => setReport(true)}
-          disabled={!data?.log && !data?.sim}
+          disabled={TONE_ONLY ? !toneResult(state) || !data?.log : !data?.log && !data?.sim}
         >
           <span className="hidden sm:inline">Отчёт для письма</span>
         </Button>
@@ -83,7 +85,7 @@ export function OverviewPage() {
             setReport(false);
             drop("report");
           }}
-          data={data}
+          data={TONE_ONLY ? { ...data, sim: null } : data}
           list={list}
         />
       )}
@@ -106,7 +108,8 @@ export function OverviewPage() {
         </div>
       </div>
     );
-  if (!data.log && !state.runs.length)
+  // Tone-only mode: the overview is the tone-of-voice result, never the accuracy one or the simulations.
+  if (TONE_ONLY ? !toneResult(state) || !data.log : !data.log && !state.runs.length)
     return (
       <div className="flex h-full flex-col">
         {header}
@@ -126,18 +129,21 @@ export function OverviewPage() {
           <p className="text-read text-fg-3">
             {AGENT_TITLE} · {AGENT_SUBTITLE}
           </p>
-          <h2 className="mt-1 text-page font-semibold text-fg">Как работает агент</h2>
+          <h2 className="mt-1 text-page font-semibold text-fg">
+            {TONE_ONLY ? "Как агент общается с клиентами" : "Как работает агент"}
+          </h2>
           <p className="mt-3 max-w-[64ch] text-lead text-fg-2">
-            {stagesSentence(data)} Сначала — настоящие диалоги из выгрузки чата. Из найденных в них ошибок собираются
-            сценарии, и синтетические клиенты разыгрывают их с агентом. Счёт у каждого этапа свой.
+            {TONE_ONLY
+              ? "Tone of voice: настоящие диалоги из выгрузки чата проверены по вашим правилам общения."
+              : `${stagesSentence(data)} Сначала — настоящие диалоги из выгрузки чата. Из найденных в них ошибок собираются сценарии, и синтетические клиенты разыгрывают их с агентом. Счёт у каждого этапа свой.`}
           </p>
-          <div className="mt-14 grid gap-x-16 gap-y-20 lg:grid-cols-2">
+          <div className={cn("mt-14 grid gap-x-16 gap-y-20", TONE_ONLY ? "max-w-[640px]" : "lg:grid-cols-2")}>
             <LogStage
               data={data}
               list={list}
               metric={toneResult(state) ? "Tone of voice" : "Точность по коду агента"}
             />
-            <SimStage list={list} run={run} />
+            {!TONE_ONLY && <SimStage list={list} run={run} />}
           </div>
           <NextSteps
             data={data}
@@ -327,19 +333,21 @@ function NextSteps({
           run: onReport,
         }
       : null,
-    ready
-      ? {
-          icon: Play,
-          title: "Проверьте исправление на симуляции",
-          sub: "Синтетические клиенты сыграют сценарии из этих ошибок.",
-          to: `${SECTIONS.simulations}?play=1`,
-        }
-      : {
-          icon: Bot,
-          title: "Подключите агента",
-          sub: "Тогда исправления можно проверять, не дожидаясь новой выгрузки чата.",
-          to: SECTIONS.agent,
-        },
+    TONE_ONLY
+      ? null
+      : ready
+        ? {
+            icon: Play,
+            title: "Проверьте исправление на симуляции",
+            sub: "Синтетические клиенты сыграют сценарии из этих ошибок.",
+            to: `${SECTIONS.simulations}?play=1`,
+          }
+        : {
+            icon: Bot,
+            title: "Подключите агента",
+            sub: "Тогда исправления можно проверять, не дожидаясь новой выгрузки чата.",
+            to: SECTIONS.agent,
+          },
   ].filter(Boolean) as { icon: typeof Play; title: string; sub: string; to?: string; run?: () => void }[];
   return (
     <section aria-label="Что сделать" className="mt-16 border-t border-line pt-10">

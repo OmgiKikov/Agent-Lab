@@ -100,7 +100,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/start" replace /> },
       { path: "start", element: <StartPage /> },
       { path: "check", element: <CheckPage /> },
-      { path: "overview", element: hidden(<OverviewPage />) },
+      { path: "overview", element: <OverviewPage /> },
       // Stage 1: the customers' real conversations, checked against the agent's criteria.
       {
         path: "logs",

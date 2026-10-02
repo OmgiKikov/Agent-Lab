@@ -3,16 +3,20 @@ import { ArrowRight } from "lucide-react";
 import { Mark } from "../../app/Mark";
 import { SECTIONS } from "../../app/links";
 import { buttonClass } from "../../ui/Button";
+import { TONE_ONLY } from "../../app/product";
 
 /** Before the first assessment: what will appear here, and the one way in — the start, where the metric is chosen. */
 export function FirstRun() {
   return (
     <div className="mx-auto w-full max-w-2xl px-5 py-14">
       <Mark quiet className="size-12 rounded-2xl" />
-      <h2 className="mt-6 text-balance text-title font-semibold text-fg">Здесь появится оценка диалогов</h2>
+      <h2 className="mt-6 text-balance text-title font-semibold text-fg">
+        {TONE_ONLY ? "Здесь появится оценка tone of voice" : "Здесь появится оценка диалогов"}
+      </h2>
       <p className="mt-2 max-w-[60ch] text-read text-fg-2">
-        Выберите, что проверяем: tone of voice по вашим правилам общения или точность по коду агента. Найденные ошибки
-        станут сценариями, и по тем же критериям агента проверят синтетические клиенты.
+        {TONE_ONLY
+          ? "Загрузите выгрузку чата и правила общения: проверим по ним настоящие диалоги и покажем, где агент говорит не так, как договорились."
+          : "Выберите, что проверяем: tone of voice по вашим правилам общения или точность по коду агента. Найденные ошибки станут сценариями, и по тем же критериям агента проверят синтетические клиенты."}
       </p>
       <Link to={SECTIONS.start} className={`mt-8 ${buttonClass({ variant: "primary", size: "lg" })}`}>
         Начать проверку
