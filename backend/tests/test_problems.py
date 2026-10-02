@@ -125,6 +125,22 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rule['title'], 'Пишет канцеляритом')
         self.assertEqual(rule['log']['examples'][0]['title'], 'Пишет канцеляритом')
 
+    def test_an_example_the_person_refuted_is_never_shown_first(self) -> None:
+        def failed(dialogue_id: str, title: str, review: str) -> dict:
+            row = {'ruleId': 't1r1', 'status': 'FAIL', 'reason': title, 'agentQuote': 'звоните', 'title': title}
+            row['review'] = review
+            return {'dialogueId': dialogue_id, 'status': 'FAIL', 'opening': dialogue_id, 'rules': [row]}
+
+        value = audit()
+        value['results'] = [
+            failed('d1', 'Отправляет звонить', 'agree'),
+            failed('d2', 'Пишет канцеляритом', 'disagree'),
+            failed('d3', 'Пишет канцеляритом', 'disagree'),
+        ]
+        store.save(discover.RESULT, value)
+        rule = problems.build()['rules'][0]
+        self.assertEqual(rule['log']['examples'][0]['dialogueId'], 'd1')
+
     def test_a_second_check_without_a_verdict_is_not_a_disagreement(self) -> None:
         value = audit()
         value['results'][0]['second'] = {'model': 'm', 'status': 'UNMEASURED'}

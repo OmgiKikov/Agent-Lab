@@ -257,9 +257,9 @@ def finish(entry: dict, deck: list[dict]) -> dict:
     dialogues = {e['dialogueId'] for e in log['examples'] if e['status'] == 'FAIL'}
     common = Counter(log_titles).most_common(1) or Counter(sim_titles).most_common(1)
     title = common[0][0] if common else entry['rule']['text']
-    # The first violation shown is one of those the title names; the rest keep their order (stable sort).
+    # The first violation shown is one the title names and nobody refuted; the rest keep their order (stable sort).
     for side in (log, sim):
-        side['examples'].sort(key=lambda e: e['status'] != 'FAIL' or e['title'] != title)
+        side['examples'].sort(key=lambda e: e['status'] != 'FAIL' or e['title'] != title or e['review'] == 'disagree')
     return {
         'id': entry['id'],
         'title': title,
