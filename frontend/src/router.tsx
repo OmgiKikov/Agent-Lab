@@ -93,7 +93,10 @@ function Dialogues({ children }: { children: ReactElement }) {
   return dialoguesShown(state) ? children : <Navigate to="/start" replace />;
 }
 
-export const router = createBrowserRouter([
+/** The product inside one agent; «basename» (/a/<id>) keeps every link of it inside that agent. */
+export const productRouter = (basename: string) => createBrowserRouter(productRoutes, { basename });
+
+const productRoutes = [
   {
     path: "/",
     element: <Shell />,
@@ -182,4 +185,4 @@ export const router = createBrowserRouter([
       { path: "*", element: <Navigate to="/overview" replace /> },
     ],
   },
-]);
+];
