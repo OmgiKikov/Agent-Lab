@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -14,7 +14,8 @@ class RuleReply(BaseModel):
     status: Literal['PASS', 'FAIL', 'UNKNOWN', 'NOT_APPLICABLE']
     reason: NonEmptyText
     agent_quote: str = Field(alias='agentQuote')
-    title: str = ''
+    # Models send null for a criterion without a failure pattern; that is no title.
+    title: Annotated[str, BeforeValidator(lambda value: '' if value is None else value)] = ''
 
     @model_validator(mode='after')
     def measured_quote(self) -> Self:
