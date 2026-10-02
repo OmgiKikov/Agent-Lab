@@ -136,6 +136,45 @@ def start(kind: str, work: Work) -> dict:
         raise HTTPException(409, str(error)) from error
 
 
+class AgentCommand(BaseModel):
+    name: str = Field(max_length=80)
+    description: str = Field(default='', max_length=200)
+
+
+def last_result() -> dict | None:
+    """The current agent's last check in one line: errors of measured, not checked, when, which metric."""
+    value = store.load(discover.RESULT) or {}
+    summary = value.get('summary')
+    if not summary or not value.get('finishedAt'):
+        return None
+    return {
+        'failed': summary['failed'],
+        'measured': summary['measured'],
+        'unmeasured': summary['unmeasured'],
+        'finishedAt': value['finishedAt'],
+        'metric': 'Tone of voice' if value.get('purpose') == discover.TONE else 'Точность по коду агента',
+    }
+
+
+@app.get('/api/agents')
+def agents_view() -> list[dict]:
+    """Every agent with its last result, read from its own database. Never ranked: the agents have other dialogues
+    and other rules."""
+    listed = []
+    for agent in registry.listed():
+        with registry.using(agent['id']):
+            listed.append({**agent, 'result': last_result()})
+    return listed
+
+
+@app.post('/api/agents')
+def create_agent(payload: AgentCommand) -> dict:
+    try:
+        return registry.create(payload.name, payload.description)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @app.post('/api/job/stop')
 async def stop_job() -> dict:
     try:
