@@ -29,6 +29,7 @@ DECK = 'cards.json'
 LIMIT = 30
 REPRESENTATIVE = 24
 STRESS = 6
+TOPIC_BATCH = 25  # conversations sorted into topics per request: one request for 60 already fails
 SEED = 20261002  # the same sample for the same logs
 SETS = {'representative': 'Представительный набор', 'regression': 'Ошибка из лога', 'stress': 'Стрессовый набор'}
 TRIGGERS = {
@@ -473,8 +474,9 @@ async def _topics(analysis: dict, dialogues: list[dict]) -> dict[str, dict]:
     topics = {t['id']: t for t in analysis['topics']}
     known = {str(r['dialogueId']): topics[r['topicId']] for r in analysis['results'] if r['topicId'] in topics}
     new = [d for d in dialogues if str(d['id']) not in known]
-    if new:
-        for topic in await discover.keep_topics(analysis, new):
+    batches = [new[i : i + TOPIC_BATCH] for i in range(0, len(new), TOPIC_BATCH)]
+    for sorted_batch in await asyncio.gather(*(discover.keep_topics(analysis, batch) for batch in batches)):
+        for topic in sorted_batch:
             known.update({str(i): topics.get(topic['id'], topic) for i in topic['dialogueIds']})
     return known
 

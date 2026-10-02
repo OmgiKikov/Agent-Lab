@@ -215,3 +215,17 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         value = metric.metric(items)
         self.assertEqual(value['sets']['regression'], {'accuracy': 0, 'passed': 0, 'measured': 1})
         self.assertEqual(value['sets']['representative'], {'accuracy': 50, 'passed': 1, 'measured': 2})
+
+    async def test_unaudited_conversations_are_sorted_into_topics_in_batches(self):
+        many = [{'id': f'n{i}', 'messages': []} for i in range(cards.TOPIC_BATCH * 2 + 1)]
+        sizes = []
+
+        async def keep(previous, batch):
+            sizes.append(len(batch))
+            return [{'id': 't', 'dialogueIds': ['d', *(str(d['id']) for d in batch)]}]
+
+        with patch.object(cards.discover, 'keep_topics', keep):
+            topic_of = await cards._topics(analysis(), [dialogue(), *many])
+        self.assertEqual(sorted(sizes), [1, cards.TOPIC_BATCH, cards.TOPIC_BATCH])
+        self.assertEqual(set(topic_of), {'d', *(d['id'] for d in many)})
+        self.assertEqual({t['title'] for t in topic_of.values()}, {'Тариф'})
