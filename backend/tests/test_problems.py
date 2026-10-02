@@ -107,6 +107,31 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value['problems'], [rule['id']])
         self.assertIsNone(value['sim'])
 
+    def test_a_second_check_without_a_verdict_is_not_a_disagreement(self) -> None:
+        value = audit()
+        value['results'][0]['second'] = {'model': 'm', 'status': 'UNMEASURED'}
+        store.save(discover.RESULT, value)
+        example = problems.build()['rules'][0]['log']['examples'][0]
+        self.assertEqual(example['status'], 'FAIL')
+        self.assertIsNone(example['second'])
+
+    def test_a_second_verdict_on_the_whole_conversation_says_what_it_found(self) -> None:
+        value = audit()
+        value['results'][1]['second'] = {'model': 'm', 'status': 'PASS'}
+        store.save(discover.RESULT, value)
+        example = next(e for e in problems.build()['rules'][0]['log']['examples'] if e['dialogueId'] == 'd2')
+        self.assertEqual(
+            (example['second'], example['secondScope'], example['secondStatus']), ('agree', 'dialogue', 'PASS')
+        )
+
+    def test_agreement_of_the_two_checks_counts_only_conversations_both_decided(self) -> None:
+        results = [
+            {'status': 'FAIL', 'rules': [], 'second': {'model': 'm', 'status': 'FAIL'}},
+            {'status': 'FAIL', 'rules': [], 'second': {'model': 'm', 'status': 'UNMEASURED'}},
+            {'status': 'UNMEASURED', 'rules': [], 'second': {'model': 'm', 'status': 'UNMEASURED'}},
+        ]
+        self.assertEqual(discover.summarize(results, [])['secondJudge'], {'model': 'm', 'checked': 1, 'agree': 1})
+
     def test_run_side_uses_the_criterion_frozen_in_the_item(self) -> None:
         store.create_run(played_run())
         value = problems.build()
