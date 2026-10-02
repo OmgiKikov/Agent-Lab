@@ -7,6 +7,7 @@ import { BottomNav } from "./BottomNav";
 import { CommandPalette } from "./CommandPalette";
 import { ShellContext, type Shell as ShellApi } from "./ShellContext";
 import { Sidebar } from "./Sidebar";
+import { TONE_ONLY } from "./product";
 
 function Frame() {
   const location = useLocation();
@@ -54,7 +55,7 @@ function Frame() {
         </main>
       </div>
       <BottomNav counts={counts} />
-      <CommandPalette open={palette} onClose={() => setPalette(false)} />
+      {!TONE_ONLY && <CommandPalette open={palette} onClose={() => setPalette(false)} />}
     </ShellContext.Provider>
   );
 }

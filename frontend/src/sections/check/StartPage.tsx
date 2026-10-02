@@ -9,6 +9,7 @@ import { codeSources, nextStep, TONE_ID, toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { Step } from "../../product/Step";
 import { buttonClass } from "../../ui/Button";
+import { TONE_ONLY } from "../../app/product";
 
 type Metric = "tone" | "code";
 
@@ -70,7 +71,7 @@ export function StartPage() {
   const result = state?.discover ?? null;
   const now: Metric | null = result ? (toneResult(state) ? "tone" : "code") : null;
   const asked = params.get("m");
-  const metric: Metric = asked === "tone" || asked === "code" ? asked : (now ?? "tone");
+  const metric: Metric = TONE_ONLY ? "tone" : asked === "tone" || asked === "code" ? asked : (now ?? "tone");
   const choose = (m: Metric) =>
     setParams(
       (prev) => {
@@ -86,13 +87,16 @@ export function StartPage() {
       <Header title="Начать проверку" />
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-[980px] px-4 pb-24 pt-10 lg:px-10 lg:pt-14">
-          <h2 className="text-page font-semibold text-fg">Что проверяем у агента?</h2>
+          <h2 className="text-page font-semibold text-fg">
+            {TONE_ONLY ? "Как агент общается с клиентами?" : "Что проверяем у агента?"}
+          </h2>
           <p className="mt-3 max-w-[60ch] text-lead text-fg-2">
-            Выберите метрику. Её критерии оценят настоящие диалоги, а потом — сценарии, которые сыграют с агентом
-            синтетические клиенты.
+            {TONE_ONLY
+              ? "Загрузите выгрузку чата и правила общения. Из правил соберём критерии и проверим по ним настоящие диалоги."
+              : "Выберите метрику. Её критерии оценят настоящие диалоги, а потом — сценарии, которые сыграют с агентом синтетические клиенты."}
           </p>
           <div role="radiogroup" aria-label="Метрика" className="mt-8 grid gap-3 md:grid-cols-2">
-            {(["tone", "code"] as const).map((m) => (
+            {(TONE_ONLY ? (["tone"] as const) : (["tone", "code"] as const)).map((m) => (
               <MetricOption
                 key={m}
                 metric={m}
@@ -108,21 +112,23 @@ export function StartPage() {
               {go.label}
               <ArrowRight aria-hidden className="size-4" />
             </Link>
-            <Link
-              to={SECTIONS.overview}
-              className="inline-flex min-h-11 items-center justify-center rounded-control text-read text-fg-3 underline decoration-line-strong underline-offset-4 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 sm:justify-start"
-            >
-              Обзор результатов
-            </Link>
+            {!TONE_ONLY && (
+              <Link
+                to={SECTIONS.overview}
+                className="inline-flex min-h-11 items-center justify-center rounded-control text-read text-fg-3 underline decoration-line-strong underline-offset-4 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 sm:justify-start"
+              >
+                Обзор результатов
+              </Link>
+            )}
           </div>
-          {now && now !== metric && (
+          {!TONE_ONLY && now && now !== metric && (
             <p className="mt-3 max-w-[64ch] text-body text-fg-3">
               {now === "tone"
                 ? "Сейчас в «Диалогах» — проверка tone of voice. Оценка по коду агента займёт её место."
                 : "Сейчас в «Диалогах» — оценка по коду агента. Проверка tone of voice займёт её место."}
             </p>
           )}
-          <Pipeline state={state} now={now} />
+          {!TONE_ONLY && <Pipeline state={state} now={now} />}
         </div>
       </div>
     </div>
