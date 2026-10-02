@@ -32,7 +32,10 @@ def customer_text(dialogue: dict) -> str:
 
 def conversation(dialogue: dict) -> list[dict]:
     return [
-        {'role': 'CUSTOMER' if m['role'] == 'user' else 'AGENT', 'text': m['content']} for m in dialogue['messages']
+        {'role': 'CUSTOMER', 'text': m['content']}
+        if m['role'] == 'user'
+        else {'role': 'AGENT', 'text': logs.as_seen(m['content'])}
+        for m in dialogue['messages']
     ]
 
 

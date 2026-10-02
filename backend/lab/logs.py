@@ -21,6 +21,16 @@ META = 'logs-meta.json'  # the name and time of the last upload
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
 MARKER = re.compile(r'\b(CLIENT|AGENT)\b')
+# A chat button the agent sent, written into the export's text as «` ` ` transition-code CODE ` ` `».
+CONTROL = re.compile(r'`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_-]*)\s*`\s*`\s*`')
+
+
+def as_seen(text: str) -> str:
+    """An agent reply as the customer saw it: its words, then the buttons it sent, not the export's control code.
+    A judge shown the raw code reads it as the agent's formatting (frontend/src/product/text.ts does the same)."""
+    buttons = [code or 'кнопка' for code in CONTROL.findall(text)]
+    words = CONTROL.sub('', text).strip()
+    return words + ('\n[Кнопки: ' + ' | '.join(buttons) + ']' if buttons else '')
 
 
 def load() -> list[dict]:

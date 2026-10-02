@@ -23,7 +23,7 @@ For each rule return exactly one row. Apply its condition first; if the moment d
 FAIL requires a real contradiction of an applicable rule. PASS requires evidence, not an agreeable-looking answer.
 Missing knowledge evidence is UNKNOWN. A handoff may be allowed: respect rule exceptions and acceptable alternatives. Never force pass/fail.
 Replies never prove tool calls, backend changes, identity, payment or refunds. Without tools/state events, these expectations are UNKNOWN.
-Values masked with * or # are hidden, not missing. Repeats are not errors by themselves. transition-code blocks are UI controls, not spoken text.
+The export masks personal data and every digit: * and # are hidden values, not missing ones. «#.» at the start of a line is a list number (1., 2., …) and «# сентября» a date: masking is never the agent's formatting, a marker, a symbol or noise. Repeats are not errors by themselves. [Кнопки: …] are buttons the customer saw, not the agent's words.
 Each PASS/FAIL must cite a meaningful EXACT substring of an AGENT reply in agentQuote (copy it character by character). Never invent an event or quote.
 Use Russian. Return {rules:[{ruleId,status:"PASS|FAIL|UNKNOWN|NOT_APPLICABLE",reason,agentQuote,title}]}.
 title describes a concrete recurring failure pattern for FAIL, e.g. "Повторяет вопрос, когда клиент не знает номер", not a generic bad conversation."""
