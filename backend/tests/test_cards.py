@@ -300,3 +300,9 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
                 'terminalsPerClient': {1: 2, 2: 1},
             },
         )
+
+    def test_masked_numbered_steps_and_requests_fit_their_triggers(self):
+        self.assertTrue(cards._fits('instruction', '#. Повторите операцию. #. Если ошибка повторится, смените карту.'))
+        self.assertTrue(cards._fits('identifier_request', 'Предоставьте, пожалуйста, номер терминала.'))
+        self.assertFalse(cards._fits('handoff_offer', '#. Перейдите в раздел «Эквайринг». #. Нажмите «Добавить».'))
+        self.assertTrue(cards._fits('resolved', 'Любой текст'))

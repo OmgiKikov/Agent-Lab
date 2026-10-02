@@ -62,16 +62,23 @@ FOREIGN = re.compile(r'[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]')  # the model 
 # An observation is the customer's own try in the world; one about the chat or the agent is the old agent's answer.
 ABOUT_CHAT = re.compile(r'\b(агент|бот|чат|ассистент|оператор|ответил|отказал|посоветовал|сказал)\w*', re.I)
 # What the agent's message must show for a trigger to name it; the other triggers are judged by the extractor alone.
-ASKS = re.compile(r'\?|\b(уточните|укажите|напишите|выберите|назовите|сообщите|подскажите)\b', re.I)
+# The export masks digits, so numbered steps read «#.» as often as «1.».
+ASKS = re.compile(
+    r'\?|\b(уточните|укажите|напишите|выберите|назовите|сообщите|подскажите|предоставьте|пришлите|отправьте)\b', re.I
+)
+STEPS = re.compile(
+    r'(^|\s)[#\d]+\.\s|\b(перейдите|нажмите|выберите|откройте|зайдите|войдите|проверьте|оформите|заполните|повторите'
+    r'|воспользуйтесь|обратитесь|используйте|сделайте|подключите|скачайте|установите|отправьте|подпишите)\b'
+    r'|следующими способами',
+    re.I,
+)
 TRIGGER_NEEDS = {
     'unclear_question': (ASKS,),
     'repeated_clarification': (ASKS,),
     'choice_offer': (ASKS,),
     'identifier_request': (ASKS, re.compile(r'номер|инн|реквизит|мерчант|терминал|точк|tid|договор', re.I)),
     'handoff_offer': (re.compile(r'оператор|специалист|поддержк|горяч\w* лини|позвон|отделени|менеджер', re.I),),
-    'instruction': (
-        re.compile(r'перейдите|нажмите|выберите|откройте|зайдите|войдите|проверьте|оформите|заполните|\b\d\.\s', re.I),
-    ),
+    'instruction': (STEPS,),
 }
 PAST = re.compile(r'раньше|ранее|как (уже )?(делал|было|раньше)|в прошлый|прошлом|обычно', re.I)
 TRANSITION = re.compile(r'`\s*`\s*`\s*transition-code\s*([\w-]*)\s*`\s*`\s*`\.?')
