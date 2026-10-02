@@ -13,7 +13,6 @@ import { Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
 import { queueOf } from "../problems/model";
 import { Finding } from "./Finding";
-import { History } from "./History";
 import { BriefPreview } from "./BriefPreview";
 import { NextStage } from "./NextStage";
 
@@ -221,7 +220,6 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
         </Link>
       </div>
       <NextStage state={state} onRecheck={onAgain} />
-      <History finishedAt={result.finishedAt} refreshStamp={result.finishedAt + "-" + state.job.running} />
       <Sheet open={showReport} onClose={() => setShowReport(false)} title="Короткий отчёт для команды" width="lg">
         <div className="px-5 py-6 sm:px-7">
           <div className="mb-6 flex flex-wrap gap-3">

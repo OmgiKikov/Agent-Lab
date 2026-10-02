@@ -9,7 +9,6 @@ import { codeSources, nextStep, TONE_ID, toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { Step } from "../../product/Step";
 import { buttonClass } from "../../ui/Button";
-import { History } from "./History";
 
 type Metric = "tone" | "code";
 
@@ -119,12 +118,11 @@ export function StartPage() {
           {now && now !== metric && (
             <p className="mt-3 max-w-[64ch] text-body text-fg-3">
               {now === "tone"
-                ? "Сейчас в «Диалогах» — проверка tone of voice. Оценка по коду агента займёт её место; проверки tone of voice останутся в истории."
+                ? "Сейчас в «Диалогах» — проверка tone of voice. Оценка по коду агента займёт её место."
                 : "Сейчас в «Диалогах» — оценка по коду агента. Проверка tone of voice займёт её место."}
             </p>
           )}
           <Pipeline state={state} now={now} />
-          <History finishedAt={state?.discover?.finishedAt} refreshStamp={String(state?.job.running)} />
         </div>
       </div>
     </div>
