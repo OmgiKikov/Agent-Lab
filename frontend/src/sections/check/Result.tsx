@@ -13,6 +13,7 @@ import { Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
 import { queueOf } from "../problems/model";
 import { StageResult } from "../../product/StageResult";
+import { Trust } from "../../product/Trust";
 import { Finding } from "./Finding";
 import { BriefPreview } from "./BriefPreview";
 import { NextStage } from "./NextStage";
@@ -76,6 +77,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
       {measured > 0 && (
         <div className="my-8">
           <StageResult failed={summary.failed} checked={measured} unchecked={summary.unmeasured} size="display" />
+          {data && current && <Trust data={data} stage="log" checked={measured} />}
           <Link
             to={conversationsLink("log")}
             className="mt-4 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
