@@ -33,6 +33,7 @@ jobs = PerAgent()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    registry.adopt_legacy()
     store.recover_runs()
     for agent in registry.listed():
         with registry.using(agent['id']):

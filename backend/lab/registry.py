@@ -12,9 +12,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import store
-from .settings import DATA
-
-ROOT = DATA
 
 LATIN = {
     'а': 'a',
@@ -53,12 +50,18 @@ LATIN = {
 }
 
 
+def _root() -> Path:
+    """Where agents live: beside the default database, so whatever data directory a process (or a test) uses, its
+    agents are there too and never in another one."""
+    return store.DB.parent
+
+
 def _registry() -> Path:
-    return ROOT / 'agents.sqlite3'
+    return _root() / 'agents.sqlite3'
 
 
 def db_of(agent_id: str) -> Path:
-    return ROOT / 'agents' / agent_id / 'lab.sqlite3'
+    return _root() / 'agents' / agent_id / 'lab.sqlite3'
 
 
 @contextmanager
@@ -136,3 +139,32 @@ def using(agent_id: str) -> Iterator[None]:
         yield
     finally:
         store.AGENT.reset(token)
+
+
+# The agent that lived alone before agents existed.
+FIRST = {'id': 'acquiring', 'name': 'Агент эквайринга', 'description': 'СберБизнес · чат поддержки'}
+
+
+def adopt_legacy() -> None:
+    """Before agents, everything lived in one database: it becomes the first agent, once. The old file is renamed to
+    lab.sqlite3.before-agents and kept. A copy finished on disk precedes the registry entry, so an interrupted start
+    simply repeats the adoption."""
+    old = store.DB
+    if listed() or not old.exists():
+        return
+    target = db_of(FIRST['id'])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(target.name + '.partial')
+    source, copy = sqlite3.connect(old), sqlite3.connect(partial)
+    try:
+        source.backup(copy)  # consistent with a write-ahead log, unlike copying the file
+    finally:
+        copy.close()
+        source.close()
+    partial.replace(target)
+    target.chmod(0o600)
+    create(FIRST['name'], FIRST['description'], agent_id=FIRST['id'])
+    for suffix in ('', '-wal', '-shm'):
+        path = old.with_name(old.name + suffix)
+        if path.exists():
+            path.replace(old.with_name(old.name + '.before-agents' + suffix))

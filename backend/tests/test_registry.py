@@ -15,9 +15,14 @@ class RegistryTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        for mocked in (patch.object(registry, 'ROOT', self.root), patch.object(store, 'DB', self.root / 'lab.sqlite3')):
-            mocked.start()
-            self.addCleanup(mocked.stop)
+        mocked = patch.object(store, 'DB', self.root / 'lab.sqlite3')
+        mocked.start()
+        self.addCleanup(mocked.stop)
+
+    def test_the_registry_lives_beside_the_default_database(self) -> None:
+        registry.create('Первый', '')
+        self.assertTrue((self.root / 'agents.sqlite3').exists())
+        self.assertEqual(registry.db_of('pervyy'), self.root / 'agents' / 'pervyy' / 'lab.sqlite3')
 
     def test_agents_get_readable_unique_ids_in_creation_order(self) -> None:
         first = registry.create('Агент эквайринга', 'СберБизнес · чат поддержки')
@@ -47,11 +52,7 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
-        for mocked in (
-            patch.object(registry, 'ROOT', root),
-            patch.object(store, 'DB', root / 'lab.sqlite3'),
-            patch.object(api, 'jobs', jobs.PerAgent()),
-        ):
+        for mocked in (patch.object(store, 'DB', root / 'lab.sqlite3'), patch.object(api, 'jobs', jobs.PerAgent())):
             mocked.start()
             self.addCleanup(mocked.stop)
         self.first = registry.create('Первый', '')['id']
@@ -113,3 +114,31 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
         with registry.using(self.second):
             self.assertIsNone(store.load('marker.json'))
         self.assertIsNone(store.load('marker.json'))
+
+
+class AdoptionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        mocked = patch.object(store, 'DB', self.root / 'lab.sqlite3')
+        mocked.start()
+        self.addCleanup(mocked.stop)
+
+    def test_the_existing_database_becomes_the_first_agent_once(self) -> None:
+        store.save('logs.json', [{'id': 'd1'}])
+        registry.adopt_legacy()
+        self.assertEqual(
+            [(a['id'], a['name'], a['description']) for a in registry.listed()],
+            [('acquiring', 'Агент эквайринга', 'СберБизнес · чат поддержки')],
+        )
+        with registry.using('acquiring'):
+            self.assertEqual(store.load('logs.json'), [{'id': 'd1'}])
+        self.assertFalse((self.root / 'lab.sqlite3').exists())
+        self.assertTrue((self.root / 'lab.sqlite3.before-agents').exists())
+        registry.adopt_legacy()
+        self.assertEqual(len(registry.listed()), 1)
+
+    def test_a_fresh_install_starts_without_agents(self) -> None:
+        registry.adopt_legacy()
+        self.assertEqual(registry.listed(), [])
