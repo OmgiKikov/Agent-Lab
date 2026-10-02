@@ -62,10 +62,10 @@ const Address = ({ children }: { children: string }) => (
 
 /** Who judges and who plays the customer, and who judges again; «Проверить» asks each model once and says what it answered. */
 function Models({ state }: { state: LabState }) {
-  const [checks, setChecks] = useState<{ main: Check; second: Check } | "pending" | null>(null);
+  const [checks, setChecks] = useState<{ main: Check; second: Check | null } | "pending" | null>(null);
   const check = () => {
     setChecks("pending");
-    api<{ main: Check; second: Check }>("/api/models/check", {})
+    api<{ main: Check; second: Check | null }>("/api/models/check", {})
       .then(setChecks)
       .catch((e) => {
         const failed = { ok: false, error: String(e?.message ?? e) };
@@ -79,12 +79,21 @@ function Models({ state }: { state: LabState }) {
       use: "Проверяет разговоры и играет клиента в симуляциях.",
       model: state.models.main,
     },
-    {
-      role: "second" as const,
-      name: "Вторая проверка",
-      use: "Модель другого вендора: проверяет найденные ошибки независимо от первой.",
-      model: state.models.second,
-    },
+    // With one model there is no second check: asking the same model twice is not a second opinion.
+    state.models.second
+      ? {
+          role: "second" as const,
+          name: "Вторая проверка",
+          use: "Модель другого вендора: проверяет найденные ошибки независимо от первой.",
+          model: state.models.second,
+        }
+      : {
+          role: "second" as const,
+          name: "Вторая проверка",
+          use: "Доступна одна модель, поэтому разговоры проверяет только она. Насколько ей можно верить, показывают ваши ответы «Да / Нет».",
+          model: null,
+          none: "нет",
+        },
   ];
   return (
     <>
@@ -113,7 +122,7 @@ function Models({ state }: { state: LabState }) {
               )}
               {c && !c.ok && <span className="text-small text-bad">не отвечает</span>}
               <span className="font-mono text-small text-fg">
-                {r.model ?? <span className="font-sans text-fg-3">не задана</span>}
+                {r.model ?? <span className="font-sans text-fg-3">{"none" in r ? r.none : "не задана"}</span>}
               </span>
             </Row>
           );

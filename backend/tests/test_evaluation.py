@@ -81,6 +81,12 @@ class EvaluationTests(unittest.TestCase):
 
 
 class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # These tests exercise the second judge, which runs only with a second vendor configured.
+        second = patch.object(llm, 'SECOND', ('http://second/v1', 'second-judge'))
+        second.start()
+        self.addCleanup(second.stop)
+
     async def test_both_judges_share_prepared_evidence_and_next_evaluation_refreshes_it(self):
         payloads = []
         first = [{'article': 'first', 'text': 'Первая версия статьи'}]
@@ -141,6 +147,26 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'], 'UNMEASURED')
         self.assertEqual([row['status'] for row in result['rules']], ['UNKNOWN', 'UNKNOWN'])
         self.assertEqual(result['error'], 'timeout')
+
+    async def test_with_one_model_there_is_no_second_check(self):
+        calls = []
+
+        async def model(system, messages, *, endpoint=None, **kwargs):
+            calls.append(endpoint)
+            return completion({'rules': [verdict()]})
+
+        same = ('http://model', 'glm')
+        dialogue = {
+            'id': 'd1',
+            'messages': [
+                {'role': 'user', 'content': 'Вопрос'},
+                {'role': 'assistant', 'content': 'Вернуть терминал в банк'},
+            ],
+        }
+        with patch.object(llm, 'MAIN', same), patch.object(llm, 'SECOND', same), patch.object(llm, 'chat', model):
+            result = await discover.judge_dialogue(dialogue, {'id': 't1', 'rules': [criterion()]})
+        self.assertIsNone(result['second'])
+        self.assertEqual(len(calls), 1)
 
     async def test_topic_planning_retries_missing_and_duplicated_assignments(self):
         dialogue = {'id': 'stable', 'messages': [{'role': 'user', 'content': 'Вернуть терминал'}]}

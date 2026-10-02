@@ -25,6 +25,7 @@ class HostingTests(unittest.TestCase):
                 'LAB_CERTS': str(root / 'certs'),
                 'AGENT_LAB_GATEWAY_FILE': str(root / 'missing-gateway.json'),
                 'LAB_MODEL_URL': 'http://127.0.0.1:9/v1',
+                'LAB_SECOND_MODEL': 'second-judge',
             }
             result = subprocess.run(
                 [sys.executable, '-c', script], env=environment, capture_output=True, text=True, timeout=15, check=False

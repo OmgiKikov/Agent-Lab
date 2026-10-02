@@ -161,3 +161,24 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             llm.models_used([{'model': 'first'}, {'model': 'second'}, {'model': 'first'}]), 'first, second'
         )
         self.assertEqual(llm.models_used([{}]), llm.MODEL)
+
+
+class DefaultModelsTests(unittest.TestCase):
+    def second(self, **extra: str) -> str:
+        import os
+        import subprocess
+        import sys
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            env = {k: v for k, v in os.environ.items() if not k.startswith('LAB_')}
+            env.update(LAB_DATA=folder, LAB_CERTS=folder, AGENT_LAB_GATEWAY_FILE=f'{folder}/none.json', **extra)
+            script = 'from lab import llm; print(llm.second_judge())'
+            done = subprocess.run([sys.executable, '-c', script], env=env, capture_output=True, text=True, check=True)
+            return done.stdout.strip()
+
+    def test_one_model_by_default_and_a_second_vendor_only_when_named(self) -> None:
+        self.assertEqual(self.second(), 'None')
+        self.assertEqual(
+            self.second(LAB_SECOND_MODEL='openai/gpt-5.2'), "('http://127.0.0.1:11437/v1', 'openai/gpt-5.2')"
+        )

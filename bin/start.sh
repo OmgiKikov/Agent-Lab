@@ -31,7 +31,8 @@ else
     LAB_OWNED_PIDS="$LAB_OWNED_PIDS $!"
   }
   model_bridge 11436 "${LAB_PI_MODEL:-z-ai/glm-5.3}" bridge.log
-  model_bridge 11437 "${LAB_SECOND_MODEL:-openai/gpt-5.2}" bridge-second.log
+  # A second judge of another vendor only when named: LAB_SECOND_MODEL=openai/gpt-5.2
+  if [ -n "${LAB_SECOND_MODEL:-}" ]; then model_bridge 11437 "$LAB_SECOND_MODEL" bridge-second.log; fi
   echo "Модели: OpenRouter через Pi"
 fi
 echo "Agent Lab: http://127.0.0.1:${LAB_PORT:-5899}/lab"
