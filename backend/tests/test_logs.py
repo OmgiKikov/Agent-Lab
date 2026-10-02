@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from openpyxl import Workbook
 
-from lab import logs
+from lab import discover, logs
 
 
 def excel(text, order, dialogue_id='d1', include_order=True):
@@ -95,3 +95,20 @@ class LogImportTests(unittest.TestCase):
         with patch.object(logs.store, 'replace_inputs') as save:
             self.assertEqual(logs.commit([{'id': 'one', 'messages': []}]), 1)
         save.assert_called_once_with('logs.json', [{'id': 'one', 'messages': []}])
+
+
+class SeenTextTests(unittest.TestCase):
+    def test_a_logged_reply_is_judged_as_the_customer_saw_it(self):
+        dialogue = {
+            'id': 'd1',
+            'messages': [
+                {'role': 'user', 'content': 'Как вернуть терминал?'},
+                {
+                    'role': 'assistant',
+                    'content': 'Нажмите кнопку ниже.\n` ` ` transition-code TRANSFER_INTO_CHAT ` ` `',
+                },
+            ],
+        }
+        shown = discover.conversation(dialogue)
+        self.assertEqual(shown[0], {'role': 'CUSTOMER', 'text': 'Как вернуть терминал?'})
+        self.assertEqual(shown[1], {'role': 'AGENT', 'text': 'Нажмите кнопку ниже.\n[Кнопки: TRANSFER_INTO_CHAT]'})
