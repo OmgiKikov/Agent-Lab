@@ -179,17 +179,14 @@ def for_judging(rule: dict) -> dict:
 async def _judge(dialogues: list[dict], topic: dict, progress: Progress) -> list[dict]:
     results: list[dict] = []
 
-    async def one(dialogue: dict) -> None:
-        result = await discover.judge_dialogue(dialogue, topic)
+    def done(result: dict) -> None:
         for value in (result, result.get('second')):
             if value and value.get('status') == 'PASS' and any(row['status'] == 'UNKNOWN' for row in value['rules']):
                 value['status'] = 'UNMEASURED'
         results.append(result)
         progress(done=len(results), total=len(dialogues), message='Проверяю разговоры по выбранным критериям')
 
-    async with asyncio.TaskGroup() as tasks:
-        for dialogue in dialogues:
-            tasks.create_task(one(dialogue))
+    await discover.judge_each([(dialogue, topic) for dialogue in dialogues], done)
     order = {str(dialogue['id']): index for index, dialogue in enumerate(dialogues)}
     return sorted(results, key=lambda result: order[str(result['dialogueId'])])
 

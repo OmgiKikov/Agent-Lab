@@ -130,6 +130,18 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(item['status'], 'PASS')
         self.assertEqual(item['second']['status'], 'ERROR')
 
+    async def test_a_dialogue_the_model_could_not_judge_stays_unmeasured_instead_of_failing_the_check(self):
+        dialogue = {
+            'id': 'd1',
+            'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
+        }
+        topic = {'id': 't1', 'rules': [criterion('r1'), criterion('r2')]}
+        with patch.object(judge, 'log_verdict', AsyncMock(side_effect=llm.ModelError('timeout'))):
+            result = await discover.judge_dialogue(dialogue, topic)
+        self.assertEqual(result['status'], 'UNMEASURED')
+        self.assertEqual([row['status'] for row in result['rules']], ['UNKNOWN', 'UNKNOWN'])
+        self.assertEqual(result['error'], 'timeout')
+
     async def test_topic_planning_retries_missing_and_duplicated_assignments(self):
         dialogue = {'id': 'stable', 'messages': [{'role': 'user', 'content': 'Вернуть терминал'}]}
         source = {'id': 's1', 'content': 'Вернуть терминал в банк'}

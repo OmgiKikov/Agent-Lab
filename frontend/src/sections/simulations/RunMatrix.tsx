@@ -8,7 +8,7 @@ import type { Item, LabRun, Status } from "../../lab/types";
 
 const DOT: Record<string, { word: string; cls: string }> = {
   FAIL: { word: "ошибка", cls: "bg-bad" },
-  PASS: { word: "без ошибок", cls: "bg-fg/15" },
+  PASS: { word: "без ошибок", cls: "bg-ok" },
   RUNNING: { word: "идёт", cls: "animate-pulse bg-run" },
   UNMEASURED: { word: "не удалось проверить", cls: "border-[1.5px] border-dashed border-fg-4" },
 };

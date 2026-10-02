@@ -9,6 +9,7 @@ import { Materials } from "./Materials";
 import { Criteria } from "./Criteria";
 import { Checking } from "./Checking";
 import { Result } from "./Result";
+import { TONE_ONLY } from "../../app/product";
 
 export function CheckPage() {
   const { state, offline, refresh } = useLabState();
@@ -95,9 +96,11 @@ export function CheckPage() {
             )}
             {step === "result" && <Result state={state} onAgain={() => go("criteria")} />}
           </div>
-          <Link to="/overview" className="mt-12 inline-flex items-center gap-1.5 text-body text-fg-3 hover:text-fg">
-            <ArrowLeft aria-hidden className="size-3.5" />К общему обзору
-          </Link>
+          {!TONE_ONLY && (
+            <Link to="/overview" className="mt-12 inline-flex items-center gap-1.5 text-body text-fg-3 hover:text-fg">
+              <ArrowLeft aria-hidden className="size-3.5" />К общему обзору
+            </Link>
+          )}
         </div>
       </div>
     </div>

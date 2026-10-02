@@ -4,6 +4,7 @@ import { ChevronRight, Search } from "lucide-react";
 import { useShell } from "./ShellContext";
 import { Step } from "../product/Step";
 import { Button } from "../ui/Button";
+import { TONE_ONLY } from "./product";
 
 export type Crumb = { label: string; to: string };
 
@@ -51,14 +52,16 @@ export function Header({
           </div>
           {sub && <div className="truncate text-small text-fg-3 lg:hidden">{sub}</div>}
         </div>
-        <Button
-          variant="ghost"
-          icon={Search}
-          aria-label="Поиск"
-          title="Поиск (⌘K)"
-          onClick={shell.openPalette}
-          className="lg:hidden"
-        />
+        {!TONE_ONLY && (
+          <Button
+            variant="ghost"
+            icon={Search}
+            aria-label="Поиск"
+            title="Поиск (⌘K)"
+            onClick={shell.openPalette}
+            className="lg:hidden"
+          />
+        )}
         {actions}
       </div>
       {tabs}
