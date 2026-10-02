@@ -44,10 +44,40 @@ class LogImportTests(unittest.TestCase):
         self.assertEqual(len(messages), 6)
         self.assertEqual(messages[-2]['content'], 'Дайте инструкцию')
 
-    def test_ambiguous_partial_duplication_is_rejected_instead_of_truncated(self):
+    def test_partial_duplication_settled_by_the_count_is_collapsed(self):
+        other = 'CLIENT Дайте инструкцию\nAGENT Откройте настройки.\n'
+        dialogue = logs.prepare('export.xlsx', excel(PAIR * 2 + other + other, '[1, 2, 3, 4]'))[0]
+        self.assertEqual([m['content'] for m in dialogue['messages']][::2], ['Не знаю номер', 'Дайте инструкцию'])
+        self.assertEqual(dialogue['meta']['import'], {'status': 'collapsed', 'textMessages': 8, 'kept': [0, 1, 4, 5]})
+
+    def test_ambiguous_conversation_is_quarantined_and_the_rest_imported(self):
         other = 'CLIENT Дайте инструкцию\nAGENT Откройте настройки\n'
-        with self.assertRaises(ValueError):
-            logs.prepare('export.xlsx', excel(PAIR * 2 + other, '[1, 2, 3, 4]'))
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = logs.SHEET
+        sheet.append([logs.ID, logs.TEXT, logs.ORDER])
+        sheet.append(['d1', PAIR * 2 + other * 2, '[1, 2, 3, 4, 5, 6]'])
+        sheet.append(['d2', PAIR, '[1, 2]'])
+        stream = io.BytesIO()
+        workbook.save(stream)
+        upload = logs.read_upload('export.xlsx', stream.getvalue())
+        self.assertEqual([d['id'] for d in upload.dialogues], ['d2'])
+        self.assertEqual(upload.report()['quarantined'][0]['id'], 'd1')
+        self.assertIn('несколько прочтений', upload.report()['quarantined'][0]['reason'])
+
+    def test_service_columns_are_kept_and_customer_ids_only_as_a_pseudonym(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = logs.SHEET
+        sheet.append([logs.ID, logs.TEXT, logs.ORDER, 'Канал', 'agentCode', 'Статус код 202_5', 'epkId'])
+        sheet.append(['d', PAIR, '[1, 2]', "['WEB']", "['ACQUIRING_AGENT']", "['agent-ckr-pa-acquiring-COMMON']", '42'])
+        stream = io.BytesIO()
+        workbook.save(stream)
+        meta = logs.prepare('export.xlsx', stream.getvalue())[0]['meta']
+        self.assertEqual(
+            (meta['channel'], meta['agents'], meta['acquiringStatuses']), ('WEB', ['ACQUIRING_AGENT'], ['202_5'])
+        )
+        self.assertNotIn('42', json.dumps(meta))
 
     def test_missing_or_invalid_order_never_guesses(self):
         for order in (None, 'not JSON', '{}', '[]'):

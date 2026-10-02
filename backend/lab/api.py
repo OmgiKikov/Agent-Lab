@@ -190,8 +190,8 @@ async def collect_sources() -> dict:
 @app.post('/api/logs')
 async def upload_logs(request: Request, name: str) -> dict:
     async def work(progress: Progress) -> int:
-        dialogues = await asyncio.to_thread(logs.prepare, name, await request.body())
-        return logs.commit(dialogues, name)
+        upload = await asyncio.to_thread(logs.read_upload, name, await request.body())
+        return logs.commit(upload.dialogues, name, upload.report())
 
     try:
         count = await jobs.perform('logs', work)
