@@ -9,7 +9,21 @@ from typing import Literal
 from fastapi import Body, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import agents, cards, discover, llm, logs, personas, policy_files, problems, simulate, store, tone, tone_advice
+from . import (
+    agents,
+    bench,
+    cards,
+    discover,
+    llm,
+    logs,
+    personas,
+    policy_files,
+    problems,
+    simulate,
+    store,
+    tone,
+    tone_advice,
+)
 from .context import sources
 from .jobs import BusyError, Jobs, Progress, Work
 
@@ -255,12 +269,21 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 
 @app.post('/api/cards')
 async def start_cards() -> dict:
-    async def work(progress: Progress) -> list[dict]:
+    async def work(progress: Progress) -> dict:
         deck = await cards.run(progress)
-        store.save(cards.DECK, {'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck})
+        store.save(cards.DECK, {'createdAt': store.now(), 'model': llm.models_used(deck['cards']), **deck})
         return deck
 
     return start('cards', work)
+
+
+@app.get('/api/cards/report')
+def cards_report() -> dict:
+    """How the deck's synthetic customers stand for the logged ones (bench.py)."""
+    deck = store.load(cards.DECK)
+    if not deck:
+        raise HTTPException(404, 'Сценарии ещё не собраны')
+    return bench.report(deck, logs.load())
 
 
 @app.post('/api/tone-of-voice/policy')

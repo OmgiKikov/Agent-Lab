@@ -189,9 +189,9 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_cards_requires_post_and_commits_a_finished_deck(self) -> None:
         done = asyncio.Event()
 
-        async def build(progress) -> list[dict]:
+        async def build(progress) -> dict:
             done.set()
-            return [{'id': 'card-1'}]
+            return {'cards': [{'id': 'card-1'}], 'sets': {}}
 
         with patch.object(api.cards, 'run', side_effect=build):
             self.assertEqual((await self.client.get('/api/cards')).status_code, 405)

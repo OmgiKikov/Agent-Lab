@@ -56,7 +56,7 @@ export function ScenarioView({
           >
             Сыграть этот сценарий
           </Button>
-          {card.sourceDialogueId && card.origin === FROM_LOG && (
+          {card.sourceDialogueId && (
             <Link
               to={dialogOf({ source: "log", dialogueId: card.sourceDialogueId })}
               className="inline-flex items-center gap-1 text-small text-fg-2 underline decoration-line-strong underline-offset-4 hover:text-fg"

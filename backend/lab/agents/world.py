@@ -182,12 +182,31 @@ def overrides(world: dict | None) -> dict:
     return tools
 
 
-def customer_profile(world: dict | None) -> str:
+def customer_profile(world: dict | None, known: dict | None = None) -> str:
+    """The client's view of the world: the organization and its terminals as far as this customer knows them.
+    known (cards.identifiers): per identifier knows | looks_up | unknown; without it the customer knows everything."""
     if not world:
         return ''
     org = world['organization']
-    terminals = ', '.join(f'{t["nameForClient"]} (номер {t["terminalId"]})' for t in world['terminals'])
+
+    def what(name: str) -> str:
+        return ((known or {}).get(name) or {}).get('value', 'knows')
+
+    inn = {
+        'knows': f', ИНН {org["inn"]}',
+        'looks_up': f', ИНН наизусть не помнишь; если попросят, посмотришь: {org["inn"]}',
+        'unknown': ', ИНН не знаешь',
+    }[what('organization')]
+    numbers = what('terminal')
+    terminals = ', '.join(
+        t['nameForClient'] + (f' (номер {t["terminalId"]})' if numbers != 'unknown' else '') for t in world['terminals']
+    )
+    note = {
+        'knows': '',
+        'looks_up': ' Номера терминалов наизусть не помнишь: если попросят, сначала скажи, что посмотришь.',
+        'unknown': ' Номеров терминалов не знаешь.',
+    }[numbers]
     return (
-        f'Твоя организация: {org["name"]}, ИНН {org["inn"]}. Торговая точка «{org["merchantName"]}», '
-        f'{org["address"]}. Терминалы: {terminals}.'
+        f'Твоя организация: {org["name"]}{inn}. Торговая точка «{org["merchantName"]}», '
+        f'{org["address"]}. Терминалы: {terminals}.{note}'
     )

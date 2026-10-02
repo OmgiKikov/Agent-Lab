@@ -309,12 +309,16 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('purpose', analysis)
 
     async def test_card_generation_does_not_commit(self):
+        topic = {'id': 't', 'title': 'Тариф', 'rules': [{'observation': 'reply', 'quote': 'q'}]}
+        result = {'topicId': 't', 'dialogueId': 'd', 'status': 'FAIL'}
+        card = {'id': 'card', 'model': 'actual-main', 'eligible': True, 'sets': ['regression', 'representative']}
         with (
-            patch.object(cards.store, 'load', return_value={'topics': [], 'results': []}),
-            patch.object(cards, 'pick', return_value=[({}, {}, 'Coverage')]),
-            patch.object(cards, 'build_card', AsyncMock(return_value={'id': 'card', 'model': 'actual-main'})),
+            patch.object(cards.store, 'load', return_value={'topics': [topic], 'results': [result]}),
+            patch.object(cards.logs, 'load', return_value=[{'id': 'd', 'messages': []}]),
+            patch.object(cards, 'build_card', AsyncMock(return_value=card)),
             patch.object(cards.store, 'save') as save,
         ):
-            result = await cards.run()
-        self.assertEqual(result, [{'id': 'card', 'model': 'actual-main'}])
+            deck = await cards.run()
+        self.assertEqual(deck['cards'], [card])
+        self.assertEqual(deck['sets']['regression']['cardIds'], ['card'])
         save.assert_not_called()

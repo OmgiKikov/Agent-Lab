@@ -19,6 +19,6 @@ export function RunWord({ run, className }: { run: LabRun; className?: string })
   );
 }
 
-/** «из ошибки в диалоге» or «покрытие темы»: why the scenario exists. */
+/** Why the scenario exists: «из ошибки в диалоге» or the name of its set («представительный набор»). */
 export const originWord = (origin: string, fromLog: string) =>
-  origin === fromLog ? "из ошибки в диалоге" : "покрытие темы";
+  origin === fromLog ? "из ошибки в диалоге" : origin.toLowerCase();

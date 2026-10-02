@@ -42,11 +42,24 @@ Use Russian. Return {customerGoal, rules:[{ruleId,status:"PASS|FAIL|UNKNOWN|NOT_
 Not an answer to the question: an instruction for a different operation than the customer asked (e.g. blocking instead of returning equipment, cancelling a refund instead of viewing refunds), an instruction that starts in the middle (e.g. from step 7), text addressed to bank staff (e.g. «рекомендуй», «используй статью», internal systems), or a fragment unrelated to the question.
 reason: one or two short sentences a business owner understands."""
 
-CARD = """Create a reproducible CUSTOMER situation from the provided real CUSTOMER messages of one logged conversation.
-Preserve only customer facts actually available in the log. Keep the exact opening utterance and decisive follow-up utterances; explicitly say how the customer replies when asked for identifiers or details the log does not contain.
-Never leak the desired agent behavior or judge criteria into the customer's situation. Do not copy the agent's answer into the customer's facts.
-State the goal, what the customer knows and does not know, and how they behave. Use no real personal data.
-Use Russian. Return {name:"short business title of the scenario (3-7 words)",situation:"who the customer is, goal, known facts, unknown facts, behavior"}."""
+CARD = """Build a source-grounded card of the CUSTOMER of one recorded support chat. A simulator will play this customer against a new version of the bank's acquiring support agent, so keep the customer's task, knowledge and manner, never the old agent's answers.
+The chat is the customer's whole conversation with the bank assistant; several agents may have answered. Find the acquiring episode: the CUSTOMER event n where the acquiring task is first stated (episode.start) and how the customer got there (entry: first_message | after_greeting | after_other_topic).
+Evidence: every customer-side item cites a CUSTOMER event n and an exact quote copied from it (3-150 characters). Agent context cites an AGENT event agentN and an exact quote from it.
+- Only what the customer actually wrote. No biography, role, age, emotions or reasons the text does not show.
+- circumstances: the customer's situation in the world (equipment, point of sale, what already happened), never remarks about the chat itself.
+- Absence is not knowledge. If the chat never shows whether the customer knows something, list it in notEstablished (identifiers have their own field). does_not_know needs the customer's own words.
+- A value the customer typed but the export masked (# for digits, * for hidden text) is masked_in_source: the customer knew it.
+- What the AGENT said is never the customer's initial knowledge: such facts are learned_from_agent.
+- said: opening (in the episode's first message) | later (volunteered later) | on_request (answering the agent's question).
+- observations: the customer's own attempts in the world (pressed a button on the device, opened a section, followed a link) and what happened, in their words. Never an agent answer, never the customer's reply.
+- A result the customer got by following the agent's suggestion is an observation, never a fact: the new agent may suggest something else.
+- reactions: how the customer answered a specific agent move; trigger is one of unclear_question, repeated_clarification, wrong_object, inapplicable_instruction, no_progress, identifier_request, choice_offer, instruction, handoff_offer, resolved. Observed ones only, each with the agent quote it answered and the customer quote.
+- hypotheses: at most two plausible reactions to triggers that did NOT occur in this chat, tentative and consistent with the observed manner; they are untested. They describe only how the customer answers (clarifies, repeats, asks for a human, says they will try), never new facts or results of actions the customer did not report.
+- identifiers.terminal (the terminal number) and identifiers.organization (INN or company details): {status:"knows|masked_in_source|does_not_know|not_established",n,quote}; n and quote only for the first three.
+- Never put the correct agent answer, a bank procedure or a quality criterion into customer fields.
+- openingFilled: the episode's first customer message character for character, each masked run (# or *) replaced by one plausible fictional value of its kind (digits for numbers); the same text if nothing is masked.
+eligible is false when the customer has no acquiring task; ineligibleReason says why. An acquiring task is the merchant's side of card and QR payments: terminals and pinpads, QR and SBP payment acceptance, cash registers working with acquiring, settlements and revenue crediting, tariffs and fees, refunds to buyers, equipment requests, acquiring contracts and reports. Not acquiring: greeting only, paying as a buyer, salary projects, other bank products. When in doubt, eligible is true: the chat reached the acquiring agent.
+Use Russian; write text, goal, object, response and action/result addressed to the customer in the second person («у тебя», «ты»). Return {eligible, ineligibleReason, name:"business title, 3-7 words", episode:{start, entry}, goal, object, circumstances:[{text,n,quote}], facts:[{text,status:"knows|believes|learned_from_agent|does_not_know|masked_in_source",said,n,quote}], notEstablished:[text], observations:[{action,result,n,quote}], reactions:[{trigger,response,agentN,agentQuote,n,quote}], hypotheses:[{trigger,response}], identifiers:{terminal,organization}, openingFilled}"""
 
 WORLD = """You prepare test data for the mocked business systems behind a bank acquiring support chatbot.
 Input: a customer situation taken from a real conversation, and JSON templates of the systems' responses.

@@ -206,7 +206,8 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                     return_value=llm.Answer(
                         {
                             'name': 'Передача документов',
-                            'situation': 'Клиент уточняет, как передать документы.',
+                            'goal': 'Узнать, как передать документы',
+                            'episode': {'start': 1, 'entry': 'first_message'},
                         },
                         'scenario-model',
                     )

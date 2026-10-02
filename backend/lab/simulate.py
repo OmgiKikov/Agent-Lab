@@ -64,7 +64,9 @@ def opening(card: dict, persona: str) -> str:
 async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, changed: Callable[[], None]) -> None:
     conversation = item['conversation']
     test_data = world.overrides(card.get('world')) if agent.mocked else {}
-    details = world.customer_profile(card.get('world')) if test_data else record.get('customer', '')
+    details = (
+        world.customer_profile(card.get('world'), card.get('identifiers')) if test_data else record.get('customer', '')
+    )
     item['world'] = bool(test_data)
     persona = item.get('persona') or personas.DEFAULT
     message, from_log = opening(card, persona), persona == personas.DEFAULT
