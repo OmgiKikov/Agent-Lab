@@ -12,6 +12,12 @@ export const AGENT: string | null = (() => {
 
 export const BASE = AGENT ? `/a/${encodeURIComponent(AGENT)}` : "";
 
+/** A browser storage key of this agent: drafts and choices never pass from one agent to another. */
+export const agentKey = (name: string) => `${name}@${AGENT ?? ""}`;
+
+/** The full address of a place inside this agent, for a link someone else opens: origin and «/a/<id>». */
+export const shareBase = () => window.location.origin + BASE;
+
 /** The address of a place inside an agent: «/a/acquiring/overview». */
 export const agentHref = (id: string, path = "") => `/a/${encodeURIComponent(id)}${path}`;
 

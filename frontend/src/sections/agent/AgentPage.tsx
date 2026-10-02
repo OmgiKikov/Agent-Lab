@@ -15,8 +15,9 @@ import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
 import { ConnectionForm } from "./Connection";
+import { agentKey } from "../../app/agent";
 
-const READ_AT = "lab.agent.sourcesReadAt";
+const READ_AT = agentKey("lab.agent.sourcesReadAt");
 const readAt = () => {
   try {
     return localStorage.getItem(READ_AT);

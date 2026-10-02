@@ -21,6 +21,7 @@ import { useToast } from "../../ui/toast";
 import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
 import { checked, violationsOf } from "./model";
+import { shareBase } from "../../app/agent";
 
 /**
  * One problem, read top to bottom: what the agent does wrong, what it must do instead, how often (one line of numbers),
@@ -136,7 +137,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const second = secondOf(s.examples);
   const humans = humansOf(s);
   const run = stage === "sim" ? state?.runs.find((x) => x.id === runId) : undefined;
-  const link = `${window.location.origin}${problemLink(r.id, stage, runId)}`;
+  const link = `${shareBase()}${problemLink(r.id, stage, runId)}`;
   const { condition, acceptable, quote, origin } = r.rule;
   const linkCls =
     "rounded-sm underline decoration-line-strong underline-offset-4 transition-colors hover:text-fg hover:decoration-fg-3";

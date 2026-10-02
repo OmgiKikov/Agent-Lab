@@ -4,6 +4,7 @@ import { agentHref, lastAgent } from "./app/agent";
 import { ScreenError } from "./app/ScreenError";
 import { useAgents } from "./lab/agents";
 import { AgentsPage } from "./sections/agents/AgentsPage";
+import { ServiceDown } from "./ui/EmptyState";
 
 /**
  * An address without an agent. «/» and older addresses (/overview, /logs/…) open the agent used last on this computer,
@@ -11,14 +12,14 @@ import { AgentsPage } from "./sections/agents/AgentsPage";
  */
 function EnterAgent() {
   const { pathname, search } = useLocation();
-  const { data } = useAgents();
+  const { data, error } = useAgents();
   useEffect(() => {
     if (!data) return;
     const last = lastAgent();
     const target = data.find((a) => a.id === last)?.id ?? (data.length === 1 ? data[0].id : null);
     window.location.replace(target ? agentHref(target, pathname === "/" ? "" : pathname) + search : "/agents");
   }, [data, pathname, search]);
-  return null;
+  return error ? <ServiceDown /> : null;
 }
 
 export const homeRouter = createBrowserRouter([

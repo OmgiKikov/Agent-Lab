@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { shareBase } from "../../app/agent";
 
 /** Present the generated meeting brief as a document; copied and downloaded text stays Markdown. */
 export function BriefPreview({ text }: { text: string }) {
@@ -27,11 +28,11 @@ export function BriefPreview({ text }: { text: string }) {
                   </blockquote>
                 );
               const link = /^\[([^\]]+)\]\((https?:\/\/[^\s]+)\)\.$/.exec(line);
-              if (link && link[2].startsWith(window.location.origin + "/start?history="))
+              if (link && link[2].startsWith(shareBase() + "/start?history="))
                 return (
                   <Link
                     key={n}
-                    to={link[2].slice(window.location.origin.length)}
+                    to={link[2].slice(shareBase().length)}
                     className="inline-flex min-h-11 items-center font-medium text-run underline"
                   >
                     {link[1]}
