@@ -65,7 +65,8 @@ async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, ch
     conversation = item['conversation']
     test_data = world.overrides(card.get('world')) if agent.mocked else {}
     details = world.customer_profile(card.get('world')) if test_data else record.get('customer', '')
-    item['world'] = bool(test_data)
+    # Whether the conversation ran to its end: only such a conversation may be judged again (ended).
+    item.update(world=bool(test_data), ended=False)
     persona = item.get('persona') or personas.DEFAULT
     message, from_log = opening(card, persona), persona == personas.DEFAULT
     try:
@@ -87,6 +88,7 @@ async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, ch
             message, from_log = await customer_says(card, conversation, details, persona), False
             if END in message or not message:
                 break
+        item['ended'] = True
         item['stage'] = 'судья оценивает'
         changed()
         await judge.evaluate(card, item)
@@ -200,15 +202,22 @@ async def run(
     return store.run(record['id'])
 
 
+def ended(item: dict) -> bool:
+    """The conversation ran to its end, so it can be judged again. One cut short (the agent failed, the customer's
+    model failed, the run was stopped) keeps its status and its error: judging half a conversation would count it.
+    A record from before play() marked this is read from its last message: a whole conversation ends on the agent's
+    reply, one the agent broke on the customer's turn."""
+    if 'ended' in item:
+        return bool(item['ended'])
+    last = (item.get('conversation') or [{}])[-1]
+    return last.get('role') == 'agent' and bool(last.get('text'))
+
+
 async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
-    """Rejudge the recorded conversation against the criteria frozen when it was played."""
-    items = [
-        (index, item)
-        for index, item in enumerate(record['items'])
-        if any(message['role'] == 'agent' and message.get('text') for message in item['conversation'])
-    ]
+    """Rejudge the recorded conversations that ran to their end against the criteria frozen when they were played."""
+    items = [(index, item) for index, item in enumerate(record['items']) if ended(item)]
     if not items:
-        raise RuntimeError('В прогоне нет записанных ответов агента для переоценки')
+        raise RuntimeError('В прогоне нет записанных ответов агента для переоценки: ни один разговор не дошёл до конца')
     legacy = [(index, item) for index, item in items if not isinstance(item.get('criteria'), list)]
     if legacy:
         by_id = {card['id']: card for card in cards.deck()}

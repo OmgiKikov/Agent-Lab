@@ -351,6 +351,95 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             await simulate.rejudge(store.run(source['id']))
         self.assertNotIn('rejudgedAt', store.run(source['id']))
 
+    async def test_rejudge_keeps_conversations_the_agent_or_the_customer_model_cut_short(self) -> None:
+        async def say(conversation_id: str, message: str, world: dict) -> dict:
+            if message == 'agent-broke again':
+                raise simulate.agents.AgentError('Агент ответил HTTP 500')
+            return {'text': 'answer', 'status': '200', 'ok': True, 'options': [], 'events': []}
+
+        async def customer(scenario: dict, conversation: list[dict], details: str = '', persona: str | None = None):
+            if scenario['id'] == 'customer-broke':
+                raise simulate.llm.ModelError('Модель недоступна')
+            return f'{scenario["id"]} again'
+
+        async def passed(scenario: dict, item: dict) -> None:
+            item.update(status='PASS', rules=[{'ruleId': 'r', 'status': 'PASS'}])
+
+        async def failed(scenario: dict, item: dict) -> None:
+            item.update(status='FAIL', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
+
+        scenarios = [card('whole'), card('agent-broke'), card('customer-broke')]
+        with (
+            patch.object(simulate.cards, 'deck', return_value=scenarios),
+            patch.object(self.agent, 'say', side_effect=say),
+            patch.object(simulate, 'customer_says', side_effect=customer),
+            patch.object(simulate.judge, 'evaluate', side_effect=passed),
+        ):
+            played = await simulate.run('test')
+        with patch.object(simulate.judge, 'evaluate', side_effect=failed):
+            result = await simulate.rejudge(played)
+        whole, agent_broke, customer_broke = result['items']
+        self.assertEqual(whole['status'], 'FAIL')
+        self.assertEqual((agent_broke['status'], agent_broke['error']), ('UNMEASURED', 'Агент ответил HTTP 500'))
+        self.assertEqual((customer_broke['status'], customer_broke['error']), ('UNMEASURED', 'Модель недоступна'))
+        self.assertEqual(agent_broke['rules'], [])
+        self.assertEqual(result['metric']['measured'], 1)
+
+    async def test_rejudge_keeps_conversations_a_stop_cut_short(self) -> None:
+        answered = asyncio.Event()
+
+        async def say(conversation_id: str, message: str, world: dict) -> dict:
+            return {'text': 'answer', 'status': '200', 'ok': True, 'options': [], 'events': []}
+
+        async def customer(scenario: dict, conversation: list[dict], details: str = '', persona: str | None = None):
+            answered.set()
+            await asyncio.Event().wait()  # the customer's model is still writing when the run is stopped
+
+        with (
+            patch.object(self.agent, 'say', side_effect=say),
+            patch.object(simulate, 'customer_says', side_effect=customer),
+        ):
+            task = asyncio.create_task(simulate.run('test'))
+            await answered.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        stopped = store.runs()[0]
+        with (
+            patch.object(simulate.judge, 'evaluate') as judge,
+            self.assertRaisesRegex(RuntimeError, 'нет записанных ответов'),
+        ):
+            await simulate.rejudge(stopped)
+        judge.assert_not_awaited()
+        item = store.run(stopped['id'])['items'][0]
+        self.assertEqual((item['status'], item['error']), ('UNMEASURED', 'Прогон остановлен'))
+
+    async def test_rejudge_of_an_older_record_keeps_a_conversation_that_ended_on_the_customer(self) -> None:
+        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        whole, broken = simulate.new_item(card('whole'), 'default', 1), simulate.new_item(card('broken'), 'default', 1)
+        whole.update(status='PASS', conversation=[{'role': 'customer', 'text': 'q'}, {'role': 'agent', 'text': 'a'}])
+        broken.update(
+            status='UNMEASURED',
+            error='Агент ответил HTTP 500',
+            conversation=[
+                {'role': 'customer', 'text': 'q'},
+                {'role': 'agent', 'text': 'Уточните номер терминала'},
+                {'role': 'customer', 'text': '12345678'},
+            ],
+        )
+        source.update(items=[whole, broken], status='done')
+        store.create_run(source)
+
+        async def failed(scenario: dict, item: dict) -> None:
+            item.update(status='FAIL', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
+
+        with patch.object(simulate.judge, 'evaluate', side_effect=failed):
+            result = await simulate.rejudge(store.run(source['id']))
+        self.assertEqual(result['items'][0]['status'], 'FAIL')
+        self.assertEqual(
+            (result['items'][1]['status'], result['items'][1]['error']), ('UNMEASURED', 'Агент ответил HTTP 500')
+        )
+
     async def test_customer_messages_and_cached_openings_consume_labelled_model_answers(self) -> None:
         scenario = card()
         store.save(simulate.cards.DECK, {'cards': [scenario]})
