@@ -1,25 +1,33 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, ChevronDown, History as HistoryIcon, RotateCcw } from "lucide-react";
+import { ArrowRight, ChevronDown, RotateCcw } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { duty } from "../../lab/criteria";
-import { when } from "../../lab/format";
+import { count, longDay, time } from "../../lab/format";
+import { useLabState } from "../../lab/LabProvider";
+import { toneResult } from "../../lab/tone";
 import {
   comparisonText,
+  errorShare,
   loadToneHistory,
   loadToneSnapshot,
-  toneShare,
   type ToneCheck,
   type ToneSnapshot,
 } from "../../lab/toneHistory";
 import type { Rule, Status } from "../../lab/types";
 import { Conversation } from "../../product/Conversation";
+import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
-import { Skeleton } from "../../ui/EmptyState";
+import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
+import { CheckHeader } from "../checks/CheckHeader";
 
 const statusText = (status: Status) =>
-  status === "FAIL" ? "С ошибкой" : status === "PASS" ? "Без найденных ошибок" : "Не удалось оценить";
+  status === "FAIL" ? "С ошибкой" : status === "PASS" ? "Без найденных ошибок" : "Не удалось проверить";
+
+/** «3 октября, 14:05»: when a check finished, to the minute, so two checks of one day are told apart. */
+const finished = (iso: string) => `${longDay(iso)}, ${time(iso)}`;
 const selectClass =
   "mt-2 w-full rounded-control border border-line bg-canvas px-3 py-2 text-body text-fg outline-none focus-visible:ring-2 focus-visible:ring-run";
 
@@ -111,21 +119,22 @@ function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous
     filtered.find((item) => item.status === "FAIL") ??
     filtered[0];
   const dialogue = snapshot.dialogues.find((item) => item.id === current?.dialogueId);
-  const share = toneShare(check);
   const outcomes = [
     { id: "all", label: "В выборке", value: check.sampled },
+    { id: "FAIL", label: "С ошибкой агента", value: check.summary.failed },
     { id: "PASS", label: "Без найденных ошибок", value: check.summary.passed },
-    { id: "FAIL", label: "С ошибкой", value: check.summary.failed },
-    { id: "none", label: "Не удалось оценить", value: check.summary.unmeasured },
+    { id: "none", label: "Не удалось проверить", value: check.summary.unmeasured },
   ];
   return (
     <div className="space-y-8 p-5 sm:p-7">
       <div>
-        <p className="text-display font-semibold tabular-nums text-fg">{share === null ? "—" : `${share}%`}</p>
-        <p className="mt-1 text-read text-fg-2">
-          {check.summary.passed} из {check.summary.measured} оценённых разговоров — без найденных ошибок.
-        </p>
-        <p className="mt-2 break-words text-body text-fg-3">
+        <StageResult
+          size="display"
+          failed={check.summary.failed}
+          checked={check.summary.measured}
+          unchecked={check.summary.unmeasured}
+        />
+        <p className="mt-4 break-words text-body text-fg-3">
           {check.file || "Загруженные разговоры"} · выборка {check.sampled} из {check.total} · критериев{" "}
           {snapshot.criteria.length}.
         </p>
@@ -256,7 +265,7 @@ function Snapshot({ id, checks, onClose }: { id: string | null; checks: ToneChec
       onClose={onClose}
       width="lg"
       title="Сохранённая проверка"
-      sub={check ? when(check.finishedAt) : undefined}
+      sub={check ? finished(check.finishedAt) : undefined}
     >
       {isLoading && (
         <div className="space-y-4 p-5" aria-label="Загружаем сохранённую проверку">
@@ -279,103 +288,126 @@ function Snapshot({ id, checks, onClose }: { id: string | null; checks: ToneChec
   );
 }
 
-/** Saved checks stay separate from the current workspace and open their own evidence. */
-export function History({ finishedAt, refreshStamp }: { finishedAt?: string; refreshStamp?: string }) {
+/** One saved check in the list: its number first, as on every screen, then when, which export, how it stands. */
+function CheckRow({
+  check,
+  previous,
+  current,
+  onOpen,
+}: {
+  check: ToneCheck;
+  previous?: ToneCheck;
+  current: boolean;
+  onOpen: () => void;
+}) {
+  const { failed, measured, unmeasured } = check.summary;
+  const share = errorShare(check);
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full items-start gap-3 rounded-control px-1 py-4 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run"
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-read text-fg-2">
+          {measured ? (
+            <>
+              <span className={cn("font-semibold tabular-nums", failed ? "text-bad" : "text-fg")}>{failed}</span> из{" "}
+              {count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с
+              ошибкой агента
+              <span className="text-fg-3"> · {share}%</span>
+            </>
+          ) : (
+            "Ни один разговор не удалось проверить"
+          )}
+          {current && <span className="ml-2 text-small text-fg-3">текущий итог</span>}
+        </p>
+        <p className="mt-1 break-words text-small text-fg-3">
+          {finished(check.finishedAt)} · {check.file || "Загруженные разговоры"}
+          {unmeasured ? ` · не удалось проверить ${unmeasured} из ${check.sampled}` : ""}
+        </p>
+        <p className="mt-2 text-small text-fg-3">{comparisonText(check, previous)}</p>
+      </div>
+      <ArrowRight aria-hidden className="mt-1 size-4 shrink-0 text-fg-3" />
+    </button>
+  );
+}
+
+/**
+ * «История» of tone of voice: every saved check, newest first, each with its own conversations, criteria and document.
+ * One opens as a sheet (?id=), even after the export or the rules were replaced. Checks are compared only when the
+ * service says they can be: the same criteria and models.
+ */
+export function HistoryPage() {
+  const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
-  const [open, setOpen] = useState(false);
-  const selected = params.get("history");
-  const expanded = open || !!selected;
-  const select = (id: string | null) => {
+  const selected = params.get("id");
+  const now = toneResult(state)?.finishedAt;
+  const select = (id: string | null) =>
     setParams(
       (current) => {
         const next = new URLSearchParams(current);
-        if (id) next.set("history", id);
-        else next.delete("history");
+        if (id) next.set("id", id);
+        else next.delete("id");
         return next;
       },
       { replace: !id },
     );
-    setOpen(true);
-  };
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ["tone-history", finishedAt, refreshStamp],
+    queryKey: ["tone-history", now, String(state?.job.running)],
     queryFn: loadToneHistory,
-    enabled: expanded,
+    enabled: !!state,
     staleTime: Infinity,
   });
   const checks = data?.checks ?? [];
   return (
-    <section className="mt-12 border-t border-line pt-6" aria-label="История проверок">
-      <button
-        type="button"
-        onClick={() => setOpen(!expanded)}
-        aria-expanded={expanded}
-        aria-controls="tone-history-list"
-        className="flex min-h-11 w-full items-center gap-3 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run"
-      >
-        <HistoryIcon aria-hidden className="size-5 text-fg-3" />
-        <span className="flex-1 text-lead font-semibold text-fg">
-          История проверок{data ? ` · ${checks.length}` : ""}
-        </span>
-        <ChevronDown aria-hidden className={`size-4 text-fg-3 transition-transform ${expanded ? "rotate-180" : ""}`} />
-      </button>
-      {expanded && (
-        <div id="tone-history-list" className="mt-4">
-          {isLoading && <Skeleton className="h-20" />}
-          {error && (
-            <div className="py-3">
-              <p role="alert" className="text-body text-fg-3">
-                Не удалось загрузить историю.
-              </p>
-              <Button className="mt-3" icon={RotateCcw} onClick={() => void refetch()}>
-                Повторить
-              </Button>
-            </div>
-          )}
-          {data && !checks.length && (
-            <p className="py-3 text-body text-fg-3">
-              {data.hasLegacyResult
-                ? "Текущий результат создан до появления истории. Она начнётся со следующей проверки."
-                : "Здесь появятся завершённые проверки с их разговорами и критериями."}
+    <div className="flex h-full flex-col">
+      <CheckHeader check="tone" />
+      <div className="min-h-0 flex-1 overflow-auto">
+        {offline && !state ? (
+          <ServiceDown />
+        ) : (
+          <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-10">
+            <h2 className="text-title font-semibold text-fg">История проверок</h2>
+            <p className="mt-1 max-w-[64ch] text-read text-fg-3">
+              Каждая завершённая проверка сохраняется со своими разговорами, критериями и документом правил. Ответы
+              человека хранятся отдельно и переживают новую выгрузку.
             </p>
-          )}
-          <div className="divide-y divide-line">
-            {checks.map((check) => (
-              <button
-                key={check.id}
-                type="button"
-                onClick={() => select(check.id)}
-                className="flex w-full items-start gap-3 rounded-control px-1 py-4 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="text-read font-medium text-fg">
-                    {when(check.finishedAt)}
-                    {check.finishedAt === finishedAt && (
-                      <span className="ml-2 text-small font-normal text-fg-3">Текущий результат</span>
-                    )}
+            <div className="mt-6">
+              {(isLoading || !state) && <Skeleton className="h-40" />}
+              {error && (
+                <div className="py-3">
+                  <p role="alert" className="text-body text-fg-3">
+                    Не удалось загрузить историю.
                   </p>
-                  <p className="mt-1 break-words text-small text-fg-3">{check.file || "Загруженные разговоры"}</p>
-                  <p className="mt-2 text-body text-fg-2">
-                    {check.summary.passed} из {check.summary.measured} — без найденных ошибок
-                    {toneShare(check) !== null ? ` (${toneShare(check)}%)` : ""}
-                  </p>
-                  <p className="mt-1 text-small text-fg-3">
-                    Не удалось оценить: {check.summary.unmeasured} из {check.sampled}.
-                  </p>
-                  <p className="mt-2 text-small text-fg-3">
-                    {comparisonText(
-                      check,
-                      checks.find((item) => item.id === check.comparison.previousId),
-                    )}
-                  </p>
+                  <Button className="mt-3" icon={RotateCcw} onClick={() => void refetch()}>
+                    Повторить
+                  </Button>
                 </div>
-                <ArrowRight aria-hidden className="mt-1 size-4 shrink-0 text-fg-3" />
-              </button>
-            ))}
+              )}
+              {data && !checks.length && (
+                <p className="py-3 text-body text-fg-3">
+                  {data.hasLegacyResult
+                    ? "Текущий итог создан до появления истории. Она начнётся со следующей проверки."
+                    : "Здесь появятся завершённые проверки с их разговорами и критериями."}
+                </p>
+              )}
+              <div className="divide-y divide-line">
+                {checks.map((check) => (
+                  <CheckRow
+                    key={check.id}
+                    check={check}
+                    previous={checks.find((item) => item.id === check.comparison.previousId)}
+                    current={check.finishedAt === now}
+                    onOpen={() => select(check.id)}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
       <Snapshot id={selected} checks={checks} onClose={() => select(null)} />
-    </section>
+    </div>
   );
 }
