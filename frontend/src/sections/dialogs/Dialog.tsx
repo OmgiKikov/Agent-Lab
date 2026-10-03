@@ -31,21 +31,19 @@ const WORD: Record<string, [string, string]> = {
 
 /** Every criterion the checks looked at in this conversation: errors first with their quote's number, then kept, then undecided. */
 function Verdicts({
-  row,
   rules,
   find,
+  shownOf,
   lit,
   onLit,
   onDecide,
-  decided,
 }: {
-  row: DialogRow;
   rules: Rule[];
   find: (ruleId: string) => Criterion | undefined;
+  shownOf: (r: Rule) => Example;
   lit: number | null;
   onLit: (n: number | null) => void;
   onDecide: (e: Example, d: Decision) => void;
-  decided: Record<string, Decision | null>;
 }) {
   return (
     <section className="mt-10" aria-label="Проверка по критериям">
@@ -55,8 +53,7 @@ function Verdicts({
       <ul className="mt-3 divide-y divide-line">
         {rules.map((r) => {
           const c = find(r.ruleId);
-          const e = exampleFor(row, r);
-          const shown = { ...e, review: decided[r.ruleId] !== undefined ? decided[r.ruleId] : e.review };
+          const shown = shownOf(r);
           const [word, tone] = WORD[r.status] ?? [r.status, "text-fg-3"];
           const n = c?.n;
           return (
@@ -82,7 +79,7 @@ function Verdicts({
                   <span className={cn("text-small", tone)}>· {word}</span>
                 </p>
                 <p className="mt-1 text-read text-fg-2">{r.reason}</p>
-                {r.status === "FAIL" && <p className="mt-1 text-small text-fg-3">{secondLine(e, null)}</p>}
+                {r.status === "FAIL" && <p className="mt-1 text-small text-fg-3">{secondLine(shown, null)}</p>}
                 {(r.status === "FAIL" || r.status === "PASS") && (
                   <div className="mt-3">
                     <ReviewButtons size="sm" example={shown} onDecide={(d) => onDecide(shown, d)} />
@@ -103,6 +100,7 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
   const { state } = useLabState();
   const review = useReview();
   const [lit, setLit] = useState<number | null>(null);
+  // Answers shown at once, by result and verdict: a new check or a changed verdict does not inherit them.
   const [decided, setDecided] = useState<Record<string, Decision | null>>({});
   const raw = params.get("dt");
   const tab: Tab = raw === "details" ? raw : "talk";
@@ -151,14 +149,27 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
           .join(" · ");
   // The logs' result this conversation comes from; the service takes an answer only on it.
   const finishedAt = row.source === "log" ? state?.discover?.finishedAt : null;
+  const keyOf = (e: Example) => `${finishedAt ?? ""}|${e.ruleId}|${e.status}`;
+  const shownOf = (r: Rule): Example => {
+    const e = exampleFor(row, r);
+    const k = keyOf(e);
+    return k in decided ? { ...e, review: decided[k] } : e;
+  };
   const decide = (e: Example, d: Decision) => {
     const next = e.review === d ? null : d;
-    setDecided((x) => ({ ...x, [e.ruleId]: next }));
-    review.mutate({ example: e, decision: next, finishedAt });
+    const k = keyOf(e);
+    setDecided((x) => ({ ...x, [k]: next }));
+    // Refused (the result changed, a check is running) or lost: the buttons show what the service has again.
+    review.mutateAsync({ example: e, decision: next, finishedAt }).catch(() =>
+      setDecided((x) => {
+        if (x[k] !== next) return x;
+        const n = { ...x };
+        delete n[k];
+        return n;
+      }),
+    );
   };
-  const reviewed = rules.filter(
-    (r) => r.status === "FAIL" && (decided[r.ruleId] !== undefined ? decided[r.ruleId] : r.review),
-  ).length;
+  const reviewed = rules.filter((r) => r.status === "FAIL" && shownOf(r).review).length;
   return (
     <article className="min-h-0 overflow-auto" aria-label={row.title}>
       {onBack && (
@@ -253,15 +264,7 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
               )}
             </div>
             {rules.length > 0 && (
-              <Verdicts
-                row={row}
-                rules={rules}
-                find={find}
-                lit={lit}
-                onLit={setLit}
-                onDecide={decide}
-                decided={decided}
-              />
+              <Verdicts rules={rules} find={find} shownOf={shownOf} lit={lit} onLit={setLit} onDecide={decide} />
             )}
           </>
         )}

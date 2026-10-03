@@ -10,7 +10,7 @@ import { useCriteria } from "../../lab/criteria";
 import { Duty } from "../../product/Duty";
 import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { useReview, type Decision, type Example } from "../../lab/problems";
+import { answersWait, useReview, type Decision, type Example } from "../../lab/problems";
 import { humansOf, secondOf } from "../../lab/problemStats";
 import { ExampleCard } from "../../product/ExampleCard";
 import { SourceSheet } from "../../product/SourceSheet";
@@ -60,6 +60,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
     );
   };
   const decide = (e: Example, d: Decision) => {
+    if (answersWait(state, e.source)) return;
     const before = e.review;
     const next = e.review === d ? null : d;
     // The result the examples come from: the service takes the answer only on it.

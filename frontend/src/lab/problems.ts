@@ -118,12 +118,25 @@ function withDecision(data: Problems, target: Example, decision: Decision | null
  */
 export type Answer = { example: Example; decision: Decision | null; finishedAt: string | null | undefined };
 
-/** «Верно / неверно» on one verdict: shown at once, saved by the service, the counts refreshed after. */
+/**
+ * Why answers on the logs wait, in one line, or null. While their check runs, its new result replaces the one the
+ * person answers on, and the service refuses answers (backend/lab/api.py, review).
+ */
+export function answersWait(state: LabState | null, source: Example["source"]): string | null {
+  const checking = state?.job.running && (state.job.kind === "tone-check" || state.job.kind === "discover");
+  return source === "log" && checking ? "Идёт проверка разговоров — ответить можно после неё." : null;
+}
+
+/**
+ * «Верно / неверно» on one verdict: shown at once, saved by the service, the counts refreshed after. A refused answer
+ * rejects its `mutateAsync`, so a screen that shows it at once takes it back.
+ */
 export function useReview() {
   const client = useQueryClient();
   const toast = useToast();
   const { refresh } = useLabState();
   return useMutation({
+    mutationKey: ["review"],
     mutationFn: ({ example, decision, finishedAt }: Answer) =>
       api(
         "/api/review",

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -7,7 +8,7 @@ import { useKeys } from "../../app/keys";
 import { stageLink, type Stage } from "../../app/links";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { useProblems, useReview, type Decision } from "../../lab/problems";
+import { answersWait, useProblems, useReview, type Decision } from "../../lab/problems";
 import { exampleKey, queueOf, QUEUE_TITLE, type Queue } from "../../lab/verdicts";
 import { Duty } from "../../product/Duty";
 import { ExampleCard } from "../../product/ExampleCard";
@@ -86,26 +87,30 @@ export function ReviewPage({ stage }: { stage: Stage }) {
     setDir(-1);
     setAt((a) => Math.max(0, a - 1));
   };
+  /** Takes back the answer shown at once on case `k`, unless the person has answered it otherwise since. */
+  const forget = (k: string, d?: Decision) =>
+    setAnswered((a) => {
+      if (!(k in a) || (d && a[k] !== d)) return a;
+      const n = { ...a };
+      delete n[k];
+      return n;
+    });
   const decide = (d: Decision) => {
-    if (!current) return;
+    if (!current || answersWait(state, current.example.source)) return;
     const e = current.example;
     const before = e.review;
     const k = exampleKey(e);
     const was = at;
     // The result the queue shows: an answer on it never lands on a check that replaced it meanwhile.
     const finishedAt = data?.log?.finishedAt;
-    review.mutate({ example: e, decision: d, finishedAt });
+    review.mutateAsync({ example: e, decision: d, finishedAt }).catch(() => forget(k, d));
     setAnswered((a) => ({ ...a, [k]: d }));
     next();
     toast.notify(d === "agree" ? "Отмечено: это ошибка" : "Отмечено: ошибки нет", {
       label: "Отменить",
       run: () => {
         review.mutate({ example: e, decision: before, finishedAt });
-        setAnswered((a) => {
-          const n = { ...a };
-          delete n[k];
-          return n;
-        });
+        forget(k);
         setDir(-1);
         setAt(was);
       },
@@ -115,6 +120,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
 
   const made = Object.values(answered);
   const agree = made.filter((d) => d === "agree").length;
+  const saving = useIsMutating({ mutationKey: ["review"] }) > 0;
+  const counted = saving ? "Сохраняем ответы…" : "Ответы уже учтены в счёте.";
   const rule = ruleId && data ? data.rules.find((r) => r.id === ruleId) : undefined;
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
 
@@ -238,9 +245,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                 </>
               }
             >
-              {made.length
-                ? `Это ошибка — ${agree}, ошибки нет — ${made.length - agree}. Ответы уже учтены в счёте.`
-                : "Ответы уже учтены в счёте."}
+              {made.length ? `Это ошибка — ${agree}, ошибки нет — ${made.length - agree}. ${counted}` : counted}
             </EmptyState>
           ) : current ? (
             <div
