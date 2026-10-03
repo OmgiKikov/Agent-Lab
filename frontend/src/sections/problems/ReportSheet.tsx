@@ -168,8 +168,9 @@ export function ReportSheet({
           )}
           {side === "sim" && sim && (
             <p className="mt-3 text-read text-ink-2">
-              Прогон {sim.target} · {sim.version}: проверено {sim.assessed} из {sim.dialogs} разговоров, ошибка в{" "}
-              {sim.withViolations}, {sim.unassessed} проверить не удалось.
+              Прогон {sim.target} · {sim.version}: проверено {sim.assessed} из{" "}
+              {count(sim.dialogs, "разговора", "разговоров", "разговоров")}, ошибка в {sim.withViolations},{" "}
+              {sim.unassessed} проверить не удалось.
             </p>
           )}
           <dl className="mt-6 grid grid-cols-2 border-t border-ink sm:grid-cols-4">
