@@ -177,6 +177,17 @@ def tone_reviews(check_id: str) -> list[dict]:
         ]
 
 
+def tone_decisions() -> list[tuple[str, str, str, str | None]]:
+    """Every saved decision on the tone checks, the newest check first: (check, conversation, criterion, decision).
+    A person answers only on the current check, so the first decision found is their latest word."""
+    with _connection() as connection:
+        return connection.execute(
+            'SELECT reviews.check_id, reviews.dialogue_id, reviews.rule_id, reviews.decision '
+            'FROM tone_check_reviews AS reviews JOIN tone_checks AS checks ON checks.id = reviews.check_id '
+            'ORDER BY checks.rowid DESC'
+        ).fetchall()
+
+
 def _save_tone_review(
     connection: sqlite3.Connection, check_id: str, dialogue_id: str, rule_id: str, decision: str | None, updated_at: str
 ) -> None:

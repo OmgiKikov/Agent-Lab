@@ -107,6 +107,24 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(api.jobs.state['error'])
         return store.load(discover.RESULT)
 
+    async def answer(self, result, rule_id, decision, dialogue_id='d1'):
+        response = await self.client.post(
+            '/api/review',
+            json={
+                'source': 'log',
+                'dialogueId': dialogue_id,
+                'ruleId': rule_id,
+                'decision': decision,
+                'finishedAt': result['finishedAt'],
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+    @staticmethod
+    def answers(result, dialogue_id='d1'):
+        item = next(item for item in result['results'] if item['dialogueId'] == dialogue_id)
+        return {row['ruleId']: (row['status'], row.get('review')) for row in item['rules']}
+
     async def upload(self, *dialogues, name='export.jsonl'):
         content = '\n'.join(json.dumps(dialogue, ensure_ascii=False) for dialogue in dialogues)
         response = await self.client.post(f'/api/logs?name={name}', content=content.encode())
@@ -138,6 +156,50 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         result = await self.check(count=2, down={'d2'})
         self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (1, 1))
         self.assertEqual(len(store.tone_checks()), 1)
+
+    async def test_an_answer_survives_a_check_that_could_not_decide_its_conversation(self):
+        await self.upload(self.dialogue, self.other)
+        first = await self.check(count=2)
+        await self.answer(first, 'pronouns', 'agree')
+        partial = await self.check(count=2, down={'d1'})
+        self.assertEqual(self.answers(partial)['pronouns'], ('UNKNOWN', None))
+        again = await self.check(count=2)
+        self.assertEqual(self.answers(again), {'pronouns': ('FAIL', 'agree'), 'simple_language': ('FAIL', None)})
+        self.assertEqual(store.tone_reviews(again['checkId'])[0]['decision'], 'agree')
+        # Another verdict is another question; the same verdict again brings the answer back.
+        changed = await self.check(count=2, status='PASS')
+        self.assertEqual(self.answers(changed)['pronouns'], ('PASS', None))
+        self.assertEqual(self.answers(await self.check(count=2))['pronouns'], ('FAIL', 'agree'))
+        # A withdrawn answer is the latest word: an older check does not bring it back.
+        latest = store.load(discover.RESULT)
+        await self.answer(latest, 'pronouns', None)
+        await self.check(count=2, down={'d1'})
+        self.assertEqual(self.answers(await self.check(count=2))['pronouns'], ('FAIL', None))
+
+    async def test_clarifying_one_criterion_keeps_the_answers_on_the_others(self):
+        first = await self.check()
+        await self.answer(first, 'pronouns', 'agree')
+        await self.answer(first, 'simple_language', 'disagree')
+        response = await self.client.post(
+            '/api/tone-of-voice/clarification',
+            json={
+                'revision': store.load(tone.DRAFT)['revision'],
+                'ruleId': 'pronouns',
+                'text': 'Обращение на ты допустимо только в прямой цитате клиента.',
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        second = await self.check()
+        self.assertEqual(self.answers(second), {'pronouns': ('FAIL', None), 'simple_language': ('FAIL', 'disagree')})
+
+    async def test_an_answer_stays_with_its_conversation_not_with_an_id_a_new_export_reuses(self):
+        first = await self.check()
+        await self.answer(first, 'pronouns', 'agree')
+        another = {**self.dialogue, 'messages': [*self.dialogue['messages'][:1], self.other['messages'][1]]}
+        await self.upload(another, name='next.jsonl')
+        self.assertEqual(self.answers(await self.check())['pronouns'], ('FAIL', None))
+        await self.upload(self.dialogue, name='first-again.jsonl')
+        self.assertEqual(self.answers(await self.check())['pronouns'], ('FAIL', 'agree'))
 
     async def test_snapshots_survive_new_inputs_and_do_not_change_with_live_reviews(self):
         result = await self.check()
