@@ -32,8 +32,17 @@ print(gateway.problem() or ("ready" if gateway.configured() else "absent"))')" |
   case "$LAB_GATEWAY" in
   absent)
     (cd backend/bridge && npm ci --silent)
+    # A new token for each start, shared by the bridges and the backend: no other process spends OpenRouter through
+    # them. A bridge already running is used only with the token it was given (PI_PROXY_TOKEN set by hand).
+    LAB_BRIDGES_REUSED="${PI_PROXY_TOKEN:+yes}"
+    PI_PROXY_TOKEN="${PI_PROXY_TOKEN:-$("$LAB_PYTHON" -c 'import secrets; print(secrets.token_urlsafe(32))')}"
+    export PI_PROXY_TOKEN
     model_bridge() {
-      curl -fsS --max-time 2 "http://127.0.0.1:$1/health" >/dev/null 2>&1 && return
+      if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$1/health"; then
+        [ -n "$LAB_BRIDGES_REUSED" ] && return
+        echo "Порт $1 занят (мост Pi прежнего запуска?): остановите его, у этого запуска свой токен." >&2
+        exit 1
+      fi
       PI_PROXY_PORT="$1" PI_PROXY_CONCURRENCY=6 PI_JUDGE_PROVIDER="${LAB_PI_PROVIDER:-openrouter}" PI_JUDGE_MODEL="$2" \
         "$LAB_PYTHON" backend/bridge/pi_bridge.py >>"$LAB_RUNTIME/$3" 2>&1 &
       LAB_OWNED_PIDS="$LAB_OWNED_PIDS $!"

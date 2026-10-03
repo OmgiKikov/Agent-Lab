@@ -17,6 +17,11 @@ import httpx
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def busy(port: int) -> bool:
+    with socket.socket() as probe:
+        return probe.connect_ex(('127.0.0.1', port)) == 0
+
+
 def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
@@ -112,3 +117,19 @@ class StartTests(unittest.TestCase):
         self.assertEqual(state['models']['via'], 'шлюз банка')
         self.assertIn('url.txt пустой', state['models']['problem'])
         self.assertFalse((self.folder / 'data/bridge.log').exists())  # no bridge was started
+
+    @unittest.skipIf(busy(11436), 'a Pi bridge of another start listens on 11436')
+    def test_the_bridges_and_the_backend_share_a_token_of_this_start(self) -> None:
+        pi = self.tool('pi', 'echo готов')
+        self.assertIn('Модели: OpenRouter через Pi', self.start(PI_BIN=str(pi)))
+        ready('http://127.0.0.1:11436/health')
+        body = {'messages': [{'role': 'user', 'content': 'Проверка связи'}]}
+        public = {'Authorization': 'Bearer pi-local-bridge'}
+        bridge = httpx.post('http://127.0.0.1:11436/v1/chat/completions', json=body, headers=public, trust_env=False)
+        self.assertEqual(bridge.status_code, 401)
+        ready(f'http://127.0.0.1:{self.port}/health')
+        page = {'Origin': f'http://127.0.0.1:{self.port}'}
+        checked = httpx.post(
+            f'http://127.0.0.1:{self.port}/api/models/check', headers=page, timeout=60, trust_env=False
+        )
+        self.assertEqual(checked.json()['main'], {'ok': True})
