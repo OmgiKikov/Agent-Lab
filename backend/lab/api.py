@@ -314,14 +314,20 @@ async def upload_logs(request: Request, name: str) -> dict:
 
 
 @app.get('/api/logs/{dialogue_id}')
-def log_detail(dialogue_id: str) -> dict:
+def log_detail(dialogue_id: str, check: Literal['tone', 'code'] | None = None) -> dict:
+    """A logged conversation with its evaluation in the result of the check asked for; without one, in tone of voice's
+    result, then in Точность's."""
     dialogue = logs.read(dialogue_id)
     if dialogue is None:
         raise HTTPException(404, 'Разговор не найден')
-    analysis = store.load(discover.RESULT) or {}
-    evaluation = next(
-        (result for result in analysis.get('results', []) if str(result['dialogueId']) == dialogue_id), None
-    )
+    evaluation = None
+    for key in [check] if check else checks.RESULTS:
+        analysis = store.load(checks.result(key)) or {}
+        evaluation = next(
+            (result for result in analysis.get('results', []) if str(result['dialogueId']) == dialogue_id), None
+        )
+        if evaluation:
+            break
     return {**dialogue, 'evaluation': evaluation}
 
 

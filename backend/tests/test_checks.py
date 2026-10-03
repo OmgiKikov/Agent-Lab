@@ -129,6 +129,20 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         state = (await self.client.get('/api/state')).json()
         self.assertEqual(state['runs'][0]['check'], 'tone')
 
+    async def test_a_conversation_shows_its_evaluation_in_the_check_asked_for(self):
+        async def criteria(query=''):
+            evaluation = (await self.client.get(f'/api/logs/d1{query}')).json()['evaluation']
+            return evaluation and [row['ruleId'] for row in evaluation['rules']]
+
+        await self.assess_code()
+        self.assertEqual(await criteria(), ['t1r1'])
+        self.assertIsNone(await criteria('?check=tone'))
+        await self.check_tone()
+        self.assertEqual(await criteria(), ['pronouns'])  # without a check: tone of voice's, then Точность's
+        self.assertEqual(await criteria('?check=tone'), ['pronouns'])
+        self.assertEqual(await criteria('?check=code'), ['t1r1'])
+        self.assertEqual((await self.client.get('/api/logs/d1?check=other')).status_code, 422)
+
     async def test_an_outage_says_the_previous_result_is_kept_only_when_the_check_has_one(self):
         self.assertIsNone(await self.assess_code())
         unanswered = 'Модель проверки не ответила ни по одному разговору.'
