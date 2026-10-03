@@ -56,6 +56,17 @@ class LogImportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             logs.prepare('export.xlsx', excel(PAIR, None, include_order=False))
 
+    def test_a_marker_word_inside_a_message_stays_in_the_message(self):
+        text = 'CLIENT Терминал пишет HOST AGENT NOT FOUND, что делать?\nAGENT Перезагрузите терминал'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2]'))
+        self.assertEqual(
+            dialogues[0]['messages'],
+            [
+                {'role': 'user', 'content': 'Терминал пишет HOST AGENT NOT FOUND, что делать?'},
+                {'role': 'assistant', 'content': 'Перезагрузите терминал'},
+            ],
+        )
+
     def test_zero_is_a_real_id_and_final_customer_turn_is_preserved(self):
         text = PAIR + 'CLIENT Ещё один вопрос'
         dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3]', dialogue_id=0))

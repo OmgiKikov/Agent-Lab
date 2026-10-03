@@ -20,7 +20,8 @@ FILE = 'logs.json'
 META = 'logs-meta.json'  # the name and time of the last upload
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
-MARKER = re.compile(r'\b(CLIENT|AGENT)\b')
+# The export starts every turn on its own line; «HOST AGENT NOT FOUND» inside a message is the customer's words.
+MARKER = re.compile(r'^[ \t]*(CLIENT|AGENT)\b', re.M)
 # A chat button the agent sent, written into the export's text as «` ` ` transition-code CODE ` ` `».
 CONTROL = re.compile(r'`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_-]*)\s*`\s*`\s*`')
 # The line as_seen puts under a reply for those buttons.
