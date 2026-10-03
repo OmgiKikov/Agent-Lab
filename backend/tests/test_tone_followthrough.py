@@ -108,6 +108,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         return store.load(discover.RESULT)
 
     async def answer(self, result, rule_id, decision, dialogue_id='d1'):
+        """A person's answer on the result and the verdict they see, as every screen sends it."""
         response = await self.client.post(
             '/api/review',
             json={
@@ -116,6 +117,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 'ruleId': rule_id,
                 'decision': decision,
                 'finishedAt': result['finishedAt'],
+                'status': self.answers(result, dialogue_id)[rule_id][0],
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
