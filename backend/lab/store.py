@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import checks
 from .metric import metric
 from .settings import DATA
 
@@ -153,7 +154,7 @@ def _update_document(connection: sqlite3.Connection, name: str, mutate: Callable
 
 
 def replace_inputs(name: str, value: Any) -> None:
-    """Replace sources or logs together with invalidation of their derived audit and scenarios.
+    """Replace sources or logs together with invalidation of their derived results and scenarios.
 
     The tone-of-voice check derives from its own policy, not from the agent's code: while the policy stays the same,
     its criteria and its result survive re-read code. Scenarios read the code, so they are invalidated either way.
@@ -162,13 +163,13 @@ def replace_inputs(name: str, value: Any) -> None:
         raise ValueError('Only source and log documents are inputs')
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
-        cleared = ['discover.json', 'cards.json']
-        if name == 'sources.json':
+        cleared = [checks.result(checks.CODE), 'cards.json']
+        if name == 'logs.json':
+            cleared.append(checks.result(checks.TONE))
+        else:
             policy = _tone_policy(_document(connection, name))
             if not policy or policy != _tone_policy(value):
-                cleared.append('tone-of-voice-criteria.json')
-            elif (_document(connection, 'discover.json') or {}).get('purpose') == 'tone-of-voice':
-                cleared.remove('discover.json')
+                cleared += ['tone-of-voice-criteria.json', checks.result(checks.TONE)]
         connection.execute(
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
             (name, _json(value)),
@@ -270,7 +271,7 @@ def _save_tone_review(
 
 
 def save_tone_check(snapshot: dict) -> None:
-    """Publish the live result and its immutable evidence snapshot in one transaction.
+    """Publish the live result, in tone of voice's own place, and its immutable evidence snapshot in one transaction.
 
     Initial carried reviews seed separate annotations; later reviews never rewrite historical model evidence.
     """
@@ -282,7 +283,7 @@ def save_tone_check(snapshot: dict) -> None:
         )
         connection.execute(
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            ('discover.json', _json(snapshot['result'])),
+            (checks.result(checks.TONE), _json(snapshot['result'])),
         )
         connection.execute(
             'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',

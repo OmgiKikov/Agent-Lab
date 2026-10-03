@@ -1,8 +1,8 @@
-"""Test cards: business scenarios built from the audited logs.
+"""Test cards: business scenarios built from the errors one check found in the real conversations.
 
 A card is a situation for the synthetic customer (taken from a real conversation), its frozen criteria
 (the grounded rules of its topic, observable in the agent's replies or its system calls) and its test data
-for the mocked bank systems.
+for the mocked bank systems. The deck names the check it was built from (checks.py).
 """
 
 import asyncio
@@ -10,7 +10,7 @@ import hashlib
 import json
 from collections.abc import Callable, Sequence
 
-from . import discover, llm, logs, quotes, store, tone
+from . import checks, llm, logs, quotes, store, tone
 from .agents import world
 from .context import sources
 from .prompts import CARD
@@ -136,13 +136,13 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
     return card
 
 
-async def run(progress: Callable[..., None] = lambda **_: None) -> list[dict]:
-    """The cards built from the picked conversations. A card the model fails to build is reported in the progress
-    (failed) and never cancels the others; only when no card is built is the build an error."""
-    analysis = store.load(discover.RESULT)
+async def run(check: str, progress: Callable[..., None] = lambda **_: None) -> list[dict]:
+    """The cards built from the conversations picked in the check's result. A card the model fails to build is
+    reported in the progress (failed) and never cancels the others; only when no card is built is the build an error."""
+    analysis = store.load(checks.result(check))
     if not analysis:
-        raise RuntimeError('Сначала оцените диалоги')
-    if analysis.get('purpose') == tone.KIND:
+        raise RuntimeError(f'У проверки «{checks.NAMES[check]}» ещё нет итога: сначала проверьте разговоры.')
+    if check == checks.TONE:
         draft = store.load(tone.DRAFT) or {}
         if draft.get('revision') != analysis.get('criteriaRevision'):
             raise RuntimeError(

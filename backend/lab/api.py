@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from . import (
     agents,
     cards,
+    checks,
     discover,
     llm,
     logs,
@@ -120,7 +121,7 @@ class ToneClarificationCommand(BaseModel):
 
 class ReviewCommand(BaseModel):
     """A person's decision on what the judge found: on one criterion of a logged or simulated conversation, or (older
-    requests without ruleId) on a simulated conversation as a whole. finishedAt (the logs' result) and status (the
+    requests without ruleId) on a simulated conversation as a whole. finishedAt (the check's result) and status (the
     verdict) are what the person saw: when either changed meanwhile, the decision is refused."""
 
     source: Literal['log', 'sim'] = 'sim'
@@ -131,6 +132,10 @@ class ReviewCommand(BaseModel):
     decision: Literal['agree', 'disagree'] | None = None
     finishedAt: str | None = None
     status: str | None = None
+
+
+class CardsCommand(BaseModel):
+    check: Literal['tone', 'code'] | None = None
 
 
 def start(kind: str, work: Work) -> dict:
@@ -366,10 +371,21 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 
 
 @app.post('/api/cards')
-async def start_cards() -> dict:
+async def start_cards(payload: CardsCommand | None = Body(default=None)) -> dict:
+    """Scenarios from the errors of one check: the one asked for, else the only check with a result."""
+    check = payload.check if payload else None
+    if check is None:
+        found = [key for key in checks.RESULTS if store.load(checks.result(key))]
+        if len(found) > 1:
+            raise HTTPException(400, 'Выберите, из какой проверки собрать сценарии')
+        check = next(iter(found), None)
+
     async def work(progress: Progress) -> list[dict]:
-        deck = await cards.run(progress)
-        store.save(cards.DECK, {'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck})
+        if check is None:
+            raise RuntimeError('Сначала проверьте разговоры: сценарии собираются из найденных ошибок.')
+        deck = await cards.run(check, progress)
+        document = {'check': check, 'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck}
+        store.save(cards.DECK, document)
         return deck
 
     return start('cards', work)
@@ -428,7 +444,7 @@ async def check_tone(payload: ToneCheckCommand) -> dict:
 
 @app.get('/api/tone-of-voice/history')
 def tone_history() -> dict:
-    result = store.load(discover.RESULT) or {}
+    result = store.load(tone.RESULT) or {}
     return {
         'checks': store.tone_checks(),
         'hasLegacyResult': result.get('purpose') == tone.KIND and not result.get('checkId'),
@@ -507,6 +523,31 @@ async def rejudge(run_id: str) -> dict:
     return start('rejudge', lambda progress: simulate.rejudge(record, progress))
 
 
+def has_verdict(analysis: dict, dialogue_id: str, rule_id: str) -> bool:
+    return any(
+        str(result.get('dialogueId')) == dialogue_id and any(row.get('ruleId') == rule_id for row in result['rules'])
+        for result in analysis.get('results') or []
+        if result.get('rules')
+    )
+
+
+def answered_check(payload: ReviewCommand) -> str:
+    """The check whose result an answer on a logged conversation is about: the one whose result the person saw
+    (finishedAt), else the first whose result has this verdict."""
+    results = {check: store.load(checks.result(check)) or {} for check in checks.RESULTS}
+    if payload.finishedAt:
+        found = next((key for key, value in results.items() if value.get('finishedAt') == payload.finishedAt), None)
+        if found is None:
+            raise HTTPException(409, store.CHANGED)
+        return found
+    found = next(
+        (key for key, value in results.items() if has_verdict(value, payload.dialogueId, payload.ruleId)), None
+    )
+    if found is None:
+        raise HTTPException(404, 'Вердикт не найден')
+    return found
+
+
 @app.post('/api/review')
 async def review(payload: ReviewCommand) -> dict:
     if payload.source == 'log':
@@ -514,9 +555,10 @@ async def review(payload: ReviewCommand) -> dict:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')
         if jobs.state['running'] and jobs.state['kind'] in ('discover', 'tone-check'):
             raise HTTPException(409, 'Идёт оценка диалогов: ответ не сохранится. Отметьте после неё.')
+        check = answered_check(payload)
         try:
             store.set_log_review(
-                discover.RESULT,
+                checks.result(check),
                 payload.dialogueId,
                 payload.ruleId,
                 payload.decision,
