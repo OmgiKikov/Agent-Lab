@@ -24,10 +24,15 @@ export function matchesRow(r: DialogRow, verdict: Verdict, query: string, only: 
   return !q || [r.title, r.topic, ...r.fails].some((s) => s.toLowerCase().includes(q));
 }
 
-const textKey = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
-
-/** The criteria of the product by the checks' wording, so a conversation's verdicts carry the same numbers as everywhere. */
-export function criteriaByText(list: Criterion[]) {
-  const map = new Map(list.map((c) => [textKey(c.r.rule.text), c]));
-  return (text: string) => map.get(textKey(text));
+/**
+ * The criteria of the product by the ids the checks gave them in a stage, so a conversation's verdicts carry the same
+ * numbers as everywhere. Not by wording: a verdict keeps the text the check saw, with a person's clarifications.
+ */
+export function criteriaByRule(list: Criterion[]) {
+  const map = new Map(
+    list.flatMap((c) =>
+      (["log", "sim"] as const).flatMap((s) => c.r[s].ruleIds.map((id) => [`${s}|${id}`, c] as const)),
+    ),
+  );
+  return (source: "log" | "sim", ruleId: string) => map.get(`${source}|${ruleId}`);
 }

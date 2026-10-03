@@ -30,7 +30,8 @@ export type Example = {
   review: Decision | null;
   reviewScope: Scope | null;
 };
-export type Side = { failed: number; passed: number; unknown: number; examples: Example[] };
+/** One stage of a rule: its counts, its verdicts, and the ids the checks gave the rule in this stage. */
+export type Side = { failed: number; passed: number; unknown: number; examples: Example[]; ruleIds: string[] };
 export type RuleEntry = {
   id: string;
   title: string;

@@ -7,7 +7,7 @@ import { personaName } from "../../lab/look";
 import type { Persona } from "../../lab/types";
 import { Menu } from "../../ui/Menu";
 import { Search } from "../../ui/Search";
-import { criteriaByText, matchesRow, VERDICTS, type Verdict } from "./model";
+import { criteriaByRule, matchesRow, VERDICTS, type Verdict } from "./model";
 
 /** A conversation's result as a sign and a word: colour never stands alone. */
 export function VerdictWord({ status, className }: { status: DialogRow["status"]; className?: string }) {
@@ -125,14 +125,14 @@ export function Rows({
   runMenu?: React.ReactNode;
   className?: string;
 }) {
-  const find = criteriaByText(criteria);
+  const find = criteriaByRule(criteria);
   const numbers = (r: DialogRow) =>
     [
       ...new Set(
         r.rules
           .filter((x) => x.status === "FAIL")
           .flatMap((x) => {
-            const c = find(x.rule);
+            const c = find(r.source, x.ruleId);
             return c ? [c.n] : [];
           }),
       ),

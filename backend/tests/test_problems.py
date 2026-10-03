@@ -107,6 +107,15 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value['problems'], [rule['id']])
         self.assertIsNone(value['sim'])
 
+    def test_a_rule_names_the_ids_its_verdicts_carry_in_each_stage(self) -> None:
+        # A verdict keeps the wording the check saw (a clarified criterion's text grows): screens match it by id.
+        value = audit()
+        value['results'][0]['rules'][0]['rule'] = RULE['text'] + '\n\nУточнения, подтверждённые человеком:\n…'
+        store.save(discover.RESULT, value)
+        store.create_run(played_run())
+        rule = problems.build('run-1')['rules'][0]
+        self.assertEqual((rule['log']['ruleIds'], rule['sim']['ruleIds']), (['t1r1', 't2r1'], ['c1']))
+
     def test_the_first_example_of_a_problem_shows_what_its_title_says(self) -> None:
         def failed(dialogue_id: str, title: str, second: dict | None = None) -> dict:
             row = {'ruleId': 't1r1', 'status': 'FAIL', 'reason': title, 'agentQuote': 'звоните', 'title': title}

@@ -18,7 +18,7 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Segmented } from "../../ui/Segmented";
 import { VerdictWord } from "./Rows";
-import { criteriaByText } from "./model";
+import { criteriaByRule } from "./model";
 
 type Tab = "talk" | "details";
 const ORDER: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
@@ -41,7 +41,7 @@ function Verdicts({
 }: {
   row: DialogRow;
   rules: Rule[];
-  find: (t: string) => Criterion | undefined;
+  find: (ruleId: string) => Criterion | undefined;
   lit: number | null;
   onLit: (n: number | null) => void;
   onDecide: (e: Example, d: Decision) => void;
@@ -54,7 +54,7 @@ function Verdicts({
       </h3>
       <ul className="mt-3 divide-y divide-line">
         {rules.map((r) => {
-          const c = find(r.rule);
+          const c = find(r.ruleId);
           const e = exampleFor(row, r);
           const shown = { ...e, review: decided[r.ruleId] !== undefined ? decided[r.ruleId] : e.review };
           const [word, tone] = WORD[r.status] ?? [r.status, "text-fg-3"];
@@ -123,12 +123,13 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
     index: row.index,
   } as Example;
   const { turns, loading, error } = useTurns(probe);
-  const find = criteriaByText(criteria);
+  const byRule = criteriaByRule(criteria);
+  const find = (ruleId: string) => byRule(row.source, ruleId);
   const rules = [...row.rules].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
   const marks: Mark[] = rules
     .filter((r) => r.status === "FAIL" && r.agentQuote)
     .flatMap((r) => {
-      const c = find(r.rule);
+      const c = find(r.ruleId);
       return c ? [{ quote: r.agentQuote, n: c.n }] : [];
     });
   const judged = rules.filter((r) => r.status === "PASS" || r.status === "FAIL").length;
