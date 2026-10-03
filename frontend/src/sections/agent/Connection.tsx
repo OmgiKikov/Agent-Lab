@@ -2,14 +2,14 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Check as CheckIcon, Code2, Globe, Monitor, PlugZap, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
-import type { Check, LabState, Target } from "../../lab/types";
+import type { LabState, Probe, Target } from "../../lab/types";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 import { agentKey } from "../../app/agent";
 
-type Answer = Check & { question?: string };
+type Answer = Probe & { question?: string };
 type Last = { target: string; text: string; at: string };
 
 const LAST = agentKey("lab.agent.lastCheck"),
@@ -79,8 +79,19 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
+/**
+ * How far a way is set up, in words that do not promise more than is known: an address only says where the agent is
+ * («адрес задан»), whether it answers is told by «Проверить связь»; the agent from its code is «готово» only when the
+ * service found how to start it (backend/lab/agents, public).
+ */
+function readiness(target: Target): { word: string; ok: boolean } {
+  if (!target.ready) return { word: "не настроено", ok: false };
+  return target.kind === "code" ? { word: "готово", ok: true } : { word: "адрес задан", ok: false };
+}
+
 function Way({ target, on, onPick }: { target: Target; on: boolean; onPick: () => void }) {
   const look = WAY_LOOK[target.id] ?? { icon: Globe, how: target.note };
+  const ready = readiness(target);
   return (
     <button
       type="button"
@@ -111,15 +122,14 @@ function Way({ target, on, onPick }: { target: Target; on: boolean; onPick: () =
           {target.where ? ` · ${target.where}` : ""}
         </span>
       </span>
-      <span className={cn("inline-flex items-center gap-1 text-small", target.ready ? "text-ok" : "text-fg-3")}>
-        {target.ready ? (
-          <>
-            <CheckIcon aria-hidden className="size-3.5" />
-            готово
-          </>
-        ) : (
-          "не настроено"
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 whitespace-nowrap text-small",
+          ready.ok ? "text-ok" : target.ready ? "text-fg-2" : "text-fg-3",
         )}
+      >
+        {ready.ok && <CheckIcon aria-hidden className="size-3.5" />}
+        {ready.word}
       </span>
     </button>
   );
