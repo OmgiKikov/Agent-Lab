@@ -13,6 +13,7 @@ from .api import app
 from .settings import FRONTEND
 
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
+DEFAULT_PORTS = {'http': 80, 'https': 443}
 
 
 def allowed_hosts() -> set[str]:
@@ -33,22 +34,32 @@ def _host(value: str) -> tuple[str, int | None] | None:
     return parts.hostname, port
 
 
+def _origin(value: str) -> tuple[str, str, int | None] | None:
+    """Scheme, host and port of an Origin header; None for anything else (null, a path, a broken port)."""
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return None
+    if not parts.hostname or parts.username is not None or parts.path or parts.query or parts.fragment:
+        return None
+    return parts.scheme, parts.hostname, port or DEFAULT_PORTS.get(parts.scheme)
+
+
 @app.middleware('http')
 async def local_browser_commands(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """A page on another name that resolves to this computer (DNS rebinding) reads and changes nothing, pages
-    included; other browser tabs cannot launch model work on this local application."""
+    included. A browser's command comes only from the Lab's own page: another local service on another port (Jupyter,
+    a stand's Swagger) cannot replace the export or start paid work. A request without Origin is not a browser page's.
+    """
     host = _host(request.headers.get('host', ''))
     if host is None or host[0] not in allowed_hosts():
         detail = 'Agent Lab открывается по адресу 127.0.0.1 или localhost. Другое имя добавьте в LAB_ALLOWED_HOSTS.'
         return JSONResponse({'detail': detail}, status_code=400)
     origin = request.headers.get('origin')
     if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and origin:
-        try:
-            source = urlsplit(origin)
-            allowed = source.scheme in ('http', 'https') and source.hostname in ('127.0.0.1', 'localhost', '::1')
-        except ValueError:
-            allowed = False
-        if not allowed:
+        scheme = request.scope['scheme']
+        if _origin(origin) != (scheme, host[0], host[1] or DEFAULT_PORTS.get(scheme)):
             return JSONResponse({'detail': 'Запрос из внешней страницы отклонён'}, status_code=403)
     return await call_next(request)
 

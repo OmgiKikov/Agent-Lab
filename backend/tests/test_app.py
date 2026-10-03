@@ -65,7 +65,9 @@ async def main():
                 response = await client.post('/api/models/check', headers={'Origin': origin})
                 assert response.status_code == 403, (origin, response.text)
             check.assert_not_awaited()
-            response = await client.post('/api/models/check', headers={'Origin': 'http://127.0.0.1:5900'})
+            # The Vite dev proxy keeps the page's Host (changeOrigin: false), so its Origin is the request's own.
+            headers = {'Origin': 'http://127.0.0.1:5900', 'Host': '127.0.0.1:5900'}
+            response = await client.post('/api/models/check', headers=headers)
             assert response.status_code == 200
             assert check.await_count == 2
         assert (await client.get('/favicon.svg')).status_code == 404
@@ -99,6 +101,38 @@ async def main():
 asyncio.run(main())
 """,
             built=True,
+        )
+
+    def test_another_local_service_cannot_send_commands(self) -> None:
+        """Jupyter, a stand's Swagger or `python -m http.server` is another origin on this computer: its page may post
+        a simple form or text/plain body, which replaces the export or starts paid work."""
+        self.probe(
+            """
+import asyncio
+import httpx
+from unittest.mock import AsyncMock, patch
+from lab import api
+from lab.app import app
+
+async def main():
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://127.0.0.1:5899') as client:
+        with patch.object(api.llm, 'check', new=AsyncMock(return_value={'ok': True})) as check:
+            others = ('http://localhost:8888', 'http://127.0.0.1:5900', 'http://localhost:5899', 'https://127.0.0.1:5899')
+            for origin in others:
+                response = await client.post('/api/models/check', headers={'Origin': origin})
+                assert response.status_code == 403, (origin, response.status_code)
+            headers = {'Origin': 'http://localhost:8888', 'Content-Type': 'text/plain'}
+            response = await client.post('/api/logs?name=a.jsonl', content='{}', headers=headers)
+            assert response.status_code == 403, response.status_code
+            check.assert_not_awaited()
+            for headers in ({'Origin': 'http://127.0.0.1:5899'}, {}):
+                response = await client.post('/api/models/check', headers=headers)
+                assert response.status_code == 200, (headers, response.status_code)
+        assert (await client.get('/api/state', headers={'Origin': 'http://localhost:8888'})).status_code == 200
+
+asyncio.run(main())
+""",
+            built=False,
         )
 
     def test_a_person_can_add_a_name_of_this_computer(self) -> None:
