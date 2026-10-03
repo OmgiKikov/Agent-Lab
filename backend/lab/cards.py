@@ -2,7 +2,8 @@
 
 A card is a situation for the synthetic customer (taken from a real conversation), its frozen criteria
 (the grounded rules of its topic, observable in the agent's replies or its system calls) and its test data
-for the mocked bank systems. The deck names the check it was built from (checks.py).
+for the mocked bank systems. A card from an error names the criteria the agent failed in that conversation
+(reproduces): the scenario is a test of that error. The deck names the check it was built from (checks.py).
 """
 
 import asyncio
@@ -17,6 +18,8 @@ from .prompts import CARD
 
 DECK = checks.DECK
 LIMIT = 30
+# Why a card exists: an error the check found in a real conversation, or a conversation without one (a control).
+FROM_LOG, COVERAGE = 'Ошибка из лога', 'Покрытие темы'
 # Applies to every scenario: instructions must come from the knowledge base, not be invented.
 FOLLOWS_KNOWLEDGE = {
     'id': 'g-knowledge',
@@ -70,8 +73,14 @@ def _parse_card(value: dict) -> dict:
     return value
 
 
-def pick(analysis: dict) -> list[tuple[dict, dict, str]]:
-    """Per topic: up to two conversations where the agent failed (regressions) and two where it did not (coverage)."""
+def failed_in(result: dict) -> list[str]:
+    """The criteria the agent failed in one conversation of a check's result, in the order of its verdicts."""
+    return [row['ruleId'] for row in result.get('rules') or [] if row.get('status') == 'FAIL' and row.get('ruleId')]
+
+
+def pick(analysis: dict) -> list[tuple[dict, dict, str, list[str]]]:
+    """Per topic: up to two conversations where the agent failed (regressions), with the criteria it failed there,
+    and two where it did not (coverage)."""
     by_id = {str(d['id']): d for d in logs.load()}
     rounds = [[], [], [], []]  # 1st regression, 1st coverage, 2nd regression, 2nd coverage of every topic
     for topic in analysis['topics']:
@@ -82,9 +91,9 @@ def pick(analysis: dict) -> list[tuple[dict, dict, str]]:
         coverage = [r for r in results if r['status'] in ('PASS', 'UNMEASURED')]
         for n in range(2):
             if n < len(failed):
-                rounds[2 * n].append((topic, by_id[str(failed[n]['dialogueId'])], 'Ошибка из лога'))
+                rounds[2 * n].append((topic, by_id[str(failed[n]['dialogueId'])], FROM_LOG, failed_in(failed[n])))
             if n < len(coverage):
-                rounds[2 * n + 1].append((topic, by_id[str(coverage[n]['dialogueId'])], 'Покрытие темы'))
+                rounds[2 * n + 1].append((topic, by_id[str(coverage[n]['dialogueId'])], COVERAGE, []))
     return [chosen for group in rounds for chosen in group][:LIMIT]
 
 
@@ -98,7 +107,11 @@ def general_rules(analysis: dict) -> list[dict]:
     return [items[0][1] for items in by_quote.values() if len({t for t, _ in items}) >= 3]
 
 
-async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence[dict] = ()) -> dict:
+async def build_card(
+    topic: dict, dialogue: dict, origin: str, general: Sequence[dict] = (), reproduces: Sequence[str] = ()
+) -> dict:
+    """The card of one conversation. reproduces: the criteria the agent failed in it (pick); the card keeps the ones
+    it checks, so a criterion the scenario cannot observe is never said to be reproduced by it."""
     customer = [m['content'] for m in dialogue['messages'] if m['role'] == 'user']
     answer = await llm.structured(CARD, {'topic': topic['title'], 'customerMessages': customer}, parse=_parse_card)
     value = answer.value
@@ -125,6 +138,7 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
         test_data = await world.build(value['situation'], customer)
     except llm.ModelError:
         test_data = None
+    checked = {criterion['id'] for criterion in criteria}
     card = {
         'topic': topic['title'],
         'topicId': topic['id'],
@@ -134,6 +148,7 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
         'criteria': criteria,
         'origin': origin,
         'sourceDialogueId': str(dialogue['id']),
+        'reproduces': list(dict.fromkeys(rule_id for rule_id in reproduces if rule_id in checked)),
         'world': test_data,
     }
     card['id'] = hashlib.sha256(json.dumps(card, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
@@ -160,9 +175,9 @@ async def run(check: str, progress: Callable[..., None] = lambda **_: None) -> l
     built: dict[int, dict] = {}
     failed: list[dict] = []
 
-    async def one(index: int, topic: dict, dialogue: dict, origin: str) -> None:
+    async def one(index: int, topic: dict, dialogue: dict, origin: str, reproduces: Sequence[str] = ()) -> None:
         try:
-            built[index] = await build_card(topic, dialogue, origin, general)
+            built[index] = await build_card(topic, dialogue, origin, general, reproduces)
         except llm.ModelError as error:
             failed.append({'topic': topic['title'], 'dialogueId': str(dialogue['id']), 'error': str(error)})
         missing = f' · не собрано: {len(failed)}' if failed else ''

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import tempfile
 import unittest
@@ -66,7 +67,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failed_card_does_not_cancel_the_others_and_is_reported(self):
         failed, release = asyncio.Event(), asyncio.Event()
 
-        async def build(topic, dialogue, origin, general):
+        async def build(topic, dialogue, origin, general, reproduces=()):
             if dialogue['id'] == 'fail':
                 failed.set()
                 raise llm.ModelError('model unavailable')
@@ -128,3 +129,39 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['model'], 'actual-model')
         self.assertEqual(result['sourceDialogueId'], 'd')
         self.assertEqual(result['criteria'][1]['observation'], 'tool')
+
+    async def test_a_card_from_an_error_names_the_criteria_it_reproduces(self):
+        """A scenario is a test of the error it was built from: the criteria the agent failed in the source conversation
+        travel with the card, in the order of that conversation's result. One the scenario does not check (the Lab does
+        not record state changes) is not reproduced by it; a card from a conversation without an error reproduces none.
+        """
+        audit = analysis()
+        state = {'id': 'state', 'text': 'Сменить статус заявки', 'quote': 'setStatus', 'observation': 'state'}
+        audit['topics'][0]['rules'].append(state)
+        failed = [
+            {'ruleId': 'state', 'status': 'FAIL', 'agentQuote': ''},
+            {'ruleId': 'tool', 'status': 'PASS', 'agentQuote': 'getLkkTariff'},
+            {'ruleId': 'reply', 'status': 'FAIL', 'agentQuote': 'Подробный ответ клиенту'},
+        ]
+        audit['results'] = [
+            {'topicId': 't', 'dialogueId': 'd', 'status': 'FAIL', 'rules': failed},
+            {'topicId': 't', 'dialogueId': 'p', 'status': 'PASS', 'rules': [{'ruleId': 'reply', 'status': 'PASS'}]},
+        ]
+        named = llm.Answer({'name': 'Тариф', 'situation': 'Клиент узнаёт тариф.'}, 'actual-model')
+        with (
+            patch.object(cards.store, 'load', return_value=audit),
+            patch.object(cards.logs, 'load', return_value=[dialogue(), dict(dialogue(), id='p')]),
+            patch.object(cards.llm, 'structured', AsyncMock(return_value=named)),
+            patch.object(cards.world, 'build', AsyncMock(return_value=None)),
+            patch.object(cards.sources, 'load', return_value=[]),
+        ):
+            deck = await cards.run('code')
+        self.assertEqual(
+            [(card['origin'], card['sourceDialogueId'], card['reproduces']) for card in deck],
+            [('Ошибка из лога', 'd', ['reply']), ('Покрытие темы', 'p', [])],
+        )
+        # The id is still the hash of the card's content, what it reproduces included; the model stays outside.
+        for card in deck:
+            content = {key: value for key, value in card.items() if key not in ('id', 'model')}
+            digest = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+            self.assertEqual(card['id'], digest[:12])
