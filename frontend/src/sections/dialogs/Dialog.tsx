@@ -149,10 +149,12 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
         ]
           .filter(Boolean)
           .join(" · ");
+  // The logs' result this conversation comes from; the service takes an answer only on it.
+  const finishedAt = row.source === "log" ? state?.discover?.finishedAt : null;
   const decide = (e: Example, d: Decision) => {
     const next = e.review === d ? null : d;
     setDecided((x) => ({ ...x, [e.ruleId]: next }));
-    review.mutate({ example: e, decision: next });
+    review.mutate({ example: e, decision: next, finishedAt });
   };
   const reviewed = rules.filter(
     (r) => r.status === "FAIL" && (decided[r.ruleId] !== undefined ? decided[r.ruleId] : r.review),

@@ -62,11 +62,13 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const decide = (e: Example, d: Decision) => {
     const before = e.review;
     const next = e.review === d ? null : d;
-    review.mutate({ example: e, decision: next });
+    // The result the examples come from: the service takes the answer only on it.
+    const finishedAt = data?.log?.finishedAt;
+    review.mutate({ example: e, decision: next, finishedAt });
     if (next)
       toast.notify(next === "agree" ? "Отмечено: это ошибка" : "Отмечено: ошибки нет", {
         label: "Отменить",
-        run: () => review.mutate({ example: e, decision: before }),
+        run: () => review.mutate({ example: e, decision: before, finishedAt }),
       });
   };
   useKeys({

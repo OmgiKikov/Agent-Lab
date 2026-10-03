@@ -112,26 +112,38 @@ function withDecision(data: Problems, target: Example, decision: Decision | null
   };
 }
 
+/**
+ * A person's answer on one verdict, as the screen shows it: the example with its status, and the logs' result it comes
+ * from (`finishedAt`). The service refuses it when either has changed since, so it never lands on another check.
+ */
+export type Answer = { example: Example; decision: Decision | null; finishedAt: string | null | undefined };
+
 /** «Верно / неверно» on one verdict: shown at once, saved by the service, the counts refreshed after. */
 export function useReview() {
   const client = useQueryClient();
   const toast = useToast();
   const { refresh } = useLabState();
   return useMutation({
-    mutationFn: ({
-      example,
-      decision,
-      finishedAt,
-    }: {
-      example: Example;
-      decision: Decision | null;
-      finishedAt?: string;
-    }) =>
+    mutationFn: ({ example, decision, finishedAt }: Answer) =>
       api(
         "/api/review",
         example.source === "log"
-          ? { source: "log", dialogueId: example.dialogueId, ruleId: example.ruleId, decision, finishedAt }
-          : { source: "sim", run: example.runId, index: example.index, ruleId: example.ruleId, decision },
+          ? {
+              source: "log",
+              dialogueId: example.dialogueId,
+              ruleId: example.ruleId,
+              decision,
+              finishedAt,
+              status: example.status,
+            }
+          : {
+              source: "sim",
+              run: example.runId,
+              index: example.index,
+              ruleId: example.ruleId,
+              decision,
+              status: example.status,
+            },
       ),
     onMutate: ({ example, decision }) => {
       client.setQueriesData<Problems>({ queryKey: ["problems"] }, (old) =>

@@ -92,13 +92,15 @@ export function ReviewPage({ stage }: { stage: Stage }) {
     const before = e.review;
     const k = exampleKey(e);
     const was = at;
-    review.mutate({ example: e, decision: d });
+    // The result the queue shows: an answer on it never lands on a check that replaced it meanwhile.
+    const finishedAt = data?.log?.finishedAt;
+    review.mutate({ example: e, decision: d, finishedAt });
     setAnswered((a) => ({ ...a, [k]: d }));
     next();
     toast.notify(d === "agree" ? "Отмечено: это ошибка" : "Отмечено: ошибки нет", {
       label: "Отменить",
       run: () => {
-        review.mutate({ example: e, decision: before });
+        review.mutate({ example: e, decision: before, finishedAt });
         setAnswered((a) => {
           const n = { ...a };
           delete n[k];
