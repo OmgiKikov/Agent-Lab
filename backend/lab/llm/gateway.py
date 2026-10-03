@@ -6,17 +6,19 @@ format) and AGENT_LAB_GATEWAY_URL / _CERT_PATH / _KEY_PATH / _CA_PATH / _INSECUR
 Protocol v2: POST /v2/chat/completions and GET /v1/models; the client certificate authenticates, no token.
 """
 
+import codecs
 import json
 import os
 import re
 import ssl
 import subprocess
+import tempfile
 from pathlib import Path
 
 import httpx
 
 from .. import store
-from ..settings import CERTS
+from ..settings import CERTS, ROOT
 from .errors import MalformedAnswer, ModelError, refused
 
 FILE = Path(os.environ.get('AGENT_LAB_GATEWAY_FILE', '~/.agent-lab/gateway.json')).expanduser()
@@ -98,33 +100,85 @@ def _from_certs_folder() -> dict | None:
     return {'url': url, 'cert': str(cert), 'key': str(key), 'ca': str(ca) if ca else None, 'insecure': False}
 
 
-def _password() -> str | None:
+def _password() -> bytes:
+    """certs/password.txt as written, without its line break or a BOM; empty without the file."""
     path = CERTS / 'password.txt'
     if not path.exists():
-        return None
-    return path.read_text().strip() or None
+        return b''
+    return path.read_bytes().removeprefix(codecs.BOM_UTF8).strip()
 
 
 def _unpack(bundle: Path) -> tuple[Path, Path]:
-    """Split a .p12/.pfx bundle into PEM files with openssl (certs/.converted, owner-only)."""
+    """Split a .p12/.pfx bundle into PEM files (certs/.converted, owner-only). openssl reads the password on stdin,
+    never from its command line; a failed conversion leaves the previous files as they were."""
+    password = _password()
+    cert = _openssl(bundle, password, '-clcerts', '-nokeys')
+    key = _openssl(bundle, password, '-nocerts', '-nodes')
+    if b'BEGIN CERTIFICATE' not in cert or b'PRIVATE KEY' not in key:
+        raise ModelError(
+            f'В {_named(bundle)} нет сертификата клиента с ключом: '
+            'попросите выпустить .p12/.pfx заново или положите в certs/ сертификат и ключ в PEM'
+        )
     out = CERTS / '.converted'
-    out.mkdir(mode=0o700, exist_ok=True)
-    password = _password() or ''
-    for args, name in ((['-clcerts', '-nokeys'], 'client.pem'), (['-nocerts', '-nodes'], 'client.key')):
-        command = [
-            'openssl',
-            'pkcs12',
-            '-in',
-            str(bundle),
-            *args,
-            '-out',
-            str(out / name),
-            '-passin',
-            f'pass:{password}',
-        ]
-        subprocess.run(command, check=True, capture_output=True)
-    (out / 'client.key').chmod(0o600)
+    try:
+        out.mkdir(mode=0o700, exist_ok=True)
+        _replace(out / 'client.pem', cert)
+        _replace(out / 'client.key', key)
+    except OSError as error:
+        raise ModelError(
+            f'Сертификат из {_named(bundle)} не записывается в {_named(out)} ({error.strerror}): '
+            'проверьте место на диске и права на папку'
+        ) from error
     return out / 'client.pem', out / 'client.key'
+
+
+def _openssl(bundle: Path, password: bytes, *args: str) -> bytes:
+    """One part of the bundle in PEM. A bundle exported by older Windows (RC2) opens under OpenSSL 3 only with -legacy;
+    what went wrong is told in words, never with the command line."""
+    for legacy in ((), ('-legacy',)):
+        command = ['openssl', 'pkcs12', *legacy, '-in', str(bundle), *args, '-passin', 'stdin']
+        try:
+            done = subprocess.run(command, input=password + b'\n', capture_output=True, timeout=60, check=False)
+        except FileNotFoundError:
+            raise ModelError(
+                f'Чтобы открыть {_named(bundle)}, нужна программа openssl, а её на компьютере нет: '
+                'установите OpenSSL или положите в certs/ сертификат и ключ в PEM'
+            ) from None
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ModelError(f'openssl не открыл {_named(bundle)}: {type(error).__name__}') from None
+        if done.returncode == 0:
+            return done.stdout
+        failure = done.stderr.decode(errors='replace')
+        if 'unsupported' not in failure:
+            break
+    if 'invalid password' in failure.lower():
+        where = _named(CERTS / 'password.txt')
+        if not password:
+            raise ModelError(f'{_named(bundle)} закрыт паролем: впишите его в {where}')
+        raise ModelError(f'{_named(bundle)} не открылся: неверный пароль в {where}')
+    if legacy:
+        raise ModelError(
+            f'{_named(bundle)} в старом формате (RC2), а OpenSSL на этом компьютере открывает его только с модулем '
+            'legacy: пересохраните сертификат в современном формате (AES) или положите в certs/ сертификат и ключ в PEM'
+        )
+    raise ModelError(f'openssl не открыл {_named(bundle)} (код {done.returncode}): проверьте, что это целый .p12/.pfx')
+
+
+def _replace(path: Path, data: bytes) -> None:
+    """Write beside the file, then rename over it: a reader never sees half a key, a failure leaves the old file."""
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.')  # owner-only
+    try:
+        with os.fdopen(descriptor, 'wb') as file:
+            file.write(data)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def _named(path: Path) -> str:
+    """A file the way the person finds it: certs/… inside the project, the full path elsewhere."""
+    return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
 
 
 def _client(timeout: httpx.Timeout | float) -> tuple[httpx.AsyncClient, str]:
@@ -133,7 +187,7 @@ def _client(timeout: httpx.Timeout | float) -> tuple[httpx.AsyncClient, str]:
         raise ModelError('Шлюз моделей не настроен: положите url.txt, сертификат и ключ в папку certs/')
     try:
         context = ssl.create_default_context(cafile=settings.get('ca') or None)
-        context.load_cert_chain(settings['cert'], settings['key'], password=_password())
+        context.load_cert_chain(settings['cert'], settings['key'], password=_password() or None)
     except (OSError, ssl.SSLError) as error:
         raise ModelError(f'Сертификат, ключ или CA шлюза не читаются: {type(error).__name__}') from error
     if settings.get('insecure'):
