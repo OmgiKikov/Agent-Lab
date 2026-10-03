@@ -1,21 +1,36 @@
 """Read a communication policy as text; parsing never changes active inputs."""
 
 import io
+import zlib
 from pathlib import Path
 from xml.etree import ElementTree
-from zipfile import BadZipFile, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
 
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+LIMIT = 2_000_000  # the uploaded file
+TEXT_LIMIT = 1_000_000  # the text of a .docx, unpacked
+
+
+def _text_part(archive: ZipFile) -> bytes:
+    """The document's text, unpacked a piece at a time: the size an archive declares can lie, and a zip bomb stops at
+    TEXT_LIMIT instead of filling memory. Word deflates; other methods unpack without a bound on each piece."""
+    info = archive.getinfo('word/document.xml')
+    if info.flag_bits & 1 or info.compress_type not in (ZIP_STORED, ZIP_DEFLATED):
+        raise BadZipFile('encrypted or unusual compression')
+    data = bytearray()
+    with archive.open(info) as part:
+        while piece := part.read(1 << 16):
+            data += piece
+            if len(data) > TEXT_LIMIT:
+                raise ValueError('Документ слишком большой. Оставьте только правила общения.')
+    return bytes(data)
 
 
 def _docx(data: bytes) -> str:
     try:
         with ZipFile(io.BytesIO(data)) as archive:
-            info = archive.getinfo('word/document.xml')
-            if info.file_size > 1_000_000:
-                raise ValueError('Документ слишком большой. Оставьте только правила общения.')
-            root = ElementTree.fromstring(archive.read(info))
-    except (BadZipFile, KeyError, ElementTree.ParseError) as error:
+            root = ElementTree.fromstring(_text_part(archive))
+    except (BadZipFile, KeyError, ElementTree.ParseError, zlib.error, EOFError) as error:
         raise ValueError('Не удалось прочитать документ Word. Загрузите файл .docx.') from error
     paragraphs = []
     for paragraph in root.iter(W + 'p'):
@@ -34,7 +49,7 @@ def _docx(data: bytes) -> str:
 
 
 def read(name: str, data: bytes) -> str:
-    if len(data) > 2_000_000:
+    if len(data) > LIMIT:
         raise ValueError('Файл слишком большой: не более 2 МБ.')
     extension = Path(name).suffix.lower()
     if extension == '.docx':

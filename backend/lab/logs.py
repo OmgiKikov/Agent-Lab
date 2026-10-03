@@ -8,8 +8,9 @@ actual repeated question is preserved. Parsing is pure so a cancelled import can
 import io
 import json
 import re
+import zlib
 from xml.etree.ElementTree import ParseError
-from zipfile import BadZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
 
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
@@ -18,6 +19,7 @@ from . import store
 
 FILE = 'logs.json'
 META = 'logs-meta.json'  # the name and time of the last upload
+INFLATED = 500_000_000  # the parts of a workbook, unpacked together
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
 # The export starts every turn on its own line; «HOST AGENT NOT FOUND» inside a message is the customer's words.
@@ -82,6 +84,27 @@ def _export_messages(messages: list[dict], count: int) -> list[dict]:
         if all(block[:2] == block[2:] for block in blocks):
             return [message for block in blocks for message in block[:2]]
     raise ValueError('Текст и порядок сообщений не совпадают; неоднозначные повторы нельзя восстановить')
+
+
+def _check_parts(data: bytes) -> None:
+    """Every part of a workbook unpacks to the size it declares, all of them to at most INFLATED. openpyxl reads some
+    parts whole, and a zip bomb that declares little would fill memory there; here each part is unpacked a piece at a
+    time, one byte past its declared size, which a lying part has."""
+    with ZipFile(io.BytesIO(data)) as archive:
+        parts = archive.infolist()
+        if sum(info.file_size for info in parts) > INFLATED:
+            raise ValueError(f'Файл Excel слишком большой: после распаковки больше {INFLATED // 1_000_000} МБ.')
+        for info in parts:
+            if info.flag_bits & 1 or info.compress_type not in (ZIP_STORED, ZIP_DEFLATED):
+                raise BadZipFile('encrypted or unusual compression')  # Excel deflates; others have no bound per piece
+            declared = info.file_size
+            info.file_size += 1  # this archive object is only for the check
+            unpacked = 0
+            with archive.open(info) as part:
+                while piece := part.read(1 << 16):
+                    unpacked += len(piece)
+            if unpacked != declared:
+                raise BadZipFile('a part is not the size it declares')
 
 
 def _cell(row: tuple, index: int) -> object:
@@ -170,9 +193,10 @@ def prepare(name: str, data: bytes) -> list[dict]:
         dialogues = from_jsonl(data)
     elif name.lower().endswith('.xlsx'):
         try:
+            _check_parts(data)
             dialogues = from_excel(data)
         # KeyError: openpyxl names a part of the workbook the archive does not have.
-        except (BadZipFile, InvalidFileException, ParseError, KeyError) as error:
+        except (BadZipFile, InvalidFileException, ParseError, KeyError, zlib.error, EOFError) as error:
             raise ValueError('Не удалось прочитать файл Excel: неверная структура .xlsx') from error
     else:
         raise ValueError('Загрузите файл .xlsx или .jsonl')
