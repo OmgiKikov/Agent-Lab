@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, FileText, RotateCcw } from "lucide-react";
-import { conversationsLink, reviewLink } from "../../app/links";
+import { ArrowRight, FileText, History, RotateCcw } from "lucide-react";
+import { conversationsLink, historyLink, reviewLink, toneCheckLink } from "../../app/links";
 import { useCriteria } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useProblems } from "../../lab/problems";
@@ -14,14 +14,12 @@ import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
 import { BriefSheet, ownCriteria, useToneBrief } from "./BriefSheet";
 import { Finding } from "./Finding";
-import { History } from "./History";
 import { NextStage } from "./NextStage";
-import { HISTORY_SHOWN, TONE_ONLY } from "../../app/product";
 
 export function Result({ state, onAgain }: { state: LabState; onAgain: () => void }) {
   const result = toneResult(state);
-  const { data, list } = useCriteria(null);
-  const evidence = useProblems(null);
+  const { data, list } = useCriteria("tone");
+  const evidence = useProblems("tone");
   const [selected, setSelected] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
   const brief = useToneBrief(state);
@@ -76,11 +74,11 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
             checked={measured}
             unchecked={summary.unmeasured}
             size="display"
-            link={(part) => conversationsLink("log", { v: { bad: "fail", ok: "pass", none: "none" }[part] })}
+            link={(part) => conversationsLink("tone", { v: { bad: "fail", ok: "pass", none: "none" }[part] })}
           />
-          {data && current && <Trust data={data} stage="log" checked={measured} />}
+          {data && current && <Trust data={data} check="tone" checked={measured} />}
           <Link
-            to={conversationsLink("log")}
+            to={conversationsLink("tone")}
             className="mt-4 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
           >
             Все разговоры
@@ -174,7 +172,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
               : "Посмотрите разговоры без оценки и уточните, какие критерии можно к ним применить."}
           </p>
           <Link
-            to={measured ? reviewLink("log") : conversationsLink("log", { v: "none" })}
+            to={measured ? reviewLink("tone") : conversationsLink("tone", { v: "none" })}
             className="mt-4 inline-flex min-h-11 items-center gap-2 font-medium text-run hover:underline"
           >
             {measured ? "Проверить примеры вручную" : "Посмотреть разговоры"}
@@ -187,7 +185,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           Отчёт для письма
         </Button>
         <Link
-          to={reviewLink("log")}
+          to={reviewLink("tone")}
           className="inline-flex min-h-11 items-center gap-1 text-body font-medium text-run hover:underline"
         >
           Проверить оценки вручную
@@ -197,16 +195,20 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           Проверить снова
         </Button>
         <Link
-          to="/check?step=materials"
+          to={toneCheckLink("materials")}
           className="inline-flex min-h-11 items-center text-body text-fg-2 hover:underline"
         >
           Следующая выгрузка
         </Link>
+        <Link
+          to={historyLink()}
+          className="inline-flex min-h-11 items-center gap-1.5 text-body text-fg-2 hover:underline"
+        >
+          <History aria-hidden className="size-4 text-fg-3" />
+          История проверок
+        </Link>
       </div>
-      {!TONE_ONLY && <NextStage state={state} onRecheck={onAgain} />}
-      {HISTORY_SHOWN && (
-        <History finishedAt={result.finishedAt} refreshStamp={result.finishedAt + "-" + state.job.running} />
-      )}
+      <NextStage state={state} onRecheck={onAgain} />
       <BriefSheet open={showReport} onClose={() => setShowReport(false)} brief={brief} />
     </section>
   );

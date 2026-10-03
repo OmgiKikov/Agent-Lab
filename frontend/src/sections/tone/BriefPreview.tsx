@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { shareBase } from "../../app/agent";
+import { historyLink } from "../../app/links";
 
 /** Present the generated meeting brief as a document; copied and downloaded text stays Markdown. */
 export function BriefPreview({ text }: { text: string }) {
@@ -28,7 +29,7 @@ export function BriefPreview({ text }: { text: string }) {
                   </blockquote>
                 );
               const link = /^\[([^\]]+)\]\((https?:\/\/[^\s]+)\)\.$/.exec(line);
-              if (link && link[2].startsWith(shareBase() + "/start?history="))
+              if (link && link[2].startsWith(shareBase() + historyLink()))
                 return (
                   <Link
                     key={n}

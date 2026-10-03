@@ -1,7 +1,7 @@
-import { Link, useSearchParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
+import { SECTIONS } from "../../app/links";
 import { useLabState } from "../../lab/LabProvider";
 import { CHECK_STEPS, nextStep, toneResult, type CheckStep } from "../../lab/tone";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -9,8 +9,11 @@ import { Materials } from "./Materials";
 import { Criteria } from "./Criteria";
 import { Checking } from "./Checking";
 import { Result } from "./Result";
-import { TONE_ONLY } from "../../app/product";
 
+/**
+ * Tone of voice step by step: the export and the rules of communication, the criteria collected from them, the check,
+ * its result. Without a step in the address it opens where the work stands.
+ */
 export function CheckPage() {
   const { state, offline, refresh } = useLabState();
   const [params, setParams] = useSearchParams();
@@ -30,7 +33,7 @@ export function CheckPage() {
   // finished check that would move forward again.
   const go = (next: CheckStep, replace = false) => setParams({ step: next }, { replace });
   const at = CHECK_STEPS.findIndex((s) => s.id === step);
-  const header = <Header title="Проверка tone of voice" crumbs={[{ label: "Начать проверку", to: "/start" }]} />;
+  const header = <Header title="Пошаговая проверка" crumbs={[{ label: "Tone of voice", to: SECTIONS.tone }]} />;
   if (offline && !state)
     return (
       <div className="flex h-full flex-col">
@@ -103,11 +106,6 @@ export function CheckPage() {
             )}
             {step === "result" && <Result state={state} onAgain={() => go("criteria")} />}
           </div>
-          {!TONE_ONLY && (
-            <Link to="/overview" className="mt-12 inline-flex items-center gap-1.5 text-body text-fg-3 hover:text-fg">
-              <ArrowLeft aria-hidden className="size-3.5" />К общему обзору
-            </Link>
-          )}
         </div>
       </div>
     </div>

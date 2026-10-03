@@ -33,7 +33,7 @@ export function Advice({
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const clarify = mode === "clarify";
-  const stale = state?.toneOfVoice?.revision !== openingRevision || state?.discover?.finishedAt !== finishedAt;
+  const stale = state?.toneOfVoice?.revision !== openingRevision || state?.checks.tone?.finishedAt !== finishedAt;
   const busy = pending || !!state?.job.running;
   const generate = async () => {
     setPending(true);

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, Download } from "lucide-react";
 import { shareBase } from "../../app/agent";
-import { HISTORY_SHOWN } from "../../app/product";
 import { useCriteria, type Criterion } from "../../lab/criteria";
 import { download } from "../../lab/problemReport";
 import { toneResult } from "../../lab/tone";
@@ -22,15 +21,15 @@ export const ownCriteria = (result: Discover, list: Criterion[]) => {
  * still holds an older check than the one on screen.
  */
 export function useToneBrief(state: LabState | null): string {
-  const { data, list } = useCriteria(null);
+  const { data, list } = useCriteria("tone");
   const result = toneResult(state);
   if (!state || !result || !data || data.log?.finishedAt !== result.finishedAt) return "";
   const report = { ...data, rules: ownCriteria(result, list).map((c) => c.r) };
-  return toneBrief(report, result, shareBase(), { filename: state.logs.file ?? undefined, saved: HISTORY_SHOWN });
+  return toneBrief(report, result, shareBase(), { filename: state.logs.file ?? undefined });
 }
 
 /**
- * «Отчёт для письма» of a tone-of-voice result: the same one from the result, «Обзор» and «Диалоги», with the screen's
+ * «Отчёт для письма» of a tone-of-voice result: the same one from the result, «Обзор» and the section, with the screen's
  * number and words. It is read here, then copied or downloaded; reading it calls no model.
  */
 export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: () => void; brief: string }) {
