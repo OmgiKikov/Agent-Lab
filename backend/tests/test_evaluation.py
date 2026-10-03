@@ -219,6 +219,35 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.status, 'PASS')
                 self.assertEqual(result.rows[0]['ruleId'], 'r1')
 
+    async def test_a_criterion_that_was_not_measured_needs_no_quote_or_reason(self):
+        """A null, missing or empty quote or reason on such a row keeps the rest of the reply; a verdict still needs
+        both."""
+        unmeasured = (
+            {'ruleId': 'r2', 'status': 'NOT_APPLICABLE', 'reason': 'Задержки не было.', 'agentQuote': None},
+            {'ruleId': 'r2', 'status': 'NOT_APPLICABLE', 'reason': 'Задержки не было.'},
+            {'ruleId': 'r2', 'status': 'UNKNOWN', 'reason': '', 'agentQuote': ''},
+            {'ruleId': 'r2', 'status': 'UNKNOWN', 'reason': None},
+        )
+        for row in unmeasured:
+            with self.subTest(row=row):
+                chat = AsyncMock(return_value=completion({'rules': [verdict(), row]}))
+                with patch.object(llm, 'chat', chat):
+                    result = await judge.log_verdict(
+                        [criterion(), criterion('r2')], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}]
+                    )
+                self.assertEqual(chat.await_count, 1)
+                self.assertEqual([r['status'] for r in result.rows], ['PASS', row['status']])
+                kept = result.rows[1]
+                self.assertEqual((kept['agentQuote'], kept['reason']), ('', row.get('reason') or ''))
+        valid = {'rules': [verdict()]}
+        without_quote = {key: value for key, value in verdict().items() if key != 'agentQuote'}
+        for measured in (without_quote, dict(verdict(), reason=None), dict(verdict(status='FAIL'), agentQuote=None)):
+            with self.subTest(measured=measured):
+                chat = AsyncMock(side_effect=[completion({'rules': [measured]}), completion(valid)])
+                with patch.object(llm, 'chat', chat):
+                    await judge.log_verdict([criterion()], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}])
+                self.assertEqual(chat.await_count, 2)
+
     async def test_duplicate_verdict_ids_are_retried(self):
         answer = {'rules': [verdict(), verdict()]}
         valid = {'rules': [verdict(), verdict('r2')]}
