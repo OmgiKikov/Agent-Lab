@@ -13,13 +13,14 @@ from .metric import metric
 from .settings import DATA
 
 DB = DATA / 'lab.sqlite3'
-# The database of the agent a request works in (registry.using, api.py); without one, DB above.
-AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
-# The database's user_version once its schema below is in place.
+# The database's user_version once its schema (_set_up) is in place. Raise it with every change to _set_up: a database
+# is set up again only when its user_version differs.
 SCHEMA = 3
 # The uploaded dialogues: every write keeps their number beside them (lengths), so the state polled every 1.5 s
 # counts them without reading megabytes of conversations.
 COUNTED = 'logs.json'
+# The database of the agent a request works in (registry.using, api.py); without one, DB above.
+AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 
 
 def now() -> str:
