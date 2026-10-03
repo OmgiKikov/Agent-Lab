@@ -195,6 +195,33 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['finishedAt'])
         self.assertTrue(self.agent.closed)
 
+    async def test_a_stop_writes_what_it_cut_short_and_the_final_status_at_once(self) -> None:
+        playing = asyncio.Event()
+
+        async def say(conversation_id: str, message: str, world: dict) -> dict:
+            playing.set()
+            await asyncio.Event().wait()  # every conversation waits for the agent; the rest are queued
+
+        scenarios = [card(f'card-{number}') for number in range(2 * simulate.PARALLEL)]
+        with (
+            patch.object(simulate.cards, 'deck', return_value=scenarios),
+            patch.object(self.agent, 'say', side_effect=say),
+        ):
+            task = asyncio.create_task(simulate.run('test'))
+            await playing.wait()
+            with patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes:
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+        self.assertEqual(writes.call_count, 1)
+        result = store.runs()[0]
+        self.assertEqual((result['status'], result['error']), ('stopped', 'Прогон остановлен'))
+        self.assertTrue(result['finishedAt'])
+        self.assertEqual(
+            {(item['status'], item['error']) for item in result['items']}, {('UNMEASURED', 'Прогон остановлен')}
+        )
+        self.assertEqual(result['metric']['unmeasured'], len(scenarios))
+
     async def test_unexpected_open_failure_is_terminal(self) -> None:
         with patch.object(self.agent, 'open', new=AsyncMock(side_effect=RuntimeError('cannot launch'))):
             result = await simulate.run('test')

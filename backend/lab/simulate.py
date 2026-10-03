@@ -192,12 +192,15 @@ async def run(
     except Exception as error:
         record.update(status='failed', error=_error_message(error))
     finally:
+        # What the stop or the failure cut short, with the final status, in one write: not one per conversation.
+        cut = {}
         for index, item in enumerate(record['items']):
             if item['status'] == 'RUNNING':
                 item.update(status='UNMEASURED', stage='', error=record['error'])
-                changed(index)
-        store.update_run(
+                cut[index] = item
+        store.update_items(
             record['id'],
+            cut,
             status=record['status'],
             error=record['error'],
             finishedAt=store.now(),
