@@ -137,6 +137,8 @@ async def build_card(topic: dict, dialogue: dict, origin: str, general: Sequence
 
 
 async def run(progress: Callable[..., None] = lambda **_: None) -> list[dict]:
+    """The cards built from the picked conversations. A card the model fails to build is reported in the progress
+    (failed) and never cancels the others; only when no card is built is the build an error."""
     analysis = store.load(discover.RESULT)
     if not analysis:
         raise RuntimeError('Сначала оцените диалоги')
@@ -150,20 +152,27 @@ async def run(progress: Callable[..., None] = lambda **_: None) -> list[dict]:
     if not picks:
         raise RuntimeError('Нет разговоров с проверяемыми правилами для сборки сценариев')
     general = general_rules(analysis)
-    done = []
+    built: dict[int, dict] = {}
+    failed: list[dict] = []
 
-    async def one(topic: dict, dialogue: dict, origin: str) -> dict:
-        card = await build_card(topic, dialogue, origin, general)
-        done.append(card)
+    async def one(index: int, topic: dict, dialogue: dict, origin: str) -> None:
+        try:
+            built[index] = await build_card(topic, dialogue, origin, general)
+        except llm.ModelError as error:
+            failed.append({'topic': topic['title'], 'dialogueId': str(dialogue['id']), 'error': str(error)})
+        missing = f' · не собрано: {len(failed)}' if failed else ''
         progress(
-            stage='cards', done=len(done), total=len(picks), message=f'Готово сценариев: {len(done)} из {len(picks)}'
+            stage='cards',
+            done=len(built) + len(failed),
+            total=len(picks),
+            message=f'Готово сценариев: {len(built)} из {len(picks)}{missing}',
+            failed=list(failed),
         )
-        return card
 
     progress(stage='cards', done=0, total=len(picks), message='Собираю сценарии')
-    try:
-        async with asyncio.TaskGroup() as tasks:
-            pending = [tasks.create_task(one(*pick)) for pick in picks]
-    except* llm.ModelError as errors:
-        raise llm.ModelError(str(errors.exceptions[0])) from errors
-    return [task.result() for task in pending]
+    async with asyncio.TaskGroup() as tasks:
+        for index, chosen in enumerate(picks):
+            tasks.create_task(one(index, *chosen))
+    if not built:
+        raise llm.ModelError(failed[0]['error'])
+    return [built[index] for index in sorted(built)]

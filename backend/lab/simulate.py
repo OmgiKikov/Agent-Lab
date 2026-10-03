@@ -14,6 +14,7 @@ from .transcript import with_buttons
 MAX_AGENT_TURNS = 3
 PARALLEL = 4
 END = '[КОНЕЦ]'
+JUDGED = ('status', 'rules', 'model', 'second', 'error', 'criteria')  # what a re-judge changes in a conversation
 Progress = Callable[..., None]
 
 
@@ -65,7 +66,8 @@ async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, ch
     conversation = item['conversation']
     test_data = world.overrides(card.get('world')) if agent.mocked else {}
     details = world.customer_profile(card.get('world')) if test_data else record.get('customer', '')
-    item['world'] = bool(test_data)
+    # Whether the conversation ran to its end: only such a conversation may be judged again (ended).
+    item.update(world=bool(test_data), ended=False)
     persona = item.get('persona') or personas.DEFAULT
     message, from_log = opening(card, persona), persona == personas.DEFAULT
     try:
@@ -87,6 +89,7 @@ async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, ch
             message, from_log = await customer_says(card, conversation, details, persona), False
             if END in message or not message:
                 break
+        item['ended'] = True
         item['stage'] = 'судья оценивает'
         changed()
         await judge.evaluate(card, item)
@@ -160,7 +163,10 @@ async def run(
     store.create_run(record)
 
     def changed(index: int) -> None:
-        store.update_item(record['id'], index, record['items'][index])
+        """A conversation's turns stay in memory, in the job's progress; it is written once, when it ends with a
+        verdict or an error. A write rereads and rewrites the whole run, on the event loop that stop also needs."""
+        if record['items'][index]['status'] != 'RUNNING':
+            store.update_item(record['id'], index, record['items'][index])
         done = sum(item['status'] != 'RUNNING' for item in record['items'])
         progress(run=record['id'], done=done, total=len(plan), message=f'{record["targetName"]}: прогон')
 
@@ -186,12 +192,15 @@ async def run(
     except Exception as error:
         record.update(status='failed', error=_error_message(error))
     finally:
+        # What the stop or the failure cut short, with the final status, in one write: not one per conversation.
+        cut = {}
         for index, item in enumerate(record['items']):
             if item['status'] == 'RUNNING':
                 item.update(status='UNMEASURED', stage='', error=record['error'])
-                changed(index)
-        store.update_run(
+                cut[index] = item
+        store.update_items(
             record['id'],
+            cut,
             status=record['status'],
             error=record['error'],
             finishedAt=store.now(),
@@ -200,15 +209,25 @@ async def run(
     return store.run(record['id'])
 
 
+def ended(item: dict) -> bool:
+    """The conversation ran to its end, so it can be judged again. One cut short (the agent failed, the customer's
+    model failed, the run was stopped) keeps its status and its error: judging half a conversation would count it.
+    A record from before play() marked this is read from its last message: a whole conversation ends on the agent's
+    reply, one the agent broke on the customer's turn."""
+    if 'ended' in item:
+        return bool(item['ended'])
+    last = (item.get('conversation') or [{}])[-1]
+    return last.get('role') == 'agent' and bool(last.get('text'))
+
+
 async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
-    """Rejudge the recorded conversation against the criteria frozen when it was played."""
-    items = [
-        (index, item)
-        for index, item in enumerate(record['items'])
-        if any(message['role'] == 'agent' and message.get('text') for message in item['conversation'])
-    ]
+    """Rejudge the recorded conversations that ran to their end against the criteria frozen when they were played.
+
+    The new verdicts replace the old ones together, after the whole pass: a stopped or failed pass leaves the run as
+    it was, never half re-judged under a final status."""
+    items = [(index, item) for index, item in enumerate(record['items']) if ended(item)]
     if not items:
-        raise RuntimeError('В прогоне нет записанных ответов агента для переоценки')
+        raise RuntimeError('В прогоне нет записанных ответов агента для переоценки: ни один разговор не дошёл до конца')
     legacy = [(index, item) for index, item in items if not isinstance(item.get('criteria'), list)]
     if legacy:
         by_id = {card['id']: card for card in cards.deck()}
@@ -222,18 +241,18 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
             item['criteria'] = deepcopy(card['criteria'])
     done = 0
 
-    async def one(index: int, item: dict) -> None:
+    async def one(item: dict) -> None:
         nonlocal done
         try:
             await judge.evaluate(item, item)
             item['error'] = None
         except llm.ModelError as error:
             item.update(status='UNMEASURED', error=str(error), rules=[], second=None)
-        store.update_item(record['id'], index, item)
         done += 1
         progress(done=done, total=len(items), message='Переоценка разговоров')
 
     async with asyncio.TaskGroup() as group:
-        for index, item in items:
-            group.create_task(one(index, item))
-    return store.update_run(record['id'], rejudgedAt=store.now(), model=llm.models_used(record['items']))
+        for _, item in items:
+            group.create_task(one(item))
+    verdicts = {index: {key: item[key] for key in JUDGED if key in item} for index, item in items}
+    return store.update_items(record['id'], verdicts, rejudgedAt=store.now(), model=llm.models_used(record['items']))

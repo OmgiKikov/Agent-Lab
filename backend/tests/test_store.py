@@ -177,6 +177,73 @@ class StoreTests(unittest.TestCase):
         with sqlite3.connect(store.DB) as connection:
             self.assertEqual(connection.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
 
+    def test_the_schema_is_set_up_once_per_database_not_on_every_connection(self) -> None:
+        statements = []
+        connect = sqlite3.connect
+
+        def traced(*args, **kwargs) -> sqlite3.Connection:
+            connection = connect(*args, **kwargs)
+            connection.set_trace_callback(statements.append)
+            return connection
+
+        def setup(sql: str) -> bool:
+            return sql.startswith(('CREATE', 'ALTER', 'PRAGMA journal_mode'))
+
+        with patch.object(store.sqlite3, 'connect', traced):
+            store.save('settings.json', {'x': 1})
+            self.assertTrue(any(setup(sql) for sql in statements))
+            statements.clear()
+            for _ in range(3):
+                self.assertEqual(store.load('settings.json'), {'x': 1})
+            store.create_run(record())
+            self.assertEqual([sql for sql in statements if setup(sql)], [])
+            # Another database (another agent) is set up on its first use, and only then.
+            with patch.object(store, 'DB', self.path / 'other' / 'lab.sqlite3'):
+                self.assertIsNone(store.load('settings.json'))
+                self.assertTrue(any(setup(sql) for sql in statements))
+                self.assertEqual(store.run('run-1'), None)
+        self.assertEqual(store.run('run-1')['id'], 'run-1')
+
+    def test_runs_of_an_older_database_and_every_write_keep_a_summary_without_conversations(self) -> None:
+        older = record()
+        older.update(status='done', items=[{'cardId': 'card-1', 'status': 'PASS', 'conversation': []}])
+        with sqlite3.connect(store.DB) as connection:
+            connection.execute('CREATE TABLE runs (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            connection.execute('INSERT INTO runs (id, value) VALUES (?, ?)', ('run-1', json.dumps(older)))
+        connection.close()
+        self.assertEqual(store.run_summaries(), [{key: value for key, value in older.items() if key != 'items'}])
+        running = dict(record(), id='run-2', startedAt='2026-10-01T10:00:00+00:00')
+        store.import_legacy({}, [running])
+        self.assertEqual([summary['id'] for summary in store.run_summaries()], ['run-2', 'run-1'])
+        store.recover_runs()
+        self.assertEqual(store.run_summaries()[0]['status'], 'stopped')
+        store.update_run('run-1', label='первый')
+        self.assertEqual(store.run_summaries()[1]['label'], 'первый')
+        self.assertTrue(all('items' not in summary for summary in store.run_summaries()))
+
+    def test_the_number_of_dialogues_is_kept_beside_them_by_every_write(self) -> None:
+        with sqlite3.connect(store.DB) as connection:
+            connection.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            connection.execute('INSERT INTO documents VALUES (?, ?)', ('logs.json', json.dumps([{'id': '1'}] * 2)))
+        connection.close()
+        self.assertEqual(store.length('logs.json'), 2)
+        store.save('logs.json', [{'id': '1'}])
+        self.assertEqual(store.length('logs.json'), 1)
+        store.replace_inputs('logs.json', [{'id': str(number)} for number in range(4)])
+        self.assertEqual(store.length('logs.json'), 4)
+        store.import_legacy({'logs.json': []}, [])
+        self.assertEqual(store.length('logs.json'), 4)
+        with self.assertRaises(ValueError):
+            store.length('discover.json')
+        # A SQLite without JSON functions keeps no number: the dialogues are read and counted.
+        with (
+            patch.object(store, 'DB', self.path / 'plain' / 'lab.sqlite3'),
+            patch.object(store, '_json_functions', return_value=False),
+        ):
+            self.assertEqual(store.length('logs.json'), 0)
+            store.save('logs.json', [{'id': '1'}] * 3)
+            self.assertEqual(store.length('logs.json'), 3)
+
     def test_changed_primary_judgment_clears_old_confirmation(self) -> None:
         source = record()
         source['items'][0].update(status='FAIL', rules=[{'status': 'FAIL'}])
