@@ -1,24 +1,22 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Check, Copy, Download, FileText, RotateCcw } from "lucide-react";
+import { ArrowRight, FileText, RotateCcw } from "lucide-react";
 import { conversationsLink, reviewLink } from "../../app/links";
 import { useCriteria } from "../../lab/criteria";
-import { download } from "../../lab/problemReport";
+import { count } from "../../lab/format";
 import { useProblems } from "../../lab/problems";
 import { toneResult } from "../../lab/tone";
-import { toneBrief } from "../../lab/toneReport";
 import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
-import { Sheet } from "../../ui/Sheet";
 import { queueOf } from "../problems/model";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
+import { BriefSheet, ownCriteria, useToneBrief } from "./BriefSheet";
 import { Finding } from "./Finding";
-import { BriefPreview } from "./BriefPreview";
+import { History } from "./History";
 import { NextStage } from "./NextStage";
-import { TONE_ONLY } from "../../app/product";
-import { shareBase } from "../../app/agent";
+import { HISTORY_SHOWN, TONE_ONLY } from "../../app/product";
 
 export function Result({ state, onAgain }: { state: LabState; onAgain: () => void }) {
   const result = toneResult(state);
@@ -26,18 +24,13 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
   const evidence = useProblems(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState(false);
+  const brief = useToneBrief(state);
   if (!result) return null;
   const { summary } = result;
   const measured = summary.measured;
-  const quotes = new Set(result.topics.flatMap((t) => t.rules.map((r) => r.quote)));
-  const own = list.filter((c) => quotes.has(c.r.rule.quote));
-  const problems = queueOf(own, "log");
+  const problems = queueOf(ownCriteria(result, list), "log");
   const selectedFinding = problems.find((c) => c.r.id === selected) ?? problems[0];
   const current = data?.log?.finishedAt === result.finishedAt;
-  const report = data && current ? { ...data, rules: own.map((c) => c.r) } : null;
-  const brief = report ? toneBrief(report, result, shareBase(), state.logs.file ?? undefined) : "";
   const previousRevision = result.criteriaRevision !== state.toneOfVoice?.revision;
   const modelError = !measured ? result.results.find((r) => r.error)?.error : null;
   return (
@@ -53,8 +46,9 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
                 : "Пока не удалось оценить"}
           </h2>
           <p className="mt-2 text-body text-fg-3">
-            В выборке {result.sampled} из {state.logs.total} разговоров · {result.topics.flatMap((t) => t.rules).length}{" "}
-            критериев
+            В выборке {result.sampled}
+            {"\u00a0"}из {count(state.logs.total, "разговора", "разговоров", "разговоров")} ·{" "}
+            {count(result.topics.flatMap((t) => t.rules).length, "критерий", "критерия", "критериев")}
           </p>
         </div>
         <Button
@@ -64,7 +58,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           disabled={!brief}
           onClick={() => setShowReport(true)}
         >
-          Короткий отчёт
+          Отчёт для письма
         </Button>
       </div>
       {previousRevision && (
@@ -190,7 +184,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
       )}
       <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-line pt-5">
         <Button className="sm:hidden" size="lg" icon={FileText} disabled={!brief} onClick={() => setShowReport(true)}>
-          Короткий отчёт
+          Отчёт для письма
         </Button>
         <Link
           to={reviewLink("log")}
@@ -210,42 +204,10 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
         </Link>
       </div>
       {!TONE_ONLY && <NextStage state={state} onRecheck={onAgain} />}
-      <Sheet open={showReport} onClose={() => setShowReport(false)} title="Короткий отчёт для команды" width="lg">
-        <div className="px-5 py-6 sm:px-7">
-          <div className="mb-6 flex flex-wrap gap-3">
-            <Button
-              size="lg"
-              icon={Download}
-              disabled={!brief}
-              onClick={() => download("tone-of-voice-brief.md", brief)}
-            >
-              Скачать отчёт
-            </Button>
-            <Button
-              size="lg"
-              icon={copied ? Check : Copy}
-              disabled={!brief}
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(brief);
-                  setCopied(true);
-                  setCopyError(false);
-                } catch {
-                  setCopyError(true);
-                }
-              }}
-            >
-              {copied ? "Скопировано" : "Скопировать"}
-            </Button>
-          </div>
-          {copyError && (
-            <p role="alert" className="mb-4 text-body text-bad">
-              Не удалось скопировать. Скачайте отчёт или выделите текст.
-            </p>
-          )}
-          <BriefPreview text={brief} />
-        </div>
-      </Sheet>
+      {HISTORY_SHOWN && (
+        <History finishedAt={result.finishedAt} refreshStamp={result.finishedAt + "-" + state.job.running} />
+      )}
+      <BriefSheet open={showReport} onClose={() => setShowReport(false)} brief={brief} />
     </section>
   );
 }

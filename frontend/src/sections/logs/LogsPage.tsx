@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, useSearchParams } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { FileText, RotateCcw } from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
@@ -20,6 +20,8 @@ import { FirstRun } from "../overview/FirstRun";
 import { AssessSheet } from "../problems/AssessSheet";
 import { ProblemList } from "../problems/ProblemList";
 import { ReportSheet } from "../problems/ReportSheet";
+import { BriefSheet, useToneBrief } from "../check/BriefSheet";
+import { TONE_ONLY } from "../../app/product";
 
 /** The tabs of the logs with their counts: every conversation of the export, the verdicts where the two checks disagree. */
 export function useLogTabs() {
@@ -71,6 +73,10 @@ function LogsResult({
   // «code»: the start asked for the assessment by the criteria from the agent's code, whatever the dialogues hold now.
   const [code, setCode] = useState(asked === "code");
   const [report, setReport] = useState(params.get("report") === "1");
+  // A tone-of-voice result has its own report: the same as on the result, with the same number.
+  const tone = !!toneResult(state);
+  const brief = useToneBrief(state);
+  const navigate = useNavigate();
   useEffect(() => {
     if (asked === "1" || asked === "code") {
       setAssess(true);
@@ -100,18 +106,20 @@ function LogsResult({
           <span className="hidden sm:contents">
             <UploadButton variant="outline" />
           </span>
-          <Button
-            variant="primary"
-            icon={FileText}
-            aria-label="Отчёт для письма"
-            onClick={() => setReport(true)}
-            disabled={!data?.log}
-          >
-            <span className="hidden sm:inline">Отчёт для письма</span>
-          </Button>
+          {(tone || !!data?.log) && (
+            <Button
+              variant="primary"
+              icon={FileText}
+              aria-label="Отчёт для письма"
+              onClick={() => setReport(true)}
+              disabled={tone && !brief}
+            >
+              <span className="hidden sm:inline">Отчёт для письма</span>
+            </Button>
+          )}
         </>
       }
-      below={<SectionJob kinds={["discover"]} />}
+      below={<SectionJob kinds={["tone-check", "discover"]} />}
     />
   );
   const sheets = (
@@ -125,16 +133,27 @@ function LogsResult({
         criteria={data ? checkedIn(data, "log").length : 0}
         code={code}
       />
-      {data?.log && (
-        <ReportSheet
+      {tone ? (
+        <BriefSheet
           open={report}
           onClose={() => {
             setReport(false);
             drop("report");
           }}
-          data={data}
-          list={list}
+          brief={brief}
         />
+      ) : (
+        data?.log && (
+          <ReportSheet
+            open={report}
+            onClose={() => {
+              setReport(false);
+              drop("report");
+            }}
+            data={data}
+            list={list}
+          />
+        )
       )}
     </>
   );
@@ -180,6 +199,8 @@ function LogsResult({
             <button
               type="button"
               onClick={() => {
+                // In tone-only mode the sheet would offer one way only: the check's own criteria step.
+                if (TONE_ONLY && tone) return void navigate("/check?step=criteria");
                 setCode(false);
                 setAssess(true);
               }}

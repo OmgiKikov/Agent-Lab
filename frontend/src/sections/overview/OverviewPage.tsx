@@ -21,6 +21,7 @@ import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { AssessSheet } from "../problems/AssessSheet";
 import { ProblemList } from "../problems/ProblemList";
 import { ReportSheet } from "../problems/ReportSheet";
+import { BriefSheet, useToneBrief } from "../check/BriefSheet";
 import { FirstRun } from "./FirstRun";
 import { TONE_ONLY } from "../../app/product";
 import { cn } from "@/lib/utils";
@@ -37,6 +38,9 @@ export function OverviewPage() {
   const { data, list } = useCriteria(null);
   const [assess, setAssess] = useState(params.get("assess") === "1");
   const [report, setReport] = useState(params.get("report") === "1");
+  // A tone-of-voice result has its own report: the same as on the result, with the same number.
+  const tone = !!toneResult(state);
+  const brief = useToneBrief(state);
   useEffect(() => {
     if (params.get("assess") === "1") setAssess(true);
     if (params.get("report") === "1") setReport(true);
@@ -57,17 +61,19 @@ export function OverviewPage() {
     <Header
       title="Обзор"
       actions={
-        <Button
-          variant="primary"
-          icon={FileText}
-          aria-label="Отчёт для письма"
-          onClick={() => setReport(true)}
-          disabled={TONE_ONLY ? !toneResult(state) || !data?.log : !data?.log && !data?.sim}
-        >
-          <span className="hidden sm:inline">Отчёт для письма</span>
-        </Button>
+        (tone || (!TONE_ONLY && !!(data?.log || data?.sim))) && (
+          <Button
+            variant="primary"
+            icon={FileText}
+            aria-label="Отчёт для письма"
+            onClick={() => setReport(true)}
+            disabled={tone && !brief}
+          >
+            <span className="hidden sm:inline">Отчёт для письма</span>
+          </Button>
+        )
       }
-      below={<SectionJob kinds={["discover", "run", "rejudge", "cards"]} />}
+      below={<SectionJob kinds={["tone-check", "tone-criteria", "discover", "run", "rejudge", "cards"]} />}
     />
   );
   const sheets = (
@@ -80,16 +86,28 @@ export function OverviewPage() {
         }}
         criteria={data ? checkedIn(data, "log").length : 0}
       />
-      {data && (data.log || data.sim) && (
-        <ReportSheet
+      {tone ? (
+        <BriefSheet
           open={report}
           onClose={() => {
             setReport(false);
             drop("report");
           }}
-          data={TONE_ONLY ? { ...data, sim: null } : data}
-          list={list}
+          brief={brief}
         />
+      ) : (
+        data &&
+        (data.log || data.sim) && (
+          <ReportSheet
+            open={report}
+            onClose={() => {
+              setReport(false);
+              drop("report");
+            }}
+            data={data}
+            list={list}
+          />
+        )
       )}
     </>
   );
@@ -309,7 +327,11 @@ function NextSteps({
   onReport: () => void;
 }) {
   const disputed = verdictQueue(data, "disputed", null, "log").length;
-  const unchecked = verdictQueue(data, "unchecked", null, "log").length;
+  // The errors the model found and nobody answered yet, and how many conversations they are in: «28 ошибок» next to
+  // «22 разговора с ошибкой» needs its own unit.
+  const open = verdictQueue(data, "all", null, "log").filter((v) => v.example.status === "FAIL" && !v.example.review);
+  const unchecked = open.length;
+  const conversations = new Set(open.map((v) => v.example.dialogueId)).size;
   const steps = [
     disputed > 0
       ? {
@@ -322,15 +344,15 @@ function NextSteps({
         ? {
             icon: ClipboardCheck,
             title: `Подтвердите ${count(unchecked, "найденную ошибку", "найденные ошибки", "найденных ошибок")}`,
-            sub: "По одной: «да, ошибка» или «нет».",
+            sub: `В ${count(conversations, "разговоре", "разговорах", "разговорах")}. По одной: «да, ошибка» или «нет».`,
             to: reviewLink("log", { queue: "unchecked" }),
           }
         : null,
     problems > 0
       ? {
           icon: FileText,
-          title: `Передайте ${count(problems, "проблему", "проблемы", "проблем")} разработчикам`,
-          sub: "Лист с примерами из разговоров — в письмо или тикет.",
+          title: `Передайте ${count(problems, "проблему", "проблемы", "проблем")} команде агента`,
+          sub: "Отчёт с примерами из разговоров — в письмо или тикет.",
           run: onReport,
         }
       : null,
