@@ -36,32 +36,42 @@ export function StageResult({
   const arrived = useArrived();
   return (
     <div className={className}>
-      <p
-        className={cn(
-          "whitespace-nowrap font-semibold tabular-nums text-fg",
-          size === "hero" ? "text-display sm:text-hero" : "text-page sm:text-display",
-        )}
-        aria-label={`${failed} из ${checked}`}
-      >
-        <span aria-hidden className={failed ? "text-bad" : "text-fg"}>
-          {shownFailed}
-        </span>
-        <span aria-hidden className="font-normal text-fg-3">
-          {" "}
-          из{" "}
-        </span>
-        <span aria-hidden>{shownChecked}</span>
-      </p>
-      <p className={cn("text-fg-2", size === "hero" ? "mt-3 text-lead" : "mt-2 text-read")}>
-        {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
-        агента
-        {checked > 0 && (
-          <span className="text-fg-3">
-            {"\u00a0·\u00a0"}
-            {pct(failed, checked)}%
-          </span>
-        )}
-      </p>
+      {checked > 0 ? (
+        <>
+          <p
+            className={cn(
+              "whitespace-nowrap font-semibold tabular-nums text-fg",
+              size === "hero" ? "text-display sm:text-hero" : "text-page sm:text-display",
+            )}
+          >
+            {/* The counting digits are for the eye; a screen reader hears the final number once. */}
+            <span className="sr-only">
+              {failed} из {checked}
+            </span>
+            <span aria-hidden className={failed ? "text-bad" : "text-fg"}>
+              {shownFailed}
+            </span>
+            <span aria-hidden className="font-normal text-fg-3">
+              {" "}
+              из{" "}
+            </span>
+            <span aria-hidden>{shownChecked}</span>
+          </p>
+          <p className={cn("text-fg-2", size === "hero" ? "mt-3 text-lead" : "mt-2 text-read")}>
+            {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
+            агента
+            <span className="text-fg-3">
+              {"\u00a0·\u00a0"}
+              {pct(failed, checked)}%
+            </span>
+          </p>
+        </>
+      ) : (
+        // Nothing measured is not «0 из 0»: no number to show, and no «без ошибок» to imply.
+        <p className={cn("font-semibold text-fg", size === "hero" ? "text-title sm:text-page" : "text-title")}>
+          Ни один разговор не удалось проверить
+        </p>
+      )}
       <div
         className={cn(
           "flex w-full gap-[3px] overflow-hidden rounded-full",

@@ -11,6 +11,7 @@ import { Segmented } from "../../ui/Segmented";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
 import { UploadButton } from "../../product/UploadLogs";
+import { HISTORY_SHOWN, TONE_ONLY } from "../../app/product";
 
 const SIZES = [100, 200, 300];
 
@@ -64,8 +65,8 @@ export function AssessSheet({
       >
         <div className="space-y-5 px-5 py-5">
           <p className="max-w-[52ch] text-read text-fg-2">
-            Эта проверка повторяется на своей странице: там её критерии и уточнения, которые вы подтвердили. Прошлые
-            результаты остаются в истории.
+            Эта проверка повторяется на своей странице: там её критерии и уточнения, которые вы подтвердили.
+            {HISTORY_SHOWN && " Прошлые результаты остаются в истории."}
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Button
@@ -78,9 +79,12 @@ export function AssessSheet({
             >
               Повторить проверку tone of voice
             </Button>
-            <Button variant="ghost" size="lg" onClick={() => setSwitched(true)}>
-              Оценить по коду агента
-            </Button>
+            {/* The code assessment would take the place of this result, and tone-only screens never show it. */}
+            {!TONE_ONLY && (
+              <Button variant="ghost" size="lg" onClick={() => setSwitched(true)}>
+                Оценить по коду агента
+              </Button>
+            )}
           </div>
         </div>
       </Sheet>

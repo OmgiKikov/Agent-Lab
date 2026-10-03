@@ -9,7 +9,12 @@ export const plural = (n: number, one: string, few: string, many: string) => {
 /** «300 разговоров» — the number never parts from its word at a line break. */
 export const count = (n: number, one: string, few: string, many: string) => `${n}\u00a0${plural(n, one, few, many)}`;
 
-export const pct = (a: number, b: number) => (b ? Math.round((100 * a) / b) : 0);
+/** A whole percent that never contradicts the count beside it: 1 of 300 is 1%, not 0%; 299 of 300 is 99%, not 100%. */
+export const pct = (a: number, b: number) => {
+  if (!b) return 0;
+  const share = Math.round((100 * a) / b);
+  return a > 0 && a < b ? Math.min(99, Math.max(1, share)) : share;
+};
 
 export const when = (iso?: string | null) =>
   iso

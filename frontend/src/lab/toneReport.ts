@@ -1,7 +1,7 @@
 import { reliabilityWord, problemPath } from "./problemReport";
 import type { Problems, RuleEntry } from "./problems";
 import type { Discover } from "./types";
-import { count } from "./format";
+import { count, pct } from "./format";
 
 const excerpt = (value: string, limit = 300) => value.trim().slice(0, limit).trimEnd();
 const short = (value: string, limit = 300) => excerpt(value, limit) + (value.trim().length > limit ? "…" : "");
@@ -21,8 +21,17 @@ function nextAction(problem: RuleEntry): string {
   return "Подтвердить оценку на примерах перед передачей задачи команде агента.";
 }
 
-/** A short meeting brief; complete criteria and evidence remain in the immutable saved check. */
-export function toneBrief(data: Problems, result: Discover, base: string, filename?: string): string {
+/**
+ * A short brief for the team, with the same number and words as the screen: «N из M — с ошибкой агента». Complete
+ * criteria and evidence remain in the saved check — linked only while the history of checks is shown (`saved`).
+ * Links open Agent Lab on the computer where the check ran; the brief says so, since it travels by e-mail.
+ */
+export function toneBrief(
+  data: Problems,
+  result: Discover,
+  base: string,
+  { filename, saved: history }: { filename?: string; saved: boolean },
+): string {
   const criteria = result.topics.flatMap((topic) => topic.rules);
   const quotes = new Set(criteria.map((criterion) => criterion.quote));
   const rules = data.rules.filter((rule) => quotes.has(rule.rule.quote));
@@ -30,20 +39,21 @@ export function toneBrief(data: Problems, result: Discover, base: string, filena
     .filter((rule) => rule.log.failed > 0)
     .sort((a, b) => b.log.failed - a.log.failed)
     .slice(0, 3);
-  const measured = result.summary.measured;
-  const share = measured ? `${Math.round((100 * result.summary.passed) / measured)}%` : "нет оценки";
+  const { measured, failed, passed, unmeasured } = result.summary;
   const reviews = rules.flatMap((rule) => rule.log.examples).filter((example) => example.review);
   const agrees = reviews.filter((example) => example.review === "agree").length;
   const origin = base.replace(/\/$/, "");
-  const saved = result.checkId ? `${origin}/start?history=${encodeURIComponent(result.checkId)}` : null;
+  const saved = history && result.checkId ? `${origin}/start?history=${encodeURIComponent(result.checkId)}` : null;
   const lines = [
     "# Tone of voice: сводка для команды",
     "",
     `Проверка завершена: ${date(result.finishedAt)}.`,
     ...(filename ? [`Выгрузка: ${short(filename, 160)}.`] : []),
     `Выборка: ${count(result.sampled, "разговор", "разговора", "разговоров")}. Критериев: ${criteria.length}.`,
-    `Без найденных ошибок: ${result.summary.passed} из ${measured} разговоров, которые удалось оценить (${share}).`,
-    `С ошибкой: ${result.summary.failed}. Не удалось оценить: ${result.summary.unmeasured} из ${result.sampled}; в процент они не входят.`,
+    measured
+      ? `С ошибкой агента: ${failed} из ${count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(failed, measured)}%).`
+      : `Ни один разговор не удалось проверить.`,
+    `Без найденных ошибок: ${passed}. Не удалось проверить: ${unmeasured} из ${result.sampled}; в счёт они не входят.`,
     `Ответы человека по отдельным оценкам критериев: ${reviews.length}; согласие с оценкой — ${agrees}, несогласие — ${reviews.length - agrees}. Это число оценок, а не разговоров.`,
     "",
     "Автоматическая оценка относится к выбранным критериям и этой выборке. Процент не измеряет точность самого оценщика.",
@@ -66,7 +76,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, filena
     lines.push(
       `## ${index + 1}. ${short(problem.title, 140)}`,
       "",
-      `Ошибка найдена в ${problem.log.failed} из ${problem.log.failed + problem.log.passed} разговоров, в которых удалось проверить этот критерий. Не удалось проверить критерий: ${problem.log.unknown}.`,
+      `Ошибка найдена в ${problem.log.failed} из ${count(problem.log.failed + problem.log.passed, "разговора", "разговоров", "разговоров")}, в которых удалось проверить этот критерий. Не удалось проверить критерий: ${problem.log.unknown}.`,
       "",
       "Основание — фрагмент документа:",
       problem.rule.quote ? quote(problem.rule.quote) : "Цитата источника не сохранена.",
@@ -96,8 +106,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, filena
         `Проверка примера: ${reliabilityWord(example)}.`,
       );
     lines.push("", `Следующее действие: ${nextAction(problem)}`, "");
-    if (!saved)
-      lines.push(`Полное основание в текущей рабочей области: ${origin}${problemPath(problem.id, "log")}`, "");
+    if (!saved) lines.push(`Полное основание в Agent Lab: ${origin}${problemPath(problem.id, "log")}`, "");
   }
   if (rules.filter((rule) => rule.log.failed > 0).length > 3)
     lines.push("В сводке — три наиболее частые проблемы. Полный список доступен в результате проверки.", "");
@@ -110,7 +119,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, filena
     );
   else
     lines.push(
-      "Текст и числа сохранены на момент экспорта. Ссылки ведут в текущую рабочую область: после новой загрузки её содержимое может измениться.",
+      "Числа и текст — на момент выгрузки отчёта. Ссылки открывают Agent Lab на компьютере, где шла проверка, и показывают текущее состояние: после новой выгрузки разговоров оно изменится.",
     );
   return lines.join("\n");
 }

@@ -6,6 +6,8 @@ import { useLabState } from "../../lab/LabProvider";
 import { useSource } from "../../lab/problems";
 import { rememberName, rememberText, savedName, savedText, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
+import { HISTORY_SHOWN } from "../../app/product";
+import { exportFileError, ReplaceExport, replacesResult } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
 
@@ -66,8 +68,10 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       await refresh();
       onNext();
     });
+  // New rules replace the criteria and take the current result away (backend: store.replace_inputs); the same rules
+  // only collect the criteria anew, and the result stays.
   const next = () => {
-    if (state.discover && !reusable) setPending({ next: true });
+    if (state.discover && !unchanged) setPending({ next: true });
     else prepare();
   };
   const disabled = busy || state.job.running;
@@ -90,10 +94,11 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
             onChange={(e) => {
               const f = e.target.files?.[0];
               e.target.value = "";
-              if (f) {
-                if (state.discover || state.toneOfVoice) setPending({ file: f });
-                else sendLogs(f);
-              }
+              if (!f) return;
+              const wrong = exportFileError(f);
+              if (wrong) setError(wrong);
+              else if (replacesResult(state)) setPending({ file: f });
+              else sendLogs(f);
             }}
           />
           <div className="mt-4 rounded-sheet bg-inset p-5">
@@ -115,14 +120,14 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
         </div>
         <div>
           <label htmlFor="tone-policy" className="block text-read font-semibold text-fg">
-            Правила tone of voice
+            Правила общения
           </label>
           <p className="mt-1 text-body text-fg-3">Вставьте текст или загрузите Word, TXT, Markdown.</p>
           <input
             ref={policyInput}
             type="file"
             accept=".docx,.txt,.md"
-            aria-label="Файл правил tone of voice"
+            aria-label="Файл правил общения"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
@@ -177,10 +182,20 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
         </Button>
         {!state.logs.total && <p className="mt-2 text-body text-fg-3">Сначала загрузите разговоры.</p>}
       </div>
+      <ReplaceExport
+        open={!!pending?.file}
+        keepsCriteria={!!state.toneOfVoice}
+        onCancel={() => setPending(null)}
+        onConfirm={() => {
+          const file = pending?.file;
+          setPending(null);
+          if (file) sendLogs(file);
+        }}
+      />
       <Modal
-        open={!!pending}
+        open={!!pending?.next}
         onClose={() => setPending(null)}
-        title="Начать новую проверку?"
+        title="Собрать критерии по новым правилам?"
         footer={
           <>
             <Button variant="ghost" onClick={() => setPending(null)}>
@@ -189,24 +204,21 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
             <Button
               variant="primary"
               onClick={() => {
-                const p = pending;
                 setPending(null);
-                if (p?.file) sendLogs(p.file);
-                else if (p?.next) prepare();
+                prepare();
               }}
             >
-              Продолжить
+              Собрать заново
             </Button>
           </>
         }
       >
         <p className="text-read text-fg-2">
-          Текущая рабочая выборка и собранные сценарии будут заменены. Сохранённые проверки в истории и прогоны
-          симуляций останутся доступны.
-          {pending?.file && state.toneOfVoice && " Критерии и ваши уточнения сохранятся для новой выгрузки."}
-          {state.discover?.purpose === TONE_ID &&
-            !state.discover.checkId &&
-            " Текущая оценка создана до появления истории; при необходимости сначала скачайте её отчёт."}
+          Правила изменились: итог текущей проверки уйдёт из «Диалогов» и «Обзора», критерии соберутся заново, а ваши
+          уточнения к прежним критериям не перейдут.
+          {HISTORY_SHOWN
+            ? " Сама проверка останется в истории."
+            : " Если итог ещё нужен, сначала скачайте «Отчёт для письма»."}
         </p>
       </Modal>
     </section>

@@ -4,9 +4,26 @@ import { Mark } from "../../app/Mark";
 import { SECTIONS } from "../../app/links";
 import { buttonClass } from "../../ui/Button";
 import { TONE_ONLY } from "../../app/product";
+import { useLabState } from "../../lab/LabProvider";
 
 /** Before the first assessment: what will appear here, and the one way in — the start, where the metric is chosen. */
 export function FirstRun() {
+  const { state } = useLabState();
+  // The first check is already running: the way in is its progress, not another start.
+  if (state?.job.running && state.job.kind === "tone-check")
+    return (
+      <div className="mx-auto w-full max-w-2xl px-5 py-14">
+        <Mark quiet className="size-12 rounded-2xl" />
+        <h2 className="mt-6 text-balance text-title font-semibold text-fg">Идёт проверка tone of voice</h2>
+        <p className="mt-2 max-w-[60ch] text-read text-fg-2">
+          Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть: результат сохранится.
+        </p>
+        <Link to="/check?step=checking" className={`mt-8 ${buttonClass({ variant: "primary", size: "lg" })}`}>
+          Ход проверки
+          <ArrowRight aria-hidden className="size-4" />
+        </Link>
+      </div>
+    );
   return (
     <div className="mx-auto w-full max-w-2xl px-5 py-14">
       <Mark quiet className="size-12 rounded-2xl" />

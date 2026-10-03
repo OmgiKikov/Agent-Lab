@@ -19,6 +19,7 @@ import type { ReactElement } from "react";
 import { useLabState } from "./lab/LabProvider";
 import { dialoguesShown, TONE_ONLY } from "./app/product";
 import { ScreenError } from "./app/ScreenError";
+import { ServiceDown } from "./ui/EmptyState";
 
 /** An earlier address leads to its block; the query of the old address is kept, what the block needs is added. */
 function To({ to, from }: { to: string; from?: (p: Record<string, string | undefined>) => Record<string, string> }) {
@@ -87,9 +88,9 @@ const hidden = (element: ReactElement) => (TONE_ONLY ? <Navigate to="/start" rep
 
 /** «Диалоги» in tone-only mode: shown once they hold a tone-of-voice result, never the accuracy one. */
 function Dialogues({ children }: { children: ReactElement }) {
-  const { state } = useLabState();
+  const { state, offline } = useLabState();
   if (!TONE_ONLY) return children;
-  if (!state) return null;
+  if (!state) return offline ? <ServiceDown /> : null;
   return dialoguesShown(state) ? children : <Navigate to="/start" replace />;
 }
 

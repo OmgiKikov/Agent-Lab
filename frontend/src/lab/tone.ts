@@ -31,9 +31,9 @@ const TEXT_KEY = agentKey("tone-of-voice:policy-draft");
 const NAME_KEY = agentKey("tone-of-voice:policy-name");
 export function savedName(): string {
   try {
-    return sessionStorage.getItem(NAME_KEY) ?? "Правила tone of voice";
+    return sessionStorage.getItem(NAME_KEY) ?? "Правила общения";
   } catch {
-    return "Правила tone of voice";
+    return "Правила общения";
   }
 }
 export function rememberName(name: string) {

@@ -9,7 +9,8 @@ import { codeSources, nextStep, TONE_ID, toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { Step } from "../../product/Step";
 import { buttonClass } from "../../ui/Button";
-import { TONE_ONLY } from "../../app/product";
+import { HISTORY_SHOWN, TONE_ONLY } from "../../app/product";
+import { History } from "./History";
 
 type Metric = "tone" | "code";
 
@@ -132,6 +133,9 @@ export function StartPage() {
             </p>
           )}
           {!TONE_ONLY && <Pipeline state={state} now={now} />}
+          {HISTORY_SHOWN && (
+            <History finishedAt={state?.discover?.finishedAt} refreshStamp={String(state?.job.running)} />
+          )}
         </div>
       </div>
     </div>

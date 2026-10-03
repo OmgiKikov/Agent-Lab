@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { conversationsLink } from "../../app/links";
 import type { Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
+import { count } from "../../lab/format";
 import { reliabilityWord } from "../../lab/problemReport";
 import { useReview } from "../../lab/problems";
 import type { Discover, ToneDraft } from "../../lab/types";
@@ -49,7 +50,8 @@ export function Finding({
             to={conversationsLink("log", { rule: c.r.id, v: "fail" })}
             className="font-medium text-run hover:underline"
           >
-            {c.r.log.failed} из {c.r.log.failed + c.r.log.passed} разговоров
+            {c.r.log.failed}
+            {"\u00a0"}из {count(c.r.log.failed + c.r.log.passed, "разговора", "разговоров", "разговоров")}
           </Link>
         </div>
         <h3 className="mt-3 text-title font-semibold text-fg">{c.r.title.replace(/^Ошибка:\s*/i, "")}</h3>
@@ -127,7 +129,7 @@ export function Finding({
           <div>
             <p className="text-read font-medium text-fg">Это действительно ошибка?</p>
             <p aria-live="polite" className="mt-1 text-small text-fg-3">
-              {review.isPending ? "Сохраняем ответ…" : reliabilityWord(e)}
+              {review.isPending ? "Сохраняем ответ…" : e.review || e.second ? reliabilityWord(e) : ""}
             </p>
           </div>
           <div className="flex w-full gap-2 sm:w-auto">

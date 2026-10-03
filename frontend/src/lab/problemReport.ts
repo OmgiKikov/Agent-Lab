@@ -5,26 +5,28 @@ import type { Example, Problems, RuleEntry } from "./problems";
 const SOURCE_LABEL: Record<string, string> = {
   prompt: "Промпт требует",
   tools: "Инструменты агента",
-  "tone-of-voice": "Правила tone of voice требуют",
+  "tone-of-voice": "Правила общения требуют",
 };
 export const sourceLabel = (kind: string) => SOURCE_LABEL[kind] ?? "Источник критерия";
 
 /**
  * How well an example is backed, in words: a person's answer first, then whether the two automatic checks (two models
- * of different vendors) agree. The order of examples follows it.
+ * of different vendors) agree. The order of examples follows it. With neither, it says so plainly: «проверено один раз»
+ * read as if a person had already looked.
  */
 export function reliabilityWord(e: Example): string {
   if (e.review === "agree") return "подтверждено вами";
   if (e.review === "disagree") return "вы не согласились";
   if (e.second === "agree") return "две проверки совпали";
   if (e.second === "disagree") return "проверки разошлись";
-  return "проверено один раз";
+  return "человек ещё не проверял";
 }
 
 /** The second check in a sentence, for a person; the model's name only where an engineer asks for it. */
 export function secondLine(e: Example, model: string | null): string {
+  // Without a second check (one model by default) there is nothing to say about it.
+  if (!e.second) return "";
   const who = model ? `Вторая проверка (${model})` : "Вторая проверка";
-  if (!e.second) return `${who} этот разговор не смотрела.`;
   if (e.secondScope === "dialogue")
     return e.secondStatus === "FAIL"
       ? `${who} смотрела разговор целиком и нашла в нём ошибку.`
@@ -64,10 +66,10 @@ export function stagesSentence(data: Problems): string {
 const where = (p: RuleEntry, source?: Source) =>
   [
     source !== "sim" && p.log.failed
-      ? `в ${p.log.failed} из ${p.log.failed + p.log.passed} ${plural(p.log.failed + p.log.passed, "диалога", "диалогов", "диалогов")}`
+      ? `в ${p.log.failed} из ${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`
       : null,
     source !== "log" && p.sim.failed
-      ? `в ${p.sim.failed} из ${p.sim.failed + p.sim.passed} разговоров симуляции`
+      ? `в ${p.sim.failed} из ${count(p.sim.failed + p.sim.passed, "разговора", "разговоров", "разговоров")} симуляции`
       : null,
   ]
     .filter(Boolean)
@@ -113,11 +115,11 @@ export function problemsReport(data: Problems, base: string, source: Source): st
   const lines = [`# ${summarySentence(data, source)}`, ""];
   if (source === "log" && data.log)
     lines.push(
-      `Диалоги: проверено ${data.log.assessed} из ${data.log.sampled} разговоров ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,
+      `Диалоги: проверено ${data.log.assessed} из ${count(data.log.sampled, "разговора", "разговоров", "разговоров")} ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,
     );
   if (source === "sim" && data.sim)
     lines.push(
-      `Симуляция: ${data.sim.target} · ${data.sim.version} от ${day(data.sim.finishedAt)}, проверено ${data.sim.assessed} из ${data.sim.dialogs} разговоров, ошибка в ${data.sim.withViolations}, не удалось проверить ${data.sim.unassessed}.`,
+      `Симуляция: ${data.sim.target} · ${data.sim.version} от ${day(data.sim.finishedAt)}, проверено ${data.sim.assessed} из ${count(data.sim.dialogs, "разговора", "разговоров", "разговоров")}, ошибка в ${data.sim.withViolations}, не удалось проверить ${data.sim.unassessed}.`,
     );
   lines.push("");
   const list = data.rules.filter((r) => r[source].failed > 0).sort((a, b) => b[source].failed - a[source].failed);

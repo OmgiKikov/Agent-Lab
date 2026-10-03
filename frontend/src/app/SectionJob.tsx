@@ -3,7 +3,10 @@ import { api } from "../lab/api";
 import { useLabState } from "../lab/LabProvider";
 import { useToast } from "../ui/toast";
 
-/** Under a section's head while its own task runs: what it does, how far, «Остановить», and a hairline of progress. */
+/**
+ * Under a section's head while its own task runs: what it does, how far, «Остановить», and a hairline of progress. A
+ * narrow window shows the task once, in the bar above the bottom navigation (TaskCard), so this line is for wide ones.
+ */
 export function SectionJob({ kinds }: { kinds: string[] }) {
   const { state } = useLabState();
   const toast = useToast();
@@ -11,7 +14,7 @@ export function SectionJob({ kinds }: { kinds: string[] }) {
   if (!job?.running || !job.kind || !kinds.includes(job.kind)) return null;
   const { done = 0, total = 0, message } = job.progress;
   return (
-    <div className="border-t border-line" role="status">
+    <div className="hidden border-t border-line lg:block" role="status">
       <div className="flex h-8 items-center gap-3 px-4 text-small text-fg-3 lg:px-5">
         <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-run" />
         <span className="min-w-0 flex-1 truncate text-fg-2">{message}</span>
