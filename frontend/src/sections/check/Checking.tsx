@@ -1,12 +1,27 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
+import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
 import { useLabState } from "../../lab/LabProvider";
 import { toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
 
-export function Checking({ state, onBack, onDone }: { state: LabState; onBack: () => void; onDone: () => void }) {
+const STOPPED = "Остановлено";
+
+export function Checking({
+  state,
+  onBack,
+  onDone,
+  onResult,
+}: {
+  state: LabState;
+  onBack: () => void;
+  /** The check finished: the page moves on by itself. */
+  onDone: () => void;
+  /** The person goes back to the result that is still there. */
+  onResult: () => void;
+}) {
   const { refresh } = useLabState();
   const job = state.job;
   const active = job.kind === "tone-check";
@@ -17,27 +32,43 @@ export function Checking({ state, onBack, onDone }: { state: LabState; onBack: (
   const done = active ? (job.progress.done ?? 0) : 0;
   const total = active ? (job.progress.total ?? 0) : 0;
   const error = active && !job.running ? job.error : null;
+  // A stop is the person's own choice, not a failure: no red, no model settings; the previous result stays.
+  const stopped = error === STOPPED;
   return (
     <section aria-labelledby="checking-title">
       <h2 id="checking-title" className="text-title font-semibold text-fg">
         Проверяем, как агент общался с клиентами
       </h2>
       {error ? (
-        <div role="alert" className="mt-6">
-          <p className="text-read text-bad">
-            {error === "Остановлено" ? "Проверка остановлена. Разговоры и критерии сохранены." : error}
+        <div role={stopped ? "status" : "alert"} className="mt-6">
+          <p className={cn("text-read", stopped ? "text-fg-2" : "text-bad")}>
+            {stopped
+              ? `Проверка остановлена. ${finished ? "Прежний итог сохранён." : "Разговоры и критерии сохранены."}`
+              : error}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
+            {finished && (
+              <Button variant="primary" onClick={onResult}>
+                К прежнему итогу
+              </Button>
+            )}
             <Button onClick={onBack}>Вернуться к критериям</Button>
-            <Link to="/settings" className="self-center text-body text-fg-3 underline">
-              Настройки моделей
-            </Link>
+            {!stopped && (
+              <Link to="/settings" className="self-center text-body text-fg-3 underline">
+                Настройки моделей
+              </Link>
+            )}
           </div>
         </div>
       ) : (
         <>
           <p role="status" className="mt-8 text-display font-semibold tabular-nums text-fg">
-            {done} <span className="font-normal text-fg-3">из {total || "…"}</span>
+            {done}
+            {"\u00a0"}
+            <span className="font-normal text-fg-3">
+              из{"\u00a0"}
+              {total || "…"}
+            </span>
           </p>
           <p className="mt-2 text-read text-fg-3">
             Проверено разговоров. Можно перейти в другие разделы — оценка продолжится.

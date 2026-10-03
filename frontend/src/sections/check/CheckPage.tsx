@@ -26,7 +26,9 @@ export function CheckPage() {
         : (asked === "criteria" || asked === "checking") && !ready && state?.job.kind !== "tone-criteria"
           ? "materials"
           : asked;
-  const go = (next: CheckStep) => setParams({ step: next });
+  // A step the page moves to by itself replaces the one it left: «Назад» from the result goes to the criteria, not to a
+  // finished check that would move forward again.
+  const go = (next: CheckStep, replace = false) => setParams({ step: next }, { replace });
   const at = CHECK_STEPS.findIndex((s) => s.id === step);
   const header = <Header title="Проверка tone of voice" crumbs={[{ label: "Начать проверку", to: "/start" }]} />;
   if (offline && !state)
@@ -55,7 +57,7 @@ export function CheckPage() {
                   <li key={s.id}>
                     <button
                       type="button"
-                      disabled={state.job.running || i > at || (s.id === "result" && !finished)}
+                      disabled={state.job.running || (s.id === "result" ? !finished : i > at)}
                       onClick={() => go(s.id)}
                       aria-current={s.id === step ? "step" : undefined}
                       className={cn(
@@ -92,7 +94,12 @@ export function CheckPage() {
               <Criteria state={state} onBack={() => go("materials")} onStarted={() => go("checking")} />
             )}
             {step === "checking" && (
-              <Checking state={state} onBack={() => go("criteria")} onDone={() => go("result")} />
+              <Checking
+                state={state}
+                onBack={() => go("criteria")}
+                onDone={() => go("result", true)}
+                onResult={() => go("result")}
+              />
             )}
             {step === "result" && <Result state={state} onAgain={() => go("criteria")} />}
           </div>
