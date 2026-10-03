@@ -8,5 +8,11 @@ import { toneResult } from "../lab/tone";
  */
 export const TONE_ONLY = true;
 
+/**
+ * Saved tone-of-voice checks (sections/check/History.tsx) are kept by the service but not shown for now. Every place
+ * that would send a person there — the brief's link, «останутся в истории» — follows this switch.
+ */
+export const HISTORY_SHOWN = false;
+
 /** In tone-only mode «Диалоги» are shown once they hold a tone-of-voice result, never the accuracy one. */
 export const dialoguesShown = (state: LabState | null) => !TONE_ONLY || !!toneResult(state);
