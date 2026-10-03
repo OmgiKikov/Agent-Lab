@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, ArrowRight, ArrowUpRight, Code2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, Code2, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { problemLink } from "../../app/links";
+import { problemLink, type Check } from "../../app/links";
 import { duty, type Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
@@ -51,6 +51,7 @@ function ExampleRow({ e }: { e: Example }) {
 /** The chosen criterion: what it requires, how it went in this stage, and the conversations behind each count. */
 export function CriterionPanel({
   c,
+  check,
   side,
   runId,
   shown,
@@ -59,6 +60,7 @@ export function CriterionPanel({
   className,
 }: {
   c: Criterion;
+  check: Check;
   side: SideKey;
   runId?: string | null;
   shown: Shown;
@@ -90,15 +92,21 @@ export function CriterionPanel({
         <p className="text-small text-fg-3">Критерий {c.n}</p>
         <h2 className="mt-1 text-balance text-title font-semibold text-fg">{c.name}</h2>
         <p className="mt-2 text-body text-fg-2">{duty(r.rule.text)}</p>
-        {r.rule.origin && (
-          <p
-            className="mt-2 flex items-center gap-1.5 text-small text-fg-3"
-            title="Где это требование записано в коде агента"
-          >
-            <Code2 aria-hidden className="size-3.5" />
-            <span className="font-mono">{shortOrigin(r.rule.origin)}</span>
-          </p>
-        )}
+        {r.rule.origin &&
+          (r.rule.kind === "tone-of-voice" ? (
+            <p className="mt-2 flex items-center gap-1.5 text-small text-fg-3" title="Где это требование записано">
+              <FileText aria-hidden className="size-3.5" />
+              <span>{r.rule.origin}</span>
+            </p>
+          ) : (
+            <p
+              className="mt-2 flex items-center gap-1.5 text-small text-fg-3"
+              title="Где это требование записано в коде агента"
+            >
+              <Code2 aria-hidden className="size-3.5" />
+              <span className="font-mono">{shortOrigin(r.rule.origin)}</span>
+            </p>
+          ))}
         <div className="mt-4">
           <Facts
             facts={[
@@ -131,7 +139,7 @@ export function CriterionPanel({
         </div>
         {s.failed > 0 && (
           <Link
-            to={problemLink(r.id, side, runId)}
+            to={problemLink(r.id, side === "sim" ? "sim" : check, runId)}
             className="mt-4 inline-flex items-center gap-1.5 rounded-sm text-body font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3"
           >
             Разбор проблемы

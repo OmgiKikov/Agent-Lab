@@ -74,10 +74,12 @@ function Lens({ c, side, on, onSelect }: { c: Criterion; side: SideKey; on: bool
 }
 
 /**
- * The agent's prompt as code, with its criteria in place: each quote lit by what the judge found on this side, the count
- * over it, a bar in the margin. The line numbers are the code's own.
+ * A source of criteria as written — the agent's prompt, or the person's rules of communication — with its criteria in
+ * place: each quote lit by what the check found on this side, the count over it, a bar in the margin. The line numbers
+ * are the source's own.
  */
 export function CodeView({
+  label,
   source,
   content,
   items,
@@ -85,6 +87,7 @@ export function CodeView({
   selected,
   onSelect,
 }: {
+  label: string;
   source: Source;
   content: string;
   items: Criterion[];
@@ -110,12 +113,7 @@ export function CodeView({
       ?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [selected, source.id]);
   return (
-    <div
-      ref={box}
-      className="min-h-0 overflow-auto bg-canvas py-3"
-      role="region"
-      aria-label="Текст промпта с критериями"
-    >
+    <div ref={box} className="min-h-0 overflow-auto bg-canvas py-3" role="region" aria-label={label}>
       {lines.map((line, i) => {
         const here = spans.filter((s) => s.start < line.end + 1 && s.end > line.start);
         const opens = spans.filter((s) => s.start >= line.start && s.start <= line.end);
@@ -153,7 +151,7 @@ export function CodeView({
                     onSelect={onSelect}
                   />
                 ) : (
-                  " "
+                  "\u00a0"
                 )}
               </span>
             </div>
@@ -163,7 +161,7 @@ export function CodeView({
       {missing.length > 0 && (
         <p className="mx-6 mt-6 border-t border-line pt-3 font-sans text-small text-warn">
           {missing.length === 1 ? "Цитаты одного критерия" : `Цитат ${missing.length} критериев`} нет в нынешнем тексте:
-          код мог измениться после того, как критерии извлекли ({missing.map((c) => c.n).join(", ")}).
+          он мог измениться после того, как критерии собрали ({missing.map((c) => c.n).join(", ")}).
         </p>
       )}
     </div>
