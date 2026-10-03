@@ -17,7 +17,7 @@ import httpx
 
 from .. import store
 from ..settings import CERTS
-from .errors import ModelError
+from .errors import MalformedAnswer, ModelError, refused
 
 FILE = Path(os.environ.get('AGENT_LAB_GATEWAY_FILE', '~/.agent-lab/gateway.json')).expanduser()
 FORMAT = 'agent-lab-gateway-1'
@@ -127,7 +127,7 @@ def _unpack(bundle: Path) -> tuple[Path, Path]:
     return out / 'client.pem', out / 'client.key'
 
 
-def _client(timeout: float) -> tuple[httpx.AsyncClient, str]:
+def _client(timeout: httpx.Timeout | float) -> tuple[httpx.AsyncClient, str]:
     settings = config()
     if not settings:
         raise ModelError('Шлюз моделей не настроен: положите url.txt, сертификат и ключ в папку certs/')
@@ -148,7 +148,7 @@ async def catalog() -> list[str]:
     async with client:
         response = await client.get(base + '/v1/models')
     if response.status_code != 200:
-        raise ModelError(f'Шлюз не отдал каталог моделей: HTTP {response.status_code}')
+        raise refused('Шлюз не отдал каталог моделей:', response)
     try:
         data = response.json()
     except ValueError as error:
@@ -180,7 +180,7 @@ async def auto_models() -> dict:
     return models
 
 
-async def chat(model: str, system: str, messages: list[dict], timeout: float) -> tuple[str, str]:
+async def chat(model: str, system: str, messages: list[dict], timeout: httpx.Timeout) -> tuple[str, str]:
     """(answer, model that answered)."""
     if model == 'auto':
         model = (await auto_models())['model']
@@ -199,22 +199,22 @@ async def chat(model: str, system: str, messages: list[dict], timeout: float) ->
     async with client:
         response = await client.post(base + '/v2/chat/completions', json=body)
     if response.status_code != 200:
-        raise ModelError(f'Шлюз моделей ответил HTTP {response.status_code}')
+        raise refused('Шлюз моделей ответил', response)
     try:
         data = response.json()
     except ValueError as error:
-        raise ModelError('Шлюз вернул ответ не в JSON') from error
+        raise MalformedAnswer('Шлюз вернул ответ не в JSON') from error
     if not isinstance(data, dict) or not isinstance(data.get('messages'), list):
-        raise ModelError('В ответе шлюза нет списка messages')
+        raise MalformedAnswer('В ответе шлюза нет списка messages')
     if not all(isinstance(message, dict) for message in data['messages']):
-        raise ModelError('Неверный формат сообщения шлюза')
+        raise MalformedAnswer('Неверный формат сообщения шлюза')
     answer = next((message for message in data['messages'] if message.get('role') == 'assistant'), None)
     if answer is None or not isinstance(answer.get('content'), list):
-        raise ModelError('В ответе шлюза нет текста assistant')
+        raise MalformedAnswer('В ответе шлюза нет текста assistant')
     parts = answer['content']
     if not all(isinstance(part, dict) and isinstance(part.get('text'), str) for part in parts):
-        raise ModelError('Текст ответа шлюза должен быть строкой')
+        raise MalformedAnswer('Текст ответа шлюза должен быть строкой')
     label = data.get('model', model)
     if not isinstance(label, str) or not label.strip():
-        raise ModelError('Имя ответившей модели шлюза должно быть строкой')
+        raise MalformedAnswer('Имя ответившей модели шлюза должно быть строкой')
     return ''.join(part['text'] for part in parts), label

@@ -6,11 +6,13 @@ Two backends, chosen at start:
   LAB_MODEL_URL / LAB_MODEL_KEY / LAB_MODEL; a second judge of another vendor only with LAB_SECOND_MODEL
   (+ LAB_SECOND_URL). It re-checks every verdict; its actual model is recorded in that result. Without it, or when it is
   the main model again, there is no second check (second_judge).
+A call that may pass on another try (no connection, 429, 5xx) is made again a few times (chat).
 """
 
 import asyncio
 import json
 import os
+import random
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
@@ -18,7 +20,7 @@ from typing import Generic, TypeVar
 import httpx
 
 from . import gateway
-from .errors import ModelError
+from .errors import MalformedAnswer, ModelError, refused
 
 GATEWAY = 'gateway'
 Endpoint = tuple[str, str]  # (base URL or GATEWAY, model)
@@ -41,6 +43,12 @@ else:
 MODEL = MAIN[1]
 API_KEY = os.environ.get('LAB_MODEL_KEY', os.environ.get('PI_PROXY_TOKEN', 'pi-local-bridge'))
 CONCURRENCY = int(os.environ.get('LAB_MODEL_CONCURRENCY', '6'))
+ATTEMPTS = 3  # tries of a call that may pass later; after a read timeout, one more try only
+CONNECT_TIMEOUT = 10  # seconds: an unreachable model fails fast, while an answer may take the whole read timeout
+PAUSE = 2  # seconds before the second try, doubled before each next one, plus up to as much again at random
+MAX_PAUSE = 30  # a longer Retry-After is cut to this
+# No connection, a dropped one, or no answer in time: the next try may pass.
+_TRANSIENT = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 
 T = TypeVar('T')
 
@@ -73,25 +81,54 @@ async def chat(
     timeout: float = 240,
     endpoint: Endpoint | None = None,
 ) -> Answer[str]:
+    """One answer. No connection, 429 and 5xx are asked again, up to ATTEMPTS tries, after the pause the model asked
+    for or a doubling one; a read timeout once only, as the model may have done (and billed) the work; nothing else."""
     base, model = endpoint or MAIN
     if isinstance(messages, str):
         messages = [{'role': 'user', 'content': messages}]
-    try:
-        async with _limit():
-            if base == GATEWAY:
-                text, label = await gateway.chat(model, system, messages, timeout)
-            else:
-                text, label = await _openai_chat(base, model, system, messages, json_mode, timeout)
-    except httpx.HTTPError as error:
-        raise ModelError(f'Модель недоступна: {type(error).__name__}') from error
+    limits = httpx.Timeout(timeout, connect=CONNECT_TIMEOUT)
+    attempt = timeouts = 0
+    while True:
+        attempt += 1
+        try:
+            text, label = await _ask(base, model, system, messages, json_mode, limits)
+            break
+        except ModelError as error:
+            timeouts += isinstance(error.__cause__, httpx.ReadTimeout)
+            if not error.retryable or attempt == ATTEMPTS or timeouts > 1:
+                raise
+            await asyncio.sleep(_pause(attempt, error.retry_after))
     text = text.strip()
     if not text:
-        raise ModelError('Модель вернула пустой ответ')
+        raise MalformedAnswer('Модель вернула пустой ответ')
     return Answer(text, label)
 
 
+async def _ask(
+    base: str, model: str, system: str, messages: list[dict], json_mode: bool, timeout: httpx.Timeout
+) -> tuple[str, str]:
+    """One try, within the concurrency limit; what went wrong on the way becomes a ModelError."""
+    try:
+        async with _limit():
+            if base == GATEWAY:
+                return await gateway.chat(model, system, messages, timeout)
+            return await _openai_chat(base, model, system, messages, json_mode, timeout)
+    except _TRANSIENT as error:
+        raise ModelError(f'Модель недоступна: {type(error).__name__}', retryable=True) from error
+    except httpx.HTTPError as error:
+        raise ModelError(f'Модель недоступна: {type(error).__name__}') from error
+
+
+def _pause(attempt: int, retry_after: float | None) -> float:
+    """Seconds before the next try: the model's own Retry-After up to MAX_PAUSE, else a doubling pause with jitter, so
+    the calls that failed together do not all come back at once."""
+    if retry_after is not None:
+        return min(retry_after, MAX_PAUSE)
+    return PAUSE * 2 ** (attempt - 1) + random.uniform(0, PAUSE)
+
+
 async def _openai_chat(
-    base: str, model: str, system: str, messages: list[dict], json_mode: bool, timeout: float
+    base: str, model: str, system: str, messages: list[dict], json_mode: bool, timeout: httpx.Timeout
 ) -> tuple[str, str]:
     body = {'model': model, 'stream': False, 'messages': [{'role': 'system', 'content': system}, *messages]}
     if json_mode:
@@ -101,22 +138,22 @@ async def _openai_chat(
             f'{base}/chat/completions', json=body, headers={'Authorization': f'Bearer {API_KEY}'}
         )
     if response.status_code != 200:
-        raise ModelError(f'Модель не ответила: HTTP {response.status_code}')
+        raise refused('Модель не ответила:', response)
     try:
         data = response.json()
     except ValueError as error:
-        raise ModelError('Модель вернула не JSON') from error
+        raise MalformedAnswer('Модель вернула не JSON') from error
     if not isinstance(data, dict) or not isinstance(data.get('choices'), list) or not data['choices']:
-        raise ModelError('В ответе модели нет choices')
+        raise MalformedAnswer('В ответе модели нет choices')
     choice = data['choices'][0]
     if not isinstance(choice, dict) or not isinstance(choice.get('message'), dict):
-        raise ModelError('В ответе модели нет объекта message')
+        raise MalformedAnswer('В ответе модели нет объекта message')
     text = choice['message'].get('content')
     if not isinstance(text, str):
-        raise ModelError('Текст ответа модели должен быть строкой')
+        raise MalformedAnswer('Текст ответа модели должен быть строкой')
     label = data.get('model', model)
     if not isinstance(label, str) or not label.strip():
-        raise ModelError('Имя ответившей модели должно быть строкой')
+        raise MalformedAnswer('Имя ответившей модели должно быть строкой')
     return text, label
 
 
@@ -188,7 +225,8 @@ async def structured(
     attempts: int = 2,
     endpoint: Endpoint | None = None,
 ) -> Answer[T]:
-    """Parse a JSON reply once into the caller's type; retry malformed output or a rejected reply."""
+    """Parse a JSON reply once into the caller's type; ask again for malformed output or a rejected reply. Any other
+    ModelError is final here: chat() has already asked again where that may help."""
     prompt = json.dumps(payload, ensure_ascii=False)
     system += (
         '\nReturn only a valid JSON object. '
@@ -200,7 +238,7 @@ async def structured(
             answer = await chat(system, prompt, json_mode=True, endpoint=endpoint)
             value = parse(parse_json(answer.value))
             return Answer(value, answer.model)
-        except (ModelError, ValueError, KeyError, TypeError, httpx.HTTPError) as error:
+        except (MalformedAnswer, ValueError, KeyError, TypeError) as error:
             last = error
     raise ModelError(f'Не удалось получить ответ модели: {type(last).__name__}: {str(last)[:200]}')
 
@@ -212,6 +250,7 @@ __all__ = [
     'SECOND',
     'Answer',
     'Endpoint',
+    'MalformedAnswer',
     'ModelError',
     'chat',
     'check',

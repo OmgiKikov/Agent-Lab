@@ -1,6 +1,8 @@
 import asyncio
 import json
 import unittest
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -161,6 +163,116 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             llm.models_used([{'model': 'first'}, {'model': 'second'}, {'model': 'first'}]), 'first, second'
         )
         self.assertEqual(llm.models_used([{}]), llm.MODEL)
+
+
+ANSWER = {'choices': [{'message': {'content': '{"ready": true}'}}], 'model': 'm'}
+
+
+def answered(body: dict = ANSWER):
+    return lambda request: json_response(body)
+
+
+def status(code: int, **headers: str):
+    return lambda request: httpx.Response(code, headers=headers)
+
+
+def broken(kind: type[httpx.TransportError]):
+    def reply(request):
+        raise kind('network', request=request)
+
+    return reply
+
+
+class RetryTests(unittest.IsolatedAsyncioTestCase):
+    """What is asked again and after which pause; asyncio.sleep is patched, nothing waits for real."""
+
+    async def ask(self, *replies, structured: bool = False):
+        """(answer or ModelError, requests the provider got, pauses taken) for these replies in turn."""
+        requests, pauses = [], []
+
+        def handler(request):
+            requests.append(request)
+            return replies[len(requests) - 1](request)
+
+        async def call():
+            if structured:
+                return await llm.structured('system', {}, parse=lambda value: value, endpoint=('http://p/v1', 'm'))
+            return await llm.chat('system', 'question', endpoint=('http://p/v1', 'm'))
+
+        with (
+            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
+            patch.object(llm.asyncio, 'sleep', AsyncMock(side_effect=pauses.append)),
+        ):
+            try:
+                result = await call()
+            except llm.ModelError as error:
+                result = error
+        return result, len(requests), pauses
+
+    async def test_a_busy_model_is_asked_again_after_the_pause_it_asked_for(self):
+        result, requests, pauses = await self.ask(status(429, **{'Retry-After': '7'}), answered())
+        self.assertEqual((result.model, requests, pauses), ('m', 2, [7]))
+
+    async def test_a_long_retry_after_is_cut_and_three_tries_are_the_most(self):
+        busy = status(429, **{'Retry-After': '3600'})
+        result, requests, pauses = await self.ask(busy, busy, busy)
+        self.assertEqual((requests, pauses, result.status), (3, [llm.MAX_PAUSE, llm.MAX_PAUSE], 429))
+
+    async def test_a_retry_after_date_is_read_as_seconds(self):
+        when = format_datetime(datetime.now(UTC) + timedelta(seconds=20), usegmt=True)
+        _, _, pauses = await self.ask(status(503, **{'Retry-After': when}), answered())
+        self.assertTrue(15 < pauses[0] <= 20, pauses)
+
+    async def test_a_failing_model_is_asked_again_after_growing_pauses_with_jitter(self):
+        result, requests, pauses = await self.ask(status(503), status(502), status(500))
+        self.assertEqual((requests, result.status, str(result)), (3, 500, 'Модель не ответила: HTTP 500'))
+        self.assertTrue(llm.PAUSE <= pauses[0] < 2 * llm.PAUSE <= pauses[1] < 3 * llm.PAUSE, pauses)
+
+    async def test_another_4xx_is_never_asked_again_even_by_structured(self):
+        result, requests, pauses = await self.ask(status(400), structured=True)
+        self.assertEqual((requests, pauses, result.status), (1, [], 400))
+        self.assertEqual(str(result), 'Модель не ответила: HTTP 400')
+
+    async def test_a_lost_connection_is_asked_again(self):
+        replies = broken(httpx.ConnectError), broken(httpx.RemoteProtocolError), answered()
+        result, requests, pauses = await self.ask(*replies)
+        self.assertEqual((result.value, requests, len(pauses)), ('{"ready": true}', 3, 2))
+
+    async def test_a_read_timeout_is_asked_again_once_only(self):
+        result, requests, _ = await self.ask(broken(httpx.ReadTimeout), broken(httpx.ReadTimeout), answered())
+        self.assertEqual((requests, str(result)), (2, 'Модель недоступна: ReadTimeout'))
+
+    async def test_structured_does_not_multiply_the_tries_of_chat(self):
+        result, requests, _ = await self.ask(status(503), status(503), status(503), structured=True)
+        self.assertEqual((requests, str(result)), (3, 'Модель не ответила: HTTP 503'))
+
+    async def test_a_malformed_answer_is_asked_again_once_at_once(self):
+        result, requests, pauses = await self.ask(answered({'choices': []}), answered(), structured=True)
+        self.assertEqual((result.value, requests, pauses), ({'ready': True}, 2, []))
+
+    async def test_the_connection_has_a_short_timeout_and_the_answer_the_usual_one(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request.extensions['timeout'])
+            return json_response(ANSWER)
+
+        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            await llm.chat('system', 'question', endpoint=('http://p/v1', 'm'))
+        self.assertEqual((seen[0]['connect'], seen[0]['read']), (llm.CONNECT_TIMEOUT, 240))
+
+    async def test_the_gateway_follows_the_same_policy(self):
+        answer = {'messages': [{'role': 'assistant', 'content': [{'text': 'да'}]}]}
+        replies = iter([httpx.Response(503), json_response(answer)])
+        transport = httpx.MockTransport(lambda _: next(replies))
+        with (
+            patch.object(
+                llm.gateway, '_client', side_effect=lambda *_: (Client(transport=transport), 'http://gateway')
+            ),
+            patch.object(llm.asyncio, 'sleep', AsyncMock()) as sleep,
+        ):
+            result = await llm.chat('system', 'question', endpoint=(llm.GATEWAY, 'requested'))
+        self.assertEqual((result.value, sleep.await_count), ('да', 1))
 
 
 class DefaultModelsTests(unittest.TestCase):
