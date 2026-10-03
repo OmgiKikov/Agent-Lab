@@ -1,14 +1,18 @@
 """An uploaded file stays within its limits whatever it claims about itself."""
 
 import struct
+import tempfile
 import tracemalloc
 import unittest
 import zlib
+from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 from test_logs import PAIR, excel
 
-from lab import logs, policy_files
+from lab import api, logs, policy_files, store
+from lab.jobs import Jobs
 
 
 def one_part(name: str, body: bytes, declared: int, crc: int) -> bytes:
@@ -57,3 +61,54 @@ class ArchiveTests(unittest.TestCase):
             policy_files.read('rules.docx', garbage)
         with self.assertRaisesRegex(ValueError, 'Не удалось прочитать файл Excel'):
             logs.prepare('export.xlsx', one_part('[Content_Types].xml', b'\xff' * 64, 100, 0))
+
+
+class UploadBodyTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        for mocked in (
+            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
+            patch.object(api, 'jobs', Jobs()),
+        ):
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
+        self.uploads = (
+            ('/api/logs?name=export.jsonl', logs),
+            ('/api/tone-of-voice/read-file?name=rules.md', policy_files),
+        )
+
+    async def asyncTearDown(self) -> None:
+        await api.jobs.close()
+        await self.client.aclose()
+
+    async def test_an_upload_that_declares_too_much_is_refused_before_it_is_read(self) -> None:
+        pulled = []
+
+        async def body():
+            pulled.append(True)
+            yield b'{}'
+
+        for path, module in self.uploads:
+            with self.subTest(path=path), patch.object(module, 'LIMIT', 10_000):
+                response = await self.client.post(path, content=body(), headers={'Content-Length': '10001'})
+                self.assertEqual(response.status_code, 413, response.text)
+                self.assertIn('Файл слишком большой', response.json()['detail'])
+        self.assertEqual(pulled, [])
+
+    async def test_an_upload_without_a_declared_length_is_read_no_further_than_the_limit(self) -> None:
+        for path, module in self.uploads:
+            pulled = 0
+
+            async def endless():
+                nonlocal pulled
+                for _ in range(1_000):
+                    pulled += 1
+                    yield b' ' * 1_000
+
+            with self.subTest(path=path), patch.object(module, 'LIMIT', 10_000):
+                response = await self.client.post(path, content=endless())
+                self.assertEqual(response.status_code, 413, response.text)
+                self.assertLessEqual(pulled, 11)
+        self.assertIsNone(store.load(logs.FILE))

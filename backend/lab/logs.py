@@ -19,6 +19,7 @@ from . import store
 
 FILE = 'logs.json'
 META = 'logs-meta.json'  # the name and time of the last upload
+LIMIT = 50_000_000  # an uploaded export
 INFLATED = 500_000_000  # the parts of a workbook, unpacked together
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
