@@ -39,6 +39,39 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(picks[0][2], 'Покрытие темы')
         self.assertEqual(audit['results'][0]['status'], 'UNMEASURED')
 
+    async def test_a_tone_check_gives_a_scenario_per_criterion_the_agent_failed_not_four_at_most(self):
+        """Tone of voice has one topic: picking two errors and two controls per topic capped its deck at four. Every
+        criterion the agent failed gets its own conversation first (the most frequent first, each conversation once),
+        then a control, then the second conversation of every criterion, then the second control."""
+        rules = [{'id': f'c{n}', 'text': f'Критерий {n}', 'quote': str(n), 'observation': 'reply'} for n in range(1, 5)]
+        failed = {'d1': ['c1', 'c2'], 'd2': ['c1'], 'd3': ['c3'], 'd4': ['c3'], 'd5': ['c4']}
+
+        def result(dialogue_id: str) -> dict:
+            errors = failed.get(dialogue_id, [])
+            rows = [{'ruleId': rule['id'], 'status': 'FAIL' if rule['id'] in errors else 'PASS'} for rule in rules]
+            return {'topicId': 't1', 'dialogueId': dialogue_id, 'status': 'FAIL' if errors else 'PASS', 'rules': rows}
+
+        ids = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8']
+        topic = {'id': 't1', 'title': 'Tone of voice', 'rules': rules}
+        audit = {'topics': [topic], 'results': [result(d) for d in ids]}
+        messages = [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}]
+        talks = [{'id': d, 'messages': messages} for d in ids]
+        with patch.object(cards.logs, 'load', return_value=talks):
+            picks = cards.pick(audit)
+        self.assertEqual(
+            [(dialogue['id'], origin) for _, dialogue, origin, _ in picks],
+            [
+                ('d1', cards.FROM_LOG),
+                ('d3', cards.FROM_LOG),
+                ('d5', cards.FROM_LOG),
+                ('d6', cards.COVERAGE),
+                ('d2', cards.FROM_LOG),
+                ('d4', cards.FROM_LOG),
+                ('d7', cards.COVERAGE),
+            ],
+        )
+        self.assertEqual(picks[0][3], ['c1', 'c2'])  # the card still reproduces every criterion failed there
+
     async def test_empty_generation_is_an_explicit_error(self):
         with (
             patch.object(cards.store, 'load', return_value={'topics': [], 'results': []}),
