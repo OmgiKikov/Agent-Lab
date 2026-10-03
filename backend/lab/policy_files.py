@@ -30,7 +30,7 @@ def _docx(data: bytes) -> str:
     try:
         with ZipFile(io.BytesIO(data)) as archive:
             root = ElementTree.fromstring(_text_part(archive))
-    except (BadZipFile, KeyError, ElementTree.ParseError, zlib.error, EOFError) as error:
+    except (BadZipFile, KeyError, ElementTree.ParseError, zlib.error, EOFError, NotImplementedError) as error:
         raise ValueError('Не удалось прочитать документ Word. Загрузите файл .docx.') from error
     paragraphs = []
     for paragraph in root.iter(W + 'p'):

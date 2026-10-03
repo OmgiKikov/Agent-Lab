@@ -29,6 +29,9 @@ MARKER = re.compile(r'^[ \t]*(CLIENT|AGENT)\b', re.M)
 CONTROL = re.compile(r'`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_-]*)\s*`\s*`\s*`')
 # The line as_seen puts under a reply for those buttons.
 BUTTONS = re.compile(r'\n\[Кнопки: [^\n]*\]\Z')
+# A broken workbook: openpyxl names a part the archive does not have (KeyError), zipfile meets a broken stream or a
+# feature it does not read.
+UNREADABLE = (BadZipFile, InvalidFileException, ParseError, KeyError, zlib.error, EOFError, NotImplementedError)
 
 
 def as_seen(text: str) -> str:
@@ -196,8 +199,7 @@ def prepare(name: str, data: bytes) -> list[dict]:
         try:
             _check_parts(data)
             dialogues = from_excel(data)
-        # KeyError: openpyxl names a part of the workbook the archive does not have.
-        except (BadZipFile, InvalidFileException, ParseError, KeyError, zlib.error, EOFError) as error:
+        except UNREADABLE as error:
             raise ValueError('Не удалось прочитать файл Excel: неверная структура .xlsx') from error
     else:
         raise ValueError('Загрузите файл .xlsx или .jsonl')

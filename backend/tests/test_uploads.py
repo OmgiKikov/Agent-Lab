@@ -15,13 +15,12 @@ from lab import api, logs, policy_files, store
 from lab.jobs import Jobs
 
 
-def one_part(name: str, body: bytes, declared: int, crc: int) -> bytes:
-    """A zip archive of one deflated part, its sizes and checksum as given."""
+def one_part(name: str, body: bytes, declared: int, crc: int, flags: int = 0) -> bytes:
+    """A zip archive of one deflated part, its sizes, checksum and flags as given."""
     member = name.encode()
-    local = struct.pack('<IHHHHHIIIHH', 0x04034B50, 20, 0, 8, 0, 0, crc, len(body), declared, len(member), 0)
-    central = struct.pack(
-        '<IHHHHHHIIIHHHHHII', 0x02014B50, 20, 20, 0, 8, 0, 0, crc, len(body), declared, len(member), 0, 0, 0, 0, 0, 0
-    )
+    sizes = (crc, len(body), declared, len(member))
+    local = struct.pack('<IHHHHHIIIHH', 0x04034B50, 20, flags, 8, 0, 0, *sizes, 0)
+    central = struct.pack('<IHHHHHHIIIHHHHHII', 0x02014B50, 20, 20, flags, 8, 0, 0, *sizes, 0, 0, 0, 0, 0, 0)
     end = struct.pack('<IHHHHIIH', 0x06054B50, 0, 0, 1, 1, len(central + member), len(local + member + body), 0)
     return local + member + body + central + member + end
 
@@ -61,6 +60,18 @@ class ArchiveTests(unittest.TestCase):
             policy_files.read('rules.docx', garbage)
         with self.assertRaisesRegex(ValueError, 'Не удалось прочитать файл Excel'):
             logs.prepare('export.xlsx', one_part('[Content_Types].xml', b'\xff' * 64, 100, 0))
+
+    def test_an_archive_feature_python_does_not_read_is_a_validation_error(self):
+        text = zlib.compressobj(9, zlib.DEFLATED, -15)
+        body = text.compress(b'<x/>') + text.flush()
+        for flags in (0x20, 0x40):  # compressed patched data, strong encryption
+            with self.subTest(flags=flags):
+                part = one_part('word/document.xml', body, 4, zlib.crc32(b'<x/>'), flags)
+                with self.assertRaisesRegex(ValueError, 'Не удалось прочитать документ Word'):
+                    policy_files.read('rules.docx', part)
+                part = one_part('[Content_Types].xml', body, 4, zlib.crc32(b'<x/>'), flags)
+                with self.assertRaisesRegex(ValueError, 'Не удалось прочитать файл Excel'):
+                    logs.prepare('export.xlsx', part)
 
 
 class UploadBodyTests(unittest.IsolatedAsyncioTestCase):
