@@ -10,10 +10,10 @@ from pathlib import Path
 
 import httpx
 
-from ..settings import DATA
+from .. import store
 from .http import AGENT_PATH, AgentError, HttpAgent
 
-LOG = DATA / 'local-code-agent.log'
+LOG = 'local-code-agent.log'  # beside the database of the agent being checked: agents run in parallel (jobs.PerAgent)
 START_TIMEOUT = 180
 
 
@@ -37,13 +37,17 @@ class CodeAgent(HttpAgent):
         script = self.repo / 'local/run-app.sh'
         if not script.exists():
             raise AgentError(f'Нет исходников агента: {script}')
-        LOG.parent.mkdir(parents=True, exist_ok=True)
-        with LOG.open('w') as log:
+        log = store.database().parent / LOG
+        log.parent.mkdir(parents=True, exist_ok=True)
+        # The agent's output may quote the bank's data: readable by this user only.
+        descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w') as output:
             self.process = subprocess.Popen(
                 [str(script)],
                 cwd=self.repo,
                 env={**os.environ, 'APP_PORT': str(self.port)},
-                stdout=log,
+                stdout=output,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
@@ -51,7 +55,7 @@ class CodeAgent(HttpAgent):
         async with httpx.AsyncClient(timeout=3) as client:
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
-                    raise AgentError('Агент из исходников не запустился: см. data/local-code-agent.log')
+                    raise AgentError(f'Агент из исходников не запустился: см. {log}')
                 try:
                     identity = (await client.get(f'http://127.0.0.1:{self.port}/local/agent-lab/identity')).json()
                 except (httpx.HTTPError, ValueError):

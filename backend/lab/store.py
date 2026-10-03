@@ -26,9 +26,14 @@ def now() -> str:
     return datetime.now(UTC).isoformat(timespec='milliseconds')
 
 
+def database() -> Path:
+    """The database the current request or job works in; its folder holds the rest of that agent's files."""
+    return AGENT.get() or DB
+
+
 @contextmanager
 def _connection() -> Iterator[sqlite3.Connection]:
-    path = AGENT.get() or DB
+    path = database()
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
     try:
