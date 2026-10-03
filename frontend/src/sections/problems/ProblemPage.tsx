@@ -12,6 +12,7 @@ import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useReview, type Decision, type Example } from "../../lab/problems";
 import { humansOf, secondOf } from "../../lab/problemStats";
+import { conversationKey, exampleAt } from "../../lab/verdicts";
 import { ExampleCard } from "../../product/ExampleCard";
 import { SourceSheet } from "../../product/SourceSheet";
 import { shortOrigin } from "../../product/text";
@@ -45,22 +46,26 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
 
   const examples = c ? violationsOf(c, stage) : [];
-  const at = Math.max(0, Math.min(examples.length - 1, Number(params.get("e") ?? 0) || 0));
+  const at = exampleAt(examples, params.get("e"));
   const example = examples[at];
-  const go = (n: number) => {
-    dir.current = n >= at ? 1 : -1;
+  /** The example in the address by its conversation: «Нет» sends it to the end of the order, it stays on screen. */
+  const pin = (e: Example) =>
     setParams(
       (prev) => {
         const p = new URLSearchParams(prev);
-        if (n) p.set("e", String(n));
-        else p.delete("e");
+        p.set("e", conversationKey(e));
         return p;
       },
       { replace: true },
     );
+  const go = (n: number) => {
+    if (!examples[n]) return;
+    dir.current = n >= at ? 1 : -1;
+    pin(examples[n]);
   };
   const decide = (e: Example, d: Decision) => {
     if (answersWait(state, e.source)) return;
+    if (params.get("e") !== conversationKey(e)) pin(e);
     const before = e.review;
     const next = e.review === d ? null : d;
     // The result the examples come from: the service takes the answer only on it.

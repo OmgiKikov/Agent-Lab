@@ -1,8 +1,22 @@
+import { logKey, simKey } from "./dialogs";
 import type { Example, Problems, RuleEntry } from "./problems";
 
 /** One verdict: a criterion in one conversation. */
 export const exampleKey = (e: Example) =>
   `${e.source}|${e.source === "log" ? e.dialogueId : `${e.runId}#${e.index}`}|${e.ruleId}`;
+
+/** The conversation of an example as «Разговоры» address it (`?d=`); never a bare number. */
+export const conversationKey = (e: Example) =>
+  e.source === "log" ? logKey(e.dialogueId ?? "") : simKey(e.runId ?? "", e.index ?? 0);
+
+/**
+ * Which example an address names (`?e=`): its conversation, so the same one stays on screen when an answer re-sorts
+ * them; in an older address, a number is its place. The first one when the address names none of them.
+ */
+export function exampleAt(examples: Example[], wanted: string | null): number {
+  if (wanted && /^\d+$/.test(wanted)) return Math.max(0, Math.min(examples.length - 1, Number(wanted)));
+  return Math.max(0, wanted ? examples.findIndex((e) => conversationKey(e) === wanted) : 0);
+}
 
 export type Queue = "disputed" | "unchecked" | "all";
 
