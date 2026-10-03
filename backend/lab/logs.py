@@ -84,6 +84,11 @@ def _export_messages(messages: list[dict], count: int) -> list[dict]:
     raise ValueError('Текст и порядок сообщений не совпадают; неоднозначные повторы нельзя восстановить')
 
 
+def _cell(row: tuple, index: int) -> object:
+    """A sheet that does not declare its size gives each row only as far as its last filled cell."""
+    return row[index] if index < len(row) else None
+
+
 def from_excel(data: bytes) -> list[dict]:
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
@@ -98,10 +103,10 @@ def from_excel(data: bytes) -> list[dict]:
         for row in rows:
             if not any(value is not None for value in row):
                 continue
-            dialogue_id = row[column[ID]]
+            dialogue_id = _cell(row, column[ID])
             try:
-                count = _message_count(row[column[ORDER]])
-                messages = _export_messages(turns(str(row[column[TEXT]] or '')), count)
+                count = _message_count(_cell(row, column[ORDER]))
+                messages = _export_messages(turns(str(_cell(row, column[TEXT]) or '')), count)
             except ValueError as error:
                 raise ValueError(f'Диалог {dialogue_id}: {error}') from error
             dialogues.append({'id': dialogue_id, 'messages': messages})
@@ -166,7 +171,8 @@ def prepare(name: str, data: bytes) -> list[dict]:
     elif name.lower().endswith('.xlsx'):
         try:
             dialogues = from_excel(data)
-        except (BadZipFile, InvalidFileException, ParseError) as error:
+        # KeyError: openpyxl names a part of the workbook the archive does not have.
+        except (BadZipFile, InvalidFileException, ParseError, KeyError) as error:
             raise ValueError('Не удалось прочитать файл Excel: неверная структура .xlsx') from error
     else:
         raise ValueError('Загрузите файл .xlsx или .jsonl')
