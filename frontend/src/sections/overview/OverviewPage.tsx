@@ -167,9 +167,15 @@ export function OverviewPage() {
   );
 }
 
+/**
+ * The person connected their agent: they set its address on the test stand, or its folder can start it from its code.
+ * The address on this computer is built in («local-http»), so it says nothing about their agent.
+ */
+const connected = (state: LabState) => state.targets.some((t) => t.ready && t.id !== "local-http");
+
 /** The first visit: the three ways in, each with what it needs and what is already here. */
 function StartCards({ state }: { state: LabState }) {
-  const ready = state.targets.some((t) => t.ready);
+  const ready = connected(state);
   const cards: { title: string; what: string; begin: Begin; primary?: boolean }[] = [
     { title: CHECK_NAME.tone, what: WHAT.tone, begin: beginOf("tone", state), primary: true },
     { title: CHECK_NAME.code, what: WHAT.code, begin: beginOf("code", state) },
@@ -444,7 +450,7 @@ function CheckSteps({ check, onReport }: { check: Check; onReport: () => void })
 /** What to do with the simulation: build the scenarios from a check's errors, play them, or connect the agent. */
 function simSteps(state: LabState): Step[] {
   const deck = state.cards?.cards.length ? state.cards : null;
-  const ready = state.targets.some((t) => t.ready);
+  const ready = connected(state);
   return [
     deck
       ? {
