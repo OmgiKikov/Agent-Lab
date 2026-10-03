@@ -201,6 +201,7 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
     progress(done=0, total=len(dialogues), message='Начинаю проверку tone of voice')
     results = await _judge(dialogues, {**topic, 'rules': [for_judging(rule) for rule in criteria]}, progress)
     ensure_active()
+    discover.ensure_answered(results)
     previous = store.load(discover.RESULT) or {}
     if previous.get('criteriaRevision') == draft['revision']:
         discover.carry_reviews(previous, results)

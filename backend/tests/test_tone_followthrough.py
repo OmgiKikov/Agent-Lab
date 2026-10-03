@@ -13,6 +13,36 @@ from lab import api, cards, discover, judge, llm, simulate, store, tone
 from lab.jobs import Jobs
 
 
+def judged(status='FAIL', model='model-a', down=()):
+    """discover.judge_dialogue with a fake model: every criterion gets this verdict on the agent's reply; a conversation
+    in `down` is one the model did not answer, so every criterion of it stays unknown, with the model's error."""
+
+    async def judge(dialogue, topic):
+        failed = dialogue['id'] in down
+        return {
+            'dialogueId': dialogue['id'],
+            'topicId': topic['id'],
+            'status': 'UNMEASURED' if failed else status,
+            'rules': [
+                {
+                    'ruleId': rule['id'],
+                    'rule': rule['text'],
+                    'status': 'UNKNOWN' if failed else status,
+                    'reason': '' if failed else 'Форма обращения не соответствует критерию.',
+                    'agentQuote': '' if failed else dialogue['messages'][1]['content'],
+                    'title': '' if failed else 'Форма обращения',
+                }
+                for rule in topic['rules']
+            ],
+            'opening': dialogue['messages'][0]['content'],
+            'error': 'Модель недоступна: ConnectError' if failed else None,
+            'model': None if failed else model,
+            'second': None,
+        }
+
+    return judge
+
+
 class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # The flow is checked with both judges: a second vendor configured.
@@ -35,6 +65,13 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 {'role': 'assistant', 'content': 'Предоставь документы до 12 октября.'},
             ],
         }
+        self.other = {
+            'id': 'd2',
+            'messages': [
+                {'role': 'user', 'content': 'Где мой терминал?'},
+                {'role': 'assistant', 'content': 'Терминал привезут завтра, жди звонка.'},
+            ],
+        }
         await self.client.post('/api/logs?name=first.jsonl', content=json.dumps(self.dialogue))
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
         await self.client.post('/api/tone-of-voice/criteria')
@@ -51,42 +88,56 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
 
-    async def check(self, rule_ids=None, model='model-a'):
-        async def judge(dialogue, topic):
-            return {
-                'dialogueId': dialogue['id'],
-                'topicId': topic['id'],
-                'status': 'FAIL',
-                'rules': [
-                    {
-                        'ruleId': rule['id'],
-                        'rule': rule['text'],
-                        'status': 'FAIL',
-                        'reason': 'Форма обращения не соответствует критерию.',
-                        'agentQuote': dialogue['messages'][1]['content'],
-                        'title': 'Форма обращения',
-                    }
-                    for rule in topic['rules']
-                ],
-                'opening': dialogue['messages'][0]['content'],
-                'model': model,
-                'second': None,
-            }
-
+    async def start_check(self, judge, rule_ids=None, count=1):
         draft = store.load(tone.DRAFT)
         with patch.object(discover, 'judge_dialogue', side_effect=judge):
             response = await self.client.post(
                 '/api/tone-of-voice/check',
                 json={
                     'ruleIds': rule_ids or ['pronouns', 'simple_language'],
-                    'count': 1,
+                    'count': count,
                     'revision': draft['revision'],
                 },
             )
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
+
+    async def check(self, rule_ids=None, model='model-a', count=1, down=(), status='FAIL'):
+        await self.start_check(judged(status, model, down), rule_ids, count)
         self.assertIsNone(api.jobs.state['error'])
         return store.load(discover.RESULT)
+
+    async def upload(self, *dialogues, name='export.jsonl'):
+        content = '\n'.join(json.dumps(dialogue, ensure_ascii=False) for dialogue in dialogues)
+        response = await self.client.post(f'/api/logs?name={name}', content=content.encode())
+        self.assertEqual(response.status_code, 200, response.text)
+
+    async def test_a_check_the_model_could_not_answer_keeps_the_previous_result_scenarios_and_history(self):
+        down = AsyncMock(side_effect=llm.ModelError('Модель недоступна: ConnectError'))
+        request = {'ruleIds': ['pronouns'], 'count': 1, 'revision': store.load(tone.DRAFT)['revision']}
+        with patch.object(llm, 'chat', down):
+            await self.client.post('/api/tone-of-voice/check', json=request)
+            await self.wait_job()
+        self.assertEqual(api.jobs.state['error'], 'Модель проверки не ответила ни по одному разговору.')
+        self.assertIsNone(store.load(discover.RESULT))
+        previous = await self.check()
+        deck = {'cards': [{'id': 'built-from-the-previous-check'}]}
+        store.save(cards.DECK, deck)
+        with patch.object(llm, 'chat', down):
+            await self.client.post('/api/tone-of-voice/check', json=request)
+            await self.wait_job()
+        self.assertEqual(
+            api.jobs.state['error'], 'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён.'
+        )
+        self.assertEqual(store.load(discover.RESULT), previous)
+        self.assertEqual(store.load(cards.DECK), deck)
+        self.assertEqual(len(store.tone_checks()), 1)
+
+    async def test_a_check_the_model_answered_in_part_is_published_with_the_rest_not_checked(self):
+        await self.upload(self.dialogue, self.other)
+        result = await self.check(count=2, down={'d2'})
+        self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (1, 1))
+        self.assertEqual(len(store.tone_checks()), 1)
 
     async def test_snapshots_survive_new_inputs_and_do_not_change_with_live_reviews(self):
         result = await self.check()
