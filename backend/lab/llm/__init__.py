@@ -83,8 +83,9 @@ async def chat(
     json_mode: bool = False,
     timeout: float = 240,
     endpoint: Endpoint | None = None,
+    attempts: int = ATTEMPTS,
 ) -> Answer[str]:
-    """One answer. No connection, 429 and 5xx are asked again, up to ATTEMPTS tries, after the pause the model asked
+    """One answer. No connection, 429 and 5xx are asked again, up to `attempts` tries, after the pause the model asked
     for or a doubling one; a read timeout once only, as the model may have done (and billed) the work; nothing else."""
     base, model = endpoint or MAIN
     if isinstance(messages, str):
@@ -98,7 +99,7 @@ async def chat(
             break
         except ModelError as error:
             timeouts += isinstance(error.__cause__, httpx.ReadTimeout)
-            if not error.retryable or attempt == ATTEMPTS or timeouts > 1:
+            if not error.retryable or attempt >= attempts or timeouts > 1:
                 raise
             await asyncio.sleep(_pause(attempt, error.retry_after))
     text = text.strip()
@@ -226,9 +227,9 @@ def _via(base: str) -> str:
 
 
 async def check(endpoint: Endpoint) -> dict:
-    """One short call: does this model answer."""
+    """One short call, tried once: does this model answer. The person waits for it, so what is wrong is said at once."""
     try:
-        await chat('Ответь одним словом.', 'Проверка связи: ответь «готов».', timeout=90, endpoint=endpoint)
+        await chat('Ответь одним словом.', 'Проверка связи: ответь «готов».', timeout=90, endpoint=endpoint, attempts=1)
     except ModelError as error:
         return {'ok': False, 'error': str(error)}
     return {'ok': True}

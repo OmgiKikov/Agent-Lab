@@ -247,6 +247,23 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         result, requests, pauses = await self.ask(*replies)
         self.assertEqual((result.value, requests, len(pauses)), ('{"ready": true}', 3, 2))
 
+    async def test_the_connection_check_answers_after_one_try(self):
+        """«Проверить модели» says at once what is wrong: three tries with pauses hold the button half a minute."""
+        requests, pauses = [], []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(503, request=request)
+
+        with (
+            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
+            patch.object(llm.asyncio, 'sleep', AsyncMock(side_effect=pauses.append)),
+        ):
+            checked = await llm.check(('http://p/v1', 'm'))
+        self.assertEqual(
+            (checked, len(requests), pauses), ({'ok': False, 'error': 'Модель не ответила: HTTP 503'}, 1, [])
+        )
+
     async def test_a_read_timeout_is_asked_again_once_only(self):
         result, requests, _ = await self.ask(broken(httpx.ReadTimeout), broken(httpx.ReadTimeout), answered())
         self.assertEqual((requests, str(result)), (2, 'Модель недоступна: ReadTimeout'))
