@@ -163,7 +163,10 @@ async def run(
     store.create_run(record)
 
     def changed(index: int) -> None:
-        store.update_item(record['id'], index, record['items'][index])
+        """A conversation's turns stay in memory, in the job's progress; it is written once, when it ends with a
+        verdict or an error. A write rereads and rewrites the whole run, on the event loop that stop also needs."""
+        if record['items'][index]['status'] != 'RUNNING':
+            store.update_item(record['id'], index, record['items'][index])
         done = sum(item['status'] != 'RUNNING' for item in record['items'])
         progress(run=record['id'], done=done, total=len(plan), message=f'{record["targetName"]}: прогон')
 

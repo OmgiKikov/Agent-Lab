@@ -80,6 +80,44 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('actual-judge-card-1', result['model'])
         self.assertIn('actual-judge-card-2', result['model'])
 
+    async def test_a_conversation_is_written_once_when_it_ends_and_its_progress_stays_in_memory(self) -> None:
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def say(conversation_id: str, message: str, world: dict) -> dict:
+            return {'text': 'answer', 'status': '200', 'ok': True, 'options': [], 'events': []}
+
+        async def customer(scenario: dict, conversation: list[dict], details: str = '', persona: str | None = None):
+            return 'again'
+
+        async def evaluate(scenario: dict, item: dict) -> None:
+            if scenario['id'] == 'card-2':
+                entered.set()
+                await release.wait()
+            item.update(status='PASS', rules=[{'ruleId': 'r', 'status': 'PASS'}])
+
+        reported = []
+        with (
+            patch.object(simulate.cards, 'deck', return_value=[card(), card('card-2')]),
+            patch.object(self.agent, 'say', side_effect=say),
+            patch.object(simulate, 'customer_says', side_effect=customer),
+            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes,
+        ):
+            task = asyncio.create_task(simulate.run('test', progress=lambda **values: reported.append(values)))
+            await entered.wait()
+            live = store.runs()[0]
+            release.set()
+            result = await task
+        # The live view reads the record: a finished conversation is there while another one still plays.
+        self.assertEqual([item['status'] for item in live['items']], ['PASS', 'RUNNING'])
+        self.assertEqual(len(live['items'][0]['conversation']), 2 * simulate.MAX_AGENT_TURNS)
+        self.assertEqual(live['metric']['total'], 1)
+        # The agent's version, each conversation once when it ends, the finished run: never once per turn.
+        self.assertEqual(writes.call_count, 1 + len(result['items']) + 1)
+        self.assertGreater(len(reported), 2 * len(result['items']))
+        self.assertEqual(reported[-1]['done'], 2)
+        self.assertEqual([item['status'] for item in result['items']], ['PASS', 'PASS'])
+
     async def test_rejudge_patches_a_current_record_instead_of_stale_snapshot(self) -> None:
         source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
         item = simulate.new_item(card(), 'default', 1)
