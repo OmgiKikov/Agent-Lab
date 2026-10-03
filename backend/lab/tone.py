@@ -253,7 +253,7 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
     if not dialogues:
         raise ValueError('Сначала загрузите разговоры.')
     started = store.now()
-    topic = {'id': 't1', 'title': 'Tone of voice', 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
+    topic = {'id': 't1', 'title': checks.TONE_TOPIC, 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
     progress(done=0, total=len(dialogues), message='Начинаю проверку tone of voice')
     results = await _judge(dialogues, {**topic, 'rules': [for_judging(rule) for rule in criteria]}, progress)
     ensure_active()

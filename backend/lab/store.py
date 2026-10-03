@@ -105,8 +105,13 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 
+def _summarized(record: dict) -> dict:
+    """The run without its conversations, always with its check (checks.of_run: an older record names none)."""
+    return {key: value for key, value in record.items() if key != 'items'} | {'check': checks.of_run(record)}
+
+
 def _summary(record: dict) -> str:
-    return _json({key: value for key, value in record.items() if key != 'items'})
+    return _json(_summarized(record))
 
 
 def load(name: str, default: Any = None) -> Any:
@@ -313,7 +318,7 @@ def run_summaries() -> list[dict]:
     with _connection() as connection:
         # A row an older Lab wrote after the setup has no summary yet: its record stands in.
         rows = connection.execute('SELECT coalesce(summary, value) FROM runs').fetchall()
-    summaries = [{key: value for key, value in json.loads(raw).items() if key != 'items'} for (raw,) in rows]
+    summaries = [_summarized(json.loads(raw)) for (raw,) in rows]
     return sorted(summaries, key=lambda summary: summary.get('startedAt', ''), reverse=True)
 
 
@@ -325,7 +330,7 @@ def run(run_id: str) -> dict | None:
 
 def create_run(record: dict) -> dict:
     """Insert a run once. Subsequent writes must patch it, never replace a snapshot."""
-    value = dict(record, revision=1, updatedAt=now(), metric=metric(record['items']))
+    value = dict(record, check=checks.of_run(record), revision=1, updatedAt=now(), metric=metric(record['items']))
     with _connection() as connection:
         connection.execute(
             'INSERT INTO runs (id, value, summary) VALUES (?, ?, ?)', (value['id'], _json(value), _summary(value))

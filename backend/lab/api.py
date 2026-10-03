@@ -70,7 +70,7 @@ async def agent_of_request(request: Request, call_next: Callable[[Request], Awai
 
 RUN_FIELDS = (
     'id', 'target', 'targetName', 'version', 'label', 'startedAt', 'finishedAt', 'status', 'metric', 'error',
-    'model', 'repeats', 'personas', 'updatedAt', 'revision',
+    'model', 'repeats', 'personas', 'updatedAt', 'revision', 'check',
 )  # fmt: skip
 CHECK_QUESTION = 'Какой процент эквайринга?'
 

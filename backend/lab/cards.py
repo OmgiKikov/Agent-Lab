@@ -50,6 +50,11 @@ def deck() -> list[dict]:
     return (store.load(DECK) or {}).get('cards') or []
 
 
+def check() -> str | None:
+    """The check whose errors the deck was built from."""
+    return (store.load(DECK) or {}).get('check')
+
+
 def remember_openings(openings: dict[str, dict[str, str]]) -> None:
     """Keep the openings rewritten for customer types (simulate.prepare_openings) in the cards."""
     value = store.load(DECK) or {}

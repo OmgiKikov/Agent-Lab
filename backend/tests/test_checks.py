@@ -123,6 +123,12 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         # The agent's sources count the criteria of the accuracy result: the communication rules are tone of voice's.
         self.assertEqual({source['id']: source['rules'] for source in state['sources']}, {'s1': 1, 'tone-of-voice': 0})
 
+    async def test_the_state_lists_each_run_with_its_check(self):
+        item = {'cardId': 'c1', 'status': 'PASS', 'topic': 'Tone of voice', 'criteria': [], 'conversation': []}
+        store.create_run({'id': 'run-1', 'status': 'done', 'items': [item]})
+        state = (await self.client.get('/api/state')).json()
+        self.assertEqual(state['runs'][0]['check'], 'tone')
+
     async def test_an_outage_says_the_previous_result_is_kept_only_when_the_check_has_one(self):
         self.assertIsNone(await self.assess_code())
         unanswered = 'Модель проверки не ответила ни по одному разговору.'

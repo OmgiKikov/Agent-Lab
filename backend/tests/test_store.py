@@ -211,7 +211,8 @@ class StoreTests(unittest.TestCase):
             connection.execute('CREATE TABLE runs (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
             connection.execute('INSERT INTO runs (id, value) VALUES (?, ?)', ('run-1', json.dumps(older)))
         connection.close()
-        self.assertEqual(store.run_summaries(), [{key: value for key, value in older.items() if key != 'items'}])
+        summary = {key: value for key, value in older.items() if key != 'items'}
+        self.assertEqual(store.run_summaries(), [summary | {'check': 'code'}])
         running = dict(record(), id='run-2', startedAt='2026-10-01T10:00:00+00:00')
         store.import_legacy({}, [running])
         self.assertEqual([summary['id'] for summary in store.run_summaries()], ['run-2', 'run-1'])
