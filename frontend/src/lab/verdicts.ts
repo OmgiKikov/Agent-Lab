@@ -1,9 +1,26 @@
 import { logKey, simKey } from "./dialogs";
-import type { Example, Problems, RuleEntry } from "./problems";
+import type { Decision, Example, Problems, RuleEntry } from "./problems";
 
 /** One verdict: a criterion in one conversation. */
 export const exampleKey = (e: Example) =>
   `${e.source}|${e.source === "log" ? e.dialogueId : `${e.runId}#${e.index}`}|${e.ruleId}`;
+
+/**
+ * A verdict's fixed place in a shuffle of all verdicts (FNV-1a of its key, then mixed): the cases «без ошибки» the
+ * queue asks about are the same every time and do not follow the order of the conversations or criteria.
+ */
+export function rank(e: Example): number {
+  const key = exampleKey(e);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 0x01000193);
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/** What a person's answer says about the conversation: «Да» on an error and «Нет» on «без ошибки» both say error. */
+export const saysError = (status: Example["status"], decision: Decision) =>
+  (status === "FAIL") === (decision === "agree");
 
 /** The conversation of an example as «Разговоры» address it (`?d=`); never a bare number. */
 export const conversationKey = (e: Example) =>
@@ -40,15 +57,46 @@ export function verdictsOf(
   );
 }
 
+/** Every fifth case without an answer is «без ошибки»: a person checks what the model missed, not only its finds. */
+const KEPT_EVERY = 5;
+
 /**
- * What a person checks, in order: disputed ones (the second judge gave another verdict) first; then violations
- * nobody checked; then everything, violations before fulfilments.
+ * Errors nobody answered, in their order, and at every fifth place a verdict «без ошибки» nobody answered, while there
+ * are such verdicts: the same ones every time (`rank`), so the share of misses a person finds is not biased by order.
+ */
+function unanswered(all: ReturnType<typeof verdictsOf>) {
+  const kept = all
+    .filter((v) => v.example.status === "PASS" && !v.example.review)
+    .sort((a, b) => rank(a.example) - rank(b.example));
+  const queue: typeof all = [];
+  for (const v of all) {
+    if (v.example.status !== "FAIL" || v.example.review) continue;
+    queue.push(v);
+    if (queue.length % KEPT_EVERY === KEPT_EVERY - 1 && kept.length) queue.push(kept.shift()!);
+  }
+  return queue;
+}
+
+/**
+ * What a person checks, in order: disputed ones (the second judge gave another verdict) first; then the errors nobody
+ * answered, every fifth case a verdict «без ошибки»; then everything, violations before fulfilments.
  */
 export function queueOf(data: Problems, queue: Queue, ruleId?: string | null, source?: "log" | "sim") {
   const all = verdictsOf(data, ruleId, source);
   if (queue === "disputed") return all.filter((v) => v.example.second === "disagree");
-  if (queue === "unchecked") return all.filter((v) => v.example.status === "FAIL" && !v.example.review);
+  if (queue === "unchecked") return unanswered(all);
   return [...all.filter((v) => v.example.status === "FAIL"), ...all.filter((v) => v.example.status === "PASS")];
+}
+
+/**
+ * A person's answers on the verdicts «без ошибки» of a stage: how many they checked, and in how many they found the
+ * error the model missed. Only answers on the criterion itself: an older answer on a whole simulated conversation is not.
+ */
+export function missesOf(data: Problems, source: "log" | "sim"): { checked: number; missed: number } {
+  const answered = verdictsOf(data, null, source).filter(
+    (v) => v.example.status === "PASS" && v.example.review && v.example.reviewScope === "rule",
+  );
+  return { checked: answered.length, missed: answered.filter((v) => v.example.review === "disagree").length };
 }
 
 /** People's decisions on verdicts: each verdict once; an older decision on a whole simulated conversation once. */
