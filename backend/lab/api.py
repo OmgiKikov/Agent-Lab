@@ -188,10 +188,8 @@ async def stop_job() -> dict:
     return {'ok': True}
 
 
-def source_summary() -> list[dict]:
-    rules = {
-        source['id']: source.get('rules', 0) for source in (store.load(discover.RESULT) or {}).get('sources') or []
-    }
+def source_summary(analysis: dict | None) -> list[dict]:
+    rules = {source['id']: source.get('rules', 0) for source in (analysis or {}).get('sources') or []}
     return [
         {
             'id': source['id'],
@@ -207,20 +205,21 @@ def source_summary() -> list[dict]:
 
 @app.get('/api/state')
 def state() -> dict:
+    """Polled every 1.5 s during a job: the log assessment is read once; runs and dialogues are not parsed at all."""
     analysis = store.load(discover.RESULT)
-    if analysis:
+    if analysis and not analysis.get('summary'):  # every assessment stores its summary; an older one may not
         analysis['summary'] = discover.summarize(analysis['results'], analysis['topics'])
     return {
         'job': jobs.state,
         'model': llm.MODEL,
         'models': llm.describe(),
         'settings': agents.settings(),
-        'sources': source_summary(),
-        'logs': {'total': len(logs.load()), **logs.meta()},
+        'sources': source_summary(analysis),
+        'logs': {'total': store.length(logs.FILE), **logs.meta()},
         'discover': analysis,
         'toneOfVoice': store.load(tone.DRAFT),
         'cards': store.load(cards.DECK),
-        'runs': [{key: record.get(key) for key in RUN_FIELDS} for record in store.runs()],
+        'runs': [{key: summary.get(key) for key in RUN_FIELDS} for summary in store.run_summaries()],
         'targets': [agents.public(key, config) for key, config in agents.configs().items()],
         'personas': personas.public(),
     }

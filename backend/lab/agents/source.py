@@ -10,26 +10,38 @@ from pathlib import Path
 
 import httpx
 
-from ..settings import DATA
+from .. import store
 from .http import AGENT_PATH, AgentError, HttpAgent
 
-LOG = DATA / 'local-code-agent.log'
+LOG = 'local-code-agent.log'  # beside the database of the agent being checked: agents run in parallel (jobs.PerAgent)
 START_TIMEOUT = 180
+# Ports chosen by this process for agents it has not stopped yet: two runs starting at once must not both pick a port
+# their processes have not bound yet.
+_HELD: set[int] = set()
 
 
 def free_port(preferred: int) -> int:
-    """The preferred port if nobody listens on it, otherwise the next free one."""
+    """The preferred port if nobody listens on it and no other run holds it, otherwise the next free one. It stays
+    held until release()."""
     for port in range(preferred, preferred + 50):
+        if port in _HELD:
+            continue
         with socket.socket() as probe:
             if probe.connect_ex(('127.0.0.1', port)) != 0:
+                _HELD.add(port)
                 return port
     raise AgentError('Нет свободного порта для агента из исходников')
 
 
+def release(port: int | None) -> None:
+    _HELD.discard(port)
+
+
 class CodeAgent(HttpAgent):
     def __init__(self, config: dict) -> None:
-        self.port = free_port(int(config.get('port', 8081)))
-        super().__init__({**config, 'url': f'http://127.0.0.1:{self.port}{AGENT_PATH}', 'profile': 'local'})
+        super().__init__({**config, 'url': '', 'profile': 'local'})
+        self.preferred = int(config.get('port', 8081))
+        self.port: int | None = None
         self.repo = Path(config['repo']).expanduser()
         self.process: subprocess.Popen | None = None
 
@@ -37,13 +49,19 @@ class CodeAgent(HttpAgent):
         script = self.repo / 'local/run-app.sh'
         if not script.exists():
             raise AgentError(f'Нет исходников агента: {script}')
-        LOG.parent.mkdir(parents=True, exist_ok=True)
-        with LOG.open('w') as log:
+        self.port = free_port(self.preferred)
+        self.url = f'http://127.0.0.1:{self.port}{AGENT_PATH}'
+        log = store.database().parent / LOG
+        log.parent.mkdir(parents=True, exist_ok=True)
+        # The agent's output may quote the bank's data: readable by this user only.
+        descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w') as output:
             self.process = subprocess.Popen(
                 [str(script)],
                 cwd=self.repo,
                 env={**os.environ, 'APP_PORT': str(self.port)},
-                stdout=log,
+                stdout=output,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
@@ -51,7 +69,7 @@ class CodeAgent(HttpAgent):
         async with httpx.AsyncClient(timeout=3) as client:
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
-                    raise AgentError('Агент из исходников не запустился: см. data/local-code-agent.log')
+                    raise AgentError(f'Агент из исходников не запустился: см. {log}')
                 try:
                     identity = (await client.get(f'http://127.0.0.1:{self.port}/local/agent-lab/identity')).json()
                 except (httpx.HTTPError, ValueError):
@@ -67,6 +85,12 @@ class CodeAgent(HttpAgent):
         raise AgentError('Агент из исходников не ответил за 3 минуты')
 
     async def close(self) -> None:
+        try:
+            await self._stop()
+        finally:
+            release(self.port)
+
+    async def _stop(self) -> None:
         if not self.process or self.process.poll() is not None:
             return
         try:

@@ -310,6 +310,72 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state['runs'][0]['updatedAt'])
         self.assertNotIn('workshop', state)
 
+    async def state_parsing(self) -> tuple[dict, list[str]]:
+        """/api/state, and every text it parsed as JSON on the way."""
+        parsed = []
+        loads = json.loads
+
+        def spy(text, *args, **kwargs):
+            parsed.append(text if isinstance(text, str) else text.decode())
+            return loads(text, *args, **kwargs)
+
+        with patch.object(store.json, 'loads', spy):
+            response = await self.client.get('/api/state')
+        self.assertEqual(response.status_code, 200)
+        return response.json(), parsed
+
+    async def test_state_lists_runs_without_parsing_their_conversations(self) -> None:
+        conversation = [{'role': 'agent', 'text': 'conversation-of-the-run'}]
+        for number in (1, 2):
+            store.create_run(
+                {
+                    'id': f'run-{number}',
+                    'startedAt': f'2026-10-0{number}T10:00:00+00:00',
+                    'status': 'done',
+                    'items': [{'cardId': 'card-1', 'status': 'PASS', 'conversation': conversation}],
+                }
+            )
+        store.set_review('run-1', 0, 'agree')
+        state, parsed = await self.state_parsing()
+        self.assertEqual([run['id'] for run in state['runs']], ['run-2', 'run-1'])
+        self.assertEqual(state['runs'][1]['revision'], 2)
+        self.assertEqual(state['runs'][1]['metric']['human'], {'reviewed': 1, 'agree': 1})
+        self.assertNotIn('items', state['runs'][0])
+        self.assertFalse([text for text in parsed if 'conversation-of-the-run' in text])
+
+    async def test_state_counts_the_dialogues_without_parsing_them(self) -> None:
+        messages = [{'role': 'user', 'content': 'dialogue-text'}, {'role': 'assistant', 'content': 'answer'}]
+        store.replace_inputs('logs.json', [{'id': str(number), 'messages': messages} for number in range(3)])
+        state, parsed = await self.state_parsing()
+        self.assertEqual(state['logs']['total'], 3)
+        self.assertFalse([text for text in parsed if 'dialogue-text' in text])
+        response = await self.client.post(
+            '/api/logs?name=one.jsonl', content=json.dumps({'id': 'x', 'messages': messages})
+        )
+        self.assertEqual(response.status_code, 200)
+        state, _ = await self.state_parsing()
+        self.assertEqual((state['logs']['total'], state['logs']['file']), (1, 'one.jsonl'))
+
+    async def test_state_reads_the_log_assessment_once_and_reuses_its_summary(self) -> None:
+        summary = {'checked': 1, 'measured': 1, 'failed': 1, 'passed': 0, 'unmeasured': 0, 'patterns': []}
+        assessment = {
+            'results': [{'dialogueId': 'd1', 'status': 'FAIL', 'rules': [], 'opening': 'assessment-text'}],
+            'topics': [],
+            'sources': [{'id': 's1', 'rules': 2}],
+            'summary': summary,
+        }
+        store.save(api.discover.RESULT, assessment)
+        store.save('sources.json', [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'prompt'}])
+        with patch.object(api.discover, 'summarize', side_effect=AssertionError('the stored summary is reused')):
+            state, parsed = await self.state_parsing()
+        self.assertEqual(state['discover']['summary'], summary)
+        self.assertEqual(state['sources'][0]['rules'], 2)
+        self.assertEqual(len([text for text in parsed if 'assessment-text' in text]), 1)
+        # A record from before results carried their summary gets one.
+        store.save(api.discover.RESULT, {key: value for key, value in assessment.items() if key != 'summary'})
+        state, _ = await self.state_parsing()
+        self.assertEqual((state['discover']['summary']['failed'], state['discover']['summary']['measured']), (1, 1))
+
     async def test_startup_recovers_interrupted_run_and_retains_finished_items_and_reviews(self) -> None:
         store.create_run(
             {

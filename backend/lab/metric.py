@@ -9,6 +9,7 @@ With several customer types, accuracy per type shows where the agent breaks on h
 from .personas import DEFAULT
 
 FINISHED = ('PASS', 'FAIL', 'UNMEASURED')
+DECIDED = ('PASS', 'FAIL')
 
 
 def _accuracy(statuses: list[str]) -> dict:
@@ -36,7 +37,8 @@ def metric(items: list[dict]) -> dict:
         'measured': measured,
         'total': len(done),
     }
-    twice = [i for i in done if (i.get('second') or {}).get('status') in FINISHED]
+    # As discover.summarize: a check that decided nothing is no second opinion, so it neither agrees nor disagrees.
+    twice = [i for i in done if i['status'] in DECIDED and (i.get('second') or {}).get('status') in DECIDED]
     if twice:
         value['secondJudge'] = {
             'model': twice[0]['second'].get('model'),

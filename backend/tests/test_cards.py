@@ -1,10 +1,12 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from lab import api, cards, llm, store
+from lab.agents import world
 from lab.jobs import Jobs
 
 
@@ -61,28 +63,53 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('model unavailable', api.jobs.state['error'])
             self.assertFalse(api.jobs.state['running'])
 
-    async def test_failure_joins_other_card_calls_before_returning(self):
-        cancelled = asyncio.Event()
+    async def test_a_failed_card_does_not_cancel_the_others_and_is_reported(self):
+        failed, release = asyncio.Event(), asyncio.Event()
 
         async def build(topic, dialogue, origin, general):
             if dialogue['id'] == 'fail':
-                await asyncio.sleep(0)
+                failed.set()
                 raise llm.ModelError('model unavailable')
-            try:
-                await asyncio.Event().wait()
-            finally:
-                cancelled.set()
+            await release.wait()  # still being built when the other card fails
+            return {'id': dialogue['id']}
 
+        topic = {'title': 'Тариф'}
+        picks = [(topic, {'id': 'fail'}, 'Coverage'), (topic, {'id': 'kept'}, 'Coverage')]
+        reported = []
         with (
             patch.object(cards.store, 'load', return_value={'topics': [], 'results': []}),
-            patch.object(
-                cards, 'pick', return_value=[({}, {'id': 'fail'}, 'Coverage'), ({}, {'id': 'wait'}, 'Coverage')]
-            ),
+            patch.object(cards, 'pick', return_value=picks),
             patch.object(cards, 'build_card', build),
+        ):
+            building = asyncio.create_task(cards.run(lambda **values: reported.append(values)))
+            await failed.wait()
+            await asyncio.sleep(0)
+            release.set()
+            deck = await building
+        self.assertEqual(deck, [{'id': 'kept'}])
+        self.assertEqual(reported[-1]['done'], 2)
+        self.assertEqual(
+            reported[-1]['failed'], [{'topic': 'Тариф', 'dialogueId': 'fail', 'error': 'model unavailable'}]
+        )
+
+    async def test_a_world_of_the_wrong_shape_is_a_model_error_and_is_asked_again(self):
+        shapes = {'getLkkTariff': {'rate': 1.0}}
+        bad = {'organization': {'name': 'ООО «Ромашка»'}, 'terminals': [], 'tools': ['getLkkTariff']}
+        good = {**bad, 'tools': {'getLkkTariff': {'rate': 2.5}}}
+        replies = [llm.Answer(json.dumps(bad), 'actual-model'), llm.Answer(json.dumps(good), 'actual-model')]
+        with (
+            patch.object(world, 'templates', return_value=shapes),
+            patch.object(world.llm, 'chat', AsyncMock(side_effect=replies)) as chat,
+        ):
+            built = await world.build('Клиент узнаёт тариф', ['Какой мой тариф?'])
+        self.assertEqual(chat.await_count, 2)
+        self.assertEqual(built['tools'], {'getLkkTariff': {'rate': 2.5}})
+        with (
+            patch.object(world, 'templates', return_value=shapes),
+            patch.object(world.llm, 'chat', AsyncMock(return_value=replies[0])),
             self.assertRaises(llm.ModelError),
         ):
-            await cards.run()
-        self.assertTrue(cancelled.is_set())
+            await world.build('Клиент узнаёт тариф', ['Какой мой тариф?'])
 
     async def test_generated_card_keeps_actual_model_outside_scenario_id(self):
         topic = analysis()['topics'][0]
