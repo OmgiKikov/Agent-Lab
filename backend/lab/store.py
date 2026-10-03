@@ -15,6 +15,8 @@ from .settings import DATA
 DB = DATA / 'lab.sqlite3'
 # The database of the agent a request works in (registry.using, api.py); without one, DB above.
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
+# A person's answer on a verdict that is no longer the one they saw.
+CHANGED = 'Результат изменился. Откройте актуальную проверку.'
 
 
 def now() -> str:
@@ -177,6 +179,17 @@ def tone_reviews(check_id: str) -> list[dict]:
         ]
 
 
+def tone_decisions() -> list[tuple[str, str, str, str | None]]:
+    """Every saved decision on the tone checks, the newest check first: (check, conversation, criterion, decision).
+    A person answers only on the current check, so the first decision found is their latest word."""
+    with _connection() as connection:
+        return connection.execute(
+            'SELECT reviews.check_id, reviews.dialogue_id, reviews.rule_id, reviews.decision '
+            'FROM tone_check_reviews AS reviews JOIN tone_checks AS checks ON checks.id = reviews.check_id '
+            'ORDER BY checks.rowid DESC'
+        ).fetchall()
+
+
 def _save_tone_review(
     connection: sqlite3.Connection, check_id: str, dialogue_id: str, rule_id: str, decision: str | None, updated_at: str
 ) -> None:
@@ -305,8 +318,11 @@ def _decision(decision: str | None) -> str | None:
     return decision
 
 
-def set_review(run_id: str, index: int, decision: str | None, rule_id: str | None = None) -> dict:
-    """A person's decision on a simulated conversation: on one criterion's verdict, or (older requests) on the whole."""
+def set_review(
+    run_id: str, index: int, decision: str | None, rule_id: str | None = None, status: str | None = None
+) -> dict:
+    """A person's decision on a simulated conversation: on one criterion's verdict, or (older requests) on the whole.
+    With the verdict the person answered about (status), a changed verdict refuses the decision."""
     _decision(decision)
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
         raise IndexError(index)
@@ -319,24 +335,34 @@ def set_review(run_id: str, index: int, decision: str | None, rule_id: str | Non
         row = next((row for row in item.get('rules') or [] if row.get('ruleId') == rule_id), None)
         if row is None:
             raise KeyError(rule_id)
+        if status and row.get('status') != status:
+            raise ValueError(CHANGED)
         row['review'] = decision
 
     return _mutate_run(run_id, mutate)
 
 
 def set_log_review(
-    analysis: str, dialogue_id: str, rule_id: str, decision: str | None, finished_at: str | None = None
+    analysis: str,
+    dialogue_id: str,
+    rule_id: str,
+    decision: str | None,
+    finished_at: str | None = None,
+    status: str | None = None,
 ) -> None:
-    """A person's decision on one criterion's verdict in a logged conversation, kept in the log assessment."""
+    """A person's decision on one criterion's verdict in a logged conversation, kept in the log assessment.
+    It lands only on the result (finished_at) and the verdict (status) the person saw, when they are given."""
     _decision(decision)
 
     def mutate(value: dict | None) -> None:
         if finished_at and (value or {}).get('finishedAt') != finished_at:
-            raise ValueError('Результат изменился. Откройте актуальную проверку.')
+            raise ValueError(CHANGED)
         result = next((r for r in (value or {}).get('results') or [] if str(r.get('dialogueId')) == dialogue_id), None)
         row = next((row for row in (result or {}).get('rules') or [] if row.get('ruleId') == rule_id), None)
         if row is None:
             raise KeyError(rule_id)
+        if status and row.get('status') != status:
+            raise ValueError(CHANGED)
         row['review'] = decision
 
     with _connection() as connection:

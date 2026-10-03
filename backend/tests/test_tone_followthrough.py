@@ -13,6 +13,36 @@ from lab import api, cards, discover, judge, llm, simulate, store, tone
 from lab.jobs import Jobs
 
 
+def judged(status='FAIL', model='model-a', down=()):
+    """discover.judge_dialogue with a fake model: every criterion gets this verdict on the agent's reply; a conversation
+    in `down` is one the model did not answer, so every criterion of it stays unknown, with the model's error."""
+
+    async def judge(dialogue, topic):
+        failed = dialogue['id'] in down
+        return {
+            'dialogueId': dialogue['id'],
+            'topicId': topic['id'],
+            'status': 'UNMEASURED' if failed else status,
+            'rules': [
+                {
+                    'ruleId': rule['id'],
+                    'rule': rule['text'],
+                    'status': 'UNKNOWN' if failed else status,
+                    'reason': '' if failed else 'Форма обращения не соответствует критерию.',
+                    'agentQuote': '' if failed else dialogue['messages'][1]['content'],
+                    'title': '' if failed else 'Форма обращения',
+                }
+                for rule in topic['rules']
+            ],
+            'opening': dialogue['messages'][0]['content'],
+            'error': 'Модель недоступна: ConnectError' if failed else None,
+            'model': None if failed else model,
+            'second': None,
+        }
+
+    return judge
+
+
 class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # The flow is checked with both judges: a second vendor configured.
@@ -35,6 +65,13 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 {'role': 'assistant', 'content': 'Предоставь документы до 12 октября.'},
             ],
         }
+        self.other = {
+            'id': 'd2',
+            'messages': [
+                {'role': 'user', 'content': 'Где мой терминал?'},
+                {'role': 'assistant', 'content': 'Терминал привезут завтра, жди звонка.'},
+            ],
+        }
         await self.client.post('/api/logs?name=first.jsonl', content=json.dumps(self.dialogue))
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
         await self.client.post('/api/tone-of-voice/criteria')
@@ -51,42 +88,129 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
 
-    async def check(self, rule_ids=None, model='model-a'):
-        async def judge(dialogue, topic):
-            return {
-                'dialogueId': dialogue['id'],
-                'topicId': topic['id'],
-                'status': 'FAIL',
-                'rules': [
-                    {
-                        'ruleId': rule['id'],
-                        'rule': rule['text'],
-                        'status': 'FAIL',
-                        'reason': 'Форма обращения не соответствует критерию.',
-                        'agentQuote': dialogue['messages'][1]['content'],
-                        'title': 'Форма обращения',
-                    }
-                    for rule in topic['rules']
-                ],
-                'opening': dialogue['messages'][0]['content'],
-                'model': model,
-                'second': None,
-            }
-
+    async def start_check(self, judge, rule_ids=None, count=1):
         draft = store.load(tone.DRAFT)
         with patch.object(discover, 'judge_dialogue', side_effect=judge):
             response = await self.client.post(
                 '/api/tone-of-voice/check',
                 json={
                     'ruleIds': rule_ids or ['pronouns', 'simple_language'],
-                    'count': 1,
+                    'count': count,
                     'revision': draft['revision'],
                 },
             )
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
+
+    async def check(self, rule_ids=None, model='model-a', count=1, down=(), status='FAIL'):
+        await self.start_check(judged(status, model, down), rule_ids, count)
         self.assertIsNone(api.jobs.state['error'])
         return store.load(discover.RESULT)
+
+    async def answer(self, result, rule_id, decision, dialogue_id='d1'):
+        """A person's answer on the result and the verdict they see, as every screen sends it."""
+        response = await self.client.post(
+            '/api/review',
+            json={
+                'source': 'log',
+                'dialogueId': dialogue_id,
+                'ruleId': rule_id,
+                'decision': decision,
+                'finishedAt': result['finishedAt'],
+                'status': self.answers(result, dialogue_id)[rule_id][0],
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+    @staticmethod
+    def answers(result, dialogue_id='d1'):
+        item = next(item for item in result['results'] if item['dialogueId'] == dialogue_id)
+        return {row['ruleId']: (row['status'], row.get('review')) for row in item['rules']}
+
+    async def upload(self, *dialogues, name='export.jsonl'):
+        content = '\n'.join(json.dumps(dialogue, ensure_ascii=False) for dialogue in dialogues)
+        response = await self.client.post(f'/api/logs?name={name}', content=content.encode())
+        self.assertEqual(response.status_code, 200, response.text)
+
+    async def test_a_check_the_model_could_not_answer_keeps_the_previous_result_scenarios_and_history(self):
+        down = AsyncMock(side_effect=llm.ModelError('Модель недоступна: ConnectError'))
+        request = {'ruleIds': ['pronouns'], 'count': 1, 'revision': store.load(tone.DRAFT)['revision']}
+        with patch.object(llm, 'chat', down):
+            await self.client.post('/api/tone-of-voice/check', json=request)
+            await self.wait_job()
+        self.assertEqual(api.jobs.state['error'], 'Модель проверки не ответила ни по одному разговору.')
+        self.assertIsNone(store.load(discover.RESULT))
+        previous = await self.check()
+        deck = {'cards': [{'id': 'built-from-the-previous-check'}]}
+        store.save(cards.DECK, deck)
+        with patch.object(llm, 'chat', down):
+            await self.client.post('/api/tone-of-voice/check', json=request)
+            await self.wait_job()
+        self.assertEqual(
+            api.jobs.state['error'], 'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён.'
+        )
+        self.assertEqual(store.load(discover.RESULT), previous)
+        self.assertEqual(store.load(cards.DECK), deck)
+        self.assertEqual(len(store.tone_checks()), 1)
+
+    async def test_a_check_the_model_answered_in_part_is_published_with_the_rest_not_checked(self):
+        await self.upload(self.dialogue, self.other)
+        result = await self.check(count=2, down={'d2'})
+        self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (1, 1))
+        self.assertEqual(len(store.tone_checks()), 1)
+
+    async def test_an_answer_survives_a_check_that_could_not_decide_its_conversation(self):
+        await self.upload(self.dialogue, self.other)
+        first = await self.check(count=2)
+        await self.answer(first, 'pronouns', 'agree')
+        partial = await self.check(count=2, down={'d1'})
+        self.assertEqual(self.answers(partial)['pronouns'], ('UNKNOWN', None))
+        again = await self.check(count=2)
+        self.assertEqual(self.answers(again), {'pronouns': ('FAIL', 'agree'), 'simple_language': ('FAIL', None)})
+        self.assertEqual(store.tone_reviews(again['checkId'])[0]['decision'], 'agree')
+        # Another verdict is another question; the same verdict again brings the answer back.
+        changed = await self.check(count=2, status='PASS')
+        self.assertEqual(self.answers(changed)['pronouns'], ('PASS', None))
+        self.assertEqual(self.answers(await self.check(count=2))['pronouns'], ('FAIL', 'agree'))
+        # A withdrawn answer is the latest word: an older check does not bring it back.
+        latest = store.load(discover.RESULT)
+        await self.answer(latest, 'pronouns', None)
+        await self.check(count=2, down={'d1'})
+        self.assertEqual(self.answers(await self.check(count=2))['pronouns'], ('FAIL', None))
+
+    async def test_answers_of_a_result_saved_before_the_history_of_checks_stay_on_the_next_check(self):
+        first = await self.check()
+        # A result from before the history of checks: its answers live only in the result itself.
+        legacy = {key: value for key, value in first.items() if key != 'checkId'}
+        store.save(discover.RESULT, legacy)
+        await self.answer(legacy, 'pronouns', 'agree')
+        self.assertEqual(store.tone_reviews(first['checkId']), [])
+        self.assertEqual(self.answers(await self.check())['pronouns'], ('FAIL', 'agree'))
+
+    async def test_clarifying_one_criterion_keeps_the_answers_on_the_others(self):
+        first = await self.check()
+        await self.answer(first, 'pronouns', 'agree')
+        await self.answer(first, 'simple_language', 'disagree')
+        response = await self.client.post(
+            '/api/tone-of-voice/clarification',
+            json={
+                'revision': store.load(tone.DRAFT)['revision'],
+                'ruleId': 'pronouns',
+                'text': 'Обращение на ты допустимо только в прямой цитате клиента.',
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        second = await self.check()
+        self.assertEqual(self.answers(second), {'pronouns': ('FAIL', None), 'simple_language': ('FAIL', 'disagree')})
+
+    async def test_an_answer_stays_with_its_conversation_not_with_an_id_a_new_export_reuses(self):
+        first = await self.check()
+        await self.answer(first, 'pronouns', 'agree')
+        another = {**self.dialogue, 'messages': [*self.dialogue['messages'][:1], self.other['messages'][1]]}
+        await self.upload(another, name='next.jsonl')
+        self.assertEqual(self.answers(await self.check())['pronouns'], ('FAIL', None))
+        await self.upload(self.dialogue, name='first-again.jsonl')
+        self.assertEqual(self.answers(await self.check())['pronouns'], ('FAIL', 'agree'))
 
     async def test_snapshots_survive_new_inputs_and_do_not_change_with_live_reviews(self):
         result = await self.check()

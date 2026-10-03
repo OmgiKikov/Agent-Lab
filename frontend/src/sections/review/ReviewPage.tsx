@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -7,8 +8,8 @@ import { useKeys } from "../../app/keys";
 import { stageLink, type Stage } from "../../app/links";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { useProblems, useReview, type Decision } from "../../lab/problems";
-import { exampleKey, queueOf, QUEUE_TITLE, type Queue } from "../../lab/verdicts";
+import { answersWait, useProblems, useReview, type Decision } from "../../lab/problems";
+import { exampleKey, queueOf, QUEUE_TITLE, saysError, type Queue } from "../../lab/verdicts";
 import { Duty } from "../../product/Duty";
 import { ExampleCard } from "../../product/ExampleCard";
 import { Button } from "../../ui/Button";
@@ -19,11 +20,14 @@ import { useLogTabs } from "../logs/LogsPage";
 import { SimTabs } from "../simulations/stage";
 
 const QUEUES: Queue[] = ["disputed", "unchecked", "all"];
+/** The queues count cases (one criterion in one conversation, an error or «без ошибки») and say so. */
+const cases = (n: number) => count(n, "случай", "случая", "случаев");
 
 /**
  * «Проверка» of a stage: a person answers, one case at a time, whether what the checks found is an error — disputed cases
- * first. The answer is saved and the next case comes; «Отменить» brings the last one back. The queue is fixed when it
- * opens, so answering does not reshuffle it.
+ * first. Among the cases without an answer every fifth is one the model found no error in («Здесь правда нет ошибки?»),
+ * so its misses are checked too. The answer is saved and the next case comes; «Отменить» brings the last one back. The
+ * queue is fixed when it opens, so answering does not reshuffle it.
  */
 export function ReviewPage({ stage }: { stage: Stage }) {
   const { state, offline } = useLabState();
@@ -86,24 +90,30 @@ export function ReviewPage({ stage }: { stage: Stage }) {
     setDir(-1);
     setAt((a) => Math.max(0, a - 1));
   };
+  /** Takes back the answer shown at once on case `k`, unless the person has answered it otherwise since. */
+  const forget = (k: string, d?: Decision) =>
+    setAnswered((a) => {
+      if (!(k in a) || (d && a[k] !== d)) return a;
+      const n = { ...a };
+      delete n[k];
+      return n;
+    });
   const decide = (d: Decision) => {
-    if (!current) return;
+    if (!current || answersWait(state, current.example.source)) return;
     const e = current.example;
     const before = e.review;
     const k = exampleKey(e);
     const was = at;
-    review.mutate({ example: e, decision: d });
+    // The result the queue shows: an answer on it never lands on a check that replaced it meanwhile.
+    const finishedAt = data?.log?.finishedAt;
+    review.mutateAsync({ example: e, decision: d, finishedAt }).catch(() => forget(k, d));
     setAnswered((a) => ({ ...a, [k]: d }));
     next();
-    toast.notify(d === "agree" ? "Отмечено: это ошибка" : "Отмечено: ошибки нет", {
+    toast.notify(saysError(e.status, d) ? "Отмечено: это ошибка" : "Отмечено: ошибки нет", {
       label: "Отменить",
       run: () => {
-        review.mutate({ example: e, decision: before });
-        setAnswered((a) => {
-          const n = { ...a };
-          delete n[k];
-          return n;
-        });
+        review.mutate({ example: e, decision: before, finishedAt });
+        forget(k);
         setDir(-1);
         setAt(was);
       },
@@ -111,8 +121,14 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   };
   useKeys({ KeyV: () => decide("agree"), KeyN: () => decide("disagree"), ArrowRight: next, ArrowLeft: back });
 
-  const made = Object.values(answered);
-  const agree = made.filter((d) => d === "agree").length;
+  const made = Object.keys(answered);
+  // «Нет» on a case «без ошибки» says the model missed an error: the person's word on the conversation is what counts.
+  const errors = made.filter((k) => {
+    const status = byKey.get(k)?.example.status;
+    return status && saysError(status, answered[k]);
+  }).length;
+  const saving = useIsMutating({ mutationKey: ["review"] }) > 0;
+  const counted = saving ? "Сохраняем ответы…" : "Ответы уже учтены в счёте.";
   const rule = ruleId && data ? data.rules.find((r) => r.id === ruleId) : undefined;
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
 
@@ -139,14 +155,14 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                 trigger={
                   <span className="inline-flex items-center gap-1.5 text-lead font-semibold text-fg">
                     {QUEUE_TITLE[queue]}
-                    <span className="font-normal tabular-nums text-fg-3">{counts[queue]}</span>
+                    <span className="font-normal tabular-nums text-fg-3">{cases(counts[queue])}</span>
                     <ChevronDown aria-hidden className="size-4 text-fg-3" />
                   </span>
                 }
                 items={QUEUES.map((q) => ({
                   key: q,
                   label: QUEUE_TITLE[q],
-                  sub: `${counts[q]}`,
+                  sub: cases(counts[q]),
                   on: q === queue,
                   run: () => set((n) => n.set("queue", q)),
                 }))}
@@ -236,9 +252,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                 </>
               }
             >
-              {made.length
-                ? `Это ошибка — ${agree}, ошибки нет — ${made.length - agree}. Ответы уже учтены в счёте.`
-                : "Ответы уже учтены в счёте."}
+              {made.length ? `Это ошибка — ${errors}, ошибки нет — ${made.length - errors}. ${counted}` : counted}
             </EmptyState>
           ) : current ? (
             <div

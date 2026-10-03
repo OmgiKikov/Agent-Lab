@@ -30,7 +30,8 @@ export type Example = {
   review: Decision | null;
   reviewScope: Scope | null;
 };
-export type Side = { failed: number; passed: number; unknown: number; examples: Example[] };
+/** One stage of a rule: its counts, its verdicts, and the ids the checks gave the rule in this stage. */
+export type Side = { failed: number; passed: number; unknown: number; examples: Example[]; ruleIds: string[] };
 export type RuleEntry = {
   id: string;
   title: string;
@@ -111,26 +112,51 @@ function withDecision(data: Problems, target: Example, decision: Decision | null
   };
 }
 
-/** «Верно / неверно» on one verdict: shown at once, saved by the service, the counts refreshed after. */
+/**
+ * A person's answer on one verdict, as the screen shows it: the example with its status, and the logs' result it comes
+ * from (`finishedAt`). The service refuses it when either has changed since, so it never lands on another check.
+ */
+export type Answer = { example: Example; decision: Decision | null; finishedAt: string | null | undefined };
+
+/**
+ * Why answers on the logs wait, in one line, or null. While their check runs, its new result replaces the one the
+ * person answers on, and the service refuses answers (backend/lab/api.py, review).
+ */
+export function answersWait(state: LabState | null, source: Example["source"]): string | null {
+  const checking = state?.job.running && (state.job.kind === "tone-check" || state.job.kind === "discover");
+  return source === "log" && checking ? "Идёт проверка разговоров — ответить можно после неё." : null;
+}
+
+/**
+ * «Верно / неверно» on one verdict: shown at once, saved by the service, the counts refreshed after. A refused answer
+ * rejects its `mutateAsync`, so a screen that shows it at once takes it back.
+ */
 export function useReview() {
   const client = useQueryClient();
   const toast = useToast();
   const { refresh } = useLabState();
   return useMutation({
-    mutationFn: ({
-      example,
-      decision,
-      finishedAt,
-    }: {
-      example: Example;
-      decision: Decision | null;
-      finishedAt?: string;
-    }) =>
+    mutationKey: ["review"],
+    mutationFn: ({ example, decision, finishedAt }: Answer) =>
       api(
         "/api/review",
         example.source === "log"
-          ? { source: "log", dialogueId: example.dialogueId, ruleId: example.ruleId, decision, finishedAt }
-          : { source: "sim", run: example.runId, index: example.index, ruleId: example.ruleId, decision },
+          ? {
+              source: "log",
+              dialogueId: example.dialogueId,
+              ruleId: example.ruleId,
+              decision,
+              finishedAt,
+              status: example.status,
+            }
+          : {
+              source: "sim",
+              run: example.runId,
+              index: example.index,
+              ruleId: example.ruleId,
+              decision,
+              status: example.status,
+            },
       ),
     onMutate: ({ example, decision }) => {
       client.setQueriesData<Problems>({ queryKey: ["problems"] }, (old) =>
