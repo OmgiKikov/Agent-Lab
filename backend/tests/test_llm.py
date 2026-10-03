@@ -285,16 +285,17 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DefaultModelsTests(unittest.TestCase):
-    def second(self, **extra: str) -> str:
+    def second(self, value: str = 'llm.second_judge()', **extra: str) -> str:
+        """What the value is in a fresh process with only these LAB_*/PI_* settings."""
         import os
         import subprocess
         import sys
         import tempfile
 
         with tempfile.TemporaryDirectory() as folder:
-            env = {k: v for k, v in os.environ.items() if not k.startswith('LAB_')}
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'PI_'))}
             env.update(LAB_DATA=folder, LAB_CERTS=folder, AGENT_LAB_GATEWAY_FILE=f'{folder}/none.json', **extra)
-            script = 'from lab import llm; print(llm.second_judge())'
+            script = f'from lab import llm; print({value})'
             done = subprocess.run([sys.executable, '-c', script], env=env, capture_output=True, text=True, check=True)
             return done.stdout.strip()
 
@@ -302,6 +303,45 @@ class DefaultModelsTests(unittest.TestCase):
         self.assertEqual(self.second(), 'None')
         self.assertEqual(
             self.second(LAB_SECOND_MODEL='openai/gpt-5.2'), "('http://127.0.0.1:11437/v1', 'openai/gpt-5.2')"
+        )
+
+    def test_the_second_judge_goes_where_the_main_one_goes_unless_named(self) -> None:
+        main = {'LAB_MODEL_URL': 'http://models.bank.test/v1', 'LAB_SECOND_MODEL': 'openai/gpt-5.2'}
+        self.assertEqual(self.second(**main), "('http://models.bank.test/v1', 'openai/gpt-5.2')")
+        self.assertEqual(
+            self.second(**main, LAB_SECOND_URL='http://other.test/v1'), "('http://other.test/v1', 'openai/gpt-5.2')"
+        )
+
+    def test_the_main_key_goes_to_another_host_never_and_the_second_has_its_own(self) -> None:
+        main = {'LAB_MODEL_URL': 'http://a.test/v1', 'LAB_MODEL_KEY': 'sk-main', 'LAB_SECOND_MODEL': 'openai/gpt-5.2'}
+        elsewhere = {**main, 'LAB_SECOND_URL': 'http://b.test/v1'}
+        self.assertEqual(self.second('llm.SECOND_KEY', **elsewhere), 'None')
+        self.assertEqual(self.second('llm.SECOND_KEY', **elsewhere, LAB_SECOND_KEY='sk-second'), 'sk-second')
+        self.assertEqual(self.second('llm.SECOND_KEY', **main), 'sk-main')  # the same address
+        self.assertEqual(self.second('llm.SECOND_KEY', LAB_SECOND_MODEL='x', PI_PROXY_TOKEN='launch'), 'launch')
+
+
+class KeyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_each_endpoint_gets_its_own_key_and_another_host_none(self):
+        seen = []
+
+        def handler(request):
+            seen.append((request.url.host, request.headers.get('Authorization')))
+            return json_response(ANSWER)
+
+        with (
+            patch.object(llm, 'MAIN', ('http://a.test/v1', 'main')),
+            patch.object(llm, 'SECOND', ('http://b.test/v1', 'second')),
+            patch.object(llm, 'API_KEY', 'sk-main'),
+            patch.object(llm, 'SECOND_KEY', None, create=True),
+            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
+        ):
+            for endpoint in (llm.MAIN, llm.SECOND, ('http://c.test/v1', 'other')):
+                await llm.chat('system', 'question', endpoint=endpoint)
+            with patch.object(llm, 'SECOND_KEY', 'sk-second'):
+                await llm.chat('system', 'question', endpoint=llm.SECOND)
+        self.assertEqual(
+            seen, [('a.test', 'Bearer sk-main'), ('b.test', None), ('c.test', None), ('b.test', 'Bearer sk-second')]
         )
 
 

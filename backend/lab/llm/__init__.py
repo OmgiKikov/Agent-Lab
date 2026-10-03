@@ -4,8 +4,8 @@ Two backends, chosen at start:
 - the bank's model gateway (gateway.py) when its certificates are in certs/: the work computer;
 - an OpenAI-compatible endpoint otherwise: the Pi bridges to OpenRouter started by bin/start.sh.
   LAB_MODEL_URL / LAB_MODEL_KEY / LAB_MODEL; a second judge of another vendor only with LAB_SECOND_MODEL
-  (+ LAB_SECOND_URL). It re-checks every verdict; its actual model is recorded in that result. Without it, or when it is
-  the main model again, there is no second check (second_judge).
+  (+ LAB_SECOND_URL / LAB_SECOND_KEY). It re-checks every verdict; its actual model is recorded in that result. Without
+  it, or when it is the main model again, there is no second check (second_judge).
 A call that may pass on another try (no connection, 429, 5xx) is made again a few times (chat).
 """
 
@@ -24,24 +24,26 @@ from .errors import MalformedAnswer, ModelError, refused
 
 GATEWAY = 'gateway'
 Endpoint = tuple[str, str]  # (base URL or GATEWAY, model)
+PI = 'http://127.0.0.1:11436/v1'  # the Pi bridges bin/start.sh starts without the gateway and LAB_MODEL_URL
+PI_SECOND = 'http://127.0.0.1:11437/v1'
 
 if not os.environ.get('LAB_MODEL_URL') and gateway.configured():
     # 'auto': the newest GLM in the gateway's catalog.
     MAIN: Endpoint = (GATEWAY, os.environ.get('LAB_MODEL') or gateway.chosen_models().get('model') or 'auto')
     SECOND: Endpoint = (GATEWAY, os.environ.get('LAB_SECOND_MODEL') or gateway.chosen_models().get('second') or 'auto')
 else:
-    MAIN = (
-        os.environ.get('LAB_MODEL_URL', 'http://127.0.0.1:11436/v1').rstrip('/'),
-        os.environ.get('LAB_MODEL', 'z-ai/glm-5.3'),
-    )
-    # One model by default, as on the work computer; a second vendor only when named.
-    SECOND = (
-        (os.environ.get('LAB_SECOND_URL', 'http://127.0.0.1:11437/v1').rstrip('/'), os.environ['LAB_SECOND_MODEL'])
-        if os.environ.get('LAB_SECOND_MODEL')
-        else MAIN
-    )
+    MAIN = (os.environ.get('LAB_MODEL_URL', PI).rstrip('/'), os.environ.get('LAB_MODEL', 'z-ai/glm-5.3'))
+    # One model by default, as on the work computer; a second vendor only when named. It goes where the main one goes
+    # unless LAB_SECOND_URL says otherwise; to the second Pi bridge only on the Pi path.
+    _second_url = os.environ.get('LAB_SECOND_URL') or (MAIN[0] if os.environ.get('LAB_MODEL_URL') else PI_SECOND)
+    SECOND = (_second_url.rstrip('/'), os.environ['LAB_SECOND_MODEL']) if os.environ.get('LAB_SECOND_MODEL') else MAIN
 MODEL = MAIN[1]
-API_KEY = os.environ.get('LAB_MODEL_KEY', os.environ.get('PI_PROXY_TOKEN', 'pi-local-bridge'))
+PI_TOKEN = os.environ.get('PI_PROXY_TOKEN', 'pi-local-bridge')  # bin/start.sh gives the bridges a new one each start
+API_KEY = os.environ.get('LAB_MODEL_KEY', PI_TOKEN)
+# The main key goes only to the main model's address: elsewhere the second judge has a key of its own, or the bridges'.
+SECOND_KEY = os.environ.get('LAB_SECOND_KEY') or (
+    API_KEY if SECOND[0] == MAIN[0] else PI_TOKEN if SECOND[0] == PI_SECOND else None
+)
 CONCURRENCY = int(os.environ.get('LAB_MODEL_CONCURRENCY', '6'))
 ATTEMPTS = 3  # tries of a call that may pass later; after a read timeout, one more try only
 CONNECT_TIMEOUT = 10  # seconds: an unreachable model fails fast, while an answer may take the whole read timeout
@@ -122,6 +124,15 @@ async def _ask(
         raise ModelError(f'Адрес модели не читается ({error}): проверьте {setting}') from error
 
 
+def _key(endpoint: Endpoint) -> str | None:
+    """The key for this endpoint's address: the main key never goes to another host."""
+    if endpoint == MAIN:
+        return API_KEY
+    if endpoint == SECOND:
+        return SECOND_KEY
+    return API_KEY if endpoint[0] == MAIN[0] else None
+
+
 def _pause(attempt: int, retry_after: float | None) -> float:
     """Seconds before the next try: the model's own Retry-After up to MAX_PAUSE, else a doubling pause with jitter, so
     the calls that failed together do not all come back at once."""
@@ -136,9 +147,10 @@ async def _openai_chat(
     body = {'model': model, 'stream': False, 'messages': [{'role': 'system', 'content': system}, *messages]}
     if json_mode:
         body['response_format'] = {'type': 'json_object'}
+    key = _key((base, model))
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
-            f'{base}/chat/completions', json=body, headers={'Authorization': f'Bearer {API_KEY}'}
+            f'{base}/chat/completions', json=body, headers={'Authorization': f'Bearer {key}'} if key else {}
         )
     if response.status_code != 200:
         raise refused('Модель не ответила:', response)
