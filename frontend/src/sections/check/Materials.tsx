@@ -120,14 +120,14 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
         </div>
         <div>
           <label htmlFor="tone-policy" className="block text-read font-semibold text-fg">
-            Правила tone of voice
+            Правила общения
           </label>
           <p className="mt-1 text-body text-fg-3">Вставьте текст или загрузите Word, TXT, Markdown.</p>
           <input
             ref={policyInput}
             type="file"
             accept=".docx,.txt,.md"
-            aria-label="Файл правил tone of voice"
+            aria-label="Файл правил общения"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];

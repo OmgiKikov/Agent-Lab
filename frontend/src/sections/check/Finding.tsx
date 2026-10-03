@@ -127,7 +127,7 @@ export function Finding({
           <div>
             <p className="text-read font-medium text-fg">Это действительно ошибка?</p>
             <p aria-live="polite" className="mt-1 text-small text-fg-3">
-              {review.isPending ? "Сохраняем ответ…" : reliabilityWord(e)}
+              {review.isPending ? "Сохраняем ответ…" : e.review || e.second ? reliabilityWord(e) : ""}
             </p>
           </div>
           <div className="flex w-full gap-2 sm:w-auto">
