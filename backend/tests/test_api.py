@@ -258,6 +258,19 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('items', state['runs'][0])
         self.assertFalse([text for text in parsed if 'conversation-of-the-run' in text])
 
+    async def test_state_counts_the_dialogues_without_parsing_them(self) -> None:
+        messages = [{'role': 'user', 'content': 'dialogue-text'}, {'role': 'assistant', 'content': 'answer'}]
+        store.replace_inputs('logs.json', [{'id': str(number), 'messages': messages} for number in range(3)])
+        state, parsed = await self.state_parsing()
+        self.assertEqual(state['logs']['total'], 3)
+        self.assertFalse([text for text in parsed if 'dialogue-text' in text])
+        response = await self.client.post(
+            '/api/logs?name=one.jsonl', content=json.dumps({'id': 'x', 'messages': messages})
+        )
+        self.assertEqual(response.status_code, 200)
+        state, _ = await self.state_parsing()
+        self.assertEqual((state['logs']['total'], state['logs']['file']), (1, 'one.jsonl'))
+
     async def test_startup_recovers_interrupted_run_and_retains_finished_items_and_reviews(self) -> None:
         store.create_run(
             {

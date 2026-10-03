@@ -221,6 +221,29 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(store.run_summaries()[1]['label'], 'первый')
         self.assertTrue(all('items' not in summary for summary in store.run_summaries()))
 
+    def test_the_number_of_dialogues_is_kept_beside_them_by_every_write(self) -> None:
+        with sqlite3.connect(store.DB) as connection:
+            connection.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            connection.execute('INSERT INTO documents VALUES (?, ?)', ('logs.json', json.dumps([{'id': '1'}] * 2)))
+        connection.close()
+        self.assertEqual(store.length('logs.json'), 2)
+        store.save('logs.json', [{'id': '1'}])
+        self.assertEqual(store.length('logs.json'), 1)
+        store.replace_inputs('logs.json', [{'id': str(number)} for number in range(4)])
+        self.assertEqual(store.length('logs.json'), 4)
+        store.import_legacy({'logs.json': []}, [])
+        self.assertEqual(store.length('logs.json'), 4)
+        with self.assertRaises(ValueError):
+            store.length('discover.json')
+        # A SQLite without JSON functions keeps no number: the dialogues are read and counted.
+        with (
+            patch.object(store, 'DB', self.path / 'plain' / 'lab.sqlite3'),
+            patch.object(store, '_json_functions', return_value=False),
+        ):
+            self.assertEqual(store.length('logs.json'), 0)
+            store.save('logs.json', [{'id': '1'}] * 3)
+            self.assertEqual(store.length('logs.json'), 3)
+
     def test_changed_primary_judgment_clears_old_confirmation(self) -> None:
         source = record()
         source['items'][0].update(status='FAIL', rules=[{'status': 'FAIL'}])

@@ -16,7 +16,10 @@ DB = DATA / 'lab.sqlite3'
 # The database of the agent a request works in (registry.using, api.py); without one, DB above.
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 # The database's user_version once its schema below is in place.
-SCHEMA = 2
+SCHEMA = 3
+# The uploaded dialogues: every write keeps their number beside them (lengths), so the state polled every 1.5 s
+# counts them without reading megabytes of conversations.
+COUNTED = 'logs.json'
 
 
 def now() -> str:
@@ -60,7 +63,33 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
             'check_id TEXT NOT NULL, dialogue_id TEXT NOT NULL, rule_id TEXT NOT NULL, '
             'decision TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (check_id, dialogue_id, rule_id))'
         )
+        connection.execute('CREATE TABLE IF NOT EXISTS lengths (name TEXT PRIMARY KEY, length INTEGER NOT NULL)')
+        if _json_functions(connection):
+            # Not INSERT OR REPLACE: in a trigger, the conflict policy of the write that fired it would apply.
+            keep = (
+                'DELETE FROM lengths WHERE name = new.name; '
+                'INSERT INTO lengths (name, length) VALUES (new.name, json_array_length(new.value));'
+            )
+            for name, event in (('length_on_insert', 'INSERT'), ('length_on_update', 'UPDATE OF value')):
+                connection.execute(
+                    f"CREATE TRIGGER IF NOT EXISTS {name} AFTER {event} ON documents WHEN new.name = '{COUNTED}' "
+                    f'BEGIN {keep} END'
+                )
+            connection.execute(
+                'INSERT OR REPLACE INTO lengths (name, length) '
+                'SELECT name, json_array_length(value) FROM documents WHERE name = ?',
+                (COUNTED,),
+            )
         connection.execute(f'PRAGMA user_version = {SCHEMA}')
+
+
+def _json_functions(connection: sqlite3.Connection) -> bool:
+    """Built into SQLite since 3.38. Without them a trigger calling one would fail every write of the documents."""
+    try:
+        connection.execute("SELECT json_array_length('[]')")
+    except sqlite3.OperationalError:
+        return False
+    return True
 
 
 def _json(value: Any) -> str:
@@ -75,6 +104,18 @@ def load(name: str, default: Any = None) -> Any:
     with _connection() as connection:
         row = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
     return json.loads(row[0]) if row else default
+
+
+def length(name: str) -> int:
+    """How many dialogues are uploaded, from the number kept beside them: the dialogues themselves are not read."""
+    if name != COUNTED:
+        raise ValueError('Only the uploaded dialogues are counted')
+    with _connection() as connection:
+        row = connection.execute('SELECT length FROM lengths WHERE name = ?', (name,)).fetchone()
+        if row is None:  # nothing uploaded, or a SQLite without JSON functions keeps no number
+            stored = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
+            return len(json.loads(stored[0]) or []) if stored else 0
+    return row[0]
 
 
 def save(name: str, value: Any) -> None:

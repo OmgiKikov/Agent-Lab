@@ -214,7 +214,7 @@ def state() -> dict:
         'models': llm.describe(),
         'settings': agents.settings(),
         'sources': source_summary(),
-        'logs': {'total': len(logs.load()), **logs.meta()},
+        'logs': {'total': store.length(logs.FILE), **logs.meta()},
         'discover': analysis,
         'toneOfVoice': store.load(tone.DRAFT),
         'cards': store.load(cards.DECK),
