@@ -1,14 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { AGENT } from "../app/agent";
 import { api } from "./api";
+import type { Check } from "./types";
 
-/** An agent the Lab checks, with its last result read from its own database (backend/lab/api.py, /api/agents). */
+/** The result of one check in a line: errors of measured, not checked, when. */
+export type CheckLine = { failed: number; measured: number; unmeasured: number; finishedAt: string };
+
+/** An agent the Lab checks, with the result of each check read from its own database (backend/lab/api.py, /api/agents). */
 export type Agent = {
   id: string;
   name: string;
   description: string;
   createdAt: string;
-  result: { failed: number; measured: number; unmeasured: number; finishedAt: string; metric: string } | null;
+  results: Record<Check, CheckLine | null>;
 };
 
 export const useAgents = () =>

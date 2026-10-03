@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useLabState } from "./LabProvider";
 import { useProblems, type Problems, type RuleEntry } from "./problems";
+import type { Check } from "./types";
 
 /** Muted hues for the topics of conversations, as Linear's labels: a dot and a faint tint carry the colour. */
 const HUES = ["#6DB3F2", "#A57CF5", "#5FC98A", "#F0AD4E", "#4FCAE3", "#E28A80", "#C9B458"];
@@ -8,6 +9,9 @@ const HUES = ["#6DB3F2", "#A57CF5", "#5FC98A", "#F0AD4E", "#4FCAE3", "#E28A80", 
 export type Topic = { topic: string; short: string; hue: string };
 /** A criterion as the whole product shows it: one number everywhere, a short name, where it applies. */
 export type Criterion = { r: RuleEntry; n: number; name: string; every: boolean; topics: Topic[] };
+
+/** A quote as criteria are matched by it: the same words, whatever the spaces and the case. */
+export const quoteKey = (q: string) => q.replace(/\s+/g, " ").trim().toLowerCase();
 
 /** «Ставка, тариф и комиссия по эквайрингу» → «Ставка». */
 export const shortTopic = (t: string) => t.split(",")[0].trim();
@@ -65,19 +69,23 @@ export function numberCriteria(rules: RuleEntry[], reference?: string[]): { list
 }
 
 /**
- * The numbered criteria. Numbers come from the logs' rules (the contract), so a criterion keeps its number in a
- * run's results; a rule only a run has gets the next free number.
+ * The numbered criteria of a check. Numbers come from the check's own record (its result and its last run), so a
+ * criterion keeps its number in a run's results; a rule only that run has gets the next free number. Tone of voice
+ * numbers its criteria in the order of the person's draft, as the step-by-step check shows them.
  */
-export function useCriteria(runId: string | null = null): {
+export function useCriteria(
+  check: Check | null,
+  runId: string | null = null,
+): {
   data: Problems | undefined;
   list: Criterion[];
   topics: Topic[];
   unnamed: number;
 } {
-  const { data: base } = useProblems(null);
-  const { data: withRun } = useProblems(runId);
+  const { data: base } = useProblems(check);
+  const { data: withRun } = useProblems(check, runId, !!runId);
   const { state } = useLabState();
-  const draft = state?.discover?.purpose === "tone-of-voice" ? state.toneOfVoice : null;
+  const draft = check === "tone" ? state?.toneOfVoice : null;
   return useMemo(() => {
     const reference = draft?.criteria.map((c) => c.quote);
     const numbered = numberCriteria(base?.rules ?? [], reference);

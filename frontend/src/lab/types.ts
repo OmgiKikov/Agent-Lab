@@ -1,3 +1,8 @@
+/**
+ * The two checks of the real conversations of the export (docs/DESIGN.md): tone of voice by a person's rules of
+ * communication, accuracy by the criteria read from the agent's code. Each has its own criteria, result and answers.
+ */
+export type Check = "tone" | "code";
 export type Status = "PASS" | "FAIL" | "UNMEASURED" | "UNKNOWN" | "NOT_APPLICABLE" | "RUNNING";
 export type Rule = {
   ruleId: string;
@@ -49,6 +54,8 @@ export type Item = {
   second?: { model: string; status: string; rules?: Rule[] };
   review?: "agree" | "disagree" | null;
   world?: boolean;
+  /** The criteria frozen when the conversation was played: a criterion that never applied in it is named only here. */
+  criteria?: Criterion[];
 };
 export type LabRun = {
   id: string;
@@ -65,9 +72,14 @@ export type LabRun = {
   label?: string;
   personas?: string[] | null;
   model?: string;
+  /** The check whose scenarios it played, from the deck at the start; the summaries in /api/state always have it. */
+  check?: Check;
 };
+/** A run as /api/state lists it: its summary, without the conversations, and always with its check. */
+export type RunSummary = LabRun & { check: Check };
 export type Criterion = {
   id: string;
+  name?: string;
   text: string;
   quote: string;
   condition?: string;
@@ -126,7 +138,8 @@ export type Models = {
   secondVia?: string | null;
   problem?: string | null;
 };
-export type Check = { ok: boolean; error?: string; status?: string; text?: string; seconds?: number; version?: string };
+/** What one try of a connection or a model answered. */
+export type Probe = { ok: boolean; error?: string; status?: string; text?: string; seconds?: number; version?: string };
 export type Topic = { id: string; title: string; rules: Criterion[] };
 export type Discover = {
   checkId?: string;
@@ -149,6 +162,8 @@ export type Discover = {
     secondJudge?: { model: string; checked: number; agree: number } | null;
   };
 };
+/** The scenarios, built from the errors of one check and remembering it. */
+export type Deck = { check: Check; cards: Card[]; createdAt?: string };
 export type Job = {
   kind: string | null;
   running: boolean;
@@ -163,9 +178,10 @@ export type LabState = {
   settings: Settings;
   sources: Source[];
   logs: { total: number; file?: string | null; updatedAt?: string | null };
-  discover: null | Discover;
-  cards: null | { cards: Card[]; createdAt?: string };
-  runs: LabRun[];
+  /** The result of each check, or null: tone of voice and accuracy never replace each other. */
+  checks: Record<Check, Discover | null>;
+  cards: null | Deck;
+  runs: RunSummary[];
   targets: Target[];
   personas: Persona[];
 };

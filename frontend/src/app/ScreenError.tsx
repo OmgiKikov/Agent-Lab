@@ -1,6 +1,8 @@
 import { isRouteErrorResponse, useRouteError } from "react-router-dom";
 import { RotateCcw } from "lucide-react";
 import { Button } from "../ui/Button";
+import { BASE } from "./agent";
+import { SECTIONS } from "./links";
 import { Mark } from "./Mark";
 
 /**
@@ -19,14 +21,14 @@ export function ScreenError() {
       <Mark quiet className="size-12 rounded-2xl" />
       <h1 className="mt-6 text-title font-semibold text-fg">Этот экран не открылся</h1>
       <p className="mt-2 text-read text-fg-2">
-        Данные и результаты проверок сохранены. Обновите страницу; если повторится, вернитесь на старт.
+        Данные и результаты проверок сохранены. Обновите страницу; если повторится, вернитесь к обзору.
       </p>
       <div className="mt-6 flex flex-wrap gap-3">
         <Button variant="primary" size="lg" icon={RotateCcw} onClick={() => window.location.reload()}>
           Обновить
         </Button>
-        <Button size="lg" onClick={() => window.location.assign("/start")}>
-          На старт
+        <Button size="lg" onClick={() => window.location.assign(`${BASE}${SECTIONS.overview}`)}>
+          К обзору
         </Button>
       </div>
       <details className="mt-8 text-body text-fg-3">

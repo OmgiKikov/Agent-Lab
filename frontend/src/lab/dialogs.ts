@@ -1,11 +1,15 @@
+import { conversationsLink } from "../app/links";
+import { CHECK_NAME } from "./checks";
 import type { Decision, Example } from "./problems";
-import type { LabRun, LabState, Rule, Status } from "./types";
+import type { Check, Criterion, LabRun, LabState, Rule, Status } from "./types";
 
 /** One row of a stage's conversations: a logged conversation or a simulated one. */
 export type Source = "log" | "sim";
 export type DialogRow = {
   key: string;
   source: Source;
+  /** The check whose result judged it; of a simulated one, the check of its run. */
+  check?: Check;
   title: string;
   topic: string;
   status: Status | null;
@@ -21,22 +25,24 @@ export type DialogRow = {
   rules: Rule[];
   second?: { model?: string; status: string; rules?: Rule[] } | null;
   review?: Decision | null;
+  /** The criteria frozen in a simulated conversation when it was played. */
+  frozen?: Criterion[];
 };
 
 export const logKey = (dialogueId: string) => `log~${dialogueId}`;
 export const simKey = (runId: string, index: number) => `sim~${runId}~${index}`;
 
-/** The dialogue an example of a problem or a rule comes from. */
-export const dialogOf = (e: Pick<Example, "source" | "dialogueId" | "runId" | "index">) =>
+/** The dialogue an example of a problem or a rule comes from: in its check's section, or in its run. */
+export const dialogOf = (e: Pick<Example, "source" | "dialogueId" | "runId" | "index" | "check">) =>
   e.source === "log"
-    ? `/logs/conversations?d=${encodeURIComponent(logKey(e.dialogueId ?? ""))}`
-    : `/simulations/conversations?run=${encodeURIComponent(e.runId ?? "")}&d=${encodeURIComponent(simKey(e.runId ?? "", e.index ?? 0))}`;
+    ? conversationsLink(e.check ?? "tone", { d: logKey(e.dialogueId ?? "") })
+    : conversationsLink("sim", { run: e.runId, d: simKey(e.runId ?? "", e.index ?? 0) });
 
-/** The conversation behind a row key, in its stage: a real one in «Диалоги», a simulated one in its run. */
-export function dialogLink(key: string): string {
+/** The conversation behind a row key: a real one in the section of the check given, a simulated one in its run. */
+export function dialogLink(key: string, check: Check): string {
   const [kind, a, b] = key.split("~");
   if (kind === "sim") return dialogOf({ source: "sim", runId: a, index: Number(b) });
-  if (kind === "log") return dialogOf({ source: "log", dialogueId: a });
+  if (kind === "log") return dialogOf({ source: "log", dialogueId: a, check });
   return "/overview";
 }
 
@@ -53,13 +59,15 @@ export const twoChecks = (status: Status | null, second?: DialogRow["second"]): 
 
 const disputedOf = (status: Status, second?: DialogRow["second"]) => twoChecks(status, second) === "disagree";
 
-export function logRows(state: LabState): DialogRow[] {
-  const d = state.discover;
+/** The conversations of the export as one check's result judged them. */
+export function logRows(state: LabState, check: Check): DialogRow[] {
+  const d = state.checks[check];
   if (!d) return [];
   const topics = new Map(d.topics.map((t) => [t.id, t.title]));
   return d.results.map((r) => ({
     key: logKey(String(r.dialogueId)),
     source: "log" as const,
+    check,
     title: r.opening,
     topic: topics.get(r.topicId) ?? "",
     status: r.status,
@@ -77,6 +85,7 @@ export function simRows(run: LabRun | null | undefined): DialogRow[] {
   return run.items.map((item, index) => ({
     key: simKey(run.id, index),
     source: "sim" as const,
+    check: run.check,
     title: item.conversation[0]?.text ?? item.name,
     topic: item.topic,
     status: item.status,
@@ -91,6 +100,7 @@ export function simRows(run: LabRun | null | undefined): DialogRow[] {
     rules: item.rules,
     second: item.second ?? null,
     review: item.review ?? null,
+    frozen: item.criteria,
   }));
 }
 
@@ -115,6 +125,7 @@ export function exampleFor(row: DialogRow, rule: Rule): Example {
   const review = rule.review ?? (row.source === "sim" ? (row.review ?? null) : null);
   return {
     source: row.source === "sim" ? "sim" : "log",
+    check: row.check,
     dialogueId: row.dialogueId,
     runId: row.runId,
     index: row.index,
@@ -135,7 +146,8 @@ export function exampleFor(row: DialogRow, rule: Rule): Example {
 
 /** The dialogue as text for a ticket: who said what, then the judge's verdicts. */
 export function transcript(row: DialogRow, turns: { role: string; text: string }[]): string {
-  const lines = [`# ${row.title}`, "", `${row.source === "log" ? "Диалоги" : "Симуляция"} · ${row.topic}`, ""];
+  const where = row.source === "log" ? ["Диалоги", row.check && CHECK_NAME[row.check]] : ["Симуляция"];
+  const lines = [`# ${row.title}`, "", [...where, row.topic].filter(Boolean).join(" · "), ""];
   for (const t of turns) lines.push(`${t.role === "customer" ? "Клиент" : "Агент"}: ${t.text}`, "");
   const judged = row.rules.filter((r) => r.status === "FAIL" || r.status === "PASS");
   if (judged.length) {
