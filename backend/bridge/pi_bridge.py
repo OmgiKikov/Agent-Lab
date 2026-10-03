@@ -2,7 +2,8 @@
 
 On a computer without the bank's model gateway, the judges and the synthetic customer reach OpenRouter models
 through it (bin/start.sh starts one bridge per judge). Pi keeps the provider credentials; the bridge never sees them.
-PI_PROXY_PORT, PI_JUDGE_PROVIDER, PI_JUDGE_MODEL, PI_PROXY_CONCURRENCY, PI_PROXY_TOKEN.
+PI_PROXY_PORT, PI_JUDGE_PROVIDER, PI_JUDGE_MODEL, PI_PROXY_CONCURRENCY, PI_PROXY_TOKEN (bin/start.sh makes a new one
+for each start). Only this computer's own names are served: a page that rebinds its name to 127.0.0.1 is refused.
 """
 
 import json
@@ -24,6 +25,7 @@ TOKEN = os.environ.get('PI_PROXY_TOKEN', 'pi-local-bridge')
 SLOTS = BoundedSemaphore(max(1, int(os.environ.get('PI_PROXY_CONCURRENCY', '1'))))
 MAX_BODY = 2_000_000
 TIMEOUT = 240
+HOSTS = ('127.0.0.1', 'localhost')
 logger = logging.getLogger(__name__)
 
 
@@ -69,7 +71,7 @@ def run_pi(request: dict) -> str:
     with SLOTS:
         result = subprocess.run(command, cwd=HERE, capture_output=True, text=True, timeout=TIMEOUT, check=False)
     if result.returncode:
-        raise RuntimeError(f'Pi failed with exit code {result.returncode}: {result.stderr[-400:]}')
+        raise RuntimeError(f'Pi failed with exit code {result.returncode}')  # its output may quote the conversation
     if not result.stdout.strip():
         raise RuntimeError('Pi returned an empty response')
     return result.stdout.strip()
@@ -90,7 +92,17 @@ class Handler(BaseHTTPRequestHandler):
     def error(self, code: int, message: str) -> None:
         self.reply(code, {'error': {'message': message}})
 
+    def refused_host(self) -> bool:
+        """Refuse a request under a name other than this computer's (a page that rebound its own name to 127.0.0.1);
+        True when refused."""
+        if (self.headers.get('Host') or '').rsplit(':', 1)[0].lower() in HOSTS:
+            return False
+        self.error(403, 'Only 127.0.0.1 and localhost are served')
+        return True
+
     def do_GET(self) -> None:
+        if self.refused_host():
+            return
         if self.path == '/health':
             if PI_BIN.is_file() and shutil.which('node'):
                 self.reply(200, {'status': 'ok', 'model': MODEL})
@@ -102,6 +114,8 @@ class Handler(BaseHTTPRequestHandler):
             self.error(404, 'Not found')
 
     def do_POST(self) -> None:
+        if self.refused_host():
+            return
         if self.headers.get('Authorization') != f'Bearer {TOKEN}':
             self.error(401, 'Local bridge token required')
             return
@@ -119,7 +133,8 @@ class Handler(BaseHTTPRequestHandler):
             self.error(400, str(error))
             return
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
-            logger.error('Pi request failed: %s', error)
+            # The kind only: a timeout's text is the whole command line, the customer's conversation included.
+            logger.error('Pi request failed: %s', type(error).__name__)
             self.error(502, 'Pi model request failed')
             return
         self.reply(
