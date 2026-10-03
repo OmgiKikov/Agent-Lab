@@ -82,7 +82,7 @@ def checked(
                 'knowledge': '' if knowledge_available else 'Нет статей или готовых ответов для проверки знаний. ',
             }
             missing = missing_evidence.get(observation, 'Неизвестный способ проверки критерия. ')
-            if missing or not quotes.found(quote, evidence):
+            if missing or not quotes.cited(quote, evidence):
                 status, reason = 'UNKNOWN', (missing or NO_QUOTE) + reason
         out.append(
             {

@@ -72,6 +72,23 @@ class EvaluationTests(unittest.TestCase):
         self.assertFalse(quotes.found('Вернуть терминал…Вернуть терминал', 'Вернуть терминал'))
         self.assertFalse(quotes.found('да…да…да…да', 'да'))
 
+    def test_a_verdict_cannot_stitch_short_parts_into_words_the_agent_never_said(self):
+        reply = 'Оформить возврат можно в личном кабинете, но деньги вернуть нельзя после закрытия смены.'
+        other = 'Вернуть деньги на карту нельзя. Можно оформить возврат через терминал.'
+        for quote, text in (
+            ('Оформить возврат можно … деньги вернуть', reply),
+            ('Вернуть деньги на карту … можно', other),
+        ):
+            with self.subTest(quote=quote):
+                rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], text)
+                self.assertEqual(rows[0]['status'], 'UNKNOWN')
+                self.assertFalse(quotes.cited(quote, text))
+        # Long parts stand, and so does the agent's own «…» quoted whole.
+        quote = 'Оформить возврат можно в личном кабинете … после закрытия смены'
+        rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], reply)
+        self.assertEqual(rows[0]['status'], 'PASS')
+        self.assertTrue(quotes.cited('Минутку… Проверяю данные', 'Минутку… Проверяю данные по терминалу.'))
+
     def test_grounding_never_substitutes_an_unrelated_source(self):
         topics = [{'title': 'Возврат', 'rules': [dict(criterion(), sourceId='missing', quote='Вернуть терминал')]}]
         grounded, dropped = discover.ground(topics, [{'id': 's1', 'content': 'Вернуть терминал в банк'}])
