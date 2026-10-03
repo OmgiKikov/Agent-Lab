@@ -154,29 +154,23 @@ class AgentCommand(BaseModel):
     description: str = Field(default='', max_length=200)
 
 
-def last_result() -> dict | None:
-    """The current agent's last check in one line: errors of measured, not checked, when, which metric."""
-    value = store.load(discover.RESULT) or {}
+def result_line(check: str) -> dict | None:
+    """The current agent's result of one check in one line: errors of measured, not checked, when."""
+    value = store.load(checks.result(check)) or {}
     summary = value.get('summary') or {}
     if not value.get('finishedAt') or any(key not in summary for key in ('failed', 'measured', 'unmeasured')):
         return None  # nothing finished, or a record of another shape: never a reason to hide the other agents
-    return {
-        'failed': summary['failed'],
-        'measured': summary['measured'],
-        'unmeasured': summary['unmeasured'],
-        'finishedAt': value['finishedAt'],
-        'metric': 'Tone of voice' if value.get('purpose') == discover.TONE else 'Точность по коду агента',
-    }
+    return {key: summary[key] for key in ('failed', 'measured', 'unmeasured')} | {'finishedAt': value['finishedAt']}
 
 
 @app.get('/api/agents')
 def agents_view() -> list[dict]:
-    """Every agent with its last result, read from its own database. Never ranked: the agents have other dialogues
-    and other rules."""
+    """Every agent with the result of each of its checks, read from its own database. Never ranked: the agents have
+    other dialogues and other rules; nor are an agent's two checks added up."""
     listed = []
     for agent in registry.listed():
         with registry.using(agent['id']):
-            listed.append({**agent, 'result': last_result()})
+            listed.append({**agent, 'results': {check: result_line(check) for check in checks.RESULTS}})
     return listed
 
 
