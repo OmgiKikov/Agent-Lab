@@ -8,32 +8,31 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Group, Row } from "./parts";
 
+const PI = "OpenRouter через Pi";
+
 /** «Настройки»: what the product itself runs on — the models and where it answers. How to reach the agent lives in «Агент». */
 export function SettingsPage() {
   const { state, offline } = useLabState();
+  const models = state?.models;
   return (
     <div className="flex h-full flex-col">
       <Header title="Настройки" />
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-6xl px-4 pb-16 lg:px-10">
-          <Group
-            title="Модели"
-            about={
-              state ? (
-                <>
-                  Запросы идут через {state.models.via}.
-                  {state.models.via === "OpenRouter" && (
-                    <>
-                      {" "}
-                      Сертификаты шлюза банка кладутся в папку <span className="font-mono">certs/</span>.
-                    </>
-                  )}
-                </>
-              ) : undefined
-            }
-          >
+          <Group title="Модели" about={models ? <Destination models={models} /> : undefined}>
             {state ? (
-              <Models state={state} />
+              <>
+                {models?.problem && (
+                  <div role="alert" className="mb-4 rounded-block border border-bad/30 bg-bad/[0.06] p-3">
+                    <p className="text-small font-medium text-bad">Шлюз банка не работает</p>
+                    <p className="mt-1 break-words text-small text-fg-2">{models.problem}</p>
+                    <p className="mt-1 text-small text-fg-3">
+                      Пока это не исправлено, разговоры никуда не отправляются.
+                    </p>
+                  </div>
+                )}
+                <Models state={state} />
+              </>
             ) : offline ? (
               <p className="text-small text-fg-2">Сервис проверок не отвечает, модели сейчас не видны.</p>
             ) : (
@@ -59,6 +58,21 @@ export function SettingsPage() {
 const Address = ({ children }: { children: string }) => (
   <span className="select-all font-mono text-small text-fg-2">{children}</span>
 );
+
+/** Where the customers' conversations go — the bank's gateway, OpenRouter through Pi, or an endpoint's address — and, where it matters, where the gateway's certificates go. */
+function Destination({ models }: { models: LabState["models"] }) {
+  return (
+    <>
+      Разговоры уходят в {models.via}.{models.secondVia && <> Вторая проверка — в {models.secondVia}.</>}
+      {(models.via === PI || models.problem) && (
+        <>
+          {" "}
+          Сертификаты шлюза банка кладутся в папку <span className="font-mono">certs/</span>.
+        </>
+      )}
+    </>
+  );
+}
 
 /** Who judges and who plays the customer, and who judges again; «Проверить» asks each model once and says what it answered. */
 function Models({ state }: { state: LabState }) {
