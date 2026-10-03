@@ -262,6 +262,70 @@ class StoreTests(unittest.TestCase):
         result = store.update_item('run-1', 0, {'rules': [{'ruleId': 'r2', 'status': 'FAIL'}]})
         self.assertIsNone(result['items'][0]['review'])
 
+    def older(self, documents: dict, runs: tuple = ()) -> None:
+        """A database of schema 3, when both checks shared one result (discover.json) and a deck or a run named no
+        check: these documents and runs in it, before its next connection."""
+        store.save('settings.json', {})
+        with sqlite3.connect(store.DB) as connection:
+            for name, value in documents.items():
+                connection.execute('INSERT OR REPLACE INTO documents VALUES (?, ?)', (name, json.dumps(value)))
+            for run in runs:
+                summary = {key: value for key, value in run.items() if key != 'items'}
+                connection.execute(
+                    'INSERT INTO runs VALUES (?, ?, ?)', (run['id'], json.dumps(run), json.dumps(summary))
+                )
+            connection.execute('PRAGMA user_version = 3')
+        connection.close()
+
+    def test_an_older_database_moves_its_tone_of_voice_result_to_its_own_place(self) -> None:
+        shared = {'purpose': 'tone-of-voice', 'checkId': 'c1', 'finishedAt': '2026-10-02T10:00:00+00:00'}
+        deck = {'createdAt': '2026-10-02T11:00:00+00:00', 'cards': [{'id': 'card-1', 'topic': 'Tone of voice'}]}
+        played = dict(record(), status='done')
+        played['items'][0].update(status='PASS', topic='Tone of voice', criteria=[{'id': 'pronouns', 'text': 'На вы'}])
+        self.older({'discover.json': shared, 'cards.json': deck}, (played,))
+        self.assertEqual(store.load('tone-result.json'), shared)
+        self.assertIsNone(store.load('discover.json'))
+        self.assertEqual(store.load('cards.json'), deck | {'check': 'tone'})
+        self.assertEqual((store.run('run-1')['check'], store.run_summaries()[0]['check']), ('tone', 'tone'))
+        # Separated once: set up again, it stays as it is.
+        with sqlite3.connect(store.DB) as connection:
+            connection.execute('PRAGMA user_version = 3')
+        connection.close()
+        self.assertEqual(
+            [store.load(name) for name in ('tone-result.json', 'discover.json', 'cards.json')],
+            [shared, None, deck | {'check': 'tone'}],
+        )
+
+    def test_an_older_database_keeps_its_accuracy_result_and_labels_the_deck_built_from_it(self) -> None:
+        shared = {'finishedAt': '2026-10-02T10:00:00+00:00', 'topics': [], 'results': []}
+        deck = {'cards': [{'id': 'card-1', 'topic': 'Терминалы'}]}
+        self.older({'discover.json': shared, 'cards.json': deck}, (dict(record(), status='done'),))
+        self.assertEqual(store.load('discover.json'), shared)
+        self.assertIsNone(store.load('tone-result.json'))
+        self.assertEqual(store.load('cards.json'), deck | {'check': 'code'})
+        self.assertEqual(store.run_summaries()[0]['check'], 'code')
+
+    def test_the_legacy_import_puts_a_tone_of_voice_result_in_its_own_place(self) -> None:
+        legacy = self.path / 'legacy'
+        (legacy / 'runs').mkdir(parents=True)
+        rows = [{'ruleId': 'pronouns', 'status': 'FAIL'}]
+        shared = {
+            'purpose': 'tone-of-voice',
+            'topics': [{'id': 't1', 'title': 'Tone of voice', 'rules': []}],
+            'results': [{'dialogueId': 7, 'status': 'FAIL', 'rules': rows}],
+        }
+        (legacy / 'discover.json').write_text(json.dumps(shared))
+        (legacy / 'cards.json').write_text(json.dumps({'cards': [{'id': 'card-1'}]}))
+        played = dict(record(), status='done')
+        played['items'][0].update(status='PASS', topic='Tone of voice', rules=[{'status': 'PASS'}])
+        (legacy / 'runs' / 'run-1.json').write_text(json.dumps(played))
+        migrate(legacy)
+        self.assertEqual(store.load('tone-result.json')['results'][0]['dialogueId'], '7')
+        self.assertEqual(store.load('tone-result.json')['summary']['failed'], 1)
+        self.assertIsNone(store.load('discover.json'))
+        self.assertEqual(store.load('cards.json')['check'], 'tone')
+        self.assertEqual((store.run('run-1')['check'], store.run_summaries()[0]['check']), ('tone', 'tone'))
+
     def test_repeated_import_cannot_restore_invalidated_audit_or_scenarios(self) -> None:
         legacy = self.path / 'legacy'
         legacy.mkdir()

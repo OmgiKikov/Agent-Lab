@@ -9,6 +9,7 @@ nothing of the Lab, so storage can use it too.
 TONE, CODE = 'tone', 'code'
 RESULTS = {TONE: 'tone-result.json', CODE: 'discover.json'}
 NAMES = {TONE: 'Tone of voice', CODE: 'Точность'}
+DECK = 'cards.json'  # the scenarios, built from the errors of one check: {check, createdAt, model, cards}
 # What marks tone of voice's own: the kind and id of its policy, so its criteria's sourceId (tone.KIND), and the title
 # of its only topic, which its scenarios and their conversations carry.
 TONE_OF_VOICE, TONE_TOPIC = 'tone-of-voice', 'Tone of voice'
@@ -29,3 +30,18 @@ def of_run(record: dict) -> str:
         if item.get('topic') == TONE_TOPIC or any(criterion.get('sourceId') == TONE_OF_VOICE for criterion in criteria):
             return TONE
     return CODE
+
+
+def separated(documents: dict) -> dict:
+    """What changes in the documents of the time when both checks shared one result (discover.json): a tone-of-voice
+    result there moves to its own place, unless one is there already; a deck that names no check gets the check of
+    the result in the shared place, which it was built from. Only the documents that change; none the second time."""
+    shared = documents.get(RESULTS[CODE])
+    tone = isinstance(shared, dict) and shared.get('purpose') == TONE_OF_VOICE
+    changes = {}
+    deck = documents.get(DECK)
+    if isinstance(deck, dict) and not deck.get('check'):
+        changes[DECK] = deck | {'check': TONE if tone else CODE}
+    if tone and not documents.get(RESULTS[TONE]):
+        changes |= {RESULTS[TONE]: shared, RESULTS[CODE]: None}
+    return changes

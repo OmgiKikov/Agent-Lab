@@ -16,7 +16,7 @@ from .settings import DATA
 DB = DATA / 'lab.sqlite3'
 # The database's user_version once its schema (_set_up) is in place. Raise it with every change to _set_up: a database
 # is set up again only when its user_version differs.
-SCHEMA = 3
+SCHEMA = 4
 # The uploaded dialogues: every write keeps their number beside them (lengths), so the state polled every 1.5 s
 # counts them without reading megabytes of conversations.
 COUNTED = 'logs.json'
@@ -62,8 +62,7 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
         connection.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL, summary TEXT)')
         if 'summary' not in {column[1] for column in connection.execute('PRAGMA table_info(runs)')}:
             connection.execute('ALTER TABLE runs ADD COLUMN summary TEXT')
-        for run_id, value in connection.execute('SELECT id, value FROM runs WHERE summary IS NULL').fetchall():
-            connection.execute('UPDATE runs SET summary = ? WHERE id = ?', (_summary(json.loads(value)), run_id))
+        _separate_checks(connection)
         connection.execute(
             'CREATE TABLE IF NOT EXISTS tone_checks (id TEXT PRIMARY KEY, summary TEXT NOT NULL, value TEXT NOT NULL)'
         )
@@ -90,6 +89,23 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
                 (COUNTED,),
             )
         connection.execute(f'PRAGMA user_version = {SCHEMA}')
+
+
+def _separate_checks(connection: sqlite3.Connection) -> None:
+    """Each check keeps its own result, and a deck and a run name their check (checks.py). In an older database a
+    tone-of-voice result lies in the accuracy's place: it moves to its own and the deck gets its check
+    (checks.separated); a run gets the check of its criteria (checks.of_run), in its record and its summary. What is
+    separated already stays."""
+    names = (*checks.RESULTS.values(), checks.DECK)
+    for name, value in checks.separated({name: _document(connection, name) for name in names}).items():
+        _put(connection, name, value)
+    for run_id, value, summary in connection.execute('SELECT id, value, summary FROM runs').fetchall():
+        if summary is None or 'check' not in json.loads(summary):
+            played = json.loads(value)
+            played['check'] = checks.of_run(played)
+            connection.execute(
+                'UPDATE runs SET value = ?, summary = ? WHERE id = ?', (_json(played), _summary(played), run_id)
+            )
 
 
 def _json_functions(connection: sqlite3.Connection) -> bool:
@@ -189,6 +205,13 @@ def replace_inputs(name: str, value: Any) -> None:
 def _document(connection: sqlite3.Connection, name: str) -> Any:
     row = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
     return json.loads(row[0]) if row else None
+
+
+def _put(connection: sqlite3.Connection, name: str, value: Any) -> None:
+    connection.execute(
+        'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
+        (name, _json(value)),
+    )
 
 
 def _tone_policy(items: list[dict] | None) -> list[dict]:
@@ -507,6 +530,7 @@ def import_legacy(documents: dict[str, Any], records: list[dict]) -> dict[str, i
             ).rowcount
         for record in records:
             value = dict(record)
+            value.setdefault('check', checks.of_run(value))
             value.setdefault('revision', 1)
             value.setdefault('updatedAt', value.get('finishedAt') or value.get('startedAt') or now())
             counts['runs'] += connection.execute(

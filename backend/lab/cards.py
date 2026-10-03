@@ -15,7 +15,7 @@ from .agents import world
 from .context import sources
 from .prompts import CARD
 
-DECK = 'cards.json'
+DECK = checks.DECK
 LIMIT = 30
 # Applies to every scenario: instructions must come from the knowledge base, not be invented.
 FOLLOWS_KNOWLEDGE = {
