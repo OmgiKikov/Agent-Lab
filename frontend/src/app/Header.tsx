@@ -2,9 +2,7 @@ import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight, Search } from "lucide-react";
 import { useShell } from "./ShellContext";
-import { Step } from "../product/Step";
 import { Button } from "../ui/Button";
-import { TONE_ONLY } from "./product";
 
 export type Crumb = { label: string; to: string };
 
@@ -15,7 +13,6 @@ export type Crumb = { label: string; to: string };
  */
 export function Header({
   title,
-  step,
   crumbs,
   sub,
   actions,
@@ -23,7 +20,6 @@ export function Header({
   below,
 }: {
   title: ReactNode;
-  step?: 1 | 2;
   crumbs?: Crumb[];
   sub?: ReactNode;
   actions?: ReactNode;
@@ -36,7 +32,6 @@ export function Header({
       <div className="flex h-16 items-center gap-2 px-4 lg:px-10">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
-            {step && <Step n={step} className="mr-1" />}
             {crumbs?.map((c) => (
               <Fragment key={c.to}>
                 <Link
@@ -52,16 +47,14 @@ export function Header({
           </div>
           {sub && <div className="truncate text-small text-fg-3 lg:hidden">{sub}</div>}
         </div>
-        {!TONE_ONLY && (
-          <Button
-            variant="ghost"
-            icon={Search}
-            aria-label="Поиск"
-            title="Поиск (⌘K)"
-            onClick={shell.openPalette}
-            className="lg:hidden"
-          />
-        )}
+        <Button
+          variant="ghost"
+          icon={Search}
+          aria-label="Поиск"
+          title="Поиск (⌘K)"
+          onClick={shell.openPalette}
+          className="lg:hidden"
+        />
         {actions}
       </div>
       {tabs}

@@ -1,12 +1,13 @@
 import { NavLink, useLocation, useSearchParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import type { Stage } from "./links";
+import { historyLink, SECTIONS, stageRoot, type Stage } from "./links";
 
 type Tab = { to: string; label: string; count?: number; end?: boolean };
 
 /**
- * The pages of a stage, the same in both: its result, its conversations, the person's check; the simulation adds its
- * runs and scenarios. The run being looked at travels with the tabs.
+ * The pages of a section. A check: its result, its conversations, the person's check, its criteria; tone of voice
+ * adds the history of its checks. The simulation: its result, runs, scenarios, conversations and check; the run
+ * being looked at travels with the tabs.
  */
 export function StageTabs({
   stage,
@@ -19,23 +20,26 @@ export function StageTabs({
   const { pathname } = useLocation();
   const run = stage === "sim" ? params.get("run") : null;
   const keep = run ? `?run=${encodeURIComponent(run)}` : "";
+  const root = stageRoot(stage);
   const tabs: Tab[] =
-    stage === "log"
+    stage === "sim"
       ? [
-          { to: "/logs", label: "Итог", end: true },
-          { to: "/logs/conversations", label: "Разговоры", count: counts.conversations },
-          { to: "/logs/review", label: "Проверка", count: counts.review },
+          { to: `${SECTIONS.simulations}${keep}`, label: "Итог", end: true },
+          { to: `${SECTIONS.simulations}/runs`, label: "Прогоны", count: counts.runs },
+          { to: `${SECTIONS.simulations}/scenarios`, label: "Сценарии", count: counts.scenarios },
+          { to: `${SECTIONS.simulations}/conversations${keep}`, label: "Разговоры", count: counts.conversations },
+          { to: `${SECTIONS.simulations}/review${keep}`, label: "Проверка", count: counts.review },
         ]
       : [
-          { to: `/simulations${keep}`, label: "Итог", end: true },
-          { to: "/simulations/runs", label: "Прогоны", count: counts.runs },
-          { to: "/simulations/scenarios", label: "Сценарии", count: counts.scenarios },
-          { to: `/simulations/conversations${keep}`, label: "Разговоры", count: counts.conversations },
-          { to: `/simulations/review${keep}`, label: "Проверка", count: counts.review },
+          { to: root, label: "Итог", end: true },
+          { to: `${root}/conversations`, label: "Разговоры", count: counts.conversations },
+          { to: `${root}/review`, label: "Проверка", count: counts.review },
+          { to: `${root}/criteria`, label: "Критерии" },
+          ...(stage === "tone" ? [{ to: historyLink(), label: "История" }] : []),
         ];
   const problemsOpen = pathname.includes("/problems/");
   return (
-    <nav aria-label="Страницы этапа" className="-mb-px flex gap-6 overflow-x-auto px-4 lg:px-10">
+    <nav aria-label="Страницы раздела" className="-mb-px flex gap-6 overflow-x-auto px-4 lg:px-10">
       {tabs.map((t) => {
         const path = t.to.split("?")[0];
         const on = t.end
