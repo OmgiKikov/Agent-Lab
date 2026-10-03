@@ -111,7 +111,22 @@ def from_excel(data: bytes) -> list[dict]:
 
 
 def from_jsonl(data: bytes) -> list[dict]:
-    return [json.loads(line) for line in data.decode('utf-8').splitlines() if line.strip()]
+    try:
+        text = data.decode('utf-8-sig')  # Windows editors save UTF-8 with a byte order mark
+    except UnicodeDecodeError as error:
+        raise ValueError('Файл .jsonl должен быть в кодировке UTF-8: сохраните выгрузку в UTF-8.') from error
+    dialogues = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            dialogues.append(json.loads(line))
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f'Строка {number} файла .jsonl не читается как JSON: проверьте, что это выгрузка чата, '
+                'по одному разговору в строке.'
+            ) from error
+    return dialogues
 
 
 def _validated(dialogues: list[dict]) -> list[dict]:

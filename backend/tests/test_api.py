@@ -69,6 +69,15 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.load(api.discover.RESULT), {'results': ['old']})
         self.assertEqual(store.load(api.cards.DECK), {'cards': ['old']})
 
+    async def test_a_broken_export_is_refused_in_words_a_person_can_act_on(self) -> None:
+        response = await self.client.post('/api/logs?name=export.jsonl', content='id;client;agent\n1;Здравствуйте')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()['detail'],
+            'Не удалось прочитать файл: Строка 1 файла .jsonl не читается как JSON: проверьте, что это выгрузка чата, '
+            'по одному разговору в строке.',
+        )
+
     async def test_successful_upload_invalidates_old_audit_and_scenarios(self) -> None:
         store.save(api.discover.RESULT, {'results': ['old']})
         store.save(api.cards.DECK, {'cards': ['old']})

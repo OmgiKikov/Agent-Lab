@@ -84,6 +84,23 @@ class LogImportTests(unittest.TestCase):
             logs.prepare('logs.jsonl', data)
         save.assert_not_called()
 
+    def test_jsonl_saved_with_a_byte_order_mark_is_read(self):
+        dialogue = {
+            'id': 'one',
+            'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
+        }
+        data = b'\xef\xbb\xbf' + json.dumps(dialogue, ensure_ascii=False).encode()
+        self.assertEqual(logs.prepare('logs.jsonl', data), [dialogue])
+
+    def test_an_unreadable_jsonl_says_which_line_and_what_to_check(self):
+        good = json.dumps({'id': 'one', 'messages': [{'role': 'user', 'content': 'Вопрос'}]})
+        for data, message in (
+            ((good + '\n\nid;client;agent\n').encode(), r'^Строка 3 файла \.jsonl не читается как JSON: проверьте'),
+            ('Здравствуйте'.encode('cp1251'), r'^Файл \.jsonl должен быть в кодировке UTF-8'),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                logs.prepare('logs.jsonl', data)
+
     def test_duplicate_ids_are_rejected(self):
         dialogue = {
             'id': 'one',
