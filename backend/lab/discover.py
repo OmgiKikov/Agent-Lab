@@ -277,7 +277,7 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     # The tone-of-voice policy (tone.KIND) has its own check in tone.py; the rules here come from the agent's code.
     srcs = [source for source in sources.load() if source['kind'] != TONE]
     if not srcs:
-        raise RuntimeError('Нет источников правил: шаг «агент» → «собрать из кода агента».')
+        raise RuntimeError('Код агента ещё не прочитан: в разделе «Агент» нажмите «Прочитать код».')
     dialogues = sample(count)
     if not dialogues:
         raise RuntimeError('Нет разговоров для оценки: сначала загрузите диалоги.')

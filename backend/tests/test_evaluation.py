@@ -422,6 +422,18 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([source['id'] for source in analysis['sources']], ['s1'])
         self.assertNotIn('purpose', analysis)
 
+    async def test_an_assessment_without_the_agents_code_names_where_to_read_it(self):
+        policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь к клиенту на вы.'}
+        with (
+            patch.object(discover.sources, 'load', return_value=[policy]),
+            patch.object(discover.store, 'load', return_value=None),
+            self.assertRaises(RuntimeError) as refused,
+        ):
+            await discover.run()
+        self.assertEqual(
+            str(refused.exception), 'Код агента ещё не прочитан: в разделе «Агент» нажмите «Прочитать код».'
+        )
+
     async def test_card_generation_does_not_commit(self):
         with (
             patch.object(cards.store, 'load', return_value={'topics': [], 'results': []}),

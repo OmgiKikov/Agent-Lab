@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lab import agents
-from lab.agents.http import AgentError, read_reply
+from lab.agents.http import AgentError, HttpAgent, read_reply
 
 
 class AgentReplyTests(unittest.TestCase):
@@ -42,3 +42,13 @@ class ReadinessTests(unittest.TestCase):
         config = {'name': 'Агент на ИФТ', 'kind': 'http'}
         self.assertFalse(agents.public('prod', config | {'url': ''})['ready'])
         self.assertTrue(agents.public('prod', config | {'url': 'https://ift.example/agent'})['ready'])
+
+
+class MissingAddressTests(unittest.IsolatedAsyncioTestCase):
+    async def test_an_agent_without_its_address_names_where_to_set_it(self):
+        with self.assertRaises(AgentError) as refused:
+            await HttpAgent({'url': '', 'profile': 'prod'}).open()
+        self.assertEqual(
+            str(refused.exception),
+            'Не задан адрес агента на ИФТ: укажите его в разделе «Агент», поле «Адрес агента на тестовом стенде».',
+        )
