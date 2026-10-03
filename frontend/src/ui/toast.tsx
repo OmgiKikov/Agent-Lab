@@ -56,7 +56,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   t.action?.run();
                   dismiss(t.id);
                 }}
-                className="text-small font-medium text-fg underline underline-offset-4"
+                className="-my-1 min-h-6 px-1 text-small font-medium text-fg underline underline-offset-4"
               >
                 {t.action.label}
               </button>
@@ -65,7 +65,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               type="button"
               onClick={() => dismiss(t.id)}
               aria-label="Закрыть"
-              className="text-fg-3 transition-colors hover:text-fg"
+              className="-m-1 grid size-6 flex-shrink-0 place-items-center text-fg-3 transition-colors hover:text-fg"
             >
               <X aria-hidden className="size-3.5" />
             </button>

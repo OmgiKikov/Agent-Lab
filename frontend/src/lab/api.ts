@@ -5,12 +5,17 @@ const API = import.meta.env.VITE_LAB_API_BASE_URL ?? "";
 /** Every call works inside the agent of the page (backend/lab/api.py, X-Agent). */
 const AGENT_HEADER: Record<string, string> = AGENT ? { "X-Agent": AGENT } : {};
 
+/** What went wrong in words: the service's own message, or the first of FastAPI's validation messages. */
+function problem(detail: unknown, status: number): string {
+  if (typeof detail === "string") return detail;
+  const first = Array.isArray(detail) ? (detail[0] as { msg?: unknown } | undefined) : undefined;
+  if (first && typeof first.msg === "string") return `Сервис не принял запрос: ${first.msg}`;
+  return `Сервис ответил ошибкой ${status}`;
+}
+
 async function read<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = (data as { detail?: unknown }).detail;
-    throw new Error(typeof detail === "string" ? detail : `HTTP ${response.status}`);
-  }
+  if (!response.ok) throw new Error(problem((data as { detail?: unknown }).detail, response.status));
   return data as T;
 }
 
