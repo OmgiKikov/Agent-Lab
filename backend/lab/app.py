@@ -1,5 +1,6 @@
 """One Python process serves the Lab's HTTP routes and the built frontend."""
 
+import os
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -11,10 +12,35 @@ from starlette.types import Scope
 from .api import app
 from .settings import FRONTEND
 
+LOOPBACK = ('127.0.0.1', 'localhost', '::1')
+
+
+def allowed_hosts() -> set[str]:
+    """This computer's own names, and the ones a person adds in LAB_ALLOWED_HOSTS (separated by commas or spaces)."""
+    added = os.environ.get('LAB_ALLOWED_HOSTS', '').replace(',', ' ').split()
+    return {*LOOPBACK, *(name.strip('[]').lower() for name in added)}
+
+
+def _host(value: str) -> tuple[str, int | None] | None:
+    """The name and port of a Host header; None unless it is one host with an optional port that is a number."""
+    try:
+        parts = urlsplit('//' + value)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.netloc != value or parts.username is not None or not parts.hostname:
+        return None
+    return parts.hostname, port
+
 
 @app.middleware('http')
 async def local_browser_commands(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """Other browser tabs cannot launch model work on this local application."""
+    """A page on another name that resolves to this computer (DNS rebinding) reads and changes nothing, pages
+    included; other browser tabs cannot launch model work on this local application."""
+    host = _host(request.headers.get('host', ''))
+    if host is None or host[0] not in allowed_hosts():
+        detail = 'Agent Lab открывается по адресу 127.0.0.1 или localhost. Другое имя добавьте в LAB_ALLOWED_HOSTS.'
+        return JSONResponse({'detail': detail}, status_code=400)
     origin = request.headers.get('origin')
     if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and origin:
         try:
