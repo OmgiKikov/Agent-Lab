@@ -271,6 +271,26 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         state, _ = await self.state_parsing()
         self.assertEqual((state['logs']['total'], state['logs']['file']), (1, 'one.jsonl'))
 
+    async def test_state_reads_the_log_assessment_once_and_reuses_its_summary(self) -> None:
+        summary = {'checked': 1, 'measured': 1, 'failed': 1, 'passed': 0, 'unmeasured': 0, 'patterns': []}
+        assessment = {
+            'results': [{'dialogueId': 'd1', 'status': 'FAIL', 'rules': [], 'opening': 'assessment-text'}],
+            'topics': [],
+            'sources': [{'id': 's1', 'rules': 2}],
+            'summary': summary,
+        }
+        store.save(api.discover.RESULT, assessment)
+        store.save('sources.json', [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'prompt'}])
+        with patch.object(api.discover, 'summarize', side_effect=AssertionError('the stored summary is reused')):
+            state, parsed = await self.state_parsing()
+        self.assertEqual(state['discover']['summary'], summary)
+        self.assertEqual(state['sources'][0]['rules'], 2)
+        self.assertEqual(len([text for text in parsed if 'assessment-text' in text]), 1)
+        # A record from before results carried their summary gets one.
+        store.save(api.discover.RESULT, {key: value for key, value in assessment.items() if key != 'summary'})
+        state, _ = await self.state_parsing()
+        self.assertEqual((state['discover']['summary']['failed'], state['discover']['summary']['measured']), (1, 1))
+
     async def test_startup_recovers_interrupted_run_and_retains_finished_items_and_reviews(self) -> None:
         store.create_run(
             {
