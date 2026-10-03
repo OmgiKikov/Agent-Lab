@@ -59,6 +59,32 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn('Только JSON', rules[1]['text'])
         self.assertTrue(all(quotes.found(rule['quote'], source['content']) for rule in rules))
 
+    def test_every_heading_of_a_coded_rubric_bounds_its_own_section(self):
+        rubric = POLICY.replace(
+            '### pronouns',
+            '### Greeting\nНачинайте ответ с приветствия.\n'
+            '## Оформление\n'
+            '### lists:\nСписки оформляйте цифрами.\n'
+            '### emoji2\nНе используйте эмодзи.\n'
+            '### Обращение по имени\nНазывайте клиента по имени, только если он сам его назвал.\n'
+            '### pronouns',
+        )
+        source = tone.policy('rules', rubric)
+        rules = tone.coded_criteria(source)
+        self.assertEqual(
+            {rule['id']: rule['text'] for rule in rules},
+            {
+                'greeting': 'Начинайте ответ с приветствия.',
+                'lists': 'Списки оформляйте цифрами.',
+                'emoji2': 'Не используйте эмодзи.',
+                'section-1': 'Называйте клиента по имени, только если он сам его назвал.',
+                'pronouns': 'Обращайтесь к клиенту на «вы» со строчной буквы.',
+                'simple_language': 'Не используйте канцеляризмы.\nИспользуйте активный залог.',
+            },
+        )
+        self.assertEqual([rule['name'] for rule in rules][1:4], ['Оформление списков', 'emoji2', 'Обращение по имени'])
+        self.assertTrue(all(quotes.found(rule['quote'], source['content']) for rule in rules))
+
     def test_generated_criteria_cannot_invent_source_evidence(self):
         source = tone.policy('rules', 'Обращайтесь к клиенту на вы и не используйте эмодзи.')
         row = {

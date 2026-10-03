@@ -72,6 +72,23 @@ class EvaluationTests(unittest.TestCase):
         self.assertFalse(quotes.found('Вернуть терминал…Вернуть терминал', 'Вернуть терминал'))
         self.assertFalse(quotes.found('да…да…да…да', 'да'))
 
+    def test_a_verdict_cannot_stitch_short_parts_into_words_the_agent_never_said(self):
+        reply = 'Оформить возврат можно в личном кабинете, но деньги вернуть нельзя после закрытия смены.'
+        other = 'Вернуть деньги на карту нельзя. Можно оформить возврат через терминал.'
+        for quote, text in (
+            ('Оформить возврат можно … деньги вернуть', reply),
+            ('Вернуть деньги на карту … можно', other),
+        ):
+            with self.subTest(quote=quote):
+                rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], text)
+                self.assertEqual(rows[0]['status'], 'UNKNOWN')
+                self.assertFalse(quotes.cited(quote, text))
+        # Long parts stand, and so does the agent's own «…» quoted whole.
+        quote = 'Оформить возврат можно в личном кабинете … после закрытия смены'
+        rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], reply)
+        self.assertEqual(rows[0]['status'], 'PASS')
+        self.assertTrue(quotes.cited('Минутку… Проверяю данные', 'Минутку… Проверяю данные по терминалу.'))
+
     def test_grounding_never_substitutes_an_unrelated_source(self):
         topics = [{'title': 'Возврат', 'rules': [dict(criterion(), sourceId='missing', quote='Вернуть терминал')]}]
         grounded, dropped = discover.ground(topics, [{'id': 's1', 'content': 'Вернуть терминал в банк'}])
@@ -218,6 +235,65 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(chat.await_count, 2)
                 self.assertEqual(result.status, 'PASS')
                 self.assertEqual(result.rows[0]['ruleId'], 'r1')
+
+    async def test_a_criterion_that_was_not_measured_needs_no_quote_or_reason(self):
+        """A null, missing or empty quote or reason on such a row keeps the rest of the reply; a verdict still needs
+        both."""
+        unmeasured = (
+            {'ruleId': 'r2', 'status': 'NOT_APPLICABLE', 'reason': 'Задержки не было.', 'agentQuote': None},
+            {'ruleId': 'r2', 'status': 'NOT_APPLICABLE', 'reason': 'Задержки не было.'},
+            {'ruleId': 'r2', 'status': 'UNKNOWN', 'reason': '', 'agentQuote': ''},
+            {'ruleId': 'r2', 'status': 'UNKNOWN', 'reason': None},
+        )
+        for row in unmeasured:
+            with self.subTest(row=row):
+                chat = AsyncMock(return_value=completion({'rules': [verdict(), row]}))
+                with patch.object(llm, 'chat', chat):
+                    result = await judge.log_verdict(
+                        [criterion(), criterion('r2')], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}]
+                    )
+                self.assertEqual(chat.await_count, 1)
+                self.assertEqual([r['status'] for r in result.rows], ['PASS', row['status']])
+                kept = result.rows[1]
+                self.assertEqual((kept['agentQuote'], kept['reason']), ('', row.get('reason') or ''))
+        valid = {'rules': [verdict()]}
+        without_quote = {key: value for key, value in verdict().items() if key != 'agentQuote'}
+        for measured in (without_quote, dict(verdict(), reason=None), dict(verdict(status='FAIL'), agentQuote=None)):
+            with self.subTest(measured=measured):
+                chat = AsyncMock(side_effect=[completion({'rules': [measured]}), completion(valid)])
+                with patch.object(llm, 'chat', chat):
+                    await judge.log_verdict([criterion()], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}])
+                self.assertEqual(chat.await_count, 2)
+
+    async def test_the_labs_line_of_buttons_is_never_the_agents_words(self):
+        """A logged reply is shown with «[Кнопки: …]» for the export's control code; a FAIL quoting that line, or the
+        code in it, has no evidence. In a played conversation a button's label is the agent's own text."""
+        reply = 'Нажмите кнопку ниже.\n` ` ` transition-code TRANSFER_INTO_CHAT ` ` `'
+        dialogue = {
+            'id': 'd1',
+            'messages': [{'role': 'user', 'content': 'Как вернуть терминал?'}, {'role': 'assistant', 'content': reply}],
+        }
+        rules = [criterion('special_characters')]
+        for quote, expected in (
+            ('[Кнопки: TRANSFER_INTO_CHAT]', 'UNKNOWN'),
+            ('Кнопки: TRANSFER_INTO_CHAT', 'UNKNOWN'),
+            ('TRANSFER_INTO_CHAT', 'UNKNOWN'),
+            ('Нажмите кнопку ниже.', 'FAIL'),
+        ):
+            answer = {'rules': [verdict('special_characters', 'FAIL', quote)]}
+            with self.subTest(quote=quote), patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))):
+                result = await judge.log_verdict(rules, discover.conversation(dialogue))
+                self.assertEqual(result.rows[0]['status'], expected)
+        played = [{'role': 'agent', 'text': 'Выберите, что сделать дальше.', 'options': ['Позвать оператора']}]
+        for quote, expected in (('Позвать оператора', 'PASS'), ('[Кнопки: Позвать оператора]', 'UNMEASURED')):
+            answer = {'customerGoal': 'Вернуть терминал', 'rules': [verdict(quote=quote)]}
+            with (
+                self.subTest(quote=quote),
+                patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
+                patch.object(judge.knowledge, 'retrieved', return_value=[]),
+            ):
+                result = await judge.run_verdict({'criteria': [criterion()]}, played)
+                self.assertEqual(result.status, expected)
 
     async def test_duplicate_verdict_ids_are_retried(self):
         answer = {'rules': [verdict(), verdict()]}

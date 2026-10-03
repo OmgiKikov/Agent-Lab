@@ -39,27 +39,46 @@ RULE_NAMES = {
 }
 
 
+def _code(heading: str) -> str | None:
+    """The validator code a heading names: «pronouns», «Лексика и синтаксис: simple_language», «Greeting», «lists:»,
+    «emoji2»; None for a heading without one."""
+    code = heading.rstrip(':').rsplit(':', 1)[-1].strip().lower()
+    return code if re.fullmatch(r'[a-z][a-z0-9_-]*', code) else None
+
+
 def coded_criteria(source: dict) -> list[dict]:
-    """A supplied validator rubric already defines its criteria; retain codes, repeated sections and exceptions."""
+    """A supplied validator rubric already defines its criteria; retain codes, repeated sections and exceptions.
+    Every ## or ### heading ends the section before it. A heading without a code still bounds a section of its own,
+    shown under its own words, so its duty never joins the criterion above; a heading over a group of sections has no
+    text of its own and is only a boundary."""
     text = source['content']
     section = re.search(r'^# Правила коммуникаций\s*$', text, re.M)
     end = re.search(r'^# Формат ответа\s*$', text, re.M)
     if not section or not end or end.start() <= section.end():
         return []
     rules = text[section.end() : end.start()].strip()
-    headers = list(re.finditer(r'^#{2,3}\s+(?:([^\n:]+):\s*)?([a-z][a-z_-]+)\s*$', rules, re.M))
+    headings = list(re.finditer(r'^#{2,3}[ \t]+(.+?)[ \t]*$', rules, re.M))
     blocks: dict[str, list[tuple[str, str]]] = {}
-    for index, header in enumerate(headers):
-        stop = headers[index + 1].start() if index + 1 < len(headers) else len(rules)
+    names = dict(RULE_NAMES)
+    untitled: dict[str, str] = {}  # the id of a section without a code, by its heading: a repeated one joins it
+    for index, heading in enumerate(headings):
+        stop = headings[index + 1].start() if index + 1 < len(headings) else len(rules)
         # The quote keeps the passage verbatim; the duty a person reads goes without its «### code» heading.
-        passage = (rules[header.start() : stop].strip(), rules[header.end() : stop].strip())
-        blocks.setdefault(header.group(2), []).append(passage)
+        passage = (rules[heading.start() : stop].strip(), rules[heading.end() : stop].strip())
+        code = _code(heading.group(1))
+        if code is None:
+            if not passage[1]:
+                continue
+            title = heading.group(1).strip().rstrip(':')
+            code = untitled.setdefault(title, f'section-{len(untitled) + 1}')
+            names[code] = title
+        blocks.setdefault(code, []).append(passage)
     principles = text.split('## Главные принципы', 1)[-1].split('# Правила коммуникаций', 1)[0].strip()
     return [
         {
             'id': code,
-            'name': RULE_NAMES.get(code, code),
-            'text': '\n'.join(duty for _, duty in parts if duty) or RULE_NAMES.get(code, code),
+            'name': names.get(code, code),
+            'text': '\n'.join(duty for _, duty in parts if duty) or names.get(code, code),
             'quote': ' … '.join(block for block, _ in parts),
             'sourceId': source['id'],
             'observation': 'reply',
