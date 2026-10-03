@@ -25,7 +25,7 @@ from .errors import MalformedAnswer, ModelError, refused
 GATEWAY = 'gateway'
 Endpoint = tuple[str, str]  # (base URL or GATEWAY, model)
 
-if gateway.configured() and not os.environ.get('LAB_MODEL_URL'):
+if not os.environ.get('LAB_MODEL_URL') and gateway.configured():
     # 'auto': the newest GLM in the gateway's catalog.
     MAIN: Endpoint = (GATEWAY, os.environ.get('LAB_MODEL') or gateway.chosen_models().get('model') or 'auto')
     SECOND: Endpoint = (GATEWAY, os.environ.get('LAB_SECOND_MODEL') or gateway.chosen_models().get('second') or 'auto')
@@ -184,12 +184,14 @@ def second_judge() -> Endpoint | None:
 
 
 def describe() -> dict:
-    """Which models judge and play the customer, and through what; no second when only one model is available."""
+    """Which models judge and play the customer, and through what; no second when only one model is available.
+    problem: why the bank's gateway, set up, cannot be used now."""
     main, second = _names()
     return {
         'via': 'шлюз банка' if MAIN[0] == GATEWAY else 'OpenRouter',
         'main': main,
         'second': second if second_judge() else None,
+        'problem': gateway.problem() if MAIN[0] == GATEWAY else None,
     }
 
 

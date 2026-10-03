@@ -4,6 +4,7 @@ Where the certificates are: the files dropped into certs/ (url.txt, the certific
 password.txt, the bank's root certificate named ca* or root*). ~/.agent-lab/gateway.json (the archived Agent Lab's
 format) and AGENT_LAB_GATEWAY_URL / _CERT_PATH / _KEY_PATH / _CA_PATH / _INSECURE take precedence when complete.
 Protocol v2: POST /v2/chat/completions and GET /v1/models; the client certificate authenticates, no token.
+Set up but broken, it stays the backend: every call fails with what to fix (problem), no conversation goes elsewhere.
 """
 
 import asyncio
@@ -41,15 +42,20 @@ _session: tuple[asyncio.AbstractEventLoop, ssl.SSLContext, httpx.AsyncClient] | 
 
 
 def config() -> dict | None:
-    """url, cert, key, ca and insecure; None when the gateway is not set up."""
-    settings = _from_file()
-    for field, name in _ENV.items():
-        if os.environ.get(name):
-            settings[field] = os.environ[name]
-    if os.environ.get('AGENT_LAB_GATEWAY_INSECURE'):
-        settings['insecure'] = os.environ['AGENT_LAB_GATEWAY_INSECURE'] == '1'
-    if not _complete(settings):
-        settings = _from_certs_folder() or settings
+    """url, cert, key, ca and insecure; None when the gateway is not set up. Set up but unusable (an empty url.txt, no
+    certificate, a file that cannot be read, a bundle that does not open) is a ModelError saying what to fix: the only
+    error it raises."""
+    try:
+        settings = _from_file()
+        for field, name in _ENV.items():
+            if os.environ.get(name):
+                settings[field] = os.environ[name]
+        if os.environ.get('AGENT_LAB_GATEWAY_INSECURE'):
+            settings['insecure'] = os.environ['AGENT_LAB_GATEWAY_INSECURE'] == '1'
+        if not _complete(settings):
+            settings = _from_certs_folder() or settings
+    except OSError as error:
+        raise ModelError(_unreadable(error)) from error
     if not _complete(settings):
         return None
     settings['url'] = re.sub(r'/v[12]$', '', settings['url'].rstrip('/'))
@@ -57,10 +63,23 @@ def config() -> dict | None:
 
 
 def configured() -> bool:
+    """Set up: certs/url.txt, or a complete settings file or environment. A broken setup is still the gateway: its calls
+    fail with the reason (problem) rather than the conversations going to another backend."""
     try:
         return config() is not None
     except ModelError:
-        return True  # a broken settings file is reported on the first call, not hidden behind another backend
+        return True
+
+
+def problem() -> str | None:
+    """Why the gateway that is set up cannot be used, in words for «Настройки» and bin/start.sh; None when it can."""
+    try:
+        settings = config()
+        if settings:
+            _context(settings)
+    except ModelError as error:
+        return str(error)
+    return None
 
 
 def _complete(settings: dict) -> bool:
@@ -73,23 +92,27 @@ def _from_file() -> dict:
     try:
         data = json.loads(FILE.read_text(encoding='utf-8'))
     except (OSError, ValueError) as error:
-        raise ModelError(f'Файл настройки шлюза {FILE} повреждён') from error
-    if data.get('format') != FORMAT:
-        raise ModelError(f'Файл настройки шлюза {FILE}: неизвестный формат')
-    return {
+        raise ModelError(f'Файл настройки шлюза {FILE} не читается: исправьте или удалите его') from error
+    if not isinstance(data, dict) or data.get('format') != FORMAT:
+        raise ModelError(f'Файл настройки шлюза {FILE}: неизвестный формат, исправьте или удалите его')
+    settings = {
         'url': data.get('url'),
         'cert': data.get('certPath'),
         'key': data.get('keyPath'),
         'ca': data.get('caPath'),
-        'insecure': bool(data.get('insecure')),
     }
+    if not all(value is None or isinstance(value, str) for value in settings.values()):
+        raise ModelError(f'Файл настройки шлюза {FILE}: url, certPath, keyPath и caPath должны быть строками')
+    return {**settings, 'insecure': bool(data.get('insecure'))}
 
 
 def _from_certs_folder() -> dict | None:
-    """certs/: url.txt, a client certificate and key (PEM, or one .p12/.pfx with password.txt),
-    and the bank's root certificate named ca* or root* when the gateway needs it."""
+    """certs/: url.txt, a client certificate and key (PEM, or one .p12/.pfx with password.txt), and the bank's root
+    certificate named ca* or root* when the gateway needs it. Without url.txt the gateway is not set up; with it,
+    whatever is missing is a ModelError."""
     if not (CERTS / 'url.txt').exists():
         return None
+    url = _url()
     files = [f for f in CERTS.iterdir() if f.is_file()]
     pem = {f: f.read_text(errors='ignore') for f in files if f.suffix.lower() in ('.pem', '.crt', '.cer', '.key')}
 
@@ -103,17 +126,41 @@ def _from_certs_folder() -> dict | None:
     if (not cert or not key) and bundle:
         cert, key = _unpack(bundle)
     if not cert or not key:
-        return None
-    url = (CERTS / 'url.txt').read_text().strip().splitlines()[0].strip()
+        raise ModelError(
+            f'В {_named(CERTS)} нет сертификата и ключа шлюза: положите их в PEM (.pem или .crt и .key) '
+            'или один .p12/.pfx с паролем в password.txt'
+        )
     return {'url': url, 'cert': str(cert), 'key': str(key), 'ca': str(ca) if ca else None, 'insecure': False}
+
+
+def _url() -> str:
+    """The gateway's address: the first line of certs/url.txt."""
+    path = CERTS / 'url.txt'
+    lines = [line.strip() for line in path.read_text(encoding='utf-8-sig', errors='replace').splitlines()]
+    url = next((line for line in lines if line), '')
+    if not url:
+        raise ModelError(f'{_named(path)} пустой: впишите в него адрес шлюза моделей (https://…)')
+    try:
+        valid = url.startswith(('https://', 'http://')) and bool(httpx.URL(url).host)
+    except httpx.InvalidURL:
+        valid = False
+    if not valid:
+        raise ModelError(f'В {_named(path)} не адрес шлюза: нужна одна строка вида https://адрес-шлюза')
+    return url
 
 
 def _password() -> bytes:
     """certs/password.txt as written, without its line break or a BOM; empty without the file."""
     path = CERTS / 'password.txt'
-    if not path.exists():
-        return b''
-    return path.read_bytes().removeprefix(codecs.BOM_UTF8).strip()
+    try:
+        return path.read_bytes().removeprefix(codecs.BOM_UTF8).strip() if path.exists() else b''
+    except OSError as error:
+        raise ModelError(_unreadable(error)) from error
+
+
+def _unreadable(error: OSError) -> str:
+    where = _named(Path(error.filename)) if error.filename else f'Файл в {_named(CERTS)}'
+    return f'{where} не читается ({error.strerror or type(error).__name__}): проверьте, что он на месте и доступен'
 
 
 def _unpack(bundle: Path) -> tuple[Path, Path]:
@@ -244,11 +291,23 @@ def _context(settings: dict) -> ssl.SSLContext:
 
 
 def _tls(settings: dict, password: bytes) -> ssl.SSLContext:
+    """The password is passed even when empty: without one, OpenSSL would ask for it on the terminal and hold every
+    call."""
+    ca, cert, key = settings.get('ca'), Path(settings['cert']), Path(settings['key'])
     try:
-        context = ssl.create_default_context(cafile=settings.get('ca') or None)
-        context.load_cert_chain(settings['cert'], settings['key'], password=password or None)
+        context = ssl.create_default_context(cafile=ca or None)
     except (OSError, ssl.SSLError) as error:
-        raise ModelError(f'Сертификат, ключ или CA шлюза не читаются: {type(error).__name__}') from error
+        where = _named(Path(ca)) if ca else 'системные'
+        raise ModelError(
+            f'Корневой сертификат шлюза ({where}) не читается ({type(error).__name__}): нужен сертификат банка в PEM'
+        ) from error
+    try:
+        context.load_cert_chain(cert, key, password=password)
+    except (OSError, ssl.SSLError) as error:
+        raise ModelError(
+            f'Сертификат {_named(cert)} и ключ {_named(key)} не читаются или не подходят друг к другу '
+            f'({type(error).__name__}): нужна пара одного выпуска; пароль ключа, если он есть, — в password.txt'
+        ) from error
     if settings.get('insecure'):
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE

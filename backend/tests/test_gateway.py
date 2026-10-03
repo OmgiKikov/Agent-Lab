@@ -3,7 +3,9 @@
 import asyncio
 import os
 import shutil
+import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -12,6 +14,7 @@ from unittest.mock import patch
 
 import httpx
 
+from lab import llm
 from lab.llm import gateway
 
 Client = httpx.AsyncClient
@@ -20,19 +23,20 @@ BUNDLES = Path()  # a temporary folder, from setUpModule
 
 
 def setUpModule() -> None:
-    """client.p12 as the bank issues it, the same in an older Windows export (RC2), and one without the key."""
+    """client.p12 as the bank issues it, the same in an older Windows export (RC2), one without the key; and the
+    certificate and key in PEM, the key also encrypted with PASSWORD."""
     global BUNDLES
     BUNDLES = Path(tempfile.mkdtemp(prefix='agent-lab-bundles-'))
-    key, cert = BUNDLES / 'key.pem', BUNDLES / 'cert.pem'
+    key, cert = BUNDLES / 'client.key', BUNDLES / 'client.pem'
     openssl(
         'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-subj', '/CN=t', '-days', '1'
     )
+    openssl('pkey', '-in', key, '-aes256', '-out', BUNDLES / 'encrypted.key', '-passout', 'stdin')
     for name, options in (('modern', ('-inkey', key)), ('legacy', ('-inkey', key, '-legacy')), ('nokey', ('-nokeys',))):
         # No -legacy before OpenSSL 3: the RC2 tests are skipped there.
         openssl(
             'pkcs12', '-export', '-in', cert, *options, '-out', BUNDLES / f'{name}.p12', '-passout', 'stdin', ok=False
         )
-    key.unlink()
 
 
 def openssl(*args: object, ok: bool = True) -> None:
@@ -148,6 +152,111 @@ class BundleTests(GatewayCase):
     def test_a_bundle_without_the_key_is_a_reason(self) -> None:
         shutil.copy(BUNDLES / 'nokey.p12', self.certs / 'client.p12')
         self.assertIn('нет сертификата клиента с ключом', self.reason())
+
+
+class SetupTests(GatewayCase):
+    """certs/url.txt is there, something else is wrong: the reason names the file, and it is still the gateway."""
+
+    def broken(self) -> str:
+        reason = self.reason()
+        self.assertEqual(gateway.problem(), reason)
+        self.assertTrue(gateway.configured())
+        return reason
+
+    def pem(self, key: str = 'client.key') -> None:
+        """The certificate and key as PEM files instead of the bundle."""
+        (self.certs / 'client.p12').unlink()
+        shutil.copy(BUNDLES / 'client.pem', self.certs / 'client.pem')
+        shutil.copy(BUNDLES / key, self.certs / 'client.key')
+
+    def test_an_empty_url_txt_says_to_write_the_address(self) -> None:
+        (self.certs / 'url.txt').write_text('\n')
+        self.assertIn('url.txt пустой: впишите в него адрес шлюза', self.broken())
+
+    def test_url_txt_must_hold_an_address(self) -> None:
+        for text in ('gateway.bank.test', 'https://gateway:84 43'):
+            with self.subTest(text=text):
+                (self.certs / 'url.txt').write_text(text)
+                self.assertIn('url.txt не адрес шлюза', self.broken())
+
+    def test_an_unreadable_url_txt_is_named(self) -> None:
+        (self.certs / 'url.txt').unlink()
+        (self.certs / 'url.txt').mkdir()
+        self.assertIn('url.txt не читается', self.broken())
+
+    def test_an_unreadable_password_txt_is_named(self) -> None:
+        (self.certs / 'password.txt').unlink()
+        (self.certs / 'password.txt').mkdir()
+        self.assertIn('password.txt не читается', self.broken())
+
+    def test_url_txt_without_a_certificate_is_still_the_gateway(self) -> None:
+        (self.certs / 'client.p12').unlink()
+        self.assertIn('нет сертификата и ключа шлюза', self.broken())
+
+    def test_without_url_txt_there_is_no_gateway(self) -> None:
+        (self.certs / 'url.txt').unlink()
+        self.assertFalse(gateway.configured())
+        self.assertIsNone(gateway.problem())
+
+    def test_a_broken_settings_file_is_named(self) -> None:
+        wrong = '{"format": "agent-lab-gateway-1", "url": 5, "certPath": "c.pem", "keyPath": "c.key"}'
+        for text in ('[]', wrong):
+            with self.subTest(text=text):
+                gateway.FILE.write_text(text)
+                self.assertIn(str(gateway.FILE), self.broken())
+
+    def test_a_certificate_and_a_key_that_do_not_open_are_named(self) -> None:
+        self.pem()
+        (self.certs / 'client.key').write_text('-----BEGIN PRIVATE KEY-----\nbroken\n-----END PRIVATE KEY-----\n')
+        reason = gateway.problem()
+        self.assertIn('client.pem', reason)
+        self.assertIn('client.key', reason)
+
+    def test_an_encrypted_key_opens_with_password_txt_and_is_never_asked_for_on_the_terminal(self) -> None:
+        self.pem('encrypted.key')
+        self.assertIsNone(gateway.problem())
+        (self.certs / 'password.txt').unlink()
+        passwords = []
+        real = ssl.SSLContext.load_cert_chain
+
+        def load(context, *args, **options):
+            passwords.append(options.get('password'))
+            return real(context, *args, **options)
+
+        with patch.object(ssl.SSLContext, 'load_cert_chain', load):
+            self.assertIn('password.txt', gateway.problem())
+        self.assertEqual(passwords, [b''])  # None would let OpenSSL wait for the password on the terminal
+
+    def test_every_model_call_answers_with_the_reason_and_the_settings_show_it(self) -> None:
+        (self.certs / 'url.txt').write_text('')
+        reason = self.reason()
+        with (
+            patch.object(llm, 'MAIN', (llm.GATEWAY, 'requested')),
+            patch.object(llm, 'SECOND', (llm.GATEWAY, 'requested')),
+            patch.object(gateway, 'chosen_models', return_value={}),
+        ):
+            for call in (lambda: llm.chat('system', 'question'), lambda: llm.structured('system', {}, parse=dict)):
+                with self.assertRaises(llm.ModelError) as caught:
+                    asyncio.run(call())
+                self.assertEqual(str(caught.exception), reason)
+            self.assertEqual(asyncio.run(llm.check(llm.MAIN)), {'ok': False, 'error': reason})
+            self.assertEqual(llm.describe()['problem'], reason)
+
+    def test_the_backend_starts_with_broken_certificates_and_stays_on_the_gateway(self) -> None:
+        (self.certs / 'url.txt').write_text('')
+        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'AGENT_LAB', 'PI_'))}
+        environment.update(
+            LAB_DATA=str(self.certs.parent / 'data'),
+            LAB_CERTS=str(self.certs),
+            AGENT_LAB_GATEWAY_FILE=str(gateway.FILE),
+        )
+        script = 'import lab.api\nfrom lab import llm\nprint(llm.MAIN[0])\nprint(llm.describe()["problem"])'
+        done = subprocess.run(
+            [sys.executable, '-c', script], env=environment, capture_output=True, text=True, timeout=60, check=False
+        )
+        self.assertEqual(done.returncode, 0, done.stderr[-600:])
+        self.assertEqual(done.stdout.splitlines()[0], 'gateway')
+        self.assertIn('url.txt пустой', done.stdout)
 
 
 class LegacyBundleTests(GatewayCase):
