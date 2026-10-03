@@ -351,6 +351,72 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             await simulate.rejudge(store.run(source['id']))
         self.assertNotIn('rejudgedAt', store.run(source['id']))
 
+    def played(self, count: int = 3) -> str:
+        """A finished run whose conversations all passed under an older model."""
+        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        items = [simulate.new_item(card(f'card-{n}'), 'default', 1) for n in range(count)]
+        for item in items:
+            item.update(
+                status='PASS',
+                ended=True,
+                model='old-model',
+                conversation=[{'role': 'agent', 'text': 'answer'}],
+                rules=[{'ruleId': 'r', 'status': 'PASS'}],
+            )
+        source.update(items=items, status='done', model='old-model')
+        store.create_run(source)
+        return source['id']
+
+    async def test_stopped_rejudge_leaves_the_run_as_it_was(self) -> None:
+        run_id = self.played()
+        first = asyncio.Event()
+
+        async def evaluate(scenario: dict, item: dict) -> None:
+            if item['cardId'] != 'card-0':
+                await asyncio.Event().wait()  # the other conversations are still being judged
+            item.update(status='FAIL', model='new-model', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
+            first.set()
+
+        jobs = Jobs()
+        with patch.object(simulate.judge, 'evaluate', side_effect=evaluate):
+            jobs.start('rejudge', lambda progress: simulate.rejudge(store.run(run_id), progress))
+            await first.wait()
+            await asyncio.sleep(0)
+            await jobs.stop()
+        result = store.run(run_id)
+        self.assertEqual([(item['status'], item['model']) for item in result['items']], [('PASS', 'old-model')] * 3)
+        self.assertEqual((result['status'], result['model'], result['metric']['failed']), ('done', 'old-model', 0))
+        self.assertNotIn('rejudgedAt', result)
+        self.assertEqual(jobs.state['error'], 'Остановлено')
+
+    async def test_rejudge_applies_all_new_verdicts_at_once_or_none_when_it_fails(self) -> None:
+        run_id = self.played()
+
+        async def crashes(scenario: dict, item: dict) -> None:
+            if item['cardId'] == 'card-1':
+                raise RuntimeError('judge crashed')
+            item.update(status='FAIL', model='new-model', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
+
+        with (
+            patch.object(simulate.judge, 'evaluate', side_effect=crashes),
+            self.assertRaisesRegex(ExceptionGroup, 'unhandled errors'),
+        ):
+            await simulate.rejudge(store.run(run_id))
+        self.assertEqual([item['status'] for item in store.run(run_id)['items']], ['PASS'] * 3)
+
+        async def fails(scenario: dict, item: dict) -> None:
+            item.update(status='FAIL', model='new-model', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
+
+        with (
+            patch.object(simulate.judge, 'evaluate', side_effect=fails),
+            patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes,
+        ):
+            result = await simulate.rejudge(store.run(run_id))
+        self.assertEqual(writes.call_count, 1)
+        self.assertEqual([item['status'] for item in result['items']], ['FAIL'] * 3)
+        self.assertEqual((result['model'], result['metric']['failed']), ('new-model', 3))
+        self.assertTrue(result['rejudgedAt'])
+
     async def test_rejudge_keeps_conversations_the_agent_or_the_customer_model_cut_short(self) -> None:
         async def say(conversation_id: str, message: str, world: dict) -> dict:
             if message == 'agent-broke again':

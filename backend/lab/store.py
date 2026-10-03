@@ -271,30 +271,42 @@ def _without_reviews(rows: list[dict] | None) -> list[dict]:
     return [{key: value for key, value in row.items() if key != 'review'} for row in rows or []]
 
 
-def update_item(run_id: str, index: int, fields: dict) -> dict:
+def _patch_item(item: dict, fields: dict) -> None:
     """Keep human confirmation through progress, but never attach it to a changed judgment.
 
     A decision on the whole conversation is dropped when its status or verdicts change. A decision on one criterion
     belongs to the person, not to the producer's copy: it stays with that criterion while its verdict is the same."""
     patch = {key: value for key, value in fields.items() if key != 'review'}
+    changed = ('status' in patch and patch['status'] != item.get('status')) or (
+        'rules' in patch and _without_reviews(patch['rules']) != _without_reviews(item.get('rules'))
+    )
+    kept = _rule_reviews(item.get('rules'))
+    item.update(patch)
+    if 'rules' in patch:
+        rows = []
+        for row in _without_reviews(patch['rules']):
+            status, decision = kept.get(row.get('ruleId'), (None, None))
+            if decision and status == row.get('status'):
+                row['review'] = decision
+            rows.append(row)
+        item['rules'] = rows
+    if changed:
+        item['review'] = None
+
+
+def update_item(run_id: str, index: int, fields: dict) -> dict:
+    return update_items(run_id, {index: fields})
+
+
+def update_items(run_id: str, patches: dict[int, dict], **fields: Any) -> dict:
+    """Patch several conversations, and the run's own fields, in one transaction: a re-judged run changes at once."""
+    if {'id', 'items', 'metric', 'revision', 'updatedAt'} & fields.keys():
+        raise ValueError('Run items and metadata must be updated through their own operation')
 
     def mutate(record: dict) -> None:
-        item = record['items'][index]
-        changed = ('status' in patch and patch['status'] != item.get('status')) or (
-            'rules' in patch and _without_reviews(patch['rules']) != _without_reviews(item.get('rules'))
-        )
-        kept = _rule_reviews(item.get('rules'))
-        item.update(patch)
-        if 'rules' in patch:
-            rows = []
-            for row in _without_reviews(patch['rules']):
-                status, decision = kept.get(row.get('ruleId'), (None, None))
-                if decision and status == row.get('status'):
-                    row['review'] = decision
-                rows.append(row)
-            item['rules'] = rows
-        if changed:
-            item['review'] = None
+        for index, patch in patches.items():
+            _patch_item(record['items'][index], patch)
+        record.update(fields)
 
     return _mutate_run(run_id, mutate)
 
