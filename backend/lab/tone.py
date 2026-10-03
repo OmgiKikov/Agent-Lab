@@ -11,7 +11,7 @@ from .jobs import Progress
 
 DRAFT = 'tone-of-voice-criteria.json'
 RESULT = checks.result(checks.TONE)  # tone-result.json: its own, beside the accuracy result (discover.RESULT)
-KIND = 'tone-of-voice'
+KIND = checks.TONE_OF_VOICE  # the kind and id of the communication rules among the sources, the purpose of a result
 PROMPT = """Extract observable tone-of-voice criteria from the supplied communication policy.
 Assess only how the agent communicates: politeness, form of address, clarity, empathy, and handling disagreement.
 Do not invent a policy or assess factual accuracy, tool use, payments or backend actions.

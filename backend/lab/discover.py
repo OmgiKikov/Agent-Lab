@@ -16,7 +16,7 @@ from .prompts import ASSIGN, PLAN
 RESULT = checks.result(checks.CODE)  # discover.json: the accuracy result; tone of voice keeps its own (tone.RESULT)
 SEED = 20260928  # the same sample of conversations in every audit
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
-TONE = 'tone-of-voice'  # tone.KIND: tone.py imports this module, so the value is repeated, as in store
+TONE = checks.TONE_OF_VOICE  # tone.KIND: the kind of the communication rules among the sources
 OBSERVATIONS = ('reply', 'tool', 'state')
 UNANSWERED = 'Модель проверки не ответила ни по одному разговору.'
 
