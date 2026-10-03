@@ -7,6 +7,7 @@ import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
+import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 
@@ -83,6 +84,15 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
         </div>
       ) : draft ? (
         <>
+          {!state.logs.total && (
+            // Criteria taken from another agent can be here before this agent's conversations are.
+            <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-sheet bg-inset p-5">
+              <p className="min-w-0 flex-1 basis-64 text-read text-fg-2">
+                Разговоры этого агента ещё не загружены. Загрузите выгрузку чата — и проверим её по этим критериям.
+              </p>
+              <UploadButton variant="outline" label="Загрузить разговоры" />
+            </div>
+          )}
           <p className="mt-5 text-body text-fg-3">
             Выбрано {ids.length} из {draft.criteria.length}
             {draft.criteria.length > MAX_CRITERIA && ` · за одну проверку — не больше ${MAX_CRITERIA}`}
@@ -147,11 +157,13 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
               </select>
             </div>
           )}
-          <p className="mt-2 text-body text-fg-3">
-            Проверим {total}
-            {"\u00a0"}из {count(state.logs.total, "разговора", "разговоров", "разговоров")} по{" "}
-            {count(ids.length, "критерию", "критериям", "критериям")}. Подключение к агенту не требуется.
-          </p>
+          {!!state.logs.total && (
+            <p className="mt-2 text-body text-fg-3">
+              Проверим {total}
+              {"\u00a0"}из {count(state.logs.total, "разговора", "разговоров", "разговоров")} по{" "}
+              {count(ids.length, "критерию", "критериям", "критериям")}. Подключение к агенту не требуется.
+            </p>
+          )}
         </>
       ) : (
         !serviceError && <p className="mt-6 text-read text-fg-2">Критерии пока не собраны.</p>
@@ -182,7 +194,13 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
           </Button>
         )}
         {!generating && (
-          <Button variant="ghost" icon={RotateCcw} disabled={running} onClick={regenerate}>
+          <Button
+            variant="ghost"
+            icon={RotateCcw}
+            disabled={running || !state.logs.total}
+            title={state.logs.total ? undefined : "Сначала загрузите разговоры"}
+            onClick={regenerate}
+          >
             {draft ? "Собрать заново" : "Повторить сборку"}
           </Button>
         )}

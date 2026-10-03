@@ -61,7 +61,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
       </div>
       {previousRevision && (
         <div role="status" className="mt-5 rounded-block bg-inset p-4 text-read text-fg-2">
-          Вы уточнили критерии. Этот результат относится к предыдущей версии.
+          Критерии изменились. Этот результат относится к предыдущей версии.
           <Button className="mt-3 block" size="lg" onClick={onAgain} disabled={state.job.running}>
             Проверить по новым критериям
           </Button>
