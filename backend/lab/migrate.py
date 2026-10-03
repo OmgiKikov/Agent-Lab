@@ -5,7 +5,7 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 
-from . import discover, judge, logs, registry, store
+from . import checks, discover, judge, logs, registry, store
 from .metric import metric
 
 
@@ -29,8 +29,14 @@ def _recompute_verdict(value: dict) -> tuple[int, int]:
 
 
 def _load_documents(source: Path) -> dict:
-    """Read legacy documents and normalize the optional log export before any database write."""
+    """Read legacy documents and normalize the optional log export before any database write. A tone-of-voice result
+    from the time both checks shared one place goes to its own, and a deck names its check (checks.separated)."""
     documents = {path.name: json.loads(path.read_text(encoding='utf-8')) for path in sorted(source.glob('*.json'))}
+    for name, value in checks.separated(documents).items():
+        if value is None:
+            del documents[name]
+        else:
+            documents[name] = value
     log_file = source / 'logs.jsonl'
     if logs.FILE in documents:
         log_data = '\n'.join(json.dumps(row, ensure_ascii=False) for row in documents[logs.FILE]).encode('utf-8')
@@ -63,8 +69,7 @@ def migrate(source: Path) -> dict[str, int]:
             recomputed += changed
             reset_reviews += reset
         record['metric'] = metric(record['items'])
-    analysis = documents.get(discover.RESULT)
-    if analysis:
+    for analysis in filter(None, (documents.get(name) for name in checks.RESULTS.values())):
         for result in analysis['results']:
             result['dialogueId'] = str(result['dialogueId'])
             changed, reset = _recompute_verdict(result)

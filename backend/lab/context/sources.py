@@ -100,7 +100,9 @@ def load() -> list[dict]:
 def collect(repo: Path) -> list[dict]:
     """Read the current repository; committing a collected snapshot belongs to the calling job."""
     if not (repo / 'src').is_dir():
-        raise RuntimeError(f'Нет кода агента в {repo}: укажите репозиторий на шаге «агент».')
+        raise RuntimeError(
+            f'Нет кода агента в {repo}: укажите папку с кодом в разделе «Агент» и нажмите «Прочитать код».'
+        )
     collected = prompts(repo)
     catalog = tools(repo)
     if catalog:

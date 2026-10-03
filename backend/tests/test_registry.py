@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import httpx
 
-from lab import api, discover, jobs, logs, migrate, registry, store
+from lab import api, jobs, logs, migrate, registry, store
 
 
 class RegistryTests(unittest.TestCase):
@@ -119,13 +119,15 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(store.load('marker.json'))
         self.assertIsNone(store.load('marker.json'))
 
-    async def test_agents_are_listed_with_their_last_result_and_created_by_name(self) -> None:
+    async def test_agents_are_listed_with_the_result_of_each_check_and_created_by_name(self) -> None:
         with registry.using(self.first):
             summary = {'checked': 100, 'measured': 92, 'failed': 78, 'passed': 14, 'unmeasured': 8}
             store.save(
-                'discover.json',
-                {'purpose': discover.TONE, 'finishedAt': '2026-10-02T20:41:53+00:00', 'summary': summary},
+                'tone-result.json',
+                {'purpose': 'tone-of-voice', 'finishedAt': '2026-10-02T20:41:53+00:00', 'summary': summary},
             )
+            summary = {'checked': 60, 'measured': 50, 'failed': 5, 'passed': 45, 'unmeasured': 10}
+            store.save('discover.json', {'finishedAt': '2026-10-01T09:00:00+00:00', 'summary': summary})
         response = await self.client.post('/api/agents', json={'name': 'Кредитный агент', 'description': 'Кредиты'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['id'], 'kreditnyy-agent')
@@ -133,16 +135,14 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
         listed = (await self.client.get('/api/agents')).json()
         self.assertEqual([a['id'] for a in listed], [self.first, self.second, 'kreditnyy-agent'])
         self.assertEqual(
-            listed[0]['result'],
+            listed[0]['results'],
             {
-                'failed': 78,
-                'measured': 92,
-                'unmeasured': 8,
-                'finishedAt': '2026-10-02T20:41:53+00:00',
-                'metric': 'Tone of voice',
+                'tone': {'failed': 78, 'measured': 92, 'unmeasured': 8, 'finishedAt': '2026-10-02T20:41:53+00:00'},
+                'code': {'failed': 5, 'measured': 50, 'unmeasured': 10, 'finishedAt': '2026-10-01T09:00:00+00:00'},
             },
         )
-        self.assertIsNone(listed[1]['result'])
+        self.assertEqual(listed[1]['results'], {'tone': None, 'code': None})
+        self.assertNotIn('result', listed[0])
 
     async def test_the_agent_connection_check_works_inside_the_agent(self) -> None:
         with registry.using(self.first):
@@ -163,7 +163,7 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
             store.save('discover.json', {'finishedAt': '2026-10-02T20:41:53+00:00', 'summary': {'checked': 3}})
         response = await self.client.get('/api/agents')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([a['result'] for a in response.json()], [None, None])
+        self.assertEqual([a['results'] for a in response.json()], [{'tone': None, 'code': None}] * 2)
 
 
 class AdoptionTests(unittest.TestCase):

@@ -5,12 +5,13 @@ import hashlib
 import re
 import uuid
 
-from . import discover, llm, quotes, store, tone_history
+from . import checks, discover, llm, quotes, store, tone_history
 from .context import sources
 from .jobs import Progress
 
 DRAFT = 'tone-of-voice-criteria.json'
-KIND = 'tone-of-voice'
+RESULT = checks.result(checks.TONE)  # tone-result.json: its own, beside the accuracy result (discover.RESULT)
+KIND = checks.TONE_OF_VOICE  # the kind and id of the communication rules among the sources, the purpose of a result
 PROMPT = """Extract observable tone-of-voice criteria from the supplied communication policy.
 Assess only how the agent communicates: politeness, form of address, clarity, empathy, and handling disagreement.
 Do not invent a policy or assess factual accuracy, tool use, payments or backend actions.
@@ -252,15 +253,15 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
     if not dialogues:
         raise ValueError('Сначала загрузите разговоры.')
     started = store.now()
-    topic = {'id': 't1', 'title': 'Tone of voice', 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
+    topic = {'id': 't1', 'title': checks.TONE_TOPIC, 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
     progress(done=0, total=len(dialogues), message='Начинаю проверку tone of voice')
     results = await _judge(dialogues, {**topic, 'rules': [for_judging(rule) for rule in criteria]}, progress)
     ensure_active()
-    discover.ensure_answered(results)
+    previous = store.load(RESULT) or {}
+    discover.ensure_answered(results, previous)
     # The live result carries its own answers with the same criteria, as before: a result saved before the history of
     # checks keeps them only in itself. The history then adds what a check in between lost or what another criterion's
     # clarification would have dropped.
-    previous = store.load(discover.RESULT) or {}
     if previous.get('criteriaRevision') == draft['revision']:
         discover.carry_reviews(previous, results)
     carry_decisions(results, criteria, dialogues)

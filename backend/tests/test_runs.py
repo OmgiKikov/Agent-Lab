@@ -571,6 +571,31 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             (result['items'][1]['status'], result['items'][1]['error']), ('UNMEASURED', 'Агент ответил HTTP 500')
         )
 
+    async def test_a_run_remembers_the_check_its_deck_was_built_from(self) -> None:
+        store.save(simulate.cards.DECK, {'check': 'tone', 'cards': [card()]})
+
+        async def evaluate(scenario: dict, item: dict) -> None:
+            item.update(status='PASS', rules=[])
+
+        with patch.object(simulate.judge, 'evaluate', side_effect=evaluate):
+            result = await simulate.run('test')
+        self.assertEqual(result['check'], 'tone')
+        self.assertEqual(store.run_summaries()[0]['check'], 'tone')
+
+    def test_a_run_from_before_runs_remembered_their_check_has_the_check_of_its_criteria(self) -> None:
+        def played(run_id: str, criterion: dict, topic: str = 'Терминалы') -> None:
+            item = simulate.new_item(dict(card(), topic=topic, criteria=[criterion]), 'default', 1)
+            store.create_run({'id': run_id, 'startedAt': run_id, 'status': 'done', 'items': [item]})
+
+        played('1', {'id': 'pronouns', 'text': 'На вы', 'sourceId': 'tone-of-voice'})
+        played('2', {'id': 'pronouns', 'text': 'На вы'}, topic='Tone of voice')  # a card kept no source of its criteria
+        played('3', {'id': 't1r1', 'text': 'Называет срок', 'sourceId': 's1'})
+        summaries = store.run_summaries()
+        self.assertEqual(
+            [(summary['id'], summary['check']) for summary in summaries], [('3', 'code'), ('2', 'tone'), ('1', 'tone')]
+        )
+        self.assertEqual(store.run('2')['check'], 'tone')
+
     async def test_customer_messages_and_cached_openings_consume_labelled_model_answers(self) -> None:
         scenario = card()
         store.save(simulate.cards.DECK, {'cards': [scenario]})

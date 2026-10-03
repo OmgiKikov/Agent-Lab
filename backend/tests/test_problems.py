@@ -47,6 +47,42 @@ def audit() -> dict:
     }
 
 
+POLICY = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'origin': 'ToV.docx', 'content': 'Обращайтесь на вы.'}
+TONE_RULE = {'id': 'pronouns', 'name': 'Обращение', 'text': 'Обращается на вы', 'quote': 'Обращайтесь на вы'}
+
+
+def tone_result() -> dict:
+    """A tone-of-voice result: its one topic, an error in the conversation where the audit found one too."""
+    row = {'ruleId': 'pronouns', 'status': 'FAIL', 'reason': 'На ты', 'agentQuote': 'звони'}
+    return {
+        'purpose': 'tone-of-voice',
+        'sampled': 1,
+        'finishedAt': '2026-09-29T10:00:00+00:00',
+        'topics': [{'id': 't1', 'title': 'Tone of voice', 'rules': [dict(TONE_RULE, sourceId='tone-of-voice')]}],
+        'results': [{'dialogueId': 'd1', 'status': 'FAIL', 'opening': 'Терминал не работает', 'rules': [row]}],
+    }
+
+
+def tone_run() -> dict:
+    """A finished run of scenarios built from tone of voice, newer than played_run."""
+    item = {
+        'cardId': 'tone-card',
+        'status': 'FAIL',
+        'topic': 'Tone of voice',
+        'criteria': [TONE_RULE],
+        'conversation': [{'role': 'customer', 'text': 'Привет'}],
+        'rules': [{'ruleId': 'pronouns', 'status': 'FAIL', 'reason': 'На ты', 'agentQuote': 'звони'}],
+    }
+    return {
+        'id': 'run-tone',
+        'check': 'tone',
+        'startedAt': '2026-10-01T10:00:00+00:00',
+        'finishedAt': '2026-10-01T10:10:00+00:00',
+        'status': 'done',
+        'items': [item],
+    }
+
+
 def played_run() -> dict:
     """A finished run whose item keeps the criterion frozen when it was played."""
     criterion = {'id': 'c1', 'text': 'Агент не отсылает в поддержку', 'quote': QUOTE}
@@ -88,7 +124,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         await self.client.aclose()
 
     def test_a_rule_restated_in_two_topics_is_one_rule_counted_per_conversation(self) -> None:
-        value = problems.build()
+        value = problems.build('code')
         self.assertEqual(len(value['rules']), 1)
         rule = value['rules'][0]
         self.assertEqual(rule['topics'], ['Терминалы', 'Возвраты'])
@@ -113,7 +149,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         value['results'][0]['rules'][0]['rule'] = RULE['text'] + '\n\nУточнения, подтверждённые человеком:\n…'
         store.save(discover.RESULT, value)
         store.create_run(played_run())
-        rule = problems.build('run-1')['rules'][0]
+        rule = problems.build('code', 'run-1')['rules'][0]
         self.assertEqual((rule['log']['ruleIds'], rule['sim']['ruleIds']), (['t1r1', 't2r1'], ['c1']))
 
     def test_the_first_example_of_a_problem_shows_what_its_title_says(self) -> None:
@@ -130,7 +166,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             failed('d3', 'Пишет канцеляритом'),
         ]
         store.save(discover.RESULT, value)
-        rule = problems.build()['rules'][0]
+        rule = problems.build('code')['rules'][0]
         self.assertEqual(rule['title'], 'Пишет канцеляритом')
         self.assertEqual(rule['log']['examples'][0]['title'], 'Пишет канцеляритом')
 
@@ -147,14 +183,14 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             failed('d3', 'Пишет канцеляритом', 'disagree'),
         ]
         store.save(discover.RESULT, value)
-        rule = problems.build()['rules'][0]
+        rule = problems.build('code')['rules'][0]
         self.assertEqual(rule['log']['examples'][0]['dialogueId'], 'd1')
 
     def test_a_second_check_without_a_verdict_is_not_a_disagreement(self) -> None:
         value = audit()
         value['results'][0]['second'] = {'model': 'm', 'status': 'UNMEASURED'}
         store.save(discover.RESULT, value)
-        example = problems.build()['rules'][0]['log']['examples'][0]
+        example = problems.build('code')['rules'][0]['log']['examples'][0]
         self.assertEqual(example['status'], 'FAIL')
         self.assertIsNone(example['second'])
 
@@ -162,7 +198,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         value = audit()
         value['results'][1]['second'] = {'model': 'm', 'status': 'PASS'}
         store.save(discover.RESULT, value)
-        example = next(e for e in problems.build()['rules'][0]['log']['examples'] if e['dialogueId'] == 'd2')
+        example = next(e for e in problems.build('code')['rules'][0]['log']['examples'] if e['dialogueId'] == 'd2')
         self.assertEqual(
             (example['second'], example['secondScope'], example['secondStatus']), ('agree', 'dialogue', 'PASS')
         )
@@ -177,7 +213,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
 
     def test_run_side_uses_the_criterion_frozen_in_the_item(self) -> None:
         store.create_run(played_run())
-        value = problems.build()
+        value = problems.build('code')
         rule = value['rules'][0]
         self.assertEqual(rule['sim']['failed'], 1)
         self.assertEqual(rule['sim']['examples'][0]['opening'], 'Не работает')
@@ -191,7 +227,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         criterion = cards.FOLLOWS_KNOWLEDGE
         item['rules'] = [{'ruleId': criterion['id'], 'rule': criterion['text'], 'status': 'FAIL'}]
         store.create_run(record)
-        value = problems.build('run-1')
+        value = problems.build('code', 'run-1')
         found = next(rule for rule in value['rules'] if rule['sim']['failed'])
         self.assertEqual(found['rule']['quote'], criterion['quote'])
         self.assertEqual(found['sim']['failed'], 1)
@@ -205,10 +241,38 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             {'ruleId': 'lost-2', 'rule': 'Сообщает время работы', 'status': 'FAIL'},
         ]
         store.create_run(record)
-        found = [rule for rule in problems.build('run-1')['rules'] if rule['sim']['failed']]
+        found = [rule for rule in problems.build('code', 'run-1')['rules'] if rule['sim']['failed']]
         self.assertEqual(len(found), 2)
         self.assertEqual(len({rule['id'] for rule in found}), 2)
         self.assertTrue(all(rule['rule']['quote'] == '' and rule['sim']['failed'] == 1 for rule in found))
+
+    async def test_the_problems_are_those_of_one_check_with_its_runs_and_its_scenarios(self) -> None:
+        store.save(api.sources.FILE, [SOURCE, POLICY])
+        store.save('tone-result.json', tone_result())
+        store.create_run(played_run())  # of Точность
+        store.create_run(tone_run())  # of tone of voice, the newest run
+        deck = {'check': 'code', 'cards': [{'id': 'card-1', 'sourceDialogueId': 'd1', 'criteria': []}]}
+        store.save(cards.DECK, deck)
+        code = (await self.client.get('/api/problems?check=code')).json()
+        tone = (await self.client.get('/api/problems?check=tone')).json()
+        self.assertEqual((code['check'], tone['check']), ('code', 'tone'))
+        self.assertEqual([rule['rule']['text'] for rule in code['rules']], [RULE['text']])
+        self.assertEqual([rule['rule']['text'] for rule in tone['rules']], [TONE_RULE['text']])
+        self.assertEqual(tone['rules'][0]['rule']['origin'], 'ToV.docx')
+        self.assertEqual(
+            (code['log']['finishedAt'], tone['log']['finishedAt']), (audit()['finishedAt'], '2026-09-29T10:00:00+00:00')
+        )
+        self.assertEqual((code['sim']['runId'], tone['sim']['runId']), ('run-1', 'run-tone'))
+        # The scenarios built from Точность's errors are named only among its problems.
+        self.assertEqual((code['rules'][0]['scenarioIds'], tone['rules'][0]['scenarioIds']), (['card-1'], []))
+        # Old links name no check: tone of voice. A run's problems are those of its own check.
+        self.assertEqual((await self.client.get('/api/problems')).json(), tone)
+        by_run = (await self.client.get('/api/problems?run=run-1&check=tone')).json()
+        self.assertEqual(
+            (by_run['check'], by_run['log']['finishedAt'], by_run['sim']['runId']),
+            ('code', audit()['finishedAt'], 'run-1'),
+        )
+        self.assertEqual((await self.client.get('/api/problems?check=accuracy')).status_code, 422)
 
     async def test_run_summary_excludes_unmeasured_conversations_from_checked_count(self) -> None:
         record = played_run()
@@ -232,14 +296,14 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/logs?name=new.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200, response.text)
         state = (await self.client.get('/api/state')).json()
-        self.assertIsNone(state['discover'])
+        self.assertEqual(state['checks'], {'tone': None, 'code': None})
         detail = (await self.client.get('/api/logs/d1')).json()
         self.assertIsNone(detail['evaluation'])
         self.assertEqual(detail['messages'][1]['content'], 'Новый ответ')
-        self.assertIsNone((await self.client.get('/api/problems')).json()['log'])
+        self.assertIsNone((await self.client.get('/api/problems?check=code')).json()['log'])
 
     async def test_problems_and_source_routes(self) -> None:
-        response = await self.client.get('/api/problems')
+        response = await self.client.get('/api/problems?check=code')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()['rules']), 1)
         self.assertEqual((await self.client.get('/api/problems?run=missing')).status_code, 404)
@@ -251,7 +315,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         body = {'source': 'log', 'dialogueId': 'd1', 'ruleId': 't1r1', 'decision': 'disagree'}
         response = await self.client.post('/api/review', json=body)
         self.assertEqual(response.status_code, 200, response.text)
-        example = (await self.client.get('/api/problems')).json()['rules'][0]['log']['examples']
+        example = (await self.client.get('/api/problems?check=code')).json()['rules'][0]['log']['examples']
         failed = next(e for e in example if e['status'] == 'FAIL')
         self.assertEqual((failed['review'], failed['reviewScope']), ('disagree', 'rule'))
         missing = await self.client.post('/api/review', json=dict(body, ruleId='nope'))

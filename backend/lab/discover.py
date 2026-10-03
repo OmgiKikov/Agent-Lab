@@ -9,14 +9,14 @@ import random
 from collections import Counter
 from collections.abc import Callable
 
-from . import judge, llm, logs, quotes, store
+from . import checks, judge, llm, logs, quotes, store
 from .context import sources
 from .prompts import ASSIGN, PLAN
 
-RESULT = 'discover.json'
+RESULT = checks.result(checks.CODE)  # discover.json: the accuracy result; tone of voice keeps its own (tone.RESULT)
 SEED = 20260928  # the same sample of conversations in every audit
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
-TONE = 'tone-of-voice'  # tone.KIND: tone.py imports this module, so the value is repeated, as in store
+TONE = checks.TONE_OF_VOICE  # tone.KIND: the kind of the communication rules among the sources
 OBSERVATIONS = ('reply', 'tool', 'state')
 UNANSWERED = 'Модель проверки не ответила ни по одному разговору.'
 
@@ -183,12 +183,12 @@ async def judge_each(todo: list[tuple[dict, dict]], done: Callable[[dict], None]
             tasks.create_task(one(dialogue, topic))
 
 
-def ensure_answered(results: list[dict]) -> None:
-    """An outage is not a result: when the model answered on no conversation, the check fails, and the previous result,
-    the scenarios built from it and the history stay. When only some failed, it is a result: those conversations are
-    «не удалось проверить»."""
+def ensure_answered(results: list[dict], previous: dict | None) -> None:
+    """An outage is not a result: when the model answered on no conversation, the check fails, and its previous result
+    (previous, the check's own), the scenarios built from it and the history stay. When only some failed, it is a
+    result: those conversations are «не удалось проверить»."""
     if all(result['status'] == 'UNMEASURED' for result in results) and any(result.get('error') for result in results):
-        raise RuntimeError(UNANSWERED + (' Прежний итог сохранён.' if store.load(RESULT) else ''))
+        raise RuntimeError(UNANSWERED + (' Прежний итог сохранён.' if previous else ''))
 
 
 def carry_reviews(previous: dict, results: list[dict]) -> None:
@@ -268,16 +268,11 @@ def summarize(results: list[dict], topics: list[dict]) -> dict:
 
 async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None, replan: bool = False) -> dict:
     previous = store.load(RESULT) or {}
-    if previous.get('purpose') == TONE and not replan:
-        # Its frozen topic holds the tone criteria: reused here, they would lose the clarifications and the history.
-        raise RuntimeError(
-            'Диалоги проверены по правилам tone of voice: повторите эту проверку в «Начать проверку». '
-            'Чтобы оценить их по коду агента, выберите там «Точность».'
-        )
-    # The tone-of-voice policy (tone.KIND) has its own check in tone.py; the rules here come from the agent's code.
+    # The tone-of-voice policy (tone.KIND) has its own check and result in tone.py; the rules here come from the
+    # agent's code.
     srcs = [source for source in sources.load() if source['kind'] != TONE]
     if not srcs:
-        raise RuntimeError('Нет источников правил: шаг «агент» → «собрать из кода агента».')
+        raise RuntimeError('Код агента ещё не прочитан: в разделе «Агент» нажмите «Прочитать код».')
     dialogues = sample(count)
     if not dialogues:
         raise RuntimeError('Нет разговоров для оценки: сначала загрузите диалоги.')
@@ -307,7 +302,7 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
         progress(stage='judge', done=len(results), total=len(todo), message=f'Оценено {len(results)} из {len(todo)}')
 
     await judge_each(todo, done)
-    ensure_answered(results)
+    ensure_answered(results, previous)
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     results.sort(key=lambda r: order.get(str(r['dialogueId']), 0))
     if previous.get('topics') and not replan:

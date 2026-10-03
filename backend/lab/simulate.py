@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Callable
 from copy import deepcopy
 
-from . import agents, cards, judge, llm, personas, store
+from . import agents, cards, checks, judge, llm, personas, store
 from .agents import world
 from .prompts import PERSONA_OPENING, SIMULATOR
 from .transcript import with_buttons
@@ -160,6 +160,8 @@ async def run(
     record = new_run(key, config, label, repeats, persona_ids)
     plan = [(card, persona, attempt) for attempt in range(1, repeats + 1) for persona in persona_ids for card in chosen]
     record['items'] = [new_item(card, persona, attempt) for card, persona, attempt in plan]
+    # The run is measured by the criteria of the check its deck was built from, and remembers it.
+    record['check'] = cards.check() or checks.of_run(record)
     store.create_run(record)
 
     def changed(index: int) -> None:

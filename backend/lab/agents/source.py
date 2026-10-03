@@ -14,6 +14,7 @@ from .. import store
 from .http import AGENT_PATH, AgentError, HttpAgent
 
 LOG = 'local-code-agent.log'  # beside the database of the agent being checked: agents run in parallel (jobs.PerAgent)
+START = 'local/run-app.sh'  # in the agent's folder: what starts it
 START_TIMEOUT = 180
 # Ports chosen by this process for agents it has not stopped yet: two runs starting at once must not both pick a port
 # their processes have not bound yet.
@@ -46,7 +47,7 @@ class CodeAgent(HttpAgent):
         self.process: subprocess.Popen | None = None
 
     async def open(self) -> None:
-        script = self.repo / 'local/run-app.sh'
+        script = self.repo / START
         if not script.exists():
             raise AgentError(f'Нет исходников агента: {script}')
         self.port = free_port(self.preferred)

@@ -22,7 +22,7 @@ text: 10..2000 characters for clarify, 1..12000 for rewrite. explanation: 1..200
 
 
 def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
-    analysis = store.load(discover.RESULT) or {}
+    analysis = store.load(tone.RESULT) or {}
     draft = store.load(tone.DRAFT) or {}
     if analysis.get('purpose') != tone.KIND or analysis.get('finishedAt') != finished_at:
         raise ValueError('Результат проверки изменился. Откройте актуальный результат.')

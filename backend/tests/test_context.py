@@ -53,3 +53,11 @@ class ContextTests(unittest.TestCase):
             self.assertEqual(collected[0]['content'], prompt.strip())
             self.assertEqual(collected[0]['id'], 's1')
             save.assert_not_called()
+
+    def test_a_folder_without_code_is_named_with_the_place_to_set_it(self):
+        with tempfile.TemporaryDirectory() as folder, self.assertRaises(RuntimeError) as refused:
+            sources.collect(Path(folder))
+        self.assertEqual(
+            str(refused.exception),
+            f'Нет кода агента в {folder}: укажите папку с кодом в разделе «Агент» и нажмите «Прочитать код».',
+        )

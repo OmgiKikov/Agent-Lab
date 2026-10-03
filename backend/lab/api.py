@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from . import (
     agents,
     cards,
+    checks,
     discover,
     llm,
     logs,
@@ -69,9 +70,12 @@ async def agent_of_request(request: Request, call_next: Callable[[Request], Awai
 
 RUN_FIELDS = (
     'id', 'target', 'targetName', 'version', 'label', 'startedAt', 'finishedAt', 'status', 'metric', 'error',
-    'model', 'repeats', 'personas', 'updatedAt', 'revision',
+    'model', 'repeats', 'personas', 'updatedAt', 'revision', 'check',
 )  # fmt: skip
 CHECK_QUESTION = 'Какой процент эквайринга?'
+# The job that writes a check's result: while it runs, answers on that result would be lost (review).
+WRITES = {'tone-check': checks.TONE, 'discover': checks.CODE}
+NOT_CHECKED = 'Этот критерий в разговоре не проверялся.'  # an answer on a logged conversation without this verdict
 
 
 class DiscoverCommand(BaseModel):
@@ -120,10 +124,12 @@ class ToneClarificationCommand(BaseModel):
 
 class ReviewCommand(BaseModel):
     """A person's decision on what the judge found: on one criterion of a logged or simulated conversation, or (older
-    requests without ruleId) on a simulated conversation as a whole. finishedAt (the logs' result) and status (the
-    verdict) are what the person saw: when either changed meanwhile, the decision is refused."""
+    requests without ruleId) on a simulated conversation as a whole. On a logged one, check names the check whose
+    result it goes to. finishedAt (the check's result) and status (the verdict) are what the person saw: when either
+    changed meanwhile, the decision is refused."""
 
     source: Literal['log', 'sim'] = 'sim'
+    check: Literal['tone', 'code'] | None = None
     run: str = ''
     index: int | None = Field(default=None, ge=0, strict=True)
     dialogueId: str = ''
@@ -131,6 +137,10 @@ class ReviewCommand(BaseModel):
     decision: Literal['agree', 'disagree'] | None = None
     finishedAt: str | None = None
     status: str | None = None
+
+
+class CardsCommand(BaseModel):
+    check: Literal['tone', 'code'] | None = None
 
 
 def start(kind: str, work: Work) -> dict:
@@ -145,29 +155,23 @@ class AgentCommand(BaseModel):
     description: str = Field(default='', max_length=200)
 
 
-def last_result() -> dict | None:
-    """The current agent's last check in one line: errors of measured, not checked, when, which metric."""
-    value = store.load(discover.RESULT) or {}
+def result_line(check: str) -> dict | None:
+    """The current agent's result of one check in one line: errors of measured, not checked, when."""
+    value = store.load(checks.result(check)) or {}
     summary = value.get('summary') or {}
     if not value.get('finishedAt') or any(key not in summary for key in ('failed', 'measured', 'unmeasured')):
         return None  # nothing finished, or a record of another shape: never a reason to hide the other agents
-    return {
-        'failed': summary['failed'],
-        'measured': summary['measured'],
-        'unmeasured': summary['unmeasured'],
-        'finishedAt': value['finishedAt'],
-        'metric': 'Tone of voice' if value.get('purpose') == discover.TONE else 'Точность по коду агента',
-    }
+    return {key: summary[key] for key in ('failed', 'measured', 'unmeasured')} | {'finishedAt': value['finishedAt']}
 
 
 @app.get('/api/agents')
 def agents_view() -> list[dict]:
-    """Every agent with its last result, read from its own database. Never ranked: the agents have other dialogues
-    and other rules."""
+    """Every agent with the result of each of its checks, read from its own database. Never ranked: the agents have
+    other dialogues and other rules; nor are an agent's two checks added up."""
     listed = []
     for agent in registry.listed():
         with registry.using(agent['id']):
-            listed.append({**agent, 'result': last_result()})
+            listed.append({**agent, 'results': {check: result_line(check) for check in checks.RESULTS}})
     return listed
 
 
@@ -205,18 +209,19 @@ def source_summary(analysis: dict | None) -> list[dict]:
 
 @app.get('/api/state')
 def state() -> dict:
-    """Polled every 1.5 s during a job: the log assessment is read once; runs and dialogues are not parsed at all."""
-    analysis = store.load(discover.RESULT)
-    if analysis and not analysis.get('summary'):  # every assessment stores its summary; an older one may not
-        analysis['summary'] = discover.summarize(analysis['results'], analysis['topics'])
+    """Polled every 1.5 s during a job: each check's result is read once; runs and dialogues are not parsed at all."""
+    results = {check: store.load(checks.result(check)) for check in checks.RESULTS}
+    for result in results.values():
+        if result and not result.get('summary'):  # every result stores its summary; an older one may not
+            result['summary'] = discover.summarize(result['results'], result['topics'])
     return {
         'job': jobs.state,
         'model': llm.MODEL,
         'models': llm.describe(),
         'settings': agents.settings(),
-        'sources': source_summary(analysis),
+        'sources': source_summary(results[checks.CODE]),
         'logs': {'total': store.length(logs.FILE), **logs.meta()},
-        'discover': analysis,
+        'checks': results,
         'toneOfVoice': store.load(tone.DRAFT),
         'cards': store.load(cards.DECK),
         'runs': [{key: summary.get(key) for key in RUN_FIELDS} for summary in store.run_summaries()],
@@ -308,23 +313,34 @@ async def upload_logs(request: Request, name: str) -> dict:
 
 
 @app.get('/api/logs/{dialogue_id}')
-def log_detail(dialogue_id: str) -> dict:
+def log_detail(dialogue_id: str, check: Literal['tone', 'code'] | None = None) -> dict:
+    """A logged conversation with its evaluation in the result of the check asked for; without one, in tone of voice's
+    result, then in Точность's."""
     dialogue = logs.read(dialogue_id)
     if dialogue is None:
         raise HTTPException(404, 'Разговор не найден')
-    analysis = store.load(discover.RESULT) or {}
-    evaluation = next(
-        (result for result in analysis.get('results', []) if str(result['dialogueId']) == dialogue_id), None
-    )
+    evaluation = None
+    for key in [check] if check else checks.RESULTS:
+        analysis = store.load(checks.result(key)) or {}
+        evaluation = next(
+            (result for result in analysis.get('results', []) if str(result['dialogueId']) == dialogue_id), None
+        )
+        if evaluation:
+            break
     return {**dialogue, 'evaluation': evaluation}
 
 
 @app.get('/api/problems')
-def problems_view(run: str | None = None) -> dict:
-    """Every rule with its verdicts in the logs and in one run; the rules found violated are the problems."""
-    if run and store.run(run) is None:
-        raise HTTPException(404, 'Прогон не найден')
-    return problems.build(run)
+def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None = None) -> dict:
+    """Every rule of one check with its verdicts in the logs and in one run of that check; the rules found violated
+    are the problems. A run is measured by its own check's criteria, so its check is taken; without either, tone of
+    voice (older links)."""
+    if run:
+        record = store.run(run)
+        if record is None:
+            raise HTTPException(404, 'Прогон не найден')
+        check = checks.of_run(record)
+    return problems.build(check, run)
 
 
 @app.get('/api/sources/{source_id}')
@@ -366,10 +382,21 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 
 
 @app.post('/api/cards')
-async def start_cards() -> dict:
+async def start_cards(payload: CardsCommand | None = Body(default=None)) -> dict:
+    """Scenarios from the errors of one check: the one asked for, else the only check with a result."""
+    check = payload.check if payload else None
+    if check is None:
+        found = [key for key in checks.RESULTS if store.load(checks.result(key))]
+        if len(found) > 1:
+            raise HTTPException(400, 'Выберите, из какой проверки собрать сценарии')
+        check = next(iter(found), None)
+
     async def work(progress: Progress) -> list[dict]:
-        deck = await cards.run(progress)
-        store.save(cards.DECK, {'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck})
+        if check is None:
+            raise RuntimeError('Сначала проверьте разговоры: сценарии собираются из найденных ошибок.')
+        deck = await cards.run(check, progress)
+        document = {'check': check, 'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck}
+        store.save(cards.DECK, document)
         return deck
 
     return start('cards', work)
@@ -428,7 +455,7 @@ async def check_tone(payload: ToneCheckCommand) -> dict:
 
 @app.get('/api/tone-of-voice/history')
 def tone_history() -> dict:
-    result = store.load(discover.RESULT) or {}
+    result = store.load(tone.RESULT) or {}
     return {
         'checks': store.tone_checks(),
         'hasLegacyResult': result.get('purpose') == tone.KIND and not result.get('checkId'),
@@ -507,16 +534,44 @@ async def rejudge(run_id: str) -> dict:
     return start('rejudge', lambda progress: simulate.rejudge(record, progress))
 
 
+def has_verdict(analysis: dict, dialogue_id: str, rule_id: str) -> bool:
+    return any(
+        str(result.get('dialogueId')) == dialogue_id and any(row.get('ruleId') == rule_id for row in result['rules'])
+        for result in analysis.get('results') or []
+        if result.get('rules')
+    )
+
+
+def answered_check(payload: ReviewCommand) -> str:
+    """The check whose result an answer on a logged conversation goes to: the one it names, else the one whose result
+    the person saw (finishedAt), else the first whose result has this verdict."""
+    if payload.check:
+        return payload.check
+    results = {check: store.load(checks.result(check)) or {} for check in checks.RESULTS}
+    if payload.finishedAt:
+        found = next((key for key, value in results.items() if value.get('finishedAt') == payload.finishedAt), None)
+        if found is None:
+            raise HTTPException(409, store.CHANGED)
+        return found
+    found = next(
+        (key for key, value in results.items() if has_verdict(value, payload.dialogueId, payload.ruleId)), None
+    )
+    if found is None:
+        raise HTTPException(404, NOT_CHECKED)
+    return found
+
+
 @app.post('/api/review')
 async def review(payload: ReviewCommand) -> dict:
     if payload.source == 'log':
         if not payload.dialogueId or not payload.ruleId:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')
-        if jobs.state['running'] and jobs.state['kind'] in ('discover', 'tone-check'):
-            raise HTTPException(409, 'Идёт оценка диалогов: ответ не сохранится. Отметьте после неё.')
+        check = answered_check(payload)
+        if jobs.state['running'] and WRITES.get(jobs.state['kind']) == check:
+            raise HTTPException(409, f'Идёт проверка «{checks.NAMES[check]}»: ответ не сохранится. Отметьте после неё.')
         try:
             store.set_log_review(
-                discover.RESULT,
+                checks.result(check),
                 payload.dialogueId,
                 payload.ruleId,
                 payload.decision,
@@ -524,7 +579,7 @@ async def review(payload: ReviewCommand) -> dict:
                 payload.status,
             )
         except KeyError as error:
-            raise HTTPException(404, 'Вердикт не найден') from error
+            raise HTTPException(404, NOT_CHECKED) from error
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
         return {'ok': True}
