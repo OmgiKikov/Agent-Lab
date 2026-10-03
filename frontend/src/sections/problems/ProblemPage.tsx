@@ -22,6 +22,7 @@ import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
 import { checked, violationsOf } from "./model";
 import { shareBase } from "../../app/agent";
+import { TONE_ONLY } from "../../app/product";
 
 /**
  * One problem, read top to bottom: what the agent does wrong, what it must do instead, how often (one line of numbers),
@@ -139,6 +140,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const run = stage === "sim" ? state?.runs.find((x) => x.id === runId) : undefined;
   const link = `${shareBase()}${problemLink(r.id, stage, runId)}`;
   const { condition, acceptable, quote, origin } = r.rule;
+  const tone = r.rule.kind === "tone-of-voice";
   const linkCls =
     "rounded-sm underline decoration-line-strong underline-offset-4 transition-colors hover:text-fg hover:decoration-fg-3";
 
@@ -215,7 +217,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
               входят.
             </p>
           )}
-          {r[other].failed > 0 && (
+          {r[other].failed > 0 && !(TONE_ONLY && other === "sim") && (
             <Link
               to={problemLink(r.id, other)}
               className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
@@ -264,7 +266,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
             </div>
           </section>
 
-          {stage === "log" && (
+          {stage === "log" && !TONE_ONLY && (
             <div className="mt-12 border-t border-line pt-8">
               <Reproduce r={r} />
             </div>
@@ -281,10 +283,14 @@ export function ProblemPage({ stage }: { stage: Stage }) {
             <div className="mt-4 space-y-3 text-read text-fg-2">
               <div>
                 <span className="text-small text-fg-3">
-                  {r.rule.kind === "tone-of-voice" ? "Требование в правилах общения" : "Требование в промпте агента"}
+                  {tone ? "Требование в правилах общения" : "Требование в промпте агента"}
                 </span>
                 <blockquote className="mt-1 border-l-2 border-mark-strong pl-3 text-read text-fg">
-                  {quote ? `«${quote}»` : "Цитата из кода не сохранена в этом прогоне."}
+                  {quote
+                    ? `«${quote}»`
+                    : tone
+                      ? "Цитата из правил не сохранена."
+                      : "Цитата из кода не сохранена в этом прогоне."}
                 </blockquote>
               </div>
               {origin && (
@@ -296,17 +302,20 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                       onClick={() => setSource(true)}
                       className="inline-flex items-center gap-0.5 font-medium text-run hover:underline"
                     >
-                      Текст промпта
+                      {tone ? "Текст правил" : "Текст промпта"}
                       <ArrowUpRight aria-hidden className="size-3.5" />
                     </button>
                   )}
-                  <Link
-                    to={criterionLink(r.id, { view: "code" })}
-                    className="inline-flex items-center gap-0.5 font-medium text-run hover:underline"
-                  >
-                    В коде агента
-                    <ArrowUpRight aria-hidden className="size-3.5" />
-                  </Link>
+                  {/* The rules of communication are not in the agent's code; the code view is hidden in tone-only mode. */}
+                  {!tone && !TONE_ONLY && (
+                    <Link
+                      to={criterionLink(r.id, { view: "code" })}
+                      className="inline-flex items-center gap-0.5 font-medium text-run hover:underline"
+                    >
+                      В коде агента
+                      <ArrowUpRight aria-hidden className="size-3.5" />
+                    </Link>
+                  )}
                 </div>
               )}
               <p className="text-body text-fg-3">
