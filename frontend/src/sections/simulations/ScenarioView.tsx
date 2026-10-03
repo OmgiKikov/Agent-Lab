@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, Building2, Database, Play } from "lucide-react";
-import { criterionLink } from "../../app/links";
+import { criterionLink, type Check } from "../../app/links";
+import { BY_CRITERIA } from "../../lab/checks";
 import { duty, type Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
@@ -11,15 +12,21 @@ import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { originWord } from "./parts";
 
-/** A scenario: the situation, how the customer begins (for each type), what the judge will check, the test data, and «Сыграть». */
+/**
+ * A scenario: the situation, how the customer begins (for each type), what its check's criteria will look at, the test
+ * data, and «Сыграть».
+ */
 export function ScenarioView({
   card,
+  check,
   state,
   mine,
   onPlay,
   onBack,
 }: {
   card: Card;
+  /** The check whose errors the scenarios were built from. */
+  check: Check | null;
   state: LabState;
   mine: Criterion[];
   onPlay: () => void;
@@ -43,6 +50,7 @@ export function ScenarioView({
       <div className="max-w-4xl px-4 pb-16 pt-5 lg:px-10 lg:pt-7">
         <p className="text-small text-fg-3">
           {card.topic} · <span className="text-fg-2">{originWord(card.origin, FROM_LOG)}</span>
+          {check ? ` · ${BY_CRITERIA[check]}` : ""}
         </p>
         <h2 className="mt-2 text-balance text-title font-semibold text-fg">{card.name}</h2>
         <p className="mt-3 max-w-[66ch] whitespace-pre-line text-read text-fg-2">{card.situation}</p>
@@ -56,9 +64,9 @@ export function ScenarioView({
           >
             Сыграть этот сценарий
           </Button>
-          {card.sourceDialogueId && card.origin === FROM_LOG && (
+          {card.sourceDialogueId && card.origin === FROM_LOG && check && (
             <Link
-              to={dialogOf({ source: "log", dialogueId: card.sourceDialogueId })}
+              to={dialogOf({ source: "log", dialogueId: card.sourceDialogueId, check })}
               className="inline-flex items-center gap-1 text-small text-fg-2 underline decoration-line-strong underline-offset-4 hover:text-fg"
             >
               Настоящий разговор, откуда он
@@ -88,11 +96,11 @@ export function ScenarioView({
             {plural(mine.length || card.criteria.length, "критерий", "критерия", "критериев")}
           </Label>
           <ul className="mt-2 divide-y divide-line">
-            {mine.length
+            {mine.length && check
               ? mine.map((c) => (
                   <li key={c.r.id}>
                     <Link
-                      to={criterionLink(c.r.id)}
+                      to={criterionLink(check, c.r.id)}
                       className="-mx-3 grid grid-cols-[32px_minmax(0,1fr)_auto] items-start gap-2 rounded-control px-3 py-3 transition-colors hover:bg-hover"
                     >
                       <span className="pt-0.5 text-small tabular-nums text-fg-3">{c.n}</span>

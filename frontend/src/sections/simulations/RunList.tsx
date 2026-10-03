@@ -2,17 +2,19 @@ import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { runLink } from "../../app/links";
+import { BY_CRITERIA } from "../../lab/checks";
 import { count, longDay, time } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { isRunning, runTitle } from "../../lab/runs";
-import type { LabRun, LabState } from "../../lab/types";
+import type { LabState, RunSummary } from "../../lab/types";
 import { ENTER, stagger } from "../../product/motion";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { SimHeader, useSimRuns } from "./stage";
 
 /**
- * «Прогоны»: every run of the simulation, newest first, each with its own count. A run opens as its result. Runs are not
- * versions of each other, so nothing here is compared: no arrows, no «лучше».
+ * «Прогоны»: every run of the simulation, newest first, each with its own count and the check whose criteria it is
+ * counted by. A run opens as its result. Runs are not versions of each other, so nothing here is compared: no arrows,
+ * no «лучше».
  */
 export function RunListPage() {
   const { state, offline } = useLabState();
@@ -49,7 +51,7 @@ export function RunListPage() {
             <EmptyState drop title="Прогонов ещё не было" className="py-24">
               {state.cards?.cards.length
                 ? "«Сыграть» справа вверху: синтетические клиенты сыграют сценарии с агентом."
-                : "Сначала соберите сценарии из оценённых диалогов."}
+                : "Сначала соберите сценарии из ошибок проверки разговоров."}
             </EmptyState>
           )}
         </div>
@@ -58,7 +60,7 @@ export function RunListPage() {
   );
 }
 
-function RunRow({ run, state, i }: { run: LabRun; state: LabState; i: number }) {
+function RunRow({ run, state, i }: { run: RunSummary; state: LabState; i: number }) {
   const m = run.metric;
   const live = isRunning(run);
   const job = live && state.job.running && state.job.progress.run === run.id ? state.job.progress : null;
@@ -71,7 +73,7 @@ function RunRow({ run, state, i }: { run: LabRun; state: LabState; i: number }) 
       >
         <span className="min-w-0">
           <span className="block text-small text-fg-3">
-            {longDay(run.startedAt)}, {time(run.startedAt)}
+            {longDay(run.startedAt)}, {time(run.startedAt)} · {BY_CRITERIA[run.check]}
             {run.repeats && run.repeats > 1 ? ` · каждый сценарий ×${run.repeats}` : ""}
           </span>
           <span className="mt-1 block truncate text-lead font-semibold text-fg">{run.label || runTitle(run)}</span>
