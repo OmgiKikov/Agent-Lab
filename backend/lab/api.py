@@ -210,18 +210,19 @@ def source_summary(analysis: dict | None) -> list[dict]:
 
 @app.get('/api/state')
 def state() -> dict:
-    """Polled every 1.5 s during a job: the log assessment is read once; runs and dialogues are not parsed at all."""
-    analysis = store.load(discover.RESULT)
-    if analysis and not analysis.get('summary'):  # every assessment stores its summary; an older one may not
-        analysis['summary'] = discover.summarize(analysis['results'], analysis['topics'])
+    """Polled every 1.5 s during a job: each check's result is read once; runs and dialogues are not parsed at all."""
+    results = {check: store.load(checks.result(check)) for check in checks.RESULTS}
+    for result in results.values():
+        if result and not result.get('summary'):  # every result stores its summary; an older one may not
+            result['summary'] = discover.summarize(result['results'], result['topics'])
     return {
         'job': jobs.state,
         'model': llm.MODEL,
         'models': llm.describe(),
         'settings': agents.settings(),
-        'sources': source_summary(analysis),
+        'sources': source_summary(results[checks.CODE]),
         'logs': {'total': store.length(logs.FILE), **logs.meta()},
-        'discover': analysis,
+        'checks': results,
         'toneOfVoice': store.load(tone.DRAFT),
         'cards': store.load(cards.DECK),
         'runs': [{key: summary.get(key) for key in RUN_FIELDS} for summary in store.run_summaries()],

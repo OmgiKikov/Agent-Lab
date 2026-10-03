@@ -108,6 +108,21 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.load(CODE_RESULT)['summary']['passed'], 1)
         self.assertEqual(store.load(TONE_RESULT), own)
 
+    async def test_the_state_shows_the_result_of_each_check_with_its_summary(self):
+        await self.assess_code()
+        state = (await self.client.get('/api/state')).json()
+        self.assertIsNone(state['checks']['tone'])
+        await self.check_tone(status='PASS')
+        state = (await self.client.get('/api/state')).json()
+        self.assertNotIn('discover', state)
+        self.assertEqual(state['checks'], {'tone': store.load(TONE_RESULT), 'code': store.load(CODE_RESULT)})
+        summaries = {check: state['checks'][check]['summary'] for check in ('tone', 'code')}
+        self.assertEqual(
+            {check: (s['passed'], s['failed']) for check, s in summaries.items()}, {'tone': (1, 0), 'code': (0, 1)}
+        )
+        # The agent's sources count the criteria of the accuracy result: the communication rules are tone of voice's.
+        self.assertEqual({source['id']: source['rules'] for source in state['sources']}, {'s1': 1, 'tone-of-voice': 0})
+
     async def test_an_outage_says_the_previous_result_is_kept_only_when_the_check_has_one(self):
         self.assertIsNone(await self.assess_code())
         unanswered = 'Модель проверки не ответила ни по одному разговору.'

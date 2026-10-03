@@ -232,7 +232,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/logs?name=new.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200, response.text)
         state = (await self.client.get('/api/state')).json()
-        self.assertIsNone(state['discover'])
+        self.assertEqual(state['checks'], {'tone': None, 'code': None})
         detail = (await self.client.get('/api/logs/d1')).json()
         self.assertIsNone(detail['evaluation'])
         self.assertEqual(detail['messages'][1]['content'], 'Новый ответ')
