@@ -94,6 +94,13 @@ export function outcomeOf(history: Played[] | undefined): Outcome {
   return "none";
 }
 
+/** The customer types that met an error in the latest run that played a scenario: replaying them reproduces it. */
+export function failedTypes(history: Played[] | undefined): string[] {
+  const latest = history?.[0]?.run;
+  if (!latest) return [];
+  return [...new Set(history.filter((p) => p.run === latest && p.status === "FAIL").map((p) => p.persona))];
+}
+
 /**
  * The criteria of a scenario as every screen names and numbers them: the check's numbered criterion with the same
  * quote, else the scenario's own short name.

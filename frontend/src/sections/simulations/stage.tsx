@@ -50,7 +50,7 @@ export function SimTabs({ state, runId }: { state: LabState | null; runId: strin
 
 /**
  * The head of every page of the simulation: its tabs and, where it plays, «Собрать сценарии» and «Сыграть». «Сыграть» opens
- * the same dialog from anywhere (?play=1, or ?play=<scenario>[,<scenario>…] with those chosen); once the run is named,
+ * the same dialog from anywhere (?play=1, or ?play=<scenario>[,<scenario>…] with those chosen, and ?types=<type>[,…] with those customer types); once the run is named,
  * its result opens and fills in.
  */
 export function SimHeader({ runId, actions = true }: { runId: string | null; actions?: boolean }) {
@@ -58,21 +58,26 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
   const toast = useToast();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const [play, setPlay] = useState<{ preset: string[] | null } | null>(null);
+  const [play, setPlay] = useState<{ preset: string[] | null; types: string[] | null } | null>(null);
   const [follow, setFollow] = useState(false);
   const asked = params.get("play");
+  const askedTypes = params.get("types");
   useEffect(() => {
     if (!asked) return;
-    setPlay({ preset: asked === "1" ? null : asked.split(",").filter(Boolean) });
+    setPlay({
+      preset: asked === "1" ? null : asked.split(",").filter(Boolean),
+      types: askedTypes ? askedTypes.split(",").filter(Boolean) : null,
+    });
     setParams(
       (prev) => {
         const n = new URLSearchParams(prev);
         n.delete("play");
+        n.delete("types");
         return n;
       },
       { replace: true },
     );
-  }, [asked, setParams]);
+  }, [asked, askedTypes, setParams]);
   const started = state?.job.running && state.job.kind === "run" ? state.job.progress.run : undefined;
   useEffect(() => {
     if (follow && started) {
@@ -126,7 +131,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
               <Button
                 variant="primary"
                 icon={Play}
-                onClick={() => setPlay({ preset: null })}
+                onClick={() => setPlay({ preset: null, types: null })}
                 disabled={busy || !cards}
                 title={busy ? "Сейчас идёт другая задача" : !cards ? "Сначала соберите сценарии" : undefined}
               >
@@ -175,6 +180,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
           onClose={() => setPlay(null)}
           state={state}
           preset={play?.preset}
+          presetTypes={play?.types}
           onStarted={() => setFollow(true)}
         />
       )}

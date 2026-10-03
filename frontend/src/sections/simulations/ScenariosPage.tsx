@@ -13,6 +13,7 @@ import { FROM_LOG } from "../../lab/runs";
 import {
   controlLine,
   namedCriteria,
+  failedTypes,
   outcomeOf,
   runsOf,
   useScenarios,
@@ -167,6 +168,8 @@ export function ScenariosPage() {
     ]),
   ) as Record<Filter, number>;
   const failing = cards.filter((c) => outcome(c) === "fail").map((c) => c.id);
+  // The customer types that met the error: replaying only the default type would not reproduce it.
+  const failingTypes = [...new Set(failing.flatMap((id) => failedTypes(records.get(id)?.history)))];
   const filter = toFilter(params.get("v"));
   const q = query.trim().toLowerCase();
   const shown = cards.filter(
@@ -271,7 +274,12 @@ export function ScenariosPage() {
                       ? "Сейчас идёт другая задача"
                       : `Сыграть ${count(failing.length, "сценарий", "сценария", "сценариев")} с ошибкой в последнем прогоне`
                   }
-                  onClick={() => set((n) => n.set("play", failing.join(",")), false)}
+                  onClick={() =>
+                    set((n) => {
+                      n.set("play", failing.join(","));
+                      n.set("types", failingTypes.join(","));
+                    }, false)
+                  }
                 >
                   Сыграть с ошибкой
                 </Button>
