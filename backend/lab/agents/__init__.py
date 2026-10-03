@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .. import store
-from .http import AGENT_PATH, AgentError, HttpAgent
+from .http import AGENT_PATH, BAD_ADDRESS, AgentError, HttpAgent, address_valid
 from .session import session
 from .source import CodeAgent
 
@@ -35,10 +35,15 @@ def settings() -> dict:
 
 
 def save_settings(values: dict) -> dict:
+    """A typo in the agent's address is refused here, in words, instead of surfacing later inside a check or a run;
+    an empty address clears it."""
     current = settings()
     current.update({k: v for k, v in values.items() if k in current})
     if isinstance(current['epk'], str):
         current['epk'] = current['epk'].split()
+    current['prodUrl'] = current['prodUrl'].strip()
+    if current['prodUrl'] and not address_valid(current['prodUrl']):
+        raise ValueError(BAD_ADDRESS)
     store.save(SETTINGS, current)
     return settings()
 

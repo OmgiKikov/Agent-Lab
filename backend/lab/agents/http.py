@@ -1,6 +1,7 @@
 """An agent reached over HTTP: the aigw-rest-service contract in its two dialects (the IFT stand and the local one)."""
 
 import os
+import re
 import time
 import uuid
 from datetime import UTC, datetime
@@ -11,10 +12,24 @@ import httpx
 from ..settings import AGENT_TIMEOUT, MOCK_URL
 
 AGENT_PATH = '/api/v1/ai/agents/agent-ckr-pa-acquiring'
+BAD_ADDRESS = 'Проверьте адрес агента: нужен вид https://хост:порт/путь, без пробелов, с портом от 1 до 65535.'
 
 
 class AgentError(RuntimeError):
     """The agent is unreachable or its answer cannot be read."""
+
+
+def address_valid(url: str) -> bool:
+    """An address the agent can be reached at: http or https, a host, a port that is a number from 1 to 65535, no
+    spaces. httpx refuses some typos (InvalidURL) and takes others («:99999», a space in the host) only to fail while
+    connecting, outside its own errors: both are checked here, before a request."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+        httpx.URL(url)
+    except (ValueError, httpx.InvalidURL):
+        return False
+    return parts.scheme in ('http', 'https') and bool(parts.hostname) and port != 0 and not re.search(r'\s', url)
 
 
 def prod_request(conversation_id: str, text: str, epk_ids: list[str]) -> tuple[dict, dict]:
@@ -129,6 +144,8 @@ class HttpAgent:
 
     async def say(self, conversation_id: str, text: str, world: dict | None = None) -> dict:
         """One turn: the reply, its status and buttons, seconds taken, and the systems it called (local stand)."""
+        if not address_valid(self.url):
+            raise AgentError(BAD_ADDRESS)  # saved before addresses were checked: the agent cannot be reached
         headers, body = self.request(conversation_id, text)
         # A long answer is normal; an unreachable address should fail fast.
         async with httpx.AsyncClient(timeout=httpx.Timeout(AGENT_TIMEOUT, connect=10)) as client:
@@ -152,6 +169,8 @@ class HttpAgent:
 
 
 async def _stand_version(url: str) -> str | None:
+    if not address_valid(url):
+        return None
     origin = '{0.scheme}://{0.netloc}'.format(urlsplit(url))
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -170,7 +189,7 @@ async def _apply_world(client: httpx.AsyncClient, trace_id: str, world: dict) ->
             f'{MOCK_URL}/mock/overrides', json={'trace_id': trace_id, 'sbe': {'tools': world}}, timeout=5
         )
         response.raise_for_status()
-    except httpx.HTTPError as error:
+    except (httpx.HTTPError, httpx.InvalidURL) as error:
         raise AgentError(f'Заглушки систем не приняли данные сценария: {type(error).__name__}') from error
 
 
@@ -178,7 +197,7 @@ async def _mock_cursor(client: httpx.AsyncClient) -> int | None:
     try:
         data = (await client.get(f'{MOCK_URL}/mock/calls', params={'limit': 0}, timeout=3)).json()
         return data.get('cursor') if isinstance(data, dict) else None
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return None
 
 
@@ -189,7 +208,7 @@ async def _mock_events(client: httpx.AsyncClient, cursor: int | None, trace_id: 
     try:
         params = {'after': cursor, 'limit': 500}
         data = (await client.get(f'{MOCK_URL}/mock/calls', params=params, timeout=3)).json()
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return []
     events = []
     for call in data.get('calls') or [] if isinstance(data, dict) else []:
