@@ -2,9 +2,10 @@
 
 import argparse
 import json
+from contextlib import nullcontext
 from pathlib import Path
 
-from . import discover, judge, logs, store
+from . import discover, judge, logs, registry, store
 from .metric import metric
 
 
@@ -73,11 +74,32 @@ def migrate(source: Path) -> dict[str, int]:
     return {**store.import_legacy(documents, records), 'recomputedVerdicts': recomputed, 'resetReviews': reset_reviews}
 
 
+def target(agent_id: str | None) -> str | None:
+    """The agent whose database the app reads the import from: the one named, or the only one. None while there are no
+    agents: the default database, which the next start adopts as the first agent."""
+    agents = [agent['id'] for agent in registry.listed()]
+    if agent_id is None and len(agents) < 2:
+        return agents[0] if agents else None
+    if agent_id in agents:
+        return agent_id
+    listed = ', '.join(agents) or 'пока нет'
+    if agent_id is None:
+        raise ValueError(f'Агентов несколько — укажите, в какого импортировать: --agent <id>. Агенты: {listed}.')
+    raise ValueError(f'Нет агента «{agent_id}». Агенты: {listed}.')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True, type=Path, help='Папка старых data/*.json, logs.jsonl и runs/*.json')
+    parser.add_argument('--agent', help='id агента (его адрес /a/<id>); без него — единственный агент')
     args = parser.parse_args()
-    print(json.dumps(migrate(args.source), ensure_ascii=False))
+    try:
+        agent = target(args.agent)
+    except ValueError as error:
+        parser.error(str(error))
+    with registry.using(agent) if agent else nullcontext():
+        report = migrate(args.source)
+    print(json.dumps({**report, 'agent': agent}, ensure_ascii=False))
 
 
 if __name__ == '__main__':

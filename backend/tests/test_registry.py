@@ -1,14 +1,17 @@
 import asyncio
+import io
 import json
 import sqlite3
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 
-from lab import api, discover, jobs, registry, store
+from lab import api, discover, jobs, logs, migrate, registry, store
 
 
 class RegistryTests(unittest.TestCase):
@@ -229,3 +232,59 @@ class AdoptionTests(unittest.TestCase):
     def test_a_fresh_install_starts_without_agents(self) -> None:
         registry.adopt_legacy()
         self.assertEqual(registry.listed(), [])
+
+
+class LegacyImportTests(unittest.TestCase):
+    """python -m lab.migrate writes where the app reads: into an agent's database."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        mocked = patch.object(store, 'DB', self.root / 'lab.sqlite3')
+        mocked.start()
+        self.addCleanup(mocked.stop)
+        self.legacy = self.root / 'legacy'
+        self.legacy.mkdir()
+        dialogue = {'id': 'd1', 'messages': [{'role': 'user', 'content': 'Q'}, {'role': 'assistant', 'content': 'A'}]}
+        (self.legacy / 'logs.jsonl').write_text(json.dumps(dialogue) + '\n')
+
+    def run_import(self, *arguments: str) -> dict:
+        printed = io.StringIO()
+        with patch.object(sys, 'argv', ['migrate', '--source', str(self.legacy), *arguments]), redirect_stdout(printed):
+            migrate.main()
+        return json.loads(printed.getvalue())
+
+    def refused(self, *arguments: str) -> str:
+        said = io.StringIO()
+        with redirect_stderr(said), self.assertRaises(SystemExit):
+            self.run_import(*arguments)
+        return said.getvalue()
+
+    def logs_of(self, agent_id: str) -> list:
+        with registry.using(agent_id):
+            return store.load(logs.FILE) or []
+
+    def test_without_agents_the_import_waits_in_the_database_the_next_start_adopts(self) -> None:
+        self.assertEqual(self.run_import()['agent'], None)
+        self.assertEqual(len(store.load(logs.FILE)), 1)
+        registry.adopt_legacy()
+        self.assertEqual(len(self.logs_of('acquiring')), 1)
+
+    def test_the_only_agent_receives_the_import(self) -> None:
+        only = registry.create('Агент эквайринга')['id']
+        self.assertEqual(self.run_import()['agent'], only)
+        self.assertEqual(len(self.logs_of(only)), 1)
+        self.assertFalse(store.DB.exists())
+
+    def test_with_several_agents_the_import_is_told_which(self) -> None:
+        first = registry.create('Первый')['id']
+        second = registry.create('Второй')['id']
+        for arguments in ((), ('--agent', 'nobody')):
+            with self.subTest(arguments=arguments):
+                said = self.refused(*arguments)
+                self.assertIn(f'{first}, {second}', said)
+                self.assertIn('--agent', said)
+        self.assertEqual(self.run_import('--agent', second)['agent'], second)
+        self.assertEqual((len(self.logs_of(first)), len(self.logs_of(second))), (0, 1))
+        self.assertFalse(store.DB.exists())
