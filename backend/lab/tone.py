@@ -238,6 +238,12 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
     results = await _judge(dialogues, {**topic, 'rules': [for_judging(rule) for rule in criteria]}, progress)
     ensure_active()
     discover.ensure_answered(results)
+    # The live result carries its own answers with the same criteria, as before: a result saved before the history of
+    # checks keeps them only in itself. The history then adds what a check in between lost or what another criterion's
+    # clarification would have dropped.
+    previous = store.load(discover.RESULT) or {}
+    if previous.get('criteriaRevision') == draft['revision']:
+        discover.carry_reviews(previous, results)
     carry_decisions(results, criteria, dialogues)
     return {
         'purpose': KIND,

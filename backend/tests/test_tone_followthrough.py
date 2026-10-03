@@ -178,6 +178,15 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         await self.check(count=2, down={'d1'})
         self.assertEqual(self.answers(await self.check(count=2))['pronouns'], ('FAIL', None))
 
+    async def test_answers_of_a_result_saved_before_the_history_of_checks_stay_on_the_next_check(self):
+        first = await self.check()
+        # A result from before the history of checks: its answers live only in the result itself.
+        legacy = {key: value for key, value in first.items() if key != 'checkId'}
+        store.save(discover.RESULT, legacy)
+        await self.answer(legacy, 'pronouns', 'agree')
+        self.assertEqual(store.tone_reviews(first['checkId']), [])
+        self.assertEqual(self.answers(await self.check())['pronouns'], ('FAIL', 'agree'))
+
     async def test_clarifying_one_criterion_keeps_the_answers_on_the_others(self):
         first = await self.check()
         await self.answer(first, 'pronouns', 'agree')
