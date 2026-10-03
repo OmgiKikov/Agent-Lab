@@ -8,8 +8,9 @@ actual repeated question is preserved. Parsing is pure so a cancelled import can
 import io
 import json
 import re
+import zlib
 from xml.etree.ElementTree import ParseError
-from zipfile import BadZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
 
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
@@ -18,11 +19,19 @@ from . import store
 
 FILE = 'logs.json'
 META = 'logs-meta.json'  # the name and time of the last upload
+LIMIT = 50_000_000  # an uploaded export
+INFLATED = 500_000_000  # the parts of a workbook, unpacked together
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
-MARKER = re.compile(r'\b(CLIENT|AGENT)\b')
+# The export starts every turn on its own line; «HOST AGENT NOT FOUND» inside a message is the customer's words.
+MARKER = re.compile(r'^[ \t]*(CLIENT|AGENT)\b', re.M)
 # A chat button the agent sent, written into the export's text as «` ` ` transition-code CODE ` ` `».
 CONTROL = re.compile(r'`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_-]*)\s*`\s*`\s*`')
+# The line as_seen puts under a reply for those buttons.
+BUTTONS = re.compile(r'\n\[Кнопки: [^\n]*\]\Z')
+# A broken workbook: openpyxl names a part the archive does not have (KeyError), zipfile meets a broken stream or a
+# feature it does not read.
+UNREADABLE = (BadZipFile, InvalidFileException, ParseError, KeyError, zlib.error, EOFError, NotImplementedError)
 
 
 def as_seen(text: str) -> str:
@@ -31,6 +40,12 @@ def as_seen(text: str) -> str:
     buttons = [code or 'кнопка' for code in CONTROL.findall(text)]
     words = CONTROL.sub('', text).strip()
     return words + ('\n[Кнопки: ' + ' | '.join(buttons) + ']' if buttons else '')
+
+
+def words(text: str) -> str:
+    """What the agent wrote in a reply, raw or as_seen: the line of buttons is the Lab's and the code is the export's,
+    so neither is evidence of the agent's words."""
+    return BUTTONS.sub('', CONTROL.sub('', text)).strip()
 
 
 def load() -> list[dict]:
@@ -75,6 +90,32 @@ def _export_messages(messages: list[dict], count: int) -> list[dict]:
     raise ValueError('Текст и порядок сообщений не совпадают; неоднозначные повторы нельзя восстановить')
 
 
+def _check_parts(data: bytes) -> None:
+    """Every part of a workbook unpacks to the size it declares, all of them to at most INFLATED. openpyxl reads some
+    parts whole, and a zip bomb that declares little would fill memory there; here each part is unpacked a piece at a
+    time, one byte past its declared size, which a lying part has."""
+    with ZipFile(io.BytesIO(data)) as archive:
+        parts = archive.infolist()
+        if sum(info.file_size for info in parts) > INFLATED:
+            raise ValueError(f'Файл Excel слишком большой: после распаковки больше {INFLATED // 1_000_000} МБ.')
+        for info in parts:
+            if info.flag_bits & 1 or info.compress_type not in (ZIP_STORED, ZIP_DEFLATED):
+                raise BadZipFile('encrypted or unusual compression')  # Excel deflates; others have no bound per piece
+            declared = info.file_size
+            info.file_size += 1  # this archive object is only for the check
+            unpacked = 0
+            with archive.open(info) as part:
+                while piece := part.read(1 << 16):
+                    unpacked += len(piece)
+            if unpacked != declared:
+                raise BadZipFile('a part is not the size it declares')
+
+
+def _cell(row: tuple, index: int) -> object:
+    """A sheet that does not declare its size gives each row only as far as its last filled cell."""
+    return row[index] if index < len(row) else None
+
+
 def from_excel(data: bytes) -> list[dict]:
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
@@ -89,10 +130,10 @@ def from_excel(data: bytes) -> list[dict]:
         for row in rows:
             if not any(value is not None for value in row):
                 continue
-            dialogue_id = row[column[ID]]
+            dialogue_id = _cell(row, column[ID])
             try:
-                count = _message_count(row[column[ORDER]])
-                messages = _export_messages(turns(str(row[column[TEXT]] or '')), count)
+                count = _message_count(_cell(row, column[ORDER]))
+                messages = _export_messages(turns(str(_cell(row, column[TEXT]) or '')), count)
             except ValueError as error:
                 raise ValueError(f'Диалог {dialogue_id}: {error}') from error
             dialogues.append({'id': dialogue_id, 'messages': messages})
@@ -102,7 +143,22 @@ def from_excel(data: bytes) -> list[dict]:
 
 
 def from_jsonl(data: bytes) -> list[dict]:
-    return [json.loads(line) for line in data.decode('utf-8').splitlines() if line.strip()]
+    try:
+        text = data.decode('utf-8-sig')  # Windows editors save UTF-8 with a byte order mark
+    except UnicodeDecodeError as error:
+        raise ValueError('Файл .jsonl должен быть в кодировке UTF-8: сохраните выгрузку в UTF-8.') from error
+    dialogues = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            dialogues.append(json.loads(line))
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f'Строка {number} файла .jsonl не читается как JSON: проверьте, что это выгрузка чата, '
+                'по одному разговору в строке.'
+            ) from error
+    return dialogues
 
 
 def _validated(dialogues: list[dict]) -> list[dict]:
@@ -141,8 +197,9 @@ def prepare(name: str, data: bytes) -> list[dict]:
         dialogues = from_jsonl(data)
     elif name.lower().endswith('.xlsx'):
         try:
+            _check_parts(data)
             dialogues = from_excel(data)
-        except (BadZipFile, InvalidFileException, ParseError) as error:
+        except UNREADABLE as error:
             raise ValueError('Не удалось прочитать файл Excel: неверная структура .xlsx') from error
     else:
         raise ValueError('Загрузите файл .xlsx или .jsonl')

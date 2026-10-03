@@ -272,10 +272,29 @@ async def collect_sources() -> dict:
     return start('sources', work)
 
 
+async def uploaded(request: Request, limit: int) -> bytes:
+    """The uploaded file: refused by its declared length before a byte is read, and never read past the limit."""
+    message = f'Файл слишком большой: не более {limit / 1_000_000:g} МБ.'
+    try:
+        declared = int(request.headers.get('content-length') or 0)
+    except ValueError:
+        declared = 0  # counted while reading
+    if declared > limit:
+        raise HTTPException(413, message)
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > limit:
+            raise HTTPException(413, message)
+    return bytes(data)
+
+
 @app.post('/api/logs')
 async def upload_logs(request: Request, name: str) -> dict:
+    data = await uploaded(request, logs.LIMIT)
+
     async def work(progress: Progress) -> int:
-        dialogues = await asyncio.to_thread(logs.prepare, name, await request.body())
+        dialogues = await asyncio.to_thread(logs.prepare, name, data)
         return logs.commit(dialogues, name)
 
     try:
@@ -375,8 +394,9 @@ async def save_tone_policy(payload: TonePolicyCommand) -> dict:
 
 @app.post('/api/tone-of-voice/read-file')
 async def read_tone_file(request: Request, name: str) -> dict:
+    data = await uploaded(request, policy_files.LIMIT)
     try:
-        text = await asyncio.to_thread(policy_files.read, name, await request.body())
+        text = await asyncio.to_thread(policy_files.read, name, data)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     return {'text': text, 'name': name}

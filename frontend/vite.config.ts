@@ -11,6 +11,8 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5900,
     strictPort: true,
-    proxy: { "/api": process.env.LAB_BACKEND_URL ?? "http://127.0.0.1:5901" },
+    // The backend accepts a command only from its own origin (backend/lab/app.py): the proxy keeps the page's Host,
+    // which the shorthand string form would rewrite to :5901 (changeOrigin: true).
+    proxy: { "/api": { target: process.env.LAB_BACKEND_URL ?? "http://127.0.0.1:5901", changeOrigin: false } },
   },
 });

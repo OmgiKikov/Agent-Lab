@@ -1,7 +1,9 @@
 import io
 import json
+import re
 import unittest
 from unittest.mock import patch
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook
 
@@ -20,6 +22,27 @@ def excel(text, order, dialogue_id='d1', include_order=True):
     return stream.getvalue()
 
 
+def undeclared(rows):
+    """A workbook whose sheet does not declare its size, as some exporters write it: openpyxl then reads each row only
+    as far as its last filled cell."""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = logs.SHEET
+    for row in [[logs.ID, logs.TEXT, logs.ORDER], *rows]:
+        sheet.append(row)
+    stream = io.BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    output = io.BytesIO()
+    with ZipFile(io.BytesIO(stream.getvalue())) as source, ZipFile(output, 'w', ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            part = source.read(info)
+            if info.filename.startswith('xl/worksheets/'):
+                part = re.sub(rb'<dimension[^>]*/>', b'', part)
+            target.writestr(info, part)
+    return output.getvalue()
+
+
 PAIR = 'CLIENT Не знаю номер\nAGENT Назовите номер терминала\n'
 
 
@@ -27,6 +50,19 @@ class LogImportTests(unittest.TestCase):
     def test_malformed_excel_is_a_validation_error(self):
         with self.assertRaisesRegex(ValueError, 'Не удалось прочитать файл Excel'):
             logs.prepare('broken.xlsx', b'this is not an Excel archive')
+
+    def test_a_short_excel_row_is_named_instead_of_failing_the_server(self):
+        data = undeclared([['d1', PAIR, '[1, 2]'], ['d2']])
+        with self.assertRaisesRegex(ValueError, '^Диалог d2: Не удалось прочитать порядок сообщений'):
+            logs.prepare('export.xlsx', data)
+        self.assertEqual(len(logs.prepare('export.xlsx', undeclared([['d1', PAIR, '[1, 2]']]))), 1)
+
+    def test_an_archive_without_the_parts_of_a_workbook_is_a_validation_error(self):
+        archive = io.BytesIO()
+        with ZipFile(archive, 'w') as target:
+            target.writestr('readme.txt', 'not a workbook')
+        with self.assertRaisesRegex(ValueError, '^Не удалось прочитать файл Excel'):
+            logs.prepare('export.xlsx', archive.getvalue())
 
     def test_count_confirmed_double_export_preserves_actual_repeated_exchanges(self):
         dialogues = logs.prepare('export.xlsx', excel(PAIR * 4, '[1, 2, 3, 4]'))
@@ -56,6 +92,17 @@ class LogImportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             logs.prepare('export.xlsx', excel(PAIR, None, include_order=False))
 
+    def test_a_marker_word_inside_a_message_stays_in_the_message(self):
+        text = 'CLIENT Терминал пишет HOST AGENT NOT FOUND, что делать?\nAGENT Перезагрузите терминал'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2]'))
+        self.assertEqual(
+            dialogues[0]['messages'],
+            [
+                {'role': 'user', 'content': 'Терминал пишет HOST AGENT NOT FOUND, что делать?'},
+                {'role': 'assistant', 'content': 'Перезагрузите терминал'},
+            ],
+        )
+
     def test_zero_is_a_real_id_and_final_customer_turn_is_preserved(self):
         text = PAIR + 'CLIENT Ещё один вопрос'
         dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3]', dialogue_id=0))
@@ -72,6 +119,23 @@ class LogImportTests(unittest.TestCase):
         with patch.object(logs.store, 'save') as save, self.assertRaises(ValueError):
             logs.prepare('logs.jsonl', data)
         save.assert_not_called()
+
+    def test_jsonl_saved_with_a_byte_order_mark_is_read(self):
+        dialogue = {
+            'id': 'one',
+            'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
+        }
+        data = b'\xef\xbb\xbf' + json.dumps(dialogue, ensure_ascii=False).encode()
+        self.assertEqual(logs.prepare('logs.jsonl', data), [dialogue])
+
+    def test_an_unreadable_jsonl_says_which_line_and_what_to_check(self):
+        good = json.dumps({'id': 'one', 'messages': [{'role': 'user', 'content': 'Вопрос'}]})
+        for data, message in (
+            ((good + '\n\nid;client;agent\n').encode(), r'^Строка 3 файла \.jsonl не читается как JSON: проверьте'),
+            ('Здравствуйте'.encode('cp1251'), r'^Файл \.jsonl должен быть в кодировке UTF-8'),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                logs.prepare('logs.jsonl', data)
 
     def test_duplicate_ids_are_rejected(self):
         dialogue = {

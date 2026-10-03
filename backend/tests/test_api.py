@@ -69,6 +69,15 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.load(api.discover.RESULT), {'results': ['old']})
         self.assertEqual(store.load(api.cards.DECK), {'cards': ['old']})
 
+    async def test_a_broken_export_is_refused_in_words_a_person_can_act_on(self) -> None:
+        response = await self.client.post('/api/logs?name=export.jsonl', content='id;client;agent\n1;Здравствуйте')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()['detail'],
+            'Не удалось прочитать файл: Строка 1 файла .jsonl не читается как JSON: проверьте, что это выгрузка чата, '
+            'по одному разговору в строке.',
+        )
+
     async def test_successful_upload_invalidates_old_audit_and_scenarios(self) -> None:
         store.save(api.discover.RESULT, {'results': ['old']})
         store.save(api.cards.DECK, {'cards': ['old']})
@@ -220,6 +229,50 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {'ok': False, 'error': 'not reachable'})
         said.assert_not_awaited()
         closed.assert_awaited_once()
+
+    async def test_a_malformed_agent_address_is_named_and_never_fails_a_check_or_a_run(self) -> None:
+        malformed = (
+            'https://ift.example.invalid:84 43/api',
+            'https://ift.example.invalid:99999/api',
+            'https://ift example.invalid/api',
+            'ftp://ift.example.invalid/api',
+            'ift.example.invalid/api',
+        )
+        for url in malformed:
+            with self.subTest(url=url):
+                response = await self.client.post('/api/settings', json={'prodUrl': url})
+                self.assertEqual(response.status_code, 400, response.text)
+                self.assertIn('адрес агента', response.json()['detail'])
+        self.assertEqual(api.agents.settings()['prodUrl'], '')
+        for url in ('https://ift.example.invalid:8443/api/v1/ai/agents/agent', ''):
+            response = await self.client.post('/api/settings', json={'prodUrl': url})
+            self.assertEqual(response.status_code, 200, response.text)
+        # Saved before addresses were checked: the agent is unusable, and both the check and a run say why.
+        store.save(api.agents.SETTINGS, {'prodUrl': malformed[0]})
+        response = await self.client.post('/api/agents/prod/check')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['ok'])
+        self.assertIn('адрес агента', response.json()['error'])
+        card = {
+            'id': 'c1',
+            'name': 'Возврат',
+            'topic': 'Возвраты',
+            'origin': 'Покрытие темы',
+            'situation': 'Клиент хочет вернуть оборудование',
+            'opening': 'Как оформить возврат?',
+            'criteria': [{'id': 't1r1', 'text': 'Отвечает на вопрос', 'observation': 'reply', 'quote': 'q'}],
+        }
+        store.save(api.cards.DECK, {'cards': [card]})
+        response = await self.client.post('/api/runs', json={'target': 'prod'})
+        self.assertEqual(response.status_code, 200, response.text)
+        for _ in range(100):
+            if not api.jobs.state['running']:
+                break
+            await asyncio.sleep(0.002)
+        run = store.runs()[0]
+        self.assertEqual(run['status'], 'done')
+        self.assertEqual([item['status'] for item in run['items']], ['UNMEASURED'])
+        self.assertIn('адрес агента', run['items'][0]['error'])
 
     async def test_malformed_commands_are_validation_errors(self) -> None:
         for route, payload in (
