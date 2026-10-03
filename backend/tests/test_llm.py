@@ -321,6 +321,26 @@ class DefaultModelsTests(unittest.TestCase):
         self.assertEqual(self.second('llm.SECOND_KEY', LAB_SECOND_MODEL='x', PI_PROXY_TOKEN='launch'), 'launch')
 
 
+class DescribeTests(unittest.TestCase):
+    def via(self, main: tuple, second: tuple | None = None) -> tuple:
+        with (
+            patch.object(llm, 'MAIN', main),
+            patch.object(llm, 'SECOND', second or main),
+            patch.object(llm.gateway, 'chosen_models', return_value={}),
+            patch.object(llm.gateway, 'problem', return_value=None),
+        ):
+            described = llm.describe()
+        return described['via'], described.get('secondVia')
+
+    def test_the_settings_say_where_the_conversations_go(self) -> None:
+        self.assertEqual(self.via((llm.GATEWAY, 'glm')), ('шлюз банка', None))
+        pi = ('http://127.0.0.1:11436/v1', 'glm'), ('http://127.0.0.1:11437/v1', 'gpt')
+        self.assertEqual(self.via(*pi), ('OpenRouter через Pi', None))
+        self.assertEqual(self.via(('https://user:secret@llm.bank.test:8443/v1', 'glm')), ('llm.bank.test:8443', None))
+        elsewhere = ('https://llm.bank.test/v1', 'glm'), ('https://api.vendor.test/v1', 'gpt')
+        self.assertEqual(self.via(*elsewhere), ('llm.bank.test', 'api.vendor.test'))
+
+
 class KeyTests(unittest.IsolatedAsyncioTestCase):
     async def test_each_endpoint_gets_its_own_key_and_another_host_none(self):
         seen = []

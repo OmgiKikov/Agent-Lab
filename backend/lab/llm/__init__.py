@@ -16,6 +16,7 @@ import random
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -196,15 +197,32 @@ def second_judge() -> Endpoint | None:
 
 
 def describe() -> dict:
-    """Which models judge and play the customer, and through what; no second when only one model is available.
-    problem: why the bank's gateway, set up, cannot be used now."""
+    """Which models judge and play the customer, and where the conversations go (secondVia: where the second judge's
+    go, when elsewhere); no second when only one model is available. problem: why the bank's gateway, set up, cannot be
+    used now."""
     main, second = _names()
+    judge = second_judge()
+    via, second_via = _via(MAIN[0]), _via(judge[0]) if judge else None
     return {
-        'via': 'шлюз банка' if MAIN[0] == GATEWAY else 'OpenRouter',
+        'via': via,
         'main': main,
-        'second': second if second_judge() else None,
+        'second': second if judge else None,
+        'secondVia': second_via if second_via != via else None,
         'problem': gateway.problem() if MAIN[0] == GATEWAY else None,
     }
+
+
+def _via(base: str) -> str:
+    """The bank's gateway, OpenRouter through the local Pi bridges, or the endpoint's host[:port]."""
+    if base == GATEWAY:
+        return 'шлюз банка'
+    if base in (PI, PI_SECOND):
+        return 'OpenRouter через Pi'
+    try:
+        address = urlsplit(base).netloc or base
+    except ValueError:
+        address = base
+    return address.rpartition('@')[2]  # never a user or a password written into the address
 
 
 async def check(endpoint: Endpoint) -> dict:
