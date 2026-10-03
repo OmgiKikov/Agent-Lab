@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from lab import simulate, store
 from lab.jobs import Jobs
+from lab.metric import metric
 
 
 def card(key: str = 'card-1', text: str = 'question') -> dict:
@@ -368,6 +369,15 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message, 'next question')
         self.assertEqual(cached[0]['openings']['impatient'], 'rewritten opening')
         self.assertEqual(chat.await_count, 2)
+
+    def test_agreement_of_the_two_checks_in_a_run_counts_only_conversations_both_decided(self) -> None:
+        items = [
+            {'cardId': 'a', 'status': 'FAIL', 'second': {'model': 'm', 'status': 'FAIL'}},
+            {'cardId': 'b', 'status': 'FAIL', 'second': {'model': 'm', 'status': 'UNMEASURED'}},
+            {'cardId': 'c', 'status': 'UNMEASURED', 'second': {'model': 'm', 'status': 'UNMEASURED'}},
+            {'cardId': 'd', 'status': 'UNMEASURED', 'second': {'model': 'm', 'status': 'PASS'}},
+        ]
+        self.assertEqual(metric(items)['secondJudge'], {'model': 'm', 'checked': 1, 'agree': 1})
 
 
 if __name__ == '__main__':
