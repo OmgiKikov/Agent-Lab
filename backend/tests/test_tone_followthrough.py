@@ -367,6 +367,44 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.load(tone.DRAFT), draft)
         self.assertEqual(store.load(discover.RESULT), result)
 
+    async def test_advice_reads_a_reply_as_the_judge_saw_it(self):
+        """A reply with an export control code: the error the judge found by the agent's words gets its suggestion,
+        and the model is shown the buttons, not the code."""
+        reply = 'Выберите способ оплаты:\n` ` ` transition-code PAY_QR ` ` `\nи нажмите «Далее» на экране терминала'
+        dialogue = {
+            'id': 'd1',
+            'messages': [
+                {'role': 'user', 'content': 'Как подключить оплату по QR?'},
+                {'role': 'assistant', 'content': reply},
+            ],
+        }
+        await self.client.post('/api/logs?name=qr.jsonl', content=json.dumps(dialogue))
+        quote = 'Выберите способ оплаты: и нажмите «Далее»'
+
+        async def model(system, messages, **kwargs):
+            rows = [
+                {'ruleId': rule['id'], 'status': 'FAIL', 'reason': 'Сухо.', 'agentQuote': quote, 'title': 'Сухо'}
+                for rule in json.loads(messages)['expectations']
+            ]
+            return llm.Answer(json.dumps({'rules': rows}), 'model-a')
+
+        revision = store.load(tone.DRAFT)['revision']
+        with patch.object(llm, 'chat', model):
+            await self.client.post(
+                '/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1, 'revision': revision}
+            )
+            await self.wait_job()
+        result = store.load(discover.RESULT)
+        self.assertEqual(result['results'][0]['rules'][0]['status'], 'FAIL')
+        proposal = {'text': 'Выберите способ оплаты и нажмите «Далее».', 'explanation': 'Короче.'}
+        request = {'finishedAt': result['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns', 'mode': 'rewrite'}
+        with patch.object(llm, 'chat', AsyncMock(return_value=llm.Answer(json.dumps(proposal), 'model-a'))) as advice:
+            response = await self.client.post('/api/tone-of-voice/advice', json=request)
+        self.assertEqual(response.status_code, 200, response.text)
+        shown = json.dumps(json.loads(advice.call_args.args[1])['conversation'], ensure_ascii=False)
+        self.assertNotIn('transition-code', shown)
+        self.assertIn('[Кнопки: PAY_QR]', shown)
+
     async def test_stale_advice_and_review_do_not_touch_new_results(self):
         result = await self.check()
         with patch.object(llm, 'chat', AsyncMock()) as model:
