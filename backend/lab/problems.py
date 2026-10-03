@@ -1,15 +1,17 @@
-"""Rules and problems: every rule of the log audit with its verdicts in the logs and in one simulator run.
+"""Rules and problems of one check: every rule of its result with its verdicts in the logs and in one simulator run
+of that check.
 
 A rule is keyed by its source quote, as in discover.summarize: the same rule restated in several topics is one rule.
 A problem is a rule the judge found violated at least once. Logs and a run are two sides of a rule, counted apart:
 other conversations, other customers. The record is described in section 8 of
-docs/superpowers/specs/2026-09-30-agent-lab-unified-product-design.md.
+docs/superpowers/specs/2026-09-30-agent-lab-unified-product-design.md; one per check since
+docs/superpowers/specs/2026-10-03-checks-as-sections-design.md.
 """
 
 import hashlib
 from collections import Counter
 
-from . import cards, discover, personas, quotes, store
+from . import cards, checks, personas, quotes, store
 from .context import sources
 
 COUNTED = {'FAIL': 'failed', 'PASS': 'passed', 'UNKNOWN': 'unknown'}
@@ -23,11 +25,15 @@ def rule_key(quote: str) -> str:
     return 'r-' + hashlib.sha1(quotes.normalized(quote).encode()).hexdigest()[:10]
 
 
-def chosen_run(run_id: str | None) -> dict | None:
-    """The run asked for, or the newest finished one that has conversations."""
+def chosen_run(check: str, run_id: str | None) -> dict | None:
+    """The run asked for, or the newest finished one of this check that has conversations."""
     if run_id:
         return store.run(run_id)
-    finished = (r for r in store.runs() if r.get('finishedAt') and r.get('status') != 'running' and r.get('items'))
+    finished = (
+        r
+        for r in store.runs()
+        if r.get('finishedAt') and r.get('status') != 'running' and r.get('items') and checks.of_run(r) == check
+    )
     return next(finished, None)
 
 
@@ -287,14 +293,19 @@ def finish(entry: dict, deck: list[dict]) -> dict:
     }
 
 
-def build(run_id: str | None = None) -> dict:
-    deck = cards.deck()
+def build(check: str, run_id: str | None = None) -> dict:
+    """The check's rules and problems: its result on one side, the run asked for (else its newest finished run) on
+    the other. Its scenarios are named only when the deck was built from this check."""
+    document = store.load(cards.DECK) or {}
+    deck = document.get('cards') or []
     book = Book(sources.load())
-    log = from_logs(book, store.load(discover.RESULT) or {})
-    sim = from_run(book, chosen_run(run_id), deck)
-    rules = [finish(entry, deck) for entry in book.rules.values()]
+    log = from_logs(book, store.load(checks.result(check)) or {})
+    sim = from_run(book, chosen_run(check, run_id), deck)
+    scenarios = deck if document.get('check') == check else []
+    rules = [finish(entry, scenarios) for entry in book.rules.values()]
     rules.sort(key=lambda r: (-r['log']['failed'], -r['sim']['failed'], r['rule']['text']))
     return {
+        'check': check,
         'log': log,
         'sim': sim,
         'rules': rules,

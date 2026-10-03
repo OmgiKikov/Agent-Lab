@@ -326,11 +326,16 @@ def log_detail(dialogue_id: str) -> dict:
 
 
 @app.get('/api/problems')
-def problems_view(run: str | None = None) -> dict:
-    """Every rule with its verdicts in the logs and in one run; the rules found violated are the problems."""
-    if run and store.run(run) is None:
-        raise HTTPException(404, 'Прогон не найден')
-    return problems.build(run)
+def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None = None) -> dict:
+    """Every rule of one check with its verdicts in the logs and in one run of that check; the rules found violated
+    are the problems. A run is measured by its own check's criteria, so its check is taken; without either, tone of
+    voice (older links)."""
+    if run:
+        record = store.run(run)
+        if record is None:
+            raise HTTPException(404, 'Прогон не найден')
+        check = checks.of_run(record)
+    return problems.build(check, run)
 
 
 @app.get('/api/sources/{source_id}')
