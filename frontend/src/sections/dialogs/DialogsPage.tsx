@@ -1,9 +1,7 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ChevronDown } from "lucide-react";
-import { Header } from "../../app/Header";
-import { SectionJob } from "../../app/SectionJob";
-import type { Stage } from "../../app/links";
+import { side, type Stage } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { useCriteria } from "../../lab/criteria";
 import { logKey, logRows, simKey, simRows } from "../../lab/dialogs";
@@ -14,16 +12,16 @@ import { useLabState } from "../../lab/LabProvider";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Menu } from "../../ui/Menu";
 import { UploadButton } from "../../product/UploadLogs";
-import { useLogTabs } from "../logs/LogsPage";
+import { CheckHeader } from "../checks/CheckHeader";
 import { SimHeader, useSimRuns } from "../simulations/stage";
 import { Dialog } from "./Dialog";
-import { matchesRow, toVerdict, type Verdict } from "./model";
+import { frozenNames, matchesRow, toVerdict, type Verdict } from "./model";
 import { Rows } from "./Rows";
 
 /**
- * «Разговоры» of a stage: every conversation of the logs' export, or every conversation one run played; one in full with
- * the quotes the checks cited, every criterion's result and the trace. Where a number of another page leads, filtered by
- * its criterion (?rule=) or its result (?v=).
+ * «Разговоры» of a stage: every conversation of the export as a check judged it, or every conversation one run played;
+ * one in full with the quotes the checks cited, every criterion's result and the trace. Where a number of another page
+ * leads, filtered by its criterion (?rule=) or its result (?v=).
  */
 export function DialogsPage({ stage }: { stage: Stage }) {
   const { state, offline } = useLabState();
@@ -31,9 +29,8 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const wide = useWide();
   const { finished, run: simRun } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   const runId = stage === "sim" ? (simRun?.id ?? null) : null;
-  const { data: problems, list: criteria } = useCriteria(runId);
+  const { data: problems, list: criteria } = useCriteria(stage === "sim" ? (simRun?.check ?? null) : stage, runId);
   const run = useRun(runId, state);
-  const logTabs = useLogTabs();
   const [query, setQuery] = useState("");
   const verdict = toVerdict(params.get("v"));
   const ruleId = params.get("rule");
@@ -48,17 +45,18 @@ export function DialogsPage({ stage }: { stage: Stage }) {
     );
 
   const all = useMemo(
-    () => (stage === "log" ? (state ? logRows(state) : []) : simRows(run.data)),
+    () => (stage === "sim" ? simRows(run.data) : state ? logRows(state, stage) : []),
     [stage, state, run.data],
   );
+  const named = useMemo(() => (stage === "sim" ? frozenNames(criteria, all) : undefined), [stage, criteria, all]);
   const rule = ruleId ? problems?.rules.find((r) => r.id === ruleId) : undefined;
   const only = useMemo(
     () =>
       rule
         ? new Set(
-            rule[stage].examples
+            rule[side(stage)].examples
               .filter((e) => e.status === "FAIL")
-              .map((e) => (stage === "log" ? logKey(e.dialogueId ?? "") : simKey(e.runId ?? "", e.index ?? 0))),
+              .map((e) => (stage === "sim" ? simKey(e.runId ?? "", e.index ?? 0) : logKey(e.dialogueId ?? ""))),
           )
         : null,
     [rule, stage],
@@ -80,16 +78,10 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
 
   const header =
-    stage === "log" ? (
-      <Header
-        title="Диалоги"
-        step={1}
-        tabs={logTabs}
-        actions={<UploadButton variant="outline" />}
-        below={<SectionJob kinds={["discover"]} />}
-      />
-    ) : (
+    stage === "sim" ? (
       <SimHeader runId={runId} actions={false} />
+    ) : (
+      <CheckHeader check={stage} actions={<UploadButton variant="outline" check={stage} />} />
     );
   if (offline && !state)
     return (
@@ -140,9 +132,11 @@ export function DialogsPage({ stage }: { stage: Stage }) {
     ) : null;
   const showDetail = !!selected && (wide || !!params.get("d"));
   const empty =
-    stage === "log"
-      ? "Диалоги ещё не загружены: кнопка «Загрузить диалоги» справа вверху."
-      : "В этом прогоне нет разговоров.";
+    stage === "sim"
+      ? "В этом прогоне нет разговоров."
+      : !state.logs.total
+        ? "Диалоги ещё не загружены: кнопка «Загрузить диалоги» справа вверху."
+        : "Разговоры появятся здесь, когда проверка их оценит.";
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -171,7 +165,13 @@ export function DialogsPage({ stage }: { stage: Stage }) {
           runMenu={runMenu}
         />
         {showDetail && selected ? (
-          <Dialog key={selected.key} row={selected} criteria={criteria} onBack={wide ? undefined : () => open(null)} />
+          <Dialog
+            key={selected.key}
+            row={selected}
+            criteria={criteria}
+            named={named}
+            onBack={wide ? undefined : () => open(null)}
+          />
         ) : (
           wide && (
             <EmptyState drop title={all.length ? "Выберите разговор" : "Разговоров нет"} className="justify-center">

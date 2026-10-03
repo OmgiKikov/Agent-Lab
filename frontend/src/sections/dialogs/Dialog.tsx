@@ -18,7 +18,7 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Segmented } from "../../ui/Segmented";
 import { VerdictWord } from "./Rows";
-import { criteriaByRule } from "./model";
+import { criteriaByRule, type Named } from "./model";
 
 type Tab = "talk" | "details";
 const ORDER: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
@@ -33,6 +33,7 @@ const WORD: Record<string, [string, string]> = {
 function Verdicts({
   rules,
   find,
+  named,
   shownOf,
   lit,
   onLit,
@@ -40,6 +41,7 @@ function Verdicts({
 }: {
   rules: Rule[];
   find: (ruleId: string) => Criterion | undefined;
+  named?: Named;
   shownOf: (r: Rule) => Example;
   lit: number | null;
   onLit: (n: number | null) => void;
@@ -52,7 +54,8 @@ function Verdicts({
       </h3>
       <ul className="mt-3 divide-y divide-line">
         {rules.map((r) => {
-          const c = find(r.ruleId);
+          // A criterion that applied nowhere in a run is not among the problems: its frozen name and number stand in.
+          const c = find(r.ruleId) ?? named?.get(r.ruleId);
           const shown = shownOf(r);
           // With one model there is no second check to speak of: the line is empty, and so is the place.
           const second = r.status === "FAIL" ? secondLine(shown, null) : "";
@@ -97,7 +100,18 @@ function Verdicts({
 }
 
 /** One conversation: what was said with the quotes the checks cited, numbered by their criteria; every criterion's result and the record. */
-export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Criterion[]; onBack?: () => void }) {
+export function Dialog({
+  row,
+  criteria,
+  named,
+  onBack,
+}: {
+  row: DialogRow;
+  criteria: Criterion[];
+  /** Names and numbers of a run's criteria that applied nowhere in it (sections/dialogs/model.ts, frozenNames). */
+  named?: Named;
+  onBack?: () => void;
+}) {
   const [params, setParams] = useSearchParams();
   const { state } = useLabState();
   const review = useReview();
@@ -118,6 +132,7 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
     );
   const probe = {
     source: row.source === "sim" ? "sim" : "log",
+    check: row.check,
     dialogueId: row.dialogueId,
     runId: row.runId,
     index: row.index,
@@ -149,8 +164,8 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
         ]
           .filter(Boolean)
           .join(" · ");
-  // The logs' result this conversation comes from; the service takes an answer only on it.
-  const finishedAt = row.source === "log" ? state?.discover?.finishedAt : null;
+  // The check's result this conversation comes from; the service takes an answer only on it.
+  const finishedAt = row.source === "log" && row.check ? state?.checks[row.check]?.finishedAt : null;
   const keyOf = (e: Example) => `${finishedAt ?? ""}|${e.ruleId}|${e.status}`;
   const shownOf = (r: Rule): Example => {
     const e = exampleFor(row, r);
@@ -271,7 +286,15 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
               )}
             </div>
             {rules.length > 0 && (
-              <Verdicts rules={rules} find={find} shownOf={shownOf} lit={lit} onLit={setLit} onDecide={decide} />
+              <Verdicts
+                rules={rules}
+                find={find}
+                named={named}
+                shownOf={shownOf}
+                lit={lit}
+                onLit={setLit}
+                onDecide={decide}
+              />
             )}
           </>
         )}

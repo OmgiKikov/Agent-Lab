@@ -4,7 +4,7 @@ import { ChevronDown, Play } from "lucide-react";
 import { api } from "../../lab/api";
 import { plural } from "../../lab/format";
 import type { RuleEntry } from "../../lab/problems";
-import { scenariosLink, SECTIONS } from "../../app/links";
+import { scenariosLink, SECTIONS, type Check } from "../../app/links";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
@@ -22,8 +22,11 @@ const readTarget = () => {
 };
 const link = "rounded-sm text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3";
 
-/** Play again the scenarios built from this violation's conversations, on the agent of your choice; the run shows in the navigation. */
-export function Reproduce({ r }: { r: RuleEntry }) {
+/**
+ * Play again the scenarios built from this violation's conversations, on the agent of your choice; the run shows in the
+ * task card. Only the scenarios of this check count: a deck built from the other check's errors is not this one's.
+ */
+export function Reproduce({ r, check }: { r: RuleEntry; check: Check }) {
   const { state, refresh } = useLabState();
   const toast = useToast();
   const ready = (state?.targets ?? []).filter((t) => t.ready);
@@ -31,14 +34,15 @@ export function Reproduce({ r }: { r: RuleEntry }) {
   const [starting, setStarting] = useState(false);
   const chosen = ready.find((t) => t.id === target) ?? ready[0];
   const busy = !!state?.job.running;
-  const n = r.scenarioIds.length;
+  const ids = state?.cards?.check === check ? r.scenarioIds : [];
+  const n = ids.length;
   const start = async () => {
     if (!chosen) return;
     setStarting(true);
     try {
       await api("/api/runs", {
         target: chosen.id,
-        cardIds: r.scenarioIds,
+        cardIds: ids,
         label: `Воспроизвести: ${r.title}`.slice(0, 120),
         repeats: 1,
         personas: ["default"],

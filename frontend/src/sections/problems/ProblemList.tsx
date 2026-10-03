@@ -1,9 +1,8 @@
 import { Link } from "react-router-dom";
 import type { Criterion } from "../../lab/criteria";
 import { count } from "../../lab/format";
-import { problemLink, SECTIONS, type Stage } from "../../app/links";
+import { criterionLink, problemLink, side, type Stage } from "../../app/links";
 import { ENTER, stagger } from "../../product/motion";
-import { TONE_ONLY } from "../../app/product";
 import { queueOf } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
@@ -19,14 +18,15 @@ export function ProblemList({
   runId?: string | null;
   limit?: number;
 }) {
-  const rows = queueOf(list, stage);
+  const where = side(stage);
+  const rows = queueOf(list, where);
   const shown = limit ? rows.slice(0, limit) : rows;
-  const clean = list.filter((c) => c.r[stage].passed > 0 && !c.r[stage].failed).length;
+  const clean = list.filter((c) => c.r[where].passed > 0 && !c.r[where].failed).length;
   if (!rows.length)
     return (
       <p className="py-6 text-read text-fg-3">
         {/* «No errors» only where something was checked: a check the model could not do is not a clean result. */}
-        {list.some((c) => c.r[stage].passed > 0)
+        {list.some((c) => c.r[where].passed > 0)
           ? "Ошибок не найдено ни по одному критерию."
           : "Ни один разговор пока не удалось проверить по этим критериям."}
       </p>
@@ -36,15 +36,15 @@ export function ProblemList({
       <ol className="divide-y divide-line">
         {shown.map((c, i) => (
           <li key={c.r.id} className={ENTER} style={stagger(i + 2)}>
-            <ProblemRow c={c} side={stage} rank={i + 1} to={problemLink(c.r.id, stage, runId)} />
+            <ProblemRow c={c} side={where} rank={i + 1} to={problemLink(c.r.id, stage, runId)} />
           </li>
         ))}
       </ol>
       {!limit && clean > 0 && (
         <p className="mt-4 border-t border-line pt-4 text-body text-fg-3">
           По {count(clean, "критерию", "критериям", "критериям")} ошибок не найдено.{" "}
-          {!TONE_ONLY && (
-            <Link to={SECTIONS.criteria} className="font-medium text-run hover:underline">
+          {stage !== "sim" && (
+            <Link to={criterionLink(stage)} className="font-medium text-run hover:underline">
               Все критерии
             </Link>
           )}
