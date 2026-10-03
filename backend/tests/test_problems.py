@@ -107,6 +107,15 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value['problems'], [rule['id']])
         self.assertIsNone(value['sim'])
 
+    def test_a_rule_names_the_ids_its_verdicts_carry_in_each_stage(self) -> None:
+        # A verdict keeps the wording the check saw (a clarified criterion's text grows): screens match it by id.
+        value = audit()
+        value['results'][0]['rules'][0]['rule'] = RULE['text'] + '\n\nУточнения, подтверждённые человеком:\n…'
+        store.save(discover.RESULT, value)
+        store.create_run(played_run())
+        rule = problems.build('run-1')['rules'][0]
+        self.assertEqual((rule['log']['ruleIds'], rule['sim']['ruleIds']), (['t1r1', 't2r1'], ['c1']))
+
     def test_the_first_example_of_a_problem_shows_what_its_title_says(self) -> None:
         def failed(dialogue_id: str, title: str, second: dict | None = None) -> dict:
             row = {'ruleId': 't1r1', 'status': 'FAIL', 'reason': title, 'agentQuote': 'звоните', 'title': title}
@@ -248,6 +257,23 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         missing = await self.client.post('/api/review', json=dict(body, ruleId='nope'))
         self.assertEqual(missing.status_code, 404)
         self.assertEqual((await self.client.post('/api/review', json={'source': 'log'})).status_code, 422)
+
+    async def test_an_answer_on_a_verdict_that_changed_meanwhile_is_refused(self) -> None:
+        # The person saw «без ошибки» in an earlier result; the current one says the agent erred here.
+        body = {'source': 'log', 'dialogueId': 'd1', 'ruleId': 't1r1', 'decision': 'agree', 'status': 'PASS'}
+        for stale in ({}, {'finishedAt': audit()['finishedAt']}):
+            response = await self.client.post('/api/review', json={**body, **stale})
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(response.json()['detail'], 'Результат изменился. Откройте актуальную проверку.')
+        self.assertNotIn('review', store.load(discover.RESULT)['results'][0]['rules'][0])
+        response = await self.client.post('/api/review', json={**body, 'status': 'FAIL'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(store.load(discover.RESULT)['results'][0]['rules'][0]['review'], 'agree')
+        store.create_run(played_run())
+        body = {'source': 'sim', 'run': 'run-1', 'index': 0, 'ruleId': 'c1', 'decision': 'agree', 'status': 'PASS'}
+        self.assertEqual((await self.client.post('/api/review', json=body)).status_code, 409)
+        self.assertNotIn('review', store.run('run-1')['items'][0]['rules'][0])
+        self.assertEqual((await self.client.post('/api/review', json={**body, 'status': 'FAIL'})).status_code, 200)
 
     async def test_log_answers_wait_for_a_running_audit(self) -> None:
         with patch.dict(api.jobs.state, {'running': True, 'kind': 'discover'}):

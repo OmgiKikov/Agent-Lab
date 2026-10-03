@@ -99,6 +99,9 @@ class Book:
                 },
                 'topics': [],
                 'found': {'log': {}, 'sim': {}},
+                # The ids its verdicts carry in each stage: a verdict keeps the wording the judge saw, clarifications
+                # included, so a screen finds the rule of a verdict by id, not by text.
+                'ruleIds': {'log': set(), 'sim': set()},
             }
             self.by_text[quotes.normalized(rule['text'])] = rule
         entry = self.rules[key]
@@ -123,7 +126,7 @@ def from_logs(book: Book, analysis: dict) -> dict | None:
     rules = {}
     for topic in analysis.get('topics') or []:
         for rule in topic['rules']:
-            book.entry(rule, topic['title'])
+            book.entry(rule, topic['title'])['ruleIds']['log'].add(rule['id'])
             rules[rule['id']] = (topic['title'], rule)
     results = analysis.get('results') or []
     for result in results:
@@ -220,6 +223,7 @@ def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
                 'reviewScope': review_scope,
             }
             entry = book.entry(rule, item.get('topic', ''))
+            entry['ruleIds']['sim'].add(row['ruleId'])
             book.add(entry, 'sim', f'{run["id"]}#{index}', example, row.get('title', ''))
     done = [i for i in items if i.get('status') in MEASURED]
     assessed = sum(1 for i in done if i['status'] in ('PASS', 'FAIL'))
@@ -244,7 +248,13 @@ def verdicts(entry: dict, where: str) -> tuple[dict, list[str]]:
     )
     counts = Counter(COUNTED[e['status']] for e in examples)
     titles = [t for e, t in rows if e['status'] == 'FAIL' and t]
-    side = {'failed': counts['failed'], 'passed': counts['passed'], 'unknown': counts['unknown'], 'examples': examples}
+    side = {
+        'failed': counts['failed'],
+        'passed': counts['passed'],
+        'unknown': counts['unknown'],
+        'examples': examples,
+        'ruleIds': sorted(entry['ruleIds'][where]),
+    }
     return side, titles
 
 

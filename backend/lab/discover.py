@@ -18,6 +18,7 @@ SEED = 20260928  # the same sample of conversations in every audit
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
 TONE = 'tone-of-voice'  # tone.KIND: tone.py imports this module, so the value is repeated, as in store
 OBSERVATIONS = ('reply', 'tool', 'state')
+UNANSWERED = 'Модель проверки не ответила ни по одному разговору.'
 
 
 def sample(count: int) -> list[dict]:
@@ -182,6 +183,14 @@ async def judge_each(todo: list[tuple[dict, dict]], done: Callable[[dict], None]
             tasks.create_task(one(dialogue, topic))
 
 
+def ensure_answered(results: list[dict]) -> None:
+    """An outage is not a result: when the model answered on no conversation, the check fails, and the previous result,
+    the scenarios built from it and the history stay. When only some failed, it is a result: those conversations are
+    «не удалось проверить»."""
+    if all(result['status'] == 'UNMEASURED' for result in results) and any(result.get('error') for result in results):
+        raise RuntimeError(UNANSWERED + (' Прежний итог сохранён.' if store.load(RESULT) else ''))
+
+
 def carry_reviews(previous: dict, results: list[dict]) -> None:
     """A person's decision stays with a verdict that did not change: the same conversation, rule and status.
     Only with frozen rules: extracted anew, the same rule id may be another rule."""
@@ -298,6 +307,7 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
         progress(stage='judge', done=len(results), total=len(todo), message=f'Оценено {len(results)} из {len(todo)}')
 
     await judge_each(todo, done)
+    ensure_answered(results)
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     results.sort(key=lambda r: order.get(str(r['dialogueId']), 0))
     if previous.get('topics') and not replan:

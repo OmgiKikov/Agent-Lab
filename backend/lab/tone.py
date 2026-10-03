@@ -176,6 +176,42 @@ def for_judging(rule: dict) -> dict:
     return {**rule, 'text': rule['text'] + '\n\nУточнения, подтверждённые человеком:\n' + '\n'.join(notes)}
 
 
+def _judged(snapshot: dict) -> tuple[dict, dict, dict]:
+    """What a saved check showed the judge and what it said: conversations, criteria as judged, verdicts."""
+    conversations = {str(dialogue['id']): dialogue for dialogue in snapshot.get('dialogues') or []}
+    criteria = {rule['id']: for_judging(rule) for rule in snapshot.get('criteria') or []}
+    verdicts = {
+        (str(result['dialogueId']), row['ruleId']): row['status']
+        for result in (snapshot.get('result') or {}).get('results') or []
+        for row in result.get('rules') or []
+    }
+    return conversations, criteria, verdicts
+
+
+def carry_decisions(results: list[dict], criteria: list[dict], dialogues: list[dict]) -> None:
+    """A person's latest decision on a criterion of a conversation stays while the verdict is the same and the judge saw
+    the same: that conversation, that criterion with its clarifications. It is read from the saved checks, so a check
+    in between that could not decide it does not lose it, and clarifying another criterion does not drop it. A new
+    export that gives the id to another conversation gets nothing."""
+    rows = {(str(result['dialogueId']), row['ruleId']): row for result in results for row in result['rules']}
+    shown = {str(dialogue['id']): dialogue for dialogue in dialogues}
+    seen = {rule['id']: for_judging(rule) for rule in criteria}
+    saved: dict[str, tuple[dict, dict, dict]] = {}
+    latest: dict[tuple[str, str], tuple[str | None, str | None]] = {}
+    for check_id, dialogue_id, rule_id, decision in store.tone_decisions():
+        key = (dialogue_id, rule_id)
+        if key in latest or key not in rows:
+            continue
+        if check_id not in saved:
+            saved[check_id] = _judged(store.tone_check(check_id) or {})
+        conversations, judged, verdicts = saved[check_id]
+        if conversations.get(dialogue_id) == shown.get(dialogue_id) and judged.get(rule_id) == seen.get(rule_id):
+            latest[key] = (verdicts.get(key), decision)
+    for key, (status, decision) in latest.items():
+        if decision and status == rows[key]['status']:
+            rows[key]['review'] = decision
+
+
 async def _judge(dialogues: list[dict], topic: dict, progress: Progress) -> list[dict]:
     results: list[dict] = []
 
@@ -201,9 +237,14 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
     progress(done=0, total=len(dialogues), message='Начинаю проверку tone of voice')
     results = await _judge(dialogues, {**topic, 'rules': [for_judging(rule) for rule in criteria]}, progress)
     ensure_active()
+    discover.ensure_answered(results)
+    # The live result carries its own answers with the same criteria, as before: a result saved before the history of
+    # checks keeps them only in itself. The history then adds what a check in between lost or what another criterion's
+    # clarification would have dropped.
     previous = store.load(discover.RESULT) or {}
     if previous.get('criteriaRevision') == draft['revision']:
         discover.carry_reviews(previous, results)
+    carry_decisions(results, criteria, dialogues)
     return {
         'purpose': KIND,
         'checkId': uuid.uuid4().hex,

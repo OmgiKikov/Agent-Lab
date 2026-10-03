@@ -97,6 +97,38 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(store.load(api.discover.RESULT), audit)
                 self.assertEqual(store.load(api.cards.DECK) is not None, kept)
 
+    async def test_an_audit_the_model_could_not_answer_keeps_the_previous_one_and_its_scenarios(self) -> None:
+        dialogue = {
+            'id': 'd1',
+            'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
+        }
+        store.save(api.logs.FILE, [dialogue])
+        store.save(
+            api.sources.FILE, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'Отвечай по делу.'}]
+        )
+        rule = {'id': 't1r1', 'text': 'Отвечает по делу', 'quote': 'Отвечай по делу', 'sourceId': 's1'}
+        previous = {
+            'finishedAt': '2026-10-01T10:00:00+00:00',
+            'topics': [{'id': 't1', 'title': 'Вопросы', 'dialogueIds': ['d1'], 'rules': [rule]}],
+            'results': [{'dialogueId': 'd1', 'topicId': 't1', 'status': 'PASS', 'rules': [], 'opening': 'Вопрос'}],
+        }
+        store.save(api.discover.RESULT, previous)
+        store.save(api.cards.DECK, {'cards': ['built from the previous audit']})
+        down = AsyncMock(side_effect=api.llm.ModelError('Модель недоступна: ConnectError'))
+        with patch.object(api.discover.judge, 'log_verdict', down):
+            response = await self.client.post('/api/discover', json={'count': 5})
+            self.assertEqual(response.status_code, 200, response.text)
+            for _ in range(100):
+                if not api.jobs.state['running']:
+                    break
+                await asyncio.sleep(0.002)
+        down.assert_awaited_once()
+        self.assertEqual(
+            api.jobs.state['error'], 'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён.'
+        )
+        self.assertEqual(store.load(api.discover.RESULT), previous)
+        self.assertEqual(store.load(api.cards.DECK), {'cards': ['built from the previous audit']})
+
     async def test_stopped_source_worker_cannot_publish_or_invalidate_previous_analysis(self) -> None:
         entered, release, finished = threading.Event(), threading.Event(), threading.Event()
         store.save(api.sources.FILE, [{'id': 'old'}])
