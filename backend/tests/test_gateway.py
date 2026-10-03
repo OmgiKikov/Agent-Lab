@@ -1,15 +1,20 @@
 """The bank's gateway read from certs/. openssl makes the bundles here, in a temporary folder: no key is in Git."""
 
+import asyncio
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 from lab.llm import gateway
 
+Client = httpx.AsyncClient
 PASSWORD = 'Secret-1'
 BUNDLES = Path()  # a temporary folder, from setUpModule
 
@@ -59,14 +64,39 @@ class GatewayCase(unittest.TestCase):
         for name in (*gateway._ENV.values(), 'AGENT_LAB_GATEWAY_INSECURE'):
             os.environ.pop(name, None)
         for name, value in (('CERTS', self.certs), ('FILE', Path(folder.name) / 'none.json')):
-            patcher = patch.object(gateway, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+            self.patch(name, value)
+        for name in ('_unpacked', '_built', '_session'):  # what earlier tests left in the caches
+            self.patch(name, None)
+
+    def patch(self, name: str, value: object) -> None:
+        patcher = patch.object(gateway, name, value, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def reason(self) -> str:
         with self.assertRaises(gateway.ModelError) as caught:
             gateway.config()
         return str(caught.exception)
+
+    def spy(self, target: object, name: str) -> list[bool]:
+        """Calls of target.name from now on: for each, whether it ran on the main thread, where the event loop is."""
+        calls = []
+        real = getattr(target, name)
+
+        def call(*args, **options):
+            calls.append(threading.current_thread() is threading.main_thread())
+            return real(*args, **options)
+
+        patcher = patch.object(target, name, side_effect=call)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def renew(self) -> None:
+        """The bank's next bundle in place of this one."""
+        bundle = self.certs / 'client.p12'
+        stamp = bundle.stat()
+        os.utime(bundle, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
 
 
 class BundleTests(GatewayCase):
@@ -130,3 +160,59 @@ class LegacyBundleTests(GatewayCase):
     def test_an_rc2_bundle_without_the_legacy_provider_is_a_reason(self) -> None:
         with tempfile.TemporaryDirectory() as empty, patch.dict(os.environ, {'OPENSSL_MODULES': empty}):
             self.assertIn('старом формате (RC2)', self.reason())
+
+
+class ReuseTests(GatewayCase):
+    """certs/ costs once, not on every call: one conversion, one TLS context, one client per event loop."""
+
+    def test_five_calls_cost_one_conversion_one_context_and_one_client(self) -> None:
+        conversions = self.spy(gateway.subprocess, 'run')
+        contexts = self.spy(gateway.ssl, 'create_default_context')
+        clients = []
+        answer = {'messages': [{'role': 'assistant', 'content': [{'text': 'да'}]}]}
+
+        def client(**options):
+            clients.append(options)
+            return Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=answer)), **options)
+
+        async def calls() -> None:
+            for _ in range(5):
+                await gateway.chat('glm', 'system', [{'role': 'user', 'content': 'вопрос'}], httpx.Timeout(5))
+
+        with patch.object(gateway.httpx, 'AsyncClient', side_effect=client):
+            asyncio.run(calls())
+        self.assertEqual((len(conversions), len(contexts), len(clients)), (2, 1, 1))  # 2: the certificate and the key
+
+    def test_a_renewed_bundle_is_converted_again_once(self) -> None:
+        conversions = self.spy(gateway.subprocess, 'run')
+        for _ in range(3):
+            gateway.config()
+        self.renew()
+        for _ in range(3):
+            gateway.config()
+        self.assertEqual(len(conversions), 4)
+
+    def test_a_broken_bundle_is_not_opened_again_on_every_call(self) -> None:
+        (self.certs / 'password.txt').write_text('Wrong-Pa55\n')
+        conversions = self.spy(gateway.subprocess, 'run')
+        for _ in range(3):
+            self.reason()
+        self.assertEqual(len(conversions), 1)
+
+    def test_openssl_runs_off_the_event_loop(self) -> None:
+        conversions = self.spy(gateway.subprocess, 'run')
+        asyncio.run(gateway._client())
+        self.assertEqual(conversions, [False, False])
+
+    def test_each_event_loop_has_its_client_and_a_renewal_gets_a_new_one(self) -> None:
+        async def clients() -> list[httpx.AsyncClient]:
+            first, again = (await gateway._client())[0], (await gateway._client())[0]
+            self.renew()
+            return [first, again, (await gateway._client())[0]]
+
+        first, again, renewed = asyncio.run(clients())
+        other = asyncio.run(gateway._client())[0]
+        self.assertIs(first, again)
+        self.assertFalse(first.is_closed)
+        self.assertIsNot(renewed, first)
+        self.assertIsNot(other, renewed)
