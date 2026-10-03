@@ -62,6 +62,15 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                 await llm.chat('system', 'question', endpoint=('http://provider/v1', 'requested'))
             self.assertFalse((await llm.check(('http://provider/v1', 'requested')))['ok'])
 
+    async def test_a_typo_in_the_model_address_is_a_model_error_and_check_says_so(self):
+        endpoint = ('http://127.0.0.1:84 43/v1', 'requested')
+        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(lambda _: json_response({}))):
+            with self.assertRaises(llm.ModelError) as caught:
+                await llm.chat('system', 'question', endpoint=endpoint)
+            checked = await llm.check(endpoint)
+        self.assertIn('LAB_MODEL_URL', str(caught.exception))
+        self.assertEqual(checked, {'ok': False, 'error': str(caught.exception)})
+
     async def test_structured_retries_bad_envelope_and_carries_successful_model(self):
         calls = []
 

@@ -117,6 +117,9 @@ async def _ask(
         raise ModelError(f'Модель недоступна: {type(error).__name__}', retryable=True) from error
     except httpx.HTTPError as error:
         raise ModelError(f'Модель недоступна: {type(error).__name__}') from error
+    except httpx.InvalidURL as error:  # not an HTTPError: a typo in the address
+        setting = 'certs/url.txt' if base == GATEWAY else 'LAB_MODEL_URL и LAB_SECOND_URL'
+        raise ModelError(f'Адрес модели не читается ({error}): проверьте {setting}') from error
 
 
 def _pause(attempt: int, retry_after: float | None) -> float:
