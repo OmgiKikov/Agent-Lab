@@ -8,17 +8,12 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Group, Row } from "./parts";
 
-/**
- * Models as /api/state describes them, with what lab/types.ts does not list yet: where the second check goes when it
- * goes elsewhere, and why the bank's gateway does not work.
- */
-type Described = LabState["models"] & { secondVia?: string | null; problem?: string | null };
 const PI = "OpenRouter через Pi";
 
 /** «Настройки»: what the product itself runs on — the models and where it answers. How to reach the agent lives in «Агент». */
 export function SettingsPage() {
   const { state, offline } = useLabState();
-  const models: Described | undefined = state?.models;
+  const models = state?.models;
   return (
     <div className="flex h-full flex-col">
       <Header title="Настройки" />
@@ -65,7 +60,7 @@ const Address = ({ children }: { children: string }) => (
 );
 
 /** Where the customers' conversations go — the bank's gateway, OpenRouter through Pi, or an endpoint's address — and, where it matters, where the gateway's certificates go. */
-function Destination({ models }: { models: Described }) {
+function Destination({ models }: { models: LabState["models"] }) {
   return (
     <>
       Разговоры уходят в {models.via}.{models.secondVia && <> Вторая проверка — в {models.secondVia}.</>}

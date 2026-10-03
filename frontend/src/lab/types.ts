@@ -115,7 +115,17 @@ export type Target = { id: string; name: string; kind: string; note: string; whe
 export type Persona = { id: string; name: string; note: string };
 export type Settings = { prodUrl: string; epk: string[]; repo: string };
 export type Source = { id: string; kind: string; origin: string; chars: number; rules: number; sha256?: string | null };
-export type Models = { via: string; main: string | null; second: string | null };
+/**
+ * The models as /api/state describes them (backend/lab/llm, describe): where the conversations go, where the second
+ * check's go when elsewhere, and why the bank's gateway, set up, cannot be used now.
+ */
+export type Models = {
+  via: string;
+  main: string | null;
+  second: string | null;
+  secondVia?: string | null;
+  problem?: string | null;
+};
 export type Check = { ok: boolean; error?: string; status?: string; text?: string; seconds?: number; version?: string };
 export type Topic = { id: string; title: string; rules: Criterion[] };
 export type Discover = {
