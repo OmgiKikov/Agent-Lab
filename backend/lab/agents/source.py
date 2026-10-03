@@ -15,21 +15,33 @@ from .http import AGENT_PATH, AgentError, HttpAgent
 
 LOG = 'local-code-agent.log'  # beside the database of the agent being checked: agents run in parallel (jobs.PerAgent)
 START_TIMEOUT = 180
+# Ports chosen by this process for agents it has not stopped yet: two runs starting at once must not both pick a port
+# their processes have not bound yet.
+_HELD: set[int] = set()
 
 
 def free_port(preferred: int) -> int:
-    """The preferred port if nobody listens on it, otherwise the next free one."""
+    """The preferred port if nobody listens on it and no other run holds it, otherwise the next free one. It stays
+    held until release()."""
     for port in range(preferred, preferred + 50):
+        if port in _HELD:
+            continue
         with socket.socket() as probe:
             if probe.connect_ex(('127.0.0.1', port)) != 0:
+                _HELD.add(port)
                 return port
     raise AgentError('Нет свободного порта для агента из исходников')
 
 
+def release(port: int | None) -> None:
+    _HELD.discard(port)
+
+
 class CodeAgent(HttpAgent):
     def __init__(self, config: dict) -> None:
-        self.port = free_port(int(config.get('port', 8081)))
-        super().__init__({**config, 'url': f'http://127.0.0.1:{self.port}{AGENT_PATH}', 'profile': 'local'})
+        super().__init__({**config, 'url': '', 'profile': 'local'})
+        self.preferred = int(config.get('port', 8081))
+        self.port: int | None = None
         self.repo = Path(config['repo']).expanduser()
         self.process: subprocess.Popen | None = None
 
@@ -37,6 +49,8 @@ class CodeAgent(HttpAgent):
         script = self.repo / 'local/run-app.sh'
         if not script.exists():
             raise AgentError(f'Нет исходников агента: {script}')
+        self.port = free_port(self.preferred)
+        self.url = f'http://127.0.0.1:{self.port}{AGENT_PATH}'
         log = store.database().parent / LOG
         log.parent.mkdir(parents=True, exist_ok=True)
         # The agent's output may quote the bank's data: readable by this user only.
@@ -71,6 +85,12 @@ class CodeAgent(HttpAgent):
         raise AgentError('Агент из исходников не ответил за 3 минуты')
 
     async def close(self) -> None:
+        try:
+            await self._stop()
+        finally:
+            release(self.port)
+
+    async def _stop(self) -> None:
         if not self.process or self.process.poll() is not None:
             return
         try:

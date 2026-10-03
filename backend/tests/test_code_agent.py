@@ -58,3 +58,16 @@ class CodeAgentTests(unittest.IsolatedAsyncioTestCase):
         log = database.parent / 'local-code-agent.log'
         self.assertIn(f'listening on {agent.port}', log.read_text())
         self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+
+    async def test_two_agents_started_at_once_each_get_their_own_port(self) -> None:
+        config = {'repo': str(self.root / 'repo'), 'port': a_free_port()}
+        first, second = source.CodeAgent(config), source.CodeAgent(config)
+        databases = [self.root / 'agents' / name / 'lab.sqlite3' for name in ('first', 'second')]
+        try:
+            await asyncio.gather(self.start(first, databases[0]), self.start(second, databases[1]))
+            self.assertNotEqual(first.port, second.port)
+            self.assertEqual((first.version, second.version), ('test', 'test'))
+        finally:
+            await asyncio.gather(first.close(), second.close())
+        self.assertEqual(source.free_port(config['port']), config['port'])  # a stopped agent's port is free again
+        source.release(config['port'])
