@@ -218,7 +218,7 @@ def state() -> dict:
         'discover': analysis,
         'toneOfVoice': store.load(tone.DRAFT),
         'cards': store.load(cards.DECK),
-        'runs': [{key: record.get(key) for key in RUN_FIELDS} for record in store.runs()],
+        'runs': [{key: summary.get(key) for key in RUN_FIELDS} for summary in store.run_summaries()],
         'targets': [agents.public(key, config) for key, config in agents.configs().items()],
         'personas': personas.public(),
     }

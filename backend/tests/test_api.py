@@ -225,6 +225,39 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state['runs'][0]['updatedAt'])
         self.assertNotIn('workshop', state)
 
+    async def state_parsing(self) -> tuple[dict, list[str]]:
+        """/api/state, and every text it parsed as JSON on the way."""
+        parsed = []
+        loads = json.loads
+
+        def spy(text, *args, **kwargs):
+            parsed.append(text if isinstance(text, str) else text.decode())
+            return loads(text, *args, **kwargs)
+
+        with patch.object(store.json, 'loads', spy):
+            response = await self.client.get('/api/state')
+        self.assertEqual(response.status_code, 200)
+        return response.json(), parsed
+
+    async def test_state_lists_runs_without_parsing_their_conversations(self) -> None:
+        conversation = [{'role': 'agent', 'text': 'conversation-of-the-run'}]
+        for number in (1, 2):
+            store.create_run(
+                {
+                    'id': f'run-{number}',
+                    'startedAt': f'2026-10-0{number}T10:00:00+00:00',
+                    'status': 'done',
+                    'items': [{'cardId': 'card-1', 'status': 'PASS', 'conversation': conversation}],
+                }
+            )
+        store.set_review('run-1', 0, 'agree')
+        state, parsed = await self.state_parsing()
+        self.assertEqual([run['id'] for run in state['runs']], ['run-2', 'run-1'])
+        self.assertEqual(state['runs'][1]['revision'], 2)
+        self.assertEqual(state['runs'][1]['metric']['human'], {'reviewed': 1, 'agree': 1})
+        self.assertNotIn('items', state['runs'][0])
+        self.assertFalse([text for text in parsed if 'conversation-of-the-run' in text])
+
     async def test_startup_recovers_interrupted_run_and_retains_finished_items_and_reviews(self) -> None:
         store.create_run(
             {

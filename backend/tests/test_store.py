@@ -204,6 +204,23 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(store.run('run-1'), None)
         self.assertEqual(store.run('run-1')['id'], 'run-1')
 
+    def test_runs_of_an_older_database_and_every_write_keep_a_summary_without_conversations(self) -> None:
+        older = record()
+        older.update(status='done', items=[{'cardId': 'card-1', 'status': 'PASS', 'conversation': []}])
+        with sqlite3.connect(store.DB) as connection:
+            connection.execute('CREATE TABLE runs (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            connection.execute('INSERT INTO runs (id, value) VALUES (?, ?)', ('run-1', json.dumps(older)))
+        connection.close()
+        self.assertEqual(store.run_summaries(), [{key: value for key, value in older.items() if key != 'items'}])
+        running = dict(record(), id='run-2', startedAt='2026-10-01T10:00:00+00:00')
+        store.import_legacy({}, [running])
+        self.assertEqual([summary['id'] for summary in store.run_summaries()], ['run-2', 'run-1'])
+        store.recover_runs()
+        self.assertEqual(store.run_summaries()[0]['status'], 'stopped')
+        store.update_run('run-1', label='первый')
+        self.assertEqual(store.run_summaries()[1]['label'], 'первый')
+        self.assertTrue(all('items' not in summary for summary in store.run_summaries()))
+
     def test_changed_primary_judgment_clears_old_confirmation(self) -> None:
         source = record()
         source['items'][0].update(status='FAIL', rules=[{'status': 'FAIL'}])

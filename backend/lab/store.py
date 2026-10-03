@@ -16,7 +16,7 @@ DB = DATA / 'lab.sqlite3'
 # The database of the agent a request works in (registry.using, api.py); without one, DB above.
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 # The database's user_version once its schema below is in place.
-SCHEMA = 1
+SCHEMA = 2
 
 
 def now() -> str:
@@ -46,7 +46,12 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
     with connection:
         connection.execute('BEGIN IMMEDIATE')
         connection.execute('CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
-        connection.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        # summary: the run without its conversations, written with it (_summary), for the list of runs.
+        connection.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL, summary TEXT)')
+        if 'summary' not in {column[1] for column in connection.execute('PRAGMA table_info(runs)')}:
+            connection.execute('ALTER TABLE runs ADD COLUMN summary TEXT')
+        for run_id, value in connection.execute('SELECT id, value FROM runs WHERE summary IS NULL').fetchall():
+            connection.execute('UPDATE runs SET summary = ? WHERE id = ?', (_summary(json.loads(value)), run_id))
         connection.execute(
             'CREATE TABLE IF NOT EXISTS tone_checks (id TEXT PRIMARY KEY, summary TEXT NOT NULL, value TEXT NOT NULL)'
         )
@@ -60,6 +65,10 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+
+
+def _summary(record: dict) -> str:
+    return _json({key: value for key, value in record.items() if key != 'items'})
 
 
 def load(name: str, default: Any = None) -> Any:
@@ -238,6 +247,15 @@ def runs() -> list[dict]:
     return sorted(records, key=lambda record: record.get('startedAt', ''), reverse=True)
 
 
+def run_summaries() -> list[dict]:
+    """Every run without its conversations, newest first: a list of runs never parses a conversation."""
+    with _connection() as connection:
+        # A row an older Lab wrote after the setup has no summary yet: its record stands in.
+        rows = connection.execute('SELECT coalesce(summary, value) FROM runs').fetchall()
+    summaries = [{key: value for key, value in json.loads(raw).items() if key != 'items'} for (raw,) in rows]
+    return sorted(summaries, key=lambda summary: summary.get('startedAt', ''), reverse=True)
+
+
 def run(run_id: str) -> dict | None:
     with _connection() as connection:
         row = connection.execute('SELECT value FROM runs WHERE id = ?', (run_id,)).fetchone()
@@ -248,8 +266,16 @@ def create_run(record: dict) -> dict:
     """Insert a run once. Subsequent writes must patch it, never replace a snapshot."""
     value = dict(record, revision=1, updatedAt=now(), metric=metric(record['items']))
     with _connection() as connection:
-        connection.execute('INSERT INTO runs (id, value) VALUES (?, ?)', (value['id'], _json(value)))
+        connection.execute(
+            'INSERT INTO runs (id, value, summary) VALUES (?, ?, ?)', (value['id'], _json(value), _summary(value))
+        )
     return value
+
+
+def _save_run(connection: sqlite3.Connection, record: dict) -> None:
+    connection.execute(
+        'UPDATE runs SET value = ?, summary = ? WHERE id = ?', (_json(record), _summary(record), record['id'])
+    )
 
 
 def _mutate_run(run_id: str, mutate: Callable[[dict], None]) -> dict:
@@ -261,7 +287,7 @@ def _mutate_run(run_id: str, mutate: Callable[[dict], None]) -> dict:
         record = json.loads(row[0])
         mutate(record)
         record.update(metric=metric(record['items']), updatedAt=now(), revision=record.get('revision', 0) + 1)
-        connection.execute('UPDATE runs SET value = ? WHERE id = ?', (_json(record), run_id))
+        _save_run(connection, record)
     return record
 
 
@@ -386,7 +412,7 @@ def recover_runs() -> int:
                 if item.get('status') == 'RUNNING':
                     item.update(status='UNMEASURED', stage='', error=error)
             record.update(metric=metric(record['items']), updatedAt=now(), revision=record.get('revision', 0) + 1)
-            connection.execute('UPDATE runs SET value = ? WHERE id = ?', (_json(record), record['id']))
+            _save_run(connection, record)
             recovered += 1
     return recovered
 
@@ -405,6 +431,7 @@ def import_legacy(documents: dict[str, Any], records: list[dict]) -> dict[str, i
             value.setdefault('revision', 1)
             value.setdefault('updatedAt', value.get('finishedAt') or value.get('startedAt') or now())
             counts['runs'] += connection.execute(
-                'INSERT OR IGNORE INTO runs (id, value) VALUES (?, ?)', (value['id'], _json(value))
+                'INSERT OR IGNORE INTO runs (id, value, summary) VALUES (?, ?, ?)',
+                (value['id'], _json(value), _summary(value)),
             ).rowcount
     return counts
