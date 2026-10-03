@@ -9,6 +9,7 @@ import { BottomNav } from "./BottomNav";
 import { CommandPalette } from "./CommandPalette";
 import { ShellContext, type Shell as ShellApi } from "./ShellContext";
 import { Sidebar } from "./Sidebar";
+import { JobNotices, TaskCard } from "./TaskCard";
 import { TONE_ONLY } from "./product";
 
 function Frame() {
@@ -17,6 +18,7 @@ function Frame() {
   const { data } = useProblems(null);
   const shell = useMemo<ShellApi>(() => ({ openPalette: () => setPalette(true) }), []);
   useEffect(() => {
+    if (TONE_ONLY) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.code === "KeyK") {
         e.preventDefault();
@@ -54,9 +56,14 @@ function Frame() {
           <div className="min-h-0 flex-1 overflow-auto">
             <Outlet />
           </div>
+          {/* A narrow window has no side navigation: the running task sits above the bottom navigation. */}
+          <div className="lg:hidden">
+            <TaskCard bar />
+          </div>
         </main>
       </div>
       <BottomNav counts={counts} />
+      <JobNotices />
       {!TONE_ONLY && <CommandPalette open={palette} onClose={() => setPalette(false)} />}
     </ShellContext.Provider>
   );

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Copy, FileDown } from "lucide-react";
 import type { Criterion } from "../../lab/criteria";
-import { day, plural } from "../../lab/format";
-import { download, problemsReport, reliabilityWord, summarySentence } from "../../lab/problemReport";
+import { count, day, plural } from "../../lab/format";
+import { download, problemsReport, reliabilityWord, sourceLabel, summarySentence } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
 import { shortOrigin } from "../../product/text";
@@ -40,11 +40,15 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
       <div className="mt-4 grid overflow-hidden rounded-block border border-ink-line sm:ml-7 sm:grid-cols-2">
         <div className="p-4">
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <Cap>Код агента требует</Cap>
+            <Cap>{sourceLabel(c.r.rule.kind)}</Cap>
             <span className="font-mono text-meta text-ink-3">{shortOrigin(c.r.rule.origin)}</span>
           </div>
           <p className="mt-2.5 text-read text-ink">
-            {c.r.rule.quote ? `«${c.r.rule.quote}»` : "Цитата из кода не сохранена в этом прогоне."}
+            {c.r.rule.quote
+              ? `«${c.r.rule.quote}»`
+              : c.r.rule.kind === "tone-of-voice"
+                ? "Цитата из правил не сохранена."
+                : "Цитата из кода не сохранена в этом прогоне."}
           </p>
         </div>
         <div className="border-t border-ink-line p-4 sm:border-l sm:border-t-0">
@@ -158,14 +162,15 @@ export function ReportSheet({
           <h2 className="mt-3 text-balance text-title font-semibold text-ink">{summarySentence(data, side)}</h2>
           {side === "log" && log && (
             <p className="mt-3 text-read text-ink-2">
-              Проверено {log.assessed} из {log.sampled} диалогов. В {log.withViolations} агент ошибся хотя бы раз,{" "}
-              {log.unassessed} проверить не удалось.
+              Проверено {log.assessed} из {count(log.sampled, "разговора", "разговоров", "разговоров")}. В{" "}
+              {log.withViolations} агент ошибся хотя бы раз, {log.unassessed} проверить не удалось.
             </p>
           )}
           {side === "sim" && sim && (
             <p className="mt-3 text-read text-ink-2">
-              Прогон {sim.target} · {sim.version}: проверено {sim.assessed} из {sim.dialogs} разговоров, ошибка в{" "}
-              {sim.withViolations}, {sim.unassessed} проверить не удалось.
+              Прогон {sim.target} · {sim.version}: проверено {sim.assessed} из{" "}
+              {count(sim.dialogs, "разговора", "разговоров", "разговоров")}, ошибка в {sim.withViolations},{" "}
+              {sim.unassessed} проверить не удалось.
             </p>
           )}
           <dl className="mt-6 grid grid-cols-2 border-t border-ink sm:grid-cols-4">

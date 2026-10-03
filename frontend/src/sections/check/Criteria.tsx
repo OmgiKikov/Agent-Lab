@@ -10,19 +10,24 @@ import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 
+/** One check takes at most this many criteria (backend/lab/api.py, ToneCheckCommand). */
+const MAX_CRITERIA = 20;
+
 export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack: () => void; onStarted: () => void }) {
   const { refresh } = useLabState();
   const draft = state.toneOfVoice;
   const result = toneResult(state);
   const [choice, setChoice] = useState<{ revision: string; ids: string[] } | null>(null);
+  // While the first criteria are still being collected there is neither a draft nor a choice: nothing is chosen yet.
   const ids =
-    choice?.revision === draft?.revision
-      ? choice!.ids
+    choice && choice.revision === draft?.revision
+      ? choice.ids
       : ((result?.criteriaRevision === draft?.revision
           ? result?.topics.flatMap((t) => t.rules.map((c) => c.id))
           : null) ??
-        draft?.criteria.map((c) => c.id) ??
+        draft?.criteria.slice(0, MAX_CRITERIA).map((c) => c.id) ??
         []);
+  const full = ids.length >= MAX_CRITERIA;
   const [size, setSize] = useState(100);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +85,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
         <>
           <p className="mt-5 text-body text-fg-3">
             Выбрано {ids.length} из {draft.criteria.length}
+            {draft.criteria.length > MAX_CRITERIA && ` · за одну проверку — не больше ${MAX_CRITERIA}`}
           </p>
           <ul className="mt-2 divide-y divide-line border-y border-line">
             {draft.criteria.map((c, i) => (
@@ -88,7 +94,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
                   <input
                     type="checkbox"
                     checked={ids.includes(c.id)}
-                    disabled={running}
+                    disabled={running || (full && !ids.includes(c.id))}
                     onChange={() => toggle(c.id)}
                     className="mt-1 size-4 accent-primary"
                   />
@@ -96,7 +102,8 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
                     <span className="block text-read font-semibold text-fg">
                       {i + 1}. {c.name}
                     </span>
-                    <span className="mt-0.5 block text-small text-fg-3">{c.id}</span>
+                    {/* A ready rubric names its criteria by code; ids a model gave (t1r1…) mean nothing to a person. */}
+                    {!draft.model && <span className="mt-0.5 block text-small text-fg-3">{c.id}</span>}
                   </span>
                 </label>
                 <details className="ml-7 mt-2 text-body">
@@ -141,7 +148,8 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
             </div>
           )}
           <p className="mt-2 text-body text-fg-3">
-            Проверим {total} из {state.logs.total} разговоров по{" "}
+            Проверим {total}
+            {"\u00a0"}из {count(state.logs.total, "разговора", "разговоров", "разговоров")} по{" "}
             {count(ids.length, "критерию", "критериям", "критериям")}. Подключение к агенту не требуется.
           </p>
         </>

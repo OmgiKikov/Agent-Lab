@@ -67,9 +67,12 @@ export function useNav({ logs, sims, criteria }: NavCounts): NavItem[] {
     },
   ];
   if (!TONE_ONLY) return items;
-  return items.filter(
-    (i) => i.to === SECTIONS.start || i.to === SECTIONS.overview || (i.to === SECTIONS.logs && dialoguesShown(state)),
-  );
+  // «Диалоги 8» read as eight dialogues, not eight problems; with one stage the count says nothing the page does not.
+  return items
+    .filter(
+      (i) => i.to === SECTIONS.start || i.to === SECTIONS.overview || (i.to === SECTIONS.logs && dialoguesShown(state)),
+    )
+    .map((i) => ({ ...i, count: undefined }));
 }
 
 /** The agent and settings stay below the day-to-day work. */
