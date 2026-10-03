@@ -248,6 +248,36 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
                     await judge.log_verdict([criterion()], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}])
                 self.assertEqual(chat.await_count, 2)
 
+    async def test_the_labs_line_of_buttons_is_never_the_agents_words(self):
+        """A logged reply is shown with «[Кнопки: …]» for the export's control code; a FAIL quoting that line, or the
+        code in it, has no evidence. In a played conversation a button's label is the agent's own text."""
+        reply = 'Нажмите кнопку ниже.\n` ` ` transition-code TRANSFER_INTO_CHAT ` ` `'
+        dialogue = {
+            'id': 'd1',
+            'messages': [{'role': 'user', 'content': 'Как вернуть терминал?'}, {'role': 'assistant', 'content': reply}],
+        }
+        rules = [criterion('special_characters')]
+        for quote, expected in (
+            ('[Кнопки: TRANSFER_INTO_CHAT]', 'UNKNOWN'),
+            ('Кнопки: TRANSFER_INTO_CHAT', 'UNKNOWN'),
+            ('TRANSFER_INTO_CHAT', 'UNKNOWN'),
+            ('Нажмите кнопку ниже.', 'FAIL'),
+        ):
+            answer = {'rules': [verdict('special_characters', 'FAIL', quote)]}
+            with self.subTest(quote=quote), patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))):
+                result = await judge.log_verdict(rules, discover.conversation(dialogue))
+                self.assertEqual(result.rows[0]['status'], expected)
+        played = [{'role': 'agent', 'text': 'Выберите, что сделать дальше.', 'options': ['Позвать оператора']}]
+        for quote, expected in (('Позвать оператора', 'PASS'), ('[Кнопки: Позвать оператора]', 'UNMEASURED')):
+            answer = {'customerGoal': 'Вернуть терминал', 'rules': [verdict(quote=quote)]}
+            with (
+                self.subTest(quote=quote),
+                patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
+                patch.object(judge.knowledge, 'retrieved', return_value=[]),
+            ):
+                result = await judge.run_verdict({'criteria': [criterion()]}, played)
+                self.assertEqual(result.status, expected)
+
     async def test_duplicate_verdict_ids_are_retried(self):
         answer = {'rules': [verdict(), verdict()]}
         valid = {'rules': [verdict(), verdict('r2')]}

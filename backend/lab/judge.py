@@ -9,11 +9,11 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from . import llm, quotes
+from . import llm, logs, quotes
 from .context import knowledge
 from .judge_reply import JudgeReply, RuleReply
 from .prompts import JUDGE_LOG, JUDGE_RUN
-from .transcript import for_judge, tool_calls, with_buttons
+from .transcript import for_judge, tool_calls
 
 NO_QUOTE = 'Цитата судьи не найдена в ответах агента; вывод не засчитан. '
 
@@ -97,16 +97,21 @@ def checked(
     return out
 
 
+def log_words(shown: list[dict]) -> str:
+    """What the agent wrote in a recorded conversation, the only text its verdicts may quote. The judge also sees the
+    buttons as «[Кнопки: …]», but that line is the Lab's rendering of export codes (JUDGE_LOG says as much)."""
+    return '\n'.join(logs.words(m['text']) for m in shown if m['role'] == 'AGENT')
+
+
 async def log_verdict(rules: list[dict], shown: list[dict], endpoint: llm.Endpoint | None = None) -> Verdict:
     """A recorded conversation from the logs; shown = [{'role': 'CUSTOMER' | 'AGENT', 'text'}]."""
-    agent_text = '\n'.join(m['text'] for m in shown if m['role'] == 'AGENT')
     answer = await llm.structured(
         JUDGE_LOG,
         {'expectations': rules, 'conversation': shown},
         parse=lambda value: _parse_reply(value, rules),
         endpoint=endpoint,
     )
-    rows = checked(answer.value.rules, rules, agent_text)
+    rows = checked(answer.value.rules, rules, log_words(shown))
     return Verdict(rows, verdict_of(rows), answer.model)
 
 
@@ -122,7 +127,8 @@ class _RunEvidence:
 async def _prepare_run(card: dict, conversation: list[dict]) -> _RunEvidence:
     shown = [{'role': m['role'].upper(), 'text': for_judge(m)} for m in conversation]
     agents = [message for message in conversation if message['role'] == 'agent']
-    agent_text = '\n'.join(with_buttons(message) for message in agents)
+    # The agent's words and its buttons' labels: the agent wrote both, the Lab's «[Кнопки: …]» around them it did not.
+    agent_text = '\n'.join(line for message in agents for line in (message['text'], *(message.get('options') or [])))
     calls = '\n'.join(call for message in agents for call in tool_calls(message))
     retrieved = await asyncio.to_thread(knowledge.retrieved, conversation)
     payload = {
