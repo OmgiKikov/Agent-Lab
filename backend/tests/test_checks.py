@@ -217,6 +217,10 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         return response
 
     async def test_scenarios_are_built_from_the_errors_of_one_check(self):
+        self.assertEqual((await self.build_cards()).status_code, 200)
+        self.assertEqual(
+            api.jobs.state['error'], 'Сначала проверьте разговоры: сценарии собираются из найденных ошибок.'
+        )
         response = await self.build_cards({'check': 'code'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(api.jobs.state['error'], 'У проверки «Точность» ещё нет итога: сначала проверьте разговоры.')
