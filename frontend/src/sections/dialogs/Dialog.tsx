@@ -54,6 +54,8 @@ function Verdicts({
         {rules.map((r) => {
           const c = find(r.ruleId);
           const shown = shownOf(r);
+          // With one model there is no second check to speak of: the line is empty, and so is the place.
+          const second = r.status === "FAIL" ? secondLine(shown, null) : "";
           const [word, tone] = WORD[r.status] ?? [r.status, "text-fg-3"];
           const n = c?.n;
           return (
@@ -79,7 +81,7 @@ function Verdicts({
                   <span className={cn("text-small", tone)}>· {word}</span>
                 </p>
                 <p className="mt-1 text-read text-fg-2">{r.reason}</p>
-                {r.status === "FAIL" && <p className="mt-1 text-small text-fg-3">{secondLine(shown, null)}</p>}
+                {second && <p className="mt-1 text-small text-fg-3">{second}</p>}
                 {(r.status === "FAIL" || r.status === "PASS") && (
                   <div className="mt-3">
                     <ReviewButtons size="sm" example={shown} onDecide={(d) => onDecide(shown, d)} />
@@ -227,11 +229,16 @@ export function Dialog({ row, criteria, onBack }: { row: DialogRow; criteria: Cr
                   "—"
                 ),
               },
-              {
-                label: "Две проверки",
-                value: checks === "agree" ? "совпали" : checks === "disagree" ? "разошлись" : "проверено один раз",
-                title: row.second?.model,
-              },
+              // Only when a second check looked at this conversation: «проверено один раз» read as a person's check.
+              ...(checks
+                ? [
+                    {
+                      label: "Две проверки",
+                      value: checks === "agree" ? "совпали" : "разошлись",
+                      title: row.second?.model,
+                    },
+                  ]
+                : []),
               { label: "Ваши ответы", value: reviewed ? `${reviewed} из ${broken}` : "ещё нет" },
             ]}
           />
