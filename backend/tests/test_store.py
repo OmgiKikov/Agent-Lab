@@ -1,3 +1,4 @@
+import itertools
 import json
 import sqlite3
 import tempfile
@@ -128,6 +129,55 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(store.load('tone-of-voice-criteria.json'), {'revision': 'r1'})
         store.replace_inputs('sources.json', [{'id': 's1', 'kind': 'prompt', 'content': 'new'}])
         self.assertIsNone(store.load('tone-of-voice-criteria.json'))
+
+    def test_what_resets_what(self) -> None:
+        """The table «Что сбрасывает что» of docs/superpowers/specs/2026-10-03-checks-as-sections-design.md: what each
+        event leaves of the tone-of-voice criteria (D), the results of tone of voice (T) and Точность (C), and the
+        deck (K) built from tone of voice, from Точность, or one that names no check."""
+        policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь на вы.', 'sha256': 'p1'}
+        code = {'id': 's1', 'kind': 'prompt', 'content': 'Называй срок.', 'sha256': 'c1'}
+        names = {'D': 'tone-of-voice-criteria.json', 'T': 'tone-result.json', 'C': 'discover.json', 'K': 'cards.json'}
+        checked = (  # every tone-of-voice check is kept in the history under its own id
+            {'check': {'id': f'check-{n}', 'finishedAt': str(n)}, 'result': {'purpose': 'tone-of-voice', 'results': []}}
+            for n in itertools.count()
+        )
+        events = {
+            'new export': lambda: store.replace_inputs('logs.json', [{'id': 'd2'}]),
+            'communication rules changed': lambda: store.replace_inputs(
+                'sources.json', [code, policy | {'content': 'Обращайтесь на ты.', 'sha256': 'p2'}]
+            ),
+            'code changed': lambda: store.replace_inputs(
+                'sources.json', [code | {'content': 'Срок.', 'sha256': 'c2'}, policy]
+            ),
+            'code read again unchanged': lambda: store.replace_inputs('sources.json', [code, policy]),
+            'new tone-of-voice criteria': lambda: store.save_tone_draft({'revision': 'r2'}),
+            'tone-of-voice criteria saved unchanged': lambda: store.save_tone_draft({'revision': 'r1'}),
+            'new tone-of-voice result': lambda: store.save_tone_check(next(checked)),
+            'new accuracy result with new criteria': lambda: store.save_audit({'topics': []}, new_criteria=True),
+            'new accuracy result with the same criteria': lambda: store.save_audit({'topics': []}, new_criteria=False),
+        }
+        kept = {  # deck built from: tone, code, no check named
+            'new export': ('D', 'D', 'D'),
+            'communication rules changed': ('C', 'CK', 'C'),
+            'code changed': ('DTK', 'DT', 'DT'),
+            'code read again unchanged': ('DTCK', 'DTCK', 'DTCK'),
+            'new tone-of-voice criteria': ('DTC', 'DTCK', 'DTC'),
+            'tone-of-voice criteria saved unchanged': ('DTCK', 'DTCK', 'DTCK'),
+            'new tone-of-voice result': ('DTC', 'DTCK', 'DTC'),
+            'new accuracy result with new criteria': ('DTCK', 'DTC', 'DTC'),
+            'new accuracy result with the same criteria': ('DTCK', 'DTCK', 'DTCK'),
+        }
+        for event, happen in events.items():
+            for deck, expected in zip(('tone', 'code', None), kept[event], strict=True):
+                with self.subTest(event=event, deck=deck):
+                    store.save('sources.json', [code, policy])
+                    store.save(names['D'], {'revision': 'r1'})
+                    store.save(names['T'], {'purpose': 'tone-of-voice', 'results': []})
+                    store.save(names['C'], {'topics': [], 'results': []})
+                    store.save(names['K'], {'check': deck, 'cards': [{'id': 'card-1'}]})
+                    happen()
+                    left = ''.join(key for key, name in names.items() if store.load(name) is not None)
+                    self.assertEqual(left, expected)
 
     def test_migration_normalizes_log_ids_and_reaggregates_existing_evidence(self) -> None:
         legacy = self.path / 'legacy'

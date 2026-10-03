@@ -94,7 +94,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         audit = {'topics': [], 'results': []}
         for replan, kept in ((False, True), (True, False)):
             with self.subTest(replan=replan):
-                store.save(api.cards.DECK, {'cards': ['built from the previous criteria']})
+                store.save(api.cards.DECK, {'check': 'code', 'cards': ['built from the previous criteria']})
                 with patch.object(api.discover, 'run', AsyncMock(return_value=audit)):
                     response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
                     self.assertEqual(response.status_code, 200, response.text)

@@ -280,7 +280,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         first = await self.check()
         previous = store.tone_check(first['checkId'])
         run = store.create_run({'id': 'played-before', 'status': 'completed', 'items': []})
-        store.save(cards.DECK, {'cards': [{'id': 'stale-scenario'}]})
+        store.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'stale-scenario'}]})
         await self.check()
         self.assertIsNone(store.load(cards.DECK))
         self.assertEqual(store.run(run['id']), run)
@@ -290,7 +290,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_rubric_clears_cards_and_blocks_rebuilding_until_logs_are_rechecked(self):
         checked = await self.check()
         draft = store.load(tone.DRAFT)
-        store.save(cards.DECK, {'cards': [{'id': 'stale-scenario'}]})
+        store.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'stale-scenario'}]})
         response = await self.client.post(
             '/api/tone-of-voice/clarification',
             json={
@@ -307,7 +307,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job()
             model.assert_not_awaited()
         self.assertIn('повторите проверку разговоров', api.jobs.state['error'])
-        store.save(cards.DECK, {'cards': [{'id': 'also-stale'}]})
+        store.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'also-stale'}]})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
         self.assertIsNone(store.load(cards.DECK))

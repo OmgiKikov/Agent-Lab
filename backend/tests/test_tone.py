@@ -199,7 +199,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await self.wait_job()
         result = store.load(tone.RESULT)
-        store.save(api.cards.DECK, {'cards': ['built from the code']})
+        store.save(api.cards.DECK, {'check': 'code', 'cards': ['built from the code']})
         policy = api.sources.load()[-1]
         code = [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'new prompt'}]
         with patch.object(api.sources, 'collect', return_value=code):

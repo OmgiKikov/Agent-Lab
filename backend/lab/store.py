@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -175,31 +175,27 @@ def _update_document(connection: sqlite3.Connection, name: str, mutate: Callable
 
 
 def replace_inputs(name: str, value: Any) -> None:
-    """Replace sources or logs together with invalidation of their derived results and scenarios.
-
-    The tone-of-voice check derives from its own policy, not from the agent's code: while the policy stays the same,
-    its criteria and its result survive re-read code. Scenarios read the code, so they are invalidated either way.
+    """Replace sources or logs together with what was derived from them, and only that. A new export clears the
+    results of both checks and the deck. The checks derive from different sources: changed communication rules (the
+    tone-of-voice policy) clear its criteria, its result and a deck built from it; changed code of the agent clears
+    the accuracy result and a deck built from it; code read again unchanged clears nothing. Runs and answers stay.
     """
     if name not in ('sources.json', 'logs.json'):
         raise ValueError('Only source and log documents are inputs')
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
-        cleared = [checks.result(checks.CODE), 'cards.json']
         if name == 'logs.json':
-            cleared.append(checks.result(checks.TONE))
+            changed = list(checks.RESULTS)
         else:
-            policy = _tone_policy(_document(connection, name))
-            if not policy or policy != _tone_policy(value):
-                cleared += ['tone-of-voice-criteria.json', checks.result(checks.TONE)]
-        connection.execute(
-            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            (name, _json(value)),
-        )
+            before = _document(connection, name)
+            changed = [check for check, part in _SOURCES_OF.items() if part(before) != part(value)]
+        _put(connection, name, value)
         # Keep the names: a repeated legacy import must not resurrect intentionally cleared results.
-        connection.executemany(
-            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            [(document, 'null') for document in cleared],
-        )
+        for check in changed:
+            _put(connection, checks.result(check), None)
+        if name == 'sources.json' and checks.TONE in changed:
+            _put(connection, 'tone-of-voice-criteria.json', None)
+        _drop_deck(connection, changed)
 
 
 def _document(connection: sqlite3.Connection, name: str) -> Any:
@@ -216,20 +212,34 @@ def _put(connection: sqlite3.Connection, name: str, value: Any) -> None:
 
 def _tone_policy(items: list[dict] | None) -> list[dict]:
     """The supplied tone-of-voice policy among the sources (tone.KIND)."""
-    return [item for item in items or [] if item.get('kind') == 'tone-of-voice']
+    return [item for item in items or [] if item.get('kind') == checks.TONE_OF_VOICE]
+
+
+def _code(items: list[dict] | None) -> list[dict]:
+    """The agent's prompts and tools among the sources: everything but the tone-of-voice policy."""
+    return [item for item in items or [] if item.get('kind') != checks.TONE_OF_VOICE]
+
+
+# The sources each check's criteria come from.
+_SOURCES_OF = {checks.TONE: _tone_policy, checks.CODE: _code}
+
+
+def _drop_deck(connection: sqlite3.Connection, changed: Collection[str]) -> None:
+    """The scenarios go with the result or the criteria of the check they were built from (changed); a deck that names
+    no check goes with any."""
+    deck = _document(connection, checks.DECK)
+    if changed and (deck is None or deck.get('check') in (None, *changed)):
+        _put(connection, checks.DECK, None)
 
 
 def save_audit(value: dict, *, new_criteria: bool) -> None:
-    """Publish a log audit; criteria extracted anew no longer match the playable cards, so those go with it."""
-    documents = [('discover.json', _json(value))]
-    if new_criteria:
-        documents.append(('cards.json', 'null'))
+    """Publish an accuracy result; criteria extracted anew no longer match the scenarios built from the old ones, so
+    those go with it. A deck from tone of voice stays."""
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
-        connection.executemany(
-            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            documents,
-        )
+        _put(connection, checks.result(checks.CODE), value)
+        if new_criteria:
+            _drop_deck(connection, [checks.CODE])
 
 
 def tone_checks() -> list[dict]:
@@ -238,23 +248,14 @@ def tone_checks() -> list[dict]:
 
 
 def save_tone_draft(draft: dict) -> None:
-    """A new rubric revision invalidates playable cards, while the prior assessment stays reviewable."""
+    """A new rubric revision invalidates the scenarios built from tone of voice, while the prior assessment stays
+    reviewable."""
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
-        row = connection.execute(
-            'SELECT value FROM documents WHERE name = ?', ('tone-of-voice-criteria.json',)
-        ).fetchone()
-        previous = (json.loads(row[0]) if row else None) or {}
-        connection.execute(
-            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            ('tone-of-voice-criteria.json', _json(draft)),
-        )
+        previous = _document(connection, 'tone-of-voice-criteria.json') or {}
+        _put(connection, 'tone-of-voice-criteria.json', draft)
         if previous.get('revision') != draft['revision']:
-            connection.execute(
-                'INSERT INTO documents (name, value) VALUES (?, ?) '
-                'ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-                ('cards.json', 'null'),
-            )
+            _drop_deck(connection, [checks.TONE])
 
 
 def tone_check(check_id: str) -> dict | None:
@@ -309,14 +310,8 @@ def save_tone_check(snapshot: dict) -> None:
             'INSERT INTO tone_checks (id, summary, value) VALUES (?, ?, ?)',
             (snapshot['check']['id'], _json(snapshot['check']), _json(snapshot)),
         )
-        connection.execute(
-            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            (checks.result(checks.TONE), _json(snapshot['result'])),
-        )
-        connection.execute(
-            'INSERT INTO documents (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value',
-            ('cards.json', 'null'),
-        )
+        _put(connection, checks.result(checks.TONE), snapshot['result'])
+        _drop_deck(connection, [checks.TONE])
         for result in snapshot['result']['results']:
             for row in result.get('rules', []):
                 if row.get('review') in ('agree', 'disagree'):
