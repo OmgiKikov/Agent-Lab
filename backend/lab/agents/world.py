@@ -115,9 +115,12 @@ async def build(situation: str, customer: list[str]) -> dict | None:
         return None
 
     def parse(value: dict) -> dict:
+        """A world of the wrong shape is a malformed answer: the model is asked again, then it is a ModelError."""
         if not isinstance(value.get('organization'), dict) or not isinstance(value.get('terminals'), list):
             raise ValueError('world needs an organization and terminal list')
-        return value
+        if not isinstance(value.get('tools') or {}, dict):
+            raise ValueError('world tools must be an object keyed by tool name')
+        return normalize(value, shapes)
 
     answer = await llm.structured(
         WORLD,
@@ -128,7 +131,7 @@ async def build(situation: str, customer: list[str]) -> dict | None:
         },
         parse=parse,
     )
-    return normalize(answer.value, shapes)
+    return answer.value
 
 
 def overrides(world: dict | None) -> dict:
