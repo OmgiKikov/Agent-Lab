@@ -15,6 +15,8 @@ from .settings import DATA
 DB = DATA / 'lab.sqlite3'
 # The database of the agent a request works in (registry.using, api.py); without one, DB above.
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
+# The database's user_version once its schema below is in place.
+SCHEMA = 1
 
 
 def now() -> str:
@@ -26,10 +28,23 @@ def _connection() -> Iterator[sqlite3.Connection]:
     path = AGENT.get() or DB
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
-    # Write-ahead log: a screen reads while a job writes, instead of waiting for it.
-    connection.execute('PRAGMA journal_mode=WAL')
     try:
-        path.chmod(0o600)
+        if connection.execute('PRAGMA user_version').fetchone()[0] != SCHEMA:
+            _set_up(connection, path)
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
+def _set_up(connection: sqlite3.Connection, path: Path) -> None:
+    """Once per database file, not on every connection: /api/state alone opens several every 1.5 s during a job.
+    A file that is new or replaced (an adopted copy, an older Lab's database) has another user_version."""
+    # Write-ahead log: a screen reads while a job writes, instead of waiting for it. The file keeps the mode.
+    connection.execute('PRAGMA journal_mode=WAL')
+    path.chmod(0o600)
+    with connection:
+        connection.execute('BEGIN IMMEDIATE')
         connection.execute('CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
         connection.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
         connection.execute(
@@ -40,10 +55,7 @@ def _connection() -> Iterator[sqlite3.Connection]:
             'check_id TEXT NOT NULL, dialogue_id TEXT NOT NULL, rule_id TEXT NOT NULL, '
             'decision TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (check_id, dialogue_id, rule_id))'
         )
-        with connection:
-            yield connection
-    finally:
-        connection.close()
+        connection.execute(f'PRAGMA user_version = {SCHEMA}')
 
 
 def _json(value: Any) -> str:

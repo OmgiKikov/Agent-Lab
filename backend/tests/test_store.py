@@ -177,6 +177,33 @@ class StoreTests(unittest.TestCase):
         with sqlite3.connect(store.DB) as connection:
             self.assertEqual(connection.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
 
+    def test_the_schema_is_set_up_once_per_database_not_on_every_connection(self) -> None:
+        statements = []
+        connect = sqlite3.connect
+
+        def traced(*args, **kwargs) -> sqlite3.Connection:
+            connection = connect(*args, **kwargs)
+            connection.set_trace_callback(statements.append)
+            return connection
+
+        def setup(sql: str) -> bool:
+            return sql.startswith(('CREATE', 'ALTER', 'PRAGMA journal_mode'))
+
+        with patch.object(store.sqlite3, 'connect', traced):
+            store.save('settings.json', {'x': 1})
+            self.assertTrue(any(setup(sql) for sql in statements))
+            statements.clear()
+            for _ in range(3):
+                self.assertEqual(store.load('settings.json'), {'x': 1})
+            store.create_run(record())
+            self.assertEqual([sql for sql in statements if setup(sql)], [])
+            # Another database (another agent) is set up on its first use, and only then.
+            with patch.object(store, 'DB', self.path / 'other' / 'lab.sqlite3'):
+                self.assertIsNone(store.load('settings.json'))
+                self.assertTrue(any(setup(sql) for sql in statements))
+                self.assertEqual(store.run('run-1'), None)
+        self.assertEqual(store.run('run-1')['id'], 'run-1')
+
     def test_changed_primary_judgment_clears_old_confirmation(self) -> None:
         source = record()
         source['items'][0].update(status='FAIL', rules=[{'status': 'FAIL'}])
