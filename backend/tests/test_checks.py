@@ -175,6 +175,12 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         # A result neither check has now: the person saw another one.
         response = await self.answer('2026-01-01T00:00:00+00:00', 'pronouns')
         self.assertEqual((response.status_code, response.json()['detail']), (409, store.CHANGED))
+        # A criterion no check has checked in this conversation.
+        for fields in ({}, {'check': 'code'}):
+            response = await self.answer(None, 'nope', **fields)
+            self.assertEqual(
+                (response.status_code, response.json()['detail']), (404, 'Этот критерий в разговоре не проверялся.')
+            )
 
     async def test_an_answer_goes_to_the_check_it_names_and_waits_only_for_that_check(self):
         await self.assess_code()

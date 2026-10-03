@@ -75,6 +75,7 @@ RUN_FIELDS = (
 CHECK_QUESTION = 'Какой процент эквайринга?'
 # The job that writes a check's result: while it runs, answers on that result would be lost (review).
 WRITES = {'tone-check': checks.TONE, 'discover': checks.CODE}
+NOT_CHECKED = 'Этот критерий в разговоре не проверялся.'  # an answer on a logged conversation without this verdict
 
 
 class DiscoverCommand(BaseModel):
@@ -556,7 +557,7 @@ def answered_check(payload: ReviewCommand) -> str:
         (key for key, value in results.items() if has_verdict(value, payload.dialogueId, payload.ruleId)), None
     )
     if found is None:
-        raise HTTPException(404, 'Вердикт не найден')
+        raise HTTPException(404, NOT_CHECKED)
     return found
 
 
@@ -578,7 +579,7 @@ async def review(payload: ReviewCommand) -> dict:
                 payload.status,
             )
         except KeyError as error:
-            raise HTTPException(404, 'Вердикт не найден') from error
+            raise HTTPException(404, NOT_CHECKED) from error
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
         return {'ok': True}
