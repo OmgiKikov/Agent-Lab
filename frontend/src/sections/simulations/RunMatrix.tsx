@@ -4,25 +4,8 @@ import { scenariosLink } from "../../app/links";
 import { personaOf, scenariosOfRun, typesOfRun } from "../../lab/logic";
 import { useLabState } from "../../lab/LabProvider";
 import { ENTER, stagger } from "../../product/motion";
-import type { Item, LabRun, Status } from "../../lab/types";
-
-const DOT: Record<string, { word: string; cls: string }> = {
-  FAIL: { word: "ошибка", cls: "bg-bad" },
-  PASS: { word: "без ошибок", cls: "bg-ok" },
-  RUNNING: { word: "идёт", cls: "animate-pulse bg-run" },
-  UNMEASURED: { word: "не удалось проверить", cls: "border-[1.5px] border-dashed border-fg-4" },
-};
-const dotOf = (status: Status) => DOT[status] ?? DOT.UNMEASURED;
-
-/** One conversation of the run as a dot: red with an error, grey without one, dashed when it could not be checked. */
-function Dot({ status, className }: { status: Status; className?: string }) {
-  return (
-    <span
-      aria-hidden
-      className={cn("block size-3.5 rounded-full transition-transform duration-150", dotOf(status).cls, className)}
-    />
-  );
-}
+import type { Item, LabRun } from "../../lab/types";
+import { DOT, Dot, dotOf } from "./parts";
 
 /**
  * The run's signature: scenarios down, types of customers across, every conversation one dot — so where the agent breaks

@@ -1,19 +1,45 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useKeys } from "../../app/keys";
 import { useWide } from "../../app/useWide";
 import { BY_CRITERIA, CHECKS, resultOf } from "../../lab/checks";
-import { quoteKey, useCriteria, type Criterion } from "../../lab/criteria";
+import { useCriteria } from "../../lab/criteria";
 import { count, day } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
+import { personaName } from "../../lab/look";
 import { FROM_LOG } from "../../lab/runs";
-import type { Card } from "../../lab/types";
+import {
+  controlLine,
+  namedCriteria,
+  outcomeOf,
+  runsOf,
+  useScenarios,
+  type Named,
+  type Outcome,
+  type Played,
+  type ScenarioRecord,
+} from "../../lab/scenarios";
+import type { Card, Persona } from "../../lab/types";
+import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Search } from "../../ui/Search";
-import { originWord } from "./parts";
-import { ScenarioView } from "./ScenarioView";
+import { Dot, dotOf } from "./parts";
+import { ScenarioView, type RecordState } from "./ScenarioView";
 import { SimHeader } from "./stage";
+
+/** Which scenarios the list shows, by how each came out in the latest run that played it (?v=). */
+type Filter = "all" | Outcome;
+const toFilter = (raw: string | null): Filter =>
+  raw === "fail" || raw === "pass" || raw === "none" || raw === "unplayed" ? raw : "all";
+const FILTERS: { value: Filter; label: string; dot?: "FAIL" | "PASS" | "UNMEASURED" | "NONE" }[] = [
+  { value: "all", label: "Все" },
+  { value: "fail", label: "С ошибкой в последнем прогоне", dot: "FAIL" },
+  { value: "pass", label: "Без ошибок", dot: "PASS" },
+  { value: "none", label: "Не удалось проверить", dot: "UNMEASURED" },
+  { value: "unplayed", label: "Не играли", dot: "NONE" },
+];
 
 function Row({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -36,10 +62,83 @@ function Row({ on, onClick, children }: { on: boolean; onClick: () => void; chil
   );
 }
 
+/** Why the scenario exists, in one line: the error it reproduces (the first, and how many more), or a control. */
+function Reproduces({ card, record, named }: { card: Card; record?: ScenarioRecord; named: Map<string, Named> }) {
+  if (!record) return <span aria-hidden className="mt-0.5 block h-[18px]" />;
+  if (card.origin !== FROM_LOG)
+    return (
+      <span className="mt-0.5 block truncate text-small text-fg-3">Контроль: {controlLine(record.sourceStatus)}</span>
+    );
+  const [first, ...more] = record.reproduces;
+  if (!first)
+    return <span className="mt-0.5 block truncate text-small text-fg-2">Из ошибки в настоящем разговоре</span>;
+  return (
+    <span className="mt-0.5 flex min-w-0 gap-1.5 text-small text-fg-2">
+      <span className="truncate">Воспроизводит: {named.get(first.ruleId)?.name ?? first.name}</span>
+      {more.length > 0 && <span className="flex-shrink-0 tabular-nums text-fg-3">+{more.length}</span>}
+    </span>
+  );
+}
+
+/** The conversations of one run by type of customer, each type once, its repeats together. */
+const byType = (plays: Played[]) => {
+  const types = new Map<string, Played[]>();
+  for (const p of plays) types.set(p.persona, [...(types.get(p.persona) ?? []), p]);
+  return [...types.entries()];
+};
+
 /**
- * «Сценарии»: the business situations the synthetic customers play, built from the errors one check found in the
- * export and from the topics it covers; the check is named over the list. A scenario says how the customer begins,
- * what that check's criteria will look at, and plays on its own.
+ * The scenario's own result in the latest run that played it, a dot per conversation with its type of customer, and
+ * under it the run before, after «в прошлом прогоне»: two observations side by side, no word about which is better.
+ */
+function LastResults({ record, personas }: { record?: ScenarioRecord; personas: Persona[] }) {
+  if (!record) return <span aria-hidden className="mt-2 block h-[18px]" />;
+  const [latest, previous] = runsOf(record.history, personas);
+  if (!latest)
+    return (
+      <span className="mt-2 flex items-center gap-1.5 text-small text-fg-3">
+        <Dot status="NONE" className="size-2.5" />
+        не играли
+      </span>
+    );
+  const said = (plays: Played[]) => plays.map((p) => dotOf(p.status).word).join(", ");
+  return (
+    <span className="mt-2 block space-y-1 text-small text-fg-3">
+      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {byType(latest.plays).map(([persona, plays]) => (
+          <span key={persona} className="inline-flex items-center gap-1.5" title={said(plays)}>
+            {plays.map((p) => (
+              <Dot key={p.index} status={p.status} className="size-2.5" />
+            ))}
+            {personaName(personas, persona)}
+            <span className="sr-only">: {said(plays)}</span>
+          </span>
+        ))}
+      </span>
+      {previous && (
+        <span className="flex flex-wrap items-center gap-1.5">
+          в прошлом прогоне
+          {previous.plays.map((p) => (
+            <span key={p.index} title={`${personaName(personas, p.persona)}: ${dotOf(p.status).word}`}>
+              <Dot status={p.status} className="size-2.5" />
+            </span>
+          ))}
+          <span className="sr-only">
+            :{" "}
+            {byType(previous.plays)
+              .map(([persona, plays]) => `${personaName(personas, persona)} — ${said(plays)}`)
+              .join("; ")}
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * «Сценарии»: each scenario is a test of the error it was built from, in the check named over the list. A row says what
+ * it reproduces and how it came out in the latest run that played it, beside the run before; the list filters by that
+ * latest result, and the scenarios with an error play again in one go. A scenario opens with its results by run.
  */
 export function ScenariosPage() {
   const { state, offline } = useLabState();
@@ -47,6 +146,7 @@ export function ScenariosPage() {
   const wide = useWide();
   const deck = state?.cards ?? null;
   const { list } = useCriteria(deck?.check ?? null);
+  const { data: tests, isError, isFetching } = useScenarios(state);
   const [query, setQuery] = useState("");
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
@@ -58,16 +158,23 @@ export function ScenariosPage() {
       { replace },
     );
   const cards = useMemo(() => state?.cards?.cards ?? [], [state?.cards]);
-  const byQuote = useMemo(() => new Map(list.map((c) => [quoteKey(c.r.rule.quote), c])), [list]);
-  const mine = (card: Card): Criterion[] =>
-    card.criteria
-      .flatMap((x) => {
-        const c = byQuote.get(quoteKey(x.quote));
-        return c ? [c] : [];
-      })
-      .sort((a, b) => a.n - b.n);
+  const records = useMemo(() => new Map((tests?.cards ?? []).map((r) => [r.id, r])), [tests]);
+  const outcome = (c: Card): Outcome | null => (records.has(c.id) ? outcomeOf(records.get(c.id)?.history) : null);
+  const counts = Object.fromEntries(
+    FILTERS.map((f) => [
+      f.value,
+      f.value === "all" ? cards.length : cards.filter((c) => outcome(c) === f.value).length,
+    ]),
+  ) as Record<Filter, number>;
+  const failing = cards.filter((c) => outcome(c) === "fail").map((c) => c.id);
+  const filter = toFilter(params.get("v"));
   const q = query.trim().toLowerCase();
-  const shown = cards.filter((c) => !q || `${c.name} ${c.topic} ${c.situation} ${c.opening}`.toLowerCase().includes(q));
+  const shown = cards.filter(
+    (c) =>
+      (filter === "all" || outcome(c) === filter) &&
+      (!q || `${c.name} ${c.topic} ${c.situation} ${c.opening}`.toLowerCase().includes(q)),
+  );
+  const topics = new Set(cards.map((c) => c.topic)).size;
   const id = params.get("s") ?? (wide ? (shown[0]?.id ?? null) : null);
   const card = cards.find((c) => c.id === id) ?? null;
   const pick = (next: string | null) =>
@@ -102,6 +209,8 @@ export function ScenariosPage() {
 
   const fromErrors = cards.filter((c) => c.origin === FROM_LOG).length;
   const showDetail = !!card && (wide || !!params.get("s"));
+  const status: RecordState = card && records.has(card.id) ? "ready" : isError && !isFetching ? "error" : "loading";
+  const busy = !!state.job.running;
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -119,22 +228,67 @@ export function ScenariosPage() {
                 "Сценариев пока нет"
               )}
             </p>
-            <Search value={query} onChange={setQuery} placeholder="Найти сценарий" />
+            {cards.length > 0 && tests && (
+              <div role="radiogroup" aria-label="Итог в последнем прогоне" className="flex flex-wrap gap-1.5">
+                {FILTERS.filter((f) => f.value !== "none" || counts.none > 0).map((f) => {
+                  const on = f.value === filter;
+                  return (
+                    <button
+                      key={f.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      disabled={!counts[f.value] && !on}
+                      onClick={() =>
+                        set((n) => {
+                          if (f.value === "all") n.delete("v");
+                          else n.set("v", f.value);
+                          n.delete("s");
+                        })
+                      }
+                      className={cn(
+                        "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-small transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:pointer-events-none disabled:opacity-40",
+                        on ? "border-fg-3 bg-selected text-fg" : "border-line text-fg-2 hover:bg-hover hover:text-fg",
+                      )}
+                    >
+                      {f.dot && <Dot status={f.dot} className="size-2" />}
+                      {f.label}
+                      <span className="tabular-nums text-fg-3">{counts[f.value]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <Search value={query} onChange={setQuery} placeholder="Найти сценарий" className="flex-1" />
+              {failing.length > 0 && (
+                <Button
+                  size="sm"
+                  icon={Play}
+                  disabled={busy}
+                  title={
+                    busy
+                      ? "Сейчас идёт другая задача"
+                      : `Сыграть ${count(failing.length, "сценарий", "сценария", "сценариев")} с ошибкой в последнем прогоне`
+                  }
+                  onClick={() => set((n) => n.set("play", failing.join(",")), false)}
+                >
+                  Сыграть с ошибкой
+                </Button>
+              )}
+            </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-2 pb-4" role="list">
+            {filter !== "all" && !tests && <Skeleton className="mx-2 mt-2 h-40" />}
             {shown.map((c) => (
               <Row key={c.id} on={c.id === id} onClick={() => pick(c.id)}>
-                <span className="block text-small text-fg-3">
-                  {c.topic} ·{" "}
-                  <span className={c.origin === FROM_LOG ? "text-fg-2" : undefined}>
-                    {originWord(c.origin, FROM_LOG)}
-                  </span>
-                </span>
-                <span className="mt-0.5 block text-body font-medium text-fg">{c.name}</span>
-                <span className="mt-0.5 block line-clamp-1 text-small text-fg-3">«{c.opening}»</span>
+                {topics > 1 && <span className="block text-small text-fg-3">{c.topic}</span>}
+                <span className="block text-body font-medium text-fg">{c.name}</span>
+                <Reproduces card={c} record={records.get(c.id)} named={namedCriteria(c, list)} />
+                <LastResults record={records.get(c.id)} personas={state.personas} />
               </Row>
             ))}
-            {!shown.length && (
+            {!shown.length && (filter === "all" || tests) && (
               <p className="px-3 py-10 text-center text-small text-fg-3">
                 {cards.length
                   ? "Ничего не нашлось"
@@ -149,9 +303,11 @@ export function ScenariosPage() {
           <ScenarioView
             key={card.id}
             card={card}
+            record={records.get(card.id)}
+            status={status}
             check={deck?.check ?? null}
             state={state}
-            mine={mine(card)}
+            named={namedCriteria(card, list)}
             onPlay={() => set((n) => n.set("play", card.id), false)}
             onBack={wide ? undefined : () => pick(null)}
           />

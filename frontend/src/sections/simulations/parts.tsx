@@ -1,6 +1,31 @@
 import { cn } from "@/lib/utils";
 import { isRunning } from "../../lab/runs";
-import type { LabRun } from "../../lab/types";
+import type { LabRun, Status } from "../../lab/types";
+
+/** A conversation's result as a dot: red with an error, green without one, dashed when it could not be checked. */
+export const DOT: Record<string, { word: string; cls: string }> = {
+  FAIL: { word: "ошибка", cls: "bg-bad" },
+  PASS: { word: "без ошибок", cls: "bg-ok" },
+  RUNNING: { word: "идёт", cls: "animate-pulse bg-run" },
+  UNMEASURED: { word: "не удалось проверить", cls: "border-[1.5px] border-dashed border-fg-4" },
+  /** A scenario no run has played yet. */
+  NONE: { word: "не играли", cls: "bg-fg-4/35" },
+};
+export const dotOf = (status: Status | "NONE") => DOT[status] ?? DOT.UNMEASURED;
+
+/** One conversation as a dot; colour never stands alone: the word is beside it, in its title or for a screen reader. */
+export function Dot({ status, className }: { status: Status | "NONE"; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "block size-3.5 flex-shrink-0 rounded-full transition-transform duration-150",
+        dotOf(status).cls,
+        className,
+      )}
+    />
+  );
+}
 
 /** A run's state as a sign and a word: running pulses, a break is red, the rest stays quiet. */
 export function RunWord({ run, className }: { run: LabRun; className?: string }) {

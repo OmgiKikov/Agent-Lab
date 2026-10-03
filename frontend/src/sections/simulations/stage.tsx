@@ -50,7 +50,8 @@ export function SimTabs({ state, runId }: { state: LabState | null; runId: strin
 
 /**
  * The head of every page of the simulation: its tabs and, where it plays, «Собрать сценарии» and «Сыграть». «Сыграть» opens
- * the same dialog from anywhere (?play=1, or ?play=<scenario> for one); once the run is named, its result opens and fills in.
+ * the same dialog from anywhere (?play=1, or ?play=<scenario>[,<scenario>…] with those chosen); once the run is named,
+ * its result opens and fills in.
  */
 export function SimHeader({ runId, actions = true }: { runId: string | null; actions?: boolean }) {
   const { state, refresh } = useLabState();
@@ -62,7 +63,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
   const asked = params.get("play");
   useEffect(() => {
     if (!asked) return;
-    setPlay({ preset: asked === "1" ? null : [asked] });
+    setPlay({ preset: asked === "1" ? null : asked.split(",").filter(Boolean) });
     setParams(
       (prev) => {
         const n = new URLSearchParams(prev);
