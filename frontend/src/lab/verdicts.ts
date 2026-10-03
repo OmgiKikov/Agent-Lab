@@ -59,10 +59,14 @@ export function verdictsOf(
 
 /** Every fifth case without an answer is «без ошибки»: a person checks what the model missed, not only its finds. */
 const KEPT_EVERY = 5;
+/** From this many answers on cases «без ошибки» the share of misses is said (product/Trust): the queue offers as many. */
+export const MISSES_FROM = 20;
 
 /**
  * Errors nobody answered, in their order, and at every fifth place a verdict «без ошибки» nobody answered, while there
  * are such verdicts: the same ones every time (`rank`), so the share of misses a person finds is not biased by order.
+ * When the errors run out first, the cases «без ошибки» go on until a person can have answered MISSES_FROM of them:
+ * with 30 errors the fifth places alone would ask about 7, and the misses would never be told.
  */
 function unanswered(all: ReturnType<typeof verdictsOf>) {
   const kept = all
@@ -74,6 +78,9 @@ function unanswered(all: ReturnType<typeof verdictsOf>) {
     queue.push(v);
     if (queue.length % KEPT_EVERY === KEPT_EVERY - 1 && kept.length) queue.push(kept.shift()!);
   }
+  const answered = all.filter((v) => v.example.status === "PASS" && v.example.review).length;
+  const asked = queue.filter((v) => v.example.status === "PASS").length;
+  queue.push(...kept.slice(0, Math.max(0, MISSES_FROM - answered - asked)));
   return queue;
 }
 

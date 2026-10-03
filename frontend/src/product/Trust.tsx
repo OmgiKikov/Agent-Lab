@@ -3,12 +3,10 @@ import { ArrowRight } from "lucide-react";
 import { reviewLink, type Stage } from "../app/links";
 import { count, plural } from "../lab/format";
 import type { Problems } from "../lab/problems";
-import { missesOf, verdictsOf } from "../lab/verdicts";
+import { MISSES_FROM, missesOf, verdictsOf } from "../lab/verdicts";
 
 /** Below this many checked conversations a share says little (Hamel Husain: under ~60 an interval is too wide). */
 const FEW = 30;
-/** Below this many answers on cases «без ошибки» the share of misses says nothing, so nothing is said. */
-const MISSES_FROM = 20;
 const ofChecked = (n: number) => count(n, "проверенного случая", "проверенных случаев", "проверенных случаев");
 
 /**
