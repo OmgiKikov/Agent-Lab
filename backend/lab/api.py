@@ -73,6 +73,8 @@ RUN_FIELDS = (
     'model', 'repeats', 'personas', 'updatedAt', 'revision', 'check',
 )  # fmt: skip
 CHECK_QUESTION = 'Какой процент эквайринга?'
+# The job that writes a check's result: while it runs, answers on that result would be lost (review).
+WRITES = {'tone-check': checks.TONE, 'discover': checks.CODE}
 
 
 class DiscoverCommand(BaseModel):
@@ -121,10 +123,12 @@ class ToneClarificationCommand(BaseModel):
 
 class ReviewCommand(BaseModel):
     """A person's decision on what the judge found: on one criterion of a logged or simulated conversation, or (older
-    requests without ruleId) on a simulated conversation as a whole. finishedAt (the check's result) and status (the
-    verdict) are what the person saw: when either changed meanwhile, the decision is refused."""
+    requests without ruleId) on a simulated conversation as a whole. On a logged one, check names the check whose
+    result it goes to. finishedAt (the check's result) and status (the verdict) are what the person saw: when either
+    changed meanwhile, the decision is refused."""
 
     source: Literal['log', 'sim'] = 'sim'
+    check: Literal['tone', 'code'] | None = None
     run: str = ''
     index: int | None = Field(default=None, ge=0, strict=True)
     dialogueId: str = ''
@@ -544,8 +548,10 @@ def has_verdict(analysis: dict, dialogue_id: str, rule_id: str) -> bool:
 
 
 def answered_check(payload: ReviewCommand) -> str:
-    """The check whose result an answer on a logged conversation is about: the one whose result the person saw
-    (finishedAt), else the first whose result has this verdict."""
+    """The check whose result an answer on a logged conversation goes to: the one it names, else the one whose result
+    the person saw (finishedAt), else the first whose result has this verdict."""
+    if payload.check:
+        return payload.check
     results = {check: store.load(checks.result(check)) or {} for check in checks.RESULTS}
     if payload.finishedAt:
         found = next((key for key, value in results.items() if value.get('finishedAt') == payload.finishedAt), None)
@@ -565,9 +571,9 @@ async def review(payload: ReviewCommand) -> dict:
     if payload.source == 'log':
         if not payload.dialogueId or not payload.ruleId:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')
-        if jobs.state['running'] and jobs.state['kind'] in ('discover', 'tone-check'):
-            raise HTTPException(409, 'Идёт оценка диалогов: ответ не сохранится. Отметьте после неё.')
         check = answered_check(payload)
+        if jobs.state['running'] and WRITES.get(jobs.state['kind']) == check:
+            raise HTTPException(409, f'Идёт проверка «{checks.NAMES[check]}»: ответ не сохранится. Отметьте после неё.')
         try:
             store.set_log_review(
                 checks.result(check),

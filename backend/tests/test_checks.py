@@ -176,6 +176,30 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         response = await self.answer('2026-01-01T00:00:00+00:00', 'pronouns')
         self.assertEqual((response.status_code, response.json()['detail']), (409, store.CHANGED))
 
+    async def test_an_answer_goes_to_the_check_it_names_and_waits_only_for_that_check(self):
+        await self.assess_code()
+        await self.check_tone()
+        tone_result, code_result = store.load(TONE_RESULT), store.load(CODE_RESULT)
+        # The check named is where the answer goes: the result the person saw must be that check's.
+        response = await self.answer(code_result['finishedAt'], 'pronouns', check='tone')
+        self.assertEqual((response.status_code, response.json()['detail']), (409, store.CHANGED))
+        self.assertEqual((await self.answer(None, 'pronouns', check='tone')).status_code, 200)
+        self.assertEqual(self.review(TONE_RESULT, 'pronouns'), 'agree')
+        # While a check runs, answers on its own result wait; the other check's result takes them.
+        with patch.dict(api.jobs.state, {'running': True, 'kind': 'discover'}):
+            code = await self.answer(code_result['finishedAt'], 't1r1', check='code')
+            own = await self.answer(tone_result['finishedAt'], 'pronouns', check='tone', decision='disagree')
+        self.assertEqual((code.status_code, own.status_code), (409, 200))
+        self.assertEqual(code.json()['detail'], 'Идёт проверка «Точность»: ответ не сохранится. Отметьте после неё.')
+        with patch.dict(api.jobs.state, {'running': True, 'kind': 'tone-check'}):
+            code = await self.answer(code_result['finishedAt'], 't1r1')
+            own = await self.answer(tone_result['finishedAt'], 'pronouns')
+        self.assertEqual((code.status_code, own.status_code), (200, 409))
+        self.assertEqual(
+            (self.review(CODE_RESULT, 't1r1'), self.review(TONE_RESULT, 'pronouns')), ('agree', 'disagree')
+        )
+        self.assertEqual((await self.answer(None, 't1r1', check='accuracy')).status_code, 422)
+
     async def build_cards(self, body=None):
         async def build(topic, dialogue, origin, general):
             return {'id': f'{topic["title"]}:{dialogue["id"]}', 'topic': topic['title'], 'criteria': topic['rules']}
