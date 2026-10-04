@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
 import { useLabState } from "../../lab/LabProvider";
-import { PROPOSING } from "../../lab/severity";
+import { PROPOSING, proposalCheck } from "../../lab/severity";
 import { toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
@@ -33,7 +33,7 @@ export function Checking({
   const done = active ? (job.progress.done ?? 0) : 0;
   const total = active ? (job.progress.total ?? 0) : 0;
   // The conversations are checked; the automatic check proposes which errors are serious (lab/severity): no count.
-  const proposing = active && job.running && job.progress.message === PROPOSING;
+  const proposing = active && job.running && !!proposalCheck(job);
   const error = active && !job.running ? job.error : null;
   // A stop is the person's own choice, not a failure: no red, no model settings; the previous result stays.
   const stopped = error === STOPPED;

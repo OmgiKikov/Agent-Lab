@@ -281,9 +281,11 @@ export function useConfirmSeverity() {
   });
 }
 
-/** The check a running or finished proposal is for, as its task says (backend severity.propose). */
-export const proposalCheck = (job: Job | undefined): Check | null =>
-  job?.kind === "severity" || job?.progress.message === PROPOSING ? (job.progress.check ?? null) : null;
+/**
+ * The check a running or finished proposal is for, as its task says (backend severity.propose): only a proposal, its
+ * own task or the end of a check, names a check in its progress.
+ */
+export const proposalCheck = (job: Job | undefined): Check | null => job?.progress.check ?? null;
 
 /**
  * «Предложить автоматически» and «Предложить снова»: the automatic check proposes for the criteria of the check's
