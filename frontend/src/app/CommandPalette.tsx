@@ -172,7 +172,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "a-code",
         group: "Действия",
-        label: "Оценить точность",
+        label: "Проверить точность",
         sub: "Проверить разговоры по критериям из кода агента",
         icon: Play,
         run: go(`${SECTIONS.accuracy}?assess=1`),

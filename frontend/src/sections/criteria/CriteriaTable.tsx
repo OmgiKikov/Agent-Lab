@@ -4,13 +4,17 @@ import { secondOf } from "../../lab/problemStats";
 import { nameOf, toneOf, type SideKey } from "./model";
 import type { Source } from "../../lab/types";
 
-/** All criteria as one list, broken first: the number, the duty, where it is written, and how it went in logs and simulation. */
+/**
+ * All criteria as one list, broken first: the number, the duty, where it is written, and how it went in logs and
+ * simulation; whether two checks agreed only when a second model checked them (hasSecond).
+ */
 export function CriteriaTable({
   list,
   sources,
   selected,
   onSelect,
   hasSim,
+  hasSecond,
   className,
 }: {
   list: Criterion[];
@@ -18,6 +22,7 @@ export function CriteriaTable({
   selected: string | null;
   onSelect: (id: string) => void;
   hasSim: boolean;
+  hasSecond: boolean;
   className?: string;
 }) {
   const rows = [...list].sort(
@@ -49,12 +54,14 @@ export function CriteriaTable({
             <th className="hidden py-2.5 pr-4 font-medium 2xl:table-cell">Где написан</th>
             <th className="py-2.5 pr-4 text-right font-medium">Диалоги</th>
             {hasSim && <th className="hidden py-2.5 pr-4 text-right font-medium sm:table-cell">Симуляции</th>}
-            <th
-              className="hidden py-2.5 pr-5 text-right font-medium md:table-cell"
-              title="В скольких ошибках в диалогах две проверки совпали"
-            >
-              Проверки совпали
-            </th>
+            {hasSecond && (
+              <th
+                className="hidden py-2.5 pr-5 text-right font-medium md:table-cell"
+                title="В скольких ошибках в диалогах две проверки совпали"
+              >
+                Проверки совпали
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -89,9 +96,11 @@ export function CriteriaTable({
                 </td>
                 <td className="py-3 pr-4 text-right text-small">{side(c, "log")}</td>
                 {hasSim && <td className="hidden py-3 pr-4 text-right text-small sm:table-cell">{side(c, "sim")}</td>}
-                <td className="hidden py-3 pr-5 text-right text-small tabular-nums text-fg-3 md:table-cell">
-                  {second.checked ? `${second.agree} из ${second.checked}` : "—"}
-                </td>
+                {hasSecond && (
+                  <td className="hidden py-3 pr-5 text-right text-small tabular-nums text-fg-3 md:table-cell">
+                    {second.checked ? `${second.agree} из ${second.checked}` : "—"}
+                  </td>
+                )}
               </tr>
             );
           })}

@@ -52,7 +52,7 @@ export function Reproduce({ r, check }: { r: RuleEntry; check: Check }) {
       } catch {
         /* private mode */
       }
-      toast.notify(`Сценарии играются на агенте «${chosen.name}»`);
+      toast.notify(`Сценарии играются · агент: ${chosen.name}`);
       await refresh();
     } catch (e) {
       toast.error(e);

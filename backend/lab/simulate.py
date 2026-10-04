@@ -3,6 +3,7 @@
 import asyncio
 import time
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
 
@@ -14,6 +15,7 @@ from .transcript import with_buttons
 MAX_AGENT_TURNS = 3
 PARALLEL = 4
 END = '[КОНЕЦ]'
+NO_REPLIES = 'Агент не ответил ни в одном разговоре'
 JUDGED = ('status', 'rules', 'model', 'second', 'error', 'criteria')  # what a re-judge changes in a conversation
 Progress = Callable[..., None]
 
@@ -187,7 +189,9 @@ async def run(
             async with asyncio.TaskGroup() as group:
                 for index, (card, _, _) in enumerate(plan):
                     group.create_task(one(card, index))
-        record['status'] = 'done'
+        # A run the agent answered in no conversation has nothing to judge, now or later: it failed, and says why.
+        silent = unanswered(record['items'])
+        record.update(status='failed' if silent else 'done', error=silent)
     except asyncio.CancelledError:
         record.update(status='stopped', error='Прогон остановлен')
         raise
@@ -220,6 +224,15 @@ def ended(item: dict) -> bool:
         return bool(item['ended'])
     last = (item.get('conversation') or [{}])[-1]
     return last.get('role') == 'agent' and bool(last.get('text'))
+
+
+def unanswered(items: list[dict]) -> str | None:
+    """Why a run has nothing to judge: no conversation ran to its end (ended, as rejudge reads it), with what most of
+    them broke on («Агент недоступен: ConnectError»). None when the agent answered in some."""
+    if not items or any(ended(item) for item in items):
+        return None
+    reasons = Counter(item['error'] for item in items if item.get('error'))
+    return f'{NO_REPLIES}: {reasons.most_common(1)[0][0]}' if reasons else f'{NO_REPLIES}.'
 
 
 async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:

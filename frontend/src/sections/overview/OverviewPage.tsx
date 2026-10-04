@@ -341,10 +341,17 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
   );
 }
 
-/** The last run of the simulation, with the check whose criteria counted it; its own number, never beside a sum. */
+/**
+ * The last run of the simulation, with the check whose criteria counted it; its own number, never beside a sum. A run
+ * without results (the agent answered in no conversation, or none is judged yet) is not the latest result: the latest
+ * run with results stands, and one line says what became of the newer one.
+ */
 function RunBlock({ state }: { state: LabState }) {
-  const { run } = useSimRuns(state, null);
-  const live = !!run && isRunning(run);
+  const { finished, run: newest } = useSimRuns(state, null);
+  const live = !!newest && isRunning(newest);
+  const counted = live ? undefined : finished.find((r) => r.metric?.measured);
+  const run = counted ?? newest;
+  const newer = counted && newest && counted.id !== newest.id ? newest : null;
   const { list } = useCriteria(run?.check ?? null, run && !live ? run.id : null);
   const m = run?.metric;
   const deck = state.cards?.cards.length ? state.cards : null;
@@ -373,10 +380,23 @@ function RunBlock({ state }: { state: LabState }) {
           title="Симуляции"
           sub={
             <span title={run.label || undefined}>
-              {live ? "Идёт прогон" : "Последний прогон"} {BY_CRITERIA[run.check]} · {longDay(run.startedAt)}
+              {live ? "Идёт прогон" : newer ? "Последний прогон с итогом" : "Последний прогон"} {BY_CRITERIA[run.check]}{" "}
+              · {longDay(run.startedAt)}
             </span>
           }
         />
+        {newer && (
+          <p className="mt-3 max-w-[60ch] text-body text-fg-2">
+            <Link
+              to={stageLink("sim", newer.id)}
+              className="font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3"
+            >
+              Последний прогон{newer.check !== run.check ? ` ${BY_CRITERIA[newer.check]}` : ""},{" "}
+              {longDay(newer.startedAt)}, {newer.status === "failed" ? "прервался" : "ещё не оценён"}
+            </Link>
+            {newer.status === "failed" && newer.error ? `. ${newer.error}` : ""}
+          </p>
+        )}
         {!live && m?.measured ? (
           <StageResult
             size="display"
@@ -389,7 +409,9 @@ function RunBlock({ state }: { state: LabState }) {
           <p className="mt-6 text-read text-fg-2">
             {live
               ? "Синтетические клиенты играют сценарии; итог появится, когда разговоры будут оценены."
-              : "Разговоры этого прогона ещё не оценены."}
+              : run.status === "failed"
+                ? `Прогон прервался${run.error ? `. ${run.error}` : "."}`
+                : "Разговоры этого прогона ещё не оценены."}
           </p>
         )}
       </div>

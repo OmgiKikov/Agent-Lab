@@ -74,7 +74,7 @@ export function useAssess(onStarted?: () => void) {
 }
 
 /**
- * «Оценить заново» of accuracy: by the same criteria, how many conversations and one button; or «Извлечь критерии
+ * «Проверить снова» of accuracy: by the same criteria, how many conversations and one button; or «Извлечь критерии
  * заново» when the agent has changed. Only this check's result is replaced.
  */
 export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -90,7 +90,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
     <Sheet
       open={open}
       onClose={onClose}
-      title="Оценить точность заново"
+      title="Проверить точность снова"
       sub="Модель читает настоящие разговоры и по каждому критерию из кода агента отмечает: ошибка, без ошибки или не ясно. Сам агент не запускается."
     >
       <div className="space-y-6 px-5 py-5">

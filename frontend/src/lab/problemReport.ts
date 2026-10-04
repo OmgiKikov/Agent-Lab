@@ -93,9 +93,18 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
   return lines.join("\n");
 }
 
-/** The problems of one source of a check as a file: its conversations and its simulation are never told together. */
-export function problemsReport(data: Problems, base: string, source: Source): string {
+/**
+ * The problems of one source of a check as a file: its conversations and its simulation are never told together. The
+ * conversations name their export (filename), as the tone-of-voice brief does.
+ */
+export function problemsReport(
+  data: Problems,
+  base: string,
+  source: Source,
+  { filename }: { filename?: string } = {},
+): string {
   const lines = [`# ${summarySentence(data, source)}`, "", `Проверка «${CHECK_NAME[data.check]}».`];
+  if (source === "log" && data.log && filename) lines.push(`Выгрузка: ${filename}.`);
   if (source === "log" && data.log)
     lines.push(
       `Диалоги: проверено ${data.log.assessed} из ${count(data.log.sampled, "разговора", "разговоров", "разговоров")} ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,
@@ -117,6 +126,79 @@ export function problemsReport(data: Problems, base: string, source: Source): st
       "",
     );
   return lines.join("\n");
+}
+
+/** A heading, a quote or a paragraph of a report: the only Markdown the reports write (problemsReport, toneBrief). */
+type Block = { kind: "h"; level: number; text: string } | { kind: "quote" | "p"; lines: string[] };
+
+function blocksOf(markdown: string): Block[] {
+  const blocks: Block[] = [];
+  for (const line of markdown.split("\n").map((l) => l.trimEnd())) {
+    const heading = /^(#{1,6}) +(.*)$/.exec(line);
+    const quoted = /^> ?(.*)$/.exec(line);
+    const kind = quoted ? "quote" : "p";
+    const last = blocks[blocks.length - 1];
+    if (heading) blocks.push({ kind: "h", level: heading[1].length, text: heading[2] });
+    else if (!line) blocks.push({ kind: "p", lines: [] });
+    else if (last && last.kind === kind && last.lines.length) last.lines.push(quoted ? quoted[1] : line);
+    else blocks.push({ kind, lines: [quoted ? quoted[1] : line] });
+  }
+  return blocks.filter((b) => b.kind === "h" || b.lines.length);
+}
+
+const escape = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** A line as HTML: «[text](https://…)» and a bare address become links, the rest is text. */
+function inline(line: string): string {
+  let html = "";
+  let at = 0;
+  for (const m of line.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>«»"]+)/g)) {
+    const href = m[2] ?? m[3];
+    html += `${escape(line.slice(at, m.index))}<a href="${escape(href)}">${escape(m[1] ?? href)}</a>`;
+    at = m.index + m[0].length;
+  }
+  return html + escape(line.slice(at));
+}
+
+/** The report as an e-mail shows it: headings, quotes, paragraphs and links. */
+export function reportHtml(markdown: string): string {
+  const html = blocksOf(markdown).map((b) =>
+    b.kind === "h"
+      ? `<h${Math.min(b.level, 4)}>${inline(b.text)}</h${Math.min(b.level, 4)}>`
+      : b.kind === "quote"
+        ? `<blockquote style="margin:0 0 0 4px;padding-left:12px;border-left:3px solid #d6d6d6">${b.lines.map(inline).join("<br>")}</blockquote>`
+        : `<p>${b.lines.map(inline).join("<br>")}</p>`,
+  );
+  return `<div>${html.join("\n")}</div>`;
+}
+
+/** The report as text, without Markdown marks: no «#», «>», «[…](…)»; a link is its words and its address. */
+export function reportText(markdown: string): string {
+  return blocksOf(markdown)
+    .map((b) =>
+      (b.kind === "h" ? b.text : b.lines.join("\n")).replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1: $2"),
+    )
+    .join("\n\n");
+}
+
+/**
+ * «Скопировать» a report for a letter or a messenger: formatted (text/html) and as plain text without Markdown marks
+ * (text/plain), so each place takes what it shows; only the text where the browser cannot put both. The downloaded
+ * file stays Markdown.
+ */
+export async function copyReport(markdown: string): Promise<void> {
+  const text = reportText(markdown);
+  if (typeof ClipboardItem === "undefined" || !navigator.clipboard.write) return navigator.clipboard.writeText(text);
+  const item = new ClipboardItem({
+    "text/html": new Blob([reportHtml(markdown)], { type: "text/html" }),
+    "text/plain": new Blob([text], { type: "text/plain" }),
+  });
+  try {
+    await navigator.clipboard.write([item]);
+  } catch {
+    await navigator.clipboard.writeText(text);
+  }
 }
 
 /** Save text as a file through the browser. */

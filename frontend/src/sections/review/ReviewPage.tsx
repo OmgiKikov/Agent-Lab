@@ -151,7 +151,9 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   return (
     <div className="flex h-full flex-col">
       {header}
-      <div className="min-h-0 flex-1 overflow-auto">
+      {/* The question stays at the bottom while the conversation scrolls under it (ExampleCard): whatever the browser
+          brings into view — the last message, a word found, a focused link — stops above it, not behind it. */}
+      <div className="min-h-0 flex-1 overflow-auto scroll-pb-40">
         <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-10">
           {data && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
@@ -193,6 +195,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               )}
             </div>
           )}
+          {/* «Все случаи 285» did not say what a case is. */}
+          {data && <p className="mt-2 text-small text-fg-3">Один случай — один критерий в одном разговоре.</p>}
           {rule && (
             <p className="mt-3 flex items-center gap-2 text-read text-fg-3">
               Только «{rule.title}»

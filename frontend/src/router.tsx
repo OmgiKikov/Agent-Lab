@@ -54,7 +54,7 @@ function IntoCheck({ path = "", from }: { path?: string; from?: From }) {
 }
 
 /**
- * «Диалоги» itself: its older tabs and problem (?tab=, ?p=) open their pages; «Оценить заново» (?assess=) the check's
+ * «Диалоги» itself: its older tabs and problem (?tab=, ?p=) open their pages; «Проверить снова» (?assess=) the check's
  * own way of checking again — «assess=code» asked for the accuracy by the agent's code, whatever held the place.
  */
 function OldLogs() {
