@@ -3,7 +3,14 @@ import { Copy, FileDown } from "lucide-react";
 import { CHECK_NAME } from "../../lab/checks";
 import type { Criterion } from "../../lab/criteria";
 import { count, day, plural } from "../../lab/format";
-import { download, problemsReport, reliabilityWord, sourceLabel, summarySentence } from "../../lab/problemReport";
+import {
+  copyReport,
+  download,
+  problemsReport,
+  reliabilityWord,
+  sourceLabel,
+  summarySentence,
+} from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
 import { shortOrigin } from "../../product/text";
@@ -78,7 +85,8 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
 
 /**
  * «Отчёт»: a check's assessment as a protocol to send, a white sheet inside the product. Its conversations and its
- * simulation are never in one report. «Скопировать для письма» puts the same in Markdown, each problem with its link.
+ * simulation are never in one report. «Скопировать для письма» puts the same on the clipboard formatted and as plain
+ * text without Markdown marks, each problem with its link; the downloaded file is Markdown.
  */
 export function ReportSheet({
   open,
@@ -102,9 +110,7 @@ export function ReportSheet({
   const items = queueOf(list, side);
   const markdown = () => problemsReport(data, shareBase(), side);
   const copy = () =>
-    navigator.clipboard
-      .writeText(markdown())
-      .then(() => toast.notify("Отчёт скопирован: вставьте в письмо или тикет"), toast.error);
+    copyReport(markdown()).then(() => toast.notify("Отчёт скопирован: вставьте в письмо или тикет"), toast.error);
   const log = data.log;
   const sim = data.sim;
   const figures =

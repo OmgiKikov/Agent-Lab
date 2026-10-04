@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy, Download } from "lucide-react";
 import { shareBase } from "../../app/agent";
 import { useCriteria, type Criterion } from "../../lab/criteria";
-import { download } from "../../lab/problemReport";
+import { copyReport, download } from "../../lab/problemReport";
 import { toneResult } from "../../lab/tone";
 import { toneBrief } from "../../lab/toneReport";
 import type { Discover, LabState } from "../../lab/types";
@@ -30,7 +30,8 @@ export function useToneBrief(state: LabState | null): string {
 
 /**
  * «Отчёт для письма» of a tone-of-voice result: the same one from the result, «Обзор» and the section, with the screen's
- * number and words. It is read here, then copied or downloaded; reading it calls no model.
+ * number and words. It is read here, then copied (formatted, and as plain text without Markdown marks) or downloaded
+ * (Markdown); reading it calls no model.
  */
 export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: () => void; brief: string }) {
   const [copied, setCopied] = useState(false);
@@ -58,7 +59,7 @@ export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: (
             disabled={!brief}
             onClick={async () => {
               try {
-                await navigator.clipboard.writeText(brief);
+                await copyReport(brief);
                 setCopied(true);
                 setCopyError(false);
               } catch {
