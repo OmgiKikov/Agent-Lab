@@ -113,6 +113,42 @@ def current_policy() -> dict:
     return found
 
 
+def rules() -> tuple[dict, dict | None] | None:
+    """This agent's rules of communication and the criteria collected from them (None until they are collected), or
+    None without rules. Criteria collected from other rules are none of theirs. Read defensively: the list of agents
+    reads every agent's."""
+    items = sources.load()
+    if not isinstance(items, list):
+        return None
+    found = next((item for item in items if isinstance(item, dict) and item.get('kind') == KIND), None)
+    if found is None or not isinstance(found.get('content'), str):
+        return None
+    draft = store.load(DRAFT)
+    if not isinstance(draft, dict) or not isinstance(draft.get('criteria'), list):
+        return found, None
+    return found, draft if draft.get('sourceSha256') == found.get('sha256') else None
+
+
+def take(policy: dict, draft: dict | None) -> bool:
+    """Another agent's rules of communication and their criteria, with the clarifications people confirmed, become
+    this agent's own as a copy; False when it has them already. The agent's code stays. Other rules replace this
+    agent's with what was derived from them (store.replace_inputs: its criteria, its tone-of-voice result, a deck from
+    them; the saved checks stay); the same rules keep their result, which then belongs to the previous criteria. The
+    criteria get a version of their own, so no result of the other agent ever matches them. Rules without criteria
+    come alone and never take away criteria collected from the same rules."""
+    own = rules()
+    same = own is not None and own[0]['content'] == policy['content']
+    if same and (draft is None or (own[1] or {}).get('criteria') == draft['criteria']):
+        return False
+    if not same:
+        kept = [item for item in sources.load() if item['kind'] != KIND]
+        store.replace_inputs(sources.FILE, [*kept, policy])
+    if draft is not None:
+        copied = {key: value for key, value in draft.items() if key != 'updatedAt'}
+        store.save_tone_draft(copied | {'revision': uuid.uuid4().hex, 'createdAt': store.now()})
+    return True
+
+
 def _criterion(row: dict, index: int, source: dict) -> dict:
     fields = ('name', 'text', 'quote', 'condition', 'acceptable')
     if not isinstance(row, dict) or any(not isinstance(row.get(key), str) for key in fields):
