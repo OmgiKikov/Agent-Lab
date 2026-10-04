@@ -38,32 +38,35 @@ export function useComparison(check: Check): Compare | null {
 const link = "font-medium text-run hover:underline";
 
 /**
- * The line under a check's number: how its result stands to its previous check, which opens from the line. Nothing
- * when there is nothing to compare with. With `serious` — once the line of serious errors stands above — the same
- * comparison of the conversations with a serious error follows in the next line, in the same words.
+ * The line under a check's number: how its result stands to its previous check, which opens from the line; the export
+ * of that check is in the link's tooltip. Nothing when there is nothing to compare with. With `serious` — once the
+ * lines of serious errors stand above — the same comparison of the conversations with a serious error follows in the
+ * next line, in the same words.
  */
 export function CompareLine({
   check,
   compare,
-  short,
   serious,
   className,
 }: {
   check: Check;
   compare: Compare | null;
-  short?: boolean;
   /** The serious criteria of the current result, once there are any: the serious comparison follows. */
   serious?: number;
   className?: string;
 }) {
-  const sentence = compare && compareSentence(compare, { short });
+  const sentence = compare && compareSentence(compare);
   if (!compare || !sentence) return null;
   const grave = serious ? seriousCompareText(compare, serious) : null;
   return (
     <>
       <p className={cn("max-w-[72ch] text-read text-fg-2", className)}>
         {compare.previous ? (
-          <Link to={historyLink(check, compare.previous.id)} className={link}>
+          <Link
+            to={historyLink(check, compare.previous.id)}
+            title={compare.previous.file ? `Выгрузка «${compare.previous.file}»` : undefined}
+            className={link}
+          >
             {sentence.head}
           </Link>
         ) : (
@@ -71,7 +74,7 @@ export function CompareLine({
         )}
         {sentence.rest}
       </p>
-      {grave && <p className="max-w-[72ch] text-read text-fg-2">{grave}</p>}
+      {grave && <p className="max-w-[72ch] whitespace-pre-line text-read text-fg-2">{grave}</p>}
     </>
   );
 }
@@ -94,8 +97,8 @@ export function PreviousCheck({ check, line, className }: { check: Check; line: 
 const nameOf = (row: CompareRow) => (row.name && row.name !== row.text ? row.name : nameFromText(row.text));
 
 /**
- * What each problem had in the previous check, beside its count now: «было 6 из 52» or «раньше ошибок не было: 0 из
- * 52». A verdict only when the difference is beyond chance, and never for a re-evaluation of the same conversations.
+ * What each problem had in the previous check, beside its count now: «было 6 из 52», or «было 0 из 52» for a new one.
+ * A verdict only when the difference is beyond chance, and never for a re-evaluation of the same conversations.
  */
 export function wasOf(compare: Compare | null): ((id: string) => ReactNode) | undefined {
   if (!compare?.criteria) return undefined;

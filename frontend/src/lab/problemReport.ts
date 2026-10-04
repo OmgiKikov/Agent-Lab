@@ -1,28 +1,32 @@
 import { problemLink } from "../app/links";
 import { CHECK_NAME } from "./checks";
 import { duty } from "./criteria";
-import { count, day, plural } from "./format";
+import { count, day } from "./format";
 import type { Example, Problems, RuleEntry } from "./problems";
 import { seriousFirst, severityText } from "./severity";
 
 const SOURCE_LABEL: Record<string, string> = {
-  prompt: "Промпт требует",
+  prompt: "Инструкции агента",
   tools: "Инструменты агента",
-  "tone-of-voice": "Правила общения требуют",
+  "tone-of-voice": "Правила общения",
 };
 export const sourceLabel = (kind: string) => SOURCE_LABEL[kind] ?? "Источник критерия";
+
+/** A word that begins a sentence. */
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /**
  * How well an example is backed, in words: a person's answer first, then whether the two automatic checks (two models
  * of different vendors) agree. The order of examples follows it. With neither, it says so plainly: «проверено один раз»
- * read as if a person had already looked.
+ * read as if a person had already looked. The person reading («вы»), or, in a report someone else reads, «человек».
  */
-export function reliabilityWord(e: Example): string {
-  if (e.review === "agree") return "подтверждено вами";
-  if (e.review === "disagree") return "вы не согласились";
+export function reliabilityWord(e: Example, who: "you" | "people" = "you"): string {
+  const you = who === "you";
+  if (e.review === "agree") return you ? "вы подтвердили" : "подтвердил человек";
+  if (e.review === "disagree") return you ? "вы не согласились" : "человек не согласился";
   if (e.second === "agree") return "две проверки совпали";
   if (e.second === "disagree") return "проверки разошлись";
-  return "человек ещё не проверял";
+  return you ? "вы ещё не проверяли" : "человек ещё не проверял";
 }
 
 /** The second check in a sentence, for a person; the model's name only where an engineer asks for it. */
@@ -47,19 +51,20 @@ export const checkedIn = (data: Problems, source: Source) =>
 export function summarySentence(data: Problems, source: Source): string {
   const total = checkedIn(data, source).length;
   const failed = data.rules.filter((r) => r[source].failed > 0).length;
-  if (failed) return `Агент ошибается по ${failed} из ${total} ${plural(total, "критерию", "критериям", "критериям")}`;
+  if (failed)
+    return `Агент ошибается по\u00a0${failed}\u00a0из\u00a0${count(total, "критерия", "критериев", "критериев")}`;
   const n = source === "log" ? (data.log?.assessed ?? 0) : (data.sim?.assessed ?? 0);
   if (!n) return "Разговоры пока не удалось проверить";
-  return `Ошибок не найдено ни по одному из ${total} ${plural(total, "критерия", "критериев", "критериев")} в ${n} ${plural(n, "разговоре", "разговорах", "разговорах")}`;
+  return `Ошибок не нашли ни по одному из\u00a0${count(total, "критерия", "критериев", "критериев")} в\u00a0${count(n, "разговоре", "разговорах", "разговорах")}`;
 }
 
 const where = (p: RuleEntry, source?: Source) =>
   [
     source !== "sim" && p.log.failed
-      ? `в ${p.log.failed} из ${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`
+      ? `в\u00a0${p.log.failed}\u00a0из\u00a0${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`
       : null,
     source !== "log" && p.sim.failed
-      ? `в ${p.sim.failed} из ${count(p.sim.failed + p.sim.passed, "разговора", "разговоров", "разговоров")} симуляции`
+      ? `в\u00a0${p.sim.failed}\u00a0из\u00a0${count(p.sim.failed + p.sim.passed, "разговора", "разговоров", "разговоров")} симуляции`
       : null,
   ]
     .filter(Boolean)
@@ -84,7 +89,7 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
     "",
     p.rule.quote
       ? `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${p.rule.origin})` : ""}: «${p.rule.quote}»`
-      : "Цитата из кода не сохранена в этом прогоне.",
+      : "Цитата не сохранилась.",
   ];
   if (e)
     lines.push(
@@ -94,7 +99,7 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
       `Клиент: ${e.opening}`,
       `Агент: «${e.agentQuote}»`,
       `Почему это ошибка: ${e.reason}`,
-      `Проверка: ${reliabilityWord(e)}`,
+      `${capital(reliabilityWord(e, "people"))}.`,
     );
   lines.push("", link);
   return lines.join("\n");
@@ -113,17 +118,19 @@ export function problemsReport(
   { filename }: { filename?: string } = {},
 ): string {
   const lines = [`# ${summarySentence(data, source)}`, "", `Проверка «${CHECK_NAME[data.check]}».`];
-  if (source === "log" && data.log && filename) lines.push(`Выгрузка: ${filename}.`);
+  if (source === "log" && data.log && filename) lines.push(`Выгрузка «${filename}».`);
   if (source === "log" && data.log) {
     lines.push(
-      `Диалоги: проверено ${data.log.assessed} из ${count(data.log.sampled, "разговора", "разговоров", "разговоров")} ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,
+      `Диалоги ${day(data.log.finishedAt)}: проверено ${data.log.assessed}\u00a0из\u00a0${count(data.log.sampled, "разговора", "разговоров", "разговоров")}.`,
+      `С ошибкой агента — ${data.log.withViolations}, не удалось проверить — ${data.log.unassessed}.`,
     );
     const severity = severityText(data);
     if (severity) lines.push(severity);
   }
   if (source === "sim" && data.sim)
     lines.push(
-      `Симуляция: ${data.sim.target} · ${data.sim.version} от ${day(data.sim.finishedAt)}, проверено ${data.sim.assessed} из ${count(data.sim.dialogs, "разговора", "разговоров", "разговоров")}, ошибка в ${data.sim.withViolations}, не удалось проверить ${data.sim.unassessed}.`,
+      `Симуляция ${data.sim.target} · ${data.sim.version}, ${day(data.sim.finishedAt)}: проверено ${data.sim.assessed}\u00a0из\u00a0${count(data.sim.dialogs, "разговора", "разговоров", "разговоров")}.`,
+      `С ошибкой агента — ${data.sim.withViolations}, не удалось проверить — ${data.sim.unassessed}.`,
     );
   lines.push("");
   const list = data.rules

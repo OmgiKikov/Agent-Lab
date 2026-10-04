@@ -13,14 +13,16 @@ const quote = (value: string) =>
     .map((line) => `> ${line}`)
     .join("\n");
 const date = (value: string) => new Date(value).toLocaleString("ru-RU", { dateStyle: "long", timeStyle: "short" });
+/** A word that begins a sentence. */
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 function nextAction(problem: RuleEntry): string {
   const errors = problem.log.examples.filter((e) => e.status === "FAIL");
   if (errors.some((e) => e.review === "disagree" || (!e.review && e.second === "disagree")))
-    return "Разобрать спорные оценки с владельцем tone of voice и уточнить применение критерия.";
+    return "разобрать спорные оценки с автором правил общения и уточнить, когда применяется критерий.";
   if (errors.some((e) => e.review === "agree"))
-    return "Передать подтверждённые примеры команде агента, согласовать правку и проверить новые ответы после неё.";
-  return "Подтвердить оценку на примерах перед передачей задачи команде агента.";
+    return "передать подтверждённые примеры команде агента и после исправления проверить новые ответы.";
+  return "проверить примеры, прежде чем передавать задачу команде агента.";
 }
 
 /**
@@ -46,28 +48,30 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
   const origin = base.replace(/\/$/, "");
   const saved = result.checkId ? `${origin}${historyLink("tone", result.checkId)}` : null;
   const lines = [
-    "# Tone of voice: сводка для команды",
+    "# Tone of voice: отчёт для команды",
     "",
-    `Проверка завершена: ${date(result.finishedAt)}.`,
-    ...(filename ? [`Выгрузка: ${short(filename, 160)}.`] : []),
-    `Выборка: ${count(result.sampled, "разговор", "разговора", "разговоров")}. Критериев: ${criteria.length}.`,
+    `Проверка закончилась ${date(result.finishedAt)}.`,
+    ...(filename ? [`Выгрузка «${short(filename, 160)}».`] : []),
+    `В выборке ${count(result.sampled, "разговор", "разговора", "разговоров")}, проверка шла по\u00a0${count(criteria.length, "критерию", "критериям", "критериям")}.`,
     measured
-      ? `С ошибкой агента: ${failed} из ${count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(failed, measured)}%).`
+      ? `С ошибкой агента — ${failed}\u00a0из\u00a0${count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(failed, measured)}%).`
       : `Ни один разговор не удалось проверить.`,
     ...(measured && severity ? [severity] : []),
-    `Без найденных ошибок: ${passed}. Не удалось проверить: ${unmeasured} из ${result.sampled}; в счёт они не входят.`,
-    `Ответы человека по отдельным оценкам критериев: ${reviews.length}; согласие с оценкой — ${agrees}, несогласие — ${reviews.length - agrees}. Это число оценок, а не разговоров.`,
+    `Без найденных ошибок — ${passed}. Не удалось проверить — ${unmeasured}\u00a0из\u00a0${result.sampled}, в счёт они не входят.`,
+    reviews.length
+      ? `Люди проверили ${count(reviews.length, "оценку", "оценки", "оценок")} и согласились с\u00a0${agrees}. Это число оценок, а не разговоров.`
+      : "Люди оценки ещё не проверяли.",
     "",
-    "Автоматическая оценка относится к выбранным критериям и этой выборке. Процент не измеряет точность самого оценщика.",
+    "Итог относится только к этим критериям и этой выборке. Процент не говорит, насколько точна сама автоматическая проверка.",
     "",
   ];
   if (!top.length)
     lines.push(
-      measured ? "## По выбранным критериям ошибок не найдено" : "## Проверка не дала достаточной оценки",
+      measured ? "## По этим критериям ошибок не нашли" : "## Ни один разговор не удалось проверить",
       "",
       measured
-        ? "Следующее действие: вручную просмотреть несколько разговоров без найденных ошибок и проверить, не пропускает ли оценщик важные случаи."
-        : "Следующее действие: посмотреть причины неоценённых разговоров, проверить настройки модели и повторить оценку.",
+        ? "Что сделать: просмотреть несколько разговоров без найденных ошибок и убедиться, что проверка не пропускает важное."
+        : "Что сделать: выяснить, почему разговоры не удалось проверить, посмотреть настройки модели и проверить снова.",
       "",
     );
   for (const [index, problem] of top.entries()) {
@@ -78,53 +82,45 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
     lines.push(
       `## ${index + 1}. ${headingOf({ ...problem, title: short(problem.title, 140) })}`,
       "",
-      `Ошибка найдена в ${problem.log.failed} из ${count(problem.log.failed + problem.log.passed, "разговора", "разговоров", "разговоров")}, в которых удалось проверить этот критерий. Не удалось проверить критерий: ${problem.log.unknown}.`,
+      `Ошибка в\u00a0${problem.log.failed}\u00a0из\u00a0${count(problem.log.failed + problem.log.passed, "разговора", "разговоров", "разговоров")}, где критерий удалось проверить.${problem.log.unknown ? ` Ещё в\u00a0${problem.log.unknown} его не удалось проверить.` : ""}`,
       "",
-      "Основание — фрагмент документа:",
-      problem.rule.quote ? quote(problem.rule.quote) : "Цитата источника не сохранена.",
-      ...(problem.rule.quote.trim().length > 300 ? ["… Продолжение — в полном основании ниже."] : []),
-      ...(problem.rule.condition
-        ? [
-            `Условие применения${problem.rule.condition.length > 180 ? " (фрагмент)" : ""}: ${short(problem.rule.condition, 180)}`,
-          ]
-        : []),
-      ...(problem.rule.acceptable
-        ? [
-            `Исключения и допустимое${problem.rule.acceptable.length > 180 ? " (фрагмент)" : ""}: ${short(problem.rule.acceptable, 180)}`,
-          ]
-        : []),
+      "Из правил общения:",
+      problem.rule.quote ? quote(problem.rule.quote) : "Цитата не сохранилась.",
+      ...(problem.rule.quote.trim().length > 300 ? ["… Полностью — по ссылке в конце."] : []),
+      ...(problem.rule.condition ? [`Когда применяется: ${short(problem.rule.condition, 180)}`] : []),
+      ...(problem.rule.acceptable ? [`Исключения и допустимое: ${short(problem.rule.acceptable, 180)}`] : []),
       ...(criterion?.clarifications?.length
-        ? [`Уточнения команды (фрагмент): ${short(criterion.clarifications.join("; "), 200)}`]
+        ? [`Уточнения команды: ${short(criterion.clarifications.map((c) => c.trim()).join(" "), 200)}`]
         : []),
     );
     if (example)
       lines.push(
         "",
-        `Пример${example.dialogueId ? ` — разговор ${short(example.dialogueId, 80)}` : ""}:`,
-        `Клиент${example.opening.length > 160 ? " (фрагмент)" : ""}: ${short(example.opening, 160)}`,
-        `Реплика агента${example.agentQuote.length > 300 ? " (фрагмент)" : ""}:\n${quote(example.agentQuote || "Цитата не сохранена.")}`,
-        ...(example.agentQuote.length > 300 ? ["… Продолжение — в сохранённом разговоре."] : []),
-        `Объяснение оценки${example.reason.length > 300 ? " (фрагмент)" : ""}: ${short(example.reason)}`,
-        `Проверка примера: ${reliabilityWord(example)}.`,
+        example.dialogueId ? `Пример из разговора ${short(example.dialogueId, 80)}:` : "Пример:",
+        `Клиент: ${short(example.opening, 160)}`,
+        `Агент:\n${quote(example.agentQuote || "Цитата не сохранилась.")}`,
+        ...(example.agentQuote.length > 300 ? ["… Полностью — в сохранённом разговоре."] : []),
+        `Почему это ошибка: ${short(example.reason)}`,
+        `${capital(reliabilityWord(example, "people"))}.`,
       );
-    lines.push("", `Следующее действие: ${nextAction(problem)}`, "");
-    if (!saved) lines.push(`Полное основание в Agent Lab: ${origin}${problemLink(problem.id, "tone")}`, "");
+    lines.push("", `Что сделать: ${nextAction(problem)}`, "");
+    if (!saved) lines.push(`Подробнее в Agent Lab: ${origin}${problemLink(problem.id, "tone")}`, "");
   }
   if (found.length > top.length)
     lines.push(
-      `В сводке — ${grave >= 3 ? "серьёзные проблемы" : grave ? "серьёзные проблемы и самые частые из остальных" : "три наиболее частые проблемы"}. Полный список доступен в результате проверки.`,
+      `В отчёте ${grave >= 3 ? "только серьёзные проблемы" : grave ? "серьёзные проблемы и самые частые из остальных" : "три самые частые проблемы"}. Остальные — в итоге проверки в Agent Lab.`,
       "",
     );
   if (saved)
     lines.push(
-      "## Полное основание проверки",
+      "## Все материалы проверки",
       "",
       `[Сохранённые разговоры, критерии, условия и исключения](${saved}).`,
-      "Фрагменты выше сокращены. По ссылке — полные материалы на момент завершения проверки; ответы человека в этой сводке учтены на момент экспорта.",
+      "По ссылке всё целиком, как было в конце проверки. Ответы людей учтены на момент, когда составлен отчёт.",
     );
   else
     lines.push(
-      "Числа и текст — на момент выгрузки отчёта. Ссылки открывают Agent Lab на компьютере, где шла проверка, и показывают текущее состояние: после новой выгрузки разговоров оно изменится.",
+      "Числа и текст — на момент, когда составлен отчёт. Ссылки открывают Agent Lab на компьютере, где шла проверка, и показывают то, что там сейчас. После новой выгрузки разговоров там будет другое.",
     );
   return lines.join("\n");
 }

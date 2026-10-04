@@ -29,7 +29,7 @@ export function needsOf(check: Check, state: LabState | null): Need[] {
     const criteria = state?.toneOfVoice?.criteria.length ?? 0;
     return [
       dialogs,
-      { label: "Правила общения", value: policy?.origin ?? null, later: "добавите на первом шаге" },
+      { label: "Правила общения", value: policy?.origin ?? null, later: "добавьте на первом шаге" },
       ...(criteria
         ? [{ label: "Критерии", value: count(criteria, "критерий", "критерия", "критериев"), later: "" }]
         : []),
@@ -109,15 +109,15 @@ export function ToneStart() {
   if (job?.running && job.kind === "tone-check")
     return (
       <Empty
-        title="Идёт проверка tone of voice"
+        title="Проверяем разговоры"
         action={
           <Link to={toneCheckLink("checking")} className={primary}>
-            Ход проверки
+            Открыть проверку
             <ArrowRight aria-hidden className="size-4" />
           </Link>
         }
       >
-        Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть: результат сохранится.
+        Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть, итог сохранится.
       </Empty>
     );
   if (previous?.newExport)
@@ -133,7 +133,7 @@ export function ToneStart() {
         }
       >
         <PreviousCheck check="tone" line={previous.line} />
-        <p className="mt-2">Проверьте новые разговоры по тем же критериям — итог сравнится с прошлой проверкой.</p>
+        <p className="mt-2">Чтобы сравнить итог с прошлой проверкой, проверьте новые разговоры по тем же критериям.</p>
       </Empty>
     );
   const begun = !!state?.toneOfVoice || (!!job?.running && job.kind === "tone-criteria");
@@ -148,8 +148,8 @@ export function ToneStart() {
         </Link>
       }
     >
-      Загрузите выгрузку чата и правила общения: из правил соберём критерии, проверим по ним настоящие разговоры и
-      покажем, где агент говорит не так, как договорились. Подключение к агенту не нужно.
+      Загрузите выгрузку чата и правила общения. Из правил соберём критерии и проверим по ним настоящие разговоры.
+      Подключать агента не нужно.
       {previous && <PreviousCheck check="tone" line={previous.line} className="mt-3" />}
     </Empty>
   );
@@ -168,8 +168,8 @@ export function AccuracyStart() {
   const job = state?.job;
   if (job?.running && job.kind === "discover")
     return (
-      <Empty title="Идёт оценка точности">
-        Модель извлекает критерии из кода агента и проверяет по ним разговоры. Итог появится здесь; страницу можно
+      <Empty title="Проверяем разговоры">
+        Модель извлекает критерии из кода агента и проверяет по ним разговоры. Итог появится здесь, страницу можно
         закрыть.
       </Empty>
     );
@@ -186,21 +186,21 @@ export function AccuracyStart() {
           </Link>
         }
       >
-        Критерии точности — дословные требования из промптов и инструментов агента: делает ли он то, что они велят, и
-        ничего не выдумывает. Укажите папку с кодом агента в «Агенте» и прочитайте его.
+        Критерии точности берутся дословно из инструкций и инструментов агента. Укажите папку с его кодом в «Агенте» и
+        прочитайте код.
       </Empty>
     );
   const total = state?.logs.total ?? 0;
   if (!total)
     return (
-      <Empty title="Загрузите разговоры" needs={needsOf("code", state)} action={<UploadButton check="code" />}>
-        Код агента прочитан. Точность проверяют на настоящих разговорах клиентов из выгрузки чата.
+      <Empty title="Нужна выгрузка чата" needs={needsOf("code", state)} action={<UploadButton check="code" />}>
+        Код агента прочитан. Точность проверяют на настоящих разговорах клиентов из выгрузки.
       </Empty>
     );
   const busy = !!job?.running;
   return (
     <Empty
-      title={previous?.newExport ? "Новая выгрузка ещё не проверена" : "Оценить точность"}
+      title={previous?.newExport ? "Новая выгрузка ещё не проверена" : "Здесь появится итог точности"}
       needs={needsOf("code", state)}
       action={
         <div className="space-y-6">
@@ -222,14 +222,14 @@ export function AccuracyStart() {
         <>
           <PreviousCheck check="code" line={previous.line} />
           <p className="mt-2">
-            Модель проверит новые разговоры по критериям из кода агента и, если критерии те же, сравнит итог с прошлой
-            проверкой. Сам агент не запускается, итог tone of voice не меняется.
+            Модель проверит новые разговоры по критериям из кода агента. Если критерии те же, итог сравнится с прошлой
+            проверкой. Сам агент не запускается, итог tone of voice не изменится.
           </p>
         </>
       ) : (
         <>
-          Модель извлечёт критерии из кода агента и по каждому отметит в разговоре: ошибка, без ошибки или не ясно. Сам
-          агент не запускается, итог tone of voice не меняется.
+          Модель извлечёт критерии из кода агента и проверит по ним разговоры. Сам агент не запускается, итог tone of
+          voice не изменится.
           {previous && <PreviousCheck check="code" line={previous.line} className="mt-3" />}
         </>
       )}

@@ -14,9 +14,9 @@ import type { Discover } from "../lab/types";
  * answer it counts the same conversations with the person's answers taken in and says what they did: the errors they
  * took back, the misses they found in the cases «без ошибки» (from 20 of them, out of how many), how many verdicts they
  * checked (lab/answers). It never replaces the number above: that stays the check's, the one the line about the
- * previous check (`compare`, under it) sets beside its previous count. The line of serious errors and whose decision
- * they are (`serious`, product/Severity, SeverityStatus) comes first, right under the number it is part of. With few
- * conversations the last, quiet line says the conclusion is preliminary.
+ * previous check (`compare`, under it) sets beside its previous count. The lines of serious errors and whose decision
+ * they are (`serious`, product/Severity, SeverityStatus) come first, right under the number they are part of. With
+ * few conversations the last, quiet line says the conclusion is preliminary.
  */
 export function Trust({
   result,
@@ -52,9 +52,9 @@ export function Trust({
       ) : (
         answers.errors > 0 && (
           <p>
-            Ошибки нашла модель.{" "}
+            Ошибки нашла модель. Чтобы доверять итогу,{" "}
             <Link to={queue} className="inline-flex items-center gap-1 font-medium text-run hover:underline">
-              {answers.errors <= 20 ? "Проверьте их" : "Проверьте 10–20 из них"}, чтобы убедиться, что она права
+              {answers.errors <= 20 ? "проверьте их" : "проверьте 10–20 из них"}
               <ArrowRight aria-hidden className="size-4" />
             </Link>
           </p>
@@ -62,7 +62,7 @@ export function Trust({
       )}
       {compare}
       {answers.measured > 0 && answers.measured < FEW && (
-        <p className="text-fg-3">Проверено мало разговоров: вывод предварительный.</p>
+        <p className="text-fg-3">{`Проверено меньше ${FEW}\u00a0разговоров, вывод предварительный.`}</p>
       )}
     </div>
   );
