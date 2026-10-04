@@ -411,6 +411,7 @@ async def propose_severity(payload: SeverityProposeCommand) -> dict:
     proposals, after a failed proposal, or `again` for every criterion a person has not decided."""
 
     async def work(progress: Progress) -> dict:
+        progress(message=severity.PROPOSING, check=payload.check)
         error = await severity.propose(payload.check, progress, again=payload.again)
         if error:
             raise llm.ModelError(error)

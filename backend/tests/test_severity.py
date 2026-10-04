@@ -343,6 +343,8 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
         self.assertIsNone(api.jobs.state['error'])
+        # The task says which check it proposes for: the screens lead to its criteria.
+        self.assertEqual(api.jobs.state['progress'], {'message': 'Предлагаю, какие ошибки серьёзные', 'check': 'tone'})
         self.assertEqual(len(model.await_args.args[1]['criteria']), 1)  # the decided one is not asked about
         found = await self.get('/api/problems?check=tone')
         rules = {rule['id']: rule for rule in found['rules']}
@@ -443,3 +445,29 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         found = await self.get('/api/problems?check=code')
         self.assertEqual([(rule['serious'], rule['severity']['by']) for rule in found['rules']], [(True, 'model')])
         self.assertEqual(found['severity'], {'criteria': 1, 'proposed': 1, 'decided': 0, 'error': None})
+
+    async def test_the_counts_cover_the_criteria_of_the_result_only(self):
+        await self.check_tone({'d1': {'pronouns'}}, propose=proposing('«вы»'))
+        extra = {'id': 'x1', 'text': 'Агент называет клиента по имени', 'quote': 'Называйте клиента по имени'}
+        item = {
+            'cardId': 'card',
+            'status': 'FAIL',
+            'topic': 'Tone of voice',
+            'criteria': [extra],
+            'conversation': [{'role': 'customer', 'text': 'Привет'}],
+            'rules': [{'ruleId': 'x1', 'status': 'FAIL', 'reason': 'Без имени', 'agentQuote': 'Здравствуйте'}],
+        }
+        store.create_run(
+            {
+                'id': 'run-tone',
+                'check': 'tone',
+                'startedAt': '2026-10-04T10:00:00+00:00',
+                'finishedAt': '2026-10-04T10:10:00+00:00',
+                'status': 'done',
+                'items': [item],
+            }
+        )
+        store.severity_failed('tone', 'Модель недоступна: ConnectError')  # a later «Предложить снова» failed
+        found = await self.get('/api/problems?check=tone')
+        self.assertEqual(len(found['rules']), 3)  # a criterion only the run has is listed, but nobody proposes for it
+        self.assertEqual(found['severity'], {'criteria': 2, 'proposed': 2, 'decided': 0, 'error': None})

@@ -1,12 +1,11 @@
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
-import { agentKey } from "../app/agent";
 import { useToast } from "../ui/toast";
 import { api } from "./api";
 import { count, plural } from "./format";
 import { shareText, type Counts } from "./history";
 import { useLabState } from "./LabProvider";
 import type { Problems, RuleEntry } from "./problems";
-import type { Check } from "./types";
+import type { Check, Job } from "./types";
 
 /**
  * Serious and minor errors (spec 2026-10-04-severity-design.md). After each check the automatic check proposes, for
@@ -282,26 +281,9 @@ export function useConfirmSeverity() {
   });
 }
 
-/** Where this tab keeps the check of its last proposal, per agent. */
-const STARTED = agentKey("lab.severity.proposing");
-
-/** The check whose proposal this tab started last: where its task leads (app/jobs). Storage may be unavailable. */
-export function proposingCheck(): Check | null {
-  try {
-    const check = sessionStorage.getItem(STARTED);
-    return check === "tone" || check === "code" ? check : null;
-  } catch {
-    return null;
-  }
-}
-
-function rememberProposing(check: Check) {
-  try {
-    sessionStorage.setItem(STARTED, check);
-  } catch {
-    /* a private window or blocked storage: the task leads to «Обзор» */
-  }
-}
+/** The check a running or finished proposal is for, as its task says (backend severity.propose). */
+export const proposalCheck = (job: Job | undefined): Check | null =>
+  job?.kind === "severity" || job?.progress.message === PROPOSING ? (job.progress.check ?? null) : null;
 
 /**
  * «Предложить автоматически» and «Предложить снова»: the automatic check proposes for the criteria of the check's
@@ -314,7 +296,6 @@ export function useProposeSeverity() {
   return useMutation({
     mutationKey: ["severity", "propose"],
     mutationFn: (check: Check) => api("/api/severity/propose", { check }),
-    onMutate: rememberProposing,
     onError: (e) => toast.error(e),
     onSettled: after,
   });

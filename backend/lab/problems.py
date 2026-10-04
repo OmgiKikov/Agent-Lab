@@ -341,8 +341,8 @@ def build(check: str, run_id: str | None = None) -> dict:
     """The check's rules and problems: its result on one side, the run asked for (else its newest finished run) on
     the other. Its scenarios are named only when the deck was built from this check. The serious criteria come first
     (a person's decision, else the model's proposal), then by frequency; `severity` counts, among the criteria of the
-    record, the ones the model proposed for and a person did not decide yet, the ones a person decided, and says why
-    the last proposal failed while a criterion has neither."""
+    check's result, the ones the model proposed for and a person did not decide yet, the ones a person decided, and says
+    why the last proposal failed while one of them has neither."""
     document = store.load(cards.DECK) or {}
     deck = document.get('cards') or []
     serious = set(store.severity()[check])
@@ -354,7 +354,9 @@ def build(check: str, run_id: str | None = None) -> dict:
     scenarios = deck if document.get('check') == check else []
     rules = [finish(entry, scenarios, serious, marks, proposed['proposals']) for entry in book.rules.values()]
     rules.sort(key=lambda r: (not r['serious'], -r['log']['failed'], -r['sim']['failed'], r['rule']['text']))
-    by = [rule['severity']['by'] for rule in rules]
+    # The criteria of the result: the model proposes for these and «Подтвердить все» confirms them; one only a run has
+    # is listed, but nobody proposes for it.
+    by = [rule['severity']['by'] for rule in rules if rule['log']['ruleIds']]
     return {
         'check': check,
         'log': log,
@@ -362,7 +364,7 @@ def build(check: str, run_id: str | None = None) -> dict:
         'rules': rules,
         'problems': [r['id'] for r in rules if r['log']['failed'] or r['sim']['failed']],
         'severity': {
-            'criteria': len(rules),
+            'criteria': len(by),
             'proposed': by.count('model'),
             'decided': by.count('person'),
             'error': proposed['error'] if None in by else None,

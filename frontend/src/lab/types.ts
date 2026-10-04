@@ -172,7 +172,8 @@ export type Job = {
   kind: string | null;
   running: boolean;
   error: string | null;
-  progress: { message?: string; done?: number; total?: number; run?: string };
+  /** `check`: the check a proposal of which errors are serious is for (task `severity`, lab/severity). */
+  progress: { message?: string; done?: number; total?: number; run?: string; check?: Check };
 };
 export type LabState = {
   toneOfVoice?: ToneDraft | null;

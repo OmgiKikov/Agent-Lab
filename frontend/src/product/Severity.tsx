@@ -12,7 +12,7 @@ import {
   pendingOf,
   proposedText,
   PROPOSING,
-  proposingCheck,
+  proposalCheck,
   reasonText,
   seriousOf,
   seriousSentence,
@@ -175,9 +175,7 @@ function Propose({ check, again, why }: { check: Check; again?: boolean; why?: s
   const job = state?.job;
   const own =
     !!job?.running &&
-    (job.kind === "severity"
-      ? (proposingCheck() ?? check) === check
-      : job.kind === JOB_OF[check] && job.progress.message === PROPOSING);
+    (job.kind === "severity" ? proposalCheck(job) === check : job.kind === JOB_OF[check] && !!proposalCheck(job));
   const running = propose.isPending || own;
   const other = !!job?.running && !own;
   return (

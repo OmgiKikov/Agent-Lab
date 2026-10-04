@@ -1,4 +1,4 @@
-import { PROPOSING, proposingCheck } from "../lab/severity";
+import { PROPOSING, proposalCheck } from "../lab/severity";
 import type { Job } from "../lab/types";
 import { criterionLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
 
@@ -16,7 +16,7 @@ export const JOBS: Record<string, { label: string; to: string }> = {
   run: { label: "Симуляция", to: SECTIONS.simulations },
   rejudge: { label: "Переоценка прогона", to: SECTIONS.simulations },
   names: { label: "Имена критериев", to: criterionLink("code") },
-  // «Предложить автоматически» (lab/severity): the task does not say its check, so it leads to «Обзор», where both are.
+  // «Предложить автоматически» (lab/severity): to the criteria of the check it proposes for (jobOf), else «Обзор».
   severity: { label: PROPOSING, to: SECTIONS.overview },
 };
 
@@ -26,6 +26,6 @@ export const JOBS: Record<string, { label: string; to: string }> = {
  */
 export function jobOf(job: Job) {
   if (!job.kind) return undefined;
-  const check = job.kind === "severity" ? proposingCheck() : null;
+  const check = job.kind === "severity" ? proposalCheck(job) : null;
   return check ? { ...JOBS.severity, to: criterionLink(check) } : JOBS[job.kind];
 }
