@@ -30,12 +30,14 @@ export function PlayDialog({
   onClose,
   state,
   preset,
+  presetTypes,
   onStarted,
 }: {
   open: boolean;
   onClose: () => void;
   state: LabState;
   preset?: string[] | null;
+  presetTypes?: string[] | null;
   onStarted: () => void;
 }) {
   const { refresh } = useLabState();
@@ -53,8 +55,10 @@ export function PlayDialog({
     if (!open) return;
     setPick(preset?.length ? "chosen" : "all");
     setChosen(new Set(preset ?? []));
+    const known = (presetTypes ?? []).filter((id) => state.personas.some((p) => p.id === id));
+    if (known.length) setTypes(known);
     setTarget((t) => (state.targets.some((x) => x.id === t && x.ready) ? t : firstReady));
-  }, [open, preset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, preset, presetTypes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const deck = pickOf(cards, pick, chosen);
   const total = deck.length * types.length * Number(repeats);

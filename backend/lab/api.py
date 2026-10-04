@@ -21,6 +21,7 @@ from . import (
     policy_files,
     problems,
     registry,
+    scenarios,
     simulate,
     store,
     tone,
@@ -341,6 +342,13 @@ def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None 
             raise HTTPException(404, 'Прогон не найден')
         check = checks.of_run(record)
     return problems.build(check, run)
+
+
+@app.get('/api/scenarios')
+def scenarios_view() -> dict:
+    """Each scenario of the deck as a test: the error of the real conversation it reproduces, and its own result in
+    every run of the deck's check, newest first. Results of runs stand side by side; nothing compares them."""
+    return scenarios.build()
 
 
 @app.get('/api/sources/{source_id}')

@@ -207,7 +207,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.answer(None, 't1r1', check='accuracy')).status_code, 422)
 
     async def build_cards(self, body=None):
-        async def build(topic, dialogue, origin, general):
+        async def build(topic, dialogue, origin, general, reproduces=()):
             return {'id': f'{topic["title"]}:{dialogue["id"]}', 'topic': topic['title'], 'criteria': topic['rules']}
 
         with patch.object(cards, 'build_card', side_effect=build):
