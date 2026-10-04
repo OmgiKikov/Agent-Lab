@@ -13,9 +13,13 @@ DECK = 'cards.json'  # the scenarios, built from the errors of one check: {check
 # The criteria of Точность waiting for its next check after a new export: its topics and their criteria without the
 # conversations of the old export (store.replace_inputs, accuracy_history.criteria_of); changed code clears them.
 CODE_CRITERIA = 'accuracy-criteria.json'
-# The criteria a person marked serious, per check, by their key (problems.rule_key): {tone: [key, …], code: […]}. Apart
-# from the criteria: a mark changes neither what is checked nor how, so it makes no new version of the criteria.
+# Serious and minor errors, per check, by the criterion's key (problems.rule_key): a person's decisions
+# {tone: {key: true|false}, code: {…}} (an older record listed only the serious keys), and apart from them the model's
+# proposals {tone: {proposals: {key: {serious, reason}}, model, at, error}, code: {…}} (severity.py), which never touch
+# a decision. Both apart from the criteria: severity changes neither what is checked nor how, so it makes no new
+# version of the criteria.
 SEVERITY = 'severity.json'
+SEVERITY_PROPOSED = 'severity-proposed.json'
 # What marks tone of voice's own: the kind and id of its policy, so its criteria's sourceId (tone.KIND), and the title
 # of its only topic, which its scenarios and their conversations carry.
 TONE_OF_VOICE, TONE_TOPIC = 'tone-of-voice', 'Tone of voice'

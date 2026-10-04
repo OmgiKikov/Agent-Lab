@@ -168,11 +168,27 @@ def tone_of_voice(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
     if draft:
 
         def check() -> Found:
-            body = {'ruleIds': [c['id'] for c in draft['criteria']][:20], 'count': args.count}
+            body = {'ruleIds': [c['id'] for c in draft['criteria']][:20], 'count': args.count, 'propose': True}
             result = lab.job('tone-check', '/api/tone-of-voice/check', body | {'revision': draft['revision']})
             return summary_line(result['checks']['tone']), None
 
-        run.step('Tone of voice: разговоры проверены', check)
+        if run.step('Tone of voice: разговоры проверены', check):
+            run.step('Tone of voice: серьёзность предложена', lambda: severity_line(lab, 'tone'))
+
+
+def severity_line(lab: Lab, check: str) -> Found:
+    """What the model proposed after the check: how many criteria it called serious, and why the first of them."""
+    found = lab.call('GET', f'/api/problems?check={check}')
+    said = found.get('severity') or {}
+    if said.get('error'):
+        raise RuntimeError(said['error'])
+    serious = [rule for rule in found['rules'] if rule['serious']]
+    if not said.get('proposed') and not said.get('decided'):
+        raise RuntimeError('модель ничего не предложила')
+    first = serious[0] if serious else None
+    reason = ((first or {}).get('severity') or {}).get('proposed') or {}
+    why = f': «{first["title"]}» — {reason.get("reason", "")}' if first else ''
+    return f'серьёзных {len(serious)} из {said["criteria"]} критериев{why}', None
 
 
 def accuracy(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
@@ -183,11 +199,11 @@ def accuracy(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
         return f'{len(found)} источников: ' + ', '.join(s.get('origin', s['id']) for s in found[:5]), found
 
     def check() -> Found:
-        result = lab.job('discover', '/api/discover', {'count': max(5, args.count)})
+        result = lab.job('discover', '/api/discover', {'count': max(5, args.count), 'propose': True})
         return summary_line(result['checks']['code']), None
 
-    if run.step('Точность: код агента прочитан', code):
-        run.step('Точность: разговоры проверены', check)
+    if run.step('Точность: код агента прочитан', code) and run.step('Точность: разговоры проверены', check):
+        run.step('Точность: серьёзность предложена', lambda: severity_line(lab, 'code'))
 
 
 def simulations(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
