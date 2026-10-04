@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, Bot, ClipboardCheck, FileText, Hammer, Play, type LucideIcon } from "lucide-react";
+import { ArrowRight, Bot, ClipboardCheck, FileText, Hammer, Play, Presentation, type LucideIcon } from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import {
@@ -129,6 +129,19 @@ export function OverviewPage() {
   const header = (
     <Header
       title="Обзор"
+      actions={
+        // The page to show management: once a check has a result to put on it.
+        CHECKS.some((c) => resultOf(state, c)) && (
+          <Link
+            to={SECTIONS.summary}
+            aria-label="Сводка для руководителя"
+            className={buttonClass({ variant: "primary" })}
+          >
+            <Presentation aria-hidden className="size-3.5" />
+            <span className="hidden sm:inline">Сводка для руководителя</span>
+          </Link>
+        )
+      }
       below={<SectionJob kinds={["tone-check", "tone-criteria", "discover", "run", "rejudge", "cards"]} />}
     />
   );

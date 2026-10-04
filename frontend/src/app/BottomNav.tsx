@@ -33,7 +33,7 @@ export function BottomNav() {
   return (
     <nav
       aria-label="Разделы"
-      className="fixed inset-x-0 bottom-0 z-30 grid h-[calc(56px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-line bg-list pb-[env(safe-area-inset-bottom)] lg:hidden"
+      className="fixed inset-x-0 bottom-0 z-30 grid h-[calc(56px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-line bg-list pb-[env(safe-area-inset-bottom)] lg:hidden print:hidden"
     >
       {WORK.map((item) => (
         <MobileItem key={item.to} item={item} />

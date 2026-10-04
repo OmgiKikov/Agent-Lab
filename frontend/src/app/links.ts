@@ -12,6 +12,8 @@ export type Stage = Check | "sim";
 
 export const SECTIONS = {
   overview: "/overview",
+  /** «Сводка для руководителя»: a page of the agent, from «Обзор» and ⌘K, not a section of the navigation. */
+  summary: "/summary",
   tone: "/tone",
   accuracy: "/accuracy",
   simulations: "/simulations",
