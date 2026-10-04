@@ -230,7 +230,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         said.assert_not_awaited()
         closed.assert_awaited_once()
 
-    async def test_a_malformed_agent_address_is_named_and_never_fails_a_check_or_a_run(self) -> None:
+    async def test_a_malformed_agent_address_is_named_by_the_check_and_by_the_run(self) -> None:
         malformed = (
             'https://ift.example.invalid:84 43/api',
             'https://ift.example.invalid:99999/api',
@@ -270,7 +270,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 break
             await asyncio.sleep(0.002)
         run = store.runs()[0]
-        self.assertEqual(run['status'], 'done')
+        # Never a crash: each conversation names the address, and the run, which the agent answered in none, fails
+        # with it (simulate.unanswered).
+        self.assertEqual(run['status'], 'failed')
+        self.assertTrue(run['error'].startswith('Агент не ответил ни в одном разговоре: '), run['error'])
+        self.assertIn('адрес агента', run['error'])
         self.assertEqual([item['status'] for item in run['items']], ['UNMEASURED'])
         self.assertIn('адрес агента', run['items'][0]['error'])
 
