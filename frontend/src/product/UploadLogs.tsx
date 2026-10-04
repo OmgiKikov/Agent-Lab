@@ -26,15 +26,13 @@ export const replacesResult = (state: LabState | null) =>
 /**
  * What a new export does, in the order a person asks about it (backend: store.replace_inputs): the current results go
  * to the history of their checks; the new conversations are checked by the same criteria and compared with the
- * previous ones; the scenarios built from a result are reset, the runs stay; the answers of people stay. A person's
- * answers on the result of accuracy are kept in its history only as they were when its check finished, so the ones
- * given since are named as going.
+ * previous ones; the scenarios built from a result are reset, the runs stay; the answers of people stay, with the
+ * saved checks they were given on (store.set_log_review).
  */
 function whatHappens(state: LabState | null): [string, string] {
   const tone = !!state?.checks.tone;
-  const code = state?.checks.code;
+  const code = !!state?.checks.code;
   const deck = state?.cards?.cards.length ? state.cards : null;
-  const answered = !!code?.results.some((result) => result.rules.some((rule) => rule.review));
   const results =
     tone && code
       ? "Текущие итоги tone of voice и точности уйдут в «Историю». "
@@ -43,7 +41,7 @@ function whatHappens(state: LabState | null): [string, string] {
         : code
           ? "Текущий итог точности уйдёт в «Историю». "
           : "";
-  const stays = `прогоны симуляций и ответы людей останутся${answered ? " — кроме ответов на итог точности, данных после его проверки" : ""}.`;
+  const stays = "прогоны симуляций и ответы людей останутся.";
   return [
     `${results}Новые разговоры проверяются по тем же критериям и сравниваются с прошлыми.`,
     deck

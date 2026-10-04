@@ -76,6 +76,12 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
         connection.execute(
             'CREATE TABLE IF NOT EXISTS code_checks (id TEXT PRIMARY KEY, summary TEXT NOT NULL, value TEXT NOT NULL)'
         )
+        # A person's answers on a saved check of Точность, kept apart from its record, as tone_check_reviews.
+        connection.execute(
+            'CREATE TABLE IF NOT EXISTS code_check_reviews ('
+            'check_id TEXT NOT NULL, dialogue_id TEXT NOT NULL, rule_id TEXT NOT NULL, '
+            'decision TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (check_id, dialogue_id, rule_id))'
+        )
         _save_accuracy_history(connection)
         connection.execute('CREATE TABLE IF NOT EXISTS lengths (name TEXT PRIMARY KEY, length INTEGER NOT NULL)')
         if _json_functions(connection):
@@ -304,6 +310,11 @@ def code_check(check_id: str) -> dict | None:
     return json.loads(row[0]) if row else None
 
 
+def code_reviews(check_id: str) -> list[dict]:
+    """A person's answers on a saved check of Точность given after it finished (set_log_review)."""
+    return _reviews('code_check_reviews', check_id)
+
+
 def tone_checks() -> list[dict]:
     with _connection() as connection:
         return [json.loads(row[0]) for row in connection.execute('SELECT summary FROM tone_checks ORDER BY rowid DESC')]
@@ -327,9 +338,13 @@ def tone_check(check_id: str) -> dict | None:
 
 
 def tone_reviews(check_id: str) -> list[dict]:
+    return _reviews('tone_check_reviews', check_id)
+
+
+def _reviews(table: str, check_id: str) -> list[dict]:
     with _connection() as connection:
         rows = connection.execute(
-            'SELECT dialogue_id, rule_id, decision, updated_at FROM tone_check_reviews '
+            f'SELECT dialogue_id, rule_id, decision, updated_at FROM {table} '
             'WHERE check_id = ? ORDER BY dialogue_id, rule_id',
             (check_id,),
         )
@@ -353,11 +368,16 @@ def tone_decisions() -> list[tuple[str, str, str, str | None]]:
 def _save_tone_review(
     connection: sqlite3.Connection, check_id: str, dialogue_id: str, rule_id: str, decision: str | None, updated_at: str
 ) -> None:
+    _save_review(connection, 'tone_check_reviews', (check_id, dialogue_id, rule_id, decision, updated_at))
+
+
+def _save_review(connection: sqlite3.Connection, table: str, review: tuple) -> None:
+    """(check, conversation, criterion, decision, when) into a table of answers on saved checks."""
     connection.execute(
-        'INSERT INTO tone_check_reviews (check_id, dialogue_id, rule_id, decision, updated_at) VALUES (?, ?, ?, ?, ?) '
+        f'INSERT INTO {table} (check_id, dialogue_id, rule_id, decision, updated_at) VALUES (?, ?, ?, ?, ?) '
         'ON CONFLICT(check_id, dialogue_id, rule_id) DO UPDATE SET '
         'decision = excluded.decision, updated_at = excluded.updated_at',
-        (check_id, dialogue_id, rule_id, decision, updated_at),
+        review,
     )
 
 
@@ -551,9 +571,13 @@ def set_log_review(
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
         value = _update_document(connection, analysis, mutate)
+        # The answer stays with the saved check of this result too, which outlives the result (a new export).
         check_id = value.get('checkId')
+        review = (check_id, dialogue_id, rule_id, decision, now())
         if check_id and connection.execute('SELECT 1 FROM tone_checks WHERE id = ?', (check_id,)).fetchone():
-            _save_tone_review(connection, check_id, dialogue_id, rule_id, decision, now())
+            _save_tone_review(connection, *review)
+        elif check_id and connection.execute('SELECT 1 FROM code_checks WHERE id = ?', (check_id,)).fetchone():
+            _save_review(connection, 'code_check_reviews', review)
 
 
 def recover_runs() -> int:

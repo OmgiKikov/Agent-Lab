@@ -72,7 +72,7 @@ def build(check: str) -> dict:
         return {
             'check': check,
             'kind': 'none' if latest else 'first',
-            'reason': 'Новая выгрузка ещё не проверена.' if latest else 'Сравнивать не с чем.',
+            'reason': 'Текущего итога ещё нет.' if latest else 'Сравнивать не с чем.',
             'current': None,
             'previous': line(latest),
         }

@@ -361,14 +361,11 @@ def history_view(check: Literal['tone', 'code']) -> dict:
 
 @app.get('/api/history/{check}/{check_id}')
 def history_detail(check: Literal['tone', 'code'], check_id: str) -> dict:
-    """A saved check with its evidence: tone of voice's as /api/tone-of-voice/history/{id}; Точность's with its result
-    and the conversations it judged."""
+    """A saved check with its evidence and the answers given on it: tone of voice's as /api/tone-of-voice/history/{id};
+    Точность's with its result and the conversations it judged."""
     if check == checks.TONE:
         return tone_history_detail(check_id)
-    record = store.code_check(check_id)
-    if record is None:
-        raise HTTPException(404, 'Проверка не найдена')
-    return record
+    return with_reviews(store.code_check(check_id), store.code_reviews(check_id))
 
 
 @app.get('/api/scenarios')
@@ -499,10 +496,13 @@ def tone_history() -> dict:
 
 @app.get('/api/tone-of-voice/history/{check_id}')
 def tone_history_detail(check_id: str) -> dict:
-    snapshot = store.tone_check(check_id)
+    return with_reviews(store.tone_check(check_id), store.tone_reviews(check_id))
+
+
+def with_reviews(snapshot: dict | None, reviews: list[dict]) -> dict:
+    """A saved check with the answers people gave on it since it finished, over the ones it was saved with."""
     if snapshot is None:
         raise HTTPException(404, 'Проверка не найдена')
-    reviews = store.tone_reviews(check_id)
     decisions = {(row['dialogueId'], row['ruleId']): row['decision'] for row in reviews}
     for result in snapshot['result']['results']:
         for row in result.get('rules', []):

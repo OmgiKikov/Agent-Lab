@@ -178,6 +178,23 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('overall', compared)
         self.assertNotIn('criteria', compared)
 
+    async def test_answers_on_accuracy_given_after_its_check_stay_with_its_saved_check(self):
+        """A new export takes the live result of Точность away; a person's answers on it stay with its saved check, as
+        tone of voice's do."""
+        result = await self.assess_code()
+        rule_id = result['results'][0]['rules'][0]['ruleId']
+        body = {'source': 'log', 'check': 'code', 'dialogueId': 'd1', 'ruleId': rule_id, 'decision': 'disagree'}
+        response = await self.client.post(
+            '/api/review', json=body | {'finishedAt': result['finishedAt'], 'status': 'FAIL'}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        await self.upload('d2', name='Октябрь.jsonl')
+        detail = await self.get(f'/api/history/code/{result["checkId"]}')
+        self.assertEqual(detail['result']['results'][0]['rules'][0]['review'], 'disagree')
+        self.assertEqual(
+            [(r['dialogueId'], r['ruleId'], r['decision']) for r in detail['reviews']], [('d1', rule_id, 'disagree')]
+        )
+
     async def test_an_accuracy_result_from_before_its_history_becomes_its_first_saved_check(self):
         result = await self.assess_code()
         legacy = {key: value for key, value in result.items() if key not in ('checkId', 'datasetFingerprint')}
