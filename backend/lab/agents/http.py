@@ -12,7 +12,7 @@ import httpx
 from ..settings import AGENT_TIMEOUT, MOCK_URL
 
 AGENT_PATH = '/api/v1/ai/agents/agent-ckr-pa-acquiring'
-BAD_ADDRESS = 'Проверьте адрес агента: нужен вид https://хост:порт/путь, без пробелов, с портом от 1 до 65535.'
+BAD_ADDRESS = 'Адрес агента записан с ошибкой. Нужен вид https://хост:порт/путь без пробелов, с портом от 1 до 65535.'
 
 
 class AgentError(RuntimeError):
@@ -98,20 +98,20 @@ def read_reply(data: object, http_status: int) -> dict:
     """What the Lab takes from the agent's answer.
     Status 200 is the agent's own reply; 202-x hands the conversation off to an operator."""
     if not isinstance(data, dict):
-        raise AgentError('Ответ агента должен быть JSON-объектом')
+        raise AgentError('Агент ответил в неизвестном формате (не JSON-объект).')
     message = data.get('message')
     if not isinstance(message, dict) or not isinstance(message.get('content'), dict):
-        raise AgentError('В ответе агента нет объекта message.content')
+        raise AgentError('Агент ответил в неизвестном формате (нет message.content).')
     content = message['content']
     status = str(content.get('status_code') or http_status)
     text = content.get('result') or content.get('reason') or ''
     if not isinstance(text, str):
-        raise AgentError('Текст ответа агента должен быть строкой')
+        raise AgentError('Агент ответил в неизвестном формате (текст не строка).')
     text = text.strip()
     # Clarifying questions come with buttons; the chat sends the button's text back as the next message.
     suggestions = data.get('suggestions') or []
     if not isinstance(suggestions, list):
-        raise AgentError('Подсказки агента должны быть списком')
+        raise AgentError('Агент ответил в неизвестном формате (suggestions не список).')
     options = [o['text'] for o in suggestions if isinstance(o, dict) and isinstance(o.get('text'), str) and o['text']]
     return {'text': text, 'status': status, 'ok': status.startswith('200') and bool(text), 'options': options}
 
@@ -135,9 +135,7 @@ class HttpAgent:
 
     async def open(self) -> None:
         if not self.url:
-            raise AgentError(
-                'Не задан адрес агента на ИФТ: укажите его в разделе «Агент», поле «Адрес агента на тестовом стенде».'
-            )
+            raise AgentError('Не задан адрес агента на тестовом стенде. Укажите его в разделе «Агент».')
         if self.mocked:
             self.version = await _stand_version(self.url) or self.version
 
@@ -158,15 +156,15 @@ class HttpAgent:
             try:
                 response = await client.post(self.url, json=body, headers=headers)
             except httpx.HTTPError as error:
-                raise AgentError(f'Агент недоступен: {type(error).__name__}') from error
+                raise AgentError(f'Нет связи с агентом ({type(error).__name__}).') from error
             seconds = round(time.monotonic() - started, 2)
             events = await _mock_events(client, cursor, headers.get('x-trace-id'))
         if response.status_code >= 500 or response.status_code in (401, 403, 404):
-            raise AgentError(f'Агент ответил HTTP {response.status_code}')
+            raise AgentError(f'Агент ответил ошибкой (HTTP {response.status_code}).')
         try:
             data = response.json()
         except ValueError as error:
-            raise AgentError('Агент вернул не JSON') from error
+            raise AgentError('Агент ответил не в JSON.') from error
         return {**read_reply(data, response.status_code), 'seconds': seconds, 'events': events}
 
 
@@ -192,7 +190,9 @@ async def _apply_world(client: httpx.AsyncClient, trace_id: str, world: dict) ->
         )
         response.raise_for_status()
     except (httpx.HTTPError, httpx.InvalidURL) as error:
-        raise AgentError(f'Заглушки систем не приняли данные сценария: {type(error).__name__}') from error
+        raise AgentError(
+            f'Заглушки систем банка не приняли тестовые данные сценария ({type(error).__name__}).'
+        ) from error
 
 
 async def _mock_cursor(client: httpx.AsyncClient) -> int | None:

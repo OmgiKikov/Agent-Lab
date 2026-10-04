@@ -25,9 +25,9 @@ def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
     analysis = store.load(tone.RESULT) or {}
     draft = store.load(tone.DRAFT) or {}
     if analysis.get('purpose') != tone.KIND or analysis.get('finishedAt') != finished_at:
-        raise ValueError('Результат проверки изменился. Откройте актуальный результат.')
+        raise ValueError('Итог проверки изменился. Обновите страницу.')
     if analysis.get('criteriaRevision') != draft.get('revision'):
-        raise ValueError('Критерии изменились. Сначала повторите проверку по новой версии.')
+        raise ValueError('Критерии изменились. Сначала проверьте разговоры по новым критериям.')
     # Also verifies the active policy still matches the draft.
     tone.selection([rule_id], draft.get('revision'))
     rule = next(
@@ -37,9 +37,9 @@ def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
     verdict = next((row for row in (result or {}).get('rules', []) if row['ruleId'] == rule_id), None)
     dialogue = logs.read(dialogue_id)
     if rule is None or verdict is None or dialogue is None:
-        raise ValueError('Разговор или критерий не найден в текущей проверке.')
+        raise ValueError('В текущем итоге нет этого разговора или критерия.')
     if verdict['status'] != 'FAIL':
-        raise ValueError('Предложение доступно для найденной ошибки общения.')
+        raise ValueError('Предложение можно получить только для найденной ошибки.')
     # The quote is checked as the judge checked it, and the model reads the replies as the judge read them: with
     # the buttons the customer saw instead of the export's control code.
     if not quotes.cited(verdict.get('agentQuote', ''), judge.log_words(discover.conversation(dialogue))):

@@ -62,5 +62,5 @@ class MissingAddressTests(unittest.IsolatedAsyncioTestCase):
             await HttpAgent({'url': '', 'profile': 'prod'}).open()
         self.assertEqual(
             str(refused.exception),
-            'Не задан адрес агента на ИФТ: укажите его в разделе «Агент», поле «Адрес агента на тестовом стенде».',
+            'Не задан адрес агента на тестовом стенде. Укажите его в разделе «Агент».',
         )

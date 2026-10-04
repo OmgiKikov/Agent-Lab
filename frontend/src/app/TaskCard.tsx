@@ -51,7 +51,7 @@ export function JobNotices() {
     const label = info?.label ?? "Задача";
     if (job.error !== STOPPED) markTab(job.error ? "Не удалось" : "Готово");
     if (job.error === STOPPED) toast.notify(`${label}: остановлено`);
-    else if (job.error) toast.error(`${label}: ${job.error}`);
+    else if (job.error) toast.error(`${label}: не удалось. ${job.error}`);
     else if (!info || here.current !== info.to.split("?")[0])
       toast.notify(
         `${label}: готово`,
@@ -151,7 +151,7 @@ export function TaskCard({ bar }: { bar?: boolean }) {
             {message}
           </div>
         )}
-        <div className="mt-1 text-small text-fg-4">Можно закрыть страницу: результат сохранится.</div>
+        <div className="mt-1 text-small text-fg-4">Страницу можно закрыть, результат сохранится.</div>
         {progress}
         <div className="mt-2 flex items-center justify-between gap-2 text-small text-fg-3">
           <span className="tabular-nums">{total ? `${done}\u00a0из\u00a0${total}` : "идёт"}</span>
@@ -178,7 +178,7 @@ export function TaskCard({ bar }: { bar?: boolean }) {
           <X className="size-3.5" />
         </button>
       </div>
-      {/* Room for a whole sentence: what happened and what to do («…проверьте «Настройки»»). */}
+      {/* Room for a whole sentence: what happened and what to do («…проверьте её в разделе «Настройки»»). */}
       <p className={cn("mt-1 text-small text-fg-2", bar ? "line-clamp-3" : "line-clamp-6")} title={job.error}>
         {job.error}
       </p>

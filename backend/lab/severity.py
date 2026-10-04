@@ -23,7 +23,7 @@ Return {"criteria": [{"id": "...", "serious": true|false, "reason": "..."}]} wit
 # Criteria asked about in one call: the reply stays short enough to answer for each.
 CHUNK = 30
 # What the task says while the model proposes, with the check it proposes for (the screens lead to its criteria).
-PROPOSING = 'Предлагаю, какие ошибки серьёзные'
+PROPOSING = 'Отмечаем серьёзные ошибки'
 ABOUT = {
     checks.TONE: "Tone of voice: how the agent talks to customers, by the bank's rules of communication.",
     checks.CODE: 'Accuracy: whether the agent does what its instructions and tools require.',

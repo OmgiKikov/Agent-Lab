@@ -64,7 +64,7 @@ function SimResult() {
         {header}
         <EmptyState
           drop
-          title="Симуляций ещё не было"
+          title="Здесь будет итог прогона"
           className="h-full justify-center"
           action={
             cards ? (
@@ -80,8 +80,7 @@ function SimResult() {
             )
           }
         >
-          Синтетические клиенты сыграют с агентом сценарии из ошибок одной из проверок разговоров, и её критерии оценят
-          их. Так ошибки находятся раньше, чем их увидят клиенты.
+          Синтетические клиенты сыграют с агентом сценарии из ошибок одной проверки. Разговоры оценят по её критериям.
         </EmptyState>
       </div>
     );
@@ -111,7 +110,7 @@ function SimResult() {
               unchecked={Math.max(0, total - m.measured)}
             />
           ) : run.status === "failed" ? (
-            // Why, in place: «Агент не ответил ни в одном разговоре: …» (backend simulate.unanswered).
+            // Why, in place: «Агент не ответил ни в одном разговоре. …» (backend simulate.unanswered).
             <div className="mt-6">
               <p className="text-title font-semibold text-fg">Прогон прервался</p>
               {run.error && <p className="mt-2 max-w-[68ch] text-lead text-fg-2">{run.error}</p>}
@@ -154,8 +153,8 @@ function Live({ run, state }: { run: LabRun; state: LabState }) {
         )}
       </p>
       <p className="mt-3 text-lead text-fg-2">
-        {plural(total || done, "разговор сыгран", "разговора сыграно", "разговоров сыграно")} · прогон идёт, проверки
-        оценивают каждый разговор следом
+        {plural(total || done, "разговор сыгран", "разговора сыграно", "разговоров сыграно")} · модель оценивает их по
+        ходу прогона
       </p>
       <div className="mt-6 h-2 max-w-[640px] overflow-hidden rounded-full bg-well">
         <div
@@ -193,9 +192,9 @@ function RunLine({
   const failed = run.status === "failed";
   const text = (
     <>
-      Синтетические клиенты {BY_CRITERIA[run.check]}
-      {run.label ? ` · «${run.label}»` : ""} · {isRunning(run) ? "идёт с" : failed ? "запущено" : "сыграно"}{" "}
-      {longDay(run.startedAt)}
+      Прогон {BY_CRITERIA[run.check]}
+      {run.label ? ` · «${run.label}»` : ""} · {isRunning(run) ? "идёт с" : failed ? "начат" : "сыгран"}{" "}
+      <span className="whitespace-nowrap">{longDay(run.startedAt)}</span>
     </>
   );
   return (
@@ -235,7 +234,7 @@ function RunLine({
           type="button"
           onClick={rejudge}
           disabled={!!state.job.running}
-          title="Проверки оценят разговоры этого прогона заново; агента не вызываем"
+          title="Модель заново оценит разговоры прогона. Агента не вызываем."
           className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-3 transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"
         >
           <RotateCcw aria-hidden className="size-3.5" />

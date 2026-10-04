@@ -15,7 +15,7 @@ from .judge_reply import JudgeReply, RuleReply
 from .prompts import JUDGE_LOG, JUDGE_RUN
 from .transcript import for_judge, tool_calls
 
-NO_QUOTE = 'Цитата судьи не найдена в ответах агента; вывод не засчитан. '
+NO_QUOTE = 'Модель привела цитату, которой нет в ответах агента. Вывод не засчитан. '
 
 
 @dataclass(frozen=True)
@@ -78,8 +78,10 @@ def checked(
             missing_evidence = {
                 'reply': '',
                 'tool': '' if tools else 'Вызовы инструментов не записаны. ',
-                'state': 'Изменения состояния не записаны. ',
-                'knowledge': '' if knowledge_available else 'Нет статей или готовых ответов для проверки знаний. ',
+                'state': 'Изменения в системах банка не записаны. ',
+                'knowledge': ''
+                if knowledge_available
+                else 'Нет статей и готовых ответов, чтобы сверить с ними ответ агента. ',
             }
             missing = missing_evidence.get(observation, 'Неизвестный способ проверки критерия. ')
             if missing or not quotes.cited(quote, evidence):

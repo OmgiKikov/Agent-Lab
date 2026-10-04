@@ -65,7 +65,7 @@ function Reproduced({
   if (!record.reproduces.length)
     return (
       <p className="mt-2 max-w-[66ch] text-read text-fg-2">
-        Сценарий собран из ошибки в настоящем разговоре; в нынешнем итоге проверки этой ошибки нет.
+        Сценарий собран из ошибки в настоящем разговоре. В нынешнем итоге проверки этой ошибки нет.
       </p>
     );
   return (
@@ -93,7 +93,9 @@ function Reproduced({
                   <mark className="rounded-sm bg-mark px-0.5 text-fg">{r.agentQuote}</mark>
                 </blockquote>
               ) : (
-                <p className="mt-1 text-small text-fg-3">Слова агента не сохранены: они в настоящем разговоре.</p>
+                <p className="mt-1 text-small text-fg-3">
+                  Слова агента здесь не сохранены. Они есть в настоящем разговоре.
+                </p>
               )}
             </div>
           </li>
@@ -278,7 +280,7 @@ export function ScenarioView({
     status === "loading" ? (
       <Skeleton className="mt-3 h-16 max-w-2xl" />
     ) : (
-      <p className="mt-2 text-read text-fg-3">Не удалось загрузить: обновите страницу.</p>
+      <p className="mt-2 text-read text-fg-3">Не удалось загрузить. Обновите страницу.</p>
     );
   // Tone of voice has one topic, named as the check: the topic is said only when it adds something.
   const topic = check && card.topic !== CHECK_NAME[check] ? card.topic : null;
@@ -316,7 +318,7 @@ export function ScenarioView({
               to={dialogOf({ source: "log", dialogueId: card.sourceDialogueId, check })}
               className="inline-flex items-center gap-1 text-small text-fg-2 underline decoration-line-strong underline-offset-4 hover:text-fg"
             >
-              Настоящий разговор, откуда он
+              Настоящий разговор, из которого собран
               <ArrowRight aria-hidden className="size-3.5" />
             </Link>
           )}
@@ -384,7 +386,7 @@ export function ScenarioView({
             ))}
         </Section>
         {world && (
-          <Section label="Тестовые данные · подставятся вместо систем банка">
+          <Section label="Тестовые данные вместо систем банка">
             <div className="mt-3 rounded-sheet bg-inset px-4 py-4 sm:px-6">
               <p className="flex items-center gap-2 text-body text-fg">
                 <Building2 aria-hidden className="size-4 text-fg-3" />

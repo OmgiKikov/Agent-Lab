@@ -115,7 +115,7 @@ def create(name: str, description: str = '', agent_id: str | None = None) -> dic
     """A new agent with an empty database of its own; a taken id gets a number."""
     name, description = name.strip(), description.strip()
     if not name:
-        raise ValueError('Нужно имя агента')
+        raise ValueError('Введите имя агента.')
     base = agent_id or slug(name)
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')

@@ -48,12 +48,12 @@ PAIR = 'CLIENT Не знаю номер\nAGENT Назовите номер те�
 
 class LogImportTests(unittest.TestCase):
     def test_malformed_excel_is_a_validation_error(self):
-        with self.assertRaisesRegex(ValueError, 'Не удалось прочитать файл Excel'):
+        with self.assertRaisesRegex(ValueError, 'Файл .xlsx повреждён'):
             logs.prepare('broken.xlsx', b'this is not an Excel archive')
 
     def test_a_short_excel_row_is_named_instead_of_failing_the_server(self):
         data = undeclared([['d1', PAIR, '[1, 2]'], ['d2']])
-        with self.assertRaisesRegex(ValueError, '^Диалог d2: Не удалось прочитать порядок сообщений'):
+        with self.assertRaisesRegex(ValueError, '^В диалоге d2 не читается порядок сообщений'):
             logs.prepare('export.xlsx', data)
         self.assertEqual(len(logs.prepare('export.xlsx', undeclared([['d1', PAIR, '[1, 2]']]))), 1)
 
@@ -61,7 +61,7 @@ class LogImportTests(unittest.TestCase):
         archive = io.BytesIO()
         with ZipFile(archive, 'w') as target:
             target.writestr('readme.txt', 'not a workbook')
-        with self.assertRaisesRegex(ValueError, '^Не удалось прочитать файл Excel'):
+        with self.assertRaisesRegex(ValueError, '^Файл .xlsx повреждён'):
             logs.prepare('export.xlsx', archive.getvalue())
 
     def test_count_confirmed_double_export_preserves_actual_repeated_exchanges(self):
@@ -131,8 +131,8 @@ class LogImportTests(unittest.TestCase):
     def test_an_unreadable_jsonl_says_which_line_and_what_to_check(self):
         good = json.dumps({'id': 'one', 'messages': [{'role': 'user', 'content': 'Вопрос'}]})
         for data, message in (
-            ((good + '\n\nid;client;agent\n').encode(), r'^Строка 3 файла \.jsonl не читается как JSON: проверьте'),
-            ('Здравствуйте'.encode('cp1251'), r'^Файл \.jsonl должен быть в кодировке UTF-8'),
+            ((good + '\n\nid;client;agent\n').encode(), r'^Строка 3 не читается как JSON\. Нужна выгрузка чата'),
+            ('Здравствуйте'.encode('cp1251'), r'^Файл \.jsonl не в кодировке UTF-8'),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 logs.prepare('logs.jsonl', data)

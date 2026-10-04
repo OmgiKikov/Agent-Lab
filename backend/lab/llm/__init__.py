@@ -56,9 +56,12 @@ _TRANSIENT = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolEr
 # The model answered, but not in the form a check reads, on every try: what happened and what to do, in a person's
 # words. The parser's own text (a Python class, an internal message) goes to the server log only.
 UNUSABLE = (
-    'Не удалось разобрать ответ модели. Попробуйте ещё раз; если повторится, модель отвечает в неожиданном формате — '
-    'проверьте «Настройки».'
+    'Не удалось разобрать ответ модели. Попробуйте ещё раз. Если не поможет, проверьте модель в разделе «Настройки».'
 )
+# No connection, or no answer in time: what is wrong in plain words, the exception's name for support, and where to
+# look. «Настройки» check the models themselves (check): there the advice is left out.
+SEE_SETTINGS = 'Проверьте её в разделе «Настройки».'
+UNREACHABLE = 'Модель недоступна ({}). ' + SEE_SETTINGS
 log = logging.getLogger(__name__)
 
 T = TypeVar('T')
@@ -112,7 +115,7 @@ async def chat(
             await asyncio.sleep(_pause(attempt, error.retry_after))
     text = text.strip()
     if not text:
-        raise MalformedAnswer('Модель вернула пустой ответ')
+        raise MalformedAnswer('Модель вернула пустой ответ.')
     return Answer(text, label)
 
 
@@ -126,12 +129,12 @@ async def _ask(
                 return await gateway.chat(model, system, messages, timeout)
             return await _openai_chat(base, model, system, messages, json_mode, timeout)
     except _TRANSIENT as error:
-        raise ModelError(f'Модель недоступна: {type(error).__name__}', retryable=True) from error
+        raise ModelError(UNREACHABLE.format(type(error).__name__), retryable=True) from error
     except httpx.HTTPError as error:
-        raise ModelError(f'Модель недоступна: {type(error).__name__}') from error
+        raise ModelError(UNREACHABLE.format(type(error).__name__)) from error
     except httpx.InvalidURL as error:  # not an HTTPError: a typo in the address
         setting = 'certs/url.txt' if base == GATEWAY else 'LAB_MODEL_URL и LAB_SECOND_URL'
-        raise ModelError(f'Адрес модели не читается ({error}): проверьте {setting}') from error
+        raise ModelError(f'Адрес модели записан с ошибкой ({error}). Проверьте {setting}.') from error
 
 
 def _key(endpoint: Endpoint) -> str | None:
@@ -163,22 +166,22 @@ async def _openai_chat(
             f'{base}/chat/completions', json=body, headers={'Authorization': f'Bearer {key}'} if key else {}
         )
     if response.status_code != 200:
-        raise refused('Модель не ответила:', response)
+        raise refused('Модель ответила ошибкой', response)
     try:
         data = response.json()
     except ValueError as error:
-        raise MalformedAnswer('Модель вернула не JSON') from error
+        raise MalformedAnswer('Модель ответила не в JSON.') from error
     if not isinstance(data, dict) or not isinstance(data.get('choices'), list) or not data['choices']:
-        raise MalformedAnswer('В ответе модели нет choices')
+        raise MalformedAnswer('В ответе модели нет choices.')
     choice = data['choices'][0]
     if not isinstance(choice, dict) or not isinstance(choice.get('message'), dict):
-        raise MalformedAnswer('В ответе модели нет объекта message')
+        raise MalformedAnswer('В ответе модели нет message.')
     text = choice['message'].get('content')
     if not isinstance(text, str):
-        raise MalformedAnswer('Текст ответа модели должен быть строкой')
+        raise MalformedAnswer('Текст ответа модели не строка.')
     label = data.get('model', model)
     if not isinstance(label, str) or not label.strip():
-        raise MalformedAnswer('Имя ответившей модели должно быть строкой')
+        raise MalformedAnswer('Имя модели в ответе не строка.')
     return text, label
 
 
@@ -239,7 +242,7 @@ async def check(endpoint: Endpoint) -> dict:
     try:
         await chat('Ответь одним словом.', 'Проверка связи: ответь «готов».', timeout=90, endpoint=endpoint, attempts=1)
     except ModelError as error:
-        return {'ok': False, 'error': str(error)}
+        return {'ok': False, 'error': str(error).removesuffix(' ' + SEE_SETTINGS)}
     return {'ok': True}
 
 

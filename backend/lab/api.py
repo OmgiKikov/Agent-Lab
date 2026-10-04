@@ -80,6 +80,7 @@ CHECK_QUESTION = 'Какой процент эквайринга?'
 # The job that writes a check's result: while it runs, answers on that result would be lost (review).
 WRITES = {'tone-check': checks.TONE, 'discover': checks.CODE}
 NOT_CHECKED = 'Этот критерий в разговоре не проверялся.'  # an answer on a logged conversation without this verdict
+UNKNOWN_WAY = 'Неизвестный способ подключения агента.'  # a target the service does not have (agents.configs)
 
 
 class DiscoverCommand(BaseModel):
@@ -105,7 +106,7 @@ class RunCommand(BaseModel):
 
 class TonePolicyCommand(BaseModel):
     text: str = Field(min_length=20, max_length=50000)
-    name: str = Field(default='Правила tone of voice', min_length=1, max_length=160)
+    name: str = Field(default='Правила общения', min_length=1, max_length=160)
 
 
 class ToneCopyCommand(BaseModel):
@@ -287,7 +288,7 @@ def state() -> dict:
 @app.post('/api/settings')
 async def save_settings(payload: SettingsCommand) -> dict:
     if jobs.state['running']:
-        raise HTTPException(409, f'Настройки нельзя менять, пока выполняется: {jobs.state["kind"]}')
+        raise HTTPException(409, 'Настройки нельзя менять, пока идёт задача. Дождитесь её или остановите.')
     try:
         return agents.save_settings(payload.model_dump(exclude_unset=True))
     except ValueError as error:
@@ -297,10 +298,12 @@ async def save_settings(payload: SettingsCommand) -> dict:
 @app.post('/api/agents/{key}/check')
 async def check_agent(key: str) -> dict:
     if key not in agents.configs():
-        raise HTTPException(404, 'Неизвестный агент')
+        raise HTTPException(404, UNKNOWN_WAY)
     agent = agents.create(key)
     if isinstance(agent, agents.CodeAgent):
-        raise HTTPException(400, 'Агент из исходников запускается только на время прогона')
+        raise HTTPException(
+            400, 'Агент из кода запускается только на время прогона, поэтому связь заранее не проверить.'
+        )
     try:
         async with agents.session(agent):
             reply = await agent.say(str(uuid.uuid4()), CHECK_QUESTION)
@@ -330,9 +333,11 @@ async def collect_sources() -> dict:
     return start('sources', work)
 
 
-async def uploaded(request: Request, limit: int) -> bytes:
-    """The uploaded file: refused by its declared length before a byte is read, and never read past the limit."""
-    message = f'Файл слишком большой: не более {limit / 1_000_000:g} МБ.'
+async def uploaded(request: Request, limit: int, advice: str) -> bytes:
+    """The uploaded file: refused by its declared length before a byte is read, and never read past the limit; the
+    refusal says what to do (advice)."""
+    size = f'{limit / 1_000_000:g}'.replace('.', ',')
+    message = f'Файл больше {size}\u00a0МБ. {advice}'
     try:
         declared = int(request.headers.get('content-length') or 0)
     except ValueError:
@@ -349,7 +354,7 @@ async def uploaded(request: Request, limit: int) -> bytes:
 
 @app.post('/api/logs')
 async def upload_logs(request: Request, name: str) -> dict:
-    data = await uploaded(request, logs.LIMIT)
+    data = await uploaded(request, logs.LIMIT, 'Выгрузите разговоры за меньший срок.')
 
     async def work(progress: Progress) -> int:
         dialogues = await asyncio.to_thread(logs.prepare, name, data)
@@ -362,7 +367,7 @@ async def upload_logs(request: Request, name: str) -> dict:
     except asyncio.CancelledError as error:
         raise HTTPException(409, 'Загрузка остановлена') from error
     except (ValueError, KeyError, OSError) as error:
-        raise HTTPException(400, f'Не удалось прочитать файл: {error}') from error
+        raise HTTPException(400, f'Не удалось прочитать файл. {error}') from error
     return {'total': count}
 
 
@@ -502,12 +507,12 @@ async def start_cards(payload: CardsCommand | None = Body(default=None)) -> dict
     if check is None:
         found = [key for key in checks.RESULTS if store.load(checks.result(key))]
         if len(found) > 1:
-            raise HTTPException(400, 'Выберите, из какой проверки собрать сценарии')
+            raise HTTPException(400, 'Выберите, из какой проверки собрать сценарии.')
         check = next(iter(found), None)
 
     async def work(progress: Progress) -> list[dict]:
         if check is None:
-            raise RuntimeError('Сначала проверьте разговоры: сценарии собираются из найденных ошибок.')
+            raise RuntimeError('Сценарии собираются из найденных ошибок. Сначала проверьте разговоры.')
         deck = await cards.run(check, progress)
         document = {'check': check, 'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck}
         store.save(cards.DECK, document)
@@ -542,13 +547,13 @@ async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
     if source is None:
         raise HTTPException(404, 'Агент не найден')
     if registry.db_of(source['id']) == store.database():
-        raise HTTPException(400, 'Правила можно взять только у другого агента')
+        raise HTTPException(400, 'Правила можно взять только у другого агента.')
     with registry.using(source['id']):
         found = tone.rules()
         marks = store.severity_marks()[checks.TONE]
         proposed = store.severity_proposed()[checks.TONE]
     if found is None:
-        raise HTTPException(400, f'У агента «{source["name"]}» нет правил общения')
+        raise HTTPException(400, f'У агента «{source["name"]}» нет правил общения.')
 
     async def work(progress: Progress) -> dict:
         changed = tone.take(*found)
@@ -568,7 +573,7 @@ async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
 
 @app.post('/api/tone-of-voice/read-file')
 async def read_tone_file(request: Request, name: str) -> dict:
-    data = await uploaded(request, policy_files.LIMIT)
+    data = await uploaded(request, policy_files.LIMIT, 'Оставьте в файле только правила общения.')
     try:
         text = await asyncio.to_thread(policy_files.read, name, data)
     except ValueError as error:
@@ -634,7 +639,7 @@ def with_reviews(snapshot: dict | None, reviews: list[dict]) -> dict:
 @app.post('/api/tone-of-voice/advice')
 async def tone_advice_command(payload: ToneAdviceCommand) -> dict:
     async def work(progress: Progress) -> dict:
-        progress(message='Готовлю предложение по найденной ошибке')
+        progress(message='Готовим предложение')
         return await tone_advice.suggest(
             payload.finishedAt, payload.dialogueId, payload.ruleId, payload.mode, payload.note
         )
@@ -669,7 +674,7 @@ async def tone_clarification(payload: ToneClarificationCommand) -> dict:
 @app.post('/api/runs')
 async def start_run(payload: RunCommand) -> dict:
     if payload.target not in agents.configs():
-        raise HTTPException(400, 'Неизвестный агент')
+        raise HTTPException(400, UNKNOWN_WAY)
     chosen = [key for key in payload.personas if key in personas.PERSONAS] or [personas.DEFAULT]
     return start(
         'run',
@@ -721,7 +726,9 @@ async def review(payload: ReviewCommand) -> dict:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')
         check = answered_check(payload)
         if jobs.state['running'] and WRITES.get(jobs.state['kind']) == check:
-            raise HTTPException(409, f'Идёт проверка «{checks.NAMES[check]}»: ответ не сохранится. Отметьте после неё.')
+            raise HTTPException(
+                409, f'Ответ не сохранится, пока идёт проверка «{checks.NAMES[check]}». Ответьте после неё.'
+            )
         try:
             store.set_log_review(
                 checks.result(check),

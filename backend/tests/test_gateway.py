@@ -135,7 +135,7 @@ class BundleTests(GatewayCase):
 
     def test_no_password_for_a_closed_bundle_says_where_to_write_it(self) -> None:
         (self.certs / 'password.txt').unlink()
-        self.assertIn('впишите его в', self.reason())
+        self.assertIn('Впишите его в', self.reason())
 
     def test_a_failed_conversion_keeps_the_previous_files(self) -> None:
         settings = gateway.config()
@@ -171,7 +171,7 @@ class SetupTests(GatewayCase):
 
     def test_an_empty_url_txt_says_to_write_the_address(self) -> None:
         (self.certs / 'url.txt').write_text('\n')
-        self.assertIn('url.txt пустой: впишите в него адрес шлюза', self.broken())
+        self.assertIn('url.txt пустой. Впишите в него адрес шлюза', self.broken())
 
     def test_url_txt_must_hold_an_address(self) -> None:
         for text in ('gateway.bank.test', 'https://gateway:84 43'):

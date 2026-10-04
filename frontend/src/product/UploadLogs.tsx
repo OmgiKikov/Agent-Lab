@@ -14,7 +14,7 @@ const ACCEPT = ".xlsx,.jsonl";
 
 /** The export reader takes the chat's Excel or a prepared .jsonl: anything else is refused before a question is asked. */
 export const exportFileError = (file: File) =>
-  /\.(xlsx|jsonl)$/i.test(file.name) ? null : "Загрузите выгрузку чата: файл .xlsx или .jsonl.";
+  /\.(xlsx|jsonl)$/i.test(file.name) ? null : "Этот файл не подходит. Загрузите выгрузку чата в .xlsx или .jsonl.";
 
 /**
  * What a new export moves or takes away (backend: store.replace_inputs): the results of both checks and the scenarios.
@@ -24,10 +24,10 @@ export const replacesResult = (state: LabState | null) =>
   !!(state?.checks.tone || state?.checks.code || state?.cards?.cards.length);
 
 /**
- * What a new export does, in the order a person asks about it (backend: store.replace_inputs): the current results go
- * to the history of their checks; the new conversations are checked by the same criteria and compared with the
- * previous ones; the scenarios built from a result are reset, the runs stay; the answers of people stay, with the
- * saved checks they were given on (store.set_log_review).
+ * What a new export does, in the order a person asks about it (backend: store.replace_inputs): what goes — the current
+ * results to the history of their checks, the scenarios built from a result reset; what stays — the criteria, the
+ * runs and the answers of people, with the saved checks they were given on (store.set_log_review), so the new
+ * conversations can be checked by the same criteria and compared with the previous ones.
  */
 function whatHappens(state: LabState | null): [string, string] {
   const tone = !!state?.checks.tone;
@@ -35,18 +35,16 @@ function whatHappens(state: LabState | null): [string, string] {
   const deck = state?.cards?.cards.length ? state.cards : null;
   const results =
     tone && code
-      ? "Текущие итоги tone of voice и точности уйдут в «Историю». "
+      ? "Текущие итоги tone of voice и точности уйдут в «Историю»."
       : tone
-        ? "Текущий итог tone of voice уйдёт в «Историю». "
+        ? "Текущий итог tone of voice уйдёт в «Историю»."
         : code
-          ? "Текущий итог точности уйдёт в «Историю». "
+          ? "Текущий итог точности уйдёт в «Историю»."
           : "";
-  const stays = "прогоны симуляций и ответы людей останутся.";
+  const scenarios = deck ? `Сценарии из итога ${deck.check === "tone" ? "tone of voice" : "точности"} сбросятся.` : "";
   return [
-    `${results}Новые разговоры проверяются по тем же критериям и сравниваются с прошлыми.`,
-    deck
-      ? `Сценарии, собранные из итога ${deck.check === "tone" ? "tone of voice" : "точности"}, сбросятся; ${stays}`
-      : stays.charAt(0).toUpperCase() + stays.slice(1),
+    [results, scenarios].filter(Boolean).join(" "),
+    "Критерии, прогоны симуляций и ответы людей останутся. Новые разговоры можно проверить по тем же критериям и сравнить с прошлыми.",
   ];
 }
 

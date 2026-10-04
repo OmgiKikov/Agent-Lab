@@ -64,7 +64,7 @@ def configs() -> dict[str, dict]:
             'profile': 'prod',
             'url': current['prodUrl'],
             'epk': current['epk'],
-            'note': 'Стенд ИФТ в контуре банка: агент доступен с рабочего компьютера.',
+            'note': 'Стенд ИФТ в сети банка. Агент доступен с рабочего компьютера.',
         },
         'local-http': {
             'name': NAMES['local-http'],
@@ -72,7 +72,9 @@ def configs() -> dict[str, dict]:
             'profile': 'local',
             'url': f'http://127.0.0.1:8080{AGENT_PATH}',
             'customer': STAND_CUSTOMER,
-            'note': 'Сервис на этом компьютере, тот же API. GigaChat настоящий, системы банка на заглушках.',
+            'note': (
+                'Агент с тем же API уже запущен на этом компьютере. GigaChat настоящий, системы банка на заглушках.'
+            ),
         },
         'local-code': {
             'name': NAMES['local-code'],
@@ -81,7 +83,7 @@ def configs() -> dict[str, dict]:
             'repo': current['repo'],
             'port': 8081,
             'customer': STAND_CUSTOMER,
-            'note': 'Запускается из исходников на время прогона, потом останавливается.',
+            'note': 'Агент запускается из кода только на время прогона.',
         },
     }
 
@@ -114,7 +116,7 @@ def run_name(run: dict) -> str:
 def create(key: str) -> HttpAgent:
     config = configs().get(key)
     if not config:
-        raise AgentError(f'Неизвестный агент: {key}')
+        raise AgentError(f'Неизвестный способ подключения агента: {key}.')
     return CodeAgent(config) if config['kind'] == 'code' else HttpAgent(config)
 
 

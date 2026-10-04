@@ -69,12 +69,13 @@ def turns(text: str) -> list[dict]:
 
 
 def _message_count(order: object) -> int:
+    """How many messages the order column lists. A refusal is the end of a sentence about one dialogue (from_excel)."""
     try:
         value = json.loads(str(order))
     except (ValueError, TypeError) as error:
-        raise ValueError('Не удалось прочитать порядок сообщений в диалоге') from error
+        raise ValueError('не читается порядок сообщений') from error
     if not isinstance(value, list) or not value:
-        raise ValueError('Порядок сообщений должен содержать непустой список')
+        raise ValueError('пустой порядок сообщений')
     return len(value)
 
 
@@ -87,7 +88,7 @@ def _export_messages(messages: list[dict], count: int) -> list[dict]:
         blocks = [messages[index : index + 4] for index in range(0, len(messages), 4)]
         if all(block[:2] == block[2:] for block in blocks):
             return [message for block in blocks for message in block[:2]]
-    raise ValueError('Текст и порядок сообщений не совпадают; неоднозначные повторы нельзя восстановить')
+    raise ValueError('текст не совпадает с порядком сообщений')
 
 
 def _check_parts(data: bytes) -> None:
@@ -97,7 +98,10 @@ def _check_parts(data: bytes) -> None:
     with ZipFile(io.BytesIO(data)) as archive:
         parts = archive.infolist()
         if sum(info.file_size for info in parts) > INFLATED:
-            raise ValueError(f'Файл Excel слишком большой: после распаковки больше {INFLATED // 1_000_000} МБ.')
+            raise ValueError(
+                f'Файл Excel больше {INFLATED // 1_000_000}\u00a0МБ после распаковки. '
+                'Выгрузите разговоры за меньший срок.'
+            )
         for info in parts:
             if info.flag_bits & 1 or info.compress_type not in (ZIP_STORED, ZIP_DEFLATED):
                 raise BadZipFile('encrypted or unusual compression')  # Excel deflates; others have no bound per piece
@@ -124,7 +128,7 @@ def from_excel(data: bytes) -> list[dict]:
         header = [str(value or '').strip() for value in next(rows, ())]
         missing = [name for name in (ID, TEXT, ORDER) if name not in header]
         if missing:
-            raise ValueError('В выгрузке нет колонок: ' + ', '.join(f'«{name}»' for name in missing))
+            raise ValueError('В выгрузке нет колонок ' + ', '.join(f'«{name}»' for name in missing) + '.')
         column = {name: header.index(name) for name in (ID, TEXT, ORDER)}
         dialogues = []
         for row in rows:
@@ -135,7 +139,7 @@ def from_excel(data: bytes) -> list[dict]:
                 count = _message_count(_cell(row, column[ORDER]))
                 messages = _export_messages(turns(str(_cell(row, column[TEXT]) or '')), count)
             except ValueError as error:
-                raise ValueError(f'Диалог {dialogue_id}: {error}') from error
+                raise ValueError(f'В диалоге {dialogue_id} {error}.') from error
             dialogues.append({'id': dialogue_id, 'messages': messages})
         return dialogues
     finally:
@@ -146,7 +150,7 @@ def from_jsonl(data: bytes) -> list[dict]:
     try:
         text = data.decode('utf-8-sig')  # Windows editors save UTF-8 with a byte order mark
     except UnicodeDecodeError as error:
-        raise ValueError('Файл .jsonl должен быть в кодировке UTF-8: сохраните выгрузку в UTF-8.') from error
+        raise ValueError('Файл .jsonl не в кодировке UTF-8. Сохраните выгрузку в UTF-8.') from error
     dialogues = []
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
@@ -155,8 +159,7 @@ def from_jsonl(data: bytes) -> list[dict]:
             dialogues.append(json.loads(line))
         except json.JSONDecodeError as error:
             raise ValueError(
-                f'Строка {number} файла .jsonl не читается как JSON: проверьте, что это выгрузка чата, '
-                'по одному разговору в строке.'
+                f'Строка {number} не читается как JSON. Нужна выгрузка чата, по одному разговору в строке.'
             ) from error
     return dialogues
 
@@ -165,29 +168,29 @@ def _validated(dialogues: list[dict]) -> list[dict]:
     usable, seen = [], set()
     for index, dialogue in enumerate(dialogues, 1):
         if not isinstance(dialogue, dict):
-            raise ValueError(f'Строка {index}: разговор должен быть объектом')
+            raise ValueError(f'В строке {index} не объект JSON. Нужен один разговор в строке.')
         dialogue_id = dialogue.get('id')
         if isinstance(dialogue_id, bool) or not isinstance(dialogue_id, str | int) or not str(dialogue_id).strip():
-            raise ValueError(f'Строка {index}: у разговора нет ID')
+            raise ValueError(f'В строке {index} у разговора нет id.')
         dialogue_id = str(dialogue_id).strip()
         if dialogue_id in seen:
-            raise ValueError(f'Повторяется ID диалога: {dialogue_id}')
+            raise ValueError(f'Диалог {dialogue_id} встречается дважды.')
         seen.add(dialogue_id)
         messages = dialogue.get('messages')
         if not isinstance(messages, list):
-            raise ValueError(f'Диалог {dialogue_id}: сообщения должны быть списком')
+            raise ValueError(f'В диалоге {dialogue_id} сообщения записаны не списком.')
         normalized = []
         for message in messages:
             if not isinstance(message, dict) or message.get('role') not in ('user', 'assistant'):
-                raise ValueError(f'Диалог {dialogue_id}: неизвестная роль сообщения')
+                raise ValueError(f'В диалоге {dialogue_id} есть сообщение с неизвестной ролью.')
             content = message.get('content')
             if not isinstance(content, str) or not content.strip():
-                raise ValueError(f'Диалог {dialogue_id}: пустой текст сообщения')
+                raise ValueError(f'В диалоге {dialogue_id} есть сообщение без текста.')
             normalized.append({'role': message['role'], 'content': content.strip()})
         if normalized and normalized[0]['role'] == 'user' and any(m['role'] == 'assistant' for m in normalized):
             usable.append({'id': dialogue_id, 'messages': normalized})
     if not usable:
-        raise ValueError('В файле нет разговоров, которые начинаются с клиента и содержат ответ агента')
+        raise ValueError('В файле нет разговоров, где клиент пишет первым и агент отвечает.')
     return usable
 
 
@@ -200,9 +203,9 @@ def prepare(name: str, data: bytes) -> list[dict]:
             _check_parts(data)
             dialogues = from_excel(data)
         except UNREADABLE as error:
-            raise ValueError('Не удалось прочитать файл Excel: неверная структура .xlsx') from error
+            raise ValueError('Файл .xlsx повреждён или зашифрован. Сохраните выгрузку заново.') from error
     else:
-        raise ValueError('Загрузите файл .xlsx или .jsonl')
+        raise ValueError('Нужна выгрузка в .xlsx или .jsonl.')
     return _validated(dialogues)
 
 

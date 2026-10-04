@@ -142,7 +142,7 @@ export function PlayDialog({
                     <span className="mt-0.5 block text-small text-warn">
                       Не настроен ·{" "}
                       <Link to={SECTIONS.agent} onClick={onClose} className="underline underline-offset-4">
-                        Агент
+                        Настроить
                       </Link>
                     </span>
                   )}
@@ -223,7 +223,7 @@ export function PlayDialog({
             aria-label="Подпись прогона"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            placeholder="Необязательно: что проверяете этим прогоном"
+            placeholder="По желанию: что проверяете этим прогоном"
             className="h-8 w-full rounded-control border border-line bg-transparent px-2.5 text-small text-fg outline-none placeholder:text-fg-4 focus:border-fg-3"
           />
         </Block>

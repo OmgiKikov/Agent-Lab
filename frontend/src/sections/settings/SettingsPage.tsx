@@ -27,24 +27,24 @@ export function SettingsPage() {
                     <p className="text-small font-medium text-bad">Шлюз банка не работает</p>
                     <p className="mt-1 break-words text-small text-fg-2">{models.problem}</p>
                     <p className="mt-1 text-small text-fg-3">
-                      Пока это не исправлено, разговоры никуда не отправляются.
+                      Пока шлюз не исправлен, разговоры никуда не отправляются.
                     </p>
                   </div>
                 )}
                 <Models state={state} />
               </>
             ) : offline ? (
-              <p className="text-small text-fg-2">Сервис проверок не отвечает, модели сейчас не видны.</p>
+              <p className="text-small text-fg-2">Сервис не отвечает, поэтому моделей не видно.</p>
             ) : (
               <Skeleton className="h-28" />
             )}
           </Group>
           <Group title="Где что работает">
             <div className="border-t border-line">
-              <Row name="Agent Lab" use="Данные, проверки и этот интерфейс: один процесс на этом компьютере.">
+              <Row name="Agent Lab" use="Данные, проверки и интерфейс — один процесс на этом компьютере.">
                 <Address>{window.location.origin}</Address>
               </Row>
-              <Row name="Запуск" use="Поднимает продукт из его папки.">
+              <Row name="Запуск" use="Запускает Agent Lab из его папки.">
                 <Address>sh bin/start.sh</Address>
               </Row>
             </div>
@@ -67,7 +67,7 @@ function Destination({ models }: { models: LabState["models"] }) {
       {(models.via === PI || models.problem) && (
         <>
           {" "}
-          Сертификаты шлюза банка кладутся в папку <span className="font-mono">certs/</span>.
+          Сертификаты шлюза банка — в папке <span className="font-mono">certs/</span>.
         </>
       )}
     </>
@@ -98,7 +98,7 @@ function Models({ state }: { state: LabState }) {
       ? {
           role: "second" as const,
           name: "Вторая проверка",
-          use: "Модель другого вендора: проверяет найденные ошибки независимо от первой.",
+          use: "Модель другого вендора. Проверяет те же разговоры независимо от основной.",
           model: state.models.second,
         }
       : {

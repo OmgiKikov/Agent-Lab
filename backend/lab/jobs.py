@@ -22,8 +22,8 @@ class Jobs:
 
     def _launch(self, kind: str, work: Work, propagate: bool) -> asyncio.Task:
         if self.state['running']:
-            raise BusyError(f'Уже выполняется: {self.state["kind"]}')
-        self.state.update(kind=kind, running=True, error=None, progress={'message': 'Запускаю…'})
+            raise BusyError('Сейчас идёт другая задача. Дождитесь её или остановите.')
+        self.state.update(kind=kind, running=True, error=None, progress={'message': 'Запускаем…'})
 
         def progress(**values: Any) -> None:
             if not task.cancelling():
@@ -62,7 +62,7 @@ class Jobs:
 
     async def stop(self) -> None:
         if not self.state['running'] or self._task is None:
-            raise BusyError('Сейчас ничего не выполняется')
+            raise BusyError('Задача уже закончилась.')
         task = self._task
         if not task.cancelling():
             task.cancel()
