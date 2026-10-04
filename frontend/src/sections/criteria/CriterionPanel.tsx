@@ -54,6 +54,7 @@ export function CriterionPanel({
   check,
   side,
   runId,
+  twice,
   shown,
   onShown,
   onBack,
@@ -63,6 +64,8 @@ export function CriterionPanel({
   check: Check;
   side: SideKey;
   runId?: string | null;
+  /** A second model checked this side: only then is there anything to say about two checks. */
+  twice: boolean;
   shown: Shown;
   onShown: (s: Shown) => void;
   onBack?: () => void;
@@ -118,16 +121,20 @@ export function CriterionPanel({
                 label: "Не удалось проверить",
                 value: s.unknown ? `в ${s.unknown} ${plural(s.unknown, "разговоре", "разговорах", "разговорах")}` : "—",
               },
-              {
-                label: "Две проверки",
-                value: second.checked ? (
-                  <>
-                    совпали в <Count n={second.agree} of={second.checked} />
-                  </>
-                ) : (
-                  "проверено один раз"
-                ),
-              },
+              ...(twice
+                ? [
+                    {
+                      label: "Две проверки",
+                      value: second.checked ? (
+                        <>
+                          совпали в <Count n={second.agree} of={second.checked} />
+                        </>
+                      ) : (
+                        "проверено один раз"
+                      ),
+                    },
+                  ]
+                : []),
               {
                 label: "Ваши ответы",
                 value: humans.checked

@@ -187,6 +187,9 @@ export function CriteriaPage({ check }: { check: Check }) {
   );
   const people = decisions(data);
   const usedSources = new Set(list.map((c) => c.r.rule.sourceId)).size;
+  // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Проверки совпали» and «Две
+  // проверки» would only say «—» and «проверено один раз», which reads as if something should have matched.
+  const twice = (s: SideKey) => list.some((c) => c.r[s].examples.some((e) => !!e.second));
   const panelOpen = !!chosen && (wide || !!asked);
   return (
     <div className="flex h-full flex-col">
@@ -328,6 +331,7 @@ export function CriteriaPage({ check }: { check: Check }) {
             selected={chosen?.r.id ?? null}
             onSelect={select}
             hasSim={!!data.sim}
+            hasSecond={twice("log")}
           />
         )}
         {panelOpen && chosen && (
@@ -337,6 +341,7 @@ export function CriteriaPage({ check }: { check: Check }) {
             check={check}
             side={side}
             runId={data.sim?.runId}
+            twice={twice(side)}
             shown={shown}
             onShown={(v) => set((n) => n.set("x", v))}
             onBack={wide ? undefined : () => set((n) => n.delete("c"), false)}
