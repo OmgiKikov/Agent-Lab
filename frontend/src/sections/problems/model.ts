@@ -24,8 +24,9 @@ export const rowSide = (c: Criterion, filter: Filter): SideKey =>
   filter === "sim" || (filter === "all" && !c.r.log.failed) ? "sim" : "log";
 
 /**
- * The queue: what the agent breaks in the logs — the criteria a person marked serious first, then the most frequent;
- * then what only the simulation found, in the same order. Frequency is never called severity: only a person's mark is.
+ * The queue: what the agent breaks in the logs — the serious criteria first, then the most frequent; then what only
+ * the simulation found, in the same order. Frequency is never called severity: only a criterion's severity is, a
+ * person's decision or the automatic check's proposal (lab/severity).
  */
 export function queueOf(list: Criterion[], filter: Filter): Criterion[] {
   const log = list

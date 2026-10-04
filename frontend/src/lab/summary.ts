@@ -4,7 +4,8 @@ import { CHECK_NAME, CHECKS } from "./checks";
 import { count, pct, plural } from "./format";
 import { headingOf } from "./problemReport";
 import { splitQuote } from "./quote";
-import { seriousText, type Serious } from "./severity";
+import type { Severity } from "./problems";
+import { NONE_SERIOUS, seriousText, type Serious } from "./severity";
 import type { Check } from "./types";
 
 /**
@@ -32,10 +33,20 @@ export type SummaryCheck = {
   unmeasured: number;
   answers: Answers;
   /**
-   * The checked conversations with a serious error, once a person marked a criterion serious (lab/severity), and
-   * their «было → стало» under the comparison of the whole check; none before.
+   * The checked conversations with a serious error, once a criterion is serious (lab/severity), and their «было →
+   * стало» under the comparison of the whole check; none before.
    */
   serious: Serious | null;
+  /**
+   * No criterion is considered serious, and every one is decided or proposed: «Ни один критерий не считается
+   * серьёзным.»
+   */
+  noneSerious: boolean;
+  /**
+   * Whose decision it is, while some criteria are the automatic check's proposals: «Какие серьёзные, предложила
+   * автоматическая проверка; люди проверили 3 из 8 критериев.»; none once people decided every proposal.
+   */
+  proposed: string | null;
   /** «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). …» — the short line of «Итог», or none. */
   compare: string | null;
   /** «С серьёзными ошибками: 3 из 53 (6%) → сейчас 6 из 53 (11%). …», or none. */
@@ -47,8 +58,9 @@ export type SummaryCheck = {
 export type SummaryProblem = {
   id: string;
   chosen: boolean;
-  /** A person marked its criterion serious: «серьёзная» beside its name. */
+  /** Its criterion is serious: «серьёзная» beside its name, with whose decision it is (`severity`). */
   serious: boolean;
+  severity: Severity;
   title: string;
   /** What the agent must do, in the criterion's words. */
   duty: string;
@@ -115,11 +127,11 @@ export const HOW = [
   "Tone of voice и Точность проверяют разное и считаются отдельно: их числа не складываются.",
 ];
 
-/** Said once a person marked a criterion serious: who decides it, and that its count is part of the number. */
+/** Said once a criterion is serious: who decides it, and that its count is part of the number. */
 export const HOW_SERIOUS =
-  "«С серьёзными ошибками» — те же проверенные разговоры, где есть ошибка хотя бы по одному критерию, который люди отметили серьёзным; тяжесть решают люди, автоматическая проверка её не назначает. Эти разговоры уже входят в число разговоров с ошибкой агента и не добавляются к нему.";
+  "«С серьёзными ошибками» — те же проверенные разговоры, где есть ошибка хотя бы по одному серьёзному критерию. Какие критерии серьёзные, предлагает автоматическая проверка, а люди подтверждают или меняют; сколько критериев проверили люди, сказано у каждой проверки. Эти разговоры уже входят в число разговоров с ошибкой агента и не добавляются к нему.";
 
-/** The footnote of a summary: with the line about serious errors once a check of it has them marked. */
+/** The footnote of a summary: with the line about serious errors once a check of it has a serious criterion. */
 export const howOf = (s: Summary) => (s.checks.some((c) => c.serious) ? [...HOW, HOW_SERIOUS] : HOW);
 
 /** A whole date with its year, for a page that leaves the product: «3 октября 2026 г.» */
@@ -148,6 +160,15 @@ const wholeReply = (reply: string, quote: string) => {
 };
 
 /**
+ * A check's serious errors in the letter, as on the page: the serious count, or that no criterion is considered
+ * serious; then, while some criteria are proposals, how many of them people checked. None while it is not decided.
+ */
+function severityLine(c: SummaryCheck): string | null {
+  const head = c.serious ? seriousText(c.serious, "people") : c.noneSerious ? NONE_SERIOUS : null;
+  return head && [head, c.proposed].filter(Boolean).join(" ");
+}
+
+/**
  * The summary as a letter (lab/problemReport, copyReport): the same as the page, the ticked problems only. Headings,
  * paragraphs and a quote: the only Markdown the reports write.
  */
@@ -165,13 +186,9 @@ export function summaryMarkdown(s: Summary): string {
       SUMMARY_WHAT[c.check],
       "",
       [`${headline(c)}.`, unmeasuredText(c)].filter(Boolean).join(" "),
-      ...[
-        c.serious && seriousText(c.serious, "people"),
-        answersText(c.answers, "people"),
-        c.compare,
-        c.seriousCompare,
-        rechecked(c.answers),
-      ].filter((x): x is string => !!x),
+      ...[severityLine(c), answersText(c.answers, "people"), c.compare, c.seriousCompare, rechecked(c.answers)].filter(
+        (x): x is string => !!x,
+      ),
     );
   }
   const chosen = s.checks.filter((c) => c.problems.some((p) => p.chosen));

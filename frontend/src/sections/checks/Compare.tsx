@@ -21,6 +21,7 @@ import { nameFromText } from "../../lab/criteria";
 import { longDay } from "../../lab/format";
 import { shareText } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
+import type { RuleEntry } from "../../lab/problems";
 import { seriousFirst } from "../../lab/severity";
 import { SeriousTag } from "../../product/Severity";
 
@@ -51,7 +52,7 @@ export function CompareLine({
   check: Check;
   compare: Compare | null;
   short?: boolean;
-  /** The criteria of the current result marked serious, once there are any: the serious comparison follows. */
+  /** The serious criteria of the current result, once there are any: the serious comparison follows. */
   serious?: number;
   className?: string;
 }) {
@@ -116,8 +117,8 @@ export function wasOf(compare: Compare | null): ((id: string) => ReactNode) | un
  * Below the problems: the criteria with errors in the previous check and none now, «было 3 из 56 → 0 из 12». The
  * denominator says what it rests on, and the service's verdict always stands beside it — «мало разговоров, чтобы
  * судить», beyond chance or within it — so that «0 из 12» is never read as a conclusion about the agent. Each opens
- * the conversations of this result it was checked in. The criteria a person marked serious (`serious`, their keys)
- * come first and say «серьёзная», as the problems above.
+ * the conversations of this result it was checked in. The serious criteria (`serious`, by their keys) come first and
+ * say «серьёзная», as the problems above.
  */
 export function NoLongerFound({
   check,
@@ -126,7 +127,7 @@ export function NoLongerFound({
 }: {
   check: Check;
   compare: Compare | null;
-  serious?: Set<string>;
+  serious?: Map<string, Pick<RuleEntry, "severity">>;
 }) {
   if (!compare || (compare.kind !== "new-data" && compare.kind !== "same-data")) return null;
   const grave = (row: CompareRow) => ({ serious: !!serious?.has(row.id) });
@@ -153,7 +154,9 @@ export function NoLongerFound({
                 <span className="min-w-0">
                   <span className="block text-read text-fg">
                     {nameOf(row)}
-                    {serious?.has(row.id) && <SeriousTag className="relative -top-px ml-2 align-middle" />}
+                    {serious?.has(row.id) && (
+                      <SeriousTag rule={serious.get(row.id)} className="relative -top-px ml-2 align-middle" />
+                    )}
                   </span>
                   {word && <span className="mt-0.5 block text-small text-fg-3">{word}</span>}
                 </span>

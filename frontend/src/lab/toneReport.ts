@@ -1,7 +1,7 @@
 import { historyLink, problemLink } from "../app/links";
 import { headingOf, reliabilityWord } from "./problemReport";
 import type { Problems, RuleEntry } from "./problems";
-import { seriousFirst, seriousOf, seriousText } from "./severity";
+import { seriousFirst, severityText } from "./severity";
 import type { Discover } from "./types";
 import { count, pct } from "./format";
 
@@ -25,10 +25,10 @@ function nextAction(problem: RuleEntry): string {
 
 /**
  * A short brief for the team, with the same number and words as the screen: «N из M — с ошибкой агента», and the
- * conversations with a serious error once a criterion is marked serious. It tells the serious problems first, marked
- * «серьёзная», then the most frequent: all the serious ones, and at least three. Complete criteria and evidence remain
- * in the saved check, linked from the brief («История» of tone of voice). Links open Agent Lab on the computer where
- * the check ran; the brief says so, since it travels by e-mail.
+ * conversations with a serious error with whose decision that is (lab/severity, severityText). It tells the serious
+ * problems first, marked «серьёзная», then the most frequent: all the serious ones, and at least three. Complete
+ * criteria and evidence remain in the saved check, linked from the brief («История» of tone of voice). Links open Agent
+ * Lab on the computer where the check ran; the brief says so, since it travels by e-mail.
  */
 export function toneBrief(data: Problems, result: Discover, base: string, { filename }: { filename?: string }): string {
   const criteria = result.topics.flatMap((topic) => topic.rules);
@@ -39,7 +39,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
     .sort((a, b) => seriousFirst(a, b) || b.log.failed - a.log.failed);
   const grave = found.filter((rule) => rule.serious).length;
   const top = found.slice(0, Math.max(3, grave));
-  const serious = seriousOf({ ...data, rules });
+  const severity = severityText({ ...data, rules });
   const { measured, failed, passed, unmeasured } = result.summary;
   const reviews = rules.flatMap((rule) => rule.log.examples).filter((example) => example.review);
   const agrees = reviews.filter((example) => example.review === "agree").length;
@@ -54,7 +54,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
     measured
       ? `С ошибкой агента: ${failed} из ${count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(failed, measured)}%).`
       : `Ни один разговор не удалось проверить.`,
-    ...(measured && serious ? [seriousText(serious, "people")] : []),
+    ...(measured && severity ? [severity] : []),
     `Без найденных ошибок: ${passed}. Не удалось проверить: ${unmeasured} из ${result.sampled}; в счёт они не входят.`,
     `Ответы человека по отдельным оценкам критериев: ${reviews.length}; согласие с оценкой — ${agrees}, несогласие — ${reviews.length - agrees}. Это число оценок, а не разговоров.`,
     "",

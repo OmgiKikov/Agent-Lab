@@ -294,7 +294,16 @@ def verdicts(entry: dict, where: str) -> tuple[dict, list[str]]:
     return side, titles
 
 
-def finish(entry: dict, deck: list[dict], serious: set[str] = frozenset()) -> dict:
+def finish(
+    entry: dict,
+    deck: list[dict],
+    serious: set[str] = frozenset(),
+    marks: dict[str, bool] | None = None,
+    proposals: dict[str, dict] | None = None,
+) -> dict:
+    """One rule of the record. `serious`: its errors are serious, by a person's decision (`marks`), else by the model's
+    proposal (`proposals`); `severity` says whose it is and what the model proposed, with its reason."""
+    marks, proposals = marks or {}, proposals or {}
     log, log_titles = verdicts(entry, 'log')
     sim, sim_titles = verdicts(entry, 'sim')
     failed = [e for e in log['examples'] + sim['examples'] if e['status'] == 'FAIL']
@@ -310,6 +319,10 @@ def finish(entry: dict, deck: list[dict], serious: set[str] = frozenset()) -> di
         'id': entry['id'],
         'title': title,
         'serious': entry['id'] in serious,
+        'severity': {
+            'by': 'person' if entry['id'] in marks else 'model' if entry['id'] in proposals else None,
+            'proposed': proposals.get(entry['id']),
+        },
         'rule': entry['rule'],
         'topics': entry['topics'],
         'log': log,
@@ -326,21 +339,34 @@ def finish(entry: dict, deck: list[dict], serious: set[str] = frozenset()) -> di
 
 def build(check: str, run_id: str | None = None) -> dict:
     """The check's rules and problems: its result on one side, the run asked for (else its newest finished run) on
-    the other. Its scenarios are named only when the deck was built from this check. The criteria a person marked
-    serious come first, then by frequency."""
+    the other. Its scenarios are named only when the deck was built from this check. The serious criteria come first
+    (a person's decision, else the model's proposal), then by frequency; `severity` counts, among the criteria of the
+    check's result, the ones the model proposed for and a person did not decide yet, the ones a person decided, and says
+    why the last proposal failed while one of them has neither."""
     document = store.load(cards.DECK) or {}
     deck = document.get('cards') or []
     serious = set(store.severity()[check])
+    marks = store.severity_marks()[check]
+    proposed = store.severity_proposed()[check]
     book = Book(sources.load())
     log = from_logs(book, store.load(checks.result(check)) or {}, serious)
     sim = from_run(book, chosen_run(check, run_id), deck)
     scenarios = deck if document.get('check') == check else []
-    rules = [finish(entry, scenarios, serious) for entry in book.rules.values()]
+    rules = [finish(entry, scenarios, serious, marks, proposed['proposals']) for entry in book.rules.values()]
     rules.sort(key=lambda r: (not r['serious'], -r['log']['failed'], -r['sim']['failed'], r['rule']['text']))
+    # The criteria of the result: the model proposes for these and «Подтвердить все» confirms them; one only a run has
+    # is listed, but nobody proposes for it.
+    by = [rule['severity']['by'] for rule in rules if rule['log']['ruleIds']]
     return {
         'check': check,
         'log': log,
         'sim': sim,
         'rules': rules,
         'problems': [r['id'] for r in rules if r['log']['failed'] or r['sim']['failed']],
+        'severity': {
+            'criteria': len(by),
+            'proposed': by.count('model'),
+            'decided': by.count('person'),
+            'error': proposed['error'] if None in by else None,
+        },
     }

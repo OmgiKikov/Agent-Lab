@@ -172,7 +172,8 @@ export type Job = {
   kind: string | null;
   running: boolean;
   error: string | null;
-  progress: { message?: string; done?: number; total?: number; run?: string };
+  /** `check`: the check a proposal of which errors are serious is for (task `severity`, lab/severity). */
+  progress: { message?: string; done?: number; total?: number; run?: string; check?: Check };
 };
 export type LabState = {
   toneOfVoice?: ToneDraft | null;
@@ -185,10 +186,16 @@ export type LabState = {
   /** The result of each check, or null: tone of voice and accuracy never replace each other. */
   checks: Record<Check, Discover | null>;
   /**
-   * The criteria a person marked serious, per check, by their key (the problem's id, problems.rule_key); without the
-   * mark an error is minor (spec 2026-10-04-severity-design.md). Older services have no such field.
+   * The serious criteria, per check, by their key (the problem's id, problems.rule_key): by a person's decision, else
+   * by the automatic check's proposal; without either an error is minor (spec 2026-10-04-severity-design.md). Older
+   * services have no such field.
    */
   severity?: Record<Check, string[]>;
+  /**
+   * Changes with any decision or proposal of severity, also one that leaves the same criteria serious (a person
+   * confirmed a proposal: whose decision it is changed). Older services have no such field.
+   */
+  severityStamp?: string;
   cards: null | Deck;
   runs: RunSummary[];
   targets: Target[];

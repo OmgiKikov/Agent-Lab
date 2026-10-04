@@ -1,5 +1,6 @@
 """Local SQLite persistence. Run mutations read and patch the current record in one transaction."""
 
+import hashlib
 import json
 import sqlite3
 import uuid
@@ -315,30 +316,132 @@ def code_reviews(check_id: str) -> list[dict]:
     return _reviews('code_check_reviews', check_id)
 
 
+def _marks(value: Any) -> dict[str, bool]:
+    """A person's decisions of one check: a criterion's key and whether its errors are serious. An older record listed
+    only the keys marked serious."""
+    if isinstance(value, list):
+        return {key: True for key in value if isinstance(key, str)}
+    if isinstance(value, dict):
+        return {key: serious for key, serious in value.items() if isinstance(serious, bool)}
+    return {}
+
+
+def _proposed(value: Any) -> dict:
+    """The model's proposals of one check: by key {serious, reason}, which model, when, and why the last one failed."""
+    value = value if isinstance(value, dict) else {}
+    proposals = value.get('proposals') if isinstance(value.get('proposals'), dict) else {}
+    return {
+        'proposals': {
+            key: {'serious': row['serious'], 'reason': row.get('reason') or ''}
+            for key, row in proposals.items()
+            if isinstance(row, dict) and isinstance(row.get('serious'), bool)
+        },
+        'model': value.get('model'),
+        'at': value.get('at'),
+        'error': value.get('error'),
+    }
+
+
+def _severity_of(connection: sqlite3.Connection) -> tuple[dict[str, dict[str, bool]], dict[str, dict]]:
+    marks = _document(connection, checks.SEVERITY) or {}
+    proposed = _document(connection, checks.SEVERITY_PROPOSED) or {}
+    return (
+        {check: _marks(marks.get(check)) for check in checks.RESULTS},
+        {check: _proposed(proposed.get(check)) for check in checks.RESULTS},
+    )
+
+
+def severity_marks() -> dict[str, dict[str, bool]]:
+    """A person's decisions per check (checks.SEVERITY): a criterion's key and whether its errors are serious."""
+    with _connection() as connection:
+        return _severity_of(connection)[0]
+
+
+def severity_proposed() -> dict[str, dict]:
+    """The model's proposals per check (checks.SEVERITY_PROPOSED)."""
+    with _connection() as connection:
+        return _severity_of(connection)[1]
+
+
+def _serious(marks: dict[str, dict[str, bool]], proposed: dict[str, dict]) -> dict[str, list[str]]:
+    found = {}
+    for check in checks.RESULTS:
+        decided = {key: row['serious'] for key, row in proposed[check]['proposals'].items()} | marks[check]
+        found[check] = sorted(key for key, serious in decided.items() if serious)
+    return found
+
+
 def severity() -> dict[str, list[str]]:
-    """The criteria a person marked serious, per check (checks.SEVERITY); a check with none has an empty list."""
-    found = load(checks.SEVERITY) or {}
-    return {check: sorted(found.get(check) or []) for check in checks.RESULTS}
+    """The criteria whose errors are serious, per check: a person's decision, else the model's proposal; without
+    either an error is minor."""
+    with _connection() as connection:
+        return _serious(*_severity_of(connection))
+
+
+def severity_stamp() -> str:
+    """What changes with any decision or proposal, also one that leaves the same criteria serious (a person confirmed a
+    proposal): the screens ask for the problems again by it."""
+    with _connection() as connection:
+        marks, proposed = _severity_of(connection)
+    return hashlib.sha1(_json([marks, proposed]).encode()).hexdigest()[:12]
 
 
 def set_severity(check: str, rule: str, serious: bool) -> dict[str, list[str]]:
-    """Mark one criterion of a check serious, or take the mark back; the marks of every check after it."""
+    """A person decides whether the errors of one criterion of a check are serious; no proposal ever changes it. The
+    serious criteria of every check after it."""
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
-        found = _document(connection, checks.SEVERITY) or {}
-        keys = {key for key in found.get(check) or [] if key != rule} | ({rule} if serious else set())
-        value = {key: sorted(found.get(key) or []) for key in checks.RESULTS} | {check: sorted(keys)}
-        _put(connection, checks.SEVERITY, value)
-    return value
+        marks, proposed = _severity_of(connection)
+        marks[check][rule] = serious
+        _put(connection, checks.SEVERITY, marks)
+        return _serious(marks, proposed)
 
 
-def take_severity(check: str, keys: list[str]) -> None:
-    """A check's marks as another agent has them (rules of communication taken as a copy, api.copy_tone_rules)."""
+def confirm_severity(check: str, keys: list[str]) -> dict[str, list[str]]:
+    """A person takes the model's proposals for these criteria as their own decisions; a criterion the person decided
+    already or the model has not proposed for stays as it is."""
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
-        found = _document(connection, checks.SEVERITY) or {}
-        value = {key: sorted(found.get(key) or []) for key in checks.RESULTS} | {check: sorted(set(keys))}
-        _put(connection, checks.SEVERITY, value)
+        marks, proposed = _severity_of(connection)
+        proposals = proposed[check]['proposals']
+        for key in keys:
+            if key not in marks[check] and key in proposals:
+                marks[check][key] = proposals[key]['serious']
+        _put(connection, checks.SEVERITY, marks)
+        return _serious(marks, proposed)
+
+
+def propose_severity(check: str, proposals: dict[str, dict], model: str | None) -> None:
+    """The model's proposals for some criteria of a check, beside the ones it made before; the last failure is over."""
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        proposed = _severity_of(connection)[1]
+        proposed[check] = {
+            'proposals': proposed[check]['proposals'] | proposals,
+            'model': model,
+            'at': now(),
+            'error': None,
+        }
+        _put(connection, checks.SEVERITY_PROPOSED, proposed)
+
+
+def severity_failed(check: str, error: str) -> None:
+    """Why the model's last proposal for a check failed; what it proposed before stays."""
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        proposed = _severity_of(connection)[1]
+        proposed[check] = proposed[check] | {'error': error, 'at': now()}
+        _put(connection, checks.SEVERITY_PROPOSED, proposed)
+
+
+def take_severity(check: str, marks: dict[str, bool], proposed: dict) -> None:
+    """A check's decisions and proposals as another agent has them (rules of communication taken as a copy,
+    api.copy_tone_rules)."""
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        own_marks, own_proposed = _severity_of(connection)
+        _put(connection, checks.SEVERITY, own_marks | {check: dict(marks)})
+        _put(connection, checks.SEVERITY_PROPOSED, own_proposed | {check: _proposed(proposed)})
 
 
 def tone_checks() -> list[dict]:

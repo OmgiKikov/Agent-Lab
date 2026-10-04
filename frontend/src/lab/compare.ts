@@ -42,8 +42,8 @@ export type Compare = {
   overall?: { before: Counts; now: Counts; verdict: Verdict | null; direction: Direction | null };
   criteria?: CompareRow[];
   /**
-   * The conversations with a serious error on both sides, by the marks as they are now, under the same rules as
-   * `overall`; only once a criterion of the check is marked serious (lab/severity).
+   * The conversations with a serious error on both sides, by the serious criteria as they are now, under the same
+   * rules as `overall`; only once a criterion of the check is serious (lab/severity).
    */
   serious?: {
     before: Counts;
@@ -57,7 +57,7 @@ export type Compare = {
 
 /**
  * The comparison of a check's current result with its previous saved check. It reads saved records only, and is asked
- * again when that check's result, the export or its serious marks change.
+ * again when that check's result, the export or its serious criteria change.
  */
 export function useCompare(check: Check | null) {
   const { state } = useLabState();
@@ -136,7 +136,7 @@ export function compareSentence(compare: Compare, { short = false } = {}): { hea
  * «С серьёзными ошибками: 6 из 53 (11%) → сейчас 0 из 71 (0%). Мало разговоров, чтобы судить: серьёзные критерии
  * удалось проверить в 16 разговорах тогда и в 4 сейчас.» — the line under the comparison of the whole check, in its
  * words: the same counts and arrow, the same verdict (few, beyond chance or within it), and for a re-evaluation of the
- * same conversations — that the difference is the evaluation's. Both sides by the serious marks as they are now
+ * same conversations — that the difference is the evaluation's. Both sides by the serious criteria as they are now
  * (`marked` of them in the current result). The share rests on the conversations where a serious criterion could be
  * checked: with few of them the line says how few. Null when nothing is marked or the checks are not compared.
  */

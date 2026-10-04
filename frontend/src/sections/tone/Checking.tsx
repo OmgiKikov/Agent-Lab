@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
 import { useLabState } from "../../lab/LabProvider";
+import { PROPOSING } from "../../lab/severity";
 import { toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
@@ -31,6 +32,8 @@ export function Checking({
   }, [job.running, job.error, finished, onDone]);
   const done = active ? (job.progress.done ?? 0) : 0;
   const total = active ? (job.progress.total ?? 0) : 0;
+  // The conversations are checked; the automatic check proposes which errors are serious (lab/severity): no count.
+  const proposing = active && job.running && job.progress.message === PROPOSING;
   const error = active && !job.running ? job.error : null;
   // A stop is the person's own choice, not a failure: no red, no model settings; the previous result stays.
   const stopped = error === STOPPED;
@@ -62,23 +65,40 @@ export function Checking({
         </div>
       ) : (
         <>
-          <p role="status" className="mt-8 text-display font-semibold tabular-nums text-fg">
-            {done}
-            {"\u00a0"}
-            <span className="font-normal text-fg-3">
-              из{"\u00a0"}
-              {total || "…"}
-            </span>
-          </p>
-          <p className="mt-2 text-read text-fg-3">
-            Проверено разговоров. Можно перейти в другие разделы — оценка продолжится.
-          </p>
-          <div className="mt-5 h-2 overflow-hidden rounded-full bg-well">
-            <div
-              className="h-full rounded-full bg-fg transition-[width] duration-500"
-              style={{ width: `${total ? (100 * done) / total : 0}%` }}
-            />
-          </div>
+          {proposing ? (
+            <>
+              <p role="status" className="mt-8 text-title font-semibold text-fg">
+                {PROPOSING}
+              </p>
+              <p className="mt-2 text-read text-fg-3">
+                Все разговоры проверены. Итог откроется сам, как только автоматическая проверка предложит, какие ошибки
+                серьёзные.
+              </p>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-well">
+                <div className="h-full w-full animate-pulse rounded-full bg-fg motion-reduce:animate-none" />
+              </div>
+            </>
+          ) : (
+            <>
+              <p role="status" className="mt-8 text-display font-semibold tabular-nums text-fg">
+                {done}
+                {"\u00a0"}
+                <span className="font-normal text-fg-3">
+                  из{"\u00a0"}
+                  {total || "…"}
+                </span>
+              </p>
+              <p className="mt-2 text-read text-fg-3">
+                Проверено разговоров. Можно перейти в другие разделы — оценка продолжится.
+              </p>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-well">
+                <div
+                  className="h-full rounded-full bg-fg transition-[width] duration-500"
+                  style={{ width: `${total ? (100 * done) / total : 0}%` }}
+                />
+              </div>
+            </>
+          )}
           <Button
             className="mt-6"
             disabled={!job.running}

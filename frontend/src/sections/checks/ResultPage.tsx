@@ -8,7 +8,7 @@ import { longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
 import { seriousOf } from "../../lab/severity";
-import { SeriousLine } from "../../product/Severity";
+import { SeverityStatus } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
 import { UploadButton } from "../../product/UploadLogs";
@@ -25,7 +25,7 @@ const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /**
  * «Итог» of a check: the real conversations of the export as this check judged them — one number, the conversations
- * with a serious error once a criterion is marked serious, and how it stands to the check's previous check; then the
+ * with a serious error and whose decision that is, and how it stands to the check's previous check; then the
  * problems it is made of, serious first, then most frequent, each beside its previous count, and the criteria whose
  * errors are no longer found. Without a result, how to get one. «Проверить снова», the same words in both checks,
  * repeats tone of voice step by step; accuracy is checked again here (?assess=1), by the same criteria or by criteria
@@ -147,7 +147,7 @@ export function ResultPage({ check }: { check: Check }) {
         <Trust
           result={result}
           check={check}
-          serious={<SeriousLine data={data} check={check} />}
+          serious={<SeverityStatus data={data} check={check} />}
           compare={<CompareLine check={check} compare={compare} serious={seriousOf(data)?.marked} />}
           className="mt-5"
         />
@@ -163,7 +163,7 @@ export function ResultPage({ check }: { check: Check }) {
         <NoLongerFound
           check={check}
           compare={compare}
-          serious={new Set(data.rules.filter((r) => r.serious).map((r) => r.id))}
+          serious={new Map(data.rules.filter((r) => r.serious).map((r) => [r.id, r]))}
         />
       </section>
     </div>,

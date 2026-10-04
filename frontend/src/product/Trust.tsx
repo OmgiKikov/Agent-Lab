@@ -14,8 +14,8 @@ import type { Discover } from "../lab/types";
  * answer it counts the same conversations with the person's answers taken in and says what they did: the errors they
  * took back, the misses they found in the cases «без ошибки» (from 20 of them, out of how many), how many verdicts they
  * checked (lab/answers). It never replaces the number above: that stays the check's, the one the line about the
- * previous check (`compare`, under it) sets beside its previous count. Once a criterion is marked serious, the line of
- * serious errors (`serious`, product/Severity) comes first, right under the number it is part of. With few
+ * previous check (`compare`, under it) sets beside its previous count. The line of serious errors and whose decision
+ * they are (`serious`, product/Severity, SeverityStatus) comes first, right under the number it is part of. With few
  * conversations the last, quiet line says the conclusion is preliminary.
  */
 export function Trust({

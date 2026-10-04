@@ -24,6 +24,7 @@ from . import (
     problems,
     registry,
     scenarios,
+    severity,
     simulate,
     store,
     tone,
@@ -84,6 +85,8 @@ NOT_CHECKED = 'Этот критерий в разговоре не провер
 class DiscoverCommand(BaseModel):
     count: int = Field(default=60, ge=5, le=300)
     replan: bool = False
+    # After the check the model proposes which errors are serious (severity.propose); the screens ask for it.
+    propose: bool = False
 
 
 class SettingsCommand(BaseModel):
@@ -110,17 +113,32 @@ class ToneCopyCommand(BaseModel):
 
 
 class SeverityCommand(BaseModel):
-    """A person marks a criterion of a check serious (serious) or takes the mark back; the criterion by its key."""
+    """A person decides whether the errors of a criterion of a check are serious; the criterion by its key."""
 
     check: Literal['tone', 'code']
     rule: str = Field(pattern=r'^r-[0-9a-f]{10}$')
     serious: bool
 
 
+class SeverityProposeCommand(BaseModel):
+    """The model proposes for the criteria of a check's result it has no proposal for (every one `again`)."""
+
+    check: Literal['tone', 'code']
+    again: bool = False
+
+
+class SeverityConfirmCommand(BaseModel):
+    """A person takes every proposal of the model for a check's criteria as their own decision."""
+
+    check: Literal['tone', 'code']
+
+
 class ToneCheckCommand(BaseModel):
     ruleIds: list[str] = Field(min_length=1, max_length=20)
     count: int = Field(default=300, ge=1, le=300)
     revision: str | None = None
+    # After the check the model proposes which errors are serious (severity.propose); the screens ask for it.
+    propose: bool = False
 
 
 class ToneAdviceCommand(BaseModel):
@@ -255,6 +273,7 @@ def state() -> dict:
         'checks': results,
         'toneOfVoice': store.load(tone.DRAFT),
         'severity': store.severity(),
+        'severityStamp': store.severity_stamp(),
         'cards': store.load(cards.DECK),
         'runs': [
             {key: summary.get(key) for key in RUN_FIELDS} | {'targetName': agents.run_name(summary)}
@@ -380,9 +399,31 @@ def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None 
 
 @app.post('/api/severity')
 def mark_severity(payload: SeverityCommand) -> dict:
-    """A person marks a criterion serious or minor (docs/superpowers/specs/2026-10-04-severity-design.md): its errors
-    then come first and are counted apart. The mark changes neither what is checked nor how."""
+    """A person decides whether a criterion's errors are serious or minor
+    (docs/superpowers/specs/2026-10-04-severity-design.md): serious ones come first and are counted apart. The decision
+    wins over the model's proposal and changes neither what is checked nor how."""
     return {'severity': store.set_severity(payload.check, payload.rule, payload.serious)}
+
+
+@app.post('/api/severity/propose')
+async def propose_severity(payload: SeverityProposeCommand) -> dict:
+    """«Предложить»: the model proposes which errors of the check's criteria are serious — for a result checked before
+    proposals, after a failed proposal, or `again` for every criterion a person has not decided."""
+
+    async def work(progress: Progress) -> dict:
+        progress(message=severity.PROPOSING, check=payload.check)
+        error = await severity.propose(payload.check, progress, again=payload.again)
+        if error:
+            raise llm.ModelError(error)
+        return {'severity': store.severity()}
+
+    return start('severity', work)
+
+
+@app.post('/api/severity/confirm')
+def confirm_severity(payload: SeverityConfirmCommand) -> dict:
+    """«Подтвердить все»: a person takes the model's proposals for the criteria of the check's result as their own."""
+    return {'severity': store.confirm_severity(payload.check, list(severity.criteria(payload.check)))}
 
 
 @app.get('/api/compare')
@@ -447,6 +488,8 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
     async def work(progress: Progress) -> dict:
         result = await discover.run(payload.count, progress, payload.replan)
         accuracy_history.commit(result, new_criteria=payload.replan)
+        if payload.propose:
+            await severity.propose(checks.CODE, progress)
         return result
 
     return start('discover', work)
@@ -502,16 +545,18 @@ async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
         raise HTTPException(400, 'Правила можно взять только у другого агента')
     with registry.using(source['id']):
         found = tone.rules()
-        marks = store.severity()[checks.TONE]
+        marks = store.severity_marks()[checks.TONE]
+        proposed = store.severity_proposed()[checks.TONE]
     if found is None:
         raise HTTPException(400, f'У агента «{source["name"]}» нет правил общения')
 
     async def work(progress: Progress) -> dict:
         changed = tone.take(*found)
-        # The serious marks belong to the criteria (problems.rule_key): they come with criteria, never with rules
-        # alone, and other marks on the same criteria are a change.
-        if found[1] is not None and store.severity()[checks.TONE] != marks:
-            store.take_severity(checks.TONE, marks)
+        # Serious or minor belongs to the criteria (problems.rule_key): a person's decisions and the model's proposals
+        # come with criteria, never with rules alone, and other ones on the same criteria are a change.
+        own = (store.severity_marks()[checks.TONE], store.severity_proposed()[checks.TONE]['proposals'])
+        if found[1] is not None and own != (marks, proposed['proposals']):
+            store.take_severity(checks.TONE, marks, proposed)
             changed = True
         return {'ok': True, 'unchanged': not changed}
 
@@ -551,6 +596,8 @@ async def check_tone(payload: ToneCheckCommand) -> dict:
     async def work(progress: Progress) -> dict:
         result = await tone.assess(criteria, payload.count, progress)
         tone.commit(result)
+        if payload.propose:
+            await severity.propose(checks.TONE, progress)
         return result
 
     return start('tone-check', work)

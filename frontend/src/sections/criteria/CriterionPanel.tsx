@@ -10,7 +10,7 @@ import { humansOf, secondOf } from "../../lab/problemStats";
 import { Count } from "../../product/Count";
 import { Facts } from "../../product/Facts";
 import { Reliability } from "../../product/Reliability";
-import { SeveritySwitch } from "../../product/Severity";
+import { SeverityControl } from "../../product/Severity";
 import { shortOrigin } from "../../product/text";
 import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
@@ -50,8 +50,9 @@ function ExampleRow({ e }: { e: Example }) {
 }
 
 /**
- * The chosen criterion: what it requires, the person's mark «Серьёзная ошибка», how it went in this stage, and the
- * conversations behind each count.
+ * The chosen criterion: what it requires, «Серьёзная ошибка» with whose decision it is (the automatic check's proposal
+ * with its reason and «Подтвердить», or the person's), how it went in this stage, and the conversations behind each
+ * count.
  */
 export function CriterionPanel({
   c,
@@ -114,14 +115,7 @@ export function CriterionPanel({
               <span className="font-mono">{shortOrigin(r.rule.origin)}</span>
             </p>
           ))}
-        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <SeveritySwitch check={check} rule={r} />
-          <span className="text-small text-fg-3">
-            {r.serious
-              ? "Ошибки по этому критерию идут первыми и считаются отдельно."
-              : "Без отметки ошибка незначительная."}
-          </span>
-        </div>
+        <SeverityControl check={check} rule={r} className="mt-4" />
         <div className="mt-4">
           <Facts
             facts={[
