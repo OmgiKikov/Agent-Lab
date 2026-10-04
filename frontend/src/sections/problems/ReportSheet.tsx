@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Copy, FileDown } from "lucide-react";
 import { CHECK_NAME } from "../../lab/checks";
 import type { Criterion } from "../../lab/criteria";
-import { count, day, plural } from "../../lab/format";
+import { day, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import {
   copyReport,
@@ -14,7 +14,7 @@ import {
 } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
-import { NONE_SERIOUS, noneSerious, proposedText, seriousOf, seriousSentence, standingOf } from "../../lab/severity";
+import { seriousOf, severityLines, standingOf } from "../../lab/severity";
 import { SeriousTag } from "../../product/Severity";
 import { shortOrigin } from "../../product/text";
 import { Button } from "../../ui/Button";
@@ -43,11 +43,11 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
         </h3>
         <p className="col-start-2 mt-1 text-small text-ink-2">
           Ошибка в{" "}
-          <b className="font-semibold text-ink-bad">
+          <b className="whitespace-nowrap font-semibold text-ink-bad">
             {s.failed} из {checked(s)}
           </b>{" "}
           {plural(checked(s), "разговора", "разговоров", "разговоров")}, где критерий удалось проверить.
-          {second.checked > 0 && ` Две проверки совпали в ${second.agree} из ${second.checked}.`}
+          {second.checked > 0 && ` Две проверки совпали в\u00a0${second.agree} из\u00a0${second.checked}.`}
           {c.r.topics.length > 0 && ` Темы: ${c.r.topics.join(", ").toLowerCase()}.`}
         </p>
       </div>
@@ -61,14 +61,14 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
             {c.r.rule.quote
               ? `«${c.r.rule.quote}»`
               : c.r.rule.kind === "tone-of-voice"
-                ? "Цитата из правил не сохранена."
-                : "Цитата из кода не сохранена в этом прогоне."}
+                ? "Цитата из правил не сохранилась."
+                : "Цитата из кода не сохранилась."}
           </p>
         </div>
         <div className="border-t border-ink-line p-4 sm:border-l sm:border-t-0">
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <Cap>Агент ответил</Cap>
-            {e && <span className="text-small text-ink-3">{reliabilityWord(e)}</span>}
+            {e && <span className="text-small text-ink-3">{reliabilityWord(e, "people")}</span>}
           </div>
           {e ? (
             <>
@@ -120,15 +120,12 @@ export function ReportSheet({
   const [side, setSide] = useState<SideKey>(data.log ? "log" : "sim");
   const items = queueOf(list, side);
   const markdown = () => problemsReport(data, shareBase(), side, { filename: file });
-  const copy = () =>
-    copyReport(markdown()).then(() => toast.notify("Отчёт скопирован: вставьте в письмо или тикет"), toast.error);
+  const copy = () => copyReport(markdown()).then(() => toast.notify("Отчёт скопирован"), toast.error);
   const log = data.log;
   const sim = data.sim;
   // Serious errors are told of the conversations of the export: the severity of a run's own criteria is not proposed.
   const standing = side === "log" && log?.assessed ? standingOf(data) : null;
-  const serious = standing ? seriousOf(data) : null;
-  const grave = serious && seriousSentence(serious, "people");
-  const whose = standing && proposedText(standing, "people");
+  const severity = standing ? severityLines(standing, seriousOf(data), "people") : [];
   const figures =
     side === "log" && log
       ? [
@@ -151,13 +148,13 @@ export function ReportSheet({
       onClose={onClose}
       width="lg"
       title="Отчёт"
-      sub="Протокол текущей оценки: так он уйдёт в письмо или тикет"
+      sub="Так он будет выглядеть в письме или тикете"
       actions={
         <>
           {sides.length > 1 && (
             <Segmented<SideKey>
               size="sm"
-              label="Чей протокол"
+              label="Что в отчёте"
               value={side}
               onChange={setSide}
               options={sides.map(([k, l]) => ({ value: k, label: l }))}
@@ -180,25 +177,17 @@ export function ReportSheet({
           <Cap>
             {side === "log" ? (
               <>
-                Протокол проверки · {CHECK_NAME[data.check]} · диалоги
+                {CHECK_NAME[data.check]} · диалоги
                 {file && <span className="normal-case tracking-normal"> «{file}»</span>} · {day(log?.finishedAt)}
               </>
             ) : (
-              `Протокол проверки · ${CHECK_NAME[data.check]} · симуляция · ${day(sim?.finishedAt)}`
+              `${CHECK_NAME[data.check]} · симуляция · ${day(sim?.finishedAt)}`
             )}
           </Cap>
           <h2 className="mt-3 text-balance text-title font-semibold text-ink">{summarySentence(data, side)}</h2>
-          {side === "log" && log && (
-            <p className="mt-3 text-read text-ink-2">
-              Проверено {log.assessed} из {count(log.sampled, "разговора", "разговоров", "разговоров")}. В{" "}
-              {log.withViolations} агент ошибся хотя бы раз, {log.unassessed} проверить не удалось.
-            </p>
-          )}
           {side === "sim" && sim && (
             <p className="mt-3 text-read text-ink-2">
-              Прогон {sim.target} · {sim.version}: проверено {sim.assessed} из{" "}
-              {count(sim.dialogs, "разговора", "разговоров", "разговоров")}, ошибка в {sim.withViolations},{" "}
-              {sim.unassessed} проверить не удалось.
+              Прогон {sim.target} · {sim.version}
             </p>
           )}
           <dl className="mt-6 grid grid-cols-2 border-t border-ink sm:grid-cols-4">
@@ -218,18 +207,18 @@ export function ReportSheet({
               </div>
             ))}
           </dl>
-          {(grave || noneSerious(standing)) && (
-            <p className="mt-4 text-read text-ink-2">
-              {grave ? (
-                <>
-                  {grave.head} — <b className="whitespace-nowrap font-semibold text-ink">{grave.share}</b>
-                  {grave.rest}
-                </>
-              ) : (
-                NONE_SERIOUS
+          {severity.length > 0 && (
+            <div className="mt-4 space-y-1 text-read text-ink-2">
+              {severity.map((line, i) =>
+                line.kind === "count" ? (
+                  <p key={i}>
+                    {line.head} — <b className="whitespace-nowrap font-semibold text-ink">{line.share}</b>.
+                  </p>
+                ) : (
+                  <p key={i}>{line.text}</p>
+                ),
               )}
-              {whose && ` ${whose}`}
-            </p>
+            </div>
           )}
           {items.map((c, i) => (
             <Section key={c.r.id} c={c} i={i + 1} side={side} />
@@ -237,13 +226,13 @@ export function ReportSheet({
           {!items.length && (
             <p className="mt-10 text-read text-ink-2">
               {(side === "log" ? log?.assessed : sim?.assessed)
-                ? "Ошибок не найдено."
+                ? "Ошибок не нашли."
                 : "Разговоры пока не удалось проверить."}
             </p>
           )}
           <p className="mt-12 border-t border-ink-line pt-4 text-small text-ink-3">
-            Счёт «N из M»: M — разговоры, где критерий удалось проверить. Диалоги и симуляция считаются отдельно и не
-            складываются. «Без найденных ошибок» не означает, что агент исправен.
+            В счёте «N из M» M — разговоры, где критерий удалось проверить. Диалоги и симуляция считаются отдельно, их
+            числа не складываются. «Без найденных ошибок» не значит, что ошибок нет.
           </p>
         </article>
       </div>

@@ -127,7 +127,7 @@ export function ResultPage({ check }: { check: Check }) {
           disabled={!state.logs.total || busy}
           title={
             check === "tone"
-              ? "Проверка по шагам: те же или уточнённые критерии"
+              ? "Проверить снова по шагам, с теми же или уточнёнными критериями"
               : "Проверить разговоры выгрузки заново по критериям из кода агента"
           }
           className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-3 transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"

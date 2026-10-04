@@ -40,8 +40,8 @@ const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /** What each check is about, in the words of the person who answers for the agent. */
 const WHAT: Record<Check, string> = {
-  tone: "Как агент общается: обращение, тон, ясность и нормы общения — по вашим правилам.",
-  code: "Делает ли агент то, что требуют его промпты и инструменты: отвечает по инструкции и ничего не выдумывает.",
+  tone: "Соблюдает ли агент ваши правила общения: обращение, тон, ясность.",
+  code: "Делает ли агент то, что требуют его инструкции и инструменты: отвечает по базе знаний и ничего не выдумывает.",
 };
 
 /** Where a check without a result stands, and its one way forward. */
@@ -55,9 +55,9 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
   if (check === "tone") {
     if (job.running && job.kind === "tone-check")
       return {
-        status: "Идёт проверка",
+        status: "Проверяем разговоры",
         needs: needsOf("tone", state),
-        action: { label: "Ход проверки", to: toneCheckLink("checking") },
+        action: { label: "Открыть проверку", to: toneCheckLink("checking") },
       };
     if (fresh)
       return {
@@ -76,9 +76,9 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
   }
   if (job.running && job.kind === "discover")
     return {
-      status: "Идёт оценка",
+      status: "Проверяем разговоры",
       needs: needsOf("code", state),
-      action: { label: "Открыть", to: SECTIONS.accuracy },
+      action: { label: "Открыть проверку", to: SECTIONS.accuracy },
     };
   if (!codeSources(state).length)
     return {
@@ -185,8 +185,8 @@ export function OverviewPage() {
           <h2 className="mt-1 text-page font-semibold text-fg">{first ? "С чего начать" : "Как работает агент"}</h2>
           <p className="mt-3 max-w-[66ch] text-lead text-fg-2">
             {first
-              ? "Настоящие разговоры клиентов из выгрузки чата проверяются двумя проверками, у каждой свои критерии. Из найденных ошибок потом собираются сценарии для синтетических клиентов."
-              : "У каждой проверки свои критерии и свой счёт, у симуляций — свой: их числа не складываются. С прошлой выгрузкой каждая проверка сравнивает себя сама — по тем же критериям."}
+              ? "Две проверки оценивают настоящие разговоры клиентов из выгрузки чата, у каждой свои критерии. Из найденных ошибок потом собирают сценарии для синтетических клиентов."
+              : "У каждой проверки и у симуляций свои критерии и свой счёт, их числа не складываются. Каждая проверка сравнивает себя только со своей прошлой."}
           </p>
           {first ? (
             <StartCards state={state} />
@@ -228,12 +228,12 @@ function StartCards({ state }: { state: LabState }) {
     { title: CHECK_NAME.code, what: WHAT.code, begin: beginOf("code", state) },
     {
       title: "Симуляции",
-      what: "Синтетические клиенты разыгрывают с агентом сценарии из найденных ошибок, и критерии той же проверки оценивают разговоры.",
+      what: "Синтетические клиенты играют с агентом сценарии из найденных ошибок. Разговоры оценивают по критериям той же проверки.",
       begin: {
         status: "После первой проверки",
         needs: [
           { label: "Итог проверки", value: null, later: "из его ошибок соберутся сценарии" },
-          { label: "Подключение агента", value: ready ? "задано" : null, later: "в «Агенте»" },
+          { label: "Подключение агента", value: ready ? "задано" : null, later: "задайте в «Агенте»" },
         ],
         // Nothing to do here before the first check, unless the agent is not connected yet.
         action: ready ? undefined : { label: "Подключить агента", to: SECTIONS.agent },
@@ -340,7 +340,7 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
             result={result}
             check={check}
             serious={<SeverityStatus data={data} check={check} />}
-            compare={<CompareLine check={check} compare={compare} short serious={seriousOf(data)?.marked} />}
+            compare={<CompareLine check={check} compare={compare} serious={seriousOf(data)?.marked} />}
             className="mt-4"
           />
           <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>
@@ -382,14 +382,14 @@ function RunBlock({ state }: { state: LabState }) {
         <BlockHead to={SECTIONS.simulations} title="Симуляции" sub="Синтетические клиенты играют сценарии из ошибок" />
         <p className="mt-6 text-read text-fg-2">
           {deck
-            ? `Сценарии ${BY_CRITERIA[deck.check]} собраны: синтетические клиенты сыграют их с агентом, и вы увидите ошибки раньше настоящих клиентов.`
-            : "Симуляций ещё не было. Сценарии собираются из ошибок одной из проверок, и её критерии оценят разговоры синтетических клиентов."}
+            ? `Сценарии ${BY_CRITERIA[deck.check]} собраны. Синтетические клиенты сыграют их с агентом.`
+            : "Симуляций ещё не было. Сценарии собирают из ошибок одной проверки, и её критерии оценивают разговоры."}
         </p>
         <Link
           to={deck ? `${SECTIONS.simulations}?play=1` : scenariosLink()}
           className={`mt-5 ${buttonClass({ variant: "outline" })}`}
         >
-          {deck ? "Сыграть сценарии" : "К сценариям"}
+          {deck ? "Сыграть сценарии" : "Открыть сценарии"}
         </Link>
       </div>
     );
@@ -429,7 +429,7 @@ function RunBlock({ state }: { state: LabState }) {
         ) : (
           <p className="mt-6 text-read text-fg-2">
             {live
-              ? "Синтетические клиенты играют сценарии; итог появится, когда разговоры будут оценены."
+              ? "Синтетические клиенты играют сценарии. Итог появится, когда разговоры оценят."
               : run.status === "failed"
                 ? `Прогон прервался${run.error ? `. ${run.error}` : "."}`
                 : "Разговоры этого прогона ещё не оценены."}
@@ -517,21 +517,21 @@ function CheckSteps({ check, onReport }: { check: Check; onReport: () => void })
     steps.push({
       icon: ClipboardCheck,
       title: `Ответьте на ${count(disputed, "спорный случай", "спорных случая", "спорных случаев")}`,
-      sub: "Две проверки разошлись: ваш ответ решит, ошибка это или нет.",
+      sub: "Две проверки разошлись. Ваш ответ решит, ошибка это или нет.",
       to: reviewLink(check, { queue: "disputed" }),
     });
   else if (open.length)
     steps.push({
       icon: ClipboardCheck,
-      title: `Подтвердите ${count(open.length, "найденную ошибку", "найденные ошибки", "найденных ошибок")}`,
-      sub: `В ${count(conversations, "разговоре", "разговорах", "разговорах")}. По одной: «да, ошибка» или «нет».`,
+      title: `Проверьте ${count(open.length, "найденную ошибку", "найденные ошибки", "найденных ошибок")}`,
+      sub: `Они в ${count(conversations, "разговоре", "разговорах", "разговорах")}. Ответьте по каждой, ошибка это или нет.`,
       to: reviewLink(check, { queue: "unchecked" }),
     });
   if (problems)
     steps.push({
       icon: FileText,
       title: `Передайте ${count(problems, "проблему", "проблемы", "проблем")} команде агента`,
-      sub: "Отчёт с примерами из разговоров — в письмо или тикет.",
+      sub: "Отчёт с примерами из разговоров для письма или тикета.",
       run: onReport,
     });
   return <StepList label={CHECK_NAME[check]} steps={steps} />;
@@ -552,7 +552,7 @@ function simSteps(state: LabState): Step[] {
       : {
           icon: Hammer,
           title: "Соберите сценарии",
-          sub: "Из ошибок одной из проверок: синтетические клиенты сыграют их с агентом.",
+          sub: "Из ошибок одной из проверок. Синтетические клиенты сыграют их с агентом.",
           to: scenariosLink(),
         },
     ...(ready
@@ -561,7 +561,7 @@ function simSteps(state: LabState): Step[] {
           {
             icon: Bot,
             title: "Подключите агента",
-            sub: "Тогда исправления можно проверять, не дожидаясь новой выгрузки чата.",
+            sub: "Чтобы проверять исправления, не дожидаясь новой выгрузки чата.",
             to: SECTIONS.agent,
           },
         ]),

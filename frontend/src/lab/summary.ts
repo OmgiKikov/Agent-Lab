@@ -5,7 +5,7 @@ import { count, pct, plural } from "./format";
 import { headingOf } from "./problemReport";
 import { splitQuote } from "./quote";
 import type { Severity } from "./problems";
-import { NONE_SERIOUS, seriousText, type Serious } from "./severity";
+import { lineText, type Serious, type SeverityLine } from "./severity";
 import type { Check } from "./types";
 
 /**
@@ -38,16 +38,12 @@ export type SummaryCheck = {
    */
   serious: Serious | null;
   /**
-   * No criterion is considered serious, and every one is decided or proposed: «Ни один критерий не считается
-   * серьёзным.»
+   * What it says about serious errors, line by line, for people (lab/severity, severityLines): «С серьёзными ошибками
+   * — 6 из 53 (11%)», «Серьёзные критерии — 2 из 8. Их отметила автоматическая проверка, люди проверили 0 из 8.», where
+   * they could be checked; or «Серьёзных критериев нет. Так решили люди.» None while nothing is marked.
    */
-  noneSerious: boolean;
-  /**
-   * Whose decision it is, while some criteria are the automatic check's proposals: «Какие серьёзные, предложила
-   * автоматическая проверка; люди проверили 3 из 8 критериев.»; none once people decided every proposal.
-   */
-  proposed: string | null;
-  /** «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). …» — the short line of «Итог», or none. */
+  severity: SeverityLine[];
+  /** «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). …» — the line of «Итог», or none. */
   compare: string | null;
   /** «С серьёзными ошибками: 3 из 53 (6%) → сейчас 6 из 53 (11%). …», or none. */
   seriousCompare: string | null;
@@ -80,8 +76,8 @@ export type SummaryExample = { customer: string | null; reply: string | null; qu
 
 /** What each check looks at, in words for someone outside the product. */
 export const SUMMARY_WHAT: Record<Check, string> = {
-  tone: "Как агент общается с клиентами: обращение, тон и ясность — по правилам общения.",
-  code: "Делает ли агент то, что от него требуют его инструкции: отвечает по базе знаний и ничего не выдумывает.",
+  tone: "Соблюдает ли агент правила общения с клиентами: обращение, тон, ясность.",
+  code: "Делает ли агент то, что требуют его инструкции: отвечает по базе знаний и ничего не выдумывает.",
 };
 
 const ofConversations = (n: number) => count(n, "разговора", "разговоров", "разговоров");
@@ -90,10 +86,10 @@ const ofConversations = (n: number) => count(n, "разговора", "разг�
 export const headline = (c: SummaryCheck) =>
   `С ошибкой агента — ${c.failed}\u00a0из\u00a0${count(c.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(c.failed, c.measured)}%)`;
 
-/** «Ещё 4 разговора не удалось проверить: в счёт они не входят.» — a separate number, never in the count. */
+/** «Ещё 4 разговора не удалось проверить, в счёт они не входят.» — a separate number, never in the count. */
 export const unmeasuredText = (c: SummaryCheck) =>
   c.unmeasured
-    ? `Ещё ${count(c.unmeasured, "разговор", "разговора", "разговоров")} не удалось проверить: в счёт ${c.unmeasured === 1 ? "он не входит" : "они не входят"}.`
+    ? `Ещё ${count(c.unmeasured, "разговор", "разговора", "разговоров")} не удалось проверить, в счёт ${c.unmeasured === 1 ? "он не входит" : "они не входят"}.`
     : null;
 
 /** «из 29 найденных», «из 21 найденной»: of the errors the check found. */
@@ -120,16 +116,16 @@ export const problemAnswers = (p: SummaryProblem) =>
 
 /** The quiet footnote: what the numbers count and what they do not say. */
 export const HOW = [
-  "«N из M»: из M разговоров, которые автоматическая проверка смогла оценить, в N она нашла ошибку агента. Разговоры, которые проверить не удалось, названы отдельно и в счёт не входят.",
-  "«Без найденных ошибок» не значит, что агент исправен: проверка находит не всё.",
-  "«С учётом ответов людей» — те же разговоры: ошибка, которую человек снял, не считается, а ошибка, которую человек нашёл сам, считается. Число проверки при этом не меняется, и с прошлыми проверками сравнивается только оно.",
-  "Прошлая проверка ставится рядом, только если требования и способ проверки те же; меньше 30 разговоров хотя бы с одной стороны — мало, чтобы судить.",
-  "Tone of voice и Точность проверяют разное и считаются отдельно: их числа не складываются.",
+  "«N из M» значит, что автоматическая проверка смогла оценить M разговоров и в N из них нашла ошибку агента. Разговоры, которые не удалось проверить, названы отдельно и в счёт не входят.",
+  "«Без найденных ошибок» не значит, что ошибок нет. Проверка находит не всё.",
+  "«С учётом ответов людей» считает те же разговоры. Ошибка, которую человек снял, не считается, а ошибка, которую он нашёл сам, считается. Число автоматической проверки от этого не меняется, и с прошлыми проверками сравнивают только его.",
+  "С прошлой проверкой сравнивают, только если критерии и способ проверки те же. Если хотя бы с одной стороны меньше 30 разговоров, этого мало, чтобы судить.",
+  "Tone of voice и Точность проверяют разное, их числа не складываются.",
 ];
 
-/** Said once a criterion is serious: who decides it, and that its count is part of the number. */
+/** Said once a criterion is serious: that its count is part of the number, and who decides it. */
 export const HOW_SERIOUS =
-  "«С серьёзными ошибками» — те же проверенные разговоры, где есть ошибка хотя бы по одному серьёзному критерию. Какие критерии серьёзные, предлагает автоматическая проверка, а люди подтверждают или меняют; сколько критериев проверили люди, сказано у каждой проверки. Эти разговоры уже входят в число разговоров с ошибкой агента и не добавляются к нему.";
+  "«С серьёзными ошибками» — проверенные разговоры, где есть ошибка хотя бы по одному серьёзному критерию. Они уже входят в число разговоров с ошибкой агента. Какие критерии серьёзные, предлагает автоматическая проверка, а люди подтверждают или меняют.";
 
 /** The footnote of a summary: with the line about serious errors once a check of it has a serious criterion. */
 export const howOf = (s: Summary) => (s.checks.some((c) => c.serious) ? [...HOW, HOW_SERIOUS] : HOW);
@@ -160,15 +156,6 @@ const wholeReply = (reply: string, quote: string) => {
 };
 
 /**
- * A check's serious errors in the letter, as on the page: the serious count, or that no criterion is considered
- * serious; then, while some criteria are proposals, how many of them people checked. None while it is not decided.
- */
-function severityLine(c: SummaryCheck): string | null {
-  const head = c.serious ? seriousText(c.serious, "people") : c.noneSerious ? NONE_SERIOUS : null;
-  return head && [head, c.proposed].filter(Boolean).join(" ");
-}
-
-/**
  * The summary as a letter (lab/problemReport, copyReport): the same as the page, the ticked problems only. Headings,
  * paragraphs and a quote: the only Markdown the reports write.
  */
@@ -186,7 +173,8 @@ export function summaryMarkdown(s: Summary): string {
       SUMMARY_WHAT[c.check],
       "",
       [`${headline(c)}.`, unmeasuredText(c)].filter(Boolean).join(" "),
-      ...[severityLine(c), answersText(c.answers, "people"), c.compare, c.seriousCompare, rechecked(c.answers)].filter(
+      ...c.severity.map(lineText),
+      ...[answersText(c.answers, "people"), c.compare, c.seriousCompare, rechecked(c.answers)].filter(
         (x): x is string => !!x,
       ),
     );
@@ -197,14 +185,7 @@ export function summaryMarkdown(s: Summary): string {
     for (const c of chosen) {
       lines.push("", `### ${CHECK_NAME[c.check]}`);
       for (const p of c.problems.filter((x) => x.chosen)) {
-        lines.push(
-          "",
-          `#### ${headingOf(p)}`,
-          "",
-          `Что требуется от агента: ${p.duty}`,
-          `${problemCount(p)}.`,
-          problemAnswers(p),
-        );
+        lines.push("", `#### ${headingOf(p)}`, "", `Агент должен: ${p.duty}`, `${problemCount(p)}.`, problemAnswers(p));
         const e = p.example;
         if (e) {
           lines.push("");
