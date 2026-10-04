@@ -3,7 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useKeys } from "../../app/keys";
 import { useWide } from "../../app/useWide";
-import { useCriteria, type Criterion } from "../../lab/criteria";
+import { BY_CRITERIA, CHECKS, resultOf } from "../../lab/checks";
+import { quoteKey, useCriteria, type Criterion } from "../../lab/criteria";
 import { count, day } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { FROM_LOG } from "../../lab/runs";
@@ -13,8 +14,6 @@ import { Search } from "../../ui/Search";
 import { originWord } from "./parts";
 import { ScenarioView } from "./ScenarioView";
 import { SimHeader } from "./stage";
-
-const quoteKey = (q: string) => q.replace(/\s+/g, " ").trim().toLowerCase();
 
 function Row({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -38,14 +37,16 @@ function Row({ on, onClick, children }: { on: boolean; onClick: () => void; chil
 }
 
 /**
- * «Сценарии»: the business situations the synthetic customers play, built from the errors in the logs and from the topics
- * the logs cover. A scenario says how the customer begins, what the checks will look at, and plays on its own.
+ * «Сценарии»: the business situations the synthetic customers play, built from the errors one check found in the
+ * export and from the topics it covers; the check is named over the list. A scenario says how the customer begins,
+ * what that check's criteria will look at, and plays on its own.
  */
 export function ScenariosPage() {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const wide = useWide();
-  const { list } = useCriteria(null);
+  const deck = state?.cards ?? null;
+  const { list } = useCriteria(deck?.check ?? null);
   const [query, setQuery] = useState("");
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
@@ -108,10 +109,11 @@ export function ScenariosPage() {
         <div className={cn("flex min-h-0 flex-col border-line lg:border-r", showDetail && !wide && "hidden")}>
           <div className="space-y-3 px-4 pb-3 pt-4">
             <p className="text-read text-fg-3">
-              {cards.length ? (
+              {cards.length && deck ? (
                 <>
-                  {count(cards.length, "сценарий", "сценария", "сценариев")}, {fromErrors} из ошибок в диалогах
-                  {state.cards?.createdAt ? ` · собраны ${day(state.cards.createdAt)}` : ""}
+                  {count(cards.length, "сценарий", "сценария", "сценариев")} {BY_CRITERIA[deck.check]}, {fromErrors} из
+                  ошибок в диалогах
+                  {deck.createdAt ? ` · собраны ${day(deck.createdAt)}` : ""}
                 </>
               ) : (
                 "Сценариев пока нет"
@@ -136,9 +138,9 @@ export function ScenariosPage() {
               <p className="px-3 py-10 text-center text-small text-fg-3">
                 {cards.length
                   ? "Ничего не нашлось"
-                  : state.discover
+                  : CHECKS.some((c) => resultOf(state, c))
                     ? "Нажмите «Собрать сценарии», чтобы продолжить."
-                    : "Сценарии собираются из оценённых диалогов."}
+                    : "Сценарии собираются из ошибок проверки разговоров: сначала проверьте их в «Tone of voice» или «Точности»."}
               </p>
             )}
           </div>
@@ -147,6 +149,7 @@ export function ScenariosPage() {
           <ScenarioView
             key={card.id}
             card={card}
+            check={deck?.check ?? null}
             state={state}
             mine={mine(card)}
             onPlay={() => set((n) => n.set("play", card.id), false)}

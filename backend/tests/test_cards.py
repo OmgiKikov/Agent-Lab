@@ -44,7 +44,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             patch.object(cards.logs, 'load', return_value=[]),
             self.assertRaisesRegex(RuntimeError, 'Нет разговоров'),
         ):
-            await cards.run()
+            await cards.run('code')
 
     async def test_generation_failure_keeps_saved_deck_and_is_visible(self):
         with (
@@ -57,7 +57,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             previous = {'cards': [{'id': 'previous'}]}
             store.save(cards.DECK, previous)
             store.save('discover.json', analysis())
-            await api.start_cards()
+            await api.start_cards(api.CardsCommand(check='code'))
             await api.jobs._task
             self.assertEqual(store.load(cards.DECK), previous)
             self.assertIn('model unavailable', api.jobs.state['error'])
@@ -81,7 +81,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             patch.object(cards, 'pick', return_value=picks),
             patch.object(cards, 'build_card', build),
         ):
-            building = asyncio.create_task(cards.run(lambda **values: reported.append(values)))
+            building = asyncio.create_task(cards.run('code', lambda **values: reported.append(values)))
             await failed.wait()
             await asyncio.sleep(0)
             release.set()

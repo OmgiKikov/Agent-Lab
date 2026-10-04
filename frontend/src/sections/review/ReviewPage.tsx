@@ -5,7 +5,7 @@ import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-re
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
-import { stageLink, type Stage } from "../../app/links";
+import { side, stageLink, type Stage } from "../../app/links";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useProblems, useReview, type Decision } from "../../lab/problems";
@@ -16,8 +16,8 @@ import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
-import { useLogTabs } from "../logs/LogsPage";
-import { SimTabs } from "../simulations/stage";
+import { CheckHeader } from "../checks/CheckHeader";
+import { SimTabs, useSimRuns } from "../simulations/stage";
 
 const QUEUES: Queue[] = ["disputed", "unchecked", "all"];
 /** The queues count cases (one criterion in one conversation, an error or «без ошибки») and say so. */
@@ -34,8 +34,11 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const navigate = useNavigate();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
-  const runId = stage === "sim" ? params.get("run") : null;
-  const { data, isPlaceholderData } = useProblems(runId);
+  const { run } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
+  const runId = stage === "sim" ? (run?.id ?? null) : null;
+  // A check's cases are of its result; a run's, of the run, counted by the criteria of its check.
+  const { data, isPlaceholderData } = useProblems(stage === "sim" ? (run?.check ?? null) : stage, runId);
+  const source = side(stage);
   const review = useReview();
   const ruleId = params.get("rule");
   const rawQueue = params.get("queue");
@@ -49,15 +52,14 @@ export function ReviewPage({ stage }: { stage: Stage }) {
       },
       { replace: true },
     );
-  const logTabs = useLogTabs();
 
   const counts = useMemo(
     () =>
-      Object.fromEntries(QUEUES.map((q) => [q, data ? queueOf(data, q, ruleId, stage).length : 0])) as Record<
+      Object.fromEntries(QUEUES.map((q) => [q, data ? queueOf(data, q, ruleId, source).length : 0])) as Record<
         Queue,
         number
       >,
-    [data, ruleId, stage],
+    [data, ruleId, source],
   );
   const context = stage === "sim" ? (runId ?? data?.sim?.runId ?? "") : (data?.log?.finishedAt ?? "");
   const id = `${stage}|${context}|${wanted ?? "default"}|${ruleId ?? ""}`;
@@ -71,13 +73,13 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const [lit, setLit] = useState(false);
   useEffect(() => {
     if (!data || isPlaceholderData || frozen?.id === id) return;
-    setFrozen({ id, queue, keys: queueOf(data, queue, ruleId, stage).map((v) => exampleKey(v.example)) });
+    setFrozen({ id, queue, keys: queueOf(data, queue, ruleId, source).map((v) => exampleKey(v.example)) });
     setAt(0);
     setAnswered({});
-  }, [data, isPlaceholderData, id, queue, ruleId, stage, frozen?.id]);
+  }, [data, isPlaceholderData, id, queue, ruleId, source, frozen?.id]);
   const byKey = useMemo(
-    () => new Map((data ? queueOf(data, "all", ruleId, stage) : []).map((v) => [exampleKey(v.example), v])),
-    [data, ruleId, stage],
+    () => new Map((data ? queueOf(data, "all", ruleId, source) : []).map((v) => [exampleKey(v.example), v])),
+    [data, ruleId, source],
   );
   const keys = frozen?.id === id ? frozen.keys : [];
   const current = keys[at] ? byKey.get(keys[at]) : undefined;
@@ -99,12 +101,12 @@ export function ReviewPage({ stage }: { stage: Stage }) {
       return n;
     });
   const decide = (d: Decision) => {
-    if (!current || answersWait(state, current.example.source)) return;
+    if (!current || answersWait(state, current.example)) return;
     const e = current.example;
     const before = e.review;
     const k = exampleKey(e);
     const was = at;
-    // The result the queue shows: an answer on it never lands on a check that replaced it meanwhile.
+    // The check's result the queue shows: an answer on it never lands on a result that replaced it meanwhile.
     const finishedAt = data?.log?.finishedAt;
     review.mutateAsync({ example: e, decision: d, finishedAt }).catch(() => forget(k, d));
     setAnswered((a) => ({ ...a, [k]: d }));
@@ -132,10 +134,12 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const rule = ruleId && data ? data.rules.find((r) => r.id === ruleId) : undefined;
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
 
-  const tabs = stage === "log" ? logTabs : <SimTabs state={state} runId={runId ?? data?.sim?.runId ?? null} />;
-  const header = (
-    <Header title={stage === "log" ? "Диалоги" : "Симуляции"} step={stage === "log" ? 1 : 2} tabs={tabs} />
-  );
+  const header =
+    stage === "sim" ? (
+      <Header title="Симуляции" tabs={<SimTabs state={state} runId={runId ?? data?.sim?.runId ?? null} />} />
+    ) : (
+      <CheckHeader check={stage} />
+    );
   if (offline && !data)
     return (
       <div className="flex h-full flex-col">
@@ -203,7 +207,11 @@ export function ReviewPage({ stage }: { stage: Stage }) {
             </p>
           )}
 
-          {!data || frozen?.id !== id ? (
+          {stage === "sim" && state && !run ? (
+            <EmptyState drop title="Прогонов ещё не было" className="py-24">
+              Здесь появятся случаи, которые проверки нашли в разговорах синтетических клиентов.
+            </EmptyState>
+          ) : !data || frozen?.id !== id ? (
             <Skeleton className="mt-8 h-[480px]" />
           ) : !keys.length ? (
             <EmptyState

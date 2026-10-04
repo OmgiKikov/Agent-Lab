@@ -1,3 +1,5 @@
+import { problemLink } from "../app/links";
+import { CHECK_NAME } from "./checks";
 import { duty } from "./criteria";
 import { count, day, plural } from "./format";
 import type { Example, Problems, RuleEntry } from "./problems";
@@ -50,19 +52,6 @@ export function summarySentence(data: Problems, source: Source): string {
   return `Ошибок не найдено ни по одному из ${total} ${plural(total, "критерия", "критериев", "критериев")} в ${n} ${plural(n, "разговоре", "разговорах", "разговорах")}`;
 }
 
-/**
- * The criteria of the two stages in one sentence: «одни и те же» only while both checked the same ones. A run played
- * before the logs were checked by other criteria (tone of voice, say) keeps its own until the next run.
- */
-export function stagesSentence(data: Problems): string {
-  const log = checkedIn(data, "log").length;
-  const sim = checkedIn(data, "sim");
-  const shared = sim.filter((r) => r.log.failed + r.log.passed > 0).length;
-  if (log && sim.length && (shared < log || shared < sim.length))
-    return `Два этапа: ${count(log, "критерий", "критерия", "критериев")} в диалогах и ${sim.length} в симуляциях.`;
-  return `Два этапа и одни и те же ${count(data.rules.length, "критерий", "критерия", "критериев")}.`;
-}
-
 const where = (p: RuleEntry, source?: Source) =>
   [
     source !== "sim" && p.log.failed
@@ -74,12 +63,6 @@ const where = (p: RuleEntry, source?: Source) =>
   ]
     .filter(Boolean)
     .join(", ");
-
-/** The page of a problem in its stage, for links that leave the product (a report, a ticket). */
-export const problemPath = (id: string, source: Source, runId?: string | null) =>
-  source === "sim"
-    ? `/simulations/problems/${encodeURIComponent(id)}${runId ? `?run=${encodeURIComponent(runId)}` : ""}`
-    : `/logs/problems/${encodeURIComponent(id)}`;
 
 /** One problem for a ticket or a message: what, how often, where the agent's code says it, one proof and the link. With a source, only that source is told. */
 export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: Source): string {
@@ -110,9 +93,9 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
   return lines.join("\n");
 }
 
-/** The problems of one source as a file: logs and simulation are never told together. */
+/** The problems of one source of a check as a file: its conversations and its simulation are never told together. */
 export function problemsReport(data: Problems, base: string, source: Source): string {
-  const lines = [`# ${summarySentence(data, source)}`, ""];
+  const lines = [`# ${summarySentence(data, source)}`, "", `Проверка «${CHECK_NAME[data.check]}».`];
   if (source === "log" && data.log)
     lines.push(
       `Диалоги: проверено ${data.log.assessed} из ${count(data.log.sampled, "разговора", "разговоров", "разговоров")} ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,
@@ -124,7 +107,15 @@ export function problemsReport(data: Problems, base: string, source: Source): st
   lines.push("");
   const list = data.rules.filter((r) => r[source].failed > 0).sort((a, b) => b[source].failed - a[source].failed);
   for (const p of list)
-    lines.push(problemMarkdown(p, `${base}${problemPath(p.id, source, data.sim?.runId)}`, 2, source), "");
+    lines.push(
+      problemMarkdown(
+        p,
+        `${base}${problemLink(p.id, source === "sim" ? "sim" : data.check, data.sim?.runId)}`,
+        2,
+        source,
+      ),
+      "",
+    );
   return lines.join("\n");
 }
 

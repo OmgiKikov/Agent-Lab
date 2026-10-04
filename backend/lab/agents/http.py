@@ -135,7 +135,9 @@ class HttpAgent:
 
     async def open(self) -> None:
         if not self.url:
-            raise AgentError('Не задан адрес агента на ИФТ: шаг «агент» → адрес ручки.')
+            raise AgentError(
+                'Не задан адрес агента на ИФТ: укажите его в разделе «Агент», поле «Адрес агента на тестовом стенде».'
+            )
         if self.mocked:
             self.version = await _stand_version(self.url) or self.version
 

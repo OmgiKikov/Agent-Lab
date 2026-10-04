@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from .. import store
 from .http import AGENT_PATH, BAD_ADDRESS, AgentError, HttpAgent, address_valid
 from .session import session
-from .source import CodeAgent
+from .source import START, CodeAgent
 
 SETTINGS = 'settings.json'
 DEFAULT_REPO = '~/Desktop/aigw-local'
@@ -84,17 +84,21 @@ def configs() -> dict[str, dict]:
 
 
 def public(key: str, config: dict) -> dict:
-    """What the page shows about an agent: the host or the repository, never the full internal address."""
+    """What the page shows about an agent: the host or the repository, never the full internal address.
+    Ready: its address is set, or its folder has what starts it from its code (START). Whether it answers is what
+    «Проверить связь» tells."""
     where = urlsplit(config.get('url') or '').hostname or ''
+    ready = bool(config.get('url'))
     if config['kind'] == 'code':
         where = config.get('repo', '').replace(str(Path.home()), '~')
+        ready = bool(config.get('repo')) and (Path(config['repo']).expanduser() / START).is_file()
     return {
         'id': key,
         'name': config['name'],
         'kind': config['kind'],
         'note': config.get('note', ''),
         'where': where,
-        'ready': bool(config.get('url')) or config['kind'] == 'code',
+        'ready': ready,
     }
 
 

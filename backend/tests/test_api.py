@@ -94,7 +94,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         audit = {'topics': [], 'results': []}
         for replan, kept in ((False, True), (True, False)):
             with self.subTest(replan=replan):
-                store.save(api.cards.DECK, {'cards': ['built from the previous criteria']})
+                store.save(api.cards.DECK, {'check': 'code', 'cards': ['built from the previous criteria']})
                 with patch.object(api.discover, 'run', AsyncMock(return_value=audit)):
                     response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
                     self.assertEqual(response.status_code, 200, response.text)
@@ -287,17 +287,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 422, (route, response.text))
 
     async def test_cards_requires_post_and_commits_a_finished_deck(self) -> None:
-        done = asyncio.Event()
-
-        async def build(progress) -> list[dict]:
-            done.set()
+        async def build(check, progress) -> list[dict]:
             return [{'id': 'card-1'}]
 
         with patch.object(api.cards, 'run', side_effect=build):
             self.assertEqual((await self.client.get('/api/cards')).status_code, 405)
-            response = await self.client.post('/api/cards')
+            response = await self.client.post('/api/cards', json={'check': 'code'})
             self.assertEqual(response.status_code, 200)
-            await done.wait()
+            await api.jobs._task
         self.assertEqual(store.load(api.cards.DECK)['cards'], [{'id': 'card-1'}])
 
     async def test_review_and_state_expose_current_revision(self) -> None:
@@ -368,13 +365,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         store.save('sources.json', [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'prompt'}])
         with patch.object(api.discover, 'summarize', side_effect=AssertionError('the stored summary is reused')):
             state, parsed = await self.state_parsing()
-        self.assertEqual(state['discover']['summary'], summary)
+        self.assertEqual(state['checks']['code']['summary'], summary)
         self.assertEqual(state['sources'][0]['rules'], 2)
         self.assertEqual(len([text for text in parsed if 'assessment-text' in text]), 1)
         # A record from before results carried their summary gets one.
         store.save(api.discover.RESULT, {key: value for key, value in assessment.items() if key != 'summary'})
         state, _ = await self.state_parsing()
-        self.assertEqual((state['discover']['summary']['failed'], state['discover']['summary']['measured']), (1, 1))
+        found = state['checks']['code']['summary']
+        self.assertEqual((found['failed'], found['measured']), (1, 1))
 
     async def test_startup_recovers_interrupted_run_and_retains_finished_items_and_reviews(self) -> None:
         store.create_run(

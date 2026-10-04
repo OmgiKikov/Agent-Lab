@@ -1,4 +1,5 @@
-import { reliabilityWord, problemPath } from "./problemReport";
+import { historyLink, problemLink } from "../app/links";
+import { reliabilityWord } from "./problemReport";
 import type { Problems, RuleEntry } from "./problems";
 import type { Discover } from "./types";
 import { count, pct } from "./format";
@@ -23,15 +24,10 @@ function nextAction(problem: RuleEntry): string {
 
 /**
  * A short brief for the team, with the same number and words as the screen: «N из M — с ошибкой агента». Complete
- * criteria and evidence remain in the saved check — linked only while the history of checks is shown (`saved`).
- * Links open Agent Lab on the computer where the check ran; the brief says so, since it travels by e-mail.
+ * criteria and evidence remain in the saved check, linked from the brief («История» of tone of voice). Links open
+ * Agent Lab on the computer where the check ran; the brief says so, since it travels by e-mail.
  */
-export function toneBrief(
-  data: Problems,
-  result: Discover,
-  base: string,
-  { filename, saved: history }: { filename?: string; saved: boolean },
-): string {
+export function toneBrief(data: Problems, result: Discover, base: string, { filename }: { filename?: string }): string {
   const criteria = result.topics.flatMap((topic) => topic.rules);
   const quotes = new Set(criteria.map((criterion) => criterion.quote));
   const rules = data.rules.filter((rule) => quotes.has(rule.rule.quote));
@@ -43,7 +39,7 @@ export function toneBrief(
   const reviews = rules.flatMap((rule) => rule.log.examples).filter((example) => example.review);
   const agrees = reviews.filter((example) => example.review === "agree").length;
   const origin = base.replace(/\/$/, "");
-  const saved = history && result.checkId ? `${origin}/start?history=${encodeURIComponent(result.checkId)}` : null;
+  const saved = result.checkId ? `${origin}${historyLink(result.checkId)}` : null;
   const lines = [
     "# Tone of voice: сводка для команды",
     "",
@@ -106,7 +102,7 @@ export function toneBrief(
         `Проверка примера: ${reliabilityWord(example)}.`,
       );
     lines.push("", `Следующее действие: ${nextAction(problem)}`, "");
-    if (!saved) lines.push(`Полное основание в Agent Lab: ${origin}${problemPath(problem.id, "log")}`, "");
+    if (!saved) lines.push(`Полное основание в Agent Lab: ${origin}${problemLink(problem.id, "tone")}`, "");
   }
   if (rules.filter((rule) => rule.log.failed > 0).length > 3)
     lines.push("В сводке — три наиболее частые проблемы. Полный список доступен в результате проверки.", "");

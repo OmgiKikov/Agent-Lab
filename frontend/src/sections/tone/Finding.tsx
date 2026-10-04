@@ -47,7 +47,7 @@ export function Finding({
             Критерий {c.n} · {c.name}
           </span>
           <Link
-            to={conversationsLink("log", { rule: c.r.id, v: "fail" })}
+            to={conversationsLink("tone", { rule: c.r.id, v: "fail" })}
             className="font-medium text-run hover:underline"
           >
             {c.r.log.failed}

@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
-import { reviewLink, type Stage } from "../app/links";
+import { reviewLink, type Check } from "../app/links";
 import { count, plural } from "../lab/format";
 import type { Problems } from "../lab/problems";
 import { MISSES_FROM, missesOf, verdictsOf } from "../lab/verdicts";
@@ -16,12 +16,12 @@ const ofChecked = (n: number) => count(n, "проверенного случая
  * person has checked 20 cases «без ошибки» (the review queue asks about every fifth), one quiet line says how often the
  * model missed an error there: the share «без найденных ошибок» is then checked too.
  */
-export function Trust({ data, stage, checked }: { data: Problems; stage: Stage; checked: number }) {
-  const errors = verdictsOf(data, null, stage).filter((v) => v.example.status === "FAIL");
+export function Trust({ data, check, checked }: { data: Problems; check: Check; checked: number }) {
+  const errors = verdictsOf(data, null, "log").filter((v) => v.example.status === "FAIL");
   const yes = errors.filter((v) => v.example.review === "agree").length;
   const no = errors.filter((v) => v.example.review === "disagree").length;
   const answered = yes + no;
-  const misses = missesOf(data, stage);
+  const misses = missesOf(data, "log");
   return (
     <div className="mt-4 space-y-1 text-read text-fg-2">
       {answered > 0 ? (
@@ -29,7 +29,7 @@ export function Trust({ data, stage, checked }: { data: Problems; stage: Stage; 
           Вы проверили {count(answered, "найденную ошибку", "найденные ошибки", "найденных ошибок")}: {yes}{" "}
           {plural(yes, "действительно ошибка", "действительно ошибки", "действительно ошибок")}, {no} — нет.{" "}
           {answered < errors.length && (
-            <Link to={reviewLink(stage, { queue: "unchecked" })} className="font-medium text-run hover:underline">
+            <Link to={reviewLink(check, { queue: "unchecked" })} className="font-medium text-run hover:underline">
               Проверить ещё
             </Link>
           )}
@@ -39,7 +39,7 @@ export function Trust({ data, stage, checked }: { data: Problems; stage: Stage; 
           <p>
             Ошибки нашла модель.{" "}
             <Link
-              to={reviewLink(stage, { queue: "unchecked" })}
+              to={reviewLink(check, { queue: "unchecked" })}
               className="inline-flex items-center gap-1 font-medium text-run hover:underline"
             >
               {errors.length <= 20 ? "Проверьте их" : "Проверьте 10–20 из них"}, чтобы убедиться, что она права

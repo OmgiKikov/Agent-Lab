@@ -1,4 +1,4 @@
-import type { Criterion } from "../../lab/criteria";
+import { nameFromText, quoteKey, type Criterion } from "../../lab/criteria";
 import type { DialogRow } from "../../lab/dialogs";
 
 export type Verdict = "all" | "fail" | "pass" | "none" | "disputed";
@@ -35,4 +35,30 @@ export function criteriaByRule(list: Criterion[]) {
     ),
   );
   return (source: "log" | "sim", ruleId: string) => map.get(`${source}|${ruleId}`);
+}
+
+/** A criterion's name and number where the record of problems does not have it. */
+export type Named = Map<string, { n: number; name: string }>;
+
+/**
+ * The criteria of a run that never applied in it: the service counts a criterion only where it has a verdict, so one
+ * that applied nowhere is not in the record, and its row in a conversation had neither name nor number. The name comes
+ * from the criteria frozen in the run's conversations; the number from the same criterion by its quote, else the next
+ * free one.
+ */
+export function frozenNames(list: Criterion[], rows: DialogRow[]): Named {
+  const find = criteriaByRule(list);
+  const byQuote = new Map(list.map((c) => [quoteKey(c.r.rule.quote), c]));
+  let next = Math.max(0, ...list.map((c) => c.n)) + 1;
+  const named: Named = new Map();
+  for (const row of rows)
+    for (const x of row.frozen ?? []) {
+      if (named.has(x.id) || find("sim", x.id)) continue;
+      const known = x.quote ? byQuote.get(quoteKey(x.quote)) : undefined;
+      named.set(
+        x.id,
+        known ? { n: known.n, name: known.name } : { n: next++, name: x.name?.trim() || nameFromText(x.text) },
+      );
+    }
+  return named;
 }

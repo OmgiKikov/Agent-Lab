@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { ChevronDown, RotateCcw } from "lucide-react";
-import { Header } from "../../app/Header";
-import { SectionJob } from "../../app/SectionJob";
+import { Link, useSearchParams } from "react-router-dom";
+import { ChevronDown, PencilLine, RotateCcw } from "lucide-react";
+import { SECTIONS, toneCheckLink, type Check } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { useCriteria, type Criterion } from "../../lab/criteria";
 import { day, plural } from "../../lab/format";
@@ -11,10 +10,12 @@ import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
-import { Button } from "../../ui/Button";
+import { codeSources, TONE_ID } from "../../lab/tone";
+import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Menu } from "../../ui/Menu";
 import { Segmented } from "../../ui/Segmented";
+import { CheckHeader } from "../checks/CheckHeader";
 import { Reextract } from "./Reextract";
 import { CodeView } from "./CodeView";
 import { CriteriaTable } from "./CriteriaTable";
@@ -29,14 +30,17 @@ const byFrequency = (list: Criterion[], side: SideKey) =>
   [...list].sort((a, b) => b.r[side].failed - a.r[side].failed || a.n - b.n);
 
 /**
- * «Критерии»: what the agent must do, where its code says so and how it went. The prompt is shown as code with each
- * criterion lit in place and its count over it; the same criteria as a list for comparing; the chosen one with its dialogues.
+ * «Критерии» of a check: what the agent must do, where it is written and how it went — in the check's conversations
+ * («Диалоги») and in the last run of its scenarios («Симуляции»). Accuracy shows the agent's prompt as code with each
+ * criterion lit in place; tone of voice, the person's rules of communication the same way. The chosen criterion opens
+ * with its conversations.
  */
-export function CriteriaPage() {
+export function CriteriaPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const wide = useWide();
-  const { data, list } = useCriteria(null);
+  const { data, list } = useCriteria(check);
+  const tone = check === "tone";
   const [reextract, setReextract] = useState(false);
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
@@ -53,7 +57,11 @@ export function CriteriaPage() {
   const view: View =
     params.get("view") === "list" || params.get("view") === "code" ? (params.get("view") as View) : "list";
   const ordered = useMemo(() => byFrequency(list, side), [list, side]);
-  const sources = state?.sources ?? [];
+  // Tone of voice is written in one document, the person's rules; accuracy in the prompts and tools of the agent.
+  const sources = useMemo(
+    () => (tone ? (state?.sources.filter((s) => s.id === TONE_ID) ?? []) : codeSources(state)),
+    [tone, state],
+  );
   const asked = params.get("c");
   const chosen = (asked ? list.find((c) => c.r.id === asked) : wide ? ordered[0] : undefined) ?? null;
   const fileId =
@@ -101,21 +109,29 @@ export function CriteriaPage() {
     ] as const
   ).filter(([k]) => (k === "log" ? !!data?.log : !!data?.sim));
   const header = (
-    <Header
-      title="Критерии"
+    <CheckHeader
+      check={check}
       actions={
-        <>
+        tone ? (
+          <Link
+            to={toneCheckLink("criteria")}
+            title="Выбрать критерии и уточнения в пошаговой проверке"
+            className={buttonClass()}
+          >
+            <PencilLine aria-hidden className="size-3.5" />
+            Изменить критерии
+          </Link>
+        ) : (
           <Button
             icon={RotateCcw}
             onClick={() => setReextract(true)}
-            disabled={busy || !state?.sources.length}
+            disabled={busy || !codeSources(state).length}
             title="Модель прочитает код агента заново и извлечёт критерии дословно"
           >
             Извлечь заново
           </Button>
-        </>
+        )
       }
-      below={<SectionJob kinds={["discover", "names", "sources"]} />}
     />
   );
   if (offline && !state)
@@ -139,8 +155,25 @@ export function CriteriaPage() {
     return (
       <div className="flex h-full flex-col">
         {header}
-        <EmptyState drop title="Критериев пока нет" className="flex-1 justify-center">
-          Они извлекаются дословно из промптов агента при первой оценке диалогов. Сначала прочитайте код в «Агенте».
+        <EmptyState
+          drop
+          title="Критериев пока нет"
+          className="flex-1 justify-center"
+          action={
+            tone ? (
+              <Link to={toneCheckLink()} className={buttonClass({ variant: "primary" })}>
+                Начать проверку
+              </Link>
+            ) : (
+              <Link to={SECTIONS.accuracy} className={buttonClass({ variant: "primary" })}>
+                {codeSources(state).length ? "Оценить разговоры" : "Прочитать код"}
+              </Link>
+            )
+          }
+        >
+          {tone
+            ? "Они собираются из ваших правил общения в пошаговой проверке и появятся здесь после неё."
+            : "Они извлекаются дословно из промптов и инструментов агента при первой оценке разговоров."}
         </EmptyState>
       </div>
     );
@@ -161,8 +194,10 @@ export function CriteriaPage() {
       <div className="flex flex-col gap-2 border-b border-line px-4 py-3 lg:flex-row lg:items-center lg:gap-4 lg:px-5">
         <p className="min-w-0 text-small text-fg-3 lg:flex-1">
           <span className="text-fg-2">
-            {list.length} {plural(list.length, "критерий", "критерия", "критериев")} из {usedSources}{" "}
-            {plural(usedSources, "источника", "источников", "источников")} кода
+            {list.length} {plural(list.length, "критерий", "критерия", "критериев")}{" "}
+            {tone
+              ? "из правил общения"
+              : `из ${usedSources} ${plural(usedSources, "источника", "источников", "источников")} кода`}
           </span>
           {data.log?.rulesSince && <>, зафиксированы {day(data.log.rulesSince)}</>}
           {second.checked > 0 && (
@@ -183,7 +218,7 @@ export function CriteriaPage() {
           {sideOptions.length > 1 && (
             <Segmented<SideKey>
               size="sm"
-              label="Этап"
+              label="Где проверяли"
               value={side}
               onChange={(v) =>
                 set((n) => {
@@ -201,17 +236,18 @@ export function CriteriaPage() {
             onChange={(v) => set((n) => n.set("view", v))}
             options={[
               { value: "list", label: "Списком" },
-              { value: "code", label: "В коде агента" },
+              { value: "code", label: tone ? "В правилах" : "В коде агента" },
             ]}
           />
         </div>
       </div>
       <div
-        className={`grid min-h-0 flex-1 ${view === "code" ? "lg:grid-cols-[232px_minmax(0,1fr)_400px] xl:grid-cols-[248px_minmax(0,1fr)_440px]" : "lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_440px]"}`}
+        className={`grid min-h-0 flex-1 ${view === "code" && !tone ? "lg:grid-cols-[232px_minmax(0,1fr)_400px] xl:grid-cols-[248px_minmax(0,1fr)_440px]" : "lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_440px]"}`}
       >
         {view === "code" ? (
           <>
-            <div className="hidden lg:contents">
+            {/* The rules of communication are one document: no list of files beside it. */}
+            <div className={tone ? "hidden" : "hidden lg:contents"}>
               <Files
                 sources={sources}
                 list={list}
@@ -230,7 +266,7 @@ export function CriteriaPage() {
             <div className={`min-h-0 flex-col ${panelOpen && !wide ? "hidden" : "flex"}`}>
               {source && (
                 <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 lg:px-6">
-                  <div className="lg:hidden">
+                  <div className={tone ? "hidden" : "lg:hidden"}>
                     <Menu
                       trigger={
                         <span className="inline-flex h-8 items-center gap-1.5 rounded-control border border-line-strong px-2.5 font-mono text-small text-fg">
@@ -251,7 +287,12 @@ export function CriteriaPage() {
                       }))}
                     />
                   </div>
-                  <span className="hidden truncate font-mono text-meta text-fg-3 lg:inline" title={source.origin}>
+                  <span
+                    className={
+                      tone ? "truncate text-small text-fg-2" : "hidden truncate font-mono text-meta text-fg-3 lg:inline"
+                    }
+                    title={source.origin}
+                  >
                     {source.origin}
                   </span>
                   <span className="ml-auto whitespace-nowrap text-small text-fg-3">
@@ -267,6 +308,7 @@ export function CriteriaPage() {
               ) : (
                 source && (
                   <CodeView
+                    label={tone ? "Текст правил общения с критериями" : "Текст промпта с критериями"}
                     source={source}
                     content={text.content}
                     items={items}
@@ -292,6 +334,7 @@ export function CriteriaPage() {
           <CriterionPanel
             key={`${chosen.r.id}-${side}`}
             c={chosen}
+            check={check}
             side={side}
             runId={data.sim?.runId}
             shown={shown}
@@ -300,7 +343,7 @@ export function CriteriaPage() {
           />
         )}
       </div>
-      <Reextract open={reextract} onClose={() => setReextract(false)} />
+      {!tone && <Reextract open={reextract} onClose={() => setReextract(false)} />}
     </div>
   );
 }

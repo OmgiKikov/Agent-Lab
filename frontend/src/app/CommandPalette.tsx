@@ -9,32 +9,58 @@ import {
   FileText,
   FlaskConical,
   Hammer,
+  History,
   ListChecks,
+  MessageSquareQuote,
   MessagesSquare,
   Play,
   Route,
   Search,
   Settings,
+  Target,
   TriangleAlert,
   Upload,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BY_CRITERIA, CHECK_NAME, CHECKS, checkOfOld, resultOf } from "../lab/checks";
 import { duty } from "../lab/criteria";
 import { day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
-import { useProblems } from "../lab/problems";
+import { useProblems, type Problems } from "../lab/problems";
 import { runTitle } from "../lab/runs";
+import type { Check } from "../lab/types";
 import { Label } from "../ui/Label";
-import { conversationsLink, criterionLink, problemLink, reviewLink, runLink, scenariosLink, SECTIONS } from "./links";
+import {
+  conversationsLink,
+  criterionLink,
+  historyLink,
+  problemLink,
+  reviewLink,
+  runLink,
+  scenariosLink,
+  SECTIONS,
+  stageRoot,
+  toneCheckLink,
+} from "./links";
 
 type Entry = { id: string; group: string; label: string; sub?: string; icon: LucideIcon; run: () => void };
 
-/** ⌘K: any section, problem, criterion, run or scenario and the main actions, without the mouse. Actions only open their place. */
+const ICON: Record<Check, LucideIcon> = { tone: MessageSquareQuote, code: Target };
+const ABOUT: Record<Check, string> = {
+  tone: "Проверка разговоров по правилам общения",
+  code: "Проверка разговоров по коду агента",
+};
+
+/**
+ * ⌘K: any section and tab of both checks, the simulations, the problems and criteria of each check, runs, scenarios
+ * and the actions of each check, without the mouse. Actions only open their place; nothing is started from here.
+ */
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
-  const { data } = useProblems(null);
   const { state } = useLabState();
+  const { data: tone } = useProblems("tone", null, open && !!resultOf(state, "tone"));
+  const { data: code } = useProblems("code", null, open && !!resultOf(state, "code"));
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
   const list = useRef<HTMLDivElement>(null);
@@ -49,44 +75,57 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     const go = (to: string) => () => {
       void navigate(to);
     };
+    const results = CHECKS.filter((c) => resultOf(state, c));
     const out: Entry[] = [
-      {
-        id: "s-check",
-        group: "Разделы",
-        label: "Проверка tone of voice",
-        sub: "Разговоры и правила общения → критерии → результат",
-        icon: ClipboardCheck,
-        run: go(SECTIONS.start),
-      },
       {
         id: "s-overview",
         group: "Разделы",
         label: "Обзор",
-        sub: "Оба этапа рядом: как работает агент",
+        sub: "Обе проверки и последний прогон: как работает агент",
         icon: LayoutDashboard,
         run: go(SECTIONS.overview),
       },
+      ...CHECKS.flatMap((c): Entry[] => [
+        { id: `s-${c}`, group: "Разделы", label: CHECK_NAME[c], sub: ABOUT[c], icon: ICON[c], run: go(stageRoot(c)) },
+        {
+          id: `s-${c}-talks`,
+          group: "Разделы",
+          label: `${CHECK_NAME[c]} · Разговоры`,
+          sub: "Каждый разговор выгрузки с оценкой этой проверки",
+          icon: MessagesSquare,
+          run: go(conversationsLink(c)),
+        },
+        {
+          id: `s-${c}-review`,
+          group: "Разделы",
+          label: `${CHECK_NAME[c]} · Проверка`,
+          sub: "Это действительно ошибка? По одному случаю",
+          icon: ClipboardCheck,
+          run: go(reviewLink(c)),
+        },
+        {
+          id: `s-${c}-criteria`,
+          group: "Разделы",
+          label: `${CHECK_NAME[c]} · Критерии`,
+          sub:
+            c === "tone" ? "Что агент обязан делать по правилам общения" : "Что агент обязан делать, прямо в его коде",
+          icon: ListChecks,
+          run: go(criterionLink(c)),
+        },
+      ]),
       {
-        id: "s-logs",
+        id: "s-tone-history",
         group: "Разделы",
-        label: "Диалоги",
-        sub: "Этап 1: настоящие разговоры клиентов",
-        icon: MessagesSquare,
-        run: go(SECTIONS.logs),
-      },
-      {
-        id: "s-log-talks",
-        group: "Разделы",
-        label: "Разговоры из диалогов",
-        sub: "Каждый разговор выгрузки целиком",
-        icon: MessagesSquare,
-        run: go(conversationsLink("log")),
+        label: `${CHECK_NAME.tone} · История`,
+        sub: "Сохранённые проверки с их разговорами и критериями",
+        icon: History,
+        run: go(historyLink()),
       },
       {
         id: "s-simulations",
         group: "Разделы",
         label: "Симуляции",
-        sub: "Этап 2: синтетические клиенты играют сценарии",
+        sub: "Синтетические клиенты играют сценарии из ошибок проверки",
         icon: FlaskConical,
         run: go(SECTIONS.simulations),
       },
@@ -96,7 +135,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         label: "Прогоны",
         sub: "Все прогоны симуляции",
         icon: FlaskConical,
-        run: go("/simulations/runs"),
+        run: go(`${SECTIONS.simulations}/runs`),
       },
       {
         id: "s-scenarios",
@@ -105,14 +144,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         sub: "Бизнес-сценарии для симуляции",
         icon: Route,
         run: go(scenariosLink()),
-      },
-      {
-        id: "s-criteria",
-        group: "Разделы",
-        label: "Критерии",
-        sub: "Что агент обязан делать, прямо в его коде",
-        icon: ListChecks,
-        run: go(SECTIONS.criteria),
       },
       {
         id: "s-agent",
@@ -126,47 +157,57 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-settings",
         group: "Разделы",
         label: "Настройки",
-        sub: "Модели, ключи, ассистент, повтор трейсов",
+        sub: "Модели и где что работает",
         icon: Settings,
         run: go(SECTIONS.settings),
       },
       {
-        id: "a-assess",
+        id: "a-tone",
         group: "Действия",
-        label: "Оценить диалоги",
-        sub: "Проверить настоящие разговоры по критериям",
+        label: "Проверить tone of voice",
+        sub: "По шагам: разговоры и правила общения → критерии → итог",
         icon: Play,
-        run: go(`${SECTIONS.logs}?assess=1`),
+        run: go(toneCheckLink()),
       },
       {
-        id: "a-review",
+        id: "a-code",
         group: "Действия",
-        label: "Ответить на спорные случаи",
-        sub: "Это ошибка или нет: по одному, клавишами V и N",
-        icon: ClipboardCheck,
-        run: go(reviewLink("log")),
+        label: "Оценить точность",
+        sub: "Проверить разговоры по критериям из кода агента",
+        icon: Play,
+        run: go(`${SECTIONS.accuracy}?assess=1`),
       },
-      {
-        id: "a-report",
-        group: "Действия",
-        label: "Отчёт для письма",
-        sub: "Проблемы диалогов листом: скопировать или скачать",
-        icon: FileText,
-        run: go(`${SECTIONS.logs}?report=1`),
-      },
+      ...results.flatMap((c): Entry[] => [
+        {
+          id: `a-${c}-review`,
+          group: "Действия",
+          label: `Ответить на спорные случаи · ${CHECK_NAME[c]}`,
+          sub: "Это ошибка или нет: по одному, клавишами V и N",
+          icon: ClipboardCheck,
+          run: go(reviewLink(c)),
+        },
+        {
+          id: `a-${c}-report`,
+          group: "Действия",
+          label: `Отчёт для письма · ${CHECK_NAME[c]}`,
+          sub: "Проблемы этой проверки листом: скопировать или скачать",
+          icon: FileText,
+          run: go(`${stageRoot(c)}?report=1`),
+        },
+      ]),
       {
         id: "a-upload",
         group: "Действия",
         label: "Загрузить диалоги",
-        sub: "Выгрузка чата — кнопкой в «Диалогах»",
+        sub: "Выгрузка чата, общая для обеих проверок",
         icon: Upload,
-        run: go(conversationsLink("log")),
+        run: go(conversationsLink(checkOfOld(state))),
       },
       {
         id: "a-cards",
         group: "Действия",
         label: "Собрать сценарии",
-        sub: "Из ошибок в оценённых диалогах",
+        sub: "Из ошибок одной из проверок",
         icon: Hammer,
         run: go(scenariosLink()),
       },
@@ -179,7 +220,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         run: go(`${SECTIONS.simulations}?play=1`),
       },
       {
-        id: "a-code",
+        id: "a-read",
         group: "Действия",
         label: "Прочитать код агента",
         sub: "Промпты и инструменты — в «Агенте»",
@@ -187,29 +228,33 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         run: go(SECTIONS.agent),
       },
     ];
-    const byId = new Map((data?.rules ?? []).map((r) => [r.id, r]));
-    for (const id of data?.problems ?? []) {
-      const p = byId.get(id);
-      if (p?.log.failed)
+    const ofCheck = (c: Check, data: Problems | undefined) => {
+      if (!data) return;
+      const byId = new Map(data.rules.map((r) => [r.id, r]));
+      for (const id of data.problems) {
+        const p = byId.get(id);
+        if (p?.log.failed)
+          out.push({
+            id: `v-${c}-${id}`,
+            group: `Проблемы · ${CHECK_NAME[c]}`,
+            label: p.title,
+            sub: `ошибка в ${p.log.failed} из ${p.log.failed + p.log.passed} разговоров`,
+            icon: TriangleAlert,
+            run: go(problemLink(id, c)),
+          });
+      }
+      for (const r of data.rules)
         out.push({
-          id: `v-${id}`,
-          group: "Проблемы в диалогах",
-          label: p.title,
-          sub: `ошибка в ${p.log.failed} из ${p.log.failed + p.log.passed} разговоров`,
-          icon: TriangleAlert,
-          run: go(problemLink(id, "log")),
+          id: `c-${c}-${r.id}`,
+          group: `Критерии · ${CHECK_NAME[c]}`,
+          label: r.title,
+          sub: r.rule.origin || duty(r.rule.text),
+          icon: ListChecks,
+          run: go(criterionLink(c, r.id)),
         });
-    }
-    for (const r of data?.rules ?? []) {
-      out.push({
-        id: `c-${r.id}`,
-        group: "Критерии",
-        label: r.title,
-        sub: r.rule.origin || duty(r.rule.text),
-        icon: ListChecks,
-        run: go(criterionLink(r.id)),
-      });
-    }
+    };
+    ofCheck("tone", tone);
+    ofCheck("code", code);
     const runs = [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
     for (const r of runs) {
       const m = r.metric;
@@ -217,7 +262,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: `r-${r.id}`,
         group: "Прогоны симуляции",
         label: r.label || runTitle(r),
-        sub: [day(r.startedAt), m?.measured ? `ошибка в ${m.failed} из ${m.measured}` : ""].filter(Boolean).join(" · "),
+        sub: [day(r.startedAt), BY_CRITERIA[r.check], m?.measured ? `ошибка в ${m.failed} из ${m.measured}` : ""]
+          .filter(Boolean)
+          .join(" · "),
         icon: FlaskConical,
         run: go(runLink(r.id)),
       });
@@ -233,7 +280,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       });
     }
     return out;
-  }, [data, state?.runs, state?.cards, navigate]);
+  }, [tone, code, state, navigate]);
 
   const q = query.trim().toLowerCase();
   const shown = useMemo(

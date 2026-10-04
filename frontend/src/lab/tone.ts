@@ -10,10 +10,8 @@ export const CHECK_STEPS: { id: CheckStep; label: string }[] = [
   { id: "result", label: "Результат" },
 ];
 
-export function toneResult(state: LabState | null) {
-  const assessment = state?.discover;
-  return assessment?.purpose === TONE_ID ? assessment : null;
-}
+/** The result of the tone-of-voice check, or null. */
+export const toneResult = (state: LabState | null) => state?.checks.tone ?? null;
 
 /** What was read from the agent's code; the rules of communication beside it are a person's own document. */
 export const codeSources = (state: LabState | null) => state?.sources.filter((s) => s.id !== TONE_ID) ?? [];

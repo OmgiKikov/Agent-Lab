@@ -4,15 +4,19 @@ import { ArrowRight, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { agentHref } from "../../app/agent";
 import { Mark } from "../../app/Mark";
-import { useAgents, type Agent } from "../../lab/agents";
+import { useAgents, type Agent, type CheckLine } from "../../lab/agents";
+import { CHECK_NAME, CHECKS } from "../../lab/checks";
 import { longDay, plural } from "../../lab/format";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { NewAgent } from "./NewAgent";
 
-/** The last result in a card: errors of measured, the split as a thin bar, which metric and when. */
-function Result({ result }: { result: NonNullable<Agent["result"]> }) {
-  const { failed, measured, unmeasured } = result;
+/**
+ * The result of one check in a line: its name and date, errors of measured, the split as a thin bar. Each check has its
+ * own line: the two are never added up.
+ */
+function Result({ name, line }: { name: string; line: CheckLine }) {
+  const { failed, measured, unmeasured } = line;
   const parts = [
     { key: "bad", n: failed, cls: "bg-bad" },
     { key: "ok", n: Math.max(0, measured - failed), cls: "bg-ok" },
@@ -21,29 +25,40 @@ function Result({ result }: { result: NonNullable<Agent["result"]> }) {
   const total = parts.reduce((s, p) => s + p.n, 0) || 1;
   return (
     <div>
-      <p className="whitespace-nowrap text-title font-semibold tabular-nums">
-        <span className={failed ? "text-bad" : "text-fg"}>{failed}</span>
-        <span className="font-normal text-fg-3">{" из "}</span>
-        <span className="text-fg">{measured}</span>
+      <p className="flex items-baseline justify-between gap-3 text-small text-fg-3">
+        <span className="font-medium text-fg-2">{name}</span>
+        <span>{longDay(line.finishedAt)}</span>
       </p>
-      <p className="mt-0.5 text-small text-fg-3">
-        {plural(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
-        агента
+      <p className="mt-1 text-small text-fg-3">
+        {measured ? (
+          <>
+            <span className={cn("text-count font-semibold tabular-nums", failed ? "text-bad" : "text-fg")}>
+              {failed}
+            </span>
+            {"\u00a0из\u00a0"}
+            <span className="font-semibold tabular-nums text-fg">{measured}</span>{" "}
+            {plural(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
+            агента
+          </>
+        ) : (
+          "Ни один разговор не удалось проверить"
+        )}
       </p>
-      <div className="mt-3 flex h-1.5 w-full gap-[2px] overflow-hidden rounded-full" aria-hidden>
+      <div className="mt-2 flex h-1.5 w-full gap-[2px] overflow-hidden rounded-full" aria-hidden>
         {parts.map((p) => (
           <div key={p.key} className={cn("h-full rounded-full", p.cls)} style={{ width: `${(100 * p.n) / total}%` }} />
         ))}
       </div>
-      <p className="mt-3 text-small text-fg-3">
-        {result.metric} · {longDay(result.finishedAt)}
-      </p>
     </div>
   );
 }
 
-/** One agent: its name, what it is, its last check. The whole card opens the agent. */
+/** One agent: its name, what it is, the result of each of its checks. The whole card opens the agent. */
 function AgentCard({ agent }: { agent: Agent }) {
+  const lines = CHECKS.flatMap((c) => {
+    const line = agent.results?.[c];
+    return line ? [{ check: c, line }] : [];
+  });
   return (
     <a
       href={agentHref(agent.id)}
@@ -52,8 +67,12 @@ function AgentCard({ agent }: { agent: Agent }) {
       <h2 className="text-count font-semibold text-fg">{agent.name}</h2>
       {agent.description && <p className="mt-1 line-clamp-2 text-body text-fg-3">{agent.description}</p>}
       <div className="mt-auto pt-6">
-        {agent.result ? (
-          <Result result={agent.result} />
+        {lines.length ? (
+          <div className="space-y-4">
+            {lines.map(({ check, line }) => (
+              <Result key={check} name={CHECK_NAME[check]} line={line} />
+            ))}
+          </div>
         ) : (
           <div>
             <p className="text-read text-fg-2">Ещё не проверялся</p>

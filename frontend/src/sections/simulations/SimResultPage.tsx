@@ -2,13 +2,14 @@ import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ChevronDown, Hammer, Play, RotateCcw } from "lucide-react";
 import { scenariosLink } from "../../app/links";
 import { api } from "../../lab/api";
+import { BY_CRITERIA } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
 import { isRunning, runTitle, useRun } from "../../lab/runs";
-import type { LabRun, LabState } from "../../lab/types";
+import type { LabRun, LabState, RunSummary } from "../../lab/types";
 import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -19,9 +20,9 @@ import { RunMatrix } from "./RunMatrix";
 import { SimHeader, useSimRuns } from "./stage";
 
 /**
- * «Симуляции», the second stage: synthetic customers play business scenarios with the agent, and the same criteria check
- * them. The result of one run as one number, the scenarios against the types of customers, and the problems it found.
- * Counted on its own: other conversations, other customers than the logs.
+ * «Симуляции»: synthetic customers play business scenarios with the agent, built from the errors of one check, and that
+ * check's criteria judge them. The result of one run as one number, the scenarios against the types of customers, and
+ * the problems it found. Counted on its own: other conversations, other customers than the export.
  */
 export function SimResultPage() {
   const [params] = useSearchParams();
@@ -36,7 +37,7 @@ function SimResult() {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const { finished, run } = useSimRuns(state, params.get("run"));
-  const { data, list } = useCriteria(run && !isRunning(run) ? run.id : null);
+  const { data, list } = useCriteria(run?.check ?? null, run && !isRunning(run) ? run.id : null);
   const header = <SimHeader runId={run?.id ?? null} />;
   if (offline && !state)
     return (
@@ -79,8 +80,8 @@ function SimResult() {
             )
           }
         >
-          Синтетические клиенты сыграют с агентом сценарии из настоящих разговоров. Так ошибки находятся раньше, чем их
-          увидят клиенты.
+          Синтетические клиенты сыграют с агентом сценарии из ошибок одной из проверок разговоров, и её критерии оценят
+          их. Так ошибки находятся раньше, чем их увидят клиенты.
         </EmptyState>
       </div>
     );
@@ -164,15 +165,18 @@ function Live({ run, state }: { run: LabRun; state: LabState }) {
   );
 }
 
-/** Which run this is, as the logs say which export: who played, its name, when; the other runs one click away, and re-checking it. */
+/**
+ * Which run this is, as a check says which export: whose criteria count it, who played, its name, when; the other runs
+ * one click away, and judging it again.
+ */
 function RunLine({
   run,
   finished,
   state,
   onPick,
 }: {
-  run: LabRun;
-  finished: LabRun[];
+  run: RunSummary;
+  finished: RunSummary[];
   state: LabState;
   onPick: (id: string) => void;
 }) {
@@ -186,8 +190,8 @@ function RunLine({
   const others = finished.filter((r) => r.id !== run.id);
   const text = (
     <>
-      Синтетические клиенты{run.label ? ` · «${run.label}»` : ""} · {isRunning(run) ? "идёт с" : "сыграно"}{" "}
-      {longDay(run.startedAt)}
+      Синтетические клиенты {BY_CRITERIA[run.check]}
+      {run.label ? ` · «${run.label}»` : ""} · {isRunning(run) ? "идёт с" : "сыграно"} {longDay(run.startedAt)}
     </>
   );
   return (
@@ -206,7 +210,11 @@ function RunLine({
           items={[run, ...others].map((r) => ({
             key: r.id,
             label: `${longDay(r.startedAt)}${r.label ? ` · «${r.label}»` : ""}`,
-            sub: [r.metric?.measured ? `ошибка в ${r.metric.failed} из ${r.metric.measured}` : "", runTitle(r)]
+            sub: [
+              BY_CRITERIA[r.check],
+              r.metric?.measured ? `ошибка в ${r.metric.failed} из ${r.metric.measured}` : "",
+              runTitle(r),
+            ]
               .filter(Boolean)
               .join(" · "),
             on: r.id === run.id,
@@ -216,7 +224,8 @@ function RunLine({
       ) : (
         <span title={runTitle(run)}>{text}</span>
       )}
-      {!isRunning(run) && run.items?.length ? (
+      {/* The summary has no conversations, only their count: a run with none has nothing to judge again. */}
+      {!isRunning(run) && (run.metric?.total ?? 0) > 0 ? (
         <button
           type="button"
           onClick={rejudge}

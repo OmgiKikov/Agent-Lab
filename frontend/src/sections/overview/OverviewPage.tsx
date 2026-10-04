@@ -1,56 +1,103 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, Bot, ClipboardCheck, FileText, Play } from "lucide-react";
+import { ArrowRight, Bot, ClipboardCheck, FileText, Hammer, Play, type LucideIcon } from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
-import { reviewLink, SECTIONS, stageLink, type Stage } from "../../app/links";
-import { useCriteria } from "../../lab/criteria";
-import { count, longDay } from "../../lab/format";
-import { useLabState } from "../../lab/LabProvider";
+import {
+  conversationsLink,
+  reviewLink,
+  scenariosLink,
+  SECTIONS,
+  stageLink,
+  stageRoot,
+  toneCheckLink,
+  type Check,
+} from "../../app/links";
 import { useAgent } from "../../lab/agents";
-import { checkedIn, stagesSentence } from "../../lab/problemReport";
-import type { Problems } from "../../lab/problems";
-import type { LabRun } from "../../lab/types";
-import { toneResult } from "../../lab/tone";
+import { BY_CRITERIA, CHECK_NAME, CHECKS, checkOfOld, resultOf } from "../../lab/checks";
+import { useCriteria } from "../../lab/criteria";
+import { longDay, count } from "../../lab/format";
+import { useLabState } from "../../lab/LabProvider";
+import { isRunning } from "../../lab/runs";
+import { codeSources } from "../../lab/tone";
+import type { LabState } from "../../lab/types";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
-import { Step } from "../../product/Step";
-import { Button, buttonClass } from "../../ui/Button";
+import { buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { AssessSheet } from "../problems/AssessSheet";
+import { Label } from "../../ui/Label";
+import { CheckReport } from "../checks/CheckReport";
+import { Needs, needsOf, type Need } from "../checks/Start";
 import { ProblemList } from "../problems/ProblemList";
-import { ReportSheet } from "../problems/ReportSheet";
-import { BriefSheet, useToneBrief } from "../check/BriefSheet";
-import { FirstRun } from "./FirstRun";
-import { TONE_ONLY } from "../../app/product";
-import { cn } from "@/lib/utils";
+import { useSimRuns } from "../simulations/stage";
+
+const PART = { bad: "fail", ok: "pass", none: "none" } as const;
+
+/** What each check is about, in the words of the person who answers for the agent. */
+const WHAT: Record<Check, string> = {
+  tone: "Как агент общается: обращение, тон, ясность и нормы общения — по вашим правилам.",
+  code: "Делает ли агент то, что требуют его промпты и инструменты: отвечает по инструкции и ничего не выдумывает.",
+};
+
+/** Where a check without a result stands, and its one way forward. */
+type Begin = { status?: string; needs: Need[]; action?: { label: string; to: string } };
+
+function beginOf(check: Check, state: LabState): Begin {
+  const job = state.job;
+  if (check === "tone") {
+    if (job.running && job.kind === "tone-check")
+      return {
+        status: "Идёт проверка",
+        needs: needsOf("tone", state),
+        action: { label: "Ход проверки", to: toneCheckLink("checking") },
+      };
+    const begun = !!state.toneOfVoice || (job.running && job.kind === "tone-criteria");
+    return {
+      status: begun ? "Проверка начата" : undefined,
+      needs: needsOf("tone", state),
+      action: begun
+        ? { label: "Продолжить проверку", to: toneCheckLink() }
+        : { label: "Начать проверку", to: toneCheckLink("materials") },
+    };
+  }
+  if (job.running && job.kind === "discover")
+    return {
+      status: "Идёт оценка",
+      needs: needsOf("code", state),
+      action: { label: "Открыть", to: SECTIONS.accuracy },
+    };
+  if (!codeSources(state).length)
+    return {
+      status: "Нужен код агента",
+      needs: needsOf("code", state),
+      action: { label: "Прочитать код", to: SECTIONS.agent },
+    };
+  return { needs: needsOf("code", state), action: { label: "Оценить разговоры", to: SECTIONS.accuracy } };
+}
 
 /**
- * «Обзор»: how the agent is doing, in the two stages it is checked — the customers' real conversations, then synthetic
- * customers playing scenarios. Each stage says its one number and its main problems, side by side and never added up;
- * then what to do next.
+ * «Обзор»: how the agent is doing. Each check of the real conversations says its own number and its main problems, the
+ * last run of the simulation says its own, with the check it was counted by; never added up or compared. Then what to
+ * do, check by check. Before anything is checked: where to begin.
  */
 export function OverviewPage() {
   const { state, offline } = useLabState();
   const agent = useAgent();
   const [params, setParams] = useSearchParams();
-  const { data, list } = useCriteria(null);
-  const [assess, setAssess] = useState(params.get("assess") === "1");
-  const [report, setReport] = useState(params.get("report") === "1");
-  // A tone-of-voice result has its own report: the same as on the result, with the same number.
-  const tone = !!toneResult(state);
-  const brief = useToneBrief(state);
+  const [report, setReport] = useState<Check | null>(null);
+  // ?report=tone|code opens that check's report; an older ?report=1 the check that has a result.
+  const asked = params.get("report");
   useEffect(() => {
-    if (params.get("assess") === "1") setAssess(true);
-    if (params.get("report") === "1") setReport(true);
-  }, [params]);
-  const drop = (key: string) => {
-    if (params.get(key))
+    if (asked && state) setReport(asked === "tone" || asked === "code" ? asked : checkOfOld(state));
+  }, [asked, state]);
+  const closeReport = () => {
+    setReport(null);
+    if (asked)
       setParams(
         (prev) => {
           const n = new URLSearchParams(prev);
-          n.delete(key);
+          n.delete("report");
           return n;
         },
         { replace: true },
@@ -60,56 +107,8 @@ export function OverviewPage() {
   const header = (
     <Header
       title="Обзор"
-      actions={
-        (tone || (!TONE_ONLY && !!(data?.log || data?.sim))) && (
-          <Button
-            variant="primary"
-            icon={FileText}
-            aria-label="Отчёт для письма"
-            onClick={() => setReport(true)}
-            disabled={tone && !brief}
-          >
-            <span className="hidden sm:inline">Отчёт для письма</span>
-          </Button>
-        )
-      }
       below={<SectionJob kinds={["tone-check", "tone-criteria", "discover", "run", "rejudge", "cards"]} />}
     />
-  );
-  const sheets = (
-    <>
-      <AssessSheet
-        open={assess}
-        onClose={() => {
-          setAssess(false);
-          drop("assess");
-        }}
-        criteria={data ? checkedIn(data, "log").length : 0}
-      />
-      {tone ? (
-        <BriefSheet
-          open={report}
-          onClose={() => {
-            setReport(false);
-            drop("report");
-          }}
-          brief={brief}
-        />
-      ) : (
-        data &&
-        (data.log || data.sim) && (
-          <ReportSheet
-            open={report}
-            onClose={() => {
-              setReport(false);
-              drop("report");
-            }}
-            data={data}
-            list={list}
-          />
-        )
-      )}
-    </>
   );
   if (offline && !state)
     return (
@@ -118,7 +117,7 @@ export function OverviewPage() {
         <ServiceDown />
       </div>
     );
-  if (!state || !data)
+  if (!state)
     return (
       <div className="flex h-full flex-col">
         {header}
@@ -128,63 +127,105 @@ export function OverviewPage() {
         </div>
       </div>
     );
-  // Tone-only mode: the overview is the tone-of-voice result, never the accuracy one or the simulations.
-  if (TONE_ONLY ? !toneResult(state) || !data.log : !data.log && !state.runs.length)
-    return (
-      <div className="flex h-full flex-col">
-        {header}
-        <div className="min-h-0 flex-1 overflow-auto">
-          <FirstRun />
-        </div>
-        {sheets}
-      </div>
-    );
 
-  const run = (data.sim && state.runs.find((r) => r.id === data.sim!.runId)) || null;
+  const first = !CHECKS.some((c) => resultOf(state, c)) && !state.runs.length;
   return (
     <div className="flex h-full flex-col">
       {header}
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-[1180px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
           <p className="text-read text-fg-3">{[agent?.name, agent?.description].filter(Boolean).join(" · ")}</p>
-          <h2 className="mt-1 text-page font-semibold text-fg">
-            {TONE_ONLY ? "Как агент общается с клиентами" : "Как работает агент"}
-          </h2>
-          <p className="mt-3 max-w-[64ch] text-lead text-fg-2">
-            {TONE_ONLY
-              ? "Tone of voice: настоящие диалоги из выгрузки чата проверены по вашим правилам общения."
-              : `${stagesSentence(data)} Сначала — настоящие диалоги из выгрузки чата. Из найденных в них ошибок собираются сценарии, и синтетические клиенты разыгрывают их с агентом. Счёт у каждого этапа свой.`}
+          <h2 className="mt-1 text-page font-semibold text-fg">{first ? "С чего начать" : "Как работает агент"}</h2>
+          <p className="mt-3 max-w-[66ch] text-lead text-fg-2">
+            {first
+              ? "Настоящие разговоры клиентов из выгрузки чата проверяются двумя проверками, у каждой свои критерии. Из найденных ошибок потом собираются сценарии для синтетических клиентов."
+              : "У каждой проверки свои критерии и свой счёт, у симуляций — свой. Числа не складываются и не сравниваются: за ними разные критерии и разные разговоры."}
           </p>
-          <div className={cn("mt-14 grid gap-x-16 gap-y-20", TONE_ONLY ? "max-w-[640px]" : "lg:grid-cols-2")}>
-            <LogStage
-              data={data}
-              list={list}
-              metric={toneResult(state) ? "Tone of voice" : "Точность по коду агента"}
-            />
-            {!TONE_ONLY && <SimStage list={list} run={run} />}
-          </div>
-          <NextSteps
-            data={data}
-            problems={list.filter((c) => c.r.log.failed > 0).length}
-            ready={state.targets.some((t) => t.ready)}
-            onReport={() => setReport(true)}
-          />
+          {first ? (
+            <StartCards state={state} />
+          ) : (
+            <>
+              <section aria-labelledby="overview-checks" className="mt-12">
+                <Label id="overview-checks">Проверки разговоров</Label>
+                <div className="mt-6 grid gap-x-16 gap-y-16 lg:grid-cols-2">
+                  {CHECKS.map((c) => (
+                    <CheckBlock key={c} check={c} state={state} />
+                  ))}
+                </div>
+              </section>
+              <section aria-labelledby="overview-trials" className="mt-16 border-t border-line pt-10">
+                <Label id="overview-trials">Испытания</Label>
+                <RunBlock state={state} />
+              </section>
+              <NextSteps state={state} onReport={setReport} />
+            </>
+          )}
         </div>
       </div>
-      {sheets}
+      {report && <CheckReport check={report} open onClose={closeReport} />}
     </div>
   );
 }
 
-/** The head of a stage: its number in the order of the work, its name (the way into it), what it checks. */
-function StageHead({ n, stage, title, sub }: { n: 1 | 2; stage: Stage; title: string; sub: ReactNode }) {
+/**
+ * The person connected their agent: they set its address on the test stand, or its folder can start it from its code.
+ * The address on this computer is built in («local-http»), so it says nothing about their agent.
+ */
+const connected = (state: LabState) => state.targets.some((t) => t.ready && t.id !== "local-http");
+
+/** The first visit: the three ways in, each with what it needs and what is already here. */
+function StartCards({ state }: { state: LabState }) {
+  const ready = connected(state);
+  const cards: { title: string; what: string; begin: Begin; primary?: boolean }[] = [
+    { title: CHECK_NAME.tone, what: WHAT.tone, begin: beginOf("tone", state), primary: true },
+    { title: CHECK_NAME.code, what: WHAT.code, begin: beginOf("code", state) },
+    {
+      title: "Симуляции",
+      what: "Синтетические клиенты разыгрывают с агентом сценарии из найденных ошибок, и критерии той же проверки оценивают разговоры.",
+      begin: {
+        status: "После первой проверки",
+        needs: [
+          { label: "Итог проверки", value: null, later: "из его ошибок соберутся сценарии" },
+          { label: "Подключение агента", value: ready ? "задано" : null, later: "в «Агенте»" },
+        ],
+        // Nothing to do here before the first check, unless the agent is not connected yet.
+        action: ready ? undefined : { label: "Подключить агента", to: SECTIONS.agent },
+      },
+    },
+  ];
+  return (
+    <ul className="mt-10 grid gap-4 md:grid-cols-3">
+      {cards.map((c) => (
+        <li key={c.title} className="flex flex-col rounded-block border border-line p-5">
+          <h3 className="text-count font-semibold text-fg">{c.title}</h3>
+          {c.begin.status && <p className="mt-1 text-small font-medium text-fg-3">{c.begin.status}</p>}
+          <p className="mt-2 text-body text-fg-2">{c.what}</p>
+          <Needs needs={c.begin.needs} className="mt-4 border-t border-line pt-3" />
+          {c.begin.action && (
+            <div className="mt-auto pt-6">
+              <Link
+                to={c.begin.action.to}
+                className={buttonClass({ variant: c.primary ? "primary" : "outline", size: "lg" })}
+              >
+                {c.begin.action.label}
+                <ArrowRight aria-hidden className="size-4" />
+              </Link>
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The head of a block: its name, the way into its section, and one line of what it is. */
+function BlockHead({ to, title, sub }: { to: string; title: string; sub: ReactNode }) {
   return (
     <div>
       <Link
-        to={stageLink(stage)}
-        className="group inline-flex items-center gap-3 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+        to={to}
+        className="group inline-flex items-center gap-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
       >
-        <Step n={n} size="lg" />
         <span className="text-title font-semibold text-fg">{title}</span>
         <ArrowRight
           aria-hidden
@@ -196,33 +237,34 @@ function StageHead({ n, stage, title, sub }: { n: 1 | 2; stage: Stage; title: st
   );
 }
 
-function LogStage({
-  data,
-  list,
-  metric,
-}: {
-  data: Problems;
-  list: ReturnType<typeof useCriteria>["list"];
-  metric: string;
-}) {
-  const log = data.log;
+/** One check: its number, how far to trust it, its three main problems; without a result, how to get one. */
+function CheckBlock({ check, state }: { check: Check; state: LabState }) {
+  const result = resultOf(state, check);
+  const { data, list } = useCriteria(result ? check : null);
+  const log = data?.log;
+  if (!result) {
+    const begin = beginOf(check, state);
+    return (
+      <section aria-label={CHECK_NAME[check]}>
+        <BlockHead to={stageRoot(check)} title={CHECK_NAME[check]} sub={begin.status ?? "Ещё не проверяли"} />
+        <p className="mt-6 max-w-[48ch] text-read text-fg-2">{WHAT[check]}</p>
+        <Needs needs={begin.needs} className="mt-3" />
+        {begin.action && (
+          <Link to={begin.action.to} className={`mt-5 ${buttonClass({ variant: "outline" })}`}>
+            {begin.action.label}
+          </Link>
+        )}
+      </section>
+    );
+  }
   return (
-    <section aria-label="Диалоги">
-      <StageHead
-        n={1}
-        stage="log"
-        title="Диалоги"
-        sub={
-          log ? (
-            <>
-              {metric} · проверено {longDay(log.finishedAt)}
-            </>
-          ) : (
-            "Настоящие разговоры клиентов из выгрузки чата"
-          )
-        }
+    <section aria-label={CHECK_NAME[check]}>
+      <BlockHead
+        to={stageRoot(check)}
+        title={CHECK_NAME[check]}
+        sub={`${state.logs.file ? `«${state.logs.file}» · ` : ""}проверено ${longDay(result.finishedAt)}`}
       />
-      {log ? (
+      {data && log ? (
         <>
           <StageResult
             size="display"
@@ -230,54 +272,65 @@ function LogStage({
             failed={log.withViolations}
             checked={log.assessed}
             unchecked={log.unassessed}
+            link={(part) => conversationsLink(check, { v: PART[part] })}
           />
-          <Trust data={data} stage="log" checked={log.assessed} />
+          <Trust data={data} check={check} checked={log.assessed} />
           <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>
           <div className="mt-1">
-            <ProblemList list={list} stage="log" limit={3} />
+            <ProblemList list={list} stage={check} limit={3} />
           </div>
           <Link
-            to={stageLink("log")}
+            to={stageRoot(check)}
             className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
           >
-            Все проблемы диалогов
+            Все проблемы
             <ArrowRight aria-hidden className="size-4" />
           </Link>
         </>
       ) : (
-        <div className="mt-8">
-          <p className="max-w-[44ch] text-lead text-fg-2">
-            Диалоги ещё не оценены. Выберите, что проверяем: tone of voice или точность по коду агента.
-          </p>
-          <Link to={SECTIONS.start} className={`mt-5 ${buttonClass({ variant: "primary" })}`}>
-            Начать проверку
-          </Link>
-        </div>
+        <Skeleton className="mt-8 h-72" />
       )}
     </section>
   );
 }
 
-function SimStage({ list, run }: { list: ReturnType<typeof useCriteria>["list"]; run: LabRun | null }) {
+/** The last run of the simulation, with the check whose criteria counted it; its own number, never beside a sum. */
+function RunBlock({ state }: { state: LabState }) {
+  const { run } = useSimRuns(state, null);
+  const live = !!run && isRunning(run);
+  const { list } = useCriteria(run?.check ?? null, run && !live ? run.id : null);
   const m = run?.metric;
+  const deck = state.cards?.cards.length ? state.cards : null;
+  if (!run)
+    return (
+      <div className="mt-6 max-w-[640px]">
+        <BlockHead to={SECTIONS.simulations} title="Симуляции" sub="Синтетические клиенты играют сценарии из ошибок" />
+        <p className="mt-6 text-read text-fg-2">
+          {deck
+            ? `Сценарии ${BY_CRITERIA[deck.check]} собраны: синтетические клиенты сыграют их с агентом, и вы увидите ошибки раньше настоящих клиентов.`
+            : "Симуляций ещё не было. Сценарии собираются из ошибок одной из проверок, и её критерии оценят разговоры синтетических клиентов."}
+        </p>
+        <Link
+          to={deck ? `${SECTIONS.simulations}?play=1` : scenariosLink()}
+          className={`mt-5 ${buttonClass({ variant: "outline" })}`}
+        >
+          {deck ? "Сыграть сценарии" : "К сценариям"}
+        </Link>
+      </div>
+    );
   return (
-    <section aria-label="Симуляции">
-      <StageHead
-        n={2}
-        stage="sim"
-        title="Симуляции"
-        sub={
-          run ? (
+    <div className="mt-6 grid gap-x-16 gap-y-10 lg:grid-cols-2">
+      <div>
+        <BlockHead
+          to={stageLink("sim", run.id)}
+          title="Симуляции"
+          sub={
             <span title={run.label || undefined}>
-              Синтетические клиенты по сценариям из ошибок в диалогах · {longDay(run.startedAt)}
+              {live ? "Идёт прогон" : "Последний прогон"} {BY_CRITERIA[run.check]} · {longDay(run.startedAt)}
             </span>
-          ) : (
-            "Синтетические клиенты по сценариям из ошибок в диалогах"
-          )
-        }
-      />
-      {run && m?.measured ? (
-        <>
+          }
+        />
+        {!live && m?.measured ? (
           <StageResult
             size="display"
             className="mt-8"
@@ -285,7 +338,17 @@ function SimStage({ list, run }: { list: ReturnType<typeof useCriteria>["list"];
             checked={m.measured}
             unchecked={Math.max(0, (m.total ?? 0) - m.measured)}
           />
-          <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>
+        ) : (
+          <p className="mt-6 text-read text-fg-2">
+            {live
+              ? "Синтетические клиенты играют сценарии; итог появится, когда разговоры будут оценены."
+              : "Разговоры этого прогона ещё не оценены."}
+          </p>
+        )}
+      </div>
+      {!live && !!m?.measured && (
+        <div>
+          <h3 className="text-read font-semibold text-fg">Главные проблемы прогона</h3>
           <div className="mt-1">
             <ProblemList list={list} stage="sim" runId={run.id} limit={3} />
           </div>
@@ -296,86 +359,20 @@ function SimStage({ list, run }: { list: ReturnType<typeof useCriteria>["list"];
             Весь прогон
             <ArrowRight aria-hidden className="size-4" />
           </Link>
-        </>
-      ) : (
-        <div className="mt-8">
-          <p className="max-w-[44ch] text-lead text-fg-2">
-            Симуляций ещё не было. Синтетические клиенты сыграют с агентом сценарии из ошибок в диалогах, и вы увидите
-            их до настоящих клиентов.
-          </p>
-          <Link to={SECTIONS.simulations} className="mt-5 inline-flex">
-            <Button variant="primary" icon={Play}>
-              Открыть симуляции
-            </Button>
-          </Link>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
-/** What to do next, from what the data says now: the person's answers, the hand-off, the check on a simulation. */
-function NextSteps({
-  data,
-  problems,
-  ready,
-  onReport,
-}: {
-  data: Problems;
-  problems: number;
-  ready: boolean;
-  onReport: () => void;
-}) {
-  const disputed = verdictQueue(data, "disputed", null, "log").length;
-  // The errors the model found and nobody answered yet, and how many conversations they are in: «28 ошибок» next to
-  // «22 разговора с ошибкой» needs its own unit.
-  const open = verdictQueue(data, "all", null, "log").filter((v) => v.example.status === "FAIL" && !v.example.review);
-  const unchecked = open.length;
-  const conversations = new Set(open.map((v) => v.example.dialogueId)).size;
-  const steps = [
-    disputed > 0
-      ? {
-          icon: ClipboardCheck,
-          title: `Ответьте на ${count(disputed, "спорный случай", "спорных случая", "спорных случаев")}`,
-          sub: "Две проверки разошлись: ваш ответ решит, ошибка это или нет.",
-          to: reviewLink("log", { queue: "disputed" }),
-        }
-      : unchecked > 0
-        ? {
-            icon: ClipboardCheck,
-            title: `Подтвердите ${count(unchecked, "найденную ошибку", "найденные ошибки", "найденных ошибок")}`,
-            sub: `В ${count(conversations, "разговоре", "разговорах", "разговорах")}. По одной: «да, ошибка» или «нет».`,
-            to: reviewLink("log", { queue: "unchecked" }),
-          }
-        : null,
-    problems > 0
-      ? {
-          icon: FileText,
-          title: `Передайте ${count(problems, "проблему", "проблемы", "проблем")} команде агента`,
-          sub: "Отчёт с примерами из разговоров — в письмо или тикет.",
-          run: onReport,
-        }
-      : null,
-    TONE_ONLY
-      ? null
-      : ready
-        ? {
-            icon: Play,
-            title: "Проверьте исправление на симуляции",
-            sub: "Синтетические клиенты сыграют сценарии из этих ошибок.",
-            to: `${SECTIONS.simulations}?play=1`,
-          }
-        : {
-            icon: Bot,
-            title: "Подключите агента",
-            sub: "Тогда исправления можно проверять, не дожидаясь новой выгрузки чата.",
-            to: SECTIONS.agent,
-          },
-  ].filter(Boolean) as { icon: typeof Play; title: string; sub: string; to?: string; run?: () => void }[];
+type Step = { icon: LucideIcon; title: string; sub: string; to?: string; run?: () => void };
+
+function StepList({ label, steps }: { label: string; steps: Step[] }) {
+  if (!steps.length) return null;
   return (
-    <section aria-label="Что сделать" className="mt-16 border-t border-line pt-10">
-      <h2 className="text-title font-semibold text-fg">Что сделать</h2>
-      <ul className="mt-6 grid gap-x-10 gap-y-6 md:grid-cols-3">
+    <div>
+      <Label>{label}</Label>
+      <ul className="mt-3 space-y-5">
         {steps.map((s) => {
           const body = (
             <>
@@ -387,7 +384,7 @@ function NextSteps({
                   {s.title}
                   <ArrowRight
                     aria-hidden
-                    className="size-4 text-fg-4 transition-transform group-hover:translate-x-0.5"
+                    className="size-4 flex-shrink-0 text-fg-4 transition-transform group-hover:translate-x-0.5"
                   />
                 </span>
                 <span className="mt-0.5 block text-body text-fg-3">{s.sub}</span>
@@ -411,6 +408,87 @@ function NextSteps({
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+/** What to do in one check: the person's answers on what it found, then the hand-off of its problems. */
+function CheckSteps({ check, onReport }: { check: Check; onReport: () => void }) {
+  const { data, list } = useCriteria(check);
+  if (!data?.log) return null;
+  const disputed = verdictQueue(data, "disputed", null, "log").length;
+  // The errors the model found and nobody answered yet, and how many conversations they are in: «28 ошибок» next to
+  // «22 разговора с ошибкой» needs its own unit.
+  const open = verdictQueue(data, "all", null, "log").filter((v) => v.example.status === "FAIL" && !v.example.review);
+  const conversations = new Set(open.map((v) => v.example.dialogueId)).size;
+  const problems = list.filter((c) => c.r.log.failed > 0).length;
+  const steps: Step[] = [];
+  if (disputed)
+    steps.push({
+      icon: ClipboardCheck,
+      title: `Ответьте на ${count(disputed, "спорный случай", "спорных случая", "спорных случаев")}`,
+      sub: "Две проверки разошлись: ваш ответ решит, ошибка это или нет.",
+      to: reviewLink(check, { queue: "disputed" }),
+    });
+  else if (open.length)
+    steps.push({
+      icon: ClipboardCheck,
+      title: `Подтвердите ${count(open.length, "найденную ошибку", "найденные ошибки", "найденных ошибок")}`,
+      sub: `В ${count(conversations, "разговоре", "разговорах", "разговорах")}. По одной: «да, ошибка» или «нет».`,
+      to: reviewLink(check, { queue: "unchecked" }),
+    });
+  if (problems)
+    steps.push({
+      icon: FileText,
+      title: `Передайте ${count(problems, "проблему", "проблемы", "проблем")} команде агента`,
+      sub: "Отчёт с примерами из разговоров — в письмо или тикет.",
+      run: onReport,
+    });
+  return <StepList label={CHECK_NAME[check]} steps={steps} />;
+}
+
+/** What to do with the simulation: build the scenarios from a check's errors, play them, or connect the agent. */
+function simSteps(state: LabState): Step[] {
+  const deck = state.cards?.cards.length ? state.cards : null;
+  const ready = connected(state);
+  return [
+    deck
+      ? {
+          icon: Play,
+          title: "Проверьте исправление на симуляции",
+          sub: `Синтетические клиенты сыграют сценарии ${BY_CRITERIA[deck.check]}.`,
+          to: `${SECTIONS.simulations}?play=1`,
+        }
+      : {
+          icon: Hammer,
+          title: "Соберите сценарии",
+          sub: "Из ошибок одной из проверок: синтетические клиенты сыграют их с агентом.",
+          to: scenariosLink(),
+        },
+    ...(ready
+      ? []
+      : [
+          {
+            icon: Bot,
+            title: "Подключите агента",
+            sub: "Тогда исправления можно проверять, не дожидаясь новой выгрузки чата.",
+            to: SECTIONS.agent,
+          },
+        ]),
+  ];
+}
+
+/** What to do next, check by check, and with the simulation; each from what its own data says now. */
+function NextSteps({ state, onReport }: { state: LabState; onReport: (check: Check) => void }) {
+  return (
+    <section aria-label="Что сделать" className="mt-16 border-t border-line pt-10">
+      <h2 className="text-title font-semibold text-fg">Что сделать</h2>
+      <div className="mt-6 grid gap-x-10 gap-y-10 md:grid-cols-3">
+        {CHECKS.filter((c) => resultOf(state, c)).map((c) => (
+          <CheckSteps key={c} check={c} onReport={() => onReport(c)} />
+        ))}
+        <StepList label="Симуляции" steps={simSteps(state)} />
+      </div>
     </section>
   );
 }

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowRight, Database, FileText, RotateCcw } from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
-import { SECTIONS } from "../../app/links";
+import { criterionLink } from "../../app/links";
 import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
 import { day, plural, thousands } from "../../lab/format";
@@ -30,7 +30,7 @@ const readAt = () => {
 export function AgentPage() {
   const { state, offline, refresh } = useLabState();
   const toast = useToast();
-  const { list } = useCriteria(null);
+  const { list } = useCriteria("code");
   const [reading, setReading] = useState(false);
   const busy = !!state?.job.running || reading;
   const readCode = () => {
@@ -93,7 +93,8 @@ export function AgentPage() {
           <div>
             <h2 className="text-title font-semibold text-fg">Подключение</h2>
             <p className="mb-5 mt-1 text-small text-fg-3">
-              Где работает агент и как до него достучаться. Нужно для симуляций; оценка диалогов агента не запускает.
+              Где работает агент и как до него достучаться. Нужно для симуляций; проверки разговоров агента не
+              запускают.
             </p>
             <ConnectionForm
               key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}`}
@@ -113,7 +114,7 @@ export function AgentPage() {
                       из <span className="font-mono">{state.settings.repo}</span>
                     </>
                   ) : null}
-                  . Из них критерии берутся дословно.
+                  . Из них дословно берутся критерии точности.
                 </>
               ) : (
                 "Код ещё не прочитан. Укажите папку с кодом в «Запуск из кода» и нажмите «Прочитать код»."
@@ -131,7 +132,7 @@ export function AgentPage() {
                     return (
                       <li key={s.id}>
                         <Link
-                          to={`${SECTIONS.criteria}?f=${encodeURIComponent(s.id)}&view=code`}
+                          to={criterionLink("code", null, { f: s.id, view: "code" })}
                           className="-mx-3 grid grid-cols-[20px_minmax(0,1fr)_auto_16px] items-center gap-3 rounded-control px-3 py-3 transition-colors hover:bg-hover"
                         >
                           <Icon aria-hidden className="size-4 text-fg-3" />

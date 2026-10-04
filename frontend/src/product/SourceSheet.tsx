@@ -5,9 +5,16 @@ import { splitQuote } from "../lab/quote";
 import { Skeleton } from "../ui/EmptyState";
 import { Sheet } from "../ui/Sheet";
 
-const KIND: Record<string, string> = { prompt: "Промпт", tools: "Инструменты агента" };
+const KIND: Record<string, string> = {
+  prompt: "Промпт",
+  tools: "Инструменты агента",
+  "tone-of-voice": "Правила общения",
+};
 
-/** The text a criterion is quoted from, with the quote marked and brought to the middle: it is the agent's own code. */
+/**
+ * The text a criterion is quoted from, with the quote marked and brought to the middle: the agent's own code, or the
+ * person's rules of communication.
+ */
 export function SourceSheet({
   open,
   onClose,
@@ -46,7 +53,7 @@ export function SourceSheet({
       )}
       {data && !parts && (
         <p className="border-b border-line px-5 py-3 text-small text-warn">
-          Цитаты критерия нет в нынешнем тексте: код мог измениться после того, как критерии извлекли.
+          Цитаты критерия нет в нынешнем тексте: он мог измениться после того, как критерии собрали.
         </p>
       )}
       {data && (

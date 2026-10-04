@@ -177,7 +177,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         draft = await self.prepared()
         self.assertEqual(len(draft['criteria']), 2)
         self.assertEqual(api.sources.load()[0], code)
-        self.assertIsNone(store.load(discover.RESULT))
+        self.assertIsNone(store.load(tone.RESULT))
         state = (await self.client.get('/api/state')).json()
         self.assertEqual(state['toneOfVoice']['revision'], draft['revision'])
 
@@ -198,8 +198,8 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(discover, 'judge_dialogue', AsyncMock(return_value=value)):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await self.wait_job()
-        result = store.load(discover.RESULT)
-        store.save(api.cards.DECK, {'cards': ['built from the code']})
+        result = store.load(tone.RESULT)
+        store.save(api.cards.DECK, {'check': 'code', 'cards': ['built from the code']})
         policy = api.sources.load()[-1]
         code = [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'new prompt'}]
         with patch.object(api.sources, 'collect', return_value=code):
@@ -208,11 +208,11 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(api.jobs.state['error'])
         self.assertEqual(api.sources.load(), [*code, policy])
         self.assertEqual(store.load(tone.DRAFT), draft)
-        self.assertEqual(store.load(discover.RESULT), result)
+        self.assertEqual(store.load(tone.RESULT), result)
         self.assertIsNone(store.load(api.cards.DECK))
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция'})
         self.assertIsNone(store.load(tone.DRAFT))
-        self.assertIsNone(store.load(discover.RESULT))
+        self.assertIsNone(store.load(tone.RESULT))
 
     async def test_check_uses_existing_judge_and_saves_tone_scope(self):
         draft = await self.prepared()
@@ -244,7 +244,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job()
         self.assertIsNone(api.jobs.state['error'])
         judge.assert_awaited_once()
-        result = store.load(discover.RESULT)
+        result = store.load(tone.RESULT)
         self.assertEqual(result['purpose'], 'tone-of-voice')
         self.assertEqual(result['criteriaRevision'], draft['revision'])
         self.assertEqual((result['summary']['measured'], result['summary']['passed']), (1, 1))
@@ -276,7 +276,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
                 '/api/tone-of-voice/check', json={'ruleIds': ['pronouns', 'simple_language'], 'count': 1}
             )
             await self.wait_job()
-        result = store.load(discover.RESULT)
+        result = store.load(tone.RESULT)
         self.assertEqual(result['results'][0]['status'], 'UNMEASURED')
         self.assertEqual(result['results'][0]['second']['status'], 'UNMEASURED')
         self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (0, 1))

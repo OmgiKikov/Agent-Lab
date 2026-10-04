@@ -1,8 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Upload } from "lucide-react";
-import { HISTORY_SHOWN } from "../app/product";
-import { SECTIONS } from "../app/links";
+import { SECTIONS, toneCheckLink, type Check } from "../app/links";
 import { upload } from "../lab/api";
 import { count } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
@@ -17,12 +16,29 @@ const ACCEPT = ".xlsx,.jsonl";
 export const exportFileError = (file: File) =>
   /\.(xlsx|jsonl)$/i.test(file.name) ? null : "Загрузите выгрузку чата: файл .xlsx или .jsonl.";
 
-/** A new export replaces the current result and scenarios (backend: store.replace_inputs), so it is asked first. */
-export const replacesResult = (state: LabState | null) => !!state?.discover;
+/**
+ * What a new export takes away (backend: store.replace_inputs): the results of both checks and the scenarios. Asked
+ * first whenever there is any of them.
+ */
+export const replacesResult = (state: LabState | null) =>
+  !!(state?.checks.tone || state?.checks.code || state?.cards?.cards.length);
+
+/** «Уйдут итог tone of voice, итог точности и собранные сценарии»: what this export replaces, in one phrase. */
+function whatGoes(state: LabState | null) {
+  const parts = [
+    state?.checks.tone && "итог tone of voice",
+    state?.checks.code && "итог точности",
+    state?.cards?.cards.length && "собранные сценарии",
+  ].filter(Boolean) as string[];
+  if (!parts.length) return "";
+  const many = parts.length > 1 || !!state?.cards?.cards.length;
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} и ${parts[parts.length - 1]}` : parts[0];
+  return `${many ? "Уйдут" : "Уйдёт"} ${list}`;
+}
 
 /**
- * What a new export takes away, said before it happens — the same words in «Материалы» and «Диалоги». The criteria and
- * the person's clarifications stay for the new export; the result does not.
+ * What a new export takes away, said before it happens — the same words wherever the export is replaced. The
+ * criteria and the person's clarifications stay for the new export; the results of both checks do not.
  */
 export function ReplaceExport({
   open,
@@ -35,6 +51,8 @@ export function ReplaceExport({
   onConfirm: () => void;
   keepsCriteria: boolean;
 }) {
+  const { state } = useLabState();
+  const goes = whatGoes(state);
   return (
     <Modal
       open={open}
@@ -52,18 +70,16 @@ export function ReplaceExport({
       }
     >
       <p className="text-read text-fg-2">
-        Итог текущей проверки уйдёт из «Диалогов» и «Обзора»: новые разговоры нужно будет проверить заново.
-        {HISTORY_SHOWN
-          ? " Сама проверка останется в истории."
-          : " Если итог ещё нужен, сначала скачайте «Отчёт для письма»."}
-        {keepsCriteria && " Критерии и ваши уточнения сохранятся."}
+        {goes ? `${goes}: новые разговоры нужно будет проверить заново.` : "Новые разговоры нужно будет проверить."}{" "}
+        Проверки tone of voice останутся в истории, прогоны симуляций — тоже.
+        {keepsCriteria && " Критерии tone of voice и ваши уточнения сохранятся."}
       </p>
     </Modal>
   );
 }
 
-/** Sends the chat's export to the service and says what to do next. */
-function useUpload() {
+/** Sends the chat's export to the service and offers the check of the page it was loaded from. */
+function useUpload(check?: Check) {
   const { refresh } = useLabState();
   const toast = useToast();
   const navigate = useNavigate();
@@ -73,13 +89,18 @@ function useUpload() {
     try {
       const { total } = await upload<{ total: number }>("/api/logs", file);
       await refresh();
-      // What to measure on them is chosen at the start: tone of voice or the criteria from the agent's code.
-      toast.notify(`Загружено ${count(total, "разговор", "разговора", "разговоров")}`, {
-        label: "Оценить",
-        run: () => {
-          void navigate(SECTIONS.start);
-        },
-      });
+      const next = check === "code" ? `${SECTIONS.accuracy}?assess=1` : check === "tone" ? toneCheckLink() : null;
+      toast.notify(
+        `Загружено ${count(total, "разговор", "разговора", "разговоров")}`,
+        next
+          ? {
+              label: "Проверить",
+              run: () => {
+                void navigate(next);
+              },
+            }
+          : undefined,
+      );
     } catch (e) {
       toast.error(e);
     } finally {
@@ -89,18 +110,21 @@ function useUpload() {
   return { busy, send };
 }
 
-/** «Загрузить диалоги»: the chat's Excel export (sheet «Данные») or prepared .jsonl. */
+/** «Загрузить диалоги»: the chat's Excel export (sheet «Данные») or prepared .jsonl, shared by both checks. */
 export function UploadButton({
   variant = "primary",
   label = "Загрузить диалоги",
+  check,
 }: {
   variant?: "primary" | "outline";
   label?: string;
+  /** The check whose page it is on: after the upload, the way to check the new conversations by it. */
+  check?: Check;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const { state } = useLabState();
   const toast = useToast();
-  const { busy, send } = useUpload();
+  const { busy, send } = useUpload(check);
   const [pending, setPending] = useState<File | null>(null);
   const running = !!state?.job.running;
   return (

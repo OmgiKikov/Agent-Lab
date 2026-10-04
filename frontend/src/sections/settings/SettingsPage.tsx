@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Check as CheckIcon, ShieldCheck } from "lucide-react";
 import { Header } from "../../app/Header";
 import { api } from "../../lab/api";
-import type { Check, LabState } from "../../lab/types";
+import type { LabState, Probe } from "../../lab/types";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
@@ -76,10 +76,10 @@ function Destination({ models }: { models: LabState["models"] }) {
 
 /** Who judges and who plays the customer, and who judges again; «Проверить» asks each model once and says what it answered. */
 function Models({ state }: { state: LabState }) {
-  const [checks, setChecks] = useState<{ main: Check; second: Check | null } | "pending" | null>(null);
+  const [checks, setChecks] = useState<{ main: Probe; second: Probe | null } | "pending" | null>(null);
   const check = () => {
     setChecks("pending");
-    api<{ main: Check; second: Check | null }>("/api/models/check", {})
+    api<{ main: Probe; second: Probe | null }>("/api/models/check", {})
       .then(setChecks)
       .catch((e) => {
         const failed = { ok: false, error: String(e?.message ?? e) };

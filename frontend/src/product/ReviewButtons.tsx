@@ -24,7 +24,7 @@ export function ReviewButtons({
   size?: "lg" | "sm";
 }) {
   const { state } = useLabState();
-  const wait = answersWait(state, example.source);
+  const wait = answersWait(state, example);
   const fail = example.status === "FAIL";
   const yes = example.review === "agree";
   const no = example.review === "disagree";

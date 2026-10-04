@@ -4,6 +4,7 @@ import { Check, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
 import { count, plural } from "../../lab/format";
+import { BY_CRITERIA } from "../../lab/checks";
 import { DEFAULT_PERSONA } from "../../lab/look";
 import { FROM_LOG, pickOf, type Pick } from "../../lab/runs";
 import type { LabState } from "../../lab/types";
@@ -146,7 +147,7 @@ export function PlayDialog({
             ))}
           </div>
         </Block>
-        <Block label="Сценарии">
+        <Block label={state.cards ? `Сценарии ${BY_CRITERIA[state.cards.check]}` : "Сценарии"}>
           <Segmented<Pick>
             value={pick}
             onChange={setPick}

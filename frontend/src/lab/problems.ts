@@ -1,8 +1,9 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLabState } from "./LabProvider";
 import { useToast } from "../ui/toast";
 import { api } from "./api";
-import type { LabRun, LabState, Turn } from "./types";
+import { JOB_OF } from "./checks";
+import type { Check, LabRun, LabState, Turn } from "./types";
 
 /** The service's record of rules and problems (lab/problems.py; spec, section 8). */
 export type Decision = "agree" | "disagree";
@@ -29,6 +30,11 @@ export type Example = {
   secondStatus?: "PASS" | "FAIL" | null;
   review: Decision | null;
   reviewScope: Scope | null;
+  /**
+   * The check whose result (or whose run) the verdict belongs to. The service names it once for the whole record;
+   * the page puts it on every example, so an answer goes to that check's result and its links stay in its section.
+   */
+  check?: Check;
 };
 /** One stage of a rule: its counts, its verdicts, and the ids the checks gave the rule in this stage. */
 export type Side = { failed: number; passed: number; unknown: number; examples: Example[]; ruleIds: string[] };
@@ -53,6 +59,8 @@ export type RuleEntry = {
   scenarioIds: string[];
 };
 export type Problems = {
+  /** The check of the record: the one asked for, or the check of the run asked for. */
+  check: Check;
   log: {
     sampled: number;
     assessed: number;
@@ -78,27 +86,50 @@ export type Problems = {
 export type LogDialogue = { id: string; messages: { role: "user" | "assistant"; content: string }[] };
 export type SourceText = { id: string; kind: string; origin: string; sha256?: string; content: string };
 
-/** What makes the problems out of date: a new assessment, a run that started or finished, a task that ended. */
+/** What makes the problems out of date: a new result, a run that started or finished, new scenarios, a task that ended. */
 export function problemsStamp(state: LabState | null): string {
   if (!state) return "";
   const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}`).join(",");
   const sources = state.sources.map((s) => `${s.id}:${s.sha256 ?? ""}`).join(",");
-  return `${state.logs.updatedAt ?? ""}|${state.discover?.finishedAt ?? ""}|${sources}|${runs}|${state.job.running}`;
+  const results = `${state.checks.tone?.finishedAt ?? ""}|${state.checks.code?.finishedAt ?? ""}`;
+  return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}`;
 }
 
-export function useProblems(runId: string | null) {
+/** Every example of the record with the check it belongs to (Example.check). */
+function withCheck(data: Problems, asked: Check | null): Problems {
+  const check = data.check ?? asked ?? undefined;
+  const own = (e: Example): Example => ({ ...e, check });
+  return {
+    ...data,
+    check: check as Check,
+    rules: data.rules.map((r) => ({
+      ...r,
+      log: { ...r.log, examples: r.log.examples.map(own) },
+      sim: { ...r.sim, examples: r.sim.examples.map(own) },
+    })),
+  };
+}
+
+/**
+ * The rules and problems of a check: its result, and the last finished run of its scenarios. With a run, that run and
+ * the result of the run's own check. Nothing is asked without one of them.
+ */
+export function useProblems(check: Check | null, runId: string | null = null, enabled = true) {
   const { state } = useLabState();
+  const scope = runId ? `run=${encodeURIComponent(runId)}` : check ? `check=${check}` : null;
   return useQuery({
-    queryKey: ["problems", runId ?? "latest", problemsStamp(state)],
-    queryFn: () => api<Problems>(`/api/problems${runId ? `?run=${encodeURIComponent(runId)}` : ""}`),
-    enabled: !!state,
-    placeholderData: keepPreviousData,
+    queryKey: ["problems", scope, problemsStamp(state)],
+    queryFn: () => api<Problems>(`/api/problems?${scope}`).then((data) => withCheck(data, runId ? null : check)),
+    enabled: !!state && !!scope && enabled,
+    // While the same record refreshes, the old one stays on screen; another check's or run's never stands in for it.
+    placeholderData: (previous, query) => (query?.queryKey[1] === scope ? previous : undefined),
     staleTime: Infinity,
   });
 }
 
 const sameVerdict = (a: Example, b: Example) =>
   a.source === b.source &&
+  a.check === b.check &&
   a.ruleId === b.ruleId &&
   (a.source === "log" ? a.dialogueId === b.dialogueId : a.runId === b.runId && a.index === b.index);
 
@@ -119,12 +150,16 @@ function withDecision(data: Problems, target: Example, decision: Decision | null
 export type Answer = { example: Example; decision: Decision | null; finishedAt: string | null | undefined };
 
 /**
- * Why answers on the logs wait, in one line, or null. While their check runs, its new result replaces the one the
- * person answers on, and the service refuses answers (backend/lab/api.py, review).
+ * Why answers on a check's result wait, in one line, or null. While that check runs, its new result replaces the one
+ * the person answers on, and the service refuses answers to it (backend/lab/api.py, review); the other check's
+ * result takes answers as usual.
  */
-export function answersWait(state: LabState | null, source: Example["source"]): string | null {
-  const checking = state?.job.running && (state.job.kind === "tone-check" || state.job.kind === "discover");
-  return source === "log" && checking ? "Идёт проверка разговоров — ответить можно после неё." : null;
+export function answersWait(state: LabState | null, example: Pick<Example, "source" | "check">): string | null {
+  if (example.source !== "log" || !state?.job.running) return null;
+  const running = (Object.keys(JOB_OF) as Check[]).find((c) => JOB_OF[c] === state.job.kind);
+  return running && (example.check ?? running) === running
+    ? "Идёт проверка разговоров — ответить можно после неё."
+    : null;
 }
 
 /**
@@ -143,6 +178,7 @@ export function useReview() {
         example.source === "log"
           ? {
               source: "log",
+              check: example.check,
               dialogueId: example.dialogueId,
               ruleId: example.ruleId,
               decision,
@@ -176,9 +212,11 @@ export function useReview() {
 /** The whole conversation of an example: a logged one from the logs, a simulated one from its run. */
 export function useTurns(example?: Example): { turns?: Turn[]; loading: boolean; error: unknown } {
   const { state } = useLabState();
+  const check = example?.check;
   const log = useQuery({
-    queryKey: ["dialogue", example?.dialogueId, state?.logs.updatedAt],
-    queryFn: () => api<LogDialogue>(`/api/logs/${encodeURIComponent(example!.dialogueId!)}`),
+    queryKey: ["dialogue", example?.dialogueId, check, state?.logs.updatedAt],
+    queryFn: () =>
+      api<LogDialogue>(`/api/logs/${encodeURIComponent(example!.dialogueId!)}${check ? `?check=${check}` : ""}`),
     enabled: example?.source === "log",
     staleTime: Infinity,
   });

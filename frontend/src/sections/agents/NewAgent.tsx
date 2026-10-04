@@ -9,7 +9,7 @@ const FIELD =
 
 /**
  * A new agent: a name and one line about it. Its own dialogues, rules and results start empty; the agent opens at
- * «Начать проверку».
+ * «Обзор», where it says how to begin.
  */
 export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = useState("");
@@ -23,7 +23,7 @@ export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void
     setError(null);
     try {
       const agent = await createAgent(name, description);
-      window.location.assign(agentHref(agent.id, "/start"));
+      window.location.assign(agentHref(agent.id, "/overview"));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);

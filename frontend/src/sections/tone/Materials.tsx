@@ -4,9 +4,8 @@ import { api, upload } from "../../lab/api";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useSource } from "../../lab/problems";
-import { rememberName, rememberText, savedName, savedText, TONE_ID } from "../../lab/tone";
+import { rememberName, rememberText, savedName, savedText, TONE_ID, toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
-import { HISTORY_SHOWN } from "../../app/product";
 import { exportFileError, ReplaceExport, replacesResult } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
@@ -68,12 +67,13 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       await refresh();
       onNext();
     });
-  // New rules replace the criteria and take the current result away (backend: store.replace_inputs); the same rules
-  // only collect the criteria anew, and the result stays.
+  // New rules replace the criteria and take the tone-of-voice result away, with the scenarios built from it (backend:
+  // store.replace_inputs); the same rules only collect the criteria anew, and the result stays. Accuracy is not touched.
   const next = () => {
-    if (state.discover && !unchanged) setPending({ next: true });
+    if (toneResult(state) && !unchanged) setPending({ next: true });
     else prepare();
   };
+  const deck = state.cards?.check === "tone" && !!state.cards.cards.length;
   const disabled = busy || state.job.running;
   return (
     <section aria-labelledby="materials-title">
@@ -214,11 +214,9 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
         }
       >
         <p className="text-read text-fg-2">
-          Правила изменились: итог текущей проверки уйдёт из «Диалогов» и «Обзора», критерии соберутся заново, а ваши
-          уточнения к прежним критериям не перейдут.
-          {HISTORY_SHOWN
-            ? " Сама проверка останется в истории."
-            : " Если итог ещё нужен, сначала скачайте «Отчёт для письма»."}
+          Правила изменились: итог tone of voice уйдёт из раздела и «Обзора», критерии соберутся заново, а ваши
+          уточнения к прежним критериям не перейдут.{deck ? " Сценарии, собранные из tone of voice, сбросятся." : ""}{" "}
+          Сама проверка останется в истории; итог точности не изменится.
         </p>
       </Modal>
     </section>

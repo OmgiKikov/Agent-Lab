@@ -4,7 +4,16 @@ import { ArrowRight, ArrowUpRight, ChevronLeft, ChevronRight, Code2, Send } from
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
-import { conversationsLink, criterionLink, problemLink, reviewLink, stageLink, type Stage } from "../../app/links";
+import {
+  conversationsLink,
+  criterionLink,
+  problemLink,
+  reviewLink,
+  side,
+  stageLink,
+  type Stage,
+} from "../../app/links";
+import { CHECK_NAME } from "../../lab/checks";
 import { dialogOf } from "../../lab/dialogs";
 import { useCriteria } from "../../lab/criteria";
 import { Duty } from "../../product/Duty";
@@ -19,16 +28,16 @@ import { shortOrigin } from "../../product/text";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
+import { useSimRuns } from "../simulations/stage";
 import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
 import { checked, violationsOf } from "./model";
 import { shareBase } from "../../app/agent";
-import { TONE_ONLY } from "../../app/product";
 
 /**
  * One problem, read top to bottom: what the agent does wrong, what it must do instead, how often (one line of numbers),
- * then the case itself — the conversation as the customer saw it — and the person's answer. One stage at a time:
- * the other stage is one link away, never mixed in.
+ * then the case itself — the conversation as the customer saw it — and the person's answer. One stage at a time: in a
+ * check, its conversations; in the simulation, one run of that check's scenarios. The other is one link away.
  */
 export function ProblemPage({ stage }: { stage: Stage }) {
   const { id = "" } = useParams();
@@ -36,7 +45,11 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const navigate = useNavigate();
   const toast = useToast();
   const { state, offline } = useLabState();
-  const { data, list } = useCriteria(stage === "sim" ? params.get("run") : null);
+  const { run: simRun } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
+  // A check's problem is of that check; a run's, of the check whose scenarios it played.
+  const check = stage === "sim" ? (simRun?.check ?? null) : stage;
+  const { data, list } = useCriteria(check, stage === "sim" ? (simRun?.id ?? null) : null);
+  const here = side(stage);
   const review = useReview();
   const [lit, setLit] = useState(false);
   const [handoff, setHandoff] = useState(false);
@@ -46,7 +59,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const c = list.find((x) => x.r.id === id);
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
 
-  const examples = c ? violationsOf(c, stage) : [];
+  const examples = c ? violationsOf(c, here) : [];
   const at = exampleAt(examples, params.get("e"));
   const example = examples[at];
   /** The example in the address by its conversation: «Нет» sends it to the end of the order, it stays on screen. */
@@ -65,11 +78,11 @@ export function ProblemPage({ stage }: { stage: Stage }) {
     pin(examples[n]);
   };
   const decide = (e: Example, d: Decision) => {
-    if (answersWait(state, e.source)) return;
+    if (answersWait(state, e)) return;
     if (params.get("e") !== conversationKey(e)) pin(e);
     const before = e.review;
     const next = e.review === d ? null : d;
-    // The result the examples come from: the service takes the answer only on it.
+    // The check's result the examples come from: the service takes the answer only on it.
     const finishedAt = data?.log?.finishedAt;
     review.mutate({ example: e, decision: next, finishedAt });
     if (next)
@@ -92,11 +105,10 @@ export function ProblemPage({ stage }: { stage: Stage }) {
     },
   });
 
-  const place = stage === "log" ? "Диалоги" : "Симуляции";
+  const place = stage === "sim" ? "Симуляции" : CHECK_NAME[stage];
   const header = (
     <Header
       title={c?.r.title ?? "Проблема"}
-      step={stage === "log" ? 1 : 2}
       crumbs={[{ label: place, to: stageLink(stage, runId) }]}
       actions={
         c && (
@@ -114,7 +126,8 @@ export function ProblemPage({ stage }: { stage: Stage }) {
         <ServiceDown />
       </div>
     );
-  if (!data)
+  // Without any run the simulation has no problems to wait for.
+  if (!data && !(stage === "sim" && state && !simRun))
     return (
       <div className="flex h-full flex-col">
         {header}
@@ -124,7 +137,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
         </div>
       </div>
     );
-  if (!c) {
+  if (!c || !data) {
     return (
       <div className="flex h-full flex-col">
         {header}
@@ -141,8 +154,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   }
 
   const r = c.r;
-  const s = r[stage];
-  const other: Stage = stage === "log" ? "sim" : "log";
+  const s = r[here];
   const second = secondOf(s.examples);
   const humans = humansOf(s);
   const run = stage === "sim" ? state?.runs.find((x) => x.id === runId) : undefined;
@@ -158,9 +170,9 @@ export function ProblemPage({ stage }: { stage: Stage }) {
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
           <p className="text-read text-fg-3">
-            {stage === "log"
-              ? "Проблема в диалогах"
-              : `Проблема в симуляции${run ? ` · прогон ${longDay(run.startedAt)}` : ""}`}
+            {stage === "sim"
+              ? `Проблема в симуляции${run ? ` · прогон ${longDay(run.startedAt)}` : ""}`
+              : `Проблема в диалогах · ${CHECK_NAME[stage]}`}
           </p>
           <h2 className="mt-1 text-balance text-page font-semibold text-fg">{r.title}</h2>
           <Duty key={r.id} text={r.rule.text} className="mt-4 max-w-[68ch] text-lead text-fg-2" />
@@ -225,15 +237,28 @@ export function ProblemPage({ stage }: { stage: Stage }) {
               входят.
             </p>
           )}
-          {r[other].failed > 0 && !(TONE_ONLY && other === "sim") && (
-            <Link
-              to={problemLink(r.id, other)}
-              className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
-            >
-              {other === "sim" ? "В симуляции" : "В диалогах"} тоже: {r[other].failed} из {checked(r[other])}
-              <ArrowRight aria-hidden className="size-4" />
-            </Link>
-          )}
+          {/* The same criterion on the other side: a check's last run, or the conversations of the run's check. */}
+          {stage === "sim"
+            ? r.log.failed > 0 &&
+              data.check && (
+                <Link
+                  to={problemLink(r.id, data.check)}
+                  className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
+                >
+                  В диалогах тоже: {r.log.failed} из {checked(r.log)}
+                  <ArrowRight aria-hidden className="size-4" />
+                </Link>
+              )
+            : r.sim.failed > 0 &&
+              data.sim && (
+                <Link
+                  to={problemLink(r.id, "sim", data.sim.runId)}
+                  className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
+                >
+                  В симуляции тоже: {r.sim.failed} из {checked(r.sim)}
+                  <ArrowRight aria-hidden className="size-4" />
+                </Link>
+              )}
 
           <section aria-label="Примеры" className="mt-12">
             <div className="flex items-center gap-3">
@@ -274,9 +299,9 @@ export function ProblemPage({ stage }: { stage: Stage }) {
             </div>
           </section>
 
-          {stage === "log" && !TONE_ONLY && (
+          {stage !== "sim" && (
             <div className="mt-12 border-t border-line pt-8">
-              <Reproduce r={r} />
+              <Reproduce r={r} check={stage} />
             </div>
           )}
 
@@ -314,10 +339,10 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                       <ArrowUpRight aria-hidden className="size-3.5" />
                     </button>
                   )}
-                  {/* The rules of communication are not in the agent's code; the code view is hidden in tone-only mode. */}
-                  {!tone && !TONE_ONLY && (
+                  {/* The rules of communication are not in the agent's code: their text opens above. */}
+                  {!tone && (
                     <Link
-                      to={criterionLink(r.id, { view: "code" })}
+                      to={criterionLink("code", r.id, { view: "code" })}
                       className="inline-flex items-center gap-0.5 font-medium text-run hover:underline"
                     >
                       В коде агента
@@ -336,7 +361,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
           </details>
         </div>
       </div>
-      <Handoff open={handoff} onClose={() => setHandoff(false)} r={r} side={stage} link={link} />
+      <Handoff open={handoff} onClose={() => setHandoff(false)} r={r} side={here} link={link} />
       <SourceSheet
         open={source}
         onClose={() => setSource(false)}

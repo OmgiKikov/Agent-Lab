@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Copy, FileDown } from "lucide-react";
+import { CHECK_NAME } from "../../lab/checks";
 import type { Criterion } from "../../lab/criteria";
 import { count, day, plural } from "../../lab/format";
 import { download, problemsReport, reliabilityWord, sourceLabel, summarySentence } from "../../lab/problemReport";
@@ -76,8 +77,8 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
 }
 
 /**
- * «Отчёт»: the assessment as a protocol to send, a white sheet inside the product. Logs and simulation are never in one
- * report. «Скопировать для письма» puts the same in Markdown, each violation with its link.
+ * «Отчёт»: a check's assessment as a protocol to send, a white sheet inside the product. Its conversations and its
+ * simulation are never in one report. «Скопировать для письма» puts the same in Markdown, each problem with its link.
  */
 export function ReportSheet({
   open,
@@ -144,7 +145,7 @@ export function ReportSheet({
             variant="ghost"
             icon={FileDown}
             aria-label="Скачать Markdown"
-            onClick={() => download(`otchet-${side === "log" ? "logi" : "simulyaciya"}.md`, markdown())}
+            onClick={() => download(`otchet-${side === "log" ? "dialogi" : "simulyaciya"}.md`, markdown())}
           />
           <Button variant="primary" icon={Copy} onClick={copy}>
             Скопировать для письма
@@ -156,8 +157,8 @@ export function ReportSheet({
         <article className="mx-auto max-w-3xl rounded-block bg-paper px-6 pb-12 pt-9 text-ink shadow-pop sm:px-12">
           <Cap>
             {side === "log"
-              ? `Протокол проверки · диалоги · ${day(log?.finishedAt)}`
-              : `Протокол проверки · симуляция · ${day(sim?.finishedAt)}`}
+              ? `Протокол проверки · ${CHECK_NAME[data.check]} · диалоги · ${day(log?.finishedAt)}`
+              : `Протокол проверки · ${CHECK_NAME[data.check]} · симуляция · ${day(sim?.finishedAt)}`}
           </Cap>
           <h2 className="mt-3 text-balance text-title font-semibold text-ink">{summarySentence(data, side)}</h2>
           {side === "log" && log && (
