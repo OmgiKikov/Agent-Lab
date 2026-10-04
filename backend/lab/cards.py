@@ -18,6 +18,7 @@ from .prompts import CARD
 
 DECK = checks.DECK
 LIMIT = 30
+PER_ERROR = 2  # conversations per criterion the agent failed, and controls per topic
 # Why a card exists: an error the check found in a real conversation, or a conversation without one (a control).
 FROM_LOG, COVERAGE = 'Ошибка из лога', 'Покрытие темы'
 # Applies to every scenario: instructions must come from the knowledge base, not be invented.
@@ -79,22 +80,38 @@ def failed_in(result: dict) -> list[str]:
 
 
 def pick(analysis: dict) -> list[tuple[dict, dict, str, list[str]]]:
-    """Per topic: up to two conversations where the agent failed (regressions), with the criteria it failed there,
-    and two where it did not (coverage)."""
+    """The conversations to build scenarios from, with the criteria the agent failed in each. Per topic, every
+    criterion the agent failed gets its own conversation, the most frequent error first, then a conversation without
+    an error (a control); then every criterion its second conversation, then the second control. A conversation is
+    used once and keeps every criterion it failed. The rounds run across all topics, so a cut at LIMIT keeps one
+    scenario per error before any second one: tone of voice, one topic, was capped at two errors and two controls."""
     by_id = {str(d['id']): d for d in logs.load()}
-    rounds = [[], [], [], []]  # 1st regression, 1st coverage, 2nd regression, 2nd coverage of every topic
+    topics = []
     for topic in analysis['topics']:
         if not any(r['observation'] == 'reply' for r in topic['rules']):
             continue
         results = [r for r in analysis['results'] if r['topicId'] == topic['id'] and str(r['dialogueId']) in by_id]
-        failed = [r for r in results if r['status'] == 'FAIL']
-        coverage = [r for r in results if r['status'] in ('PASS', 'UNMEASURED')]
-        for n in range(2):
-            if n < len(failed):
-                rounds[2 * n].append((topic, by_id[str(failed[n]['dialogueId'])], FROM_LOG, failed_in(failed[n])))
-            if n < len(coverage):
-                rounds[2 * n + 1].append((topic, by_id[str(coverage[n]['dialogueId'])], COVERAGE, []))
-    return [chosen for group in rounds for chosen in group][:LIMIT]
+        failing = {
+            rule['id']: [r for r in results if r['status'] == 'FAIL' and rule['id'] in failed_in(r)]
+            for rule in topic['rules']
+            if rule['observation'] in ('reply', 'tool')
+        }
+        ordered = sorted((found for found in failing.values() if found), key=len, reverse=True)
+        controls = [r for r in results if r['status'] in ('PASS', 'UNMEASURED')]
+        topics.append((topic, ordered, controls))
+    used: set[str] = set()
+    picked = []
+    for n in range(PER_ERROR):
+        for topic, ordered, _ in topics:
+            for found in ordered:
+                result = next((r for r in found if str(r['dialogueId']) not in used), None)
+                if result is not None:
+                    used.add(str(result['dialogueId']))
+                    picked.append((topic, by_id[str(result['dialogueId'])], FROM_LOG, failed_in(result)))
+        for topic, _, controls in topics:
+            if n < len(controls):
+                picked.append((topic, by_id[str(controls[n]['dialogueId'])], COVERAGE, []))
+    return picked[:LIMIT]
 
 
 def general_rules(analysis: dict) -> list[dict]:

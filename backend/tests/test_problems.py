@@ -282,6 +282,11 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((summary['dialogs'], summary['assessed'], summary['unassessed']), (3, 2, 1))
         self.assertEqual(summary['assessed'] - summary['withViolations'], 1)
 
+    async def test_a_run_recorded_under_an_older_name_of_its_agent_is_reported_under_the_current_one(self) -> None:
+        store.create_run(played_run() | {'target': 'prod', 'targetName': 'Агент на ИФТ'})
+        summary = (await self.client.get('/api/problems?run=run-1')).json()['sim']
+        self.assertEqual(summary['target'], 'Тестовый стенд банка')
+
     async def test_state_exposes_the_revision_used_by_source_cache(self) -> None:
         store.replace_inputs(api.sources.FILE, [dict(SOURCE, sha256='source-revision')])
         state = (await self.client.get('/api/state')).json()

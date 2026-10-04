@@ -230,6 +230,39 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['finishedAt'])
         self.assertTrue(self.agent.closed)
 
+    async def test_a_run_in_which_the_agent_answered_nothing_fails_and_says_why(self) -> None:
+        """Every conversation broke on the agent's first turn, so nothing can ever be judged. The run said «сыграно»
+        and the reason surfaced only after «Оценить заново»; the run itself now fails with it. One answer is a played
+        run."""
+
+        async def unreachable(conversation_id: str, message: str, world: dict) -> dict:
+            raise simulate.agents.AgentError('Агент недоступен: ConnectError')
+
+        async def once(conversation_id: str, message: str, world: dict) -> dict:
+            if message == 'card-2':
+                raise simulate.agents.AgentError('Агент недоступен: ConnectError')
+            return {'text': 'answer', 'status': '202', 'ok': False, 'options': [], 'events': []}
+
+        async def passed(scenario: dict, item: dict) -> None:
+            item.update(status='PASS', rules=[])
+
+        for say, expected in (
+            (unreachable, ('failed', 'Агент не ответил ни в одном разговоре: Агент недоступен: ConnectError')),
+            (once, ('done', None)),
+        ):
+            with (
+                self.subTest(say=say.__name__),
+                patch.object(simulate.cards, 'deck', return_value=[card(), card('card-2', 'card-2')]),
+                patch.object(self.agent, 'say', side_effect=say),
+                patch.object(simulate.judge, 'evaluate', side_effect=passed),
+            ):
+                result = await simulate.run('test')
+                self.assertEqual((result['status'], result['error']), expected)
+                self.assertEqual(result['items'][1]['error'], 'Агент недоступен: ConnectError')
+                # The list of runs (/api/state) has the reason without reading the conversations.
+                listed = next(summary for summary in store.run_summaries() if summary['id'] == result['id'])
+                self.assertEqual((listed['status'], listed['error']), expected)
+
     async def test_close_failure_is_a_finished_failed_run(self) -> None:
         async def evaluate(scenario: dict, item: dict) -> None:
             item.update(status='PASS')

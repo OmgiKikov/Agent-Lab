@@ -5,7 +5,7 @@ import { yesNoText } from "../../lab/answers";
 import type { Criterion } from "../../lab/criteria";
 import { pct } from "../../lab/format";
 import { humansOf } from "../../lab/problemStats";
-import { checked, violationsOf, type SideKey } from "./model";
+import { checked, errorIn, violationsOf, type SideKey } from "./model";
 
 /**
  * One problem in a list, on the page itself, no box: its rank by frequency, the agent's behaviour as a sentence, one real
@@ -52,7 +52,10 @@ export function ProblemRow({
         )}
       </span>
       <span className="pt-0.5 text-right">
-        <span className="block whitespace-nowrap text-read font-semibold tabular-nums text-fg">
+        <span
+          className="block whitespace-nowrap text-read font-semibold tabular-nums text-fg"
+          title={`Ошибка ${errorIn(s)}`}
+        >
           {s.failed}
           <span className="font-normal text-fg-3"> из {of}</span>
         </span>

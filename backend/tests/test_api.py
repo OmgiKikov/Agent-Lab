@@ -241,7 +241,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         said.assert_not_awaited()
         closed.assert_awaited_once()
 
-    async def test_a_malformed_agent_address_is_named_and_never_fails_a_check_or_a_run(self) -> None:
+    async def test_a_malformed_agent_address_is_named_by_the_check_and_by_the_run(self) -> None:
         malformed = (
             'https://ift.example.invalid:84 43/api',
             'https://ift.example.invalid:99999/api',
@@ -281,7 +281,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 break
             await asyncio.sleep(0.002)
         run = store.runs()[0]
-        self.assertEqual(run['status'], 'done')
+        # Never a crash: each conversation names the address, and the run, which the agent answered in none, fails
+        # with it (simulate.unanswered).
+        self.assertEqual(run['status'], 'failed')
+        self.assertTrue(run['error'].startswith('Агент не ответил ни в одном разговоре: '), run['error'])
+        self.assertIn('адрес агента', run['error'])
         self.assertEqual([item['status'] for item in run['items']], ['UNMEASURED'])
         self.assertIn('адрес агента', run['items'][0]['error'])
 
@@ -350,6 +354,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state['runs'][1]['metric']['human'], {'reviewed': 1, 'agree': 1})
         self.assertNotIn('items', state['runs'][0])
         self.assertFalse([text for text in parsed if 'conversation-of-the-run' in text])
+
+    async def test_a_run_recorded_under_an_older_name_of_its_agent_is_listed_under_the_current_one(self) -> None:
+        store.create_run({'id': 'run-1', 'target': 'prod', 'targetName': 'Агент на ИФТ', 'items': []})
+        store.create_run({'id': 'run-2', 'target': 'mystery', 'targetName': 'Агент, которого больше нет', 'items': []})
+        listed = {run['id']: run['targetName'] for run in (await self.client.get('/api/state')).json()['runs']}
+        self.assertEqual(listed, {'run-1': 'Тестовый стенд банка', 'run-2': 'Агент, которого больше нет'})
 
     async def test_state_counts_the_dialogues_without_parsing_them(self) -> None:
         messages = [{'role': 'user', 'content': 'dialogue-text'}, {'role': 'assistant', 'content': 'answer'}]

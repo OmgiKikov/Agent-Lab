@@ -8,15 +8,22 @@ import httpx
 class ModelError(RuntimeError):
     """A model or the model gateway gave no usable answer. The message is for the person; the rest is for the retry
     policy (llm.chat): the HTTP status the model refused with, whether asking again later may help, and the pause the
-    model asked for (Retry-After, seconds)."""
+    model asked for (Retry-After, seconds); detail is the technical text, for the server log, never for the person."""
 
     def __init__(
-        self, message: str, *, status: int | None = None, retryable: bool = False, retry_after: float | None = None
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        retryable: bool = False,
+        retry_after: float | None = None,
+        detail: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.retryable = retryable
         self.retry_after = retry_after
+        self.detail = detail
 
 
 class MalformedAnswer(ModelError):

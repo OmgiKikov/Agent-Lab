@@ -4,7 +4,7 @@ import type { Criterion } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { criterionLink, problemLink, side, type Stage } from "../../app/links";
 import { ENTER, stagger } from "../../product/motion";
-import { queueOf } from "./model";
+import { checked, errorIn, queueOf } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
 /**
@@ -28,6 +28,7 @@ export function ProblemList({
   const rows = queueOf(list, where);
   const shown = limit ? rows.slice(0, limit) : rows;
   const clean = list.filter((c) => c.r[where].passed > 0 && !c.r[where].failed).length;
+  const first = rows[0]?.r[where];
   if (!rows.length)
     return (
       <p className="py-6 text-read text-fg-3">
@@ -39,6 +40,12 @@ export function ProblemList({
     );
   return (
     <>
+      {/* «6 из 52» next to «53 проверенных разговоров» read as a slip: the second number is said once, in place. */}
+      <p className="pt-2 text-small text-fg-3">
+        «{first.failed}
+        {"\u00a0"}из{"\u00a0"}
+        {checked(first)}» — ошибка {errorIn(first)}.
+      </p>
       <ol className="divide-y divide-line">
         {shown.map((c, i) => (
           <li key={c.r.id} className={ENTER} style={stagger(i + 2)}>

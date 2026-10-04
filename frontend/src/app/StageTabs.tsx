@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { historyLink, SECTIONS, stageRoot, type Stage } from "./links";
@@ -8,7 +7,9 @@ type Tab = { to: string; label: string; count?: number; end?: boolean };
 /**
  * The pages of a section. A check: its result, its conversations, the person's check, its criteria and the history of
  * its checks. The simulation: its result, runs, scenarios, conversations and check; the run being looked at travels
- * with the tabs.
+ * with the tabs. A tab is never cut: on a narrow screen the ones that do not fit go to a second row (a tab cut at the
+ * edge read as «Ис», with nothing to say the bar scrolls). The row says which tab is open (aria-current), not the
+ * router: «Итог» at /accuracy would match every page of the section.
  */
 export function StageTabs({
   stage,
@@ -19,25 +20,6 @@ export function StageTabs({
 }) {
   const [params] = useSearchParams();
   const { pathname } = useLocation();
-  const row = useRef<HTMLElement>(null);
-  // On a phone the tabs scroll sideways: the open one is brought into the row, not left cut at its edge — again when
-  // the tabs change size (the font arrives, a count appears). The row says which tab is open (aria-current), not the
-  // router: «Итог» at /accuracy would match every page of the section.
-  useEffect(() => {
-    const nav = row.current;
-    if (!nav) return;
-    const show = () => {
-      const tab = nav.querySelector<HTMLElement>('[aria-current="page"]');
-      if (!tab) return;
-      const box = nav.getBoundingClientRect();
-      const at = tab.getBoundingClientRect();
-      if (at.right > box.right) nav.scrollLeft += at.right - box.right + 16;
-      else if (at.left < box.left) nav.scrollLeft -= box.left - at.left + 16;
-    };
-    const sizes = new ResizeObserver(show);
-    for (const tab of nav.children) sizes.observe(tab);
-    return () => sizes.disconnect();
-  }, [pathname]);
   const run = stage === "sim" ? params.get("run") : null;
   const keep = run ? `?run=${encodeURIComponent(run)}` : "";
   const root = stageRoot(stage);
@@ -59,7 +41,7 @@ export function StageTabs({
         ];
   const problemsOpen = pathname.includes("/problems/");
   return (
-    <nav ref={row} aria-label="Страницы раздела" className="-mb-px flex gap-6 overflow-x-auto px-4 lg:px-10">
+    <nav aria-label="Страницы раздела" className="-mb-px flex flex-wrap gap-x-6 px-4 lg:px-10">
       {tabs.map((t) => {
         const path = t.to.split("?")[0];
         const on = t.end

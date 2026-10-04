@@ -16,6 +16,9 @@ from .source import START, CodeAgent
 
 SETTINGS = 'settings.json'
 DEFAULT_REPO = '~/Desktop/aigw-local'
+# The three ways to reach the agent, in words without a developer's slang: the same in «Агент», «Сыграть», the runs and
+# the reports. A run keeps the name it was played under (targetName); it is shown under the current one (run_name).
+NAMES = {'prod': 'Тестовый стенд банка', 'local-http': 'На этом компьютере', 'local-code': 'Запуск из кода'}
 # The test client in the local stand's fixtures: the synthetic customer gives these details when asked.
 STAND_CUSTOMER = (
     'Твоя организация: ООО «Ромашка», ИНН 7701234567. Торговая точка «Ромашка, Тверская», '
@@ -56,15 +59,15 @@ def configs() -> dict[str, dict]:
     current = settings()
     return {
         'prod': {
-            'name': 'Агент на ИФТ',
+            'name': NAMES['prod'],
             'kind': 'http',
             'profile': 'prod',
             'url': current['prodUrl'],
             'epk': current['epk'],
-            'note': 'Ручка в контуре банка, доступна с рабочего компьютера.',
+            'note': 'Стенд ИФТ в контуре банка: агент доступен с рабочего компьютера.',
         },
         'local-http': {
-            'name': 'Локальный агент',
+            'name': NAMES['local-http'],
             'kind': 'http',
             'profile': 'local',
             'url': f'http://127.0.0.1:8080{AGENT_PATH}',
@@ -72,7 +75,7 @@ def configs() -> dict[str, dict]:
             'note': 'Сервис на этом компьютере, тот же API. GigaChat настоящий, системы банка на заглушках.',
         },
         'local-code': {
-            'name': 'Агент из исходников',
+            'name': NAMES['local-code'],
             'kind': 'code',
             'profile': 'local',
             'repo': current['repo'],
@@ -102,6 +105,12 @@ def public(key: str, config: dict) -> dict:
     }
 
 
+def run_name(run: dict) -> str:
+    """The way a run reached its agent, by its current name: a run played before the names changed recorded the older
+    one; a way that no longer exists keeps the name it was played under."""
+    return NAMES.get(str(run.get('target') or ''), run.get('targetName') or '')
+
+
 def create(key: str) -> HttpAgent:
     config = configs().get(key)
     if not config:
@@ -110,6 +119,7 @@ def create(key: str) -> HttpAgent:
 
 
 __all__ = [
+    'NAMES',
     'STAND_CUSTOMER',
     'AgentError',
     'CodeAgent',
@@ -118,6 +128,7 @@ __all__ = [
     'create',
     'public',
     'repo',
+    'run_name',
     'session',
     'settings',
 ]

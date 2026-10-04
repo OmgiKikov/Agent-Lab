@@ -110,12 +110,14 @@ function SimResult() {
               checked={m.measured}
               unchecked={Math.max(0, total - m.measured)}
             />
+          ) : run.status === "failed" ? (
+            // Why, in place: «Агент не ответил ни в одном разговоре: …» (backend simulate.unanswered).
+            <div className="mt-6">
+              <p className="text-title font-semibold text-fg">Прогон прервался</p>
+              {run.error && <p className="mt-2 max-w-[68ch] text-lead text-fg-2">{run.error}</p>}
+            </div>
           ) : (
-            <p className="mt-6 text-title font-semibold text-fg">
-              {run.status === "failed"
-                ? `Прогон прервался${run.error ? `: ${run.error}` : ""}`
-                : "Разговоры этого прогона ещё не оценены"}
-            </p>
+            <p className="mt-6 text-title font-semibold text-fg">Разговоры этого прогона ещё не оценены</p>
           )}
           <Matrix run={run} state={state} />
           {data?.sim && !live && (
@@ -188,10 +190,12 @@ function RunLine({
       .catch(toast.error);
   };
   const others = finished.filter((r) => r.id !== run.id);
+  const failed = run.status === "failed";
   const text = (
     <>
       Синтетические клиенты {BY_CRITERIA[run.check]}
-      {run.label ? ` · «${run.label}»` : ""} · {isRunning(run) ? "идёт с" : "сыграно"} {longDay(run.startedAt)}
+      {run.label ? ` · «${run.label}»` : ""} · {isRunning(run) ? "идёт с" : failed ? "запущено" : "сыграно"}{" "}
+      {longDay(run.startedAt)}
     </>
   );
   return (
@@ -224,8 +228,9 @@ function RunLine({
       ) : (
         <span title={runTitle(run)}>{text}</span>
       )}
-      {/* The summary has no conversations, only their count: a run with none has nothing to judge again. */}
-      {!isRunning(run) && (run.metric?.total ?? 0) > 0 ? (
+      {/* The summary has no conversations, only their count: a run with none has nothing to judge again, nor one that
+          failed before anything was checked (the agent answered nothing: its reason is on the page). */}
+      {!isRunning(run) && (run.metric?.total ?? 0) > 0 && !(failed && !run.metric?.measured) ? (
         <button
           type="button"
           onClick={rejudge}

@@ -1,4 +1,5 @@
 import type { Criterion } from "../../lab/criteria";
+import { count } from "../../lab/format";
 import type { Side } from "../../lab/problems";
 
 export type Filter = "all" | "log" | "sim";
@@ -9,6 +10,13 @@ export const toSide = (raw: string | null): SideKey | null => (raw === "log" || 
 
 /** Dialogues where the criterion could be checked: broken or kept. The denominator of every count of a criterion. */
 export const checked = (s: Pick<Side, "failed" | "passed">) => s.failed + s.passed;
+
+/**
+ * What «N из M» of a criterion says, in the words of the report: «в 19 из 53 разговоров, где критерий удалось
+ * проверить». M read as all the conversations checked; those where this criterion could not be checked are not in it.
+ */
+export const errorIn = (s: Pick<Side, "failed" | "passed">) =>
+  `в ${s.failed} из ${count(checked(s), "разговора", "разговоров", "разговоров")}, где критерий удалось проверить`;
 
 /** The side a row of the queue counts: the logs, unless the filter is the simulation or only the simulation found it. */
 export const rowSide = (c: Criterion, filter: Filter): SideKey =>

@@ -208,6 +208,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
             <Link to={conversationsLink(stage, { run: runId, v: "fail", rule: r.id })} className={linkCls}>
               <b className="text-count font-semibold tabular-nums text-fg">{s.failed}</b> из {checked(s)}{" "}
               {plural(checked(s), "разговора", "разговоров", "разговоров")}
+              <span className="text-fg-3">, где критерий удалось проверить</span>
             </Link>
             {second.checked > 0 && (
               <>

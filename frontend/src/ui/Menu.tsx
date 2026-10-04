@@ -10,18 +10,24 @@ export function Menu({
   items,
   align = "left",
   up,
+  disabled,
   className,
 }: {
   trigger: ReactNode;
   items: MenuItem[];
   align?: "left" | "right";
   up?: boolean;
+  /** The trigger does nothing, as a disabled button: while another task runs. */
+  disabled?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
+    // Opened near the bottom of the screen (a phone, above the bottom navigation), the list scrolls into sight.
+    list.current?.scrollIntoView({ block: "nearest" });
     const away = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -41,13 +47,15 @@ export function Menu({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
+        disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex h-full w-full items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+        className="inline-flex h-full w-full items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:pointer-events-none disabled:opacity-40"
       >
         {trigger}
       </button>
-      {open && (
+      {open && !disabled && (
         <div
+          ref={list}
           role="menu"
           className={cn(
             "absolute z-40 max-h-80 min-w-[280px] overflow-auto rounded-block bg-raised p-1 shadow-pop",

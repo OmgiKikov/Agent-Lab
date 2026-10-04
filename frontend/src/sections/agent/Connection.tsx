@@ -21,12 +21,7 @@ const words = (text: string) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-/** How the three ways are called. */
-export const WAY_NAME: Record<string, string> = {
-  prod: "Тестовый стенд банка",
-  "local-http": "На этом компьютере",
-  "local-code": "Запуск из кода",
-};
+/** How each way reaches the agent; the ways are named by the service (backend/lab/agents, NAMES), as in «Сыграть». */
 const WAY_LOOK: Record<string, { icon: typeof Globe; how: string }> = {
   prod: { icon: Globe, how: "снаружи, по адресу" },
   "local-http": { icon: Monitor, how: "снаружи, уже запущен здесь" },
@@ -115,7 +110,7 @@ function Way({ target, on, onPick }: { target: Target; on: boolean; onPick: () =
       <span className="min-w-0">
         <span className="flex items-center gap-2 text-body font-medium">
           <look.icon aria-hidden className="size-4 text-fg-3" />
-          {WAY_NAME[target.id] ?? target.name}
+          {target.name}
         </span>
         <span className="mt-0.5 block text-small text-fg-3">
           {look.how}
