@@ -22,8 +22,9 @@ const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /**
  * «Итог» of a check: the real conversations of the export as this check judged them — one number, then the problems it
- * is made of, most frequent first. Without a result, how to get one. «Проверить снова» repeats tone of voice step by
- * step; accuracy is assessed again here (?assess=1), by the same criteria or by criteria read from the code anew.
+ * is made of, most frequent first. Without a result, how to get one. «Проверить снова», the same words in both checks,
+ * repeats tone of voice step by step; accuracy is checked again here (?assess=1), by the same criteria or by criteria
+ * read from the code anew.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -126,7 +127,7 @@ export function ResultPage({ check }: { check: Check }) {
           className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-3 transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"
         >
           <RotateCcw aria-hidden className="size-3.5" />
-          {check === "tone" ? "Проверить снова" : "Оценить заново"}
+          Проверить снова
         </button>
       </div>
       <StageResult
