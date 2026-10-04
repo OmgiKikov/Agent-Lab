@@ -24,8 +24,9 @@ export function useRun(id: string | null | undefined, state: LabState | null) {
   });
 }
 
-/** «Запуск из кода · 14704e1»: which way reached the agent, and which version of it. */
-export const runTitle = (run: LabRun) => [run.targetName, run.version].filter(Boolean).join(" · ");
+/** «Запуск из кода · версия 14704e1»: which way reached the agent, and which version of it. */
+export const runTitle = (run: LabRun) =>
+  [run.targetName, run.version ? `версия ${run.version}` : ""].filter(Boolean).join(" · ");
 
 export const isRunning = (run: LabRun) => run.status === "running";
 

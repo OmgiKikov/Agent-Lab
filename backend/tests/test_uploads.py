@@ -58,7 +58,7 @@ class ArchiveTests(unittest.TestCase):
         garbage = one_part('word/document.xml', b'\xff' * 64, 100, 0)
         with self.assertRaisesRegex(ValueError, 'Не удалось прочитать документ Word'):
             policy_files.read('rules.docx', garbage)
-        with self.assertRaisesRegex(ValueError, 'Не удалось прочитать файл Excel'):
+        with self.assertRaisesRegex(ValueError, 'Файл .xlsx повреждён'):
             logs.prepare('export.xlsx', one_part('[Content_Types].xml', b'\xff' * 64, 100, 0))
 
     def test_an_archive_feature_python_does_not_read_is_a_validation_error(self):
@@ -70,7 +70,7 @@ class ArchiveTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Не удалось прочитать документ Word'):
                     policy_files.read('rules.docx', part)
                 part = one_part('[Content_Types].xml', body, 4, zlib.crc32(b'<x/>'), flags)
-                with self.assertRaisesRegex(ValueError, 'Не удалось прочитать файл Excel'):
+                with self.assertRaisesRegex(ValueError, 'Файл .xlsx повреждён'):
                     logs.prepare('export.xlsx', part)
 
 
@@ -105,7 +105,7 @@ class UploadBodyTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(path=path), patch.object(module, 'LIMIT', 10_000):
                 response = await self.client.post(path, content=body(), headers={'Content-Length': '10001'})
                 self.assertEqual(response.status_code, 413, response.text)
-                self.assertIn('Файл слишком большой', response.json()['detail'])
+                self.assertIn('Файл больше', response.json()['detail'])
         self.assertEqual(pulled, [])
 
     async def test_an_upload_without_a_declared_length_is_read_no_further_than_the_limit(self) -> None:

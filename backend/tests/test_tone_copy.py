@@ -203,9 +203,9 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_rules_are_taken_only_from_another_agent_that_has_them(self):
         empty = registry.create('Агент вкладов')['id']
         cases = (
-            (self.source, self.source, 400, 'Правила можно взять только у другого агента'),
+            (self.source, self.source, 400, 'Правила можно взять только у другого агента.'),
             (self.target, 'nobody', 404, 'Агент не найден'),
-            (self.target, empty, 400, 'У агента «Агент вкладов» нет правил общения'),
+            (self.target, empty, 400, 'У агента «Агент вкладов» нет правил общения.'),
         )
         for into, source, status, detail in cases:
             with self.subTest(source=source):

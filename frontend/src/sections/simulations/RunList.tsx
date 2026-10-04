@@ -48,9 +48,9 @@ export function RunListPage() {
               ))}
             </ul>
           ) : (
-            <EmptyState drop title="Прогонов ещё не было" className="py-24">
+            <EmptyState drop title="Здесь будут прогоны" className="py-24">
               {state.cards?.cards.length
-                ? "«Сыграть» справа вверху: синтетические клиенты сыграют сценарии с агентом."
+                ? "Сыграйте сценарии с агентом."
                 : "Сначала соберите сценарии из ошибок проверки разговоров."}
             </EmptyState>
           )}

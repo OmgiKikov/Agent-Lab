@@ -6,7 +6,7 @@ import { SectionJob } from "../../app/SectionJob";
 import { criterionLink } from "../../app/links";
 import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
-import { day, plural, thousands } from "../../lab/format";
+import { count, day, plural, thousands } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { codeSources } from "../../lab/tone";
 import { Button } from "../../ui/Button";
@@ -93,8 +93,7 @@ export function AgentPage() {
           <div>
             <h2 className="text-title font-semibold text-fg">Подключение</h2>
             <p className="mb-5 mt-1 text-small text-fg-3">
-              Где работает агент и как до него достучаться. Нужно для симуляций; проверки разговоров агента не
-              запускают.
+              Где работает агент и как с ним связаться. Это нужно только для симуляций.
             </p>
             <ConnectionForm
               key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}`}
@@ -106,7 +105,8 @@ export function AgentPage() {
             <p className="mb-5 mt-1 text-small text-fg-3">
               {sources.length ? (
                 <>
-                  Прочитано {sources.length} {plural(sources.length, "источник", "источника", "источников")}
+                  {plural(sources.length, "Прочитан", "Прочитано", "Прочитано")}{" "}
+                  {count(sources.length, "источник", "источника", "источников")}
                   {date ? ` ${date}` : ""}
                   {state.settings.repo ? (
                     <>
@@ -114,15 +114,15 @@ export function AgentPage() {
                       из <span className="font-mono">{state.settings.repo}</span>
                     </>
                   ) : null}
-                  . Из них дословно берутся критерии точности.
+                  . {plural(sources.length, "Из него", "Из них", "Из них")} дословно берутся критерии точности.
                 </>
               ) : (
-                "Код ещё не прочитан. Укажите папку с кодом в «Запуск из кода» и нажмите «Прочитать код»."
+                "Код ещё не прочитан. Выберите «Запуск из кода», укажите папку с кодом и прочитайте код."
               )}
             </p>
             {sources.length > 0 && (
               <>
-                <Label>Промпты и инструменты</Label>
+                <Label>Инструкции и инструменты</Label>
                 <ul className="mt-2 divide-y divide-line">
                   {sources.map((s) => {
                     const mine = list.filter((c) => c.r.rule.sourceId === s.id);

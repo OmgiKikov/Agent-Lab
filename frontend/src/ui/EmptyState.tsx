@@ -40,8 +40,8 @@ export function EmptyState({
 export function ServiceDown() {
   return (
     <EmptyState drop title="Сервис не отвечает" className="h-full justify-center">
-      Запустите <code className="rounded bg-well px-1.5 py-0.5 font-mono text-small text-fg-2">sh bin/start.sh</code>:
-      он поднимет всё, что нужно.
+      Запустите его командой{" "}
+      <code className="rounded bg-well px-1.5 py-0.5 font-mono text-small text-fg-2">sh bin/start.sh</code>.
     </EmptyState>
   );
 }

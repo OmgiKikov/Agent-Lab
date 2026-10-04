@@ -145,11 +145,14 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_outage_says_the_previous_result_is_kept_only_when_the_check_has_one(self):
         self.assertIsNone(await self.assess_code())
-        unanswered = 'Модель проверки не ответила ни по одному разговору.'
-        self.assertEqual(await self.check_tone(down={'d1'}), unanswered)
+        unanswered, advice = (
+            'Модель проверки не ответила ни по одному разговору.',
+            ' Проверьте модель в разделе «Настройки».',
+        )
+        self.assertEqual(await self.check_tone(down={'d1'}), unanswered + advice)
         self.assertIsNone(store.load(TONE_RESULT))
         self.assertIsNone(await self.check_tone())
-        self.assertEqual(await self.check_tone(down={'d1'}), unanswered + ' Прежний итог сохранён.')
+        self.assertEqual(await self.check_tone(down={'d1'}), unanswered + ' Прежний итог сохранён.' + advice)
 
     async def answer(self, finished_at, rule_id, **fields):
         body = {'source': 'log', 'dialogueId': 'd1', 'ruleId': rule_id, 'decision': 'agree', 'finishedAt': finished_at}
@@ -196,7 +199,9 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
             code = await self.answer(code_result['finishedAt'], 't1r1', check='code')
             own = await self.answer(tone_result['finishedAt'], 'pronouns', check='tone', decision='disagree')
         self.assertEqual((code.status_code, own.status_code), (409, 200))
-        self.assertEqual(code.json()['detail'], 'Идёт проверка «Точность»: ответ не сохранится. Отметьте после неё.')
+        self.assertEqual(
+            code.json()['detail'], 'Ответ не сохранится, пока идёт проверка «Точность». Ответьте после неё.'
+        )
         with patch.dict(api.jobs.state, {'running': True, 'kind': 'tone-check'}):
             code = await self.answer(code_result['finishedAt'], 't1r1')
             own = await self.answer(tone_result['finishedAt'], 'pronouns')
@@ -219,11 +224,11 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
     async def test_scenarios_are_built_from_the_errors_of_one_check(self):
         self.assertEqual((await self.build_cards()).status_code, 200)
         self.assertEqual(
-            api.jobs.state['error'], 'Сначала проверьте разговоры: сценарии собираются из найденных ошибок.'
+            api.jobs.state['error'], 'Сценарии собираются из найденных ошибок. Сначала проверьте разговоры.'
         )
         response = await self.build_cards({'check': 'code'})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(api.jobs.state['error'], 'У проверки «Точность» ещё нет итога: сначала проверьте разговоры.')
+        self.assertEqual(api.jobs.state['error'], 'У проверки «Точность» ещё нет итога. Сначала проверьте разговоры.')
         await self.check_tone()
         self.assertEqual((await self.build_cards()).status_code, 200)  # the only check with a result
         self.assertIsNone(api.jobs.state['error'])
@@ -232,7 +237,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         await self.assess_code()
         response = await self.build_cards({})
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()['detail'], 'Выберите, из какой проверки собрать сценарии')
+        self.assertEqual(response.json()['detail'], 'Выберите, из какой проверки собрать сценарии.')
         self.assertEqual(store.load(cards.DECK), deck)
         self.assertEqual((await self.build_cards({'check': 'code'})).status_code, 200)
         deck = store.load(cards.DECK)

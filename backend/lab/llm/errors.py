@@ -34,7 +34,7 @@ def refused(prefix: str, response: httpx.Response) -> ModelError:
     """An error status: a busy (429) or failing (5xx) model may answer later, any other 4xx will not."""
     status = response.status_code
     return ModelError(
-        f'{prefix} HTTP {status}',
+        f'{prefix} (HTTP {status}).',
         status=status,
         retryable=status == 429 or status >= 500,
         retry_after=_seconds(response.headers.get('Retry-After')),

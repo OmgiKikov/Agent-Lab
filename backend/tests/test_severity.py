@@ -344,7 +344,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job()
         self.assertIsNone(api.jobs.state['error'])
         # The task says which check it proposes for: the screens lead to its criteria.
-        self.assertEqual(api.jobs.state['progress'], {'message': 'Предлагаю, какие ошибки серьёзные', 'check': 'tone'})
+        self.assertEqual(api.jobs.state['progress'], {'message': 'Отмечаем серьёзные ошибки', 'check': 'tone'})
         self.assertEqual(len(model.await_args.args[1]['criteria']), 1)  # the decided one is not asked about
         found = await self.get('/api/problems?check=tone')
         rules = {rule['id']: rule for rule in found['rules']}

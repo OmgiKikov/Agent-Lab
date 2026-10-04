@@ -19,9 +19,9 @@ export function ScreenError() {
   return (
     <main className="mx-auto flex min-h-full max-w-xl flex-col justify-center px-5 py-16">
       <Mark quiet className="size-12 rounded-2xl" />
-      <h1 className="mt-6 text-title font-semibold text-fg">Этот экран не открылся</h1>
+      <h1 className="mt-6 text-title font-semibold text-fg">Не удалось открыть экран</h1>
       <p className="mt-2 text-read text-fg-2">
-        Данные и результаты проверок сохранены. Обновите страницу; если повторится, вернитесь к обзору.
+        Данные и итоги проверок сохранены. Обновите страницу. Если экран снова не откроется, вернитесь на «Обзор».
       </p>
       <div className="mt-6 flex flex-wrap gap-3">
         <Button variant="primary" size="lg" icon={RotateCcw} onClick={() => window.location.reload()}>

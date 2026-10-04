@@ -83,6 +83,7 @@ def coded_criteria(source: dict) -> list[dict]:
             'quote': ' … '.join(block for block, _ in parts),
             'sourceId': source['id'],
             'observation': 'reply',
+            # copy: ok — the model judges by it, and saved checks compare by it (tone_history.criteria_fingerprint)
             'condition': 'Проверять только ответы агента; реплики клиента — контекст.',
             'acceptable': principles,
         }
@@ -93,7 +94,7 @@ def coded_criteria(source: dict) -> list[dict]:
 def policy(name: str, text: str) -> dict:
     text = text.strip()
     if len(text) < 20:
-        raise ValueError('Добавьте правила общения: не менее 20 символов.')
+        raise ValueError('В правилах общения меньше 20 символов. Добавьте текст правил.')
     if len(text) > 50000:
         raise ValueError('В правилах должно быть не более 50 000 символов.')
     return {
@@ -109,7 +110,7 @@ def policy(name: str, text: str) -> dict:
 def current_policy() -> dict:
     found = next((source for source in sources.load() if source['kind'] == KIND), None)
     if found is None:
-        raise ValueError('Сначала добавьте правила tone of voice.')
+        raise ValueError('Сначала добавьте правила общения.')
     return found
 
 
@@ -171,8 +172,8 @@ def _parse(value: dict, source: dict) -> list[dict]:
 async def prepare(progress: Progress) -> dict:
     source = current_policy()
     if not discover.sample(1):
-        raise ValueError('Сначала загрузите разговоры.')
-    progress(message='Собираю критерии из ваших правил общения')
+        raise ValueError('Сначала загрузите диалоги.')
+    progress(message='Собираем критерии из правил общения')
     criteria = coded_criteria(source)
     model = None
     if not criteria:
@@ -211,7 +212,7 @@ def clarified(revision: str, rule_id: str, text: str) -> dict:
     """Only an explicit human confirmation changes the rubric, without touching source evidence."""
     text = text.strip()
     if not 10 <= len(text) <= 2000:
-        raise ValueError('Уточнение должно содержать от 10 до 2000 символов.')
+        raise ValueError('В уточнении должно быть от 10 до 2000 символов.')
     selection([rule_id], revision)
     draft = store.load(DRAFT)
     rule = next(rule for rule in draft['criteria'] if rule['id'] == rule_id)
@@ -276,7 +277,7 @@ async def _judge(dialogues: list[dict], topic: dict, progress: Progress) -> list
             if value and value.get('status') == 'PASS' and any(row['status'] == 'UNKNOWN' for row in value['rules']):
                 value['status'] = 'UNMEASURED'
         results.append(result)
-        progress(done=len(results), total=len(dialogues), message='Проверяю разговоры по выбранным критериям')
+        progress(done=len(results), total=len(dialogues), message='Проверяем разговоры')
 
     await discover.judge_each([(dialogue, topic) for dialogue in dialogues], done)
     order = {str(dialogue['id']): index for index, dialogue in enumerate(dialogues)}
@@ -287,10 +288,10 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
     source, draft = current_policy(), store.load(DRAFT)
     dialogues = discover.sample(count)
     if not dialogues:
-        raise ValueError('Сначала загрузите разговоры.')
+        raise ValueError('Сначала загрузите диалоги.')
     started = store.now()
     topic = {'id': 't1', 'title': checks.TONE_TOPIC, 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
-    progress(done=0, total=len(dialogues), message='Начинаю проверку tone of voice')
+    progress(done=0, total=len(dialogues), message='Проверяем разговоры')
     results = await _judge(dialogues, {**topic, 'rules': [for_judging(rule) for rule in criteria]}, progress)
     ensure_active()
     previous = store.load(RESULT) or {}

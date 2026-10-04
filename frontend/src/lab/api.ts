@@ -10,8 +10,8 @@ const AGENT_HEADER = agentHeader(AGENT);
 function problem(detail: unknown, status: number): string {
   if (typeof detail === "string") return detail;
   const first = Array.isArray(detail) ? (detail[0] as { msg?: unknown } | undefined) : undefined;
-  if (first && typeof first.msg === "string") return `Сервис не принял запрос: ${first.msg}`;
-  return `Сервис ответил ошибкой ${status}`;
+  if (first && typeof first.msg === "string") return `Сервис не принял запрос (${first.msg}).`;
+  return `Сервис ответил ошибкой (HTTP ${status}).`;
 }
 
 async function read<T>(response: Response): Promise<T> {

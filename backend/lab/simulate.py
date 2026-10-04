@@ -48,7 +48,7 @@ async def prepare_openings(chosen: list[dict], persona_ids: list[str], progress:
     ]
     if not missing:
         return
-    progress(done=0, total=len(missing), message='Переписываю первые реплики под типы клиентов')
+    progress(done=0, total=len(missing), message='Переписываем первые реплики под типы клиентов')
 
     async def rewrite(card: dict, key: str) -> None:
         answer = await llm.chat(PERSONA_OPENING.format(style=personas.style(key)), card['opening'])
@@ -92,7 +92,7 @@ async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, ch
             if END in message or not message:
                 break
         item['ended'] = True
-        item['stage'] = 'судья оценивает'
+        item['stage'] = 'модель оценивает'
         changed()
         await judge.evaluate(card, item)
     except (agents.AgentError, llm.ModelError) as error:
@@ -156,7 +156,7 @@ async def run(
 ) -> dict:
     chosen = [card for card in cards.deck() if not card_ids or card['id'] in card_ids]
     if not chosen:
-        raise RuntimeError('Нет карточек для прогона')
+        raise RuntimeError('Нет сценариев для прогона. Сначала соберите сценарии.')
     persona_ids = [p for p in personas.PERSONAS if p in (persona_ids or [personas.DEFAULT])] or [personas.DEFAULT]
     config = agents.configs()[key]
     record = new_run(key, config, label, repeats, persona_ids)
@@ -172,9 +172,9 @@ async def run(
         if record['items'][index]['status'] != 'RUNNING':
             store.update_item(record['id'], index, record['items'][index])
         done = sum(item['status'] != 'RUNNING' for item in record['items'])
-        progress(run=record['id'], done=done, total=len(plan), message=f'{record["targetName"]}: прогон')
+        progress(run=record['id'], done=done, total=len(plan), message=f'Играем сценарии · {record["targetName"]}')
 
-    progress(run=record['id'], done=0, total=len(plan), message=f'Запускаю: {config["name"]}')
+    progress(run=record['id'], done=0, total=len(plan), message=f'Подключаемся к агенту · {config["name"]}')
     try:
         await prepare_openings(chosen, persona_ids, progress)
         async with agents.session(agents.create(key)) as agent:
@@ -228,11 +228,11 @@ def ended(item: dict) -> bool:
 
 def unanswered(items: list[dict]) -> str | None:
     """Why a run has nothing to judge: no conversation ran to its end (ended, as rejudge reads it), with what most of
-    them broke on («Агент недоступен: ConnectError»). None when the agent answered in some."""
+    them broke on («Нет связи с агентом (ConnectError).»). None when the agent answered in some."""
     if not items or any(ended(item) for item in items):
         return None
     reasons = Counter(item['error'] for item in items if item.get('error'))
-    return f'{NO_REPLIES}: {reasons.most_common(1)[0][0]}' if reasons else f'{NO_REPLIES}.'
+    return f'{NO_REPLIES}. {reasons.most_common(1)[0][0]}' if reasons else f'{NO_REPLIES}.'
 
 
 async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
@@ -242,7 +242,7 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
     it was, never half re-judged under a final status."""
     items = [(index, item) for index, item in enumerate(record['items']) if ended(item)]
     if not items:
-        raise RuntimeError('В прогоне нет записанных ответов агента для переоценки: ни один разговор не дошёл до конца')
+        raise RuntimeError('В прогоне нет записанных ответов агента: ни один разговор не дошёл до конца.')
     legacy = [(index, item) for index, item in items if not isinstance(item.get('criteria'), list)]
     if legacy:
         by_id = {card['id']: card for card in cards.deck()}
@@ -250,8 +250,8 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
             card = by_id.get(item['cardId'])
             if card is None:
                 raise RuntimeError(
-                    'В старом прогоне не сохранены критерии, а исходной карточки больше нет. '
-                    'Запустите новый прогон с текущими сценариями.'
+                    'В старом прогоне не сохранены критерии, а его сценария больше нет. '
+                    'Сыграйте текущие сценарии заново.'
                 )
             item['criteria'] = deepcopy(card['criteria'])
     done = 0
@@ -264,7 +264,7 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
         except llm.ModelError as error:
             item.update(status='UNMEASURED', error=str(error), rules=[], second=None)
         done += 1
-        progress(done=done, total=len(items), message='Переоценка разговоров')
+        progress(done=done, total=len(items), message='Оцениваем разговоры заново')
 
     async with asyncio.TaskGroup() as group:
         for _, item in items:

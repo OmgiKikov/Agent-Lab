@@ -5,7 +5,7 @@ import type { LabRun, Status } from "../../lab/types";
 /** A conversation's result as a dot: red with an error, green without one, dashed when it could not be checked. */
 export const DOT: Record<string, { word: string; cls: string }> = {
   FAIL: { word: "ошибка", cls: "bg-bad" },
-  PASS: { word: "без ошибок", cls: "bg-ok" },
+  PASS: { word: "без найденных ошибок", cls: "bg-ok" },
   RUNNING: { word: "идёт", cls: "animate-pulse bg-run" },
   UNMEASURED: { word: "не удалось проверить", cls: "border-[1.5px] border-dashed border-fg-4" },
   /** A scenario no run has played yet. */
@@ -44,6 +44,6 @@ export function RunWord({ run, className }: { run: LabRun; className?: string })
   );
 }
 
-/** «из ошибки в диалоге» or «покрытие темы»: why the scenario exists. */
+/** «из ошибки в настоящем разговоре» or «контроль»: why the scenario exists, in the words of its list. */
 export const originWord = (origin: string, fromLog: string) =>
-  origin === fromLog ? "из ошибки в диалоге" : "покрытие темы";
+  origin === fromLog ? "из ошибки в настоящем разговоре" : "контроль";

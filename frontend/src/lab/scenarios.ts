@@ -62,7 +62,7 @@ export const controlLine = (sourceStatus: Status | null | undefined) =>
     ? "в настоящем разговоре ошибок не нашли"
     : sourceStatus === "UNMEASURED"
       ? "настоящий разговор проверить не удалось"
-      : "покрытие темы";
+      : "настоящего разговора нет в нынешнем итоге";
 
 /** One run that played a scenario: its conversations by type of customer, in the order the service lists types. */
 export type RunPlays = { run: string; label: string; startedAt: string; plays: Played[] };

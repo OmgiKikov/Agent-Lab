@@ -60,7 +60,7 @@ async def local_browser_commands(request: Request, call_next: Callable[[Request]
     if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and origin:
         scheme = request.scope['scheme']
         if _origin(origin) != (scheme, host[0], host[1] or DEFAULT_PORTS.get(scheme)):
-            return JSONResponse({'detail': 'Запрос из внешней страницы отклонён'}, status_code=403)
+            return JSONResponse({'detail': 'Запрос с чужой страницы отклонён.'}, status_code=403)
     return await call_next(request)
 
 
@@ -100,6 +100,6 @@ def frontend(path: str = '') -> FileResponse:
         raise HTTPException(404, 'Not found')
     index = FRONTEND / 'index.html'
     if not index.is_file():
-        raise HTTPException(503, 'Frontend не собран: выполните npm --prefix frontend run build')
+        raise HTTPException(503, 'Интерфейс не собран. Выполните npm --prefix frontend run build.')
     # After a rebuild the browser asks again and gets the new page, never yesterday's interface from its cache.
     return FileResponse(index, headers={'Cache-Control': 'no-cache'})

@@ -98,7 +98,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
     api("/api/cards", { check })
       .then(() => {
         refresh();
-        toast.notify("Сценарии собираются: ход виден внизу навигации");
+        toast.notify("Собираем сценарии. Ход виден внизу навигации.");
       })
       .catch(toast.error);
   };
@@ -107,9 +107,9 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
   const why = busy
     ? "Сейчас идёт другая задача"
     : !results.length
-      ? "Сначала проверьте разговоры: сценарии собираются из ошибок проверки"
+      ? "Сценарии собираются из ошибок проверки. Сначала проверьте разговоры."
       : !ready.length
-        ? "Сначала повторите проверку по уточнённым критериям"
+        ? "Критерии tone of voice изменились. Сначала проверьте разговоры заново."
         : undefined;
   return (
     <>
@@ -124,7 +124,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
                 onClick={build}
                 disabled={!!why}
                 className="hidden md:inline-flex"
-                title={why ?? "Собрать сценарии из ошибок проверки разговоров"}
+                title={why ?? "Из ошибок проверки разговоров"}
               >
                 {cards ? "Собрать заново" : "Собрать сценарии"}
               </Button>
@@ -154,9 +154,9 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
               <p className="px-4 pb-3 text-body text-fg-3 lg:px-10">
                 Критерии tone of voice изменились.{" "}
                 <Link to={toneCheckLink("criteria")} className="text-run underline">
-                  Повторите проверку
+                  Проверьте разговоры заново
                 </Link>
-                , затем соберите из неё сценарии.
+                , потом соберите сценарии.
               </p>
             )}
           </>
@@ -224,8 +224,8 @@ function BuildFrom({
       }
     >
       <p className="text-body text-fg-2">
-        Сценарии собираются из ошибок одной проверки, и прогоны считаются по её критериям.
-        {state.cards?.cards.length ? " Новые сценарии заменят собранные; сохранённые прогоны не изменятся." : ""}
+        Сценарии собираются из ошибок одной проверки. Прогоны считаются по её критериям.
+        {state.cards?.cards.length ? " Новые сценарии заменят собранные. Сохранённые прогоны не изменятся." : ""}
       </p>
       <div role="radiogroup" aria-label="Проверка" className="mt-4 flex flex-col gap-2">
         {CHECKS.map((c) => {
@@ -260,11 +260,11 @@ function BuildFrom({
                     "проверенных разговоров",
                     "проверенных разговоров",
                   )}{" "}
-                  — с ошибкой агента · {longDay(result.finishedAt)}
+                  — с ошибкой агента · <span className="whitespace-nowrap">{longDay(result.finishedAt)}</span>
                 </span>
                 {off && (
                   <span className="mt-0.5 block text-small text-warn">
-                    Критерии изменились: сначала повторите проверку
+                    Критерии изменились. Сначала проверьте разговоры заново.
                   </span>
                 )}
               </span>

@@ -56,7 +56,7 @@ export function RunMatrix({
                     <div className="text-body font-medium text-fg">{t.name}</div>
                     {scores && score && score.measured > 0 && (
                       <div className="mt-0.5 text-small text-fg-3">
-                        ошибка в {score.measured - score.passed} из {score.measured}
+                        {`ошибка в ${score.measured - score.passed}\u00a0из\u00a0${score.measured}`}
                       </div>
                     )}
                   </th>
