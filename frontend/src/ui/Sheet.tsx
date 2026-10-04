@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * A panel from the right edge over the page: the source of a criterion, the report, a form. Esc, the cross and the
- * backdrop close it; on a phone it takes the whole screen.
+ * backdrop close it; on a phone it takes the whole screen, and its actions go under the title, so the title and the
+ * line under it keep the whole width.
  */
 export function Sheet({
   open,
@@ -44,12 +45,16 @@ export function Sheet({
             className,
           )}
         >
-          <div className="flex items-start gap-3 border-b border-line px-5 py-4">
+          <div className="flex flex-wrap items-start gap-x-3 gap-y-3 border-b border-line px-5 py-4">
             <div className="min-w-0 flex-1">
               <Dialog.Title className="text-body font-semibold text-fg">{title}</Dialog.Title>
               {sub && <div className="mt-0.5 text-meta text-fg-3">{sub}</div>}
             </div>
-            {actions && <div className="flex flex-shrink-0 items-center gap-2">{actions}</div>}
+            {actions && (
+              <div className="order-last flex w-full flex-wrap items-center gap-2 md:order-none md:w-auto md:flex-shrink-0">
+                {actions}
+              </div>
+            )}
             <Dialog.Close
               className="rounded-control p-1.5 text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
               aria-label="Закрыть (Esc)"
