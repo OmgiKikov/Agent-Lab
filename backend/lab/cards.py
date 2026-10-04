@@ -21,6 +21,8 @@ LIMIT = 30
 PER_ERROR = 2  # conversations per criterion the agent failed, and controls per topic
 # Why a card exists: an error the check found in a real conversation, or a conversation without one (a control).
 FROM_LOG, COVERAGE = 'Ошибка из лога', 'Покрытие темы'
+# What the task says while it builds; the count of the built and the failed ones is the task's own (done of total).
+BUILDING = 'Собираем сценарии'
 # Applies to every scenario: instructions must come from the knowledge base, not be invented.
 FOLLOWS_KNOWLEDGE = {
     'id': 'g-knowledge',
@@ -30,7 +32,7 @@ FOLLOWS_KNOWLEDGE = {
         'и не выдуманы.'
     ),
     'condition': 'Когда агент даёт инструкцию или сообщает факты.',
-    'acceptable': 'Уточняющий вопрос; «Не могу помочь, информация отсутствует», если в статьях нет ответа.',
+    'acceptable': 'Уточняющий вопрос. Или «Не могу помочь, информация отсутствует», если в статьях нет ответа.',
     'quote': 'Используй ТОЛЬКО информацию из контекста.',
     'observation': 'knowledge',
 }
@@ -44,7 +46,7 @@ ANSWERS_THE_QUESTION = {
     ),
     'condition': 'Всегда, когда агент отвечает клиенту.',
     'acceptable': (
-        'Уточняющий вопрос по существу; «Не могу помочь, информация отсутствует», если ответа действительно нет.'
+        'Уточняющий вопрос по существу. Или «Не могу помочь, информация отсутствует», если ответа действительно нет.'
     ),
     'quote': 'Твоя главная задача — найти и чётко выдать инструкции для самостоятельного выполнения клиентом',
 }
@@ -178,16 +180,16 @@ async def run(check: str, progress: Callable[..., None] = lambda **_: None) -> l
     reported in the progress (failed) and never cancels the others; only when no card is built is the build an error."""
     analysis = store.load(checks.result(check))
     if not analysis:
-        raise RuntimeError(f'У проверки «{checks.NAMES[check]}» ещё нет итога: сначала проверьте разговоры.')
+        raise RuntimeError(f'У проверки «{checks.NAMES[check]}» ещё нет итога. Сначала проверьте разговоры.')
     if check == checks.TONE:
         draft = store.load(tone.DRAFT) or {}
         if draft.get('revision') != analysis.get('criteriaRevision'):
             raise RuntimeError(
-                'Критерии общения изменились. Сначала повторите проверку разговоров, затем соберите сценарии.'
+                'Критерии tone of voice изменились. Сначала проверьте разговоры заново, потом соберите сценарии.'
             )
     picks = pick(analysis)
     if not picks:
-        raise RuntimeError('Нет разговоров с проверяемыми правилами для сборки сценариев')
+        raise RuntimeError('Нет разговоров, из которых можно собрать сценарии.')
     general = general_rules(analysis)
     built: dict[int, dict] = {}
     failed: list[dict] = []
@@ -197,16 +199,16 @@ async def run(check: str, progress: Callable[..., None] = lambda **_: None) -> l
             built[index] = await build_card(topic, dialogue, origin, general, reproduces)
         except llm.ModelError as error:
             failed.append({'topic': topic['title'], 'dialogueId': str(dialogue['id']), 'error': str(error)})
-        missing = f' · не собрано: {len(failed)}' if failed else ''
+        missing = f'. Не удалось собрать: {len(failed)}' if failed else ''
         progress(
             stage='cards',
             done=len(built) + len(failed),
             total=len(picks),
-            message=f'Готово сценариев: {len(built)} из {len(picks)}{missing}',
+            message=f'{BUILDING}{missing}',
             failed=list(failed),
         )
 
-    progress(stage='cards', done=0, total=len(picks), message='Собираю сценарии')
+    progress(stage='cards', done=0, total=len(picks), message=BUILDING)
     async with asyncio.TaskGroup() as tasks:
         for index, chosen in enumerate(picks):
             tasks.create_task(one(index, *chosen))

@@ -36,8 +36,8 @@ const selectClass =
 
 /** What each history keeps, said above its list. */
 const KEEPS: Record<Check, string> = {
-  tone: "Каждая завершённая проверка сохраняется со своими разговорами, критериями и документом правил. Ответы человека хранятся отдельно и переживают новую выгрузку.",
-  code: "Каждая завершённая проверка сохраняется со своими разговорами, критериями из кода агента и итогом: новая выгрузка её не стирает.",
+  tone: "Каждая завершённая проверка сохраняется со своими разговорами, критериями и правилами общения. Ваши ответы остаются и после новой выгрузки.",
+  code: "Каждая завершённая проверка сохраняется со своими разговорами, критериями из кода агента и итогом. Новая выгрузка её не стирает.",
 };
 
 type SavedCriterion = {
@@ -71,12 +71,12 @@ function toneSaved(data: ToneSnapshot): Saved {
   return {
     ...data,
     numberOf: (ruleId) => numbers.get(ruleId) ?? 0,
-    basis: "Основание в документе",
+    basis: "Основание в правилах",
     source: {
-      title: `Документ проверки · ${data.policy.name || "Tone of voice"}`,
+      title: `Правила общения · ${data.policy.name || "Tone of voice"}`,
       body: <p className="mt-4 whitespace-pre-wrap break-words text-body text-fg-2">{data.policy.content}</p>,
     },
-    note: "Разговоры, критерии и автоматические оценки сохранены на момент завершения проверки. Ответы человека сохраняются отдельно; здесь показаны последние сохранённые ответы.",
+    note: "Разговоры, критерии и оценки модели сохранены такими, какими были в конце проверки. Ваши ответы хранятся отдельно, здесь показаны последние.",
   };
 }
 
@@ -122,7 +122,7 @@ function codeSaved(data: CodeSnapshot): Saved {
         </ul>
       ),
     },
-    note: "Разговоры, критерии и автоматические оценки сохранены на момент завершения проверки, ответы человека — какими были в тот момент.",
+    note: "Разговоры, критерии, оценки модели и ваши ответы сохранены такими, какими были в конце проверки.",
   };
 }
 
@@ -138,9 +138,9 @@ function SavedRule({ rule, second, saved }: { rule: Rule; second?: Rule; saved: 
           <span className={`mt-1 block text-small ${rule.status === "FAIL" ? "text-bad" : "text-fg-3"}`}>
             {statusText(rule.status)}
             {rule.review === "agree"
-              ? " · Человек согласился с оценкой"
+              ? " · вы согласились с оценкой"
               : rule.review === "disagree"
-                ? " · Человек оспорил оценку"
+                ? " · вы не согласились с оценкой"
                 : ""}
           </span>
         </div>
@@ -151,7 +151,7 @@ function SavedRule({ rule, second, saved }: { rule: Rule; second?: Rule; saved: 
             «{rule.agentQuote}»
           </blockquote>
         )}
-        <p>{rule.reason || "Объяснение оценки не сохранено."}</p>
+        <p>{rule.reason || "Объяснение не сохранилось."}</p>
         {second && (
           <p className="text-fg-3">
             Вторая проверка: {statusText(second.status).toLowerCase()}. {second.reason}
@@ -160,7 +160,7 @@ function SavedRule({ rule, second, saved }: { rule: Rule; second?: Rule; saved: 
         {criterion && (
           <div className="space-y-3">
             <p>
-              <span className="font-medium text-fg">Требование: </span>
+              <span className="font-medium text-fg">Агент должен: </span>
               {duty(criterion.text)}
             </p>
             {criterion.condition && (
@@ -188,12 +188,12 @@ function SavedRule({ rule, second, saved }: { rule: Rule; second?: Rule; saved: 
             <details>
               <summary className="cursor-pointer text-fg">{saved.basis}</summary>
               <blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-line-strong pl-3">
-                {criterion.quote || "Цитата не сохранена."}
+                {criterion.quote || "Цитата не сохранилась."}
               </blockquote>
             </details>
           </div>
         )}
-        {!criterion && <p className="text-fg-3">Критерий не найден в сохранённом наборе.</p>}
+        {!criterion && <p className="text-fg-3">Этого критерия нет среди сохранённых.</p>}
       </div>
     </details>
   );
@@ -228,8 +228,8 @@ function SnapshotBody({ saved, previous }: { saved: Saved; previous?: SavedCheck
           unchecked={check.summary.unmeasured}
         />
         <p className="mt-4 break-words text-body text-fg-3">
-          {check.file || "Загруженные разговоры"} · выборка {check.sampled} из {check.total} · критериев{" "}
-          {saved.criteria.length}.
+          {check.file || "Загруженные разговоры"} · выборка {check.sampled} из {check.total} ·{" "}
+          {count(saved.criteria.length, "критерий", "критерия", "критериев")}
         </p>
         <p className="mt-4 text-body text-fg-3">{comparisonText(check, previous)}</p>
       </div>
@@ -259,7 +259,7 @@ function SnapshotBody({ saved, previous }: { saved: Saved; previous?: SavedCheck
         {current ? (
           <>
             <label className="mt-5 block text-small text-fg-3">
-              Разговор · {filtered.length} в выбранной группе
+              Разговор · {filtered.length} в группе
               <select
                 value={current.dialogueId}
                 onChange={(event) => setSelected(event.target.value)}
@@ -289,7 +289,7 @@ function SnapshotBody({ saved, previous }: { saved: Saved; previous?: SavedCheck
                 <p className="text-body text-fg-3">Текст разговора не сохранился.</p>
               )}
             </div>
-            {current.error && <p className="mt-3 text-body text-fg-3">Причина отсутствия оценки: {current.error}</p>}
+            {current.error && <p className="mt-3 text-body text-fg-3">Почему не удалось проверить: {current.error}</p>}
             <div className="mt-5">
               {current.rules.map((rule) => (
                 <SavedRule
@@ -372,7 +372,7 @@ function Snapshot({
       {error && (
         <div className="p-5">
           <p role="alert" className="text-body text-fg-2">
-            Не удалось открыть проверку. Попробуйте ещё раз.
+            Не удалось открыть проверку.
           </p>
           <Button className="mt-4" icon={RotateCcw} onClick={() => void refetch()}>
             Повторить
@@ -481,7 +481,7 @@ export function HistoryPage({ check }: { check: Check }) {
               {data && !checks.length && (
                 <p className="py-3 text-body text-fg-3">
                   {result && !result.checkId
-                    ? "Текущий итог создан до появления истории. Она начнётся со следующей проверки."
+                    ? "Текущий итог появился раньше истории. История начнётся со следующей проверки."
                     : "Здесь появятся завершённые проверки с их разговорами и критериями."}
                 </p>
               )}

@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ArrowUpRight, Code2, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { problemLink, type Check } from "../../app/links";
+import { yesNoText } from "../../lab/answers";
 import { duty, type Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { plural } from "../../lab/format";
@@ -102,14 +103,14 @@ export function CriterionPanel({
         <p className="mt-2 text-body text-fg-2">{duty(r.rule.text)}</p>
         {r.rule.origin &&
           (r.rule.kind === "tone-of-voice" ? (
-            <p className="mt-2 flex items-center gap-1.5 text-small text-fg-3" title="Где это требование записано">
+            <p className="mt-2 flex items-center gap-1.5 text-small text-fg-3" title="Где записан критерий">
               <FileText aria-hidden className="size-3.5" />
               <span>{r.rule.origin}</span>
             </p>
           ) : (
             <p
               className="mt-2 flex items-center gap-1.5 text-small text-fg-3"
-              title="Где это требование записано в коде агента"
+              title="Где критерий записан в коде агента"
             >
               <Code2 aria-hidden className="size-3.5" />
               <span className="font-mono">{shortOrigin(r.rule.origin)}</span>
@@ -125,7 +126,9 @@ export function CriterionPanel({
               },
               {
                 label: "Не удалось проверить",
-                value: s.unknown ? `в ${s.unknown} ${plural(s.unknown, "разговоре", "разговорах", "разговорах")}` : "—",
+                value: s.unknown
+                  ? `в ${s.unknown}\u00a0${plural(s.unknown, "разговоре", "разговорах", "разговорах")}`
+                  : "—",
               },
               ...(twice
                 ? [
@@ -136,16 +139,14 @@ export function CriterionPanel({
                           совпали в <Count n={second.agree} of={second.checked} />
                         </>
                       ) : (
-                        "проверено один раз"
+                        "не с чем сравнить"
                       ),
                     },
                   ]
                 : []),
               {
                 label: "Ваши ответы",
-                value: humans.checked
-                  ? `подтвердили ${humans.agree}, не согласились ${humans.checked - humans.agree}`
-                  : "ещё нет",
+                value: humans.checked ? yesNoText(humans.agree, humans.checked - humans.agree) : "ещё нет",
               },
             ]}
           />
@@ -187,8 +188,8 @@ export function CriterionPanel({
             {shown === "FAIL"
               ? "Ошибок по этому критерию не найдено."
               : shown === "PASS"
-                ? "Разговоров без ошибки с доказательством нет."
-                : "Все разговоры, где критерий встречался, проверены."}
+                ? "Разговоров без ошибки нет."
+                : "Критерий удалось проверить во всех разговорах, где он встречался."}
           </p>
         )}
       </div>

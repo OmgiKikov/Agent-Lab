@@ -25,7 +25,7 @@ COUNTED = 'logs.json'
 # The database of the agent a request works in (registry.using, api.py); without one, DB above.
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 # A person's answer on a verdict that is no longer the one they saw.
-CHANGED = 'Результат изменился. Откройте актуальную проверку.'
+CHANGED = 'Ответ не сохранён: оценка изменилась. Обновите страницу.'
 
 
 def now() -> str:
@@ -718,7 +718,7 @@ def recover_runs() -> int:
             record = json.loads(raw)
             if record.get('status') != 'running':
                 continue
-            error = 'Прогон прерван при завершении процесса'
+            error = 'Прогон остановился вместе с сервисом.'
             record.update(status='stopped', error=error, finishedAt=now())
             for item in record['items']:
                 if item.get('status') == 'RUNNING':

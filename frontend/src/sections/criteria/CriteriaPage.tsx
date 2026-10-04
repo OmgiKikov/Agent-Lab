@@ -4,7 +4,7 @@ import { ChevronDown, PencilLine, RotateCcw } from "lucide-react";
 import { SECTIONS, toneCheckLink, type Check } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { useCriteria, type Criterion } from "../../lab/criteria";
-import { day, plural } from "../../lab/format";
+import { count, day, plural } from "../../lab/format";
 import { useSource } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
@@ -118,7 +118,7 @@ export function CriteriaPage({ check }: { check: Check }) {
         tone ? (
           <Link
             to={toneCheckLink("criteria")}
-            title="Выбрать критерии и уточнения в пошаговой проверке"
+            title="Выбрать критерии для следующей проверки"
             className={buttonClass()}
           >
             <PencilLine aria-hidden className="size-3.5" />
@@ -175,8 +175,8 @@ export function CriteriaPage({ check }: { check: Check }) {
           }
         >
           {tone
-            ? "Они собираются из ваших правил общения в пошаговой проверке и появятся здесь после неё."
-            : "Они извлекаются дословно из промптов и инструментов агента при первой оценке разговоров."}
+            ? "Здесь будут критерии из ваших правил общения."
+            : "Здесь будут критерии из кода агента. Модель извлечёт их дословно при первой оценке разговоров."}
         </EmptyState>
       </div>
     );
@@ -189,9 +189,8 @@ export function CriteriaPage({ check }: { check: Check }) {
     { checked: 0, agree: 0 },
   );
   const people = decisions(data);
-  const usedSources = new Set(list.map((c) => c.r.rule.sourceId)).size;
-  // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Проверки совпали» and «Две
-  // проверки» would only say «—» and «проверено один раз», which reads as if something should have matched.
+  // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Модели совпали» and «Две
+  // проверки» would only say «—» and «не с чем сравнить» on every criterion: nothing to tell.
   const twice = (s: SideKey) => list.some((c) => c.r[s].examples.some((e) => !!e.second));
   const panelOpen = !!chosen && (wide || !!asked);
   return (
@@ -201,16 +200,21 @@ export function CriteriaPage({ check }: { check: Check }) {
         <div className="min-w-0 lg:flex-1">
           <p className="text-small text-fg-3">
             <span className="text-fg-2">
-              {list.length} {plural(list.length, "критерий", "критерия", "критериев")}{" "}
-              {tone
-                ? "из правил общения"
-                : `из ${usedSources} ${plural(usedSources, "источника", "источников", "источников")} кода`}
+              {list.length}
+              {"\u00a0"}
+              {plural(list.length, "критерий", "критерия", "критериев")} {tone ? "из правил общения" : "из кода агента"}
             </span>
-            {data.log?.rulesSince && <>, зафиксированы {day(data.log.rulesSince)}</>}
+            {data.log?.rulesSince && (
+              <>
+                , {tone ? "собраны" : "извлечены"} {day(data.log.rulesSince)}
+              </>
+            )}
             {second.checked > 0 && (
               <>
                 {" "}
-                · две проверки совпали в {second.agree} из {second.checked} ошибок в диалогах
+                · две модели совпали в {second.agree}
+                {"\u00a0"}из{"\u00a0"}
+                {second.checked} ошибок в диалогах
               </>
             )}
             {people.agree + people.disagree > 0 && (
@@ -287,7 +291,12 @@ export function CriteriaPage({ check }: { check: Check }) {
                       items={sources.map((s) => ({
                         key: s.id,
                         label: nameOf(s).file,
-                        sub: `${list.filter((c) => c.r.rule.sourceId === s.id).length} критериев`,
+                        sub: count(
+                          list.filter((c) => c.r.rule.sourceId === s.id).length,
+                          "критерий",
+                          "критерия",
+                          "критериев",
+                        ),
                         on: s.id === fileId,
                         run: () =>
                           set((n) => {
@@ -318,7 +327,7 @@ export function CriteriaPage({ check }: { check: Check }) {
               ) : (
                 source && (
                   <CodeView
-                    label={tone ? "Текст правил общения с критериями" : "Текст промпта с критериями"}
+                    label={tone ? "Текст правил общения с критериями" : "Код агента с критериями"}
                     source={source}
                     content={text.content}
                     items={items}

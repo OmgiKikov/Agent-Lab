@@ -19,10 +19,14 @@ import type { Check, Job } from "./types";
 export type Mark = { check: Check; rule: string; serious: boolean };
 
 /** What the service says while the automatic check proposes (backend/lab/severity.py), and the name of its task. */
-export const PROPOSING = "Предлагаю, какие ошибки серьёзные";
+export const PROPOSING = "Отмечаем серьёзные ошибки";
 
 /** The person reading («вы») or, on a page someone else reads (the summary, a report, a letter), people («люди»). */
 type Who = "you" | "people";
+
+/** Who proposes: «модель» on the product's screens, «автоматическая проверка» on a page someone else reads. */
+const MODEL: Record<Who, string> = { you: "модель", people: "автоматическая проверка" };
+const PEOPLE: Record<Who, string> = { you: "вы", people: "люди" };
 
 /** Serious first; otherwise the order stays as it was (a stable sort keeps it). */
 export const seriousFirst = (a: { serious: boolean }, b: { serious: boolean }) => Number(b.serious) - Number(a.serious);
@@ -36,16 +40,20 @@ export const ofResult = (r: Pick<RuleEntry, "log">) => r.log.ruleIds.length > 0;
 /** One full stop at the end: a reason or an error comes with it or without. */
 const sentence = (text: string) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 
-/** A reason after a colon or a dash, from a small letter: «… — обвинение клиента вредит отношениям с банком». */
+/**
+ * The model's reason as a sentence of its own, after whose decision it is: «Так считает модель. Обвинение клиента
+ * вредит отношениям с банком.» Its own words often have a colon in them, so it never follows another one.
+ */
 export const reasonText = (reason: string) => {
   const text = sentence(reason);
-  return /^\p{Lu}\p{Ll}/u.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
 };
 
 /**
  * Where the severity of a check's criteria stands, among the criteria of its result (`criteria`, N): how many are
  * serious (S), the automatic check's proposals no person checked yet (P), decided by a person (D), with neither yet
- * (`pending`, N − P − D); and why the last proposal failed, while some criterion has neither.
+ * (`pending`, N − P − D); whether a person decided every serious one (`yours`); and why the last proposal failed,
+ * while some criterion has neither.
  */
 export type Standing = {
   criteria: number;
@@ -53,6 +61,7 @@ export type Standing = {
   proposed: number;
   decided: number;
   pending: number;
+  yours: boolean;
   error: string | null;
 };
 
@@ -63,57 +72,59 @@ export function standingOf(data: Problems | null | undefined): Standing | null {
   const proposed = rules.filter((r) => r.severity.by === "model").length;
   const decided = rules.filter((r) => r.severity.by === "person").length;
   const pending = rules.length - proposed - decided;
+  const serious = rules.filter((r) => r.serious);
   return {
     criteria: rules.length,
-    serious: rules.filter((r) => r.serious).length,
+    serious: serious.length,
     proposed,
     decided,
     pending,
+    yours: serious.every((r) => r.severity.by === "person"),
     error: pending ? data.severity.error : null,
   };
 }
 
 /**
- * While some criterion of the result has neither a decision nor a proposal: why the last proposal failed («Предложить
- * снова», `again`) or that it is not decided yet («Предложить автоматически»). Null when nothing waits for one.
+ * While some criterion of the result has neither a decision nor a proposal: why the last proposal failed («Отметить
+ * снова», `again`) or that nothing is marked yet («Отметить автоматически»). Null when nothing waits for one.
  */
 export function pendingOf(st: Standing): { text: string; again: boolean } | null {
   if (!st.pending) return null;
   return st.error
-    ? { text: `Не удалось предложить, какие ошибки серьёзные: ${sentence(st.error)}`, again: true }
-    : { text: "Какие ошибки серьёзные, ещё не решено.", again: false };
+    ? { text: `Не удалось отметить серьёзные ошибки. ${sentence(st.error)}`, again: true }
+    : { text: "Серьёзные ошибки ещё не отмечены.", again: false };
+}
+
+/**
+ * Which criteria are serious and whose decision it is, in one line: «Серьёзные критерии — 2 из 8. Их отметила модель,
+ * вы проверили 0 из 8.» Once a person decided every serious one, «Их отметили вы.», with how many criteria they checked
+ * in all while some proposals wait. With no serious criterion: «Серьёзных критериев нет. Так решили вы.» On a page
+ * someone else reads, the automatic check and people.
+ */
+export function whoseText(st: Standing, who: Who = "you"): string {
+  const person = PEOPLE[who];
+  const checked = `${person} проверили ${st.decided}\u00a0из\u00a0${st.criteria}`;
+  if (!st.serious)
+    return st.proposed
+      ? `Серьёзных критериев нет. Так считает ${MODEL[who]}, ${checked}.`
+      : `Серьёзных критериев нет. Так решили ${person}.`;
+  const head = `Серьёзные критерии — ${st.serious}\u00a0из\u00a0${st.criteria}.`;
+  const them = st.serious === 1 ? "Его" : "Их";
+  if (!st.yours) return `${head} ${them} отметила ${MODEL[who]}, ${checked}.`;
+  return `${head} ${them} отметили ${person}.${st.proposed ? ` Всего ${checked}.` : ""}`;
 }
 
 /**
  * The criteria tab's one quiet line about severity, with its one action: while some criteria are the automatic
- * check's proposals, how many of them are serious and how many the person checked — «Подтвердить все»; while some has
- * neither, why or that it is not decided yet — «Предложить снова» or «Предложить автоматически». Null once a person
+ * check's proposals, which are serious and how many the person checked, with «Подтвердить все»; while some has
+ * neither, why or that nothing is marked yet, with «Отметить снова» or «Отметить автоматически». Null once a person
  * decided every criterion.
  */
 export function hintOf(st: Standing): { text: string; action: "confirm" | "propose" | "again" } | null {
-  if (st.proposed)
-    return {
-      text: `Какие ошибки серьёзные, предложила автоматическая проверка: серьёзных — ${st.serious}\u00a0из\u00a0${st.criteria}. Вы проверили ${st.decided}\u00a0из\u00a0${st.criteria}; переключатель меняет решение.`,
-      action: "confirm",
-    };
+  if (st.proposed) return { text: whoseText(st), action: "confirm" };
   const pending = pendingOf(st);
   return pending && { text: pending.text, action: pending.again ? "again" : "propose" };
 }
-
-/**
- * Whose decision it is, while some criteria are the automatic check's proposals no person checked yet: «Какие
- * серьёзные, предложила автоматическая проверка; вы проверили 3 из 8 критериев.» — «люди проверили» on a page someone
- * else reads. Null once a person decided every proposal.
- */
-export function proposedText(st: Standing, who: Who = "you"): string | null {
-  if (!st.proposed) return null;
-  const criteria = count(st.criteria, "критерия", "критериев", "критериев");
-  return `Какие серьёзные, предложила автоматическая проверка; ${who === "you" ? "вы" : "люди"} проверили ${st.decided}\u00a0из\u00a0${criteria}.`;
-}
-
-/** No criterion of the result is serious, and none waits for a decision or a proposal. */
-export const NONE_SERIOUS = "Ни один критерий не считается серьёзным.";
-export const noneSerious = (st: Standing | null) => !!st && !st.serious && !st.pending;
 
 /**
  * The serious count of a check's result: the checked conversations with a serious error, its serious criteria
@@ -145,56 +156,66 @@ export function seriousOf(data: Problems | null | undefined): Serious | null {
 }
 
 /**
- * Where the serious criteria could be checked, when not in every checked conversation: «их удалось проверить в 21
- * разговоре», or «его не удалось проверить ни в одном разговоре». A share of all conversations says little when the
- * criteria seldom applied, and this says how seldom.
+ * Where the serious criteria could be checked, when not in every checked conversation: «Эти критерии удалось
+ * проверить в 16 разговорах из 53.», or «Этот критерий не удалось проверить ни в одном разговоре.» A share of all
+ * conversations says little when the criteria seldom applied, and this says how seldom.
  */
-function whereChecked(s: Serious): string {
-  if (s.checked >= s.measured) return "";
-  const them = s.marked === 1 ? "его" : "их";
-  if (!s.checked) return `; ${them} не удалось проверить ни в одном разговоре`;
-  return `; ${them} удалось проверить в\u00a0${s.checked}\u00a0${plural(s.checked, "разговоре", "разговорах", "разговорах")}`;
+function whereText(s: Serious): string | null {
+  if (s.checked >= s.measured) return null;
+  const these = s.marked === 1 ? "Этот критерий" : "Эти критерии";
+  if (!s.checked) return `${these} не удалось проверить ни в одном разговоре.`;
+  return `${these} удалось проверить в\u00a0${s.checked}\u00a0${plural(s.checked, "разговоре", "разговорах", "разговорах")} из\u00a0${s.measured}.`;
 }
 
 /**
- * «С серьёзными ошибками — 6 из 53 (11%): по 2 критериям, которые вы отметили серьёзными; их удалось проверить в 21
- * разговоре.» Whose decision it is: «вы отметили» («люди отметили» on a page someone else reads) only when a person
- * decided every serious criterion; otherwise «которые считаются серьёзными» — some are the automatic check's proposals.
- * While some criterion has neither a decision nor a proposal: «…; ещё не решено по 3 критериям». In three parts, as the
- * line of answers, so a screen can set the count apart and open its conversations.
+ * One line about serious errors under a check's number: the count, «С серьёзными ошибками — 6 из 53 (11%).», which a
+ * screen sets apart and opens; or a sentence, with the action a screen puts after it — «Проверить» the proposals,
+ * «Отметить автоматически» or «Отметить снова».
  */
-export function seriousSentence(s: Serious, who: Who = "you") {
-  const criteria = plural(s.marked, "критерию, который", "критериям, которые", "критериям, которые");
-  const serious = plural(s.marked, "серьёзным", "серьёзными", "серьёзными");
-  const whose = s.yours
-    ? `${who === "you" ? "вы" : "люди"} отметили ${serious}`
-    : `${plural(s.marked, "считается", "считаются", "считаются")} ${serious}`;
-  const open = s.pending ? `; ещё не решено по\u00a0${count(s.pending, "критерию", "критериям", "критериям")}` : "";
-  return {
-    head: "С серьёзными ошибками",
-    share: shareText(s),
-    rest: `: по\u00a0${s.marked}\u00a0${criteria} ${whose}${whereChecked(s)}${open}.`,
-  };
-}
-
-/** The same sentence as one line of text, for a letter. */
-export const seriousText = (s: Serious, who: Who = "you") => {
-  const x = seriousSentence(s, who);
-  return `${x.head} — ${x.share}${x.rest}`;
-};
+export type SeverityLine =
+  | { kind: "count"; head: string; share: string }
+  | { kind: "text"; text: string; action?: "check" | "propose" | "again" };
 
 /**
- * What a page for someone else (a report, a letter) says about serious errors in one paragraph: the serious count with
- * whose decision it is, or that no criterion is considered serious; then, while some criteria are the automatic check's
- * proposals, how many of them people checked. Null while some criterion is undecided and none is serious, and before
- * any conversation was checked.
+ * What a check says about serious errors, line by line (DESIGN.md, «Честность чисел», 4). Once a criterion is
+ * serious: the count of the same checked conversations; which criteria are serious and whose decision it is; where
+ * they could be checked, when not everywhere; what is not decided yet. With none serious: whose decision that is. While
+ * nothing is marked: that, or why it failed. A page someone else reads (`people`) says nothing until something is
+ * marked. Never instead of the check's number and never added to it.
+ */
+export function severityLines(st: Standing, serious: Serious | null, who: Who = "you"): SeverityLine[] {
+  const pending = pendingOf(st);
+  const again = pending?.again ? ("again" as const) : ("propose" as const);
+  const whose: SeverityLine = { kind: "text", text: whoseText(st, who), action: st.proposed ? "check" : undefined };
+  if (serious) {
+    const where = whereText(serious);
+    const lines: SeverityLine[] = [{ kind: "count", head: "С серьёзными ошибками", share: shareText(serious) }, whose];
+    if (where) lines.push({ kind: "text", text: where });
+    if (pending)
+      lines.push({
+        kind: "text",
+        text: `Ещё не решено по\u00a0${count(st.pending, "критерию", "критериям", "критериям")}.`,
+        action: again,
+      });
+    return lines;
+  }
+  // Serious criteria the service has not counted yet: the lines come with their count a moment later.
+  if (st.serious) return [];
+  if (pending) return who === "you" ? [{ kind: "text", text: pending.text, action: again }] : [];
+  return [whose];
+}
+
+/** A line as text, for a letter: «С серьёзными ошибками — 6 из 53 (11%).» */
+export const lineText = (line: SeverityLine) => (line.kind === "count" ? `${line.head} — ${line.share}.` : line.text);
+
+/**
+ * What a page for someone else (a report, a letter) says about serious errors, one line under another (severityLines,
+ * for people). Null while nothing is marked, and before any conversation was checked.
  */
 export function severityText(data: Problems): string | null {
   const st = standingOf(data);
   if (!st || !data.log?.assessed) return null;
-  const serious = seriousOf(data);
-  const head = serious ? seriousText(serious, "people") : noneSerious(st) ? NONE_SERIOUS : null;
-  return head && [head, proposedText(st, "people")].filter(Boolean).join(" ");
+  return severityLines(st, seriousOf(data), "people").map(lineText).join("\n") || null;
 }
 
 /**
@@ -275,18 +296,20 @@ export function useConfirmSeverity() {
           : old,
       );
     },
-    onSuccess: () => toast.notify("Предложения приняты: теперь это ваши решения"),
+    onSuccess: () => toast.notify("Отметки модели подтверждены"),
     onError: (e) => toast.error(e),
     onSettled: after,
   });
 }
 
-/** The check a running or finished proposal is for, as its task says (backend severity.propose). */
-export const proposalCheck = (job: Job | undefined): Check | null =>
-  job?.kind === "severity" || job?.progress.message === PROPOSING ? (job.progress.check ?? null) : null;
+/**
+ * The check a running or finished proposal is for, as its task says (backend severity.propose): only a proposal, its
+ * own task or the end of a check, names a check in its progress.
+ */
+export const proposalCheck = (job: Job | undefined): Check | null => job?.progress.check ?? null;
 
 /**
- * «Предложить автоматически» and «Предложить снова»: the automatic check proposes for the criteria of the check's
+ * «Отметить автоматически» and «Отметить снова»: the automatic check proposes for the criteria of the check's
  * result that have neither a decision nor a proposal (POST /api/severity/propose). It is a task of the service
  * (`severity`), seen where every task is; its failure is the task's, and the record says why (`severity.error`).
  */

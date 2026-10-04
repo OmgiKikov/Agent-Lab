@@ -59,5 +59,5 @@ class ContextTests(unittest.TestCase):
             sources.collect(Path(folder))
         self.assertEqual(
             str(refused.exception),
-            f'Нет кода агента в {folder}: укажите папку с кодом в разделе «Агент» и нажмите «Прочитать код».',
+            f'В папке {folder} нет кода агента. Укажите папку с кодом в разделе «Агент».',
         )

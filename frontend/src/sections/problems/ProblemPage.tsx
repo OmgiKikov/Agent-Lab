@@ -90,7 +90,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
     const finishedAt = data?.log?.finishedAt;
     review.mutate({ example: e, decision: next, finishedAt });
     if (next)
-      toast.notify(next === "agree" ? "Отмечено: это ошибка" : "Отмечено: ошибки нет", {
+      toast.notify(next === "agree" ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
         label: "Отменить",
         run: () => review.mutate({ example: e, decision: before, finishedAt }),
       });
@@ -151,7 +151,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
           className="h-full justify-center"
           action={<Button onClick={() => navigate(stageLink(stage, runId))}>{place}</Button>}
         >
-          После новой оценки критерии и их счёт меняются.
+          После новой проверки критерии и счёт меняются.
         </EmptyState>
       </div>
     );
@@ -187,14 +187,14 @@ export function ProblemPage({ stage }: { stage: Stage }) {
               onClick={() => setMore(true)}
               className="mt-2 text-read font-medium text-run hover:underline"
             >
-              Когда и что допустимо
+              Когда применяется и что допустимо
             </button>
           )}
           {more && (
             <dl className="mt-3 max-w-[68ch] space-y-1.5 text-read text-fg-2">
               {condition && (
                 <div>
-                  <dt className="inline font-medium text-fg">Когда это важно: </dt>
+                  <dt className="inline font-medium text-fg">Когда применяется: </dt>
                   <dd className="inline">{condition}</dd>
                 </div>
               )}
@@ -211,7 +211,10 @@ export function ProblemPage({ stage }: { stage: Stage }) {
 
           <p className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-read text-fg-2">
             <Link to={conversationsLink(stage, { run: runId, v: "fail", rule: r.id })} className={linkCls}>
-              <b className="text-count font-semibold tabular-nums text-fg">{s.failed}</b> из {checked(s)}{" "}
+              <b className="text-count font-semibold tabular-nums text-fg">{s.failed}</b>
+              {"\u00a0"}из{"\u00a0"}
+              {checked(s)}
+              {"\u00a0"}
               {plural(checked(s), "разговора", "разговоров", "разговоров")}
               <span className="text-fg-3">, где критерий удалось проверить</span>
             </Link>
@@ -221,7 +224,9 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                   ·
                 </span>
                 <span>
-                  две проверки совпали в {second.agree} из {second.checked}
+                  две модели совпали в {second.agree}
+                  {"\u00a0"}из{"\u00a0"}
+                  {second.checked}
                 </span>
               </>
             )}
@@ -237,15 +242,15 @@ export function ProblemPage({ stage }: { stage: Stage }) {
               className={linkCls}
             >
               {humans.checked
-                ? `вы ответили на ${humans.checked} из ${humans.of}: ${yesNoText(humans.agree, humans.checked - humans.agree)}`
+                ? `вы ответили на ${humans.checked}\u00a0из\u00a0${humans.of}: ${yesNoText(humans.agree, humans.checked - humans.agree)}`
                 : "вы ещё не отвечали"}
             </Link>
           </p>
           {right && <p className="mt-1.5 max-w-[72ch] text-read text-fg-2">{right}</p>}
           {s.unknown > 0 && (
             <p className="mt-1.5 text-small text-fg-3">
-              Ещё в {count(s.unknown, "разговоре", "разговорах", "разговорах")} проверить не удалось: в счёт они не
-              входят.
+              Ещё в {count(s.unknown, "разговоре", "разговорах", "разговорах")} критерий не удалось проверить. В счёт
+              они не входят.
             </p>
           )}
           {/* The same criterion on the other side: a check's last run, or the conversations of the run's check. */}
@@ -256,7 +261,9 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                   to={problemLink(r.id, data.check)}
                   className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
                 >
-                  В диалогах тоже: {r.log.failed} из {checked(r.log)}
+                  В диалогах тоже: {r.log.failed}
+                  {"\u00a0"}из{"\u00a0"}
+                  {checked(r.log)}
                   <ArrowRight aria-hidden className="size-4" />
                 </Link>
               )
@@ -266,7 +273,9 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                   to={problemLink(r.id, "sim", data.sim.runId)}
                   className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
                 >
-                  В симуляции тоже: {r.sim.failed} из {checked(r.sim)}
+                  В симуляции тоже: {r.sim.failed}
+                  {"\u00a0"}из{"\u00a0"}
+                  {checked(r.sim)}
                   <ArrowRight aria-hidden className="size-4" />
                 </Link>
               )}
@@ -327,14 +336,10 @@ export function ProblemPage({ stage }: { stage: Stage }) {
             <div className="mt-4 space-y-3 text-read text-fg-2">
               <div>
                 <span className="text-small text-fg-3">
-                  {tone ? "Требование в правилах общения" : "Требование в промпте агента"}
+                  {tone ? "Цитата из правил общения" : "Цитата из кода агента"}
                 </span>
                 <blockquote className="mt-1 border-l-2 border-mark-strong pl-3 text-read text-fg">
-                  {quote
-                    ? `«${quote}»`
-                    : tone
-                      ? "Цитата из правил не сохранена."
-                      : "Цитата из кода не сохранена в этом прогоне."}
+                  {quote ? `«${quote}»` : tone ? "Цитата из правил не сохранена." : "Цитата из кода не сохранена."}
                 </blockquote>
               </div>
               {origin && (
@@ -346,7 +351,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                       onClick={() => setSource(true)}
                       className="inline-flex items-center gap-0.5 font-medium text-run hover:underline"
                     >
-                      {tone ? "Текст правил" : "Текст промпта"}
+                      Весь текст
                       <ArrowUpRight aria-hidden className="size-3.5" />
                     </button>
                   )}

@@ -75,8 +75,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
             response.json()['detail'],
-            'Не удалось прочитать файл: Строка 1 файла .jsonl не читается как JSON: проверьте, что это выгрузка чата, '
-            'по одному разговору в строке.',
+            'Не удалось прочитать файл. Строка 1 не читается как JSON. '
+            'Нужна выгрузка чата, по одному разговору в строке.',
         )
 
     async def test_successful_upload_invalidates_old_audit_and_scenarios(self) -> None:
@@ -144,7 +144,9 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.002)
         down.assert_awaited_once()
         self.assertEqual(
-            api.jobs.state['error'], 'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён.'
+            api.jobs.state['error'],
+            'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён. '
+            'Проверьте модель в разделе «Настройки».',
         )
         self.assertEqual(store.load(api.discover.RESULT), previous)
         self.assertEqual(store.load(api.cards.DECK), {'cards': ['built from the previous audit']})
@@ -253,7 +255,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(url=url):
                 response = await self.client.post('/api/settings', json={'prodUrl': url})
                 self.assertEqual(response.status_code, 400, response.text)
-                self.assertIn('адрес агента', response.json()['detail'])
+                self.assertIn('Адрес агента', response.json()['detail'])
         self.assertEqual(api.agents.settings()['prodUrl'], '')
         for url in ('https://ift.example.invalid:8443/api/v1/ai/agents/agent', ''):
             response = await self.client.post('/api/settings', json={'prodUrl': url})
@@ -263,7 +265,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/agents/prod/check')
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()['ok'])
-        self.assertIn('адрес агента', response.json()['error'])
+        self.assertIn('Адрес агента', response.json()['error'])
         card = {
             'id': 'c1',
             'name': 'Возврат',
@@ -284,10 +286,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         # Never a crash: each conversation names the address, and the run, which the agent answered in none, fails
         # with it (simulate.unanswered).
         self.assertEqual(run['status'], 'failed')
-        self.assertTrue(run['error'].startswith('Агент не ответил ни в одном разговоре: '), run['error'])
-        self.assertIn('адрес агента', run['error'])
+        self.assertTrue(run['error'].startswith('Агент не ответил ни в одном разговоре. '), run['error'])
+        self.assertIn('Адрес агента', run['error'])
         self.assertEqual([item['status'] for item in run['items']], ['UNMEASURED'])
-        self.assertIn('адрес агента', run['items'][0]['error'])
+        self.assertIn('Адрес агента', run['items'][0]['error'])
 
     async def test_malformed_commands_are_validation_errors(self) -> None:
         for route, payload in (

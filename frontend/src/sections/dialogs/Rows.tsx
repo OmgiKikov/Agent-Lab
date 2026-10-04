@@ -19,7 +19,7 @@ export function VerdictWord({ status, className }: { status: DialogRow["status"]
         : status === "RUNNING"
           ? ["идёт", "bg-run", "text-run"]
           : status
-            ? ["не проверен", "border border-dashed border-fg-3", "text-fg-3"]
+            ? ["не удалось проверить", "border border-dashed border-fg-3", "text-fg-3"]
             : [null, "", ""];
   if (!word) return null;
   return (
@@ -66,7 +66,7 @@ function Row({
     >
       <span className="flex items-center gap-2">
         <VerdictWord status={r.status} />
-        {r.disputed && <span className="text-small text-warn">· проверки разошлись</span>}
+        {r.disputed && <span className="text-small text-warn">· модели разошлись</span>}
       </span>
       <span className="mt-1 line-clamp-2 text-body text-fg">{r.title}</span>
       <span className="mt-1 flex flex-wrap gap-x-1.5 text-small text-fg-3">
@@ -146,7 +146,7 @@ export function Rows({
   const marked = criteria.some((c) => c.r.serious);
   const verdicts = VERDICTS.filter((v) => v.value !== "serious" || marked || verdict === "serious");
   return (
-    <div className={cn("flex min-h-0 flex-col border-line lg:border-r", className)}>
+    <div className={cn("flex min-h-0 min-w-0 flex-col border-line lg:border-r", className)}>
       <div className="space-y-3 px-4 pb-3 pt-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Menu
@@ -197,13 +197,15 @@ export function Rows({
         ))}
         {!rows.length && (
           <p className="px-3 py-10 text-center text-small text-fg-3">
-            {all.length ? "В этом отборе разговоров нет" : empty}
+            {all.length ? "В этом отборе разговоров нет." : empty}
           </p>
         )}
       </div>
       {rows.length > 0 && (
         <div className="border-t border-line px-4 py-2 text-small text-fg-3">
-          {rows.length} из {all.length}
+          {rows.length}
+          {"\u00a0"}из{"\u00a0"}
+          {all.length}
         </div>
       )}
     </div>

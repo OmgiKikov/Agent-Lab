@@ -71,7 +71,7 @@ export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void
       window.location.assign(agentHref(agent.id, "/overview"));
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      setError(agent ? `Агент «${agent.name}» создан, но правила взять не удалось: ${reason}` : reason);
+      setError(agent ? `Агент «${agent.name}» создан, но правила взять не удалось. ${reason}` : reason);
       setBusy(false);
     }
   };

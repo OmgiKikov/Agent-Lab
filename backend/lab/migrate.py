@@ -55,13 +55,13 @@ def migrate(source: Path) -> dict[str, int]:
     recomputed, reset_reviews = 0, 0
     for record in records:
         if not record.get('id') or not isinstance(record.get('items'), list):
-            raise ValueError('В старом прогоне отсутствуют id или items')
+            raise ValueError('В старом прогоне нет id или items.')
         if record.get('status') == 'running':
-            record.update(status='stopped', finishedAt=store.now(), error='Прогон прерван до переноса данных')
+            record.update(status='stopped', finishedAt=store.now(), error='Прогон остановился до переноса данных.')
             for item in record['items']:
                 if item.get('status') == 'RUNNING':
                     reset_reviews += int(item.get('review') in ('agree', 'disagree'))
-                    item.update(status='UNMEASURED', stage='', error='Прогон прерван до переноса данных')
+                    item.update(status='UNMEASURED', stage='', error='Прогон остановился до переноса данных.')
                     if 'review' in item:
                         item['review'] = None
         for item in record['items']:
@@ -89,14 +89,14 @@ def target(agent_id: str | None) -> str | None:
         return agent_id
     listed = ', '.join(agents) or 'пока нет'
     if agent_id is None:
-        raise ValueError(f'Агентов несколько — укажите, в какого импортировать: --agent <id>. Агенты: {listed}.')
+        raise ValueError(f'Агентов несколько. Укажите, в какого импортировать: --agent <id>. Агенты: {listed}.')
     raise ValueError(f'Нет агента «{agent_id}». Агенты: {listed}.')
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True, type=Path, help='Папка старых data/*.json, logs.jsonl и runs/*.json')
-    parser.add_argument('--agent', help='id агента (его адрес /a/<id>); без него — единственный агент')
+    parser.add_argument('--agent', help='id агента, как в адресе /a/<id>. Без него — единственный агент')
     args = parser.parse_args()
     try:
         agent = target(args.agent)

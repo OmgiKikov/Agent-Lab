@@ -41,17 +41,23 @@ function Lens({ c, side, on, onSelect }: { c: Criterion; side: SideKey; on: bool
       <span aria-hidden>·</span>
       {tone === "bad" && (
         <span className="font-medium text-bad">
-          ошибка в {s.failed} из {checked}
+          ошибка в {s.failed}
+          {"\u00a0"}из{"\u00a0"}
+          {checked}
         </span>
       )}
       {tone === "ok" && (
         <span className="font-medium text-fg-2">
-          ошибок не найдено в {s.passed} из {checked}
+          без найденных ошибок в {s.passed}
+          {"\u00a0"}из{"\u00a0"}
+          {checked}
         </span>
       )}
       {tone === "unknown" && (
         <span className="font-medium text-fg-2">
-          не проверен в {s.unknown} {plural(s.unknown, "разговоре", "разговорах", "разговорах")}: нет доказательств
+          не удалось проверить в {s.unknown}
+          {"\u00a0"}
+          {plural(s.unknown, "разговоре", "разговорах", "разговорах")}
         </span>
       )}
       {tone === "none" && <span>не встречался в этих разговорах</span>}
@@ -59,14 +65,16 @@ function Lens({ c, side, on, onSelect }: { c: Criterion; side: SideKey; on: bool
         <>
           <span aria-hidden>·</span>
           <span>
-            две проверки совпали в {second.agree} из {second.checked}
+            две модели совпали в {second.agree}
+            {"\u00a0"}из{"\u00a0"}
+            {second.checked}
           </span>
         </>
       )}
       {tone !== "unknown" && s.unknown > 0 && (
         <>
           <span aria-hidden>·</span>
-          <span>не проверен в {s.unknown}</span>
+          <span>не удалось проверить в {s.unknown}</span>
         </>
       )}
     </button>
@@ -160,8 +168,8 @@ export function CodeView({
       })}
       {missing.length > 0 && (
         <p className="mx-6 mt-6 border-t border-line pt-3 font-sans text-small text-warn">
-          {missing.length === 1 ? "Цитаты одного критерия" : `Цитат ${missing.length} критериев`} нет в нынешнем тексте:
-          он мог измениться после того, как критерии собрали ({missing.map((c) => c.n).join(", ")}).
+          {missing.length === 1 ? "Цитаты критерия" : "Цитат критериев"} {missing.map((c) => c.n).join(", ")} нет в
+          текущем тексте. Он мог измениться после того, как собрали критерии.
         </p>
       )}
     </div>

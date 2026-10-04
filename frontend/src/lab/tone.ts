@@ -7,7 +7,7 @@ export const CHECK_STEPS: { id: CheckStep; label: string }[] = [
   { id: "materials", label: "Материалы" },
   { id: "criteria", label: "Критерии" },
   { id: "checking", label: "Проверка" },
-  { id: "result", label: "Результат" },
+  { id: "result", label: "Итог" },
 ];
 
 /** The result of the tone-of-voice check, or null. */

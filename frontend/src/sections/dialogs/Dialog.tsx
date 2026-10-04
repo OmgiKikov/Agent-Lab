@@ -202,7 +202,7 @@ export function Dialog({
       <div className="max-w-4xl px-4 pb-16 pt-6 lg:px-10 lg:pt-8">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <VerdictWord status={row.status} />
-          {row.disputed && <span className="text-small text-warn">проверки разошлись</span>}
+          {row.disputed && <span className="text-small text-warn">модели разошлись</span>}
           <span className="text-small text-fg-3">{where}</span>
         </div>
         <div className="mt-2 flex items-start gap-5">
@@ -231,7 +231,7 @@ export function Dialog({
                 ) : (
                   "—"
                 ),
-                title: "Критериев с ошибкой из тех, что удалось проверить",
+                title: "Из критериев, которые удалось проверить в этом разговоре",
               },
               {
                 label: "Без ошибки",
@@ -254,7 +254,7 @@ export function Dialog({
                     },
                   ]
                 : []),
-              { label: "Ваши ответы", value: reviewed ? `${reviewed} из ${broken}` : "ещё нет" },
+              { label: "Ваши ответы", value: reviewed ? `${reviewed}\u00a0из\u00a0${broken}` : "ещё нет" },
             ]}
           />
         </div>
@@ -276,9 +276,10 @@ export function Dialog({
               {loading ? (
                 <Skeleton className="h-40" />
               ) : error ? (
-                <p className="text-small text-bad">
-                  Не удалось загрузить разговор: {error instanceof Error ? error.message : String(error)}
-                </p>
+                <>
+                  <p className="text-small text-bad">Не удалось загрузить разговор.</p>
+                  <p className="mt-1 text-small text-fg-3">{error instanceof Error ? error.message : String(error)}</p>
+                </>
               ) : turns ? (
                 <Conversation turns={turns} marks={marks} lit={lit} onLit={(on, n) => setLit(on && n ? n : null)} />
               ) : (

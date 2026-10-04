@@ -37,7 +37,7 @@ const toFilter = (raw: string | null): Filter =>
 const FILTERS: { value: Filter; label: string; dot?: "FAIL" | "PASS" | "UNMEASURED" | "NONE" }[] = [
   { value: "all", label: "Все" },
   { value: "fail", label: "С ошибкой в последнем прогоне", dot: "FAIL" },
-  { value: "pass", label: "Без ошибок", dot: "PASS" },
+  { value: "pass", label: "Без найденных ошибок", dot: "PASS" },
   { value: "none", label: "Не удалось проверить", dot: "UNMEASURED" },
   { value: "unplayed", label: "Не играли", dot: "NONE" },
 ];
@@ -223,8 +223,8 @@ export function ScenariosPage() {
             <p className="text-read text-fg-3">
               {cards.length && deck ? (
                 <>
-                  {count(cards.length, "сценарий", "сценария", "сценариев")} {BY_CRITERIA[deck.check]}, {fromErrors} из
-                  ошибок в диалогах
+                  {count(cards.length, "сценарий", "сценария", "сценариев")} {BY_CRITERIA[deck.check]}, {fromErrors}
+                  {"\u00a0— из ошибок в диалогах"}
                   {deck.createdAt ? ` · собраны ${day(deck.createdAt)}` : ""}
                 </>
               ) : (
@@ -301,8 +301,8 @@ export function ScenariosPage() {
                 {cards.length
                   ? "Ничего не нашлось"
                   : CHECKS.some((c) => resultOf(state, c))
-                    ? "Нажмите «Собрать сценарии», чтобы продолжить."
-                    : "Сценарии собираются из ошибок проверки разговоров: сначала проверьте их в «Tone of voice» или «Точности»."}
+                    ? "Соберите сценарии из ошибок проверки."
+                    : "Сценарии собираются из ошибок проверки. Сначала проверьте разговоры в разделе «Tone of voice» или «Точность»."}
               </p>
             )}
           </div>

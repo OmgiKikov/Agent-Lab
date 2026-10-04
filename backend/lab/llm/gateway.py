@@ -92,9 +92,9 @@ def _from_file() -> dict:
     try:
         data = json.loads(FILE.read_text(encoding='utf-8'))
     except (OSError, ValueError) as error:
-        raise ModelError(f'Файл настройки шлюза {FILE} не читается: исправьте или удалите его') from error
+        raise ModelError(f'Файл настройки шлюза {FILE} не читается. Исправьте или удалите его.') from error
     if not isinstance(data, dict) or data.get('format') != FORMAT:
-        raise ModelError(f'Файл настройки шлюза {FILE}: неизвестный формат, исправьте или удалите его')
+        raise ModelError(f'Файл настройки шлюза {FILE} в неизвестном формате. Исправьте или удалите его.')
     settings = {
         'url': data.get('url'),
         'cert': data.get('certPath'),
@@ -102,7 +102,7 @@ def _from_file() -> dict:
         'ca': data.get('caPath'),
     }
     if not all(value is None or isinstance(value, str) for value in settings.values()):
-        raise ModelError(f'Файл настройки шлюза {FILE}: url, certPath, keyPath и caPath должны быть строками')
+        raise ModelError(f'В файле настройки шлюза {FILE} url, certPath, keyPath и caPath должны быть строками.')
     return {**settings, 'insecure': bool(data.get('insecure'))}
 
 
@@ -127,8 +127,8 @@ def _from_certs_folder() -> dict | None:
         cert, key = _unpack(bundle)
     if not cert or not key:
         raise ModelError(
-            f'В {_named(CERTS)} нет сертификата и ключа шлюза: положите их в PEM (.pem или .crt и .key) '
-            'или один .p12/.pfx с паролем в password.txt'
+            f'В {_named(CERTS)} нет сертификата и ключа шлюза. Положите их в PEM (.pem или .crt и .key) '
+            'или один .p12/.pfx с паролем в password.txt.'
         )
     return {'url': url, 'cert': str(cert), 'key': str(key), 'ca': str(ca) if ca else None, 'insecure': False}
 
@@ -139,13 +139,13 @@ def _url() -> str:
     lines = [line.strip() for line in path.read_text(encoding='utf-8-sig', errors='replace').splitlines()]
     url = next((line for line in lines if line), '')
     if not url:
-        raise ModelError(f'{_named(path)} пустой: впишите в него адрес шлюза моделей (https://…)')
+        raise ModelError(f'{_named(path)} пустой. Впишите в него адрес шлюза моделей (https://…).')
     try:
         valid = url.startswith(('https://', 'http://')) and bool(httpx.URL(url).host)
     except httpx.InvalidURL:
         valid = False
     if not valid:
-        raise ModelError(f'В {_named(path)} не адрес шлюза: нужна одна строка вида https://адрес-шлюза')
+        raise ModelError(f'В {_named(path)} не адрес шлюза. Нужна одна строка вида https://адрес-шлюза.')
     return url
 
 
@@ -160,7 +160,7 @@ def _password() -> bytes:
 
 def _unreadable(error: OSError) -> str:
     where = _named(Path(error.filename)) if error.filename else f'Файл в {_named(CERTS)}'
-    return f'{where} не читается ({error.strerror or type(error).__name__}): проверьте, что он на месте и доступен'
+    return f'{where} не читается ({error.strerror or type(error).__name__}). Проверьте, что файл на месте и доступен.'
 
 
 def _unpack(bundle: Path) -> tuple[Path, Path]:
@@ -189,8 +189,8 @@ def _convert(bundle: Path, password: bytes) -> tuple[Path, Path]:
     key = _openssl(bundle, password, '-nocerts', '-nodes')
     if b'BEGIN CERTIFICATE' not in cert or b'PRIVATE KEY' not in key:
         raise ModelError(
-            f'В {_named(bundle)} нет сертификата клиента с ключом: '
-            'попросите выпустить .p12/.pfx заново или положите в certs/ сертификат и ключ в PEM'
+            f'В {_named(bundle)} нет сертификата клиента с ключом. '
+            'Попросите выпустить .p12/.pfx заново или положите в certs/ сертификат и ключ в PEM.'
         )
     out = CERTS / '.converted'
     try:
@@ -199,8 +199,8 @@ def _convert(bundle: Path, password: bytes) -> tuple[Path, Path]:
         _replace(out / 'client.key', key)
     except OSError as error:
         raise ModelError(
-            f'Сертификат из {_named(bundle)} не записывается в {_named(out)} ({error.strerror}): '
-            'проверьте место на диске и права на папку'
+            f'Сертификат из {_named(bundle)} не записывается в {_named(out)} ({error.strerror}). '
+            'Проверьте место на диске и права на папку.'
         ) from error
     return out / 'client.pem', out / 'client.key'
 
@@ -214,11 +214,11 @@ def _openssl(bundle: Path, password: bytes, *args: str) -> bytes:
             done = subprocess.run(command, input=password + b'\n', capture_output=True, timeout=60, check=False)
         except FileNotFoundError:
             raise ModelError(
-                f'Чтобы открыть {_named(bundle)}, нужна программа openssl, а её на компьютере нет: '
-                'установите OpenSSL или положите в certs/ сертификат и ключ в PEM'
+                f'Чтобы открыть {_named(bundle)}, нужна программа openssl, а её на компьютере нет. '
+                'Установите OpenSSL или положите в certs/ сертификат и ключ в PEM.'
             ) from None
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise ModelError(f'openssl не открыл {_named(bundle)}: {type(error).__name__}') from None
+            raise ModelError(f'openssl не открыл {_named(bundle)} ({type(error).__name__}).') from None
         if done.returncode == 0:
             return done.stdout
         failure = done.stderr.decode(errors='replace')
@@ -227,14 +227,14 @@ def _openssl(bundle: Path, password: bytes, *args: str) -> bytes:
     if 'invalid password' in failure.lower():
         where = _named(CERTS / 'password.txt')
         if not password:
-            raise ModelError(f'{_named(bundle)} закрыт паролем: впишите его в {where}')
-        raise ModelError(f'{_named(bundle)} не открылся: неверный пароль в {where}')
+            raise ModelError(f'{_named(bundle)} закрыт паролем. Впишите его в {where}.')
+        raise ModelError(f'{_named(bundle)} не открылся: неверный пароль. Исправьте его в {where}.')
     if legacy:
         raise ModelError(
             f'{_named(bundle)} в старом формате (RC2), а OpenSSL на этом компьютере открывает его только с модулем '
-            'legacy: пересохраните сертификат в современном формате (AES) или положите в certs/ сертификат и ключ в PEM'
+            'legacy. Пересохраните сертификат в формате AES или положите в certs/ сертификат и ключ в PEM.'
         )
-    raise ModelError(f'openssl не открыл {_named(bundle)} (код {done.returncode}): проверьте, что это целый .p12/.pfx')
+    raise ModelError(f'openssl не открыл {_named(bundle)} (код {done.returncode}). Проверьте, что файл не повреждён.')
 
 
 def _replace(path: Path, data: bytes) -> None:
@@ -269,7 +269,7 @@ async def _client() -> tuple[httpx.AsyncClient, str]:
 def _connection() -> tuple[ssl.SSLContext, str]:
     settings = config()
     if not settings:
-        raise ModelError('Шлюз моделей не настроен: положите url.txt, сертификат и ключ в папку certs/')
+        raise ModelError('Шлюз моделей не настроен. Положите url.txt, сертификат и ключ в папку certs/.')
     return _context(settings), settings['url']
 
 
@@ -299,14 +299,15 @@ def _tls(settings: dict, password: bytes) -> ssl.SSLContext:
     except (OSError, ssl.SSLError) as error:
         where = _named(Path(ca)) if ca else 'системные'
         raise ModelError(
-            f'Корневой сертификат шлюза ({where}) не читается ({type(error).__name__}): нужен сертификат банка в PEM'
+            f'Корневой сертификат шлюза ({where}) не читается ({type(error).__name__}). Нужен сертификат банка в PEM.'
         ) from error
     try:
         context.load_cert_chain(cert, key, password=password)
     except (OSError, ssl.SSLError) as error:
         raise ModelError(
             f'Сертификат {_named(cert)} и ключ {_named(key)} не читаются или не подходят друг к другу '
-            f'({type(error).__name__}): нужна пара одного выпуска; пароль ключа, если он есть, — в password.txt'
+            f'({type(error).__name__}). Нужна пара одного выпуска. '
+            'Если у ключа есть пароль, впишите его в password.txt.'
         ) from error
     if settings.get('insecure'):
         context.check_hostname = False
@@ -328,16 +329,16 @@ async def catalog(timeout: httpx.Timeout | float = 30) -> list[str]:
     client, base = await _client()
     response = await client.get(base + '/v1/models', timeout=timeout)
     if response.status_code != 200:
-        raise refused('Шлюз не отдал каталог моделей:', response)
+        raise refused('Шлюз не отдал каталог моделей', response)
     try:
         data = response.json()
     except ValueError as error:
-        raise ModelError('Шлюз вернул каталог не в JSON') from error
+        raise ModelError('Шлюз отдал каталог не в JSON.') from error
     if not isinstance(data, dict) or not isinstance(data.get('data'), list):
-        raise ModelError('В каталоге шлюза нет списка data')
+        raise ModelError('В каталоге шлюза нет списка data.')
     models = data['data']
     if not all(isinstance(model, dict) and isinstance(model.get('id'), str) for model in models):
-        raise ModelError('Неверный формат записи модели в каталоге шлюза')
+        raise ModelError('Запись модели в каталоге шлюза в неизвестном формате.')
     return [model['id'] for model in models if model.get('type', 'chat') == 'chat']
 
 
@@ -365,7 +366,7 @@ async def chat(model: str, system: str, messages: list[dict], timeout: httpx.Tim
     if model == 'auto':
         model = (await auto_models(timeout))['model']
     if not model:
-        raise ModelError('В каталоге шлюза нет моделей для чата')
+        raise ModelError('В каталоге шлюза нет моделей для чата.')
     body = {
         'model': model,
         'messages': [
@@ -378,22 +379,22 @@ async def chat(model: str, system: str, messages: list[dict], timeout: httpx.Tim
     client, base = await _client()
     response = await client.post(base + '/v2/chat/completions', json=body, timeout=timeout)
     if response.status_code != 200:
-        raise refused('Шлюз моделей ответил', response)
+        raise refused('Шлюз моделей ответил ошибкой', response)
     try:
         data = response.json()
     except ValueError as error:
-        raise MalformedAnswer('Шлюз вернул ответ не в JSON') from error
+        raise MalformedAnswer('Шлюз ответил не в JSON.') from error
     if not isinstance(data, dict) or not isinstance(data.get('messages'), list):
-        raise MalformedAnswer('В ответе шлюза нет списка messages')
+        raise MalformedAnswer('В ответе шлюза нет списка messages.')
     if not all(isinstance(message, dict) for message in data['messages']):
-        raise MalformedAnswer('Неверный формат сообщения шлюза')
+        raise MalformedAnswer('Сообщение шлюза в неизвестном формате.')
     answer = next((message for message in data['messages'] if message.get('role') == 'assistant'), None)
     if answer is None or not isinstance(answer.get('content'), list):
-        raise MalformedAnswer('В ответе шлюза нет текста assistant')
+        raise MalformedAnswer('В ответе шлюза нет текста assistant.')
     parts = answer['content']
     if not all(isinstance(part, dict) and isinstance(part.get('text'), str) for part in parts):
-        raise MalformedAnswer('Текст ответа шлюза должен быть строкой')
+        raise MalformedAnswer('Текст ответа шлюза не строка.')
     label = data.get('model', model)
     if not isinstance(label, str) or not label.strip():
-        raise MalformedAnswer('Имя ответившей модели шлюза должно быть строкой')
+        raise MalformedAnswer('Имя модели в ответе шлюза не строка.')
     return ''.join(part['text'] for part in parts), label

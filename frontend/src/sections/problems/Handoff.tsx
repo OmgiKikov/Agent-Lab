@@ -38,9 +38,9 @@ export function Handoff({
       actions={
         <>
           <Button icon={Link2} onClick={() => copy(link, "Ссылка скопирована")} className="hidden sm:inline-flex">
-            Ссылка
+            Скопировать ссылку
           </Button>
-          <Button variant="primary" icon={Copy} onClick={() => copy(text, "Задача скопирована: вставьте её в тикет")}>
+          <Button variant="primary" icon={Copy} onClick={() => copy(text, "Задача скопирована")}>
             Скопировать
           </Button>
         </>

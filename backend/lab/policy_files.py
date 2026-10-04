@@ -31,7 +31,7 @@ def _docx(data: bytes) -> str:
         with ZipFile(io.BytesIO(data)) as archive:
             root = ElementTree.fromstring(_text_part(archive))
     except (BadZipFile, KeyError, ElementTree.ParseError, zlib.error, EOFError, NotImplementedError) as error:
-        raise ValueError('Не удалось прочитать документ Word. Загрузите файл .docx.') from error
+        raise ValueError('Не удалось прочитать документ Word. Сохраните его заново в .docx.') from error
     paragraphs = []
     for paragraph in root.iter(W + 'p'):
         parts = []
@@ -50,7 +50,7 @@ def _docx(data: bytes) -> str:
 
 def read(name: str, data: bytes) -> str:
     if len(data) > LIMIT:
-        raise ValueError('Файл слишком большой: не более 2 МБ.')
+        raise ValueError('Файл больше 2\u00a0МБ. Оставьте в файле только правила общения.')
     extension = Path(name).suffix.lower()
     if extension == '.docx':
         text = _docx(data)
@@ -58,7 +58,7 @@ def read(name: str, data: bytes) -> str:
         try:
             text = data.decode('utf-8-sig')
         except UnicodeDecodeError as error:
-            raise ValueError('Сохраните текстовый файл в UTF-8 или загрузите .docx.') from error
+            raise ValueError('Файл не в кодировке UTF-8. Сохраните его в UTF-8 или загрузите .docx.') from error
     else:
         raise ValueError('Загрузите правила в формате .docx, .txt или .md.')
     if not 20 <= len(text.strip()) <= 50000:

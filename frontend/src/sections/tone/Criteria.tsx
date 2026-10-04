@@ -89,14 +89,16 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
             // Criteria taken from another agent can be here before this agent's conversations are.
             <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-sheet bg-inset p-5">
               <p className="min-w-0 flex-1 basis-64 text-read text-fg-2">
-                Разговоры этого агента ещё не загружены. Загрузите выгрузку чата — и проверим её по этим критериям.
+                Чтобы запустить проверку, загрузите диалоги этого агента.
               </p>
-              <UploadButton variant="outline" label="Загрузить разговоры" />
+              <UploadButton variant="outline" />
             </div>
           )}
           <p className="mt-5 text-body text-fg-3">
-            Выбрано {ids.length} из {draft.criteria.length}
-            {draft.criteria.length > MAX_CRITERIA && ` · за одну проверку — не больше ${MAX_CRITERIA}`}
+            Выбрано {ids.length}
+            {"\u00a0"}из{"\u00a0"}
+            {draft.criteria.length}
+            {draft.criteria.length > MAX_CRITERIA && ` · не больше ${MAX_CRITERIA} за одну проверку`}
           </p>
           <ul className="mt-2 divide-y divide-line border-y border-line">
             {draft.criteria.map((c, i) => (
@@ -118,7 +120,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
                   </span>
                 </label>
                 <details className="ml-7 mt-2 text-body">
-                  <summary className="cursor-pointer text-fg-3 hover:text-fg">Требование и источник</summary>
+                  <summary className="cursor-pointer text-fg-3 hover:text-fg">Формулировка и цитата</summary>
                   <p className="mt-2 whitespace-pre-wrap text-read text-fg-2">{duty(c.text)}</p>
                   <blockquote className="mt-3 whitespace-pre-wrap border-l-2 border-mark pl-3 text-body text-fg-3">
                     {c.quote}
@@ -161,8 +163,9 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
           {!!state.logs.total && (
             <p className="mt-2 text-body text-fg-3">
               Проверим {total}
-              {"\u00a0"}из {count(state.logs.total, "разговора", "разговоров", "разговоров")} по{" "}
-              {count(ids.length, "критерию", "критериям", "критериям")}. Подключение к агенту не требуется.
+              {"\u00a0"}из{"\u00a0"}
+              {count(state.logs.total, "разговора", "разговоров", "разговоров")} по{" "}
+              {count(ids.length, "критерию", "критериям", "критериям")}. Подключать агента не нужно.
             </p>
           )}
         </>
@@ -173,7 +176,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
         <div role="alert" className="mt-5 text-read text-bad">
           <p>{error || serviceError}</p>
           <Link to="/settings" className="mt-2 inline-block text-body text-fg underline">
-            Проверить настройки моделей
+            Настройки моделей
           </Link>
         </div>
       )}
@@ -199,10 +202,10 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
             variant="ghost"
             icon={RotateCcw}
             disabled={running || !state.logs.total}
-            title={state.logs.total ? undefined : "Сначала загрузите разговоры"}
+            title={state.logs.total ? undefined : "Сначала загрузите диалоги"}
             onClick={regenerate}
           >
-            {draft ? "Собрать заново" : "Повторить сборку"}
+            {draft ? "Собрать заново" : "Собрать критерии"}
           </Button>
         )}
       </div>

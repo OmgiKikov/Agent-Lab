@@ -45,7 +45,8 @@ export function Finding({
       <div className="px-5 pb-5 pt-6 sm:px-7">
         <div className="flex flex-wrap items-center justify-between gap-3 text-small text-fg-3">
           <span>
-            Критерий {c.n} · {c.name}
+            Критерий{"\u00a0"}
+            {c.n} · {c.name}
             {c.r.serious && <SeriousTag rule={c.r} className="relative -top-px ml-2 align-middle" />}
           </span>
           <Link
@@ -53,7 +54,8 @@ export function Finding({
             className="font-medium text-run hover:underline"
           >
             {c.r.log.failed}
-            {"\u00a0"}из {count(c.r.log.failed + c.r.log.passed, "разговора", "разговоров", "разговоров")}
+            {"\u00a0"}из{"\u00a0"}
+            {count(c.r.log.failed + c.r.log.passed, "разговора", "разговоров", "разговоров")}
           </Link>
         </div>
         <h3 className="mt-3 text-title font-semibold text-fg">{c.r.title.replace(/^Ошибка:\s*/i, "")}</h3>
@@ -62,13 +64,9 @@ export function Finding({
       <div className="bg-inset px-5 py-5 sm:px-7">
         <p className="text-small text-fg-3">Клиент</p>
         <p className="mt-1 text-read text-fg-2">{e.opening}</p>
-        <p className="mt-4 text-small text-fg-3">Фрагмент ответа агента</p>
+        <p className="mt-4 text-small text-fg-3">Слова агента</p>
         <blockquote className="mt-2 whitespace-pre-wrap break-words text-lead text-fg">
-          {e.agentQuote ? (
-            <mark className="bg-mark px-0.5 text-fg">{e.agentQuote}</mark>
-          ) : (
-            "Цитата не сохранена. Посмотрите разговор целиком."
-          )}
+          {e.agentQuote ? <mark className="bg-mark px-0.5 text-fg">{e.agentQuote}</mark> : "Цитата не сохранена."}
         </blockquote>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <Link
@@ -88,7 +86,9 @@ export function Finding({
                 onClick={() => setChosen(examples[at - 1].dialogueId!)}
               />
               <span className="text-small tabular-nums text-fg-3">
-                {at + 1} / {examples.length}
+                {at + 1}
+                {"\u00a0"}из{"\u00a0"}
+                {examples.length}
               </span>
               <Button
                 size="lg"
@@ -172,15 +172,12 @@ export function Finding({
               </Button>
             )}
             <Button size="lg" variant="ghost" disabled={busy || !e.agentQuote} onClick={() => setMode("rewrite")}>
-              Как можно переформулировать
+              Переформулировать ответ
             </Button>
           </div>
         )}
         {e.review === "agree" && (
-          <p className="mt-3 text-body text-fg-3">
-            Добавьте подтверждённый пример в отчёт для команды. Следующая выгрузка поможет проверить, встречается ли эта
-            проблема снова.
-          </p>
+          <p className="mt-3 text-body text-fg-3">Отчёт для письма берёт подтверждённые примеры в первую очередь.</p>
         )}
         {review.isError && (
           <p role="alert" className="mt-3 text-body text-bad">

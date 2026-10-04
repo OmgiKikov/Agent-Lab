@@ -118,7 +118,10 @@ export function DialogsPage({ stage }: { stage: Stage }) {
           items={finished.map((x) => ({
             key: x.id,
             label: `${longDay(x.startedAt)}${x.label ? ` · «${x.label}»` : ""}`,
-            sub: [runTitle(x), x.metric?.measured ? `ошибка в ${x.metric.failed} из ${x.metric.measured}` : ""]
+            sub: [
+              runTitle(x),
+              x.metric?.measured ? `ошибка в ${x.metric.failed}\u00a0из\u00a0${x.metric.measured}` : "",
+            ]
               .filter(Boolean)
               .join(" · "),
             on: x.id === runId,
@@ -139,8 +142,8 @@ export function DialogsPage({ stage }: { stage: Stage }) {
     stage === "sim"
       ? "В этом прогоне нет разговоров."
       : !state.logs.total
-        ? "Диалоги ещё не загружены: кнопка «Загрузить диалоги» справа вверху."
-        : "Разговоры появятся здесь, когда проверка их оценит.";
+        ? "Здесь будут разговоры выгрузки. Сначала загрузите диалоги."
+        : "Разговоры появятся после проверки.";
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -180,7 +183,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
         ) : (
           wide && (
             <EmptyState drop title={all.length ? "Выберите разговор" : "Разговоров нет"} className="justify-center">
-              {all.length ? "Слева все разговоры. J и K листают." : empty}
+              {all.length ? "Слева все разговоры. Листайте их клавишами J и K." : empty}
             </EmptyState>
           )
         )}

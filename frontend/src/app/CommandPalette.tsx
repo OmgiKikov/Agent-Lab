@@ -26,7 +26,7 @@ import {
 import { cn } from "@/lib/utils";
 import { BY_CRITERIA, CHECK_NAME, CHECKS, checkOfOld, resultOf } from "../lab/checks";
 import { duty } from "../lab/criteria";
-import { day } from "../lab/format";
+import { count, day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import { useProblems, type Problems } from "../lab/problems";
 import { runTitle } from "../lab/runs";
@@ -82,7 +82,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-overview",
         group: "Разделы",
         label: "Обзор",
-        sub: "Обе проверки и последний прогон: как работает агент",
+        sub: "Итоги проверок и последнего прогона",
         icon: LayoutDashboard,
         run: go(SECTIONS.overview),
       },
@@ -90,7 +90,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-summary",
         group: "Разделы",
         label: "Сводка для руководителя",
-        sub: "Числа, ответы людей и главные проблемы — в PDF или письмо",
+        sub: "Одна страница об агенте для PDF или письма",
         icon: Presentation,
         run: go(SECTIONS.summary),
       },
@@ -100,7 +100,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           id: `s-${c}-talks`,
           group: "Разделы",
           label: `${CHECK_NAME[c]} · Разговоры`,
-          sub: "Каждый разговор выгрузки с оценкой этой проверки",
+          sub: "Разговоры выгрузки с оценкой этой проверки",
           icon: MessagesSquare,
           run: go(conversationsLink(c)),
         },
@@ -108,7 +108,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           id: `s-${c}-review`,
           group: "Разделы",
           label: `${CHECK_NAME[c]} · Проверка`,
-          sub: "Это действительно ошибка? По одному случаю",
+          sub: "Это действительно ошибка? Случаи по одному",
           icon: ClipboardCheck,
           run: go(reviewLink(c)),
         },
@@ -116,8 +116,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           id: `s-${c}-criteria`,
           group: "Разделы",
           label: `${CHECK_NAME[c]} · Критерии`,
-          sub:
-            c === "tone" ? "Что агент обязан делать по правилам общения" : "Что агент обязан делать, прямо в его коде",
+          sub: c === "tone" ? "Что агент обязан делать по правилам общения" : "Что агент обязан делать по своему коду",
           icon: ListChecks,
           run: go(criterionLink(c)),
         },
@@ -125,7 +124,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           id: `s-${c}-history`,
           group: "Разделы",
           label: `${CHECK_NAME[c]} · История`,
-          sub: "Сохранённые проверки с их разговорами и критериями",
+          sub: "Прошлые проверки с разговорами и критериями",
           icon: History,
           run: go(historyLink(c)),
         },
@@ -141,16 +140,16 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "s-runs",
         group: "Разделы",
-        label: "Прогоны",
-        sub: "Все прогоны симуляции",
+        label: "Симуляции · Прогоны",
+        sub: "Все прогоны, новые сверху",
         icon: FlaskConical,
         run: go(`${SECTIONS.simulations}/runs`),
       },
       {
         id: "s-scenarios",
         group: "Разделы",
-        label: "Сценарии",
-        sub: "Бизнес-сценарии для симуляции",
+        label: "Симуляции · Сценарии",
+        sub: "Бизнес-сценарии из ошибок проверки",
         icon: Route,
         run: go(scenariosLink()),
       },
@@ -174,7 +173,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-tone",
         group: "Действия",
         label: "Проверить tone of voice",
-        sub: "По шагам: разговоры и правила общения → критерии → итог",
+        sub: "По шагам: материалы, критерии, проверка, итог",
         icon: Play,
         run: go(toneCheckLink()),
       },
@@ -182,7 +181,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-code",
         group: "Действия",
         label: "Проверить точность",
-        sub: "Проверить разговоры по критериям из кода агента",
+        sub: "Разговоры по критериям из кода агента",
         icon: Play,
         run: go(`${SECTIONS.accuracy}?assess=1`),
       },
@@ -191,7 +190,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           id: `a-${c}-review`,
           group: "Действия",
           label: `Ответить на спорные случаи · ${CHECK_NAME[c]}`,
-          sub: "Это ошибка или нет: по одному, клавишами V и N",
+          sub: "По одному случаю, клавишами V и N",
           icon: ClipboardCheck,
           run: go(reviewLink(c)),
         },
@@ -199,7 +198,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           id: `a-${c}-report`,
           group: "Действия",
           label: `Отчёт для письма · ${CHECK_NAME[c]}`,
-          sub: "Проблемы этой проверки листом: скопировать или скачать",
+          sub: "Проблемы проверки на одном листе, чтобы скопировать или скачать",
           icon: FileText,
           run: go(`${stageRoot(c)}?report=1`),
         },
@@ -216,14 +215,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-cards",
         group: "Действия",
         label: "Собрать сценарии",
-        sub: "Из ошибок одной из проверок",
+        sub: "Из ошибок одной проверки",
         icon: Hammer,
         run: go(scenariosLink()),
       },
       {
         id: "a-play",
         group: "Действия",
-        label: "Сыграть симуляцию",
+        label: "Сыграть сценарии",
         sub: "Синтетические клиенты сыграют сценарии с агентом",
         icon: Play,
         run: go(`${SECTIONS.simulations}?play=1`),
@@ -232,7 +231,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-read",
         group: "Действия",
         label: "Прочитать код агента",
-        sub: "Промпты и инструменты — в «Агенте»",
+        sub: "Инструкции и инструменты агента, в разделе «Агент»",
         icon: FileText,
         run: go(SECTIONS.agent),
       },
@@ -247,7 +246,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             id: `v-${c}-${id}`,
             group: `Проблемы · ${CHECK_NAME[c]}`,
             label: p.title,
-            sub: `${p.serious ? "серьёзная · " : ""}ошибка в ${p.log.failed} из ${p.log.failed + p.log.passed} разговоров`,
+            sub: `${p.serious ? "серьёзная · " : ""}ошибка в ${p.log.failed}\u00a0из ${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`,
             icon: TriangleAlert,
             run: go(problemLink(id, c)),
           });
@@ -271,7 +270,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: `r-${r.id}`,
         group: "Прогоны симуляции",
         label: r.label || runTitle(r),
-        sub: [day(r.startedAt), BY_CRITERIA[r.check], m?.measured ? `ошибка в ${m.failed} из ${m.measured}` : ""]
+        sub: [
+          day(r.startedAt),
+          BY_CRITERIA[r.check],
+          m?.measured ? `ошибка в ${m.failed}\u00a0из\u00a0${m.measured}` : "",
+        ]
           .filter(Boolean)
           .join(" · "),
         icon: FlaskConical,
@@ -330,7 +333,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           }}
           className="fixed left-1/2 top-[14%] z-50 w-[calc(100vw-32px)] max-w-[600px] -translate-x-1/2 overflow-hidden rounded-sheet bg-raised shadow-pop outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
-          <Dialog.Title className="sr-only">Найти</Dialog.Title>
+          <Dialog.Title className="sr-only">Поиск</Dialog.Title>
           <div className="flex items-center gap-2.5 border-b border-line px-4">
             <Search aria-hidden className="size-4 flex-shrink-0 text-fg-3" />
             <input

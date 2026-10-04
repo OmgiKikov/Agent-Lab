@@ -333,7 +333,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         for stale in ({}, {'finishedAt': audit()['finishedAt']}):
             response = await self.client.post('/api/review', json={**body, **stale})
             self.assertEqual(response.status_code, 409, response.text)
-            self.assertEqual(response.json()['detail'], 'Результат изменился. Откройте актуальную проверку.')
+            self.assertEqual(response.json()['detail'], 'Ответ не сохранён: оценка изменилась. Обновите страницу.')
         self.assertNotIn('review', store.load(discover.RESULT)['results'][0]['rules'][0])
         response = await self.client.post('/api/review', json={**body, 'status': 'FAIL'})
         self.assertEqual(response.status_code, 200, response.text)

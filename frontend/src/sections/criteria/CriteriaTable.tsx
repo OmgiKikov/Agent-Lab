@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import { duty, type Criterion } from "../../lab/criteria";
 import { secondOf } from "../../lab/problemStats";
+import { reasonText } from "../../lab/severity";
 import { SeriousTag, SeveritySwitch } from "../../product/Severity";
 import { nameOf, toneOf, type SideKey } from "./model";
 import type { Check, Source } from "../../lab/types";
@@ -8,7 +9,7 @@ import type { Check, Source } from "../../lab/types";
 /**
  * All criteria as one list, broken first: the number, the duty, where it is written, and how it went in logs and
  * simulation; whether two checks agreed only when a second model checked them (hasSecond); and «Серьёзная» — switched
- * in the row itself, «предложено» under it while it is the automatic check's proposal (its reason in the tooltip). A
+ * in the row itself, with whose mark it is under it: «модель» (its reason in the tooltip), «вы» or «не решено». A
  * decision never moves the row: the list stays where the person decides.
  */
 export function CriteriaTable({
@@ -62,14 +63,14 @@ export function CriteriaTable({
             {hasSecond && (
               <th
                 className="hidden py-2.5 pr-5 text-right font-medium md:table-cell"
-                title="В скольких ошибках в диалогах две проверки совпали"
+                title="В скольких ошибках в диалогах две модели совпали"
               >
-                Проверки совпали
+                Модели совпали
               </th>
             )}
             <th
               className="w-px whitespace-nowrap py-2.5 pr-5 text-right font-medium"
-              title="Серьёзные ошибки идут первыми и считаются отдельно; без отметки ошибка незначительная. «Предложено» — так предложила автоматическая проверка, человек ещё не проверил"
+              title="Серьёзные ошибки идут первыми и считаются отдельно. Под переключателем написано, кто решил."
             >
               Серьёзная
             </th>
@@ -79,6 +80,14 @@ export function CriteriaTable({
           {rows.map((c) => {
             const second = secondOf(c.r.log.examples);
             const on = c.r.id === selected;
+            // Whose mark it is, under the switch: the model's (its reason in the tooltip), the person's, or none yet.
+            const { by, proposed } = c.r.severity;
+            const [whose, said] =
+              by === "model"
+                ? ["модель", `Так считает модель.${proposed ? ` ${reasonText(proposed.reason)}` : ""}`]
+                : by === "person"
+                  ? ["вы", "Так решили вы."]
+                  : ["не решено", "Ещё не решено."];
             return (
               <tr
                 key={c.r.id}
@@ -115,15 +124,10 @@ export function CriteriaTable({
                 )}
                 <td className="py-3 pr-5 text-right">
                   <SeveritySwitch check={check} rule={c.r} name={c.name} />
-                  {c.r.severity.by === "model" && (
-                    <span
-                      className="mt-1 block whitespace-nowrap text-small text-fg-3"
-                      title={c.r.severity.proposed?.reason}
-                    >
-                      предложено
-                      <span className="sr-only"> автоматически: {c.r.severity.proposed?.reason}</span>
-                    </span>
-                  )}
+                  <span className="mt-1 block whitespace-nowrap text-small text-fg-3" title={said}>
+                    <span aria-hidden>{whose}</span>
+                    <span className="sr-only">{said}</span>
+                  </span>
                 </td>
               </tr>
             );

@@ -66,7 +66,7 @@ export function useAssess(onStarted?: () => void) {
       .then(() => {
         refresh();
         onStarted?.();
-        toast.notify("Оценка началась: ход виден внизу навигации");
+        toast.notify("Оценка началась");
       })
       .catch(toast.error)
       .finally(() => setStarting(false));
@@ -92,14 +92,12 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
       open={open}
       onClose={onClose}
       title="Проверить точность снова"
-      sub="Модель читает настоящие разговоры и по каждому критерию из кода агента отмечает: ошибка, без ошибки или не ясно. Сам агент не запускается."
+      sub="Модель проверит разговоры выгрузки по критериям из кода агента. Сам агент не запускается."
     >
       <div className="space-y-6 px-5 py-5">
         <p className="text-read text-fg-2">
           В выгрузке {count(total, "разговор", "разговора", "разговоров")}.{" "}
-          {criteria
-            ? `Критерии те же: ${count(criteria, "критерий", "критерия", "критериев")} из кода агента.`
-            : "Критерии те же, что в прошлой оценке."}
+          {criteria ? `Критерии те же, их ${criteria}.` : "Критерии те же, что в прошлый раз."}
         </p>
         <SizePicker sizes={sizes} size={size} onSize={setSize} />
         <div className="flex flex-wrap items-center gap-3">
@@ -116,9 +114,8 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
         </div>
         <div className="border-t border-line pt-5">
           <p className="max-w-[56ch] text-body text-fg-2">
-            Агент поменялся: новый промпт, новые инструменты? Критерии можно извлечь из кода заново. Прежние перестанут
-            действовать: счёт, ссылки на проблемы и ваши ответы начнутся заново
-            {deck ? ", а сценарии, собранные из точности, сбросятся" : ""}. Итог tone of voice не изменится.
+            Если у агента новые инструкции или инструменты, извлеките критерии заново. Счёт, ссылки на проблемы и ваши
+            ответы начнутся с нуля{deck ? ", сценарии из точности сбросятся" : ""}. Итог tone of voice не изменится.
           </p>
           <Button
             className="mt-3"

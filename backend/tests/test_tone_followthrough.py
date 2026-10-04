@@ -138,7 +138,10 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(llm, 'chat', down):
             await self.client.post('/api/tone-of-voice/check', json=request)
             await self.wait_job()
-        self.assertEqual(api.jobs.state['error'], 'Модель проверки не ответила ни по одному разговору.')
+        self.assertEqual(
+            api.jobs.state['error'],
+            'Модель проверки не ответила ни по одному разговору. Проверьте модель в разделе «Настройки».',
+        )
         self.assertIsNone(store.load(tone.RESULT))
         previous = await self.check()
         deck = {'cards': [{'id': 'built-from-the-previous-check'}]}
@@ -147,7 +150,9 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/tone-of-voice/check', json=request)
             await self.wait_job()
         self.assertEqual(
-            api.jobs.state['error'], 'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён.'
+            api.jobs.state['error'],
+            'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён. '
+            'Проверьте модель в разделе «Настройки».',
         )
         self.assertEqual(store.load(tone.RESULT), previous)
         self.assertEqual(store.load(cards.DECK), deck)
@@ -306,7 +311,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/cards')
             await self.wait_job()
             model.assert_not_awaited()
-        self.assertIn('повторите проверку разговоров', api.jobs.state['error'])
+        self.assertIn('проверьте разговоры заново', api.jobs.state['error'])
         store.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'also-stale'}]})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()

@@ -42,14 +42,15 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           <p className="text-small font-medium text-fg-3">Проверка завершена</p>
           <h2 id="tone-result-title" className="mt-2 text-page font-semibold text-fg">
             {summary.failed
-              ? "Что стоит разобрать"
+              ? "Что нашла модель"
               : measured
-                ? "Ошибок общения не найдено"
-                : "Пока не удалось оценить"}
+                ? "Модель не нашла ошибок общения"
+                : "Разговоры не удалось проверить"}
           </h2>
           <p className="mt-2 text-body text-fg-3">
             В выборке {result.sampled}
-            {"\u00a0"}из {count(state.logs.total, "разговора", "разговоров", "разговоров")} ·{" "}
+            {"\u00a0"}из{"\u00a0"}
+            {count(state.logs.total, "разговора", "разговоров", "разговоров")} ·{" "}
             {count(result.topics.flatMap((t) => t.rules).length, "критерий", "критерия", "критериев")}
           </p>
         </div>
@@ -65,7 +66,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
       </div>
       {previousRevision && (
         <div role="status" className="mt-5 rounded-block bg-inset p-4 text-read text-fg-2">
-          Критерии изменились. Этот результат относится к предыдущей версии.
+          Критерии изменились. Этот итог посчитан по их предыдущей версии.
           <Button className="mt-3 block" size="lg" onClick={onAgain} disabled={state.job.running}>
             Проверить по новым критериям
           </Button>
@@ -100,7 +101,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
       )}
       {modelError && (
         <div role="alert" className="mb-6 text-read text-fg-2">
-          <p>Модель проверки не ответила. Проверьте настройки и запустите оценку снова.</p>
+          <p>Модель не ответила. Проверьте настройки и запустите проверку снова.</p>
           <Link to="/settings" className="mt-2 inline-block text-run underline">
             Настройки моделей
           </Link>
@@ -113,9 +114,9 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
       {!current ? (
         evidence.error ? (
           <div role="alert" className="py-5 text-read text-fg-2">
-            <p>Не удалось загрузить находки. Результат проверки сохранён.</p>
+            <p>Не удалось загрузить находки. Итог проверки сохранён.</p>
             <Button className="mt-3" size="lg" onClick={() => void evidence.refetch()}>
-              Загрузить находки
+              Загрузить снова
             </Button>
           </div>
         ) : (
@@ -165,11 +166,14 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
                             {c.r.serious && <SeriousTag rule={c.r} className="relative -top-px ml-2 align-middle" />}
                           </span>
                           <span className="mt-1 block text-small text-fg-3">
-                            Критерий {c.n} · {c.name}
+                            Критерий{"\u00a0"}
+                            {c.n} · {c.name}
                           </span>
                         </span>
                         <span className="shrink-0 text-body tabular-nums text-fg-2">
-                          {c.r.log.failed} из {c.r.log.failed + c.r.log.passed}
+                          {c.r.log.failed}
+                          {"\u00a0"}из{"\u00a0"}
+                          {c.r.log.failed + c.r.log.passed}
                         </span>
                         <ArrowRight aria-hidden className="size-4 shrink-0 text-fg-3" />
                       </button>
@@ -183,14 +187,14 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
         <div className="py-5 text-read text-fg-2">
           <p>
             {measured
-              ? "Проверьте несколько оценок вручную, чтобы убедиться, что критерии применены верно."
-              : "Посмотрите разговоры без оценки и уточните, какие критерии можно к ним применить."}
+              ? "Чтобы доверять итогу, проверьте несколько оценок вручную."
+              : "Посмотрите, почему разговоры не удалось проверить."}
           </p>
           <Link
             to={measured ? reviewLink("tone") : conversationsLink("tone", { v: "none" })}
             className="mt-4 inline-flex min-h-11 items-center gap-2 font-medium text-run hover:underline"
           >
-            {measured ? "Проверить примеры вручную" : "Посмотреть разговоры"}
+            {measured ? "Проверить оценки вручную" : "Посмотреть разговоры"}
             <ArrowRight aria-hidden className="size-4" />
           </Link>
         </div>
@@ -213,7 +217,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           to={toneCheckLink("materials")}
           className="inline-flex min-h-11 items-center text-body text-fg-2 hover:underline"
         >
-          Следующая выгрузка
+          Загрузить новую выгрузку
         </Link>
         <Link
           to={historyLink("tone")}

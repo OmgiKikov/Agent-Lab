@@ -35,16 +35,7 @@ import {
   type SummaryExample,
   type SummaryProblem,
 } from "../../lab/summary";
-import {
-  NONE_SERIOUS,
-  noneSerious,
-  proposedText,
-  seriousOf,
-  seriousSentence,
-  standingOf,
-  type Serious,
-  type Standing,
-} from "../../lab/severity";
+import { seriousOf, severityLines, standingOf, type Serious, type Standing } from "../../lab/severity";
 import type { Check } from "../../lab/types";
 import { SeriousTag } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
@@ -161,7 +152,7 @@ export function SummaryPage() {
         checks: checks.map((check): SummaryCheck => {
           const result = resultOf(state, check)!;
           const compare = compares[check];
-          const sentence = compare && compareSentence(compare, { short: true });
+          const sentence = compare && compareSentence(compare);
           const ids = ticked[check];
           return {
             check,
@@ -171,8 +162,7 @@ export function SummaryPage() {
             unmeasured: result.summary.unmeasured,
             answers: answersOf(result)!,
             serious: serious[check],
-            noneSerious: noneSerious(standing[check]),
-            proposed: standing[check] && proposedText(standing[check], "people"),
+            severity: standing[check] ? severityLines(standing[check], serious[check], "people") : [],
             compare: sentence ? `${sentence.head}${sentence.rest}` : null,
             seriousCompare: compare && serious[check] ? seriousCompareText(compare, serious[check].marked) : null,
             problems: (problems[check] ?? []).map((c): SummaryProblem => {
@@ -200,11 +190,7 @@ export function SummaryPage() {
   const ready = !!summary && checks.every((c) => problems[c]) && dialogues.every((d) => !d.isLoading);
 
   const copy = () => {
-    if (summary)
-      copyReport(summaryMarkdown(summary)).then(
-        () => toast.notify("Сводка скопирована: вставьте её в письмо"),
-        toast.error,
-      );
+    if (summary) copyReport(summaryMarkdown(summary)).then(() => toast.notify("Сводка скопирована"), toast.error);
   };
 
   const header = (
@@ -251,24 +237,24 @@ export function SummaryPage() {
     return page(
       <EmptyState
         drop
-        title="Сводке пока не из чего сложиться"
+        title="Здесь будет сводка для руководителя"
         className="h-full justify-center"
         action={
           <Link to={SECTIONS.overview} className={buttonClass()}>
-            Обзор
+            Открыть обзор
           </Link>
         }
       >
-        Она собирается из итогов проверок разговоров: проверьте разговоры, и числа, ответы людей и главные проблемы
-        появятся здесь.
+        Она собирается из итогов проверок. Проверьте разговоры, и здесь появятся числа, ответы людей и главные проблемы.
       </EmptyState>,
     );
 
   const several = summary.days.length > 1;
   return page(
     <article className="max-w-[860px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12 print:max-w-none print:p-0">
-      <p className="text-read text-fg-3">Сводка для руководителя</p>
-      <h2 className="mt-1 text-page font-semibold text-fg">{summary.agent}</h2>
+      {/* On paper the page has no head: the title goes on the sheet. */}
+      <p className="hidden text-read text-fg-3 print:block">Сводка для руководителя</p>
+      <h2 className="text-page font-semibold text-fg print:mt-1">{summary.agent}</h2>
       <p className="mt-2 break-words text-read text-fg-2">
         {summary.file ? `Выгрузка «${summary.file}» · ` : ""}
         {daysText(summary.days)}
@@ -283,11 +269,10 @@ export function SummaryPage() {
           Главное
         </h3>
         <p className="mt-1 max-w-[68ch] text-body text-fg-3 print:hidden">
-          Отметьте проблемы, которые войдут в сводку;{" "}
+          В PDF и письмо войдут только отмеченные проблемы.{" "}
           {summary.checks.some((c) => c.problems.some((p) => p.serious))
-            ? "сначала отмечены серьёзные, а где их нет — три самых частых."
-            : "сначала отмечены три самых частых каждой проверки."}{" "}
-          В PDF и в письме — только отмеченные.
+            ? "Сразу отмечены серьёзные, а где их нет, три самые частые."
+            : "Сразу отмечены три самые частые проблемы каждой проверки."}
         </p>
         {summary.checks.map((c) => (
           <CheckProblems key={c.check} c={c} loading={!problems[c.check]} onToggle={(id) => toggle(c.check, id)} />
@@ -313,8 +298,6 @@ export function SummaryPage() {
  */
 function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
   const answers = answersSentence(c.answers, "people");
-  const serious = c.serious && seriousSentence(c.serious, "people");
-  const whose = c.proposed && ` ${c.proposed}`;
   return (
     <section aria-label={CHECK_NAME[c.check]} className="mt-12 break-inside-avoid print:mt-8">
       <h3 className="text-title font-semibold text-fg">
@@ -324,19 +307,14 @@ function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
       <p className="mt-1 max-w-[68ch] text-body text-fg-3">{SUMMARY_WHAT[c.check]}</p>
       <StageResult size="display" className="mt-5" failed={c.failed} checked={c.measured} unchecked={c.unmeasured} />
       <div className="mt-4 max-w-[72ch] space-y-1 text-read text-fg-2">
-        {serious ? (
-          <p>
-            {serious.head} — <span className="whitespace-nowrap font-semibold text-fg">{serious.share}</span>
-            {serious.rest}
-            {whose}
-          </p>
-        ) : (
-          c.noneSerious && (
-            <p>
-              {NONE_SERIOUS}
-              {whose}
+        {c.severity.map((line, i) =>
+          line.kind === "count" ? (
+            <p key={i}>
+              {line.head} — <span className="whitespace-nowrap font-semibold text-fg">{line.share}</span>.
             </p>
-          )
+          ) : (
+            <p key={i}>{line.text}</p>
+          ),
         )}
         {answers && (
           <p>
@@ -345,7 +323,7 @@ function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
           </p>
         )}
         {c.compare && <p>{c.compare}</p>}
-        {c.seriousCompare && <p>{c.seriousCompare}</p>}
+        {c.seriousCompare && <p className="whitespace-pre-line">{c.seriousCompare}</p>}
         <p>{rechecked(c.answers)}</p>
       </div>
     </section>
@@ -414,7 +392,7 @@ function ProblemItem({ p, onToggle }: { p: SummaryProblem; onToggle: () => void 
         {p.chosen && (
           <>
             <p className="mt-1.5 max-w-[68ch] text-read text-fg-2">
-              <span className="text-fg-3">Что требуется от агента: </span>
+              <span className="text-fg-3">Агент должен: </span>
               {p.duty}
             </p>
             <p className="mt-1 text-read text-fg-2">{problemAnswers(p)}</p>

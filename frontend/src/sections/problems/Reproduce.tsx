@@ -52,7 +52,7 @@ export function Reproduce({ r, check }: { r: RuleEntry; check: Check }) {
       } catch {
         /* private mode */
       }
-      toast.notify(`Сценарии играются · агент: ${chosen.name}`);
+      toast.notify(`Прогон запущен с агентом «${chosen.name}»`);
       await refresh();
     } catch (e) {
       toast.error(e);
@@ -61,13 +61,14 @@ export function Reproduce({ r, check }: { r: RuleEntry; check: Check }) {
     }
   };
   return (
-    <section id="reproduce" aria-label="Проверить на симуляции" className="scroll-mt-4">
-      <Label>Проверить на симуляции</Label>
+    <section id="reproduce" aria-label="Проверить в симуляции" className="scroll-mt-4">
+      <Label>Проверить в симуляции</Label>
       {n ? (
         <div className="mt-2 flex flex-wrap items-center gap-3 text-body text-fg-2">
           <span>
-            Из этих разговоров {plural(n, "собран", "собрано", "собрано")} {n}{" "}
-            {plural(n, "сценарий", "сценария", "сценариев")}: синтетический клиент сыграет их с агентом.
+            Из этих разговоров {plural(n, "собран", "собрано", "собрано")} {n}
+            {"\u00a0"}
+            {plural(n, "сценарий", "сценария", "сценариев")}. Синтетический клиент сыграет их с агентом.
           </span>
           {chosen ? (
             <span className="flex items-center gap-2">

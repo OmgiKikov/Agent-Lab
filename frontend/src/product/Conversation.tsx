@@ -29,7 +29,7 @@ function ArticleText({ id }: { id: string }) {
     staleTime: Infinity,
     retry: false,
   });
-  if (article.isLoading) return <p className="text-small text-fg-3">Загружаю статью…</p>;
+  if (article.isLoading) return <p className="text-small text-fg-3">Загружаем статью…</p>;
   if (!article.data) return <p className="text-small text-fg-3">Статьи нет в базе знаний агента на этом компьютере.</p>;
   return (
     <div className="space-y-1.5">
@@ -225,7 +225,9 @@ export function Conversation({
           onClick={() => setOpen(true)}
           className="self-center rounded-full border border-line bg-list px-3 py-1 text-small text-fg-3 shadow-card transition-colors hover:text-fg"
         >
-          ещё {from} {plural(from, "реплика", "реплики", "реплик")} выше
+          ещё {from}
+          {"\u00a0"}
+          {plural(from, "реплика", "реплики", "реплик")} выше
         </button>
       )}
       {turns.slice(from).map((t, i) =>

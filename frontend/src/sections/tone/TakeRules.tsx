@@ -24,8 +24,8 @@ function whatGoes(state: LabState, from: RulesSource) {
     `Правила и критерии заменятся правилами агента «${from.name}».`,
     toneResult(state) &&
       (same
-        ? "Итог tone of voice останется, но будет относиться к предыдущей версии критериев."
-        : "Итог tone of voice уйдёт в историю."),
+        ? "Итог tone of voice останется, но по предыдущей версии критериев."
+        : "Итог tone of voice уйдёт в «Историю»."),
     deck && "Сценарии, собранные из tone of voice, сбросятся.",
   ]
     .filter(Boolean)
@@ -67,7 +67,7 @@ export function TakeRules({
           ? `Правила и критерии уже те же, что у агента «${from.name}»`
           : criteria
             ? `Правила общения и ${count(criteria, "критерий", "критерия", "критериев")} взяты у агента «${from.name}»`
-            : `Правила общения взяты у агента «${from.name}»: соберите по ним критерии`,
+            : `Правила общения взяты у агента «${from.name}». Соберите по ним критерии.`,
       );
       onTaken(unchanged ? !!state.toneOfVoice : criteria > 0);
     } catch (e) {
@@ -112,7 +112,7 @@ export function TakeRules({
         }
       >
         <p className="text-read text-fg-2">{asked && whatGoes(state, asked)}</p>
-        <p className="mt-3 text-body text-fg-3">Это копия: дальше у каждого агента свои правила и критерии.</p>
+        <p className="mt-3 text-body text-fg-3">Это копия. Дальше у каждого агента свои правила и критерии.</p>
       </Modal>
     </>
   );

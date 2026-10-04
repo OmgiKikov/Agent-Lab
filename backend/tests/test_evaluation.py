@@ -424,9 +424,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             self.assertRaises(RuntimeError) as refused,
         ):
             await discover.run()
-        self.assertEqual(
-            str(refused.exception), 'Код агента ещё не прочитан: в разделе «Агент» нажмите «Прочитать код».'
-        )
+        self.assertEqual(str(refused.exception), 'Код агента ещё не прочитан. Прочитайте его в разделе «Агент».')
 
     async def test_card_generation_does_not_commit(self):
         with (

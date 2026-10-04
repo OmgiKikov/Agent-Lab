@@ -97,7 +97,7 @@ export function previousOf(
 
 const VERDICT: Record<Exclude<Verdict, "same">, string> = {
   few: "Мало разговоров, чтобы судить.",
-  "beyond-chance": "Разница больше случайных колебаний; могли измениться и сами разговоры — темы, клиенты.",
+  "beyond-chance": "Разница больше случайных колебаний, но могли измениться темы разговоров и клиенты.",
   "within-chance": "Разница в пределах случайных колебаний.",
 };
 
@@ -106,12 +106,12 @@ const sideText = (counts: Counts) => (counts.measured ? shareText(counts) : "н�
 
 /**
  * The line under a check's number, in two parts: its first words (`head`, the way to the previous check) and the
- * rest. «Прошлая проверка, 3 октября, «Выгрузка чата сентябрь 2026.xlsx»: 22 из 53 (42%) → сейчас 4 из 12 (33%). Мало
- * разговоров, чтобы судить.» A re-evaluation of the same conversations says the difference is the evaluation's; other
- * criteria or models — that the checks are not compared, without numbers. Nothing before the first comparison, nor
- * without a current result. `short` leaves out the export, for «Обзор».
+ * rest. «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). Мало разговоров, чтобы судить.» The
+ * export of the previous check is not in the line: its link says it. A re-evaluation of the same conversations says
+ * the difference is the evaluation's; other criteria or models — that the checks are not compared, without numbers.
+ * Nothing before the first comparison, nor without a current result.
  */
-export function compareSentence(compare: Compare, { short = false } = {}): { head: string; rest: string } | null {
+export function compareSentence(compare: Compare): { head: string; rest: string } | null {
   if (compare.kind === "incompatible") {
     const text = notComparedText(compare.reason);
     return { head: text.slice(0, text.indexOf(":")), rest: text.slice(text.indexOf(":")) };
@@ -121,24 +121,24 @@ export function compareSentence(compare: Compare, { short = false } = {}): { hea
   const { before, now, verdict, direction } = overall;
   const same = direction === "same";
   const both = !!before.measured && !!now.measured;
-  const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}; сейчас ${sideText(now)}`;
+  const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
   if (compare.kind === "same-data")
     return {
       head: "Повторная оценка тех же разговоров",
       rest: `: ${counts}.${both && !same ? " Разница — разброс оценки, а не агента." : ""}`,
     };
-  const file = !short && previous.file ? `, «${previous.file}»` : "";
   const said = verdict && verdict !== "same" ? ` ${VERDICT[verdict]}` : "";
-  return { head: "Прошлая проверка", rest: `, ${longDay(previous.finishedAt)}${file}: ${counts}.${said}` };
+  return { head: "Прошлая проверка", rest: `, ${longDay(previous.finishedAt)}: ${counts}.${said}` };
 }
 
 /**
- * «С серьёзными ошибками: 6 из 53 (11%) → сейчас 0 из 71 (0%). Мало разговоров, чтобы судить: серьёзные критерии
- * удалось проверить в 16 разговорах тогда и в 4 сейчас.» — the line under the comparison of the whole check, in its
- * words: the same counts and arrow, the same verdict (few, beyond chance or within it), and for a re-evaluation of the
- * same conversations — that the difference is the evaluation's. Both sides by the serious criteria as they are now
- * (`marked` of them in the current result). The share rests on the conversations where a serious criterion could be
- * checked: with few of them the line says how few. Null when nothing is marked or the checks are not compared.
+ * «С серьёзными ошибками: 6 из 53 (11%) → сейчас 0 из 71 (0%). Мало разговоров, чтобы судить.» — the line under the
+ * comparison of the whole check, in its words: the same counts and arrow, the same verdict (few, beyond chance or
+ * within it), and for a re-evaluation of the same conversations — that the difference is the evaluation's. Both sides
+ * by the serious criteria as they are now (`marked` of them in the current result). The share rests on the
+ * conversations where a serious criterion could be checked: with few of them a second line says how few, «Серьёзные
+ * критерии удалось проверить в 16 разговорах в прошлый раз и в 4 сейчас.» Null when nothing is marked or the checks
+ * are not compared.
  */
 export function seriousCompareText(compare: Compare, marked = 2): string | null {
   const serious = compare.serious;
@@ -146,24 +146,23 @@ export function seriousCompareText(compare: Compare, marked = 2): string | null 
   const { before, now, checked, verdict, direction } = serious;
   const same = direction === "same";
   const both = !!before.measured && !!now.measured;
-  const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}; сейчас ${sideText(now)}`;
+  const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
   if (compare.kind === "same-data")
     return `С серьёзными ошибками: ${counts}.${both && !same ? " Разница — разброс оценки, а не агента." : ""}`;
-  const criteria = marked === 1 ? "серьёзный критерий" : "серьёзные критерии";
+  const criteria = marked === 1 ? "Серьёзный критерий" : "Серьёзные критерии";
   const said =
     verdict === "few" && checked && Math.min(checked.before, checked.now) < FEW
-      ? ` Мало разговоров, чтобы судить: ${criteria} удалось проверить в\u00a0${checked.before}\u00a0${plural(checked.before, "разговоре", "разговорах", "разговорах")} тогда и в\u00a0${checked.now} сейчас.`
+      ? ` ${VERDICT.few}\n${criteria} удалось проверить в\u00a0${checked.before}\u00a0${plural(checked.before, "разговоре", "разговорах", "разговорах")} в прошлый раз и в\u00a0${checked.now} сейчас.`
       : verdict && verdict !== "same"
         ? ` ${VERDICT[verdict]}`
         : "";
   return `С серьёзными ошибками: ${counts}.${said}`;
 }
 
-/** «было 6 из 52»: what a criterion with errors now had in the previous check, beside its count. */
+/** «было 6 из 52», or «было 0 из 52»: what a criterion with errors now had in the previous check, beside its count. */
 export function wasText(row: CompareRow): string {
   const before = row.before;
   if (!before || !before.measured) return "раньше не проверялся";
-  if (!before.failed) return `раньше ошибок не было: 0\u00a0из\u00a0${before.measured}`;
   return `было ${before.failed}\u00a0из\u00a0${before.measured}`;
 }
 
@@ -174,7 +173,7 @@ export const noLongerFound = (compare: Compare) =>
 /** «было 3 из 56 → 0 из 12», or that the criterion could not be checked now at all. */
 export function goneText(row: CompareRow): string {
   const before = row.before!;
-  const now = row.now?.measured ? `0\u00a0из\u00a0${row.now.measured}` : "сейчас проверить не удалось";
+  const now = row.now?.measured ? `0\u00a0из\u00a0${row.now.measured}` : "сейчас не удалось проверить";
   return `было ${before.failed}\u00a0из\u00a0${before.measured} → ${now}`;
 }
 

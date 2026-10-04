@@ -5,8 +5,8 @@ import type { Check, Discover, ToneCriterion } from "./types";
 
 /**
  * Below this many conversations where a criterion could be checked, on either side, a share says little (Hamel Husain:
- * under ~60 an interval is too wide): under the number («Проверено мало разговоров», product/Trust.tsx) and in «было →
- * стало» (backend/lab/history.py, FEW).
+ * under ~60 an interval is too wide): under the number («Проверено меньше 30 разговоров», product/Trust.tsx) and in
+ * «было → стало» (backend/lab/history.py, FEW).
  */
 export const FEW = 30;
 
@@ -74,7 +74,7 @@ const sameShare = (before: Counts, now: Counts) => before.failed * now.measured 
 export function shiftText(before: Counts, now: Counts, same: boolean, later = "") {
   const next = later ? `${later}\u00a0` : "";
   if (unchanged(before, now)) return `${shareText(before)}, ${later ? `${later} ` : ""}столько же`;
-  if (same) return `${shareText(before)}, ${next}${shareText(now)} — доля та же`;
+  if (same) return `${shareText(before)}, ${next}${shareText(now)}, доля та же`;
   return `${shareText(before)}\u00a0→ ${next}${shareText(now)}`;
 }
 
@@ -94,17 +94,18 @@ export function comparisonText(check: SavedCheck, previous?: SavedCheck): string
   const context =
     kind === "same-data"
       ? "Повторная оценка тех же разговоров по тем же критериям."
-      : "Другая выборка разговоров, те же критерии и модель проверки.";
+      : "Другие разговоры, те же критерии и модель.";
   if (!previous || previous.id !== check.comparison.previousId) return context;
   const before = previous.summary;
   const now = check.summary;
-  if (!before.measured || !now.measured) return `${context} Для сопоставления долей не хватает оценок.`;
+  if (!before.measured || !now.measured)
+    return `${context} В одной из проверок нет проверенных разговоров, доли не сравнить.`;
   const same = sameShare(before, now);
   const caveat =
     kind === "same-data"
       ? !same && "Разница — разброс оценки, а не агента."
       : Math.min(before.measured, now.measured) < FEW
         ? "Мало разговоров, чтобы судить."
-        : !same && "Разница может зависеть от состава разговоров.";
+        : !same && "Могли измениться темы разговоров и клиенты.";
   return `${context} С ошибкой агента: ${shiftText(before, now, same)}.${caveat ? ` ${caveat}` : ""}`;
 }

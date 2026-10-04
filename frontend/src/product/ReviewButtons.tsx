@@ -33,7 +33,7 @@ export function ReviewButtons({
     <div className={cn("flex flex-wrap items-center", big ? "gap-3" : "gap-2")}>
       <div className="w-full min-w-0 sm:w-auto sm:flex-1">
         <p className={cn("text-fg", big ? "text-lead font-semibold" : "text-body font-medium text-fg-2")}>
-          {fail ? "Это действительно ошибка?" : "Здесь правда нет ошибки?"}
+          {fail ? "Это действительно ошибка?" : "Здесь действительно нет ошибки?"}
         </p>
         {wait && <p className="mt-0.5 text-small text-fg-3">{wait}</p>}
       </div>

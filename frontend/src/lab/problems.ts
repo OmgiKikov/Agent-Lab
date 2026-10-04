@@ -192,7 +192,7 @@ export function answersWait(state: LabState | null, example: Pick<Example, "sour
   if (example.source !== "log" || !state?.job.running) return null;
   const running = (Object.keys(JOB_OF) as Check[]).find((c) => JOB_OF[c] === state.job.kind);
   return running && (example.check ?? running) === running
-    ? "Идёт проверка разговоров — ответить можно после неё."
+    ? "Идёт проверка разговоров. Ответить можно после неё."
     : null;
 }
 

@@ -43,19 +43,19 @@ export function rightOf(side: Side): {
 }
 
 /**
- * «Проверка права в 9 из 10 оценок, которые вы проверили по этому критерию.» Only from RIGHT_FROM answers, and only out
+ * «Модель права в 9 из 10 оценок, которые вы проверили по этому критерию.» Only from RIGHT_FROM answers, and only out
  * of them; with answers on cases «без ошибки» among them, how it was right on each kind. Null with fewer answers: then
  * the page says only how the person answered.
  */
 export function rightText(r: ReturnType<typeof rightOf>): string | null {
   if (r.answered < RIGHT_FROM) return null;
-  const head = `Проверка права в\u00a0${r.right}\u00a0из\u00a0${count(r.answered, "оценки", "оценок", "оценок")}, которые вы проверили по этому критерию`;
+  const head = `Модель права в\u00a0${r.right}\u00a0из\u00a0${count(r.answered, "оценки", "оценок", "оценок")}, которые вы проверили по этому критерию`;
   if (!r.clean.answered) return `${head}.`;
   const kinds = [
     r.errors.answered
       ? `в\u00a0${r.errors.right}\u00a0из\u00a0${count(r.errors.answered, "найденной ошибки", "найденных ошибок", "найденных ошибок")}`
       : null,
-    `в\u00a0${r.clean.right}\u00a0из\u00a0${r.clean.answered} «без ошибки»`,
+    `в\u00a0${r.clean.right}\u00a0из\u00a0${count(r.clean.answered, "случая", "случаев", "случаев")} «без ошибки»`,
   ];
   return `${head}: ${kinds.filter(Boolean).join(" и ")}.`;
 }

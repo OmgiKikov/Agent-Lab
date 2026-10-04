@@ -258,13 +258,13 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_failing_model_is_asked_again_after_growing_pauses_with_jitter(self):
         result, requests, pauses = await self.ask(status(503), status(502), status(500))
-        self.assertEqual((requests, result.status, str(result)), (3, 500, 'Модель не ответила: HTTP 500'))
+        self.assertEqual((requests, result.status, str(result)), (3, 500, 'Модель ответила ошибкой (HTTP 500).'))
         self.assertTrue(llm.PAUSE <= pauses[0] < 2 * llm.PAUSE <= pauses[1] < 3 * llm.PAUSE, pauses)
 
     async def test_another_4xx_is_never_asked_again_even_by_structured(self):
         result, requests, pauses = await self.ask(status(400), structured=True)
         self.assertEqual((requests, pauses, result.status), (1, [], 400))
-        self.assertEqual(str(result), 'Модель не ответила: HTTP 400')
+        self.assertEqual(str(result), 'Модель ответила ошибкой (HTTP 400).')
 
     async def test_a_lost_connection_is_asked_again(self):
         replies = broken(httpx.ConnectError), broken(httpx.RemoteProtocolError), answered()
@@ -285,16 +285,28 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         ):
             checked = await llm.check(('http://p/v1', 'm'))
         self.assertEqual(
-            (checked, len(requests), pauses), ({'ok': False, 'error': 'Модель не ответила: HTTP 503'}, 1, [])
+            (checked, len(requests), pauses), ({'ok': False, 'error': 'Модель ответила ошибкой (HTTP 503).'}, 1, [])
         )
+
+    async def test_the_connection_check_of_an_unreachable_model_does_not_send_to_settings(self):
+        """«Проверить модели» is in «Настройки»: its answer names the failure, not the page the person is on."""
+
+        def handler(request):
+            raise httpx.ConnectError('refused', request=request)
+
+        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            checked = await llm.check(('http://p/v1', 'm'))
+        self.assertEqual(checked, {'ok': False, 'error': 'Модель недоступна (ConnectError).'})
 
     async def test_a_read_timeout_is_asked_again_once_only(self):
         result, requests, _ = await self.ask(broken(httpx.ReadTimeout), broken(httpx.ReadTimeout), answered())
-        self.assertEqual((requests, str(result)), (2, 'Модель недоступна: ReadTimeout'))
+        self.assertEqual(
+            (requests, str(result)), (2, 'Модель недоступна (ReadTimeout). Проверьте её в разделе «Настройки».')
+        )
 
     async def test_structured_does_not_multiply_the_tries_of_chat(self):
         result, requests, _ = await self.ask(status(503), status(503), status(503), structured=True)
-        self.assertEqual((requests, str(result)), (3, 'Модель не ответила: HTTP 503'))
+        self.assertEqual((requests, str(result)), (3, 'Модель ответила ошибкой (HTTP 503).'))
 
     async def test_a_malformed_answer_is_asked_again_once_at_once(self):
         result, requests, pauses = await self.ask(answered({'choices': []}), answered(), structured=True)

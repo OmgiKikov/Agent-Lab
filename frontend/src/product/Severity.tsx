@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -8,14 +7,11 @@ import { useLabState } from "../lab/LabProvider";
 import type { Problems, RuleEntry } from "../lab/problems";
 import {
   hintOf,
-  NONE_SERIOUS,
-  pendingOf,
-  proposedText,
   PROPOSING,
   proposalCheck,
   reasonText,
   seriousOf,
-  seriousSentence,
+  severityLines,
   standingOf,
   useConfirmSeverity,
   useProposeSeverity,
@@ -32,8 +28,8 @@ const ACTION =
 
 /**
  * «серьёзная» beside a serious problem: a quiet red word in the colour of errors, never a badge that shouts. It says
- * whose decision it is: the automatic check's proposal, which no person has checked yet, carries its reason. On the
- * paper of a report (`paper`) in the ink of the paper.
+ * whose decision it is: the model's, which no person has checked yet, with its reason, or the person's. On the paper of
+ * a report (`paper`) in the ink of the paper.
  */
 export function SeriousTag({
   rule,
@@ -50,8 +46,10 @@ export function SeriousTag({
       tone="bad"
       title={
         proposed
-          ? `Предложено автоматически, человек ещё не проверил: ${reasonText(proposed.reason)}`
-          : "Критерий отмечен серьёзным: его ошибки идут первыми и считаются отдельно"
+          ? `Отметила модель. ${reasonText(proposed.reason)} Вы ещё не проверили.`
+          : rule?.severity.by === "person"
+            ? "Отметили вы. Серьёзные ошибки идут первыми и считаются отдельно."
+            : "Серьёзные ошибки идут первыми и считаются отдельно."
       }
       className={cn(paper && "border-ink-bad/35 text-ink-bad", className)}
     >
@@ -88,8 +86,8 @@ export function SeveritySwitch({
       hideLabel={!!name}
       title={
         rule.serious
-          ? "Серьёзная ошибка: идёт первой и считается отдельно. Без отметки — незначительная."
-          : "Незначительная ошибка. Отметьте серьёзной — встанет первой и получит отдельный счёт."
+          ? "Серьёзная ошибка. Такие идут первыми и считаются отдельно."
+          : "Незначительная ошибка. Серьёзные идут первыми и считаются отдельно."
       }
       className={className}
     />
@@ -97,9 +95,9 @@ export function SeveritySwitch({
 }
 
 /**
- * The line under a criterion's switch: whose decision it is. The automatic check's proposal with its reason, and
- * «Подтвердить», which makes the proposed value the person's decision; the person's own («Решили вы.»), with what the
- * automatic check proposed when it proposed otherwise; or, with neither, that the error is minor.
+ * The line under a criterion's switch: whose decision it is. The model's, with its reason and «Подтвердить», which
+ * makes it the person's decision; the person's own («Так решили вы.»), with the model's reason when it thought
+ * otherwise; or, with neither, that nothing is decided and the error is minor for now.
  */
 export function SeverityNote({
   check,
@@ -117,13 +115,13 @@ export function SeverityNote({
   if (by === "model" && proposed)
     return (
       <p className={cls}>
-        Предложено автоматически: {reasonText(proposed.reason)}{" "}
+        Так считает модель. {reasonText(proposed.reason)}{" "}
         <button
           type="button"
           onClick={() => {
             if (!busy) mark.mutate({ check, rule: rule.id, serious: proposed.serious });
           }}
-          title="Принять предложение: оно станет вашим решением"
+          title="Согласиться с моделью"
           className={ACTION}
         >
           Подтвердить
@@ -133,17 +131,11 @@ export function SeverityNote({
   if (by === "person")
     return (
       <p className={cls}>
-        Решили вы.
-        {proposed && proposed.serious !== rule.serious && (
-          <>
-            {" "}
-            Автоматическая проверка предлагала: {proposed.serious ? "серьёзная" : "незначительная"} —{" "}
-            {reasonText(proposed.reason)}
-          </>
-        )}
+        Так решили вы.
+        {proposed && proposed.serious !== rule.serious && <> Модель считала иначе. {reasonText(proposed.reason)}</>}
       </p>
     );
-  return <p className={cls}>Без отметки ошибка незначительная.</p>;
+  return <p className={cls}>Ещё не решено. Пока ошибка незначительная.</p>;
 }
 
 /** A criterion's switch with its line of whose decision it is: in the criterion's panel and on its problem's page. */
@@ -165,7 +157,7 @@ export function SeverityControl({
 }
 
 /**
- * «Предложить автоматически», or «Предложить снова» after a failure: the service's task `severity`. While this check's
+ * «Отметить автоматически», or «Отметить снова» after a failure: the service's task `severity`. While this check's
  * proposal runs — that task, or the end of the check itself — the button turns, and the task is seen where every task
  * is (the task card, the line under a section's head); while another task runs, it waits.
  */
@@ -187,7 +179,7 @@ function Propose({ check, again, why }: { check: Check; again?: boolean; why?: s
       className={ACTION}
     >
       {running && <Loader2 aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />}
-      {again ? "Предложить снова" : "Предложить автоматически"}
+      {again ? "Отметить снова" : "Отметить автоматически"}
     </button>
   );
 }
@@ -211,9 +203,9 @@ function ConfirmAll({ check }: { check: Check }) {
 }
 
 /**
- * The criteria tab's one quiet line about severity, with at most one action (lab/severity, hintOf): the automatic
- * check's proposals with «Подтвердить все», or why nothing is proposed yet with «Предложить». Nothing once a person
- * decided every criterion of the result.
+ * The criteria tab's one quiet line about severity, with at most one action (lab/severity, hintOf): which criteria
+ * are serious and how many the person checked, with «Подтвердить все»; or why nothing is marked yet, with «Отметить
+ * автоматически». Nothing once a person decided every criterion of the result.
  */
 export function SeverityHint({
   check,
@@ -240,64 +232,57 @@ export function SeverityHint({
 }
 
 /**
- * Under a check's number — «Итог» of both checks, «Обзор», the step-by-step result of tone of voice. Once a criterion
- * is serious: «С серьёзными ошибками — 6 из 53 (11%): по 2 критериям, которые считаются серьёзными; …» — the same
- * checked conversations, the count opens them; «вы отметили» only when a person decided every serious criterion. While
- * some criteria are the automatic check's proposals: «Какие серьёзные, предложила автоматическая проверка; вы проверили
- * 3 из 8 критериев. Проверить»; while some have neither: «ещё не решено по 2 критериям» and «Предложить
- * автоматически». With no serious criterion: «Ни один критерий не считается серьёзным.», or why it is not decided yet
- * and the way to propose. It never stands in for the number above and is never added to it.
+ * Under a check's number — «Итог» of both checks, «Обзор», the step-by-step result of tone of voice — line by line
+ * (lab/severity, severityLines): «С серьёзными ошибками — 6 из 53 (11%)», the count opening its conversations; «Серьёзные
+ * критерии — 2 из 8. Их отметила модель, вы проверили 0 из 8. Проверить»; «Эти критерии удалось проверить в 16
+ * разговорах из 53.»; «Ещё не решено по 2 критериям. Отметить автоматически». With no serious criterion, whose
+ * decision that is; while nothing is marked, that or why it failed, and the way to mark. It never stands in for the
+ * number above and is never added to it.
  */
 export function SeverityStatus({ data, check }: { data: Problems | null | undefined; check: Check }) {
   const st = standingOf(data);
   if (!st || !data?.log?.assessed) return null;
   const serious = seriousOf(data);
-  const proposed = proposedText(st);
-  const whose: ReactNode = proposed && (
-    <>
-      {" "}
-      {proposed}{" "}
-      <Link to={criterionLink(check)} className="font-medium text-run hover:underline">
-        Проверить
-      </Link>
-    </>
-  );
-  if (serious) {
-    const s = seriousSentence(serious);
-    return (
-      <p className="max-w-[72ch]">
-        {s.head} —{" "}
-        <Link
-          to={conversationsLink(check, { v: "serious" })}
-          title="Разговоры с серьёзной ошибкой"
-          className="whitespace-nowrap rounded-sm font-semibold text-fg underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-3"
-        >
-          {s.share}
-        </Link>
-        {s.rest}
-        {serious.pending > 0 && (
-          <>
-            {" "}
-            <Propose check={check} why={st.error && `Прошлое предложение не удалось: ${st.error}`} />
-          </>
-        )}
-        {whose}
-      </p>
-    );
-  }
-  // Serious criteria the service has not counted yet: the line comes with its count a moment later.
-  if (st.serious) return null;
-  const pending = pendingOf(st);
-  if (pending)
-    return (
-      <p className="max-w-[72ch]">
-        {pending.text} <Propose check={check} again={pending.again} />
-      </p>
-    );
   return (
-    <p className="max-w-[72ch]">
-      {NONE_SERIOUS}
-      {whose}
-    </p>
+    <>
+      {severityLines(st, serious).map((line, i) =>
+        line.kind === "count" ? (
+          <p key={i} className="max-w-[72ch]">
+            {line.head} —{" "}
+            <Link
+              to={conversationsLink(check, { v: "serious" })}
+              title="Разговоры с серьёзной ошибкой"
+              className="whitespace-nowrap rounded-sm font-semibold text-fg underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-3"
+            >
+              {line.share}
+            </Link>
+            .
+          </p>
+        ) : (
+          <p key={i} className="max-w-[72ch]">
+            {line.text}
+            {line.action === "check" ? (
+              <>
+                {" "}
+                <Link to={criterionLink(check)} className="font-medium text-run hover:underline">
+                  Проверить
+                </Link>
+              </>
+            ) : (
+              line.action && (
+                <>
+                  {" "}
+                  <Propose
+                    check={check}
+                    again={line.action === "again"}
+                    why={serious && st.error && `Прошлая попытка не удалась. ${st.error}`}
+                  />
+                </>
+              )
+            )}
+          </p>
+        ),
+      )}
+    </>
   );
 }

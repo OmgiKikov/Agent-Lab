@@ -6,7 +6,7 @@ import { Skeleton } from "../ui/EmptyState";
 import { Sheet } from "../ui/Sheet";
 
 const KIND: Record<string, string> = {
-  prompt: "Промпт",
+  prompt: "Инструкции агента",
   tools: "Инструменты агента",
   "tone-of-voice": "Правила общения",
 };
@@ -47,13 +47,14 @@ export function SourceSheet({
         </div>
       )}
       {!!error && (
-        <p className="p-5 text-small text-bad">
-          Не удалось открыть источник: {error instanceof Error ? error.message : String(error)}
-        </p>
+        <div className="p-5 text-small">
+          <p className="text-bad">Не удалось открыть источник.</p>
+          <p className="mt-1 text-fg-3">{error instanceof Error ? error.message : String(error)}</p>
+        </div>
       )}
       {data && !parts && (
         <p className="border-b border-line px-5 py-3 text-small text-warn">
-          Цитаты критерия нет в нынешнем тексте: он мог измениться после того, как критерии собрали.
+          Цитаты критерия нет в текущем тексте. Он мог измениться после того, как собрали критерии.
         </p>
       )}
       {data && (

@@ -236,18 +236,18 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         run."""
 
         async def unreachable(conversation_id: str, message: str, world: dict) -> dict:
-            raise simulate.agents.AgentError('Агент недоступен: ConnectError')
+            raise simulate.agents.AgentError('Нет связи с агентом (ConnectError).')
 
         async def once(conversation_id: str, message: str, world: dict) -> dict:
             if message == 'card-2':
-                raise simulate.agents.AgentError('Агент недоступен: ConnectError')
+                raise simulate.agents.AgentError('Нет связи с агентом (ConnectError).')
             return {'text': 'answer', 'status': '202', 'ok': False, 'options': [], 'events': []}
 
         async def passed(scenario: dict, item: dict) -> None:
             item.update(status='PASS', rules=[])
 
         for say, expected in (
-            (unreachable, ('failed', 'Агент не ответил ни в одном разговоре: Агент недоступен: ConnectError')),
+            (unreachable, ('failed', 'Агент не ответил ни в одном разговоре. Нет связи с агентом (ConnectError).')),
             (once, ('done', None)),
         ):
             with (
@@ -258,7 +258,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             ):
                 result = await simulate.run('test')
                 self.assertEqual((result['status'], result['error']), expected)
-                self.assertEqual(result['items'][1]['error'], 'Агент недоступен: ConnectError')
+                self.assertEqual(result['items'][1]['error'], 'Нет связи с агентом (ConnectError).')
                 # The list of runs (/api/state) has the reason without reading the conversations.
                 listed = next(summary for summary in store.run_summaries() if summary['id'] == result['id'])
                 self.assertEqual((listed['status'], listed['error']), expected)

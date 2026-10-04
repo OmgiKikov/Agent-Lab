@@ -16,7 +16,7 @@ import { shows } from "./steps";
 const WORD: Record<Example["status"], string> = {
   FAIL: "Почему это ошибка",
   PASS: "Почему здесь нет ошибки",
-  UNKNOWN: "Почему не проверено",
+  UNKNOWN: "Почему не удалось проверить",
 };
 
 /** Where an example was said: the log's topic, or the simulation's scenario and type of customer. */
@@ -93,9 +93,10 @@ export function ExampleCard({
         {loading ? (
           <Skeleton className="h-40" />
         ) : error ? (
-          <p className="text-read text-bad">
-            Не удалось загрузить разговор: {error instanceof Error ? error.message : String(error)}
-          </p>
+          <>
+            <p className="text-read text-bad">Не удалось загрузить разговор.</p>
+            <p className="mt-1 text-small text-fg-3">{error instanceof Error ? error.message : String(error)}</p>
+          </>
         ) : turns ? (
           <Conversation
             turns={turns}

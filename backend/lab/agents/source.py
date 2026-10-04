@@ -31,7 +31,7 @@ def free_port(preferred: int) -> int:
             if probe.connect_ex(('127.0.0.1', port)) != 0:
                 _HELD.add(port)
                 return port
-    raise AgentError('Нет свободного порта для агента из исходников')
+    raise AgentError('Нет свободного порта, чтобы запустить агента из кода.')
 
 
 def release(port: int | None) -> None:
@@ -49,7 +49,7 @@ class CodeAgent(HttpAgent):
     async def open(self) -> None:
         script = self.repo / START
         if not script.exists():
-            raise AgentError(f'Нет исходников агента: {script}')
+            raise AgentError(f'Нет файла {script}. Проверьте папку с кодом в разделе «Агент».')
         self.port = free_port(self.preferred)
         self.url = f'http://127.0.0.1:{self.port}{AGENT_PATH}'
         log = store.database().parent / LOG
@@ -70,20 +70,22 @@ class CodeAgent(HttpAgent):
         async with httpx.AsyncClient(timeout=3) as client:
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
-                    raise AgentError(f'Агент из исходников не запустился: см. {log}')
+                    raise AgentError(f'Агент из кода не запустился. Подробности — в {log}.')
                 try:
                     identity = (await client.get(f'http://127.0.0.1:{self.port}/local/agent-lab/identity')).json()
                 except (httpx.HTTPError, ValueError):
                     await asyncio.sleep(1)
                     continue
                 if not isinstance(identity, dict):
-                    raise AgentError('Проверка агента вернула неверный формат identity')
+                    raise AgentError('Агент из кода ответил в неизвестном формате (identity).')
                 if identity.get('pid') != self.process.pid:
-                    raise AgentError(f'На порту {self.port} отвечает чужой процесс агента (pid {identity.get("pid")})')
+                    raise AgentError(
+                        f'На порту {self.port} отвечает другой процесс агента (pid {identity.get("pid")}).'
+                    )
                 branch = self._branch()
                 self.version = f'{identity.get("version")} · {branch}' if branch else str(identity.get('version'))
                 return
-        raise AgentError('Агент из исходников не ответил за 3 минуты')
+        raise AgentError('Агент из кода не ответил за 3\u00a0минуты.')
 
     async def close(self) -> None:
         try:

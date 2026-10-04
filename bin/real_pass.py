@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Проход на настоящих модели и агенте: один раз прогоняет через запущенный Agent Lab обе проверки, сборку сценариев
-и прогон симуляции и печатает, что получилось на каждом шаге.
+"""Проход с настоящей моделью и настоящим агентом. Один раз прогоняет через запущенный Agent Lab обе проверки, сборку
+сценариев и прогон симуляции и печатает, что получилось на каждом шаге.
 
 Запуск на рабочем компьютере, когда Agent Lab уже запущен (`sh bin/start.sh`):
 
@@ -114,8 +114,8 @@ class Pass:
 def summary_line(result: dict | None) -> str:
     s = (result or {}).get('summary') or {}
     return (
-        f'{s.get("failed", "?")} из {s.get("measured", "?")} проверенных разговоров — с ошибкой агента; '
-        f'не удалось проверить: {s.get("unmeasured", "?")}'
+        f'{s.get("failed", "?")} из {s.get("measured", "?")} проверенных разговоров — с ошибкой агента. '
+        f'Не удалось проверить: {s.get("unmeasured", "?")}'
     )
 
 
@@ -173,7 +173,7 @@ def tone_of_voice(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
             return summary_line(result['checks']['tone']), None
 
         if run.step('Tone of voice: разговоры проверены', check):
-            run.step('Tone of voice: серьёзность предложена', lambda: severity_line(lab, 'tone'))
+            run.step('Tone of voice: серьёзные ошибки отмечены', lambda: severity_line(lab, 'tone'))
 
 
 def severity_line(lab: Lab, check: str) -> Found:
@@ -184,7 +184,7 @@ def severity_line(lab: Lab, check: str) -> Found:
         raise RuntimeError(said['error'])
     serious = [rule for rule in found['rules'] if rule['serious']]
     if not said.get('proposed') and not said.get('decided'):
-        raise RuntimeError('модель ничего не предложила')
+        raise RuntimeError('модель ничего не отметила')
     first = serious[0] if serious else None
     reason = ((first or {}).get('severity') or {}).get('proposed') or {}
     why = f': «{first["title"]}» — {reason.get("reason", "")}' if first else ''
@@ -203,7 +203,7 @@ def accuracy(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
         return summary_line(result['checks']['code']), None
 
     if run.step('Точность: код агента прочитан', code) and run.step('Точность: разговоры проверены', check):
-        run.step('Точность: серьёзность предложена', lambda: severity_line(lab, 'code'))
+        run.step('Точность: серьёзные ошибки отмечены', lambda: severity_line(lab, 'code'))
 
 
 def simulations(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
@@ -216,7 +216,7 @@ def simulations(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
         if not deck:
             raise RuntimeError('ни одного сценария')
         failed = (state['job'].get('progress') or {}).get('failed') or []
-        return f'{len(deck)} сценариев из {check}' + (f', не собрано {len(failed)}' if failed else ''), deck
+        return f'{len(deck)} сценариев из {check}' + (f', не удалось собрать: {len(failed)}' if failed else ''), deck
 
     deck = run.step('Симуляции: сценарии собраны', scenarios)
     if not deck:
@@ -231,7 +231,7 @@ def simulations(lab: Lab, run: Pass, args: argparse.Namespace) -> None:
         record = lab.job('run', '/api/runs', body | {'cardIds': [c['id'] for c in deck[: args.scenarios]]})['runs'][0]
         m = record.get('metric') or {}
         line = (
-            f'агент {target}: {m.get("total", "?")} разговоров, без ошибок {m.get("passed", "?")}, '
+            f'агент {target}: {m.get("total", "?")} разговоров, без найденных ошибок {m.get("passed", "?")}, '
             f'не удалось проверить {m.get("unmeasured", "?")} · статус {record.get("status")}'
         )
         return line + (f' · {record["error"]}' if record.get('error') else ''), None

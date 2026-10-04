@@ -190,7 +190,8 @@ def ensure_answered(results: list[dict], previous: dict | None) -> None:
     (previous, the check's own), the scenarios built from it and the history stay. When only some failed, it is a
     result: those conversations are «не удалось проверить»."""
     if all(result['status'] == 'UNMEASURED' for result in results) and any(result.get('error') for result in results):
-        raise RuntimeError(UNANSWERED + (' Прежний итог сохранён.' if previous else ''))
+        kept = ' Прежний итог сохранён.' if previous else ''
+        raise RuntimeError(f'{UNANSWERED}{kept} Проверьте модель в разделе «Настройки».')
 
 
 def carry_reviews(previous: dict, results: list[dict]) -> None:
@@ -276,20 +277,18 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     # agent's code.
     srcs = [source for source in sources.load() if source['kind'] != TONE]
     if not srcs:
-        raise RuntimeError('Код агента ещё не прочитан: в разделе «Агент» нажмите «Прочитать код».')
+        raise RuntimeError('Код агента ещё не прочитан. Прочитайте его в разделе «Агент».')
     dialogues = sample(count)
     if not dialogues:
-        raise RuntimeError('Нет разговоров для оценки: сначала загрузите диалоги.')
+        raise RuntimeError('Нет разговоров для проверки. Сначала загрузите диалоги.')
     started = store.now()
     if previous.get('topics') and not replan:
-        progress(
-            stage='plan', done=0, total=len(dialogues), message='Правила зафиксированы, распределяю разговоры по темам'
-        )
+        progress(stage='plan', done=0, total=len(dialogues), message='Распределяем разговоры по темам')
         topics = await keep_topics(previous, dialogues)
         dropped = previous.get('droppedRules', 0)
         rules_since = previous.get('rulesSince') or previous.get('startedAt')
     else:
-        progress(stage='plan', done=0, total=len(dialogues), message='Выделяю темы и правила из промпта')
+        progress(stage='plan', done=0, total=len(dialogues), message='Извлекаем критерии из кода агента')
         topics, dropped = await plan_topics(srcs, dialogues)
         rules_since = started
 
@@ -298,12 +297,12 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
         for dialogue_id in topic['dialogueIds']:
             topic_of.setdefault(dialogue_id, topic)
     todo = [(d, topic_of[str(d['id'])]) for d in dialogues if str(d['id']) in topic_of]
-    progress(stage='judge', done=0, total=len(todo), message=f'Оцениваю {len(todo)} разговоров')
+    progress(stage='judge', done=0, total=len(todo), message='Проверяем разговоры')
     results = []
 
     def done(result: dict) -> None:
         results.append(result)
-        progress(stage='judge', done=len(results), total=len(todo), message=f'Оценено {len(results)} из {len(todo)}')
+        progress(stage='judge', done=len(results), total=len(todo), message='Проверяем разговоры')
 
     await judge_each(todo, done)
     ensure_answered(results, result_before)

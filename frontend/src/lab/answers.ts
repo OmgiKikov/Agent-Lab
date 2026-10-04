@@ -7,7 +7,7 @@ import type { Discover } from "./types";
  * A check's result with people's answers taken in (spec 2026-10-04-answers-and-summary-design.md, 2.1), counted from
  * the result's own rows. A conversation is «с ошибкой с учётом ответов» when it keeps an error a person did not take
  * back («Нет» on «Это действительно ошибка?»), or a person found the error the check missed there («Нет» on «Здесь
- * правда нет ошибки?»); one where every error was taken back counts «без найденных ошибок». The denominator stays the
+ * действительно нет ошибки?»); one where every error was taken back counts «без найденных ошибок». The denominator stays the
  * check's: the conversations it could check. It never stands in for the check's own number, is never compared between
  * checks and never enters «было → стало» (DESIGN.md, «Честность чисел», 9).
  */
@@ -60,7 +60,7 @@ export function answersOf(result: Discover | null | undefined): Answers | null {
 }
 
 /**
- * «С учётом ваших ответов — 21 из 53 (40%): вы сняли 1 ошибку и нашли 0 пропущенных; проверено 11 оценок.» In three
+ * «С учётом ваших ответов — 21 из 53 (40%). Вы проверили 11 оценок, сняли 1 ошибку и нашли 0 пропущенных.» In three
  * parts, so a screen can set the count apart: the head, the count with its share, the rest. Who answered: the person
  * reading («вы»), or people, for a page someone else reads. A part is said only when it has answers behind it: the
  * misses only once a case «без ошибки» was answered, and from MISSES_FROM such answers with how many there were (the
@@ -77,14 +77,13 @@ export function answersSentence(
   if (a.clean)
     parts.push(
       `нашли ${a.missed}\u00a0${plural(a.missed, "пропущенную", "пропущенные", "пропущенных")}` +
-        (a.clean >= MISSES_FROM
-          ? ` в\u00a0${count(a.clean, "проверенном случае", "проверенных случаях", "проверенных случаях")} «без ошибки»`
-          : ""),
+        (a.clean >= MISSES_FROM ? ` в\u00a0${count(a.clean, "случае", "случаях", "случаях")} «без ошибки»` : ""),
     );
+  const checked = `${who === "you" ? "Вы" : "Люди"} проверили ${count(answered, "оценку", "оценки", "оценок")}`;
   return {
     head: who === "you" ? "С учётом ваших ответов" : "С учётом ответов людей",
     share: shareText({ failed: a.counted, measured: a.measured }),
-    rest: `: ${who === "you" ? "вы" : "люди"} ${parts.join(" и ")}; проверено ${count(answered, "оценка", "оценки", "оценок")}.`,
+    rest: `. ${checked}, ${parts.join(" и ")}.`,
   };
 }
 

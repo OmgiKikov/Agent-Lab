@@ -23,9 +23,9 @@ const words = (text: string) =>
 
 /** How each way reaches the agent; the ways are named by the service (backend/lab/agents, NAMES), as in «Сыграть». */
 const WAY_LOOK: Record<string, { icon: typeof Globe; how: string }> = {
-  prod: { icon: Globe, how: "снаружи, по адресу" },
-  "local-http": { icon: Monitor, how: "снаружи, уже запущен здесь" },
-  "local-code": { icon: Code2, how: "изнутри, на время прогона" },
+  prod: { icon: Globe, how: "по адресу на стенде" },
+  "local-http": { icon: Monitor, how: "уже запущен здесь" },
+  "local-code": { icon: Code2, how: "запускаем на время прогона" },
 };
 
 const read = <T,>(key: string): T | null => {
@@ -196,7 +196,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
           </Field>
         )}
         {way === "local-code" && (
-          <Field label="Папка с кодом агента" hint="Из неё читаются промпты и запускается агент.">
+          <Field label="Папка с кодом агента" hint="Из неё читаются инструкции и запускается агент.">
             <input
               name="repo"
               autoComplete="off"
@@ -213,7 +213,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
             Адрес не нужен: агент уже запущен на этом компьютере{target?.where ? ` (${target.where})` : ""}.
           </p>
         )}
-        <Field label="Клиенты, от чьего имени пишет симулятор" hint="ЕПК через пробел. Пусто — тестовый клиент.">
+        <Field label="Клиенты для симуляций" hint="ЕПК через пробел. Если пусто, пишет тестовый клиент.">
           <input
             name="epk"
             autoComplete="off"
@@ -245,7 +245,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
       </div>
       {target?.kind === "code" && (
         <p className="mt-3 text-small text-fg-3">
-          Запускается только на время прогона: проверить связь заранее нельзя.
+          Агент запускается только на время прогона, поэтому связь заранее не проверить.
         </p>
       )}
       {check &&
@@ -261,14 +261,13 @@ export function ConnectionForm({ state }: { state: LabState }) {
           </div>
         ) : (
           <p className="mt-4 text-small text-bad">
-            {check.error
-              ? `Не отвечает: ${check.error}`
-              : `Ответил не обычным ответом (статус ${check.status ?? "?"}): так бывает, когда разговор передан оператору.`}
+            {check.error ||
+              `Агент ответил не текстом, а статусом ${check.status ?? "?"}. Так бывает, когда разговор передан оператору.`}
           </p>
         ))}
       {memory.last && !check && (
         <p className="mt-4 text-small text-fg-3">
-          Последняя проверка: отвечал{" "}
+          В последний раз отвечал{" "}
           {new Date(memory.last.at).toLocaleString("ru-RU", {
             day: "2-digit",
             month: "2-digit",
