@@ -20,7 +20,8 @@ import { Duty } from "../../product/Duty";
 import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useReview, type Decision, type Example } from "../../lab/problems";
-import { humansOf, secondOf } from "../../lab/problemStats";
+import { humansOf, rightOf, rightText, secondOf } from "../../lab/problemStats";
+import { yesNoText } from "../../lab/answers";
 import { conversationKey, exampleAt } from "../../lab/verdicts";
 import { ExampleCard } from "../../product/ExampleCard";
 import { SourceSheet } from "../../product/SourceSheet";
@@ -157,6 +158,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const s = r[here];
   const second = secondOf(s.examples);
   const humans = humansOf(s);
+  const right = rightText(rightOf(s));
   const run = stage === "sim" ? state?.runs.find((x) => x.id === runId) : undefined;
   const link = `${shareBase()}${problemLink(r.id, stage, runId)}`;
   const { condition, acceptable, quote, origin } = r.rule;
@@ -228,9 +230,12 @@ export function ProblemPage({ stage }: { stage: Stage }) {
               })}
               className={linkCls}
             >
-              {humans.checked ? `вы ответили на ${humans.checked} из ${humans.of}` : "вы ещё не отвечали"}
+              {humans.checked
+                ? `вы ответили на ${humans.checked} из ${humans.of}: ${yesNoText(humans.agree, humans.checked - humans.agree)}`
+                : "вы ещё не отвечали"}
             </Link>
           </p>
+          {right && <p className="mt-1.5 max-w-[72ch] text-read text-fg-2">{right}</p>}
           {s.unknown > 0 && (
             <p className="mt-1.5 text-small text-fg-3">
               Ещё в {count(s.unknown, "разговоре", "разговорах", "разговорах")} проверить не удалось: в счёт они не

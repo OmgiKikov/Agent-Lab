@@ -320,8 +320,12 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
             unchecked={log.unassessed}
             link={(part) => conversationsLink(check, { v: PART[part] })}
           />
-          <CompareLine check={check} compare={compare} short className="mt-4" />
-          <Trust data={data} check={check} checked={log.assessed} />
+          <Trust
+            result={result}
+            check={check}
+            compare={<CompareLine check={check} compare={compare} short />}
+            className="mt-4"
+          />
           <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>
           <div className="mt-1">
             <ProblemList list={list} stage={check} limit={3} />

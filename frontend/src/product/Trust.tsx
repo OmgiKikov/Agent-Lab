@@ -1,60 +1,65 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { reviewLink, type Check } from "../app/links";
-import { count, plural } from "../lab/format";
+import { answersOf, answersSentence } from "../lab/answers";
 import { FEW } from "../lab/history";
-import type { Problems } from "../lab/problems";
-import { MISSES_FROM, missesOf, verdictsOf } from "../lab/verdicts";
-
-const ofChecked = (n: number) => count(n, "проверенного случая", "проверенных случаев", "проверенных случаев");
+import type { Discover } from "../lab/types";
 
 /**
- * How far the number above can be trusted, in plain words under it. What counts is a person's answer on the errors the
- * model found — two models agreeing is not proof they are right (Hamel Husain, «Using LLM-as-a-judge»; Kim et al. 2025).
- * Before any answer it shows the way to give some; with few conversations it says the conclusion is preliminary. Once a
- * person has checked 20 cases «без ошибки» (the review queue asks about every fifth), one quiet line says how often the
- * model missed an error there: the share «без найденных ошибок» is then checked too.
+ * The lines right under a check's number: how far it can be trusted, and how it stands to the previous check. What
+ * counts is a person's answer on what the model found — two models agreeing is not proof they are right (Hamel Husain,
+ * «Using LLM-as-a-judge»; Kim et al. 2025). Before any answer the first line shows the way to give some. From the first
+ * answer it counts the same conversations with the person's answers taken in and says what they did: the errors they
+ * took back, the misses they found in the cases «без ошибки» (from 20 of them, out of how many), how many verdicts they
+ * checked (lab/answers). It never replaces the number above: that stays the check's, the one the line about the
+ * previous check (`compare`, under it) sets beside its previous count. With few conversations the last, quiet line says
+ * the conclusion is preliminary.
  */
-export function Trust({ data, check, checked }: { data: Problems; check: Check; checked: number }) {
-  const errors = verdictsOf(data, null, "log").filter((v) => v.example.status === "FAIL");
-  const yes = errors.filter((v) => v.example.review === "agree").length;
-  const no = errors.filter((v) => v.example.review === "disagree").length;
-  const answered = yes + no;
-  const misses = missesOf(data, "log");
+export function Trust({
+  result,
+  check,
+  compare,
+  className,
+}: {
+  result: Discover;
+  check: Check;
+  compare?: ReactNode;
+  className?: string;
+}) {
+  const answers = answersOf(result);
+  if (!answers) return null;
+  const sentence = answersSentence(answers);
+  const open = answers.errors - answers.confirmed - answers.removed;
+  const queue = reviewLink(check, { queue: "unchecked" });
   return (
-    <div className="mt-4 space-y-1 text-read text-fg-2">
-      {answered > 0 ? (
-        <p>
-          Вы проверили {count(answered, "найденную ошибку", "найденные ошибки", "найденных ошибок")}: {yes}{" "}
-          {plural(yes, "действительно ошибка", "действительно ошибки", "действительно ошибок")}, {no} — нет.{" "}
-          {answered < errors.length && (
-            <Link to={reviewLink(check, { queue: "unchecked" })} className="font-medium text-run hover:underline">
+    <div className={cn("space-y-1 text-read text-fg-2", className)}>
+      {sentence ? (
+        <p className="max-w-[72ch]">
+          {sentence.head} — <span className="whitespace-nowrap font-semibold text-fg">{sentence.share}</span>
+          {sentence.rest}{" "}
+          {open > 0 && (
+            <Link to={queue} className="font-medium text-run hover:underline">
               Проверить ещё
             </Link>
           )}
         </p>
       ) : (
-        errors.length > 0 && (
+        answers.errors > 0 && (
           <p>
             Ошибки нашла модель.{" "}
-            <Link
-              to={reviewLink(check, { queue: "unchecked" })}
-              className="inline-flex items-center gap-1 font-medium text-run hover:underline"
-            >
-              {errors.length <= 20 ? "Проверьте их" : "Проверьте 10–20 из них"}, чтобы убедиться, что она права
+            <Link to={queue} className="inline-flex items-center gap-1 font-medium text-run hover:underline">
+              {answers.errors <= 20 ? "Проверьте их" : "Проверьте 10–20 из них"}, чтобы убедиться, что она права
               <ArrowRight aria-hidden className="size-4" />
             </Link>
           </p>
         )
       )}
-      {misses.checked >= MISSES_FROM && (
-        <p className="text-fg-3">
-          {misses.missed
-            ? `В\u00a0${misses.missed}\u00a0из\u00a0${ofChecked(misses.checked)} «без ошибки» вы нашли ошибку.`
-            : `Ни в одном из\u00a0${ofChecked(misses.checked)} «без ошибки» вы не нашли ошибки.`}
-        </p>
+      {compare}
+      {answers.measured > 0 && answers.measured < FEW && (
+        <p className="text-fg-3">Проверено мало разговоров: вывод предварительный.</p>
       )}
-      {checked > 0 && checked < FEW && <p className="text-fg-3">Проверено мало разговоров: вывод предварительный.</p>}
     </div>
   );
 }
