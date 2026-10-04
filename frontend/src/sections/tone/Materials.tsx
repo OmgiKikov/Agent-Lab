@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, FileText, Upload } from "lucide-react";
 import { api, upload } from "../../lab/api";
-import { count } from "../../lab/format";
+import { count, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useSource } from "../../lab/problems";
 import { rememberName, rememberText, savedName, savedText, TONE_ID, toneResult } from "../../lab/tone";
@@ -64,7 +64,7 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
     });
   const readPolicy = (file: File) =>
     run(async () => {
-      if (file.size > 2_000_000) throw new Error("Файл слишком большой: не более 2 МБ.");
+      if (file.size > 2_000_000) throw new Error("Файл больше 2 МБ. Вставьте правила текстом.");
       const parsed = await upload<{ text: string; name: string }>("/api/tone-of-voice/read-file", file);
       change(parsed.text);
       setName(parsed.name);
@@ -90,19 +90,19 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
   return (
     <section aria-labelledby="materials-title">
       <h2 id="materials-title" className="text-title font-semibold text-fg">
-        Добавьте разговоры и правила общения
+        Добавьте диалоги и правила общения
       </h2>
       <p className="mt-2 text-read text-fg-3">Из правил соберём критерии и проверим по ним ответы агента.</p>
       <div className="mt-8 grid gap-8 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <div>
-          <h3 className="text-read font-semibold text-fg">Разговоры</h3>
-          <p className="mt-1 text-body text-fg-3">Выгрузка чата: Excel (.xlsx) или JSONL.</p>
+          <h3 className="text-read font-semibold text-fg">Диалоги</h3>
+          <p className="mt-1 text-body text-fg-3">Выгрузка чата в Excel (.xlsx) или JSONL.</p>
           <input
             ref={logInput}
             type="file"
             accept=".xlsx,.jsonl"
             className="hidden"
-            aria-label="Файл разговоров"
+            aria-label="Файл выгрузки"
             onChange={(e) => {
               const f = e.target.files?.[0];
               e.target.value = "";
@@ -123,10 +123,10 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
                 <p className="mt-1 break-words text-body text-fg-3">{state.logs.file ?? "Загруженная выгрузка"}</p>
               </>
             ) : (
-              <p className="text-read text-fg-2">Разговоры ещё не загружены</p>
+              <p className="text-read text-fg-2">Диалоги ещё не загружены</p>
             )}
             <Button className="mt-4" icon={Upload} disabled={disabled} onClick={() => logInput.current?.click()}>
-              {state.logs.total ? "Другая выгрузка" : "Загрузить разговоры"}
+              {state.logs.total ? "Загрузить новую выгрузку" : "Загрузить диалоги"}
             </Button>
           </div>
         </div>
@@ -166,8 +166,8 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
           />
           <p className="mt-1 text-small text-fg-3">
             {text.length
-              ? `${text.length.toLocaleString("ru-RU")} символов · ${name}`
-              : "Нужны конкретные требования к тому, как агент общается."}
+              ? `${text.length.toLocaleString("ru-RU")}\u00a0${plural(text.length, "символ", "символа", "символов")} · ${name}`
+              : "Опишите конкретно, как агент должен общаться с клиентами."}
           </p>
         </div>
       </div>
@@ -178,9 +178,9 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       )}
       {hasSource && source.isError && (
         <div role="alert" className="mt-5 text-read text-bad">
-          <p>Не удалось загрузить сохранённые правила. Повторите загрузку перед продолжением.</p>
+          <p>Не удалось загрузить сохранённые правила.</p>
           <Button className="mt-3" onClick={() => void source.refetch()}>
-            Загрузить сохранённые правила
+            Загрузить снова
           </Button>
         </div>
       )}
@@ -193,9 +193,9 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
           disabled={disabled || !state.logs.total || text.trim().length < 20 || (hasSource && !source.data)}
           onClick={next}
         >
-          {reusable ? "Продолжить с этими критериями" : "Собрать критерии"}
+          {reusable ? "К критериям" : "Собрать критерии"}
         </Button>
-        {!state.logs.total && <p className="mt-2 text-body text-fg-3">Сначала загрузите разговоры.</p>}
+        {!state.logs.total && <p className="mt-2 text-body text-fg-3">Сначала загрузите диалоги.</p>}
       </div>
       <ReplaceExport
         open={!!pending?.file}
@@ -222,15 +222,14 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
                 prepare();
               }}
             >
-              Собрать заново
+              Собрать критерии
             </Button>
           </>
         }
       >
         <p className="text-read text-fg-2">
-          Правила изменились: итог tone of voice уйдёт из раздела и «Обзора», критерии соберутся заново, а ваши
-          уточнения к прежним критериям не перейдут.{deck ? " Сценарии, собранные из tone of voice, сбросятся." : ""}{" "}
-          Сама проверка останется в истории; итог точности не изменится.
+          Итог tone of voice уйдёт в «Историю». Критерии соберутся заново, а ваши уточнения к прежним критериям не
+          перейдут.{deck ? " Сценарии, собранные из tone of voice, сбросятся." : ""} Итог точности не изменится.
         </p>
       </Modal>
     </section>

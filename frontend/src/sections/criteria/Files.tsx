@@ -51,7 +51,9 @@ export function Files({
         <span className="text-small tabular-nums text-fg-3">
           {r.n ? (
             <>
-              <b className={cn("font-medium", r.broken ? "text-bad" : "text-ok")}>{r.broken}</b> из {r.n}
+              <b className={cn("font-medium", r.broken ? "text-bad" : "text-ok")}>{r.broken}</b>
+              {"\u00a0"}из{"\u00a0"}
+              {r.n}
             </>
           ) : (
             "—"
@@ -62,7 +64,7 @@ export function Files({
   };
   return (
     <nav aria-label="Источники критериев" className="min-h-0 overflow-auto border-r border-line bg-list px-2 py-3">
-      <Label className="block px-2 pb-2">Промпты</Label>
+      <Label className="block px-2 pb-2">Инструкции</Label>
       {prompts.map((r) => (
         <Row key={r.s.id} r={r} />
       ))}
@@ -73,15 +75,15 @@ export function Files({
       <div className="mx-2 mt-5 space-y-1.5 border-t border-line pt-3 text-small text-fg-3">
         <p className="flex items-center gap-2">
           <span aria-hidden className="h-3.5 w-1 rounded-sm bg-bad" />
-          есть ошибка хотя бы в одном разговоре
+          ошибка хотя бы в одном разговоре
         </p>
         <p className="flex items-center gap-2">
           <span aria-hidden className="h-3.5 w-1 rounded-sm bg-ok/80" />
-          ошибок не найдено
+          без найденных ошибок
         </p>
         <p className="flex items-center gap-2">
           <span aria-hidden className="stripe-unknown h-3.5 w-1 rounded-sm" />
-          не проверен: нет доказательств
+          не удалось проверить
         </p>
       </div>
     </nav>

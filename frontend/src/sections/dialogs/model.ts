@@ -12,7 +12,7 @@ export const VERDICTS: { value: Verdict; label: string }[] = [
   { value: "fail", label: "С ошибкой" },
   { value: "serious", label: "С серьёзной ошибкой" },
   { value: "pass", label: "Без ошибок" },
-  { value: "none", label: "Не проверены" },
+  { value: "none", label: "Не удалось проверить" },
   { value: "disputed", label: "Проверки разошлись" },
 ];
 

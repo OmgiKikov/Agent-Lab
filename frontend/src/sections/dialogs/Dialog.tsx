@@ -231,7 +231,7 @@ export function Dialog({
                 ) : (
                   "—"
                 ),
-                title: "Критериев с ошибкой из тех, что удалось проверить",
+                title: "Из критериев, которые удалось проверить в этом разговоре",
               },
               {
                 label: "Без ошибки",
@@ -254,7 +254,7 @@ export function Dialog({
                     },
                   ]
                 : []),
-              { label: "Ваши ответы", value: reviewed ? `${reviewed} из ${broken}` : "ещё нет" },
+              { label: "Ваши ответы", value: reviewed ? `${reviewed}\u00a0из\u00a0${broken}` : "ещё нет" },
             ]}
           />
         </div>
@@ -276,9 +276,10 @@ export function Dialog({
               {loading ? (
                 <Skeleton className="h-40" />
               ) : error ? (
-                <p className="text-small text-bad">
-                  Не удалось загрузить разговор: {error instanceof Error ? error.message : String(error)}
-                </p>
+                <>
+                  <p className="text-small text-bad">Не удалось загрузить разговор.</p>
+                  <p className="mt-1 text-small text-fg-3">{error instanceof Error ? error.message : String(error)}</p>
+                </>
               ) : turns ? (
                 <Conversation turns={turns} marks={marks} lit={lit} onLit={(on, n) => setLit(on && n ? n : null)} />
               ) : (

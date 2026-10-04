@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
 import { side, stageLink, type Stage } from "../../app/links";
+import { yesNoText } from "../../lab/answers";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useProblems, useReview, type Decision } from "../../lab/problems";
@@ -111,7 +112,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
     review.mutateAsync({ example: e, decision: d, finishedAt }).catch(() => forget(k, d));
     setAnswered((a) => ({ ...a, [k]: d }));
     next();
-    toast.notify(saysError(e.status, d) ? "Отмечено: это ошибка" : "Отмечено: ошибки нет", {
+    toast.notify(saysError(e.status, d) ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
       label: "Отменить",
       run: () => {
         review.mutate({ example: e, decision: before, finishedAt });
@@ -133,6 +134,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const counted = saving ? "Сохраняем ответы…" : "Ответы уже учтены в счёте.";
   const rule = ruleId && data ? data.rules.find((r) => r.id === ruleId) : undefined;
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
+  // Without a second model nothing can be disputed: an empty queue then says so, not that two checks agreed.
+  const twice = [...byKey.values()].some((v) => !!v.example.second);
 
   const header =
     stage === "sim" ? (
@@ -187,7 +190,9 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               {keys.length > 0 && !done && (
                 <span className="flex items-center gap-2">
                   <span className="text-read tabular-nums text-fg-3">
-                    {at + 1} из {keys.length}
+                    {at + 1}
+                    {"\u00a0"}из{"\u00a0"}
+                    {keys.length}
                   </span>
                   <Button icon={ChevronLeft} aria-label="Предыдущий случай" kbd="←" disabled={at <= 0} onClick={back} />
                   <Button icon={ChevronRight} aria-label="Следующий случай" kbd="→" onClick={next} />
@@ -206,14 +211,14 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                 className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-2 transition-colors hover:bg-hover hover:text-fg"
               >
                 <X aria-hidden className="size-3.5" />
-                все проблемы
+                снять отбор
               </button>
             </p>
           )}
 
           {stage === "sim" && state && !run ? (
             <EmptyState drop title="Прогонов ещё не было" className="py-24">
-              Здесь появятся случаи, которые проверки нашли в разговорах синтетических клиентов.
+              Здесь будут случаи из разговоров синтетических клиентов.
             </EmptyState>
           ) : !data || frozen?.id !== id ? (
             <Skeleton className="mt-8 h-[480px]" />
@@ -224,7 +229,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                 queue === "disputed"
                   ? "Спорных случаев нет"
                   : queue === "unchecked"
-                    ? "На все случаи вы уже ответили"
+                    ? "Вы ответили на все случаи"
                     : "Случаев пока нет"
               }
               className="py-24"
@@ -235,16 +240,18 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               }
             >
               {queue === "disputed"
-                ? "Две проверки совпали во всех случаях этого отбора."
-                : "Здесь появятся случаи, которые нашли проверки."}
+                ? twice
+                  ? "Две проверки совпали во всех случаях этого отбора."
+                  : "Второй проверки у этих разговоров не было."
+                : queue === "unchecked"
+                  ? counted
+                  : "Случаи появятся после проверки разговоров."}
             </EmptyState>
           ) : done ? (
             <EmptyState
               drop
               title={
-                made.length
-                  ? `Готово: вы ответили на ${count(made.length, "случай", "случая", "случаев")}`
-                  : "Очередь пройдена"
+                made.length ? `Вы ответили на ${count(made.length, "случай", "случая", "случаев")}` : "Очередь пройдена"
               }
               className="py-24"
               action={
@@ -264,7 +271,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                 </>
               }
             >
-              {made.length ? `Это ошибка — ${errors}, ошибки нет — ${made.length - errors}. ${counted}` : counted}
+              {made.length ? `${yesNoText(errors, made.length - errors)}. ${counted}` : counted}
             </EmptyState>
           ) : current ? (
             <div
@@ -297,7 +304,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               className="py-24"
               action={<Button onClick={next}>Дальше</Button>}
             >
-              Его могли переоценить.
+              Разговор могли проверить заново.
             </EmptyState>
           )}
         </div>

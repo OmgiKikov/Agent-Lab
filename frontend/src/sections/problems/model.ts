@@ -17,7 +17,7 @@ export const checked = (s: Pick<Side, "failed" | "passed">) => s.failed + s.pass
  * проверить». M read as all the conversations checked; those where this criterion could not be checked are not in it.
  */
 export const errorIn = (s: Pick<Side, "failed" | "passed">) =>
-  `в ${s.failed} из ${count(checked(s), "разговора", "разговоров", "разговоров")}, где критерий удалось проверить`;
+  `в ${s.failed}\u00a0из\u00a0${count(checked(s), "разговора", "разговоров", "разговоров")}, где критерий удалось проверить`;
 
 /** The side a row of the queue counts: the logs, unless the filter is the simulation or only the simulation found it. */
 export const rowSide = (c: Criterion, filter: Filter): SideKey =>

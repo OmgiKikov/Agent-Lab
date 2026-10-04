@@ -46,7 +46,7 @@ export function Checking({
         <div role={stopped ? "status" : "alert"} className="mt-6">
           <p className={cn("text-read", stopped ? "text-fg-2" : "text-bad")}>
             {stopped
-              ? `Проверка остановлена. ${finished ? "Прежний итог сохранён." : "Разговоры и критерии сохранены."}`
+              ? `Проверка остановлена. ${finished ? "Прежний итог сохранён." : "Диалоги и критерии сохранены."}`
               : error}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
@@ -55,7 +55,7 @@ export function Checking({
                 К прежнему итогу
               </Button>
             )}
-            <Button onClick={onBack}>Вернуться к критериям</Button>
+            <Button onClick={onBack}>К критериям</Button>
             {!stopped && (
               <Link to="/settings" className="self-center text-body text-fg-3 underline">
                 Настройки моделей
@@ -71,8 +71,7 @@ export function Checking({
                 {PROPOSING}
               </p>
               <p className="mt-2 text-read text-fg-3">
-                Все разговоры проверены. Итог откроется сам, как только автоматическая проверка предложит, какие ошибки
-                серьёзные.
+                Все разговоры проверены. Итог откроется, когда модель предложит, какие ошибки серьёзные.
               </p>
               <div className="mt-5 h-2 overflow-hidden rounded-full bg-well">
                 <div className="h-full w-full animate-pulse rounded-full bg-fg motion-reduce:animate-none" />
@@ -88,9 +87,8 @@ export function Checking({
                   {total || "…"}
                 </span>
               </p>
-              <p className="mt-2 text-read text-fg-3">
-                Проверено разговоров. Можно перейти в другие разделы — оценка продолжится.
-              </p>
+              <p className="mt-2 text-read text-fg-3">разговоров проверено</p>
+              <p className="mt-1 text-read text-fg-3">Проверка продолжится, даже если перейти в другие разделы.</p>
               <div className="mt-5 h-2 overflow-hidden rounded-full bg-well">
                 <div
                   className="h-full rounded-full bg-fg transition-[width] duration-500"

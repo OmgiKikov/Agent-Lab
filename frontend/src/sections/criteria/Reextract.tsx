@@ -16,7 +16,7 @@ export function Reextract({ open, onClose }: { open: boolean; onClose: () => voi
   const [starting, setStarting] = useState(false);
   const count = Math.max(5, Math.min(300, state?.checks.code?.sampled ?? 100));
   const deck = state?.cards?.check === "code" && !!state.cards.cards.length;
-  const dialogs = `${count} ${plural(count, "разговор", "разговора", "разговоров")}`;
+  const dialogs = `${count}\u00a0${plural(count, "разговор", "разговора", "разговоров")}`;
   const start = async () => {
     setStarting(true);
     try {
@@ -34,24 +34,24 @@ export function Reextract({ open, onClose }: { open: boolean; onClose: () => voi
     <Modal
       open={open}
       onClose={onClose}
-      title="Извлечь критерии заново"
+      title="Извлечь критерии заново?"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Отмена
           </Button>
           <Button variant="primary" onClick={start} loading={starting} disabled={!!state?.job.running}>
-            Извлечь и оценить {dialogs}
+            Извлечь заново
           </Button>
         </>
       }
     >
       <p className="text-small text-fg-2">
-        Модель прочитает промпты и инструменты агента заново, извлечёт критерии и проверит по ним {dialogs}. Прежние
-        критерии перестанут действовать: счёт, ссылки на проблемы и ваши ответы начнутся заново
-        {deck ? ", а сценарии, собранные из точности, сбросятся" : ""}. Итог tone of voice не изменится.
+        Модель заново прочитает код агента, извлечёт критерии и оценит по ним {dialogs}. Вместе с прежними критериями
+        перестанут действовать счёт, ссылки на проблемы и ваши ответы.
+        {deck ? " Сценарии, собранные из точности, сбросятся." : ""} Итог tone of voice не изменится.
       </p>
-      <p className="mt-3 text-small text-fg-3">Нужно, когда агент поменялся: новый промпт, новые инструменты.</p>
+      <p className="mt-3 text-small text-fg-3">Это нужно, когда у агента изменились инструкции или инструменты.</p>
     </Modal>
   );
 }

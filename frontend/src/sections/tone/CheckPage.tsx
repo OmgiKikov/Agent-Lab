@@ -86,7 +86,7 @@ export function CheckPage() {
           <div className={step === "result" ? "" : "mt-9"}>
             {offline && (
               <p role="alert" className="mb-5 text-body text-bad">
-                Связь с сервисом потеряна.{" "}
+                Нет связи с сервисом.{" "}
                 <button type="button" className="underline" onClick={() => refresh()}>
                   Попробовать ещё раз
                 </button>
