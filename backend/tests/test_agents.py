@@ -44,6 +44,18 @@ class ReadinessTests(unittest.TestCase):
         self.assertTrue(agents.public('prod', config | {'url': 'https://ift.example/agent'})['ready'])
 
 
+class NamesTests(unittest.TestCase):
+    def test_the_ways_to_reach_the_agent_have_the_names_of_the_agent_section(self):
+        """«Сыграть» said «Агент на ИФТ / Локальный агент / Агент из исходников» for what «Агент» calls «Тестовый
+        стенд банка / На этом компьютере / Запуск из кода»: one set everywhere, in words without a developer's slang."""
+        with patch.object(agents, 'settings', return_value={'prodUrl': '', 'epk': [], 'repo': '~/agent'}):
+            named = {key: config['name'] for key, config in agents.configs().items()}
+        self.assertEqual(
+            named,
+            {'prod': 'Тестовый стенд банка', 'local-http': 'На этом компьютере', 'local-code': 'Запуск из кода'},
+        )
+
+
 class MissingAddressTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_agent_without_its_address_names_where_to_set_it(self):
         with self.assertRaises(AgentError) as refused:

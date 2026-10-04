@@ -225,7 +225,10 @@ def state() -> dict:
         'checks': results,
         'toneOfVoice': store.load(tone.DRAFT),
         'cards': store.load(cards.DECK),
-        'runs': [{key: summary.get(key) for key in RUN_FIELDS} for summary in store.run_summaries()],
+        'runs': [
+            {key: summary.get(key) for key in RUN_FIELDS} | {'targetName': agents.run_name(summary)}
+            for summary in store.run_summaries()
+        ],
         'targets': [agents.public(key, config) for key, config in agents.configs().items()],
         'personas': personas.public(),
     }

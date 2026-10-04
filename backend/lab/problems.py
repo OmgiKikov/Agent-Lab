@@ -11,7 +11,7 @@ docs/superpowers/specs/2026-10-03-checks-as-sections-design.md.
 import hashlib
 from collections import Counter
 
-from . import cards, checks, personas, quotes, store
+from . import agents, cards, checks, personas, quotes, store
 from .context import sources
 
 COUNTED = {'FAIL': 'failed', 'PASS': 'passed', 'UNKNOWN': 'unknown'}
@@ -235,7 +235,7 @@ def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
     assessed = sum(1 for i in done if i['status'] in ('PASS', 'FAIL'))
     return {
         'runId': run['id'],
-        'target': run.get('targetName', ''),
+        'target': agents.run_name(run),
         'version': run.get('version', ''),
         'dialogs': len(done),
         'assessed': assessed,
