@@ -17,7 +17,7 @@ import { RunListPage } from "./sections/simulations/RunList";
 import { ScenariosPage } from "./sections/simulations/ScenariosPage";
 import { SimResultPage } from "./sections/simulations/SimResultPage";
 import { CheckPage } from "./sections/tone/CheckPage";
-import { HistoryPage } from "./sections/tone/History";
+import { HistoryPage } from "./sections/checks/History";
 import { ServiceDown } from "./ui/EmptyState";
 
 type From = (p: Record<string, string | undefined>) => Record<string, string>;
@@ -140,7 +140,7 @@ function DialogRedirect() {
 function OldStart() {
   const { search } = useLocation();
   const history = new URLSearchParams(search).get("history");
-  return <Navigate to={history ? historyLink(history) : SECTIONS.overview} replace />;
+  return <Navigate to={history ? historyLink("tone", history) : SECTIONS.overview} replace />;
 }
 
 /** The product inside one agent; «basename» (/a/<id>) keeps every link of it inside that agent. */
@@ -162,13 +162,14 @@ const productRoutes = [
       { path: "tone/conversations", element: <DialogsPage key="tone" stage="tone" /> },
       { path: "tone/review", element: <ReviewPage key="tone" stage="tone" /> },
       { path: "tone/criteria", element: <CriteriaPage key="tone" check="tone" /> },
-      { path: "tone/history", element: <HistoryPage /> },
+      { path: "tone/history", element: <HistoryPage key="tone" check="tone" /> },
       { path: "tone/problems/:id", element: <ProblemPage key="tone" stage="tone" /> },
       // Accuracy: the same conversations checked against the criteria read from the agent's code.
       { path: "accuracy", element: <ResultPage key="code" check="code" /> },
       { path: "accuracy/conversations", element: <DialogsPage key="code" stage="code" /> },
       { path: "accuracy/review", element: <ReviewPage key="code" stage="code" /> },
       { path: "accuracy/criteria", element: <CriteriaPage key="code" check="code" /> },
+      { path: "accuracy/history", element: <HistoryPage key="code" check="code" /> },
       { path: "accuracy/problems/:id", element: <ProblemPage key="code" stage="code" /> },
       // The simulations: synthetic customers play scenarios built from one check's errors; its criteria judge them.
       { path: "simulations", element: <SimResultPage /> },

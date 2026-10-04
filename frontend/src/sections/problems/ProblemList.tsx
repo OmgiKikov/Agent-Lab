@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { Criterion } from "../../lab/criteria";
 import { count } from "../../lab/format";
@@ -6,17 +7,22 @@ import { ENTER, stagger } from "../../product/motion";
 import { queueOf } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
-/** The problems of a stage, most frequent first, with how many criteria have no error found; `limit` for the overview. */
+/**
+ * The problems of a stage, most frequent first, with how many criteria have no error found; `limit` for the overview,
+ * `was` for what each problem had in the previous check of a check.
+ */
 export function ProblemList({
   list,
   stage,
   runId,
   limit,
+  was,
 }: {
   list: Criterion[];
   stage: Stage;
   runId?: string | null;
   limit?: number;
+  was?: (id: string) => ReactNode;
 }) {
   const where = side(stage);
   const rows = queueOf(list, where);
@@ -36,7 +42,7 @@ export function ProblemList({
       <ol className="divide-y divide-line">
         {shown.map((c, i) => (
           <li key={c.r.id} className={ENTER} style={stagger(i + 2)}>
-            <ProblemRow c={c} side={where} rank={i + 1} to={problemLink(c.r.id, stage, runId)} />
+            <ProblemRow c={c} side={where} rank={i + 1} to={problemLink(c.r.id, stage, runId)} was={was?.(c.r.id)} />
           </li>
         ))}
       </ol>

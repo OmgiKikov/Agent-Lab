@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import type { Criterion } from "../../lab/criteria";
@@ -7,8 +8,21 @@ import { checked, violationsOf, type SideKey } from "./model";
 /**
  * One problem in a list, on the page itself, no box: its rank by frequency, the agent's behaviour as a sentence, one real
  * exchange (the customer's words and the agent's, marked), and «N из M» with a quiet bar. Red stays in the result above.
+ * `was` — what the criterion had in the previous check of this check, under the count (on a phone, under the text).
  */
-export function ProblemRow({ c, side, rank, to }: { c: Criterion; side: SideKey; rank?: number; to: string }) {
+export function ProblemRow({
+  c,
+  side,
+  rank,
+  to,
+  was,
+}: {
+  c: Criterion;
+  side: SideKey;
+  rank?: number;
+  to: string;
+  was?: ReactNode;
+}) {
   const s = c.r[side];
   const of = checked(s);
   const e = violationsOf(c, side)[0];
@@ -49,6 +63,11 @@ export function ProblemRow({ c, side, rank, to }: { c: Criterion; side: SideKey;
         aria-hidden
         className="mt-1 hidden size-4 text-fg-4 transition-transform group-hover:translate-x-0.5 sm:block"
       />
+      {was && (
+        <span className="col-span-2 col-start-2 mt-1 text-small text-fg-3 sm:col-span-1 sm:col-start-3 sm:text-right">
+          {was}
+        </span>
+      )}
     </Link>
   );
 }

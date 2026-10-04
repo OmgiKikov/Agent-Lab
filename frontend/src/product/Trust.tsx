@@ -2,11 +2,10 @@ import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { reviewLink, type Check } from "../app/links";
 import { count, plural } from "../lab/format";
+import { FEW } from "../lab/history";
 import type { Problems } from "../lab/problems";
 import { MISSES_FROM, missesOf, verdictsOf } from "../lab/verdicts";
 
-/** Below this many checked conversations a share says little (Hamel Husain: under ~60 an interval is too wide). */
-const FEW = 30;
 const ofChecked = (n: number) => count(n, "проверенного случая", "проверенных случаев", "проверенных случаев");
 
 /**

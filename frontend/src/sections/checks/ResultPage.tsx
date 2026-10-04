@@ -15,15 +15,18 @@ import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { ProblemList } from "../problems/ProblemList";
 import { AssessSheet } from "./AssessSheet";
 import { CheckHeader } from "./CheckHeader";
+import { CompareLine, NoLongerFound, useComparison, wasOf } from "./Compare";
 import { CheckReport } from "./CheckReport";
 import { AccuracyStart, ToneStart } from "./Start";
 
 const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /**
- * «Итог» of a check: the real conversations of the export as this check judged them — one number, then the problems it
- * is made of, most frequent first. Without a result, how to get one. «Проверить снова» repeats tone of voice step by
- * step; accuracy is assessed again here (?assess=1), by the same criteria or by criteria read from the code anew.
+ * «Итог» of a check: the real conversations of the export as this check judged them — one number and how it stands to
+ * the check's previous check, then the problems it is made of, most frequent first, each beside its previous count,
+ * and the criteria whose errors are no longer found. Without a result, how to get one. «Проверить снова» repeats tone
+ * of voice step by step; accuracy is assessed again here (?assess=1), by the same criteria or by criteria read from the
+ * code anew.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -31,6 +34,7 @@ export function ResultPage({ check }: { check: Check }) {
   const navigate = useNavigate();
   const { data, list } = useCriteria(check);
   const result = resultOf(state, check);
+  const compare = useComparison(check);
   const [assess, setAssess] = useState(false);
   const [report, setReport] = useState(false);
   useEffect(() => {
@@ -136,6 +140,7 @@ export function ResultPage({ check }: { check: Check }) {
         unchecked={log.unassessed}
         link={(part) => conversationsLink(check, { v: PART[part] })}
       />
+      <CompareLine check={check} compare={compare} className="mt-5" />
       <Trust data={data} check={check} checked={log.assessed} />
       <section aria-label="Проблемы" className="mt-16">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">
@@ -143,8 +148,9 @@ export function ResultPage({ check }: { check: Check }) {
           <p className="text-read text-fg-3">{summarySentence(data, "log")}</p>
         </div>
         <div className="mt-2">
-          <ProblemList list={list} stage={check} />
+          <ProblemList list={list} stage={check} was={wasOf(compare)} />
         </div>
+        <NoLongerFound check={check} compare={compare} />
       </section>
     </div>,
   );

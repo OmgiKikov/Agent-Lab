@@ -1,15 +1,17 @@
 """Log audit: real conversations from the logs judged against rules grounded in the agent's prompts and tools.
 
 Rules are extracted once and then frozen: a new audit reuses them and keeps every known conversation in its topic,
-so two audits are measured against the same rules. «Новые правила» (replan) extracts them again.
+so two audits are measured against the same rules. «Новые правила» (replan) extracts them again. A new export keeps
+them too (checks.CODE_CRITERIA): its conversations are sorted into the same topics, and the two checks compare.
 """
 
 import asyncio
 import random
+import uuid
 from collections import Counter
 from collections.abc import Callable
 
-from . import checks, judge, llm, logs, quotes, store
+from . import checks, history, judge, llm, logs, quotes, store
 from .context import sources
 from .prompts import ASSIGN, PLAN
 
@@ -267,7 +269,9 @@ def summarize(results: list[dict], topics: list[dict]) -> dict:
 
 
 async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None, replan: bool = False) -> dict:
-    previous = store.load(RESULT) or {}
+    # The criteria come from the previous result, else from the ones a new export kept (checks.CODE_CRITERIA).
+    result_before = store.load(RESULT) or {}
+    previous = result_before or store.load(checks.CODE_CRITERIA) or {}
     # The tone-of-voice policy (tone.KIND) has its own check and result in tone.py; the rules here come from the
     # agent's code.
     srcs = [source for source in sources.load() if source['kind'] != TONE]
@@ -302,13 +306,16 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
         progress(stage='judge', done=len(results), total=len(todo), message=f'Оценено {len(results)} из {len(todo)}')
 
     await judge_each(todo, done)
-    ensure_answered(results, previous)
+    ensure_answered(results, result_before)
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     results.sort(key=lambda r: order.get(str(r['dialogueId']), 0))
     if previous.get('topics') and not replan:
         carry_reviews(previous, results)
     rule_count = Counter(rule.get('sourceId') for topic in topics for rule in topic['rules'])
     value = {
+        # The check's own id and the conversations it judged: its record in the history (accuracy_history.commit).
+        'checkId': uuid.uuid4().hex,
+        'datasetFingerprint': history.dataset_fingerprint([dialogue for dialogue, _ in todo]),
         'startedAt': started,
         'finishedAt': store.now(),
         'model': llm.models_used(results),

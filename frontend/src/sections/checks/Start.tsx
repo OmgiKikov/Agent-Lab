@@ -10,6 +10,8 @@ import type { LabState } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button, buttonClass } from "../../ui/Button";
 import { SizePicker, useAssess, useSampleSize } from "./AssessSheet";
+import { previousOf } from "../../lab/compare";
+import { PreviousCheck, useComparison } from "./Compare";
 
 export type Need = { label: string; value: string | null; later: string };
 
@@ -90,9 +92,19 @@ function Empty({
 
 const primary = buttonClass({ variant: "primary", size: "lg" });
 
-/** Tone of voice before its first result: the check under way, the check begun, or how to begin it. */
+/** The last saved check of a check without a current result, and whether a new export came after it. */
+function usePrevious(check: Check) {
+  const { state } = useLabState();
+  return previousOf(useComparison(check), state?.logs.updatedAt);
+}
+
+/**
+ * Tone of voice before its result: the check under way, a new export not checked yet beside the previous check, the
+ * check begun, or how to begin it.
+ */
 export function ToneStart() {
   const { state } = useLabState();
+  const previous = usePrevious("tone");
   const job = state?.job;
   if (job?.running && job.kind === "tone-check")
     return (
@@ -106,6 +118,22 @@ export function ToneStart() {
         }
       >
         Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть: результат сохранится.
+      </Empty>
+    );
+  if (previous?.newExport)
+    return (
+      <Empty
+        title="Новая выгрузка ещё не проверена"
+        needs={needsOf("tone", state)}
+        action={
+          <Link to={toneCheckLink()} className={primary}>
+            Проверить новую выгрузку
+            <ArrowRight aria-hidden className="size-4" />
+          </Link>
+        }
+      >
+        <PreviousCheck check="tone" line={previous.line} />
+        <p className="mt-2">Проверьте новые разговоры по тем же критериям — итог сравнится с прошлой проверкой.</p>
       </Empty>
     );
   const begun = !!state?.toneOfVoice || (!!job?.running && job.kind === "tone-criteria");
@@ -122,16 +150,19 @@ export function ToneStart() {
     >
       Загрузите выгрузку чата и правила общения: из правил соберём критерии, проверим по ним настоящие разговоры и
       покажем, где агент говорит не так, как договорились. Подключение к агенту не нужно.
+      {previous && <PreviousCheck check="tone" line={previous.line} className="mt-3" />}
     </Empty>
   );
 }
 
 /**
- * Accuracy before its first result: the criteria come word for word from the agent's prompts and tools, so without
- * its code there is nothing to check by («Нужен код агента»); with the code, one button checks the conversations.
+ * Accuracy before its result: the criteria come word for word from the agent's prompts and tools, so without its code
+ * there is nothing to check by («Нужен код агента»); with the code, one button checks the conversations — after a new
+ * export, beside the previous check.
  */
 export function AccuracyStart() {
   const { state } = useLabState();
+  const previous = usePrevious("code");
   const { sizes, size, setSize } = useSampleSize();
   const { start, starting } = useAssess();
   const job = state?.job;
@@ -169,7 +200,7 @@ export function AccuracyStart() {
   const busy = !!job?.running;
   return (
     <Empty
-      title="Оценить точность"
+      title={previous?.newExport ? "Новая выгрузка ещё не проверена" : "Оценить точность"}
       needs={needsOf("code", state)}
       action={
         <div className="space-y-6">
@@ -187,8 +218,21 @@ export function AccuracyStart() {
         </div>
       }
     >
-      Модель извлечёт критерии из кода агента и по каждому отметит в разговоре: ошибка, без ошибки или не ясно. Сам
-      агент не запускается, итог tone of voice не меняется.
+      {previous?.newExport ? (
+        <>
+          <PreviousCheck check="code" line={previous.line} />
+          <p className="mt-2">
+            Модель проверит новые разговоры по критериям из кода агента и, если критерии те же, сравнит итог с прошлой
+            проверкой. Сам агент не запускается, итог tone of voice не меняется.
+          </p>
+        </>
+      ) : (
+        <>
+          Модель извлечёт критерии из кода агента и по каждому отметит в разговоре: ошибка, без ошибки или не ясно. Сам
+          агент не запускается, итог tone of voice не меняется.
+          {previous && <PreviousCheck check="code" line={previous.line} className="mt-3" />}
+        </>
+      )}
     </Empty>
   );
 }

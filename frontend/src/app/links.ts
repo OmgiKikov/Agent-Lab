@@ -67,5 +67,5 @@ export const criterionLink = (
 /** The tone-of-voice check step by step; without a step it opens where the work stands. */
 export const toneCheckLink = (step?: CheckStep) => `${SECTIONS.tone}/check${query({ step })}`;
 
-/** The saved tone-of-voice checks, one of them open when given. */
-export const historyLink = (id?: string | null) => `${SECTIONS.tone}/history${query({ id })}`;
+/** The saved checks of a check, one of them open when given. */
+export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${query({ id })}`;

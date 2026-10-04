@@ -15,6 +15,7 @@ import {
 } from "../../app/links";
 import { useAgent } from "../../lab/agents";
 import { BY_CRITERIA, CHECK_NAME, CHECKS, checkOfOld, resultOf } from "../../lab/checks";
+import { comparisonOf, previousOf, useCompare, type Compare } from "../../lab/compare";
 import { useCriteria } from "../../lab/criteria";
 import { longDay, count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
@@ -28,6 +29,7 @@ import { buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Label } from "../../ui/Label";
 import { CheckReport } from "../checks/CheckReport";
+import { CompareLine, PreviousCheck } from "../checks/Compare";
 import { Needs, needsOf, type Need } from "../checks/Start";
 import { ProblemList } from "../problems/ProblemList";
 import { useSimRuns } from "../simulations/stage";
@@ -43,7 +45,10 @@ const WHAT: Record<Check, string> = {
 /** Where a check without a result stands, and its one way forward. */
 type Begin = { status?: string; needs: Need[]; action?: { label: string; to: string } };
 
-function beginOf(check: Check, state: LabState): Begin {
+/** A new export not checked yet, when the check has saved checks before it: the same way forward, named so. */
+const FRESH = "Новая выгрузка ещё не проверена";
+
+function beginOf(check: Check, state: LabState, fresh = false): Begin {
   const job = state.job;
   if (check === "tone") {
     if (job.running && job.kind === "tone-check")
@@ -51,6 +56,12 @@ function beginOf(check: Check, state: LabState): Begin {
         status: "Идёт проверка",
         needs: needsOf("tone", state),
         action: { label: "Ход проверки", to: toneCheckLink("checking") },
+      };
+    if (fresh)
+      return {
+        status: FRESH,
+        needs: needsOf("tone", state),
+        action: { label: "Проверить новую выгрузку", to: toneCheckLink() },
       };
     const begun = !!state.toneOfVoice || (job.running && job.kind === "tone-criteria");
     return {
@@ -73,17 +84,28 @@ function beginOf(check: Check, state: LabState): Begin {
       needs: needsOf("code", state),
       action: { label: "Прочитать код", to: SECTIONS.agent },
     };
+  if (fresh)
+    return {
+      status: FRESH,
+      needs: needsOf("code", state),
+      action: { label: "Проверить новую выгрузку", to: SECTIONS.accuracy },
+    };
   return { needs: needsOf("code", state), action: { label: "Оценить разговоры", to: SECTIONS.accuracy } };
 }
 
 /**
- * «Обзор»: how the agent is doing. Each check of the real conversations says its own number and its main problems, the
- * last run of the simulation says its own, with the check it was counted by; never added up or compared. Then what to
- * do, check by check. Before anything is checked: where to begin.
+ * «Обзор»: how the agent is doing. Each check of the real conversations says its own number, how it stands to its own
+ * previous check, and its main problems; the last run of the simulation says its own, with the check it was counted
+ * by; never added up or compared with each other. Then what to do, check by check. Before anything is checked: where
+ * to begin; after a new export, each check's previous check until it is checked again.
  */
 export function OverviewPage() {
   const { state, offline } = useLabState();
   const agent = useAgent();
+  const compares: Record<Check, { data?: Compare; isLoading: boolean }> = {
+    tone: useCompare("tone"),
+    code: useCompare("code"),
+  };
   const [params, setParams] = useSearchParams();
   const [report, setReport] = useState<Check | null>(null);
   // ?report=tone|code opens that check's report; an older ?report=1 the check that has a result.
@@ -128,7 +150,17 @@ export function OverviewPage() {
       </div>
     );
 
-  const first = !CHECKS.some((c) => resultOf(state, c)) && !state.runs.length;
+  // A check with saved checks is past its first visit, even when a new export has no result yet.
+  const blank = !CHECKS.some((c) => resultOf(state, c)) && !state.runs.length;
+  const saved = CHECKS.some((c) => compares[c].data?.previous || compares[c].data?.current);
+  if (blank && CHECKS.some((c) => compares[c].isLoading))
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <Skeleton className="mx-4 mt-12 h-96 lg:mx-10" />
+      </div>
+    );
+  const first = blank && !saved;
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -139,7 +171,7 @@ export function OverviewPage() {
           <p className="mt-3 max-w-[66ch] text-lead text-fg-2">
             {first
               ? "Настоящие разговоры клиентов из выгрузки чата проверяются двумя проверками, у каждой свои критерии. Из найденных ошибок потом собираются сценарии для синтетических клиентов."
-              : "У каждой проверки свои критерии и свой счёт, у симуляций — свой. Числа не складываются и не сравниваются: за ними разные критерии и разные разговоры."}
+              : "У каждой проверки свои критерии и свой счёт, у симуляций — свой: их числа не складываются. С прошлой выгрузкой каждая проверка сравнивает себя сама — по тем же критериям."}
           </p>
           {first ? (
             <StartCards state={state} />
@@ -237,17 +269,31 @@ function BlockHead({ to, title, sub }: { to: string; title: string; sub: ReactNo
   );
 }
 
-/** One check: its number, how far to trust it, its three main problems; without a result, how to get one. */
+/**
+ * One check: its number, how it stands to its previous check, how far to trust it, its three main problems; without a
+ * result, how to get one — after a new export, beside the previous check.
+ */
 function CheckBlock({ check, state }: { check: Check; state: LabState }) {
   const result = resultOf(state, check);
   const { data, list } = useCriteria(result ? check : null);
+  const { data: answer } = useCompare(check);
+  const compare = comparisonOf(answer, result);
   const log = data?.log;
   if (!result) {
-    const begin = beginOf(check, state);
+    const previous = previousOf(compare, state.logs.updatedAt);
+    const begin = beginOf(check, state, !!previous?.newExport);
     return (
       <section aria-label={CHECK_NAME[check]}>
-        <BlockHead to={stageRoot(check)} title={CHECK_NAME[check]} sub={begin.status ?? "Ещё не проверяли"} />
-        <p className="mt-6 max-w-[48ch] text-read text-fg-2">{WHAT[check]}</p>
+        <BlockHead
+          to={stageRoot(check)}
+          title={CHECK_NAME[check]}
+          sub={begin.status ?? (previous ? "Итога пока нет" : "Ещё не проверяли")}
+        />
+        {previous ? (
+          <PreviousCheck check={check} line={previous.line} className="mt-6 max-w-[56ch]" />
+        ) : (
+          <p className="mt-6 max-w-[48ch] text-read text-fg-2">{WHAT[check]}</p>
+        )}
         <Needs needs={begin.needs} className="mt-3" />
         {begin.action && (
           <Link to={begin.action.to} className={`mt-5 ${buttonClass({ variant: "outline" })}`}>
@@ -274,6 +320,7 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
             unchecked={log.unassessed}
             link={(part) => conversationsLink(check, { v: PART[part] })}
           />
+          <CompareLine check={check} compare={compare} short className="mt-4" />
           <Trust data={data} check={check} checked={log.assessed} />
           <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>
           <div className="mt-1">

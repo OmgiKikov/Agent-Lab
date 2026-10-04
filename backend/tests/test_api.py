@@ -3,12 +3,13 @@ import json
 import tempfile
 import threading
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from lab import api, store
+from lab import api, history, store
 from lab.jobs import Jobs
 
 
@@ -91,9 +92,19 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(store.load(api.cards.DECK))
 
     async def test_criteria_extracted_anew_drop_the_cards_built_from_the_old_ones(self) -> None:
-        audit = {'topics': [], 'results': []}
         for replan, kept in ((False, True), (True, False)):
             with self.subTest(replan=replan):
+                # What a check of no conversation returns (discover.run), with its own id for its saved check.
+                audit = {
+                    'checkId': uuid.uuid4().hex,
+                    'datasetFingerprint': history.dataset_fingerprint([]),
+                    'finishedAt': store.now(),
+                    'model': None,
+                    'sampled': 0,
+                    'topics': [],
+                    'results': [],
+                    'summary': api.discover.summarize([], []),
+                }
                 store.save(api.cards.DECK, {'check': 'code', 'cards': ['built from the previous criteria']})
                 with patch.object(api.discover, 'run', AsyncMock(return_value=audit)):
                     response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})

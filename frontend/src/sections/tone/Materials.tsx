@@ -199,7 +199,6 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       </div>
       <ReplaceExport
         open={!!pending?.file}
-        keepsCriteria={!!state.toneOfVoice}
         onCancel={() => setPending(null)}
         onConfirm={() => {
           const file = pending?.file;

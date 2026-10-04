@@ -152,6 +152,8 @@ export type Discover = {
   model: string;
   finishedAt: string;
   rulesSince?: string;
+  /** What the criteria were collected from: the agent's code for accuracy, with how many criteria each gave. */
+  sources?: Source[];
   topics: Topic[];
   results: LogResult[];
   summary: {
