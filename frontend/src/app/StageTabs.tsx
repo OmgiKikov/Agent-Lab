@@ -1,14 +1,15 @@
-import { NavLink, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { historyLink, SECTIONS, stageRoot, type Stage } from "./links";
 
 type Tab = { to: string; label: string; count?: number; end?: boolean };
 
 /**
- * The pages of a section. A check: its result, its conversations, the person's check, its criteria; tone of voice
- * adds the history of its checks. The simulation: its result, runs, scenarios, conversations and check; the run
- * being looked at travels with the tabs. A tab is never cut: on a narrow screen the ones that do not fit go to a second
- * row (a tab cut at the edge read as «Ис», with nothing to say the bar scrolls).
+ * The pages of a section. A check: its result, its conversations, the person's check, its criteria and the history of
+ * its checks. The simulation: its result, runs, scenarios, conversations and check; the run being looked at travels
+ * with the tabs. A tab is never cut: on a narrow screen the ones that do not fit go to a second row (a tab cut at the
+ * edge read as «Ис», with nothing to say the bar scrolls). The row says which tab is open (aria-current), not the
+ * router: «Итог» at /accuracy would match every page of the section.
  */
 export function StageTabs({
   stage,
@@ -36,7 +37,7 @@ export function StageTabs({
           { to: `${root}/conversations`, label: "Разговоры", count: counts.conversations },
           { to: `${root}/review`, label: "Проверка", count: counts.review },
           { to: `${root}/criteria`, label: "Критерии" },
-          ...(stage === "tone" ? [{ to: historyLink(), label: "История" }] : []),
+          { to: historyLink(stage), label: "История" },
         ];
   const problemsOpen = pathname.includes("/problems/");
   return (
@@ -47,7 +48,7 @@ export function StageTabs({
           ? pathname === path || (problemsOpen && path === `/${pathname.split("/")[1]}`)
           : pathname === path || pathname.startsWith(`${path}/`);
         return (
-          <NavLink
+          <Link
             key={t.label}
             to={t.to}
             aria-current={on ? "page" : undefined}
@@ -60,7 +61,7 @@ export function StageTabs({
             {t.count !== undefined && t.count > 0 && (
               <span className="text-small tabular-nums text-fg-3">{t.count}</span>
             )}
-          </NavLink>
+          </Link>
         );
       })}
     </nav>

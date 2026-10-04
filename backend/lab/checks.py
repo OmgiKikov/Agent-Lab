@@ -10,6 +10,9 @@ TONE, CODE = 'tone', 'code'
 RESULTS = {TONE: 'tone-result.json', CODE: 'discover.json'}
 NAMES = {TONE: 'Tone of voice', CODE: 'Точность'}
 DECK = 'cards.json'  # the scenarios, built from the errors of one check: {check, createdAt, model, cards}
+# The criteria of Точность waiting for its next check after a new export: its topics and their criteria without the
+# conversations of the old export (store.replace_inputs, accuracy_history.criteria_of); changed code clears them.
+CODE_CRITERIA = 'accuracy-criteria.json'
 # What marks tone of voice's own: the kind and id of its policy, so its criteria's sourceId (tone.KIND), and the title
 # of its only topic, which its scenarios and their conversations carry.
 TONE_OF_VOICE, TONE_TOPIC = 'tone-of-voice', 'Tone of voice'

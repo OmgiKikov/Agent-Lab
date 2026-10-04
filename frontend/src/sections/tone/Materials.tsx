@@ -9,6 +9,7 @@ import type { LabState } from "../../lab/types";
 import { exportFileError, ReplaceExport, replacesResult } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
+import { TakeRules } from "./TakeRules";
 
 export function Materials({ state, onNext }: { state: LabState; onNext: () => void }) {
   const { refresh } = useLabState();
@@ -33,6 +34,17 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
     edited.current = true;
     setText(value);
     rememberText(value);
+  };
+  // Rules taken from another agent are this agent's now: the form shows them, not a text typed before. With criteria
+  // ready, the next step is to check them.
+  const taken = (criteria: boolean) => {
+    edited.current = false;
+    rememberText("");
+    if (source.data) {
+      setText(source.data.content);
+      setName(source.data.origin);
+    }
+    if (criteria) onNext();
   };
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -135,9 +147,12 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
               if (f) readPolicy(f);
             }}
           />
-          <Button className="mt-3" icon={FileText} disabled={disabled} onClick={() => policyInput.current?.click()}>
-            Загрузить правила
-          </Button>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button icon={FileText} disabled={disabled} onClick={() => policyInput.current?.click()}>
+              Загрузить правила
+            </Button>
+            <TakeRules state={state} disabled={disabled} onTaken={taken} />
+          </div>
           <textarea
             id="tone-policy"
             name="tone-policy"
@@ -184,7 +199,6 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       </div>
       <ReplaceExport
         open={!!pending?.file}
-        keepsCriteria={!!state.toneOfVoice}
         onCancel={() => setPending(null)}
         onConfirm={() => {
           const file = pending?.file;

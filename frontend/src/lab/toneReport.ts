@@ -39,7 +39,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
   const reviews = rules.flatMap((rule) => rule.log.examples).filter((example) => example.review);
   const agrees = reviews.filter((example) => example.review === "agree").length;
   const origin = base.replace(/\/$/, "");
-  const saved = result.checkId ? `${origin}${historyLink(result.checkId)}` : null;
+  const saved = result.checkId ? `${origin}${historyLink("tone", result.checkId)}` : null;
   const lines = [
     "# Tone of voice: сводка для команды",
     "",

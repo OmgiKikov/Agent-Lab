@@ -11,9 +11,11 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import (
+    accuracy_history,
     agents,
     cards,
     checks,
+    compare,
     discover,
     llm,
     logs,
@@ -103,6 +105,10 @@ class TonePolicyCommand(BaseModel):
     name: str = Field(default='Правила tone of voice', min_length=1, max_length=160)
 
 
+class ToneCopyCommand(BaseModel):
+    agent: str = Field(min_length=1, max_length=120)
+
+
 class ToneCheckCommand(BaseModel):
     ruleIds: list[str] = Field(min_length=1, max_length=20)
     count: int = Field(default=300, ge=1, le=300)
@@ -165,14 +171,30 @@ def result_line(check: str) -> dict | None:
     return {key: summary[key] for key in ('failed', 'measured', 'unmeasured')} | {'finishedAt': value['finishedAt']}
 
 
+def rules_line() -> dict | None:
+    """The current agent's rules of communication in a line, for taking them into another agent: their name, how many
+    criteria were collected from them (0 before that), and their hash, which says whether two agents' rules are the
+    same. None without rules."""
+    found = tone.rules()
+    if found is None:
+        return None
+    policy, draft = found
+    return {
+        'name': policy.get('name') or policy.get('origin') or '',
+        'criteria': len(draft['criteria']) if draft else 0,
+        'sha256': policy.get('sha256'),
+    }
+
+
 @app.get('/api/agents')
 def agents_view() -> list[dict]:
-    """Every agent with the result of each of its checks, read from its own database. Never ranked: the agents have
-    other dialogues and other rules; nor are an agent's two checks added up."""
+    """Every agent with the result of each of its checks and its rules of communication, read from its own database.
+    Never ranked: the agents have other dialogues and other rules; nor are an agent's two checks added up."""
     listed = []
     for agent in registry.listed():
         with registry.using(agent['id']):
-            listed.append({**agent, 'results': {check: result_line(check) for check in checks.RESULTS}})
+            results = {check: result_line(check) for check in checks.RESULTS}
+            listed.append({**agent, 'results': results, 'rules': rules_line()})
     return listed
 
 
@@ -347,6 +369,28 @@ def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None 
     return problems.build(check, run)
 
 
+@app.get('/api/compare')
+def compare_view(check: Literal['tone', 'code'] = checks.TONE) -> dict:
+    """«Было → стало»: the check's current result against its previous saved check, criterion by criterion, when both
+    have the same criteria and models; otherwise only how they stand to each other. Reads saved records only."""
+    return compare.build(check)
+
+
+@app.get('/api/history/{check}')
+def history_view(check: Literal['tone', 'code']) -> dict:
+    """The saved checks of one check, the newest first, each with how it stands to the one saved before it."""
+    return {'checks': compare.saved_checks(check)}
+
+
+@app.get('/api/history/{check}/{check_id}')
+def history_detail(check: Literal['tone', 'code'], check_id: str) -> dict:
+    """A saved check with its evidence and the answers given on it: tone of voice's as /api/tone-of-voice/history/{id};
+    Точность's with its result and the conversations it judged."""
+    if check == checks.TONE:
+        return tone_history_detail(check_id)
+    return with_reviews(store.code_check(check_id), store.code_reviews(check_id))
+
+
 @app.get('/api/scenarios')
 def scenarios_view() -> dict:
     """Each scenario of the deck as a test: the error of the real conversation it reproduces, and its own result in
@@ -386,7 +430,7 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 
     async def work(progress: Progress) -> dict:
         result = await discover.run(payload.count, progress, payload.replan)
-        store.save_audit(result, new_criteria=payload.replan)
+        accuracy_history.commit(result, new_criteria=payload.replan)
         return result
 
     return start('discover', work)
@@ -427,6 +471,30 @@ async def save_tone_policy(payload: TonePolicyCommand) -> dict:
         raise HTTPException(409, str(error)) from error
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
+
+
+@app.post('/api/tone-of-voice/copy')
+async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
+    """The rules of communication of another agent (`agent`) and their criteria, with the clarifications people
+    confirmed, become this agent's own as a copy: later changes in either never reach the other (tone.take).
+    `unchanged` when this agent has the same rules and criteria already: nothing is written then."""
+    source = registry.get(payload.agent)
+    if source is None:
+        raise HTTPException(404, 'Агент не найден')
+    if registry.db_of(source['id']) == store.database():
+        raise HTTPException(400, 'Правила можно взять только у другого агента')
+    with registry.using(source['id']):
+        found = tone.rules()
+    if found is None:
+        raise HTTPException(400, f'У агента «{source["name"]}» нет правил общения')
+
+    async def work(progress: Progress) -> dict:
+        return {'ok': True, 'unchanged': not tone.take(*found)}
+
+    try:
+        return await jobs.perform('tone-policy', work)
+    except BusyError as error:
+        raise HTTPException(409, str(error)) from error
 
 
 @app.post('/api/tone-of-voice/read-file')
@@ -475,10 +543,13 @@ def tone_history() -> dict:
 
 @app.get('/api/tone-of-voice/history/{check_id}')
 def tone_history_detail(check_id: str) -> dict:
-    snapshot = store.tone_check(check_id)
+    return with_reviews(store.tone_check(check_id), store.tone_reviews(check_id))
+
+
+def with_reviews(snapshot: dict | None, reviews: list[dict]) -> dict:
+    """A saved check with the answers people gave on it since it finished, over the ones it was saved with."""
     if snapshot is None:
         raise HTTPException(404, 'Проверка не найдена')
-    reviews = store.tone_reviews(check_id)
     decisions = {(row['dialogueId'], row['ruleId']): row['decision'] for row in reviews}
     for result in snapshot['result']['results']:
         for row in result.get('rules', []):
