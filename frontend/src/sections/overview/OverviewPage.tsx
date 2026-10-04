@@ -340,7 +340,7 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
             result={result}
             check={check}
             serious={<SeriousLine data={data} check={check} />}
-            compare={<CompareLine check={check} compare={compare} short serious={!!seriousOf(data)} />}
+            compare={<CompareLine check={check} compare={compare} short serious={seriousOf(data)?.marked} />}
             className="mt-4"
           />
           <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>

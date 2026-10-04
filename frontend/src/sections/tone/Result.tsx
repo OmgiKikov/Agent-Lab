@@ -84,7 +84,9 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
             result={result}
             check="tone"
             serious={current && <SeriousLine data={data} check="tone" />}
-            compare={<CompareLine check="tone" compare={compare} serious={current && !!seriousOf(data)} />}
+            compare={
+              <CompareLine check="tone" compare={compare} serious={current ? seriousOf(data)?.marked : undefined} />
+            }
             className="mt-4"
           />
           <Link

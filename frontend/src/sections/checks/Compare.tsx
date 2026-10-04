@@ -51,12 +51,13 @@ export function CompareLine({
   check: Check;
   compare: Compare | null;
   short?: boolean;
-  serious?: boolean;
+  /** The criteria of the current result marked serious, once there are any: the serious comparison follows. */
+  serious?: number;
   className?: string;
 }) {
   const sentence = compare && compareSentence(compare, { short });
   if (!compare || !sentence) return null;
-  const grave = serious ? seriousCompareText(compare) : null;
+  const grave = serious ? seriousCompareText(compare, serious) : null;
   return (
     <>
       <p className={cn("max-w-[72ch] text-read text-fg-2", className)}>

@@ -53,8 +53,11 @@ export function useSeverity() {
   });
 }
 
-/** The serious count of a check's result: the checked conversations with a serious error, and its marked criteria. */
-export type Serious = Counts & { marked: number };
+/**
+ * The serious count of a check's result: the checked conversations with a serious error, its marked criteria, and the
+ * conversations where they could be checked (`checked`) — elsewhere they did not apply or could not be checked.
+ */
+export type Serious = Counts & { marked: number; checked: number };
 
 /**
  * The serious count of the result in a record of problems, or null: before any of its criteria is marked serious (the
@@ -65,13 +68,27 @@ export function seriousOf(data: Problems | null | undefined): Serious | null {
   const log = data?.log;
   if (!data || !log || log.withSerious === undefined || !log.assessed) return null;
   const marked = data.rules.filter((r) => r.serious && r.log.ruleIds.length > 0).length;
-  return marked ? { failed: log.withSerious, measured: log.assessed, marked } : null;
+  return marked
+    ? { failed: log.withSerious, measured: log.assessed, marked, checked: log.seriousChecked ?? log.assessed }
+    : null;
 }
 
 /**
- * «С серьёзными ошибками — 6 из 53 (11%): по 2 критериям, которые вы отметили серьёзными.» In three parts, as the
- * line of answers, so a screen can set the count apart and open its conversations. Who marked: the person reading
- * («вы»), or people, for a page someone else reads.
+ * Where the serious criteria could be checked, when not in every checked conversation: «их удалось проверить в 21
+ * разговоре», or «его не удалось проверить ни в одном разговоре». A share of all conversations says little when the
+ * criteria seldom applied, and this says how seldom.
+ */
+function whereChecked(s: Serious): string {
+  if (s.checked >= s.measured) return "";
+  const them = s.marked === 1 ? "его" : "их";
+  if (!s.checked) return `; ${them} не удалось проверить ни в одном разговоре`;
+  return `; ${them} удалось проверить в\u00a0${s.checked}\u00a0${plural(s.checked, "разговоре", "разговорах", "разговорах")}`;
+}
+
+/**
+ * «С серьёзными ошибками — 6 из 53 (11%): по 2 критериям, которые вы отметили серьёзными; их удалось проверить в 21
+ * разговоре.» In three parts, as the line of answers, so a screen can set the count apart and open its conversations.
+ * Who marked: the person reading («вы»), or people, for a page someone else reads.
  */
 export function seriousSentence(s: Serious, who: "you" | "people" = "you") {
   const criteria = plural(s.marked, "критерию, который", "критериям, которые", "критериям, которые");
@@ -79,7 +96,7 @@ export function seriousSentence(s: Serious, who: "you" | "people" = "you") {
   return {
     head: "С серьёзными ошибками",
     share: shareText(s),
-    rest: `: по\u00a0${s.marked}\u00a0${criteria} ${who === "you" ? "вы" : "люди"} отметили ${serious}.`,
+    rest: `: по\u00a0${s.marked}\u00a0${criteria} ${who === "you" ? "вы" : "люди"} отметили ${serious}${whereChecked(s)}.`,
   };
 }
 

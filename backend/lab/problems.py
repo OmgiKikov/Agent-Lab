@@ -134,22 +134,25 @@ def keys_of(analysis: dict) -> dict[str, str]:
     }
 
 
-def with_serious(analysis: dict, serious: set[str]) -> int:
-    """The checked conversations of a result with an error by at least one criterion marked serious."""
+def serious_counts(analysis: dict, serious: set[str]) -> dict[str, int]:
+    """Among the checked conversations of a result: those with an error by at least one criterion marked serious
+    (`failed`), and those where at least one such criterion could be checked (`checked`; elsewhere it did not apply or
+    could not be checked) — what that count rests on."""
     keys = keys_of(analysis)
-    return sum(
-        1
-        for result in analysis.get('results') or []
-        if result['status'] in DECIDED
-        and any(
-            row.get('status') == 'FAIL' and keys.get(row.get('ruleId')) in serious for row in result.get('rules') or []
-        )
-    )
+    failed = checked = 0
+    for result in analysis.get('results') or []:
+        if result['status'] not in DECIDED:
+            continue
+        rows = [row for row in result.get('rules') or [] if keys.get(row.get('ruleId')) in serious]
+        checked += any(row.get('status') in DECIDED for row in rows)
+        failed += any(row.get('status') == 'FAIL' for row in rows)
+    return {'failed': failed, 'checked': checked}
 
 
 def from_logs(book: Book, analysis: dict, serious: set[str] = frozenset()) -> dict | None:
-    """The audit's verdicts into the book; its line of counts, with the conversations that have a serious error once a
-    criterion is marked serious (withSerious; no such key before)."""
+    """The audit's verdicts into the book; its line of counts, once a criterion is marked serious with the
+    conversations that have a serious error (withSerious) and those where a serious criterion could be checked
+    (seriousChecked); no such keys before."""
     if not analysis:
         return None
     rules = {}
@@ -193,7 +196,10 @@ def from_logs(book: Book, analysis: dict, serious: set[str] = frozenset()) -> di
         'finishedAt': analysis.get('finishedAt'),
         'rulesSince': analysis.get('rulesSince'),
     }
-    return line | {'withSerious': with_serious(analysis, serious)} if serious else line
+    if not serious:
+        return line
+    counts = serious_counts(analysis, serious)
+    return line | {'withSerious': counts['failed'], 'seriousChecked': counts['checked']}
 
 
 def recorded_rule(book: Book, row: dict, known: dict, has_snapshot: bool) -> dict | None:

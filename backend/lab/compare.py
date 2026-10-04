@@ -98,8 +98,21 @@ def build(check: str) -> dict:
     serious = set(store.severity()[check])
     if serious:
         # The conversations with a serious error on both sides, by the marks as they are now.
-        then = {'failed': problems.with_serious(earlier, serious), 'measured': before['measured']}
-        current = {'failed': problems.with_serious(result, serious), 'measured': now['measured']}
+        found = [problems.serious_counts(analysis, serious) for analysis in (earlier, result)]
+        then, current = (
+            {'failed': counts['failed'], 'measured': side['measured']}
+            for counts, side in zip(found, (before, now), strict=True)
+        )
         verdict, direction = history.verdict(then, current)
-        answer['serious'] = {'before': then, 'now': current, 'verdict': verdict, 'direction': direction}
+        # The share rests on the conversations where a serious criterion could be checked: where it seldom applied,
+        # on either side, nothing more is said than for a criterion checked in so few conversations (history.FEW).
+        if verdict and min(counts['checked'] for counts in found) < history.FEW:
+            verdict = 'few'
+        answer['serious'] = {
+            'before': then,
+            'now': current,
+            'checked': {'before': found[0]['checked'], 'now': found[1]['checked']},
+            'verdict': verdict,
+            'direction': direction,
+        }
     return answer

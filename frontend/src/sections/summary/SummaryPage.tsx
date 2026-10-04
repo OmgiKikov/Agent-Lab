@@ -160,7 +160,7 @@ export function SummaryPage() {
             answers: answersOf(result)!,
             serious: serious[check],
             compare: sentence ? `${sentence.head}${sentence.rest}` : null,
-            seriousCompare: compare && serious[check] ? seriousCompareText(compare) : null,
+            seriousCompare: compare && serious[check] ? seriousCompareText(compare, serious[check].marked) : null,
             problems: (problems[check] ?? []).map((c): SummaryProblem => {
               const s = c.r.log;
               const people = humansOf(s);

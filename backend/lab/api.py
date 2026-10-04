@@ -493,7 +493,8 @@ async def save_tone_policy(payload: TonePolicyCommand) -> dict:
 async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
     """The rules of communication of another agent (`agent`) and their criteria, with the clarifications people
     confirmed, become this agent's own as a copy: later changes in either never reach the other (tone.take). The
-    marks of serious errors come with them. `unchanged` when this agent had the same rules and criteria already."""
+    marks of serious errors come with the criteria. `unchanged` when this agent had the same rules, criteria and marks
+    already."""
     source = registry.get(payload.agent)
     if source is None:
         raise HTTPException(404, 'Агент не найден')
@@ -506,10 +507,13 @@ async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
         raise HTTPException(400, f'У агента «{source["name"]}» нет правил общения')
 
     async def work(progress: Progress) -> dict:
-        unchanged = not tone.take(*found)
-        # The serious marks of the rules come with them: they belong to the criteria (problems.rule_key).
-        store.take_severity(checks.TONE, marks)
-        return {'ok': True, 'unchanged': unchanged}
+        changed = tone.take(*found)
+        # The serious marks belong to the criteria (problems.rule_key): they come with criteria, never with rules
+        # alone, and other marks on the same criteria are a change.
+        if found[1] is not None and store.severity()[checks.TONE] != marks:
+            store.take_severity(checks.TONE, marks)
+            changed = True
+        return {'ok': True, 'unchanged': not changed}
 
     try:
         return await jobs.perform('tone-policy', work)

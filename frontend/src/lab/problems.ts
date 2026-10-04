@@ -72,6 +72,8 @@ export type Problems = {
     rulesSince: string | null;
     /** The checked conversations with an error by a criterion marked serious; only once one is marked. */
     withSerious?: number;
+    /** The checked conversations where a criterion marked serious could be checked: what `withSerious` rests on. */
+    seriousChecked?: number;
   } | null;
   sim: {
     runId: string;

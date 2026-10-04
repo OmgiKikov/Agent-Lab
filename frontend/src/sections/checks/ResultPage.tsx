@@ -148,7 +148,7 @@ export function ResultPage({ check }: { check: Check }) {
           result={result}
           check={check}
           serious={<SeriousLine data={data} check={check} />}
-          compare={<CompareLine check={check} compare={compare} serious={!!seriousOf(data)} />}
+          compare={<CompareLine check={check} compare={compare} serious={seriousOf(data)?.marked} />}
           className="mt-5"
         />
       )}

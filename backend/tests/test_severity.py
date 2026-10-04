@@ -25,16 +25,18 @@ def talk(dialogue_id: str) -> dict:
     }
 
 
-def judge_by(failing: dict[str, set[str]]):
-    """discover.judge_dialogue with a fake model: a conversation fails exactly the criteria named for it."""
+def judge_by(failing: dict[str, set[str]], inapplicable: dict[str, set[str]] | None = None):
+    """discover.judge_dialogue with a fake model: a conversation fails exactly the criteria named for it; the criteria
+    named in `inapplicable` for it did not apply there (their situation never came up)."""
 
     async def judge(dialogue, topic):
         fails = failing.get(dialogue['id'], set())
+        unchecked = (inapplicable or {}).get(dialogue['id'], set())
         rows = [
             {
                 'ruleId': rule['id'],
                 'rule': rule['text'],
-                'status': 'FAIL' if rule['id'] in fails else 'PASS',
+                'status': 'FAIL' if rule['id'] in fails else 'NOT_APPLICABLE' if rule['id'] in unchecked else 'PASS',
                 'reason': 'Ответ не соответствует критерию.' if rule['id'] in fails else '',
                 'agentQuote': dialogue['messages'][1]['content'] if rule['id'] in fails else '',
                 'title': '',
@@ -104,10 +106,10 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/logs?name=export.jsonl', content=content.encode(), headers=headers)
         self.assertEqual(response.status_code, 200, response.text)
 
-    async def check_tone(self, failing):
+    async def check_tone(self, failing, inapplicable=None, count=5):
         draft = store.load(tone.DRAFT)
-        request = {'ruleIds': ['pronouns', 'simple_language'], 'count': 5, 'revision': draft['revision']}
-        with patch.object(discover, 'judge_dialogue', side_effect=judge_by(failing)):
+        request = {'ruleIds': ['pronouns', 'simple_language'], 'count': count, 'revision': draft['revision']}
+        with patch.object(discover, 'judge_dialogue', side_effect=judge_by(failing, inapplicable)):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
@@ -137,17 +139,19 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.post('/api/severity', body)).status_code, 422)
 
     async def test_serious_problems_come_first_and_are_counted_by_conversation(self):
-        await self.check_tone({'d1': {'pronouns'}, 'd2': {'simple_language'}, 'd3': {'simple_language'}})
+        failing = {'d1': {'pronouns'}, 'd2': {'simple_language'}, 'd3': {'simple_language'}}
+        await self.check_tone(failing, inapplicable={'d2': {'pronouns'}})
         pronouns, simple = self.key('pronouns'), self.key('simple_language')
         found = await self.get('/api/problems?check=tone')
         self.assertEqual(found['problems'], [simple, pronouns])  # by frequency while nothing is marked
         self.assertFalse(any(rule['serious'] for rule in found['rules']))
-        self.assertNotIn('withSerious', found['log'])
+        self.assertFalse({'withSerious', 'seriousChecked'} & set(found['log']))
         await self.mark('pronouns')
         found = await self.get('/api/problems?check=tone')
         self.assertEqual(found['problems'], [pronouns, simple])  # the serious one first, though rarer
         self.assertEqual({rule['id']: rule['serious'] for rule in found['rules']}, {pronouns: True, simple: False})
-        self.assertEqual(found['log']['withSerious'], 1)
+        # One conversation with a serious error, of the two where the serious criterion could be checked.
+        self.assertEqual((found['log']['withSerious'], found['log']['seriousChecked']), (1, 2))
 
     async def test_compare_counts_serious_errors_on_both_sides(self):
         await self.check_tone({'d1': {'pronouns'}, 'd2': {'simple_language'}})
@@ -163,8 +167,30 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             {
                 'before': {'failed': 1, 'measured': 3},
                 'now': {'failed': 1, 'measured': 2},
+                'checked': {'before': 3, 'now': 2},
                 'verdict': 'few',
                 'direction': 'more',
+            },
+        )
+
+    async def test_few_conversations_where_a_serious_criterion_could_be_checked_say_nothing_more(self):
+        before, now = [f'a{i}' for i in range(40)], [f'b{i}' for i in range(40)]
+        await self.upload(*before)
+        await self.check_tone({dialogue: {'pronouns'} for dialogue in before[:20]}, count=40)
+        await self.upload(*now)
+        await self.check_tone({}, inapplicable={dialogue: {'pronouns'} for dialogue in now[5:]}, count=40)
+        await self.mark('pronouns')
+        compared = await self.get('/api/compare?check=tone')
+        self.assertEqual(compared['overall']['verdict'], 'beyond-chance')  # 20 of 40 → 0 of 40
+        # The same shares, but the serious criterion applied in 5 conversations now: nothing more is said.
+        self.assertEqual(
+            compared['serious'],
+            {
+                'before': {'failed': 20, 'measured': 40},
+                'now': {'failed': 0, 'measured': 40},
+                'checked': {'before': 40, 'now': 5},
+                'verdict': 'few',
+                'direction': 'fewer',
             },
         )
 
@@ -197,4 +223,37 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             with registry.using(target):
                 self.assertEqual(store.load('severity.json'), {'tone': [pronouns], 'code': []})
+            await api.jobs.close()
+
+    async def test_rules_taken_without_criteria_leave_the_marks(self):
+        with patch.object(api, 'jobs', PerAgent()):
+            source = registry.create('Агент эквайринга')['id']
+            target = registry.create('Агент кредитов')['id']
+            await self.upload('d1', agent=source)
+            await self.post('/api/tone-of-voice/policy', {'text': POLICY, 'name': 'ToV.docx'}, source)
+            await self.prepare(target)
+            pronouns = self.key('pronouns')
+            await self.mark('pronouns', agent=target)
+            response = await self.post('/api/tone-of-voice/copy', {'agent': source}, target)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json()['unchanged'])
+            with registry.using(target):
+                self.assertEqual(store.severity()['tone'], [pronouns])  # the marks belong to criteria
+            await api.jobs.close()
+
+    async def test_the_same_rules_with_other_marks_are_not_the_same(self):
+        with patch.object(api, 'jobs', PerAgent()):
+            source = registry.create('Агент эквайринга')['id']
+            target = registry.create('Агент кредитов')['id']
+            await self.prepare(source)
+            await self.prepare(target)
+            pronouns = self.key('pronouns')
+            await self.mark('pronouns', agent=source)
+            response = await self.post('/api/tone-of-voice/copy', {'agent': source}, target)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertFalse(response.json()['unchanged'])
+            with registry.using(target):
+                self.assertEqual(store.severity()['tone'], [pronouns])
+            again = await self.post('/api/tone-of-voice/copy', {'agent': source}, target)
+            self.assertTrue(again.json()['unchanged'])
             await api.jobs.close()
