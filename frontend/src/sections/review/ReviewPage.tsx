@@ -195,6 +195,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               )}
             </div>
           )}
+          {/* «Все случаи 285» did not say what a case is. */}
+          {data && <p className="mt-2 text-small text-fg-3">Один случай — один критерий в одном разговоре.</p>}
           {rule && (
             <p className="mt-3 flex items-center gap-2 text-read text-fg-3">
               Только «{rule.title}»
