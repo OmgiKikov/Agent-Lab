@@ -71,6 +71,22 @@ pre {
   font-family: theme("fontFamily.mono");
 }
 
+/* Paper: A4 with even margins, white, and the colours that carry a meaning kept (the red count, the marked words). */
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm 15mm;
+  }
+  html,
+  body {
+    background: white;
+  }
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
 /* Motion off for those who ask: dialogs, drawers, numbers, spinners and skeletons stop moving. */
 @media (prefers-reduced-motion: reduce) {
   [class*="animate-in"],

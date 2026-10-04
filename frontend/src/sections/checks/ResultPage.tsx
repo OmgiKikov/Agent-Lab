@@ -140,8 +140,14 @@ export function ResultPage({ check }: { check: Check }) {
         unchecked={log.unassessed}
         link={(part) => conversationsLink(check, { v: PART[part] })}
       />
-      <CompareLine check={check} compare={compare} className="mt-5" />
-      <Trust data={data} check={check} checked={log.assessed} />
+      {result && (
+        <Trust
+          result={result}
+          check={check}
+          compare={<CompareLine check={check} compare={compare} />}
+          className="mt-5"
+        />
+      )}
       <section aria-label="Проблемы" className="mt-16">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">
           <h2 className="text-title font-semibold text-fg">Проблемы</h2>

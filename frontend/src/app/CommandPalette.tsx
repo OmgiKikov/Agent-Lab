@@ -14,6 +14,7 @@ import {
   MessageSquareQuote,
   MessagesSquare,
   Play,
+  Presentation,
   Route,
   Search,
   Settings,
@@ -84,6 +85,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         sub: "Обе проверки и последний прогон: как работает агент",
         icon: LayoutDashboard,
         run: go(SECTIONS.overview),
+      },
+      {
+        id: "s-summary",
+        group: "Разделы",
+        label: "Сводка для руководителя",
+        sub: "Числа, ответы людей и главные проблемы — в PDF или письмо",
+        icon: Presentation,
+        run: go(SECTIONS.summary),
       },
       ...CHECKS.flatMap((c): Entry[] => [
         { id: `s-${c}`, group: "Разделы", label: CHECK_NAME[c], sub: ABOUT[c], icon: ICON[c], run: go(stageRoot(c)) },

@@ -59,7 +59,10 @@ export function verdictsOf(
 
 /** Every fifth case without an answer is «без ошибки»: a person checks what the model missed, not only its finds. */
 const KEPT_EVERY = 5;
-/** From this many answers on cases «без ошибки» the share of misses is said (product/Trust): the queue offers as many. */
+/**
+ * From this many answers on cases «без ошибки» the line under a check's number says out of how many the misses were
+ * found (lab/answers): the queue offers as many.
+ */
 export const MISSES_FROM = 20;
 
 /**
@@ -93,17 +96,6 @@ export function queueOf(data: Problems, queue: Queue, ruleId?: string | null, so
   if (queue === "disputed") return all.filter((v) => v.example.second === "disagree");
   if (queue === "unchecked") return unanswered(all);
   return [...all.filter((v) => v.example.status === "FAIL"), ...all.filter((v) => v.example.status === "PASS")];
-}
-
-/**
- * A person's answers on the verdicts «без ошибки» of a stage: how many they checked, and in how many they found the
- * error the model missed. Only answers on the criterion itself: an older answer on a whole simulated conversation is not.
- */
-export function missesOf(data: Problems, source: "log" | "sim"): { checked: number; missed: number } {
-  const answered = verdictsOf(data, null, source).filter(
-    (v) => v.example.status === "PASS" && v.example.review && v.example.reviewScope === "rule",
-  );
-  return { checked: answered.length, missed: answered.filter((v) => v.example.review === "disagree").length };
 }
 
 /** People's decisions on verdicts: each verdict once; an older decision on a whole simulated conversation once. */

@@ -75,7 +75,10 @@ function Item({ item }: { item: NavItem }) {
 export function Sidebar() {
   const shell = useShell();
   return (
-    <nav aria-label="Разделы" className="hidden w-[248px] flex-shrink-0 flex-col bg-side px-3 pb-3 pt-5 lg:flex">
+    <nav
+      aria-label="Разделы"
+      className="hidden w-[248px] flex-shrink-0 flex-col bg-side px-3 pb-3 pt-5 lg:flex print:!hidden"
+    >
       <AgentSwitch />
       <button
         type="button"

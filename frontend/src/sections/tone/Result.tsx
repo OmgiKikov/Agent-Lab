@@ -78,8 +78,12 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
             size="display"
             link={(part) => conversationsLink("tone", { v: { bad: "fail", ok: "pass", none: "none" }[part] })}
           />
-          <CompareLine check="tone" compare={compare} className="mt-4" />
-          {data && current && <Trust data={data} check="tone" checked={measured} />}
+          <Trust
+            result={result}
+            check="tone"
+            compare={<CompareLine check="tone" compare={compare} />}
+            className="mt-4"
+          />
           <Link
             to={conversationsLink("tone")}
             className="mt-4 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"

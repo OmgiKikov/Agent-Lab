@@ -6,6 +6,7 @@ import { useLabState } from "./lab/LabProvider";
 import { Shell } from "./app/Shell";
 import { ScreenError } from "./app/ScreenError";
 import { OverviewPage } from "./sections/overview/OverviewPage";
+import { SummaryPage } from "./sections/summary/SummaryPage";
 import { ResultPage } from "./sections/checks/ResultPage";
 import { ProblemPage } from "./sections/problems/ProblemPage";
 import { CriteriaPage } from "./sections/criteria/CriteriaPage";
@@ -156,6 +157,8 @@ const productRoutes = [
     children: [
       { index: true, element: <Navigate to="/overview" replace /> },
       { path: "overview", element: <OverviewPage /> },
+      // One page of the agent for someone who does not use the product: numbers, answers, the ticked problems.
+      { path: "summary", element: <SummaryPage /> },
       // Tone of voice: the customers' real conversations checked against a person's rules of communication.
       { path: "tone", element: <ResultPage key="tone" check="tone" /> },
       { path: "tone/check", element: <CheckPage /> },
