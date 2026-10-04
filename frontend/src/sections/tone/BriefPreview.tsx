@@ -29,7 +29,7 @@ export function BriefPreview({ text }: { text: string }) {
                   </blockquote>
                 );
               const link = /^\[([^\]]+)\]\((https?:\/\/[^\s]+)\)\.$/.exec(line);
-              if (link && link[2].startsWith(shareBase() + historyLink()))
+              if (link && link[2].startsWith(shareBase() + historyLink("tone")))
                 return (
                   <Link
                     key={n}

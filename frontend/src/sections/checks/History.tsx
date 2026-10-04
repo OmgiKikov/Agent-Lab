@@ -1,27 +1,30 @@
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, ChevronDown, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { duty } from "../../lab/criteria";
+import type { Check } from "../../app/links";
+import { resultOf } from "../../lab/checks";
+import { duty, nameFromText, quoteKey } from "../../lab/criteria";
 import { count, longDay, time } from "../../lab/format";
-import { useLabState } from "../../lab/LabProvider";
-import { toneResult } from "../../lab/tone";
 import {
   comparisonText,
   errorShare,
-  loadToneHistory,
-  loadToneSnapshot,
-  type ToneCheck,
+  loadHistory,
+  loadSaved,
+  type CodeSnapshot,
+  type SavedCheck,
   type ToneSnapshot,
-} from "../../lab/toneHistory";
-import type { Rule, Status } from "../../lab/types";
+} from "../../lab/history";
+import { useLabState } from "../../lab/LabProvider";
+import type { LogDialogue } from "../../lab/problems";
+import type { Discover, Rule, Status } from "../../lab/types";
 import { Conversation } from "../../product/Conversation";
 import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
-import { CheckHeader } from "../checks/CheckHeader";
+import { CheckHeader } from "./CheckHeader";
 
 const statusText = (status: Status) =>
   status === "FAIL" ? "С ошибкой" : status === "PASS" ? "Без найденных ошибок" : "Не удалось проверить";
@@ -31,17 +34,107 @@ const finished = (iso: string) => `${longDay(iso)}, ${time(iso)}`;
 const selectClass =
   "mt-2 w-full rounded-control border border-line bg-canvas px-3 py-2 text-body text-fg outline-none focus-visible:ring-2 focus-visible:ring-run";
 
-function SavedRule({ rule, second, snapshot }: { rule: Rule; second?: Rule; snapshot: ToneSnapshot }) {
-  const criterionIndex = snapshot.criteria.findIndex((item) => item.id === rule.ruleId);
-  const criterion = snapshot.criteria[criterionIndex];
+/** What each history keeps, said above its list. */
+const KEEPS: Record<Check, string> = {
+  tone: "Каждая завершённая проверка сохраняется со своими разговорами, критериями и документом правил. Ответы человека хранятся отдельно и переживают новую выгрузку.",
+  code: "Каждая завершённая проверка сохраняется со своими разговорами, критериями из кода агента и итогом: новая выгрузка её не стирает.",
+};
+
+type SavedCriterion = {
+  id: string;
+  name: string;
+  text: string;
+  quote: string;
+  condition?: string;
+  acceptable?: string;
+  clarifications?: string[];
+};
+
+/**
+ * A saved check as the sheet shows it, whichever check it is: its conversations and verdicts, its numbered criteria,
+ * and what the criteria were collected from — the person's document for tone of voice, the agent's code for accuracy.
+ */
+type Saved = {
+  check: SavedCheck;
+  result: Discover;
+  dialogues: LogDialogue[];
+  criteria: SavedCriterion[];
+  /** The number of the criterion a verdict is about (its rule id), from 1; 0 when the saved set lacks it. */
+  numberOf: (ruleId: string) => number;
+  basis: string;
+  source: { title: string; body: ReactNode };
+  note: string;
+};
+
+function toneSaved(data: ToneSnapshot): Saved {
+  const numbers = new Map(data.criteria.map((criterion, index) => [criterion.id, index + 1]));
+  return {
+    ...data,
+    numberOf: (ruleId) => numbers.get(ruleId) ?? 0,
+    basis: "Основание в документе",
+    source: {
+      title: `Документ проверки · ${data.policy.name || "Tone of voice"}`,
+      body: <p className="mt-4 whitespace-pre-wrap break-words text-body text-fg-2">{data.policy.content}</p>,
+    },
+    note: "Разговоры, критерии и автоматические оценки сохранены на момент завершения проверки. Ответы человека сохраняются отдельно; здесь показаны последние сохранённые ответы.",
+  };
+}
+
+/**
+ * A saved check of accuracy: its criteria are the rules of its topics; one quote restated in several topics is one
+ * criterion, as everywhere in the product (problems.rule_key).
+ */
+function codeSaved(data: CodeSnapshot): Saved {
+  const criteria: SavedCriterion[] = [];
+  const byQuote = new Map<string, number>();
+  const numbers = new Map<string, number>();
+  for (const rule of data.result.topics.flatMap((topic) => topic.rules)) {
+    const key = quoteKey(rule.quote || rule.text);
+    if (!byQuote.has(key)) {
+      criteria.push({
+        id: rule.id,
+        name: rule.name?.trim() || nameFromText(rule.text),
+        text: rule.text,
+        quote: rule.quote,
+        condition: rule.condition,
+        acceptable: rule.acceptable,
+      });
+      byQuote.set(key, criteria.length);
+    }
+    numbers.set(rule.id, byQuote.get(key)!);
+  }
+  const sources = data.result.sources ?? [];
+  return {
+    ...data,
+    criteria,
+    numberOf: (ruleId) => numbers.get(ruleId) ?? 0,
+    basis: "Основание в коде агента",
+    source: {
+      title: `Код агента · ${count(sources.length, "источник", "источника", "источников")}`,
+      body: (
+        <ul className="mt-4 space-y-2 text-body text-fg-3">
+          {sources.map((source) => (
+            <li key={source.id} className="break-words">
+              <span className="font-mono text-small text-fg-2">{source.origin}</span> ·{" "}
+              {count(source.rules, "критерий", "критерия", "критериев")}
+            </li>
+          ))}
+        </ul>
+      ),
+    },
+    note: "Разговоры, критерии и автоматические оценки сохранены на момент завершения проверки, ответы человека — какими были в тот момент.",
+  };
+}
+
+function SavedRule({ rule, second, saved }: { rule: Rule; second?: Rule; saved: Saved }) {
+  const n = saved.numberOf(rule.ruleId);
+  const criterion = saved.criteria[n - 1];
   return (
     <details className="group border-t border-line py-4">
       <summary className="flex cursor-pointer list-none items-start gap-3 rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run [&::-webkit-details-marker]:hidden">
         <ChevronDown aria-hidden className="mt-1 size-4 shrink-0 transition-transform group-open:rotate-180" />
         <div className="min-w-0">
-          <span className="text-read font-medium text-fg">
-            {criterion ? `${criterionIndex + 1}. ${criterion.name}` : rule.rule}
-          </span>
+          <span className="text-read font-medium text-fg">{criterion ? `${n}. ${criterion.name}` : rule.rule}</span>
           <span className={`mt-1 block text-small ${rule.status === "FAIL" ? "text-bad" : "text-fg-3"}`}>
             {statusText(rule.status)}
             {rule.review === "agree"
@@ -93,7 +186,7 @@ function SavedRule({ rule, second, snapshot }: { rule: Rule; second?: Rule; snap
               </div>
             )}
             <details>
-              <summary className="cursor-pointer text-fg">Основание в документе</summary>
+              <summary className="cursor-pointer text-fg">{saved.basis}</summary>
               <blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-line-strong pl-3">
                 {criterion.quote || "Цитата не сохранена."}
               </blockquote>
@@ -106,10 +199,10 @@ function SavedRule({ rule, second, snapshot }: { rule: Rule; second?: Rule; snap
   );
 }
 
-function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous?: ToneCheck }) {
+function SnapshotBody({ saved, previous }: { saved: Saved; previous?: SavedCheck }) {
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<string | null>(null);
-  const { check, result } = snapshot;
+  const { check, result } = saved;
   const filtered = result.results.filter(
     (item) =>
       filter === "all" || (filter === "none" ? !["PASS", "FAIL"].includes(item.status) : item.status === filter),
@@ -118,7 +211,7 @@ function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous
     filtered.find((item) => item.dialogueId === selected) ??
     filtered.find((item) => item.status === "FAIL") ??
     filtered[0];
-  const dialogue = snapshot.dialogues.find((item) => item.id === current?.dialogueId);
+  const dialogue = saved.dialogues.find((item) => item.id === current?.dialogueId);
   const outcomes = [
     { id: "all", label: "В выборке", value: check.sampled },
     { id: "FAIL", label: "С ошибкой агента", value: check.summary.failed },
@@ -136,7 +229,7 @@ function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous
         />
         <p className="mt-4 break-words text-body text-fg-3">
           {check.file || "Загруженные разговоры"} · выборка {check.sampled} из {check.total} · критериев{" "}
-          {snapshot.criteria.length}.
+          {saved.criteria.length}.
         </p>
         <p className="mt-4 text-body text-fg-3">{comparisonText(check, previous)}</p>
       </div>
@@ -189,10 +282,7 @@ function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous
                   }))}
                   marks={current.rules
                     .filter((rule) => rule.status === "FAIL" && rule.agentQuote)
-                    .map((rule) => ({
-                      quote: rule.agentQuote,
-                      n: snapshot.criteria.findIndex((criterion) => criterion.id === rule.ruleId) + 1,
-                    }))
+                    .map((rule) => ({ quote: rule.agentQuote, n: saved.numberOf(rule.ruleId) }))
                     .filter((mark) => mark.n > 0)}
                 />
               ) : (
@@ -206,7 +296,7 @@ function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous
                   key={rule.ruleId}
                   rule={rule}
                   second={current.second?.rules?.find((item) => item.ruleId === rule.ruleId)}
-                  snapshot={snapshot}
+                  saved={saved}
                 />
               ))}
             </div>
@@ -217,10 +307,10 @@ function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous
       </section>
       <details className="border-t border-line pt-5">
         <summary className="cursor-pointer text-read font-medium text-fg">
-          Критерии этой проверки · {snapshot.criteria.length}
+          Критерии этой проверки · {saved.criteria.length}
         </summary>
         <div className="mt-4 divide-y divide-line">
-          {snapshot.criteria.map((criterion, index) => (
+          {saved.criteria.map((criterion, index) => (
             <details key={criterion.id} className="py-3">
               <summary className="cursor-pointer text-body font-medium text-fg">
                 {index + 1}. {criterion.name}
@@ -237,35 +327,41 @@ function SnapshotBody({ snapshot, previous }: { snapshot: ToneSnapshot; previous
         </div>
       </details>
       <details className="border-t border-line pt-5">
-        <summary className="cursor-pointer text-read font-medium text-fg">
-          Документ проверки · {snapshot.policy.name || "Tone of voice"}
-        </summary>
-        <p className="mt-4 whitespace-pre-wrap break-words text-body text-fg-2">{snapshot.policy.content}</p>
+        <summary className="cursor-pointer text-read font-medium text-fg">{saved.source.title}</summary>
+        {saved.source.body}
       </details>
-      <p className="border-t border-line pt-5 text-small text-fg-3">
-        Разговоры, критерии и автоматические оценки сохранены на момент завершения проверки. Ответы человека сохраняются
-        отдельно; здесь показаны последние сохранённые ответы.
-      </p>
+      <p className="border-t border-line pt-5 text-small text-fg-3">{saved.note}</p>
     </div>
   );
 }
 
-function Snapshot({ id, checks, onClose }: { id: string | null; checks: ToneCheck[]; onClose: () => void }) {
+function Snapshot({
+  check,
+  id,
+  checks,
+  onClose,
+}: {
+  check: Check;
+  id: string | null;
+  checks: SavedCheck[];
+  onClose: () => void;
+}) {
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ["tone-history-snapshot", id],
-    queryFn: () => loadToneSnapshot(id!),
+    queryKey: ["history-snapshot", check, id],
+    queryFn: () => loadSaved(check, id!),
     enabled: !!id,
     staleTime: 0,
   });
-  const check = data?.check ?? checks.find((item) => item.id === id);
-  const previous = checks.find((item) => item.id === check?.comparison.previousId);
+  const saved = useMemo(() => (data ? ("policy" in data ? toneSaved(data) : codeSaved(data)) : null), [data]);
+  const line = saved?.check ?? checks.find((item) => item.id === id);
+  const previous = checks.find((item) => item.id === line?.comparison.previousId);
   return (
     <Sheet
       open={!!id}
       onClose={onClose}
       width="lg"
       title="Сохранённая проверка"
-      sub={check ? finished(check.finishedAt) : undefined}
+      sub={line ? finished(line.finishedAt) : undefined}
     >
       {isLoading && (
         <div className="space-y-4 p-5" aria-label="Загружаем сохранённую проверку">
@@ -283,7 +379,7 @@ function Snapshot({ id, checks, onClose }: { id: string | null; checks: ToneChec
           </Button>
         </div>
       )}
-      {data && <SnapshotBody key={data.check.id} snapshot={data} previous={previous} />}
+      {saved && <SnapshotBody key={saved.check.id} saved={saved} previous={previous} />}
     </Sheet>
   );
 }
@@ -295,8 +391,8 @@ function CheckRow({
   current,
   onOpen,
 }: {
-  check: ToneCheck;
-  previous?: ToneCheck;
+  check: SavedCheck;
+  previous?: SavedCheck;
   current: boolean;
   onOpen: () => void;
 }) {
@@ -334,15 +430,15 @@ function CheckRow({
 }
 
 /**
- * «История» of tone of voice: every saved check, newest first, each with its own conversations, criteria and document.
- * One opens as a sheet (?id=), even after the export or the rules were replaced. Checks are compared only when the
- * service says they can be: the same criteria and models.
+ * «История» of a check: every saved check, newest first, each with its own conversations and criteria (tone of voice
+ * also with its document). One opens as a sheet (?id=), even after the export, the rules or the code were replaced.
+ * Checks are compared only when the service says they can be: the same criteria and models.
  */
-export function HistoryPage() {
+export function HistoryPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const selected = params.get("id");
-  const now = toneResult(state)?.finishedAt;
+  const result = resultOf(state, check);
   const select = (id: string | null) =>
     setParams(
       (current) => {
@@ -354,25 +450,22 @@ export function HistoryPage() {
       { replace: !id },
     );
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ["tone-history", now, String(state?.job.running)],
-    queryFn: loadToneHistory,
+    queryKey: ["history", check, result?.finishedAt ?? null, String(state?.job.running)],
+    queryFn: () => loadHistory(check),
     enabled: !!state,
     staleTime: Infinity,
   });
   const checks = data?.checks ?? [];
   return (
     <div className="flex h-full flex-col">
-      <CheckHeader check="tone" />
+      <CheckHeader check={check} />
       <div className="min-h-0 flex-1 overflow-auto">
         {offline && !state ? (
           <ServiceDown />
         ) : (
           <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-10">
             <h2 className="text-title font-semibold text-fg">История проверок</h2>
-            <p className="mt-1 max-w-[64ch] text-read text-fg-3">
-              Каждая завершённая проверка сохраняется со своими разговорами, критериями и документом правил. Ответы
-              человека хранятся отдельно и переживают новую выгрузку.
-            </p>
+            <p className="mt-1 max-w-[64ch] text-read text-fg-3">{KEEPS[check]}</p>
             <div className="mt-6">
               {(isLoading || !state) && <Skeleton className="h-40" />}
               {error && (
@@ -387,19 +480,19 @@ export function HistoryPage() {
               )}
               {data && !checks.length && (
                 <p className="py-3 text-body text-fg-3">
-                  {data.hasLegacyResult
+                  {result && !result.checkId
                     ? "Текущий итог создан до появления истории. Она начнётся со следующей проверки."
                     : "Здесь появятся завершённые проверки с их разговорами и критериями."}
                 </p>
               )}
               <div className="divide-y divide-line">
-                {checks.map((check) => (
+                {checks.map((saved) => (
                   <CheckRow
-                    key={check.id}
-                    check={check}
-                    previous={checks.find((item) => item.id === check.comparison.previousId)}
-                    current={check.finishedAt === now}
-                    onOpen={() => select(check.id)}
+                    key={saved.id}
+                    check={saved}
+                    previous={checks.find((item) => item.id === saved.comparison.previousId)}
+                    current={saved.id === result?.checkId}
+                    onOpen={() => select(saved.id)}
                   />
                 ))}
               </div>
@@ -407,7 +500,7 @@ export function HistoryPage() {
           </div>
         )}
       </div>
-      <Snapshot id={selected} checks={checks} onClose={() => select(null)} />
+      <Snapshot check={check} id={selected} checks={checks} onClose={() => select(null)} />
     </div>
   );
 }

@@ -112,15 +112,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           icon: ListChecks,
           run: go(criterionLink(c)),
         },
+        {
+          id: `s-${c}-history`,
+          group: "Разделы",
+          label: `${CHECK_NAME[c]} · История`,
+          sub: "Сохранённые проверки с их разговорами и критериями",
+          icon: History,
+          run: go(historyLink(c)),
+        },
       ]),
-      {
-        id: "s-tone-history",
-        group: "Разделы",
-        label: `${CHECK_NAME.tone} · История`,
-        sub: "Сохранённые проверки с их разговорами и критериями",
-        icon: History,
-        run: go(historyLink()),
-      },
       {
         id: "s-simulations",
         group: "Разделы",

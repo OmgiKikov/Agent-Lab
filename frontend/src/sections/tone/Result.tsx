@@ -12,6 +12,7 @@ import { Skeleton } from "../../ui/EmptyState";
 import { queueOf } from "../problems/model";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
+import { CompareLine, useComparison } from "../checks/Compare";
 import { BriefSheet, ownCriteria, useToneBrief } from "./BriefSheet";
 import { Finding } from "./Finding";
 import { NextStage } from "./NextStage";
@@ -20,6 +21,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
   const result = toneResult(state);
   const { data, list } = useCriteria("tone");
   const evidence = useProblems("tone");
+  const compare = useComparison("tone");
   const [selected, setSelected] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
   const brief = useToneBrief(state);
@@ -76,6 +78,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
             size="display"
             link={(part) => conversationsLink("tone", { v: { bad: "fail", ok: "pass", none: "none" }[part] })}
           />
+          <CompareLine check="tone" compare={compare} className="mt-4" />
           {data && current && <Trust data={data} check="tone" checked={measured} />}
           <Link
             to={conversationsLink("tone")}
@@ -201,7 +204,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           Следующая выгрузка
         </Link>
         <Link
-          to={historyLink()}
+          to={historyLink("tone")}
           className="inline-flex min-h-11 items-center gap-1.5 text-body text-fg-2 hover:underline"
         >
           <History aria-hidden className="size-4 text-fg-3" />

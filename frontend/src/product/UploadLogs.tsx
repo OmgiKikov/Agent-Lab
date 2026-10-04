@@ -17,63 +17,76 @@ export const exportFileError = (file: File) =>
   /\.(xlsx|jsonl)$/i.test(file.name) ? null : "Загрузите выгрузку чата: файл .xlsx или .jsonl.";
 
 /**
- * What a new export takes away (backend: store.replace_inputs): the results of both checks and the scenarios. Asked
- * first whenever there is any of them.
+ * What a new export moves or takes away (backend: store.replace_inputs): the results of both checks and the scenarios.
+ * Asked first whenever there is any of them.
  */
 export const replacesResult = (state: LabState | null) =>
   !!(state?.checks.tone || state?.checks.code || state?.cards?.cards.length);
 
-/** «Уйдут итог tone of voice, итог точности и собранные сценарии»: what this export replaces, in one phrase. */
-function whatGoes(state: LabState | null) {
-  const parts = [
-    state?.checks.tone && "итог tone of voice",
-    state?.checks.code && "итог точности",
-    state?.cards?.cards.length && "собранные сценарии",
-  ].filter(Boolean) as string[];
-  if (!parts.length) return "";
-  const many = parts.length > 1 || !!state?.cards?.cards.length;
-  const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} и ${parts[parts.length - 1]}` : parts[0];
-  return `${many ? "Уйдут" : "Уйдёт"} ${list}`;
+/**
+ * What a new export does, in the order a person asks about it (backend: store.replace_inputs): the current results go
+ * to the history of their checks; the new conversations are checked by the same criteria and compared with the
+ * previous ones; the scenarios built from a result are reset, the runs stay; the answers of people stay. A person's
+ * answers on the result of accuracy are kept in its history only as they were when its check finished, so the ones
+ * given since are named as going.
+ */
+function whatHappens(state: LabState | null): [string, string] {
+  const tone = !!state?.checks.tone;
+  const code = state?.checks.code;
+  const deck = state?.cards?.cards.length ? state.cards : null;
+  const answered = !!code?.results.some((result) => result.rules.some((rule) => rule.review));
+  const results =
+    tone && code
+      ? "Текущие итоги tone of voice и точности уйдут в «Историю». "
+      : tone
+        ? "Текущий итог tone of voice уйдёт в «Историю». "
+        : code
+          ? "Текущий итог точности уйдёт в «Историю». "
+          : "";
+  const stays = `прогоны симуляций и ответы людей останутся${answered ? " — кроме ответов на итог точности, данных после его проверки" : ""}.`;
+  return [
+    `${results}Новые разговоры проверяются по тем же критериям и сравниваются с прошлыми.`,
+    deck
+      ? `Сценарии, собранные из итога ${deck.check === "tone" ? "tone of voice" : "точности"}, сбросятся; ${stays}`
+      : stays.charAt(0).toUpperCase() + stays.slice(1),
+  ];
 }
 
 /**
- * What a new export takes away, said before it happens — the same words wherever the export is replaced. The
- * criteria and the person's clarifications stay for the new export; the results of both checks do not.
+ * The question before a new export, the same wherever the export is loaded: what goes to «История», what is compared,
+ * what is reset and what stays.
  */
 export function ReplaceExport({
   open,
   onCancel,
   onConfirm,
-  keepsCriteria,
 }: {
   open: boolean;
   onCancel: () => void;
   onConfirm: () => void;
-  keepsCriteria: boolean;
 }) {
   const { state } = useLabState();
-  const goes = whatGoes(state);
   return (
     <Modal
       open={open}
       onClose={onCancel}
-      title="Заменить выгрузку?"
+      title="Загрузить новую выгрузку?"
       footer={
         <>
           <Button variant="ghost" onClick={onCancel}>
             Отмена
           </Button>
           <Button variant="primary" onClick={onConfirm}>
-            Заменить
+            Загрузить
           </Button>
         </>
       }
     >
-      <p className="text-read text-fg-2">
-        {goes ? `${goes}: новые разговоры нужно будет проверить заново.` : "Новые разговоры нужно будет проверить."}{" "}
-        Проверки tone of voice останутся в истории, прогоны симуляций — тоже.
-        {keepsCriteria && " Критерии tone of voice и ваши уточнения сохранятся."}
-      </p>
+      <div className="space-y-2 text-read text-fg-2">
+        {whatHappens(state).map((text) => (
+          <p key={text}>{text}</p>
+        ))}
+      </div>
     </Modal>
   );
 }
@@ -156,7 +169,6 @@ export function UploadButton({
       </Button>
       <ReplaceExport
         open={!!pending}
-        keepsCriteria={!!state?.toneOfVoice}
         onCancel={() => setPending(null)}
         onConfirm={() => {
           const f = pending;

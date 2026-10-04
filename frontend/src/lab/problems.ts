@@ -203,7 +203,7 @@ export function useReview() {
     onSettled: () => {
       client.invalidateQueries({ queryKey: ["problems"] });
       client.invalidateQueries({ queryKey: ["run"] });
-      client.invalidateQueries({ queryKey: ["tone-history-snapshot"] });
+      client.invalidateQueries({ queryKey: ["history-snapshot"] });
       refresh();
     },
   });
