@@ -109,6 +109,14 @@ class ToneCopyCommand(BaseModel):
     agent: str = Field(min_length=1, max_length=120)
 
 
+class SeverityCommand(BaseModel):
+    """A person marks a criterion of a check serious (serious) or takes the mark back; the criterion by its key."""
+
+    check: Literal['tone', 'code']
+    rule: str = Field(pattern=r'^r-[0-9a-f]{10}$')
+    serious: bool
+
+
 class ToneCheckCommand(BaseModel):
     ruleIds: list[str] = Field(min_length=1, max_length=20)
     count: int = Field(default=300, ge=1, le=300)
@@ -246,6 +254,7 @@ def state() -> dict:
         'logs': {'total': store.length(logs.FILE), **logs.meta()},
         'checks': results,
         'toneOfVoice': store.load(tone.DRAFT),
+        'severity': store.severity(),
         'cards': store.load(cards.DECK),
         'runs': [
             {key: summary.get(key) for key in RUN_FIELDS} | {'targetName': agents.run_name(summary)}
@@ -369,6 +378,13 @@ def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None 
     return problems.build(check, run)
 
 
+@app.post('/api/severity')
+def mark_severity(payload: SeverityCommand) -> dict:
+    """A person marks a criterion serious or minor (docs/superpowers/specs/2026-10-04-severity-design.md): its errors
+    then come first and are counted apart. The mark changes neither what is checked nor how."""
+    return {'severity': store.set_severity(payload.check, payload.rule, payload.serious)}
+
+
 @app.get('/api/compare')
 def compare_view(check: Literal['tone', 'code'] = checks.TONE) -> dict:
     """«Было → стало»: the check's current result against its previous saved check, criterion by criterion, when both
@@ -476,8 +492,8 @@ async def save_tone_policy(payload: TonePolicyCommand) -> dict:
 @app.post('/api/tone-of-voice/copy')
 async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
     """The rules of communication of another agent (`agent`) and their criteria, with the clarifications people
-    confirmed, become this agent's own as a copy: later changes in either never reach the other (tone.take).
-    `unchanged` when this agent has the same rules and criteria already: nothing is written then."""
+    confirmed, become this agent's own as a copy: later changes in either never reach the other (tone.take). The
+    marks of serious errors come with them. `unchanged` when this agent had the same rules and criteria already."""
     source = registry.get(payload.agent)
     if source is None:
         raise HTTPException(404, 'Агент не найден')
@@ -485,11 +501,15 @@ async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
         raise HTTPException(400, 'Правила можно взять только у другого агента')
     with registry.using(source['id']):
         found = tone.rules()
+        marks = store.severity()[checks.TONE]
     if found is None:
         raise HTTPException(400, f'У агента «{source["name"]}» нет правил общения')
 
     async def work(progress: Progress) -> dict:
-        return {'ok': True, 'unchanged': not tone.take(*found)}
+        unchanged = not tone.take(*found)
+        # The serious marks of the rules come with them: they belong to the criteria (problems.rule_key).
+        store.take_severity(checks.TONE, marks)
+        return {'ok': True, 'unchanged': unchanged}
 
     try:
         return await jobs.perform('tone-policy', work)

@@ -93,5 +93,13 @@ def build(check: str) -> dict:
     )
     verdict, direction = history.verdict(before, now)
     answer['overall'] = {'before': before, 'now': now, 'verdict': verdict, 'direction': direction}
-    answer['criteria'] = rows(criteria(saved_check(check, previous['id'])['result']), criteria(result))
+    earlier = saved_check(check, previous['id'])['result']
+    answer['criteria'] = rows(criteria(earlier), criteria(result))
+    serious = set(store.severity()[check])
+    if serious:
+        # The conversations with a serious error on both sides, by the marks as they are now.
+        then = {'failed': problems.with_serious(earlier, serious), 'measured': before['measured']}
+        current = {'failed': problems.with_serious(result, serious), 'measured': now['measured']}
+        verdict, direction = history.verdict(then, current)
+        answer['serious'] = {'before': then, 'now': current, 'verdict': verdict, 'direction': direction}
     return answer
