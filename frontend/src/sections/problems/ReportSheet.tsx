@@ -14,7 +14,7 @@ import {
 } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
-import { seriousOf, seriousSentence } from "../../lab/severity";
+import { NONE_SERIOUS, noneSerious, proposedText, seriousOf, seriousSentence, standingOf } from "../../lab/severity";
 import { SeriousTag } from "../../product/Severity";
 import { shortOrigin } from "../../product/text";
 import { Button } from "../../ui/Button";
@@ -39,7 +39,7 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
         <span className="font-mono text-lead text-ink-3">{i}</span>
         <h3 className="text-balance text-lead font-semibold text-ink">
           {c.r.title}
-          {c.r.serious && <SeriousTag paper className="relative -top-px ml-2 align-middle font-normal" />}
+          {c.r.serious && <SeriousTag rule={c.r} paper className="relative -top-px ml-2 align-middle font-normal" />}
         </h3>
         <p className="col-start-2 mt-1 text-small text-ink-2">
           Ошибка в{" "}
@@ -91,10 +91,11 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
 
 /**
  * «Отчёт»: a check's assessment as a protocol to send, a white sheet inside the product. Its conversations and its
- * simulation are never in one report. The problems a person marked serious come first, marked «серьёзная», and the
- * conversations with a serious error stand under the numbers of the conversations. «Скопировать для письма» puts the
- * same on the clipboard formatted and as plain text without Markdown marks, each problem with its link; the downloaded
- * file is Markdown.
+ * simulation are never in one report. The serious problems come first, marked «серьёзная», and the conversations with
+ * a serious error stand under the numbers of the conversations, with whose decision that is: while some criteria are
+ * the automatic check's proposals, how many of them people checked. «Скопировать для письма» puts the same on the
+ * clipboard formatted and as plain text without Markdown marks, each problem with its link; the downloaded file is
+ * Markdown.
  */
 export function ReportSheet({
   open,
@@ -123,8 +124,11 @@ export function ReportSheet({
     copyReport(markdown()).then(() => toast.notify("Отчёт скопирован: вставьте в письмо или тикет"), toast.error);
   const log = data.log;
   const sim = data.sim;
-  const serious = side === "log" ? seriousOf(data) : null;
+  // Serious errors are told of the conversations of the export: the severity of a run's own criteria is not proposed.
+  const standing = side === "log" && log?.assessed ? standingOf(data) : null;
+  const serious = standing ? seriousOf(data) : null;
   const grave = serious && seriousSentence(serious, "people");
+  const whose = standing && proposedText(standing, "people");
   const figures =
     side === "log" && log
       ? [
@@ -214,10 +218,17 @@ export function ReportSheet({
               </div>
             ))}
           </dl>
-          {grave && (
+          {(grave || noneSerious(standing)) && (
             <p className="mt-4 text-read text-ink-2">
-              {grave.head} — <b className="whitespace-nowrap font-semibold text-ink">{grave.share}</b>
-              {grave.rest}
+              {grave ? (
+                <>
+                  {grave.head} — <b className="whitespace-nowrap font-semibold text-ink">{grave.share}</b>
+                  {grave.rest}
+                </>
+              ) : (
+                NONE_SERIOUS
+              )}
+              {whose && ` ${whose}`}
             </p>
           )}
           {items.map((c, i) => (

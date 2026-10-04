@@ -10,8 +10,8 @@ import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
-import { SEVERITY_HINT } from "../../lab/severity";
 import { codeSources, TONE_ID } from "../../lab/tone";
+import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Menu } from "../../ui/Menu";
@@ -34,8 +34,9 @@ const byFrequency = (list: Criterion[], side: SideKey) =>
  * «Критерии» of a check: what the agent must do, where it is written and how it went — in the check's conversations
  * («Диалоги») and in the last run of its scenarios («Симуляции»). Accuracy shows the agent's prompt as code with each
  * criterion lit in place; tone of voice, the person's rules of communication the same way. The chosen criterion opens
- * with its conversations. Here a person marks a criterion «Серьёзная ошибка» (in its row and in its panel); until the
- * first mark one quiet line says what the mark does.
+ * with its conversations. Here a person decides whether a criterion's errors are serious (in its row and in its panel)
+ * or confirms all the automatic check proposed; until a person decided every criterion, one quiet line says where it
+ * stands, with its one action.
  */
 export function CriteriaPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -220,8 +221,8 @@ export function CriteriaPage({ check }: { check: Check }) {
               </>
             )}
           </p>
-          {/* Once, quietly, until the first criterion of this check is marked serious. */}
-          {!list.some((c) => c.r.serious) && <p className="mt-0.5 text-small text-fg-3">{SEVERITY_HINT}</p>}
+          {/* Quietly, until a person decided every criterion: the automatic check's proposals, or why there are none. */}
+          <SeverityHint check={check} data={data} className="mt-0.5" />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {sideOptions.length > 1 && (

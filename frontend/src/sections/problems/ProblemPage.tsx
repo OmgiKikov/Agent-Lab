@@ -24,7 +24,7 @@ import { humansOf, rightOf, rightText, secondOf } from "../../lab/problemStats";
 import { yesNoText } from "../../lab/answers";
 import { conversationKey, exampleAt } from "../../lab/verdicts";
 import { ExampleCard } from "../../product/ExampleCard";
-import { SeveritySwitch } from "../../product/Severity";
+import { SeverityControl } from "../../product/Severity";
 import { SourceSheet } from "../../product/SourceSheet";
 import { shortOrigin } from "../../product/text";
 import { Button } from "../../ui/Button";
@@ -37,10 +37,11 @@ import { checked, violationsOf } from "./model";
 import { shareBase } from "../../app/agent";
 
 /**
- * One problem, read top to bottom: what the agent does wrong (and, beside it, «Серьёзная ошибка» — the person's mark on
- * its criterion), what it must do instead, how often (one line of numbers), then the case itself — the conversation as
- * the customer saw it — and the person's answer. One stage at a time: in a check, its conversations; in the
- * simulation, one run of that check's scenarios. The other is one link away.
+ * One problem, read top to bottom: what the agent does wrong, what it must do instead, whether its errors are serious
+ * («Серьёзная ошибка» on its criterion, with whose decision it is: the automatic check's proposal with its reason and
+ * «Подтвердить», or the person's), how often (one line of numbers), then the case itself — the conversation as the
+ * customer saw it — and the person's answer. One stage at a time: in a check, its conversations; in the simulation,
+ * one run of that check's scenarios. The other is one link away.
  */
 export function ProblemPage({ stage }: { stage: Stage }) {
   const { id = "" } = useParams();
@@ -173,15 +174,11 @@ export function ProblemPage({ stage }: { stage: Stage }) {
       {header}
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
-          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-            <p className="text-read text-fg-3">
-              {stage === "sim"
-                ? `Проблема в симуляции${run ? ` · прогон ${longDay(run.startedAt)}` : ""}`
-                : `Проблема в диалогах · ${CHECK_NAME[stage]}`}
-            </p>
-            {/* The mark belongs to the criterion of the check, the same from its run's problem. */}
-            {check && <SeveritySwitch check={check} rule={r} className="mb-1 sm:-mb-1.5" />}
-          </div>
+          <p className="text-read text-fg-3">
+            {stage === "sim"
+              ? `Проблема в симуляции${run ? ` · прогон ${longDay(run.startedAt)}` : ""}`
+              : `Проблема в диалогах · ${CHECK_NAME[stage]}`}
+          </p>
           <h2 className="mt-1 text-balance text-page font-semibold text-fg">{r.title}</h2>
           <Duty key={r.id} text={r.rule.text} className="mt-4 max-w-[68ch] text-lead text-fg-2" />
           {(condition || acceptable) && !more && (
@@ -209,6 +206,8 @@ export function ProblemPage({ stage }: { stage: Stage }) {
               )}
             </dl>
           )}
+          {/* The decision belongs to the criterion of the check, the same from its run's problem. */}
+          {check && <SeverityControl check={check} rule={r} className="mt-5 max-w-[68ch]" />}
 
           <p className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-read text-fg-2">
             <Link to={conversationsLink(stage, { run: runId, v: "fail", rule: r.id })} className={linkCls}>

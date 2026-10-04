@@ -38,11 +38,23 @@ export type Example = {
 };
 /** One stage of a rule: its counts, its verdicts, and the ids the checks gave the rule in this stage. */
 export type Side = { failed: number; passed: number; unknown: number; examples: Example[]; ruleIds: string[] };
+/** What the automatic check proposed for a criterion: whether its errors are serious, and why. */
+export type Proposal = { serious: boolean; reason: string };
+/**
+ * Whose decision a criterion's severity is (lab/severity): a person's (`person`), the automatic check's proposal no
+ * person has checked yet (`model`), or nobody's yet (null: its errors are minor); and what the automatic check
+ * proposed, kept also once a person decided.
+ */
+export type Severity = { by: "person" | "model" | null; proposed: Proposal | null };
 export type RuleEntry = {
   id: string;
   title: string;
-  /** A person marked the criterion serious: its errors come first and are counted apart (lab/severity). */
+  /**
+   * The criterion's errors are serious, by a person's decision, else by the automatic check's proposal: they come first
+   * and are counted apart (lab/severity).
+   */
   serious: boolean;
+  severity: Severity;
   rule: {
     name?: string;
     text: string;
@@ -70,9 +82,9 @@ export type Problems = {
     unassessed: number;
     finishedAt: string | null;
     rulesSince: string | null;
-    /** The checked conversations with an error by a criterion marked serious; only once one is marked. */
+    /** The checked conversations with an error by a serious criterion; only once one is serious. */
     withSerious?: number;
-    /** The checked conversations where a criterion marked serious could be checked: what `withSerious` rests on. */
+    /** The checked conversations where a serious criterion could be checked: what `withSerious` rests on. */
     seriousChecked?: number;
   } | null;
   sim: {
@@ -87,18 +99,27 @@ export type Problems = {
   } | null;
   rules: RuleEntry[];
   problems: string[];
+  /**
+   * Among the criteria of the record: how many the automatic check proposed for and no person decided yet, how many a
+   * person decided, and why the last proposal failed — only while a criterion has neither (lab/severity).
+   */
+  severity: { criteria: number; proposed: number; decided: number; error: string | null };
 };
 /** A logged conversation as the service keeps it (GET /api/logs/{id}). */
 export type LogDialogue = { id: string; messages: { role: "user" | "assistant"; content: string }[] };
 export type SourceText = { id: string; kind: string; origin: string; sha256?: string; content: string };
 
-/** The serious marks of both checks in a line: a mark reorders the problems and changes their count. */
+/**
+ * What changes with any decision or proposal of severity (/api/state, severityStamp): it reorders the problems, changes
+ * their count and says whose decision it is — a confirmation leaves the same criteria serious, yet it is a change. An
+ * older service without the stamp: the serious criteria of both checks in a line.
+ */
 export const severityStamp = (state: LabState | null) =>
-  state?.severity ? `${state.severity.tone.join(",")}|${state.severity.code.join(",")}` : "";
+  state?.severityStamp ?? (state?.severity ? `${state.severity.tone.join(",")}|${state.severity.code.join(",")}` : "");
 
 /**
  * What makes the problems out of date: a new result, a run that started or finished, new scenarios, a task that ended,
- * a criterion marked serious or minor.
+ * a decision or a proposal of whether a criterion's errors are serious.
  */
 export function problemsStamp(state: LabState | null): string {
   if (!state) return "";

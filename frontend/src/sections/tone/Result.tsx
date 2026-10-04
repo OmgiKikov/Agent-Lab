@@ -11,7 +11,7 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { queueOf } from "../problems/model";
 import { seriousOf } from "../../lab/severity";
-import { SeriousLine, SeriousTag } from "../../product/Severity";
+import { SeriousTag, SeverityStatus } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
 import { CompareLine, useComparison } from "../checks/Compare";
@@ -83,7 +83,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           <Trust
             result={result}
             check="tone"
-            serious={current && <SeriousLine data={data} check="tone" />}
+            serious={current && <SeverityStatus data={data} check="tone" />}
             compare={
               <CompareLine check="tone" compare={compare} serious={current ? seriousOf(data)?.marked : undefined} />
             }
@@ -162,7 +162,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
                         <span className="min-w-0 flex-1">
                           <span className="block text-read font-medium text-fg">
                             {c.r.title.replace(/^Ошибка:\s*/i, "")}
-                            {c.r.serious && <SeriousTag className="relative -top-px ml-2 align-middle" />}
+                            {c.r.serious && <SeriousTag rule={c.r} className="relative -top-px ml-2 align-middle" />}
                           </span>
                           <span className="mt-1 block text-small text-fg-3">
                             Критерий {c.n} · {c.name}

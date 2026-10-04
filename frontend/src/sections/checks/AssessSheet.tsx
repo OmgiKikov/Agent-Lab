@@ -53,7 +53,8 @@ export function SizePicker({ sizes, size, onSize }: { sizes: number[]; size: num
 
 /**
  * Starts the accuracy check: the model reads the real conversations against the criteria from the agent's code;
- * `replan` reads the criteria from the code anew first. The agent itself is not run, tone of voice is not touched.
+ * `replan` reads the criteria from the code anew first. After it the automatic check proposes which errors are serious
+ * (`propose`, lab/severity). The agent itself is not run, tone of voice is not touched.
  */
 export function useAssess(onStarted?: () => void) {
   const { refresh } = useLabState();
@@ -61,7 +62,7 @@ export function useAssess(onStarted?: () => void) {
   const [starting, setStarting] = useState(false);
   const start = (size: number, replan: boolean) => {
     setStarting(true);
-    api("/api/discover", { count: Math.max(5, size), replan })
+    api("/api/discover", { count: Math.max(5, size), replan, propose: true })
       .then(() => {
         refresh();
         onStarted?.();

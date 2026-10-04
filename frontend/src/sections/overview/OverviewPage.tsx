@@ -24,7 +24,7 @@ import { seriousOf } from "../../lab/severity";
 import { codeSources } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
-import { SeriousLine } from "../../product/Severity";
+import { SeverityStatus } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
 import { buttonClass } from "../../ui/Button";
@@ -144,7 +144,7 @@ export function OverviewPage() {
           </Link>
         )
       }
-      below={<SectionJob kinds={["tone-check", "tone-criteria", "discover", "run", "rejudge", "cards"]} />}
+      below={<SectionJob kinds={["tone-check", "tone-criteria", "discover", "severity", "run", "rejudge", "cards"]} />}
     />
   );
   if (offline && !state)
@@ -285,9 +285,9 @@ function BlockHead({ to, title, sub }: { to: string; title: string; sub: ReactNo
 }
 
 /**
- * One check: its number, its serious errors once a criterion is marked, how it stands to its previous check, how far to
- * trust it, its three main problems (serious first); without a result, how to get one — after a new export, beside the
- * previous check.
+ * One check: its number, its serious errors and whose decision they are (or why that is not decided yet), how it stands
+ * to its previous check, how far to trust it, its three main problems (serious first); without a result, how to get
+ * one — after a new export, beside the previous check.
  */
 function CheckBlock({ check, state }: { check: Check; state: LabState }) {
   const result = resultOf(state, check);
@@ -339,7 +339,7 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
           <Trust
             result={result}
             check={check}
-            serious={<SeriousLine data={data} check={check} />}
+            serious={<SeverityStatus data={data} check={check} />}
             compare={<CompareLine check={check} compare={compare} short serious={seriousOf(data)?.marked} />}
             className="mt-4"
           />

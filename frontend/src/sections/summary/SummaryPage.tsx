@@ -35,7 +35,16 @@ import {
   type SummaryExample,
   type SummaryProblem,
 } from "../../lab/summary";
-import { seriousOf, seriousSentence, type Serious } from "../../lab/severity";
+import {
+  NONE_SERIOUS,
+  noneSerious,
+  proposedText,
+  seriousOf,
+  seriousSentence,
+  standingOf,
+  type Serious,
+  type Standing,
+} from "../../lab/severity";
 import type { Check } from "../../lab/types";
 import { SeriousTag } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
@@ -70,9 +79,10 @@ function exampleOf(e: Example, dialogue: LogDialogue | undefined): SummaryExampl
 
 /**
  * «Сводка для руководителя» (/summary): one page of the agent for someone who does not use the product — each check's
- * number with its denominator, its conversations with a serious error once a criterion is marked serious, the same
- * number with people's answers, how it stands to the check's previous check, and the problems the person ticked (the
- * serious ones by default), each with what the agent must do, its count, people's answers and one reply of the agent.
+ * number with its denominator, its conversations with a serious error and whose decision that is (how many criteria
+ * people checked of the automatic check's proposals), the same number with people's answers, how it stands to the
+ * check's previous check, and the problems the person ticked (the serious ones by default), each with what the agent
+ * must do, its count, people's answers and one reply of the agent.
  * The ticks are kept in this browser, per agent; «Скачать PDF» prints the page (no navigation, buttons or ticks; A4),
  * «Скопировать для письма» puts the same on the clipboard. Numbers, answers and examples; no verdict on the agent.
  */
@@ -103,12 +113,14 @@ export function SummaryPage() {
   const checks = CHECKS.filter((c) => resultOf(state, c));
   const problems = {} as Record<Check, Criterion[] | null>;
   const serious = {} as Record<Check, Serious | null>;
+  const standing = {} as Record<Check, Standing | null>;
   const ticked = {} as Record<Check, Set<string>>;
   for (const check of CHECKS) {
     const { data, list } = criteria[check];
     const current = data?.log?.finishedAt === resultOf(state, check)?.finishedAt;
     problems[check] = current ? queueOf(list, "log") : null;
     serious[check] = current ? seriousOf(data) : null;
+    standing[check] = current && data?.log?.assessed ? standingOf(data) : null;
     const own = problems[check] ?? [];
     ticked[check] = chosenOf(
       stored[check],
@@ -159,6 +171,8 @@ export function SummaryPage() {
             unmeasured: result.summary.unmeasured,
             answers: answersOf(result)!,
             serious: serious[check],
+            noneSerious: noneSerious(standing[check]),
+            proposed: standing[check] && proposedText(standing[check], "people"),
             compare: sentence ? `${sentence.head}${sentence.rest}` : null,
             seriousCompare: compare && serious[check] ? seriousCompareText(compare, serious[check].marked) : null,
             problems: (problems[check] ?? []).map((c): SummaryProblem => {
@@ -169,6 +183,7 @@ export function SummaryPage() {
                 id: c.r.id,
                 chosen: ids.has(c.r.id),
                 serious: c.r.serious,
+                severity: c.r.severity,
                 title: c.r.title,
                 duty: duty(c.r.rule.text),
                 failed: s.failed,
@@ -293,12 +308,13 @@ export function SummaryPage() {
 }
 
 /**
- * One check: its number as «Итог» shows it, with its serious errors, people's answers, its previous check and who found
- * the errors.
+ * One check: its number as «Итог» shows it, with its serious errors and whose decision they are, people's answers, its
+ * previous check and who found the errors.
  */
 function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
   const answers = answersSentence(c.answers, "people");
   const serious = c.serious && seriousSentence(c.serious, "people");
+  const whose = c.proposed && ` ${c.proposed}`;
   return (
     <section aria-label={CHECK_NAME[c.check]} className="mt-12 break-inside-avoid print:mt-8">
       <h3 className="text-title font-semibold text-fg">
@@ -308,11 +324,19 @@ function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
       <p className="mt-1 max-w-[68ch] text-body text-fg-3">{SUMMARY_WHAT[c.check]}</p>
       <StageResult size="display" className="mt-5" failed={c.failed} checked={c.measured} unchecked={c.unmeasured} />
       <div className="mt-4 max-w-[72ch] space-y-1 text-read text-fg-2">
-        {serious && (
+        {serious ? (
           <p>
             {serious.head} — <span className="whitespace-nowrap font-semibold text-fg">{serious.share}</span>
             {serious.rest}
+            {whose}
           </p>
+        ) : (
+          c.noneSerious && (
+            <p>
+              {NONE_SERIOUS}
+              {whose}
+            </p>
+          )
         )}
         {answers && (
           <p>
@@ -380,7 +404,7 @@ function ProblemItem({ p, onToggle }: { p: SummaryProblem; onToggle: () => void 
             )}
           >
             {p.title}
-            {p.serious && <SeriousTag className="relative -top-px ml-2 align-middle font-normal" />}
+            {p.serious && <SeriousTag rule={p} className="relative -top-px ml-2 align-middle font-normal" />}
           </label>
           <span className="whitespace-nowrap text-read tabular-nums text-fg-2">
             <span className="font-semibold text-fg">{p.failed}</span> из {p.checked}{" "}

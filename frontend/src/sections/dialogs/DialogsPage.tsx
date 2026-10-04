@@ -21,7 +21,7 @@ import { Rows } from "./Rows";
 /**
  * «Разговоры» of a stage: every conversation of the export as a check judged it, or every conversation one run played;
  * one in full with the quotes the checks cited, every criterion's result and the trace. Where a number of another page
- * leads, filtered by its criterion (?rule=) or its result (?v=; `serious` — with an error by a criterion marked serious).
+ * leads, filtered by its criterion (?rule=) or its result (?v=; `serious` — with an error by a serious criterion).
  */
 export function DialogsPage({ stage }: { stage: Stage }) {
   const { state, offline } = useLabState();

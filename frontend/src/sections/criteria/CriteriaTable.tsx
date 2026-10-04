@@ -7,8 +7,9 @@ import type { Check, Source } from "../../lab/types";
 
 /**
  * All criteria as one list, broken first: the number, the duty, where it is written, and how it went in logs and
- * simulation; whether two checks agreed only when a second model checked them (hasSecond); and «Серьёзная» — the
- * person's mark, switched in the row itself. A mark never moves the row: the list stays where the person marks it.
+ * simulation; whether two checks agreed only when a second model checked them (hasSecond); and «Серьёзная» — switched
+ * in the row itself, «предложено» under it while it is the automatic check's proposal (its reason in the tooltip). A
+ * decision never moves the row: the list stays where the person decides.
  */
 export function CriteriaTable({
   check,
@@ -68,7 +69,7 @@ export function CriteriaTable({
             )}
             <th
               className="w-px whitespace-nowrap py-2.5 pr-5 text-right font-medium"
-              title="Серьёзные ошибки идут первыми и считаются отдельно; без отметки ошибка незначительная"
+              title="Серьёзные ошибки идут первыми и считаются отдельно; без отметки ошибка незначительная. «Предложено» — так предложила автоматическая проверка, человек ещё не проверил"
             >
               Серьёзная
             </th>
@@ -97,7 +98,7 @@ export function CriteriaTable({
                   >
                     {c.name}
                   </button>
-                  {c.r.serious && <SeriousTag className="relative -top-px ml-2 align-middle" />}
+                  {c.r.serious && <SeriousTag rule={c.r} className="relative -top-px ml-2 align-middle" />}
                   <div className="mt-0.5 line-clamp-2 text-small text-fg-3" title={duty(c.r.rule.text)}>
                     {duty(c.r.rule.text)}
                   </div>
@@ -114,6 +115,15 @@ export function CriteriaTable({
                 )}
                 <td className="py-3 pr-5 text-right">
                   <SeveritySwitch check={check} rule={c.r} name={c.name} />
+                  {c.r.severity.by === "model" && (
+                    <span
+                      className="mt-1 block whitespace-nowrap text-small text-fg-3"
+                      title={c.r.severity.proposed?.reason}
+                    >
+                      предложено
+                      <span className="sr-only"> автоматически: {c.r.severity.proposed?.reason}</span>
+                    </span>
+                  )}
                 </td>
               </tr>
             );

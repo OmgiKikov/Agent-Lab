@@ -20,7 +20,8 @@ export function Reextract({ open, onClose }: { open: boolean; onClose: () => voi
   const start = async () => {
     setStarting(true);
     try {
-      await api("/api/discover", { count, replan: true });
+      // After the check the automatic check proposes which errors are serious (lab/severity).
+      await api("/api/discover", { count, replan: true, propose: true });
       onClose();
       await refresh();
     } catch (e) {

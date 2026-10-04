@@ -146,7 +146,7 @@ export function TaskCard({ bar }: { bar?: boolean }) {
             {label}
           </button>
         </div>
-        {message && (
+        {message && message !== label && (
           <div className="mt-1 line-clamp-2 text-small text-fg-3" title={message}>
             {message}
           </div>

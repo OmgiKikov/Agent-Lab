@@ -49,7 +49,8 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
     setStarting(true);
     setError(null);
     try {
-      await api("/api/tone-of-voice/check", { ruleIds: ids, count: total, revision: draft?.revision });
+      // After the check the automatic check proposes which errors are serious (lab/severity).
+      await api("/api/tone-of-voice/check", { ruleIds: ids, count: total, revision: draft?.revision, propose: true });
       await refresh();
       onStarted();
     } catch (e) {
