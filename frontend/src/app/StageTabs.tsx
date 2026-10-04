@@ -7,7 +7,8 @@ type Tab = { to: string; label: string; count?: number; end?: boolean };
 /**
  * The pages of a section. A check: its result, its conversations, the person's check, its criteria; tone of voice
  * adds the history of its checks. The simulation: its result, runs, scenarios, conversations and check; the run
- * being looked at travels with the tabs.
+ * being looked at travels with the tabs. A tab is never cut: on a narrow screen the ones that do not fit go to a second
+ * row (a tab cut at the edge read as «Ис», with nothing to say the bar scrolls).
  */
 export function StageTabs({
   stage,
@@ -39,7 +40,7 @@ export function StageTabs({
         ];
   const problemsOpen = pathname.includes("/problems/");
   return (
-    <nav aria-label="Страницы раздела" className="-mb-px flex gap-6 overflow-x-auto px-4 lg:px-10">
+    <nav aria-label="Страницы раздела" className="-mb-px flex flex-wrap gap-x-6 px-4 lg:px-10">
       {tabs.map((t) => {
         const path = t.to.split("?")[0];
         const on = t.end
