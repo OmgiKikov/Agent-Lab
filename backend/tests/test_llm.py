@@ -94,6 +94,30 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chat.await_count, 2)
         self.assertEqual(result.model, 'good')
 
+    async def test_an_answer_that_cannot_be_used_is_told_in_plain_words_and_its_technical_text_goes_to_the_log(self):
+        """«Не удалось получить ответ модели: ValueError: expected business topics» showed a Python class and an
+        internal message: the person reads what happened and what to do, whoever looks into it finds the text in the
+        log."""
+
+        def parse(value: dict) -> dict:
+            raise ValueError('expected business topics')
+
+        replies = [llm.Answer('{"topics": []}', 'm'), llm.Answer('{"topics": []}', 'm')]
+        # The error passes through the innermost assertLogs: what was logged on the way stays in `logged`.
+        with (
+            patch.object(llm, 'chat', AsyncMock(side_effect=replies)),
+            self.assertRaises(llm.ModelError) as caught,
+            self.assertLogs('lab.llm', 'WARNING') as logged,
+        ):
+            await llm.structured('system', {}, parse=parse)
+        told = str(caught.exception)
+        self.assertNotIn('ValueError', told)
+        self.assertNotIn('expected business topics', told)
+        self.assertIn('Попробуйте ещё раз', told)
+        self.assertIn('«Настройки»', told)
+        self.assertEqual(caught.exception.detail, 'ValueError: expected business topics')
+        self.assertIn('ValueError: expected business topics', '\n'.join(logged.output))
+
     async def test_gateway_malformed_envelopes_are_model_errors(self):
         invalid = [
             [],

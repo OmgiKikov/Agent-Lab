@@ -178,7 +178,8 @@ export function TaskCard({ bar }: { bar?: boolean }) {
           <X className="size-3.5" />
         </button>
       </div>
-      <p className={cn("mt-1 text-small text-fg-2", bar ? "line-clamp-2" : "line-clamp-3")} title={job.error}>
+      {/* Room for a whole sentence: what happened and what to do («…проверьте «Настройки»»). */}
+      <p className={cn("mt-1 text-small text-fg-2", bar ? "line-clamp-3" : "line-clamp-6")} title={job.error}>
         {job.error}
       </p>
       {info && (

@@ -11,6 +11,7 @@ A call that may pass on another try (no connection, 429, 5xx) is made again a fe
 
 import asyncio
 import json
+import logging
 import os
 import random
 from collections.abc import Callable
@@ -52,6 +53,13 @@ PAUSE = 2  # seconds before the second try, doubled before each next one, plus u
 MAX_PAUSE = 30  # a longer Retry-After is cut to this
 # No connection, a dropped one, or no answer in time: the next try may pass.
 _TRANSIENT = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+# The model answered, but not in the form a check reads, on every try: what happened and what to do, in a person's
+# words. The parser's own text (a Python class, an internal message) goes to the server log only.
+UNUSABLE = (
+    'Не удалось разобрать ответ модели. Попробуйте ещё раз; если повторится, модель отвечает в неожиданном формате — '
+    'проверьте «Настройки».'
+)
+log = logging.getLogger(__name__)
 
 T = TypeVar('T')
 
@@ -262,7 +270,8 @@ async def structured(
     endpoint: Endpoint | None = None,
 ) -> Answer[T]:
     """Parse a JSON reply once into the caller's type; ask again for malformed output or a rejected reply. Any other
-    ModelError is final here: chat() has already asked again where that may help."""
+    ModelError is final here: chat() has already asked again where that may help. When no reply can be used, the
+    person reads UNUSABLE; what the parser said is logged and kept as the error's detail."""
     prompt = json.dumps(payload, ensure_ascii=False)
     system += (
         '\nReturn only a valid JSON object. '
@@ -276,7 +285,9 @@ async def structured(
             return Answer(value, answer.model)
         except (MalformedAnswer, ValueError, KeyError, TypeError) as error:
             last = error
-    raise ModelError(f'Не удалось получить ответ модели: {type(last).__name__}: {str(last)[:200]}')
+    detail = f'{type(last).__name__}: {str(last)[:200]}'
+    log.warning('Ответ модели %s не разобран (попыток: %d): %s', (endpoint or MAIN)[1], attempts, detail)
+    raise ModelError(UNUSABLE, detail=detail)
 
 
 __all__ = [
