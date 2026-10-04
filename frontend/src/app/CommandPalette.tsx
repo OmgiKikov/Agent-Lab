@@ -247,7 +247,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             id: `v-${c}-${id}`,
             group: `Проблемы · ${CHECK_NAME[c]}`,
             label: p.title,
-            sub: `ошибка в ${p.log.failed} из ${p.log.failed + p.log.passed} разговоров`,
+            sub: `${p.serious ? "серьёзная · " : ""}ошибка в ${p.log.failed} из ${p.log.failed + p.log.passed} разговоров`,
             icon: TriangleAlert,
             run: go(problemLink(id, c)),
           });

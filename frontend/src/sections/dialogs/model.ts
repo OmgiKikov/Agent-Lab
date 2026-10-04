@@ -1,22 +1,31 @@
 import { nameFromText, quoteKey, type Criterion } from "../../lab/criteria";
 import type { DialogRow } from "../../lab/dialogs";
 
-export type Verdict = "all" | "fail" | "pass" | "none" | "disputed";
+export type Verdict = "all" | "fail" | "serious" | "pass" | "none" | "disputed";
 
 export const toVerdict = (raw: string | null): Verdict =>
-  raw === "fail" || raw === "pass" || raw === "none" || raw === "disputed" ? raw : "all";
+  raw === "fail" || raw === "serious" || raw === "pass" || raw === "none" || raw === "disputed" ? raw : "all";
 
+/** «С серьёзной ошибкой» is offered once a criterion is marked serious (lab/severity); the rest always. */
 export const VERDICTS: { value: Verdict; label: string }[] = [
   { value: "all", label: "Все разговоры" },
   { value: "fail", label: "С ошибкой" },
+  { value: "serious", label: "С серьёзной ошибкой" },
   { value: "pass", label: "Без ошибок" },
   { value: "none", label: "Не проверены" },
   { value: "disputed", label: "Проверки разошлись" },
 ];
 
-export function matchesRow(r: DialogRow, verdict: Verdict, query: string, only: Set<string> | null) {
+export function matchesRow(
+  r: DialogRow,
+  verdict: Verdict,
+  query: string,
+  only: Set<string> | null,
+  serious?: Set<string>,
+) {
   if (only && !only.has(r.key)) return false;
   if (verdict === "fail" && r.status !== "FAIL") return false;
+  if (verdict === "serious" && !serious?.has(r.key)) return false;
   if (verdict === "pass" && r.status !== "PASS") return false;
   if (verdict === "none" && (r.status === "PASS" || r.status === "FAIL")) return false;
   if (verdict === "disputed" && !r.disputed) return false;
@@ -35,6 +44,23 @@ export function criteriaByRule(list: Criterion[]) {
     ),
   );
   return (source: "log" | "sim", ruleId: string) => map.get(`${source}|${ruleId}`);
+}
+
+/**
+ * The checked conversations with an error by a criterion a person marked serious, as the service counts them beside
+ * the check's number (problems.with_serious): the conversations «С серьёзными ошибками — 6 из 53» opens.
+ */
+export function seriousRows(rows: DialogRow[], list: Criterion[]): Set<string> {
+  const find = criteriaByRule(list);
+  return new Set(
+    rows
+      .filter(
+        (r) =>
+          (r.status === "PASS" || r.status === "FAIL") &&
+          r.rules.some((x) => x.status === "FAIL" && find(r.source, x.ruleId)?.r.serious),
+      )
+      .map((r) => r.key),
+  );
 }
 
 /** A criterion's name and number where the record of problems does not have it. */

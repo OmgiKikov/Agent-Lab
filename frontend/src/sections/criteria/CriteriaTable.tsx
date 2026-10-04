@@ -1,14 +1,17 @@
 import { cn } from "@/lib/utils";
 import { duty, type Criterion } from "../../lab/criteria";
 import { secondOf } from "../../lab/problemStats";
+import { SeriousTag, SeveritySwitch } from "../../product/Severity";
 import { nameOf, toneOf, type SideKey } from "./model";
-import type { Source } from "../../lab/types";
+import type { Check, Source } from "../../lab/types";
 
 /**
  * All criteria as one list, broken first: the number, the duty, where it is written, and how it went in logs and
- * simulation; whether two checks agreed only when a second model checked them (hasSecond).
+ * simulation; whether two checks agreed only when a second model checked them (hasSecond); and «Серьёзная» — the
+ * person's mark, switched in the row itself. A mark never moves the row: the list stays where the person marks it.
  */
 export function CriteriaTable({
+  check,
   list,
   sources,
   selected,
@@ -17,6 +20,7 @@ export function CriteriaTable({
   hasSecond,
   className,
 }: {
+  check: Check;
   list: Criterion[];
   sources: Source[];
   selected: string | null;
@@ -62,6 +66,12 @@ export function CriteriaTable({
                 Проверки совпали
               </th>
             )}
+            <th
+              className="w-px whitespace-nowrap py-2.5 pr-5 text-right font-medium"
+              title="Серьёзные ошибки идут первыми и считаются отдельно; без отметки ошибка незначительная"
+            >
+              Серьёзная
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -87,6 +97,7 @@ export function CriteriaTable({
                   >
                     {c.name}
                   </button>
+                  {c.r.serious && <SeriousTag className="relative -top-px ml-2 align-middle" />}
                   <div className="mt-0.5 line-clamp-2 text-small text-fg-3" title={duty(c.r.rule.text)}>
                     {duty(c.r.rule.text)}
                   </div>
@@ -101,6 +112,9 @@ export function CriteriaTable({
                     {second.checked ? `${second.agree} из ${second.checked}` : "—"}
                   </td>
                 )}
+                <td className="py-3 pr-5 text-right">
+                  <SeveritySwitch check={check} rule={c.r} name={c.name} />
+                </td>
               </tr>
             );
           })}

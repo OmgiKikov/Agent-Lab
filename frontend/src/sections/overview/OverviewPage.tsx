@@ -20,9 +20,11 @@ import { useCriteria } from "../../lab/criteria";
 import { longDay, count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { isRunning } from "../../lab/runs";
+import { seriousOf } from "../../lab/severity";
 import { codeSources } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
+import { SeriousLine } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
 import { buttonClass } from "../../ui/Button";
@@ -283,8 +285,9 @@ function BlockHead({ to, title, sub }: { to: string; title: string; sub: ReactNo
 }
 
 /**
- * One check: its number, how it stands to its previous check, how far to trust it, its three main problems; without a
- * result, how to get one — after a new export, beside the previous check.
+ * One check: its number, its serious errors once a criterion is marked, how it stands to its previous check, how far to
+ * trust it, its three main problems (serious first); without a result, how to get one — after a new export, beside the
+ * previous check.
  */
 function CheckBlock({ check, state }: { check: Check; state: LabState }) {
   const result = resultOf(state, check);
@@ -336,7 +339,8 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
           <Trust
             result={result}
             check={check}
-            compare={<CompareLine check={check} compare={compare} short />}
+            serious={<SeriousLine data={data} check={check} />}
+            compare={<CompareLine check={check} compare={compare} short serious={!!seriousOf(data)} />}
             className="mt-4"
           />
           <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>

@@ -1,6 +1,7 @@
 import type { Criterion } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import type { Side } from "../../lab/problems";
+import { seriousFirst } from "../../lab/severity";
 
 export type Filter = "all" | "log" | "sim";
 export type SideKey = "log" | "sim";
@@ -22,12 +23,20 @@ export const errorIn = (s: Pick<Side, "failed" | "passed">) =>
 export const rowSide = (c: Criterion, filter: Filter): SideKey =>
   filter === "sim" || (filter === "all" && !c.r.log.failed) ? "sim" : "log";
 
-/** The queue: what the agent breaks in the logs, most frequent first; then what only the simulation found. Frequency, not severity. */
+/**
+ * The queue: what the agent breaks in the logs — the criteria a person marked serious first, then the most frequent;
+ * then what only the simulation found, in the same order. Frequency is never called severity: only a person's mark is.
+ */
 export function queueOf(list: Criterion[], filter: Filter): Criterion[] {
   const log = list
     .filter((c) => c.r.log.failed > 0)
-    .sort((a, b) => b.r.log.failed - a.r.log.failed || b.r.sim.failed - a.r.sim.failed || a.n - b.n);
-  const sim = list.filter((c) => c.r.sim.failed > 0).sort((a, b) => b.r.sim.failed - a.r.sim.failed || a.n - b.n);
+    .sort(
+      (a, b) =>
+        seriousFirst(a.r, b.r) || b.r.log.failed - a.r.log.failed || b.r.sim.failed - a.r.sim.failed || a.n - b.n,
+    );
+  const sim = list
+    .filter((c) => c.r.sim.failed > 0)
+    .sort((a, b) => seriousFirst(a.r, b.r) || b.r.sim.failed - a.r.sim.failed || a.n - b.n);
   if (filter === "log") return log;
   if (filter === "sim") return sim;
   return [...log, ...sim.filter((c) => !c.r.log.failed)];

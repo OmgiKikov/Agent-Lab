@@ -9,7 +9,7 @@ import { useAgent } from "../../lab/agents";
 import { answersOf, answersSentence } from "../../lab/answers";
 import { api } from "../../lab/api";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
-import { compareSentence } from "../../lab/compare";
+import { compareSentence, seriousCompareText } from "../../lab/compare";
 import { duty, useCriteria, type Criterion } from "../../lab/criteria";
 import { pct } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
@@ -21,7 +21,7 @@ import {
   chosenOf,
   daysText,
   fullDay,
-  HOW,
+  howOf,
   madeText,
   problemAnswers,
   readChosen,
@@ -35,7 +35,9 @@ import {
   type SummaryExample,
   type SummaryProblem,
 } from "../../lab/summary";
+import { seriousOf, seriousSentence, type Serious } from "../../lab/severity";
 import type { Check } from "../../lab/types";
+import { SeriousTag } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { visible } from "../../product/text";
 import { Button, buttonClass } from "../../ui/Button";
@@ -68,10 +70,11 @@ function exampleOf(e: Example, dialogue: LogDialogue | undefined): SummaryExampl
 
 /**
  * «Сводка для руководителя» (/summary): one page of the agent for someone who does not use the product — each check's
- * number with its denominator, the same number with people's answers, how it stands to the check's previous check, and
- * the problems the person ticked, each with what the agent must do, its count, people's answers and one reply of the
- * agent. The ticks are kept in this browser, per agent; «Скачать PDF» prints the page (no navigation, buttons or ticks;
- * A4), «Скопировать для письма» puts the same on the clipboard. Numbers, answers and examples; no verdict on the agent.
+ * number with its denominator, its conversations with a serious error once a criterion is marked serious, the same
+ * number with people's answers, how it stands to the check's previous check, and the problems the person ticked (the
+ * serious ones by default), each with what the agent must do, its count, people's answers and one reply of the agent.
+ * The ticks are kept in this browser, per agent; «Скачать PDF» prints the page (no navigation, buttons or ticks; A4),
+ * «Скопировать для письма» puts the same on the clipboard. Numbers, answers and examples; no verdict on the agent.
  */
 export function SummaryPage() {
   const { state, offline } = useLabState();
@@ -94,17 +97,23 @@ export function SummaryPage() {
     };
   }, [agent]);
 
-  // The checks with a result, each with its problems, most frequent first — of that very result, not of one replaced
-  // meanwhile (null until they are at hand) — and the ones ticked.
+  // The checks with a result, each with its problems, serious first, then the most frequent — of that very result,
+  // not of one replaced meanwhile (null until they are at hand) — its serious count, and the ones ticked: by default
+  // the serious problems, else the three most frequent.
   const checks = CHECKS.filter((c) => resultOf(state, c));
   const problems = {} as Record<Check, Criterion[] | null>;
+  const serious = {} as Record<Check, Serious | null>;
   const ticked = {} as Record<Check, Set<string>>;
   for (const check of CHECKS) {
     const { data, list } = criteria[check];
-    problems[check] = data?.log?.finishedAt === resultOf(state, check)?.finishedAt ? queueOf(list, "log") : null;
+    const current = data?.log?.finishedAt === resultOf(state, check)?.finishedAt;
+    problems[check] = current ? queueOf(list, "log") : null;
+    serious[check] = current ? seriousOf(data) : null;
+    const own = problems[check] ?? [];
     ticked[check] = chosenOf(
       stored[check],
-      (problems[check] ?? []).map((c) => c.r.id),
+      own.map((c) => c.r.id),
+      own.filter((c) => c.r.serious).map((c) => c.r.id),
     );
   }
   const examples = checks.flatMap((check) =>
@@ -149,7 +158,9 @@ export function SummaryPage() {
             failed: result.summary.failed,
             unmeasured: result.summary.unmeasured,
             answers: answersOf(result)!,
+            serious: serious[check],
             compare: sentence ? `${sentence.head}${sentence.rest}` : null,
+            seriousCompare: compare && serious[check] ? seriousCompareText(compare) : null,
             problems: (problems[check] ?? []).map((c): SummaryProblem => {
               const s = c.r.log;
               const people = humansOf(s);
@@ -157,6 +168,7 @@ export function SummaryPage() {
               return {
                 id: c.r.id,
                 chosen: ids.has(c.r.id),
+                serious: c.r.serious,
                 title: c.r.title,
                 duty: duty(c.r.rule.text),
                 failed: s.failed,
@@ -256,8 +268,11 @@ export function SummaryPage() {
           Главное
         </h3>
         <p className="mt-1 max-w-[68ch] text-body text-fg-3 print:hidden">
-          Отметьте проблемы, которые войдут в сводку; сначала отмечены три самых частых каждой проверки. В PDF и в
-          письме — только отмеченные.
+          Отметьте проблемы, которые войдут в сводку;{" "}
+          {summary.checks.some((c) => c.problems.some((p) => p.serious))
+            ? "сначала отмечены серьёзные, а где их нет — три самых частых."
+            : "сначала отмечены три самых частых каждой проверки."}{" "}
+          В PDF и в письме — только отмеченные.
         </p>
         {summary.checks.map((c) => (
           <CheckProblems key={c.check} c={c} loading={!problems[c.check]} onToggle={(id) => toggle(c.check, id)} />
@@ -267,7 +282,7 @@ export function SummaryPage() {
       <footer className="mt-14 border-t border-line pt-5 text-small text-fg-3 print:mt-10 print:break-inside-avoid">
         <p className="font-medium text-fg-2">Как считали</p>
         <ul className="mt-1.5 max-w-[80ch] space-y-1">
-          {HOW.map((line) => (
+          {howOf(summary).map((line) => (
             <li key={line}>{line}</li>
           ))}
           <li>{madeText(summary)}</li>
@@ -277,9 +292,13 @@ export function SummaryPage() {
   );
 }
 
-/** One check: its number as «Итог» shows it, with people's answers, its previous check and who found the errors. */
+/**
+ * One check: its number as «Итог» shows it, with its serious errors, people's answers, its previous check and who found
+ * the errors.
+ */
 function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
   const answers = answersSentence(c.answers, "people");
+  const serious = c.serious && seriousSentence(c.serious, "people");
   return (
     <section aria-label={CHECK_NAME[c.check]} className="mt-12 break-inside-avoid print:mt-8">
       <h3 className="text-title font-semibold text-fg">
@@ -289,6 +308,12 @@ function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
       <p className="mt-1 max-w-[68ch] text-body text-fg-3">{SUMMARY_WHAT[c.check]}</p>
       <StageResult size="display" className="mt-5" failed={c.failed} checked={c.measured} unchecked={c.unmeasured} />
       <div className="mt-4 max-w-[72ch] space-y-1 text-read text-fg-2">
+        {serious && (
+          <p>
+            {serious.head} — <span className="whitespace-nowrap font-semibold text-fg">{serious.share}</span>
+            {serious.rest}
+          </p>
+        )}
         {answers && (
           <p>
             {answers.head} — <span className="whitespace-nowrap font-semibold text-fg">{answers.share}</span>
@@ -296,6 +321,7 @@ function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
           </p>
         )}
         {c.compare && <p>{c.compare}</p>}
+        {c.seriousCompare && <p>{c.seriousCompare}</p>}
         <p>{rechecked(c.answers)}</p>
       </div>
     </section>
@@ -354,6 +380,7 @@ function ProblemItem({ p, onToggle }: { p: SummaryProblem; onToggle: () => void 
             )}
           >
             {p.title}
+            {p.serious && <SeriousTag className="relative -top-px ml-2 align-middle font-normal" />}
           </label>
           <span className="whitespace-nowrap text-read tabular-nums text-fg-2">
             <span className="font-semibold text-fg">{p.failed}</span> из {p.checked}{" "}

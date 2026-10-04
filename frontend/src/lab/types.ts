@@ -184,6 +184,11 @@ export type LabState = {
   logs: { total: number; file?: string | null; updatedAt?: string | null };
   /** The result of each check, or null: tone of voice and accuracy never replace each other. */
   checks: Record<Check, Discover | null>;
+  /**
+   * The criteria a person marked serious, per check, by their key (the problem's id, problems.rule_key); without the
+   * mark an error is minor (spec 2026-10-04-severity-design.md). Older services have no such field.
+   */
+  severity?: Record<Check, string[]>;
   cards: null | Deck;
   runs: RunSummary[];
   targets: Target[];

@@ -10,6 +10,8 @@ import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { queueOf } from "../problems/model";
+import { seriousOf } from "../../lab/severity";
+import { SeriousLine, SeriousTag } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
 import { CompareLine, useComparison } from "../checks/Compare";
@@ -81,7 +83,8 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           <Trust
             result={result}
             check="tone"
-            compare={<CompareLine check="tone" compare={compare} />}
+            serious={current && <SeriousLine data={data} check="tone" />}
+            compare={<CompareLine check="tone" compare={compare} serious={current && !!seriousOf(data)} />}
             className="mt-4"
           />
           <Link
@@ -126,7 +129,9 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
             <h3 className="text-lead font-semibold text-fg">
               {selected ? "Выбранная находка" : "Начните с этой находки"}
             </h3>
-            <span className="text-small text-fg-3">По частоте в этой выборке</span>
+            <span className="text-small text-fg-3">
+              {problems.some((c) => c.r.serious) ? "Серьёзные первыми, дальше по частоте" : "По частоте в этой выборке"}
+            </span>
           </div>
           <Finding
             key={result.finishedAt + "-" + selectedFinding.r.id}
@@ -155,6 +160,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
                         <span className="min-w-0 flex-1">
                           <span className="block text-read font-medium text-fg">
                             {c.r.title.replace(/^Ошибка:\s*/i, "")}
+                            {c.r.serious && <SeriousTag className="relative -top-px ml-2 align-middle" />}
                           </span>
                           <span className="mt-1 block text-small text-fg-3">
                             Критерий {c.n} · {c.name}

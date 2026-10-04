@@ -41,17 +41,23 @@ export type Compare = {
   previous: CheckLine | null;
   overall?: { before: Counts; now: Counts; verdict: Verdict | null; direction: Direction | null };
   criteria?: CompareRow[];
+  /**
+   * The conversations with a serious error on both sides, by the marks as they are now, under the same rules as
+   * `overall`; only once a criterion of the check is marked serious (lab/severity).
+   */
+  serious?: { before: Counts; now: Counts; verdict: Verdict | null; direction: Direction | null };
 };
 
 /**
  * The comparison of a check's current result with its previous saved check. It reads saved records only, and is asked
- * again when that check's result or the export changes.
+ * again when that check's result, the export or its serious marks change.
  */
 export function useCompare(check: Check | null) {
   const { state } = useLabState();
   const result = check ? resultOf(state, check) : null;
+  const marks = check ? (state?.severity?.[check] ?? []).join(",") : "";
   return useQuery({
-    queryKey: ["compare", check, result?.checkId ?? result?.finishedAt ?? null, state?.logs.updatedAt ?? null],
+    queryKey: ["compare", check, result?.checkId ?? result?.finishedAt ?? null, state?.logs.updatedAt ?? null, marks],
     queryFn: () => api<Compare>(`/api/compare?check=${check}`),
     enabled: !!state && !!check,
     staleTime: Infinity,
@@ -117,6 +123,30 @@ export function compareSentence(compare: Compare, { short = false } = {}): { hea
   const file = !short && previous.file ? `, «${previous.file}»` : "";
   const said = verdict && verdict !== "same" ? ` ${VERDICT[verdict]}` : "";
   return { head: "Прошлая проверка", rest: `, ${longDay(previous.finishedAt)}${file}: ${counts}.${said}` };
+}
+
+/**
+ * «С серьёзными ошибками: 3 из 53 (6%) → сейчас 6 из 53 (11%). Мало разговоров, чтобы судить.» — the line under the
+ * comparison of the whole check, in its words: the same counts and arrow, the same verdict (few, beyond chance or
+ * within it), and for a re-evaluation of the same conversations — that the difference is the evaluation's. Both sides
+ * by the serious marks as they are now. Null when nothing is marked or the checks are not compared.
+ */
+export function seriousCompareText(compare: Compare): string | null {
+  const serious = compare.serious;
+  if (!serious || (compare.kind !== "new-data" && compare.kind !== "same-data")) return null;
+  const { before, now, verdict, direction } = serious;
+  const same = direction === "same";
+  const both = !!before.measured && !!now.measured;
+  const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}; сейчас ${sideText(now)}`;
+  const said =
+    compare.kind === "same-data"
+      ? both && !same
+        ? " Разница — разброс оценки, а не агента."
+        : ""
+      : verdict && verdict !== "same"
+        ? ` ${VERDICT[verdict]}`
+        : "";
+  return `С серьёзными ошибками: ${counts}.${said}`;
 }
 
 /** «было 6 из 52»: what a criterion with errors now had in the previous check, beside its count. */
