@@ -93,9 +93,18 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
   return lines.join("\n");
 }
 
-/** The problems of one source of a check as a file: its conversations and its simulation are never told together. */
-export function problemsReport(data: Problems, base: string, source: Source): string {
+/**
+ * The problems of one source of a check as a file: its conversations and its simulation are never told together. The
+ * conversations name their export (filename), as the tone-of-voice brief does.
+ */
+export function problemsReport(
+  data: Problems,
+  base: string,
+  source: Source,
+  { filename }: { filename?: string } = {},
+): string {
   const lines = [`# ${summarySentence(data, source)}`, "", `Проверка «${CHECK_NAME[data.check]}».`];
+  if (source === "log" && data.log && filename) lines.push(`Выгрузка: ${filename}.`);
   if (source === "log" && data.log)
     lines.push(
       `Диалоги: проверено ${data.log.assessed} из ${count(data.log.sampled, "разговора", "разговоров", "разговоров")} ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,

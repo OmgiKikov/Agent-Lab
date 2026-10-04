@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Copy, FileDown } from "lucide-react";
 import { CHECK_NAME } from "../../lab/checks";
 import type { Criterion } from "../../lab/criteria";
 import { count, day, plural } from "../../lab/format";
+import { useLabState } from "../../lab/LabProvider";
 import {
   copyReport,
   download,
@@ -21,7 +22,7 @@ import { useToast } from "../../ui/toast";
 import { checked, queueOf, violationsOf, type SideKey } from "./model";
 import { shareBase } from "../../app/agent";
 
-const Cap = ({ children }: { children: string }) => (
+const Cap = ({ children }: { children: ReactNode }) => (
   <span className="font-mono text-label uppercase tracking-caps text-ink-3">{children}</span>
 );
 
@@ -100,6 +101,8 @@ export function ReportSheet({
   list: Criterion[];
 }) {
   const toast = useToast();
+  // The export the conversations come from: named as the tone-of-voice report names it.
+  const file = useLabState().state?.logs.file ?? undefined;
   const sides = (
     [
       ["log", "Диалоги"],
@@ -108,7 +111,7 @@ export function ReportSheet({
   ).filter(([k]) => (k === "log" ? !!data.log : !!data.sim));
   const [side, setSide] = useState<SideKey>(data.log ? "log" : "sim");
   const items = queueOf(list, side);
-  const markdown = () => problemsReport(data, shareBase(), side);
+  const markdown = () => problemsReport(data, shareBase(), side, { filename: file });
   const copy = () =>
     copyReport(markdown()).then(() => toast.notify("Отчёт скопирован: вставьте в письмо или тикет"), toast.error);
   const log = data.log;
@@ -162,9 +165,14 @@ export function ReportSheet({
       <div className="bg-canvas px-3 py-6 sm:px-8">
         <article className="mx-auto max-w-3xl rounded-block bg-paper px-6 pb-12 pt-9 text-ink shadow-pop sm:px-12">
           <Cap>
-            {side === "log"
-              ? `Протокол проверки · ${CHECK_NAME[data.check]} · диалоги · ${day(log?.finishedAt)}`
-              : `Протокол проверки · ${CHECK_NAME[data.check]} · симуляция · ${day(sim?.finishedAt)}`}
+            {side === "log" ? (
+              <>
+                Протокол проверки · {CHECK_NAME[data.check]} · диалоги
+                {file && <span className="normal-case tracking-normal"> «{file}»</span>} · {day(log?.finishedAt)}
+              </>
+            ) : (
+              `Протокол проверки · ${CHECK_NAME[data.check]} · симуляция · ${day(sim?.finishedAt)}`
+            )}
           </Cap>
           <h2 className="mt-3 text-balance text-title font-semibold text-ink">{summarySentence(data, side)}</h2>
           {side === "log" && log && (
