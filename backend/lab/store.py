@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import uuid
 from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -9,14 +10,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import checks
+from . import checks, history
 from .metric import metric
 from .settings import DATA
 
 DB = DATA / 'lab.sqlite3'
 # The database's user_version once its schema (_set_up) is in place. Raise it with every change to _set_up: a database
 # is set up again only when its user_version differs.
-SCHEMA = 4
+SCHEMA = 5
 # The uploaded dialogues: every write keeps their number beside them (lengths), so the state polled every 1.5 s
 # counts them without reading megabytes of conversations.
 COUNTED = 'logs.json'
@@ -71,6 +72,11 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
             'check_id TEXT NOT NULL, dialogue_id TEXT NOT NULL, rule_id TEXT NOT NULL, '
             'decision TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (check_id, dialogue_id, rule_id))'
         )
+        # The saved checks of Точность, as tone_checks: summary is the line of the list, value the whole record.
+        connection.execute(
+            'CREATE TABLE IF NOT EXISTS code_checks (id TEXT PRIMARY KEY, summary TEXT NOT NULL, value TEXT NOT NULL)'
+        )
+        _save_accuracy_history(connection)
         connection.execute('CREATE TABLE IF NOT EXISTS lengths (name TEXT PRIMARY KEY, length INTEGER NOT NULL)')
         if _json_functions(connection):
             # Not INSERT OR REPLACE: in a trigger, the conflict policy of the write that fired it would apply.
@@ -106,6 +112,25 @@ def _separate_checks(connection: sqlite3.Connection) -> None:
             connection.execute(
                 'UPDATE runs SET value = ?, summary = ? WHERE id = ?', (_json(played), _summary(played), run_id)
             )
+
+
+def _save_accuracy_history(connection: sqlite3.Connection) -> None:
+    """A result of Точность from before its history becomes its first saved check, with the conversations of the export
+    it was made of (still the current one: a new export clears the result), so that the next export no longer erases
+    it. A result already saved stays as it is."""
+    from . import accuracy_history  # imports this module: only once both are loaded
+
+    result = _document(connection, checks.result(checks.CODE))
+    if not result or not result.get('results') or result.get('checkId'):
+        return
+    judged = {str(item['dialogueId']) for item in result['results']}
+    uploaded = _document(connection, COUNTED) or []
+    dialogues = [dialogue for dialogue in uploaded if str(dialogue['id']) in judged]
+    result = {**result, 'checkId': uuid.uuid4().hex, 'datasetFingerprint': history.dataset_fingerprint(dialogues)}
+    meta = _document(connection, 'logs-meta.json') or {}
+    record = accuracy_history.saved(result, dialogues, meta.get('file'), len(uploaded), None)
+    _save_code_check(connection, record)
+    _put(connection, checks.result(checks.CODE), result)
 
 
 def _json_functions(connection: sqlite3.Connection) -> bool:
@@ -176,9 +201,11 @@ def _update_document(connection: sqlite3.Connection, name: str, mutate: Callable
 
 def replace_inputs(name: str, value: Any) -> None:
     """Replace sources or logs together with what was derived from them, and only that. A new export clears the
-    results of both checks and the deck. The checks derive from different sources: changed communication rules (the
-    tone-of-voice policy) clear its criteria, its result and a deck built from it; changed code of the agent clears
-    the accuracy result and a deck built from it; code read again unchanged clears nothing. Runs and answers stay.
+    results of both checks and the deck; their saved checks stay in their histories, and the criteria of both wait for
+    the next check (tone of voice's in their draft, Точность's in checks.CODE_CRITERIA). The checks derive from
+    different sources: changed communication rules (the tone-of-voice policy) clear its criteria, its result and a deck
+    built from it; changed code of the agent clears the accuracy result, its kept criteria and a deck built from it;
+    code read again unchanged clears nothing. Runs and answers stay.
     """
     if name not in ('sources.json', 'logs.json'):
         raise ValueError('Only source and log documents are inputs')
@@ -186,9 +213,12 @@ def replace_inputs(name: str, value: Any) -> None:
         connection.execute('BEGIN IMMEDIATE')
         if name == 'logs.json':
             changed = list(checks.RESULTS)
+            _keep_code_criteria(connection)
         else:
             before = _document(connection, name)
             changed = [check for check, part in _SOURCES_OF.items() if part(before) != part(value)]
+            if checks.CODE in changed:
+                _put(connection, checks.CODE_CRITERIA, None)
         _put(connection, name, value)
         # Keep the names: a repeated legacy import must not resurrect intentionally cleared results.
         for check in changed:
@@ -196,6 +226,16 @@ def replace_inputs(name: str, value: Any) -> None:
         if name == 'sources.json' and checks.TONE in changed:
             _put(connection, 'tone-of-voice-criteria.json', None)
         _drop_deck(connection, changed)
+
+
+def _keep_code_criteria(connection: sqlite3.Connection) -> None:
+    """A new export: the criteria of Точность's result wait for its next check (checks.CODE_CRITERIA), which sorts the
+    new conversations into the same topics; without a result, the criteria kept already stay."""
+    from . import accuracy_history  # imports this module: only once both are loaded
+
+    result = _document(connection, checks.result(checks.CODE))
+    if result and result.get('topics'):
+        _put(connection, checks.CODE_CRITERIA, accuracy_history.criteria_of(result))
 
 
 def _document(connection: sqlite3.Connection, name: str) -> Any:
@@ -232,14 +272,36 @@ def _drop_deck(connection: sqlite3.Connection, changed: Collection[str]) -> None
         _put(connection, checks.DECK, None)
 
 
-def save_audit(value: dict, *, new_criteria: bool) -> None:
-    """Publish an accuracy result; criteria extracted anew no longer match the scenarios built from the old ones, so
-    those go with it. A deck from tone of voice stays."""
+def save_audit(value: dict, *, new_criteria: bool, record: dict | None = None) -> None:
+    """Publish an accuracy result, with its record in the history (accuracy_history.saved) in the same transaction;
+    criteria extracted anew no longer match the scenarios built from the old ones, so those go with it. A deck from
+    tone of voice stays."""
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
+        if record is not None:
+            _save_code_check(connection, record)
         _put(connection, checks.result(checks.CODE), value)
         if new_criteria:
             _drop_deck(connection, [checks.CODE])
+
+
+def _save_code_check(connection: sqlite3.Connection, record: dict) -> None:
+    connection.execute(
+        'INSERT INTO code_checks (id, summary, value) VALUES (?, ?, ?)',
+        (record['check']['id'], _json(record['check']), _json(record)),
+    )
+
+
+def code_checks() -> list[dict]:
+    """The saved checks of Точность, the newest first: their lines (accuracy_history.saved)."""
+    with _connection() as connection:
+        return [json.loads(row[0]) for row in connection.execute('SELECT summary FROM code_checks ORDER BY rowid DESC')]
+
+
+def code_check(check_id: str) -> dict | None:
+    with _connection() as connection:
+        row = connection.execute('SELECT value FROM code_checks WHERE id = ?', (check_id,)).fetchone()
+    return json.loads(row[0]) if row else None
 
 
 def tone_checks() -> list[dict]:

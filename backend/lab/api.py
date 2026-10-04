@@ -11,9 +11,11 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import (
+    accuracy_history,
     agents,
     cards,
     checks,
+    compare,
     discover,
     llm,
     logs,
@@ -344,6 +346,31 @@ def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None 
     return problems.build(check, run)
 
 
+@app.get('/api/compare')
+def compare_view(check: Literal['tone', 'code'] = checks.TONE) -> dict:
+    """«Было → стало»: the check's current result against its previous saved check, criterion by criterion, when both
+    have the same criteria and models; otherwise only how they stand to each other. Reads saved records only."""
+    return compare.build(check)
+
+
+@app.get('/api/history/{check}')
+def history_view(check: Literal['tone', 'code']) -> dict:
+    """The saved checks of one check, the newest first, each with how it stands to the one saved before it."""
+    return {'checks': compare.saved_checks(check)}
+
+
+@app.get('/api/history/{check}/{check_id}')
+def history_detail(check: Literal['tone', 'code'], check_id: str) -> dict:
+    """A saved check with its evidence: tone of voice's as /api/tone-of-voice/history/{id}; Точность's with its result
+    and the conversations it judged."""
+    if check == checks.TONE:
+        return tone_history_detail(check_id)
+    record = store.code_check(check_id)
+    if record is None:
+        raise HTTPException(404, 'Проверка не найдена')
+    return record
+
+
 @app.get('/api/scenarios')
 def scenarios_view() -> dict:
     """Each scenario of the deck as a test: the error of the real conversation it reproduces, and its own result in
@@ -383,7 +410,7 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
 
     async def work(progress: Progress) -> dict:
         result = await discover.run(payload.count, progress, payload.replan)
-        store.save_audit(result, new_criteria=payload.replan)
+        accuracy_history.commit(result, new_criteria=payload.replan)
         return result
 
     return start('discover', work)
