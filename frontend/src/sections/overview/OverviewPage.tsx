@@ -383,7 +383,7 @@ function RunBlock({ state }: { state: LabState }) {
         <p className="mt-6 text-read text-fg-2">
           {deck
             ? `Сценарии ${BY_CRITERIA[deck.check]} собраны. Синтетические клиенты сыграют их с агентом.`
-            : "Симуляций ещё не было. Сценарии собирают из ошибок одной проверки, и её критерии оценивают разговоры."}
+            : "Симуляций ещё не было. Сценарии собирают из ошибок одной проверки, а разговоры оценивают по её критериям."}
         </p>
         <Link
           to={deck ? `${SECTIONS.simulations}?play=1` : scenariosLink()}
@@ -517,7 +517,7 @@ function CheckSteps({ check, onReport }: { check: Check; onReport: () => void })
     steps.push({
       icon: ClipboardCheck,
       title: `Ответьте на ${count(disputed, "спорный случай", "спорных случая", "спорных случаев")}`,
-      sub: "Две проверки разошлись. Ваш ответ решит, ошибка это или нет.",
+      sub: "Две модели разошлись. Ваш ответ решит, ошибка это или нет.",
       to: reviewLink(check, { queue: "disputed" }),
     });
   else if (open.length)
@@ -545,7 +545,7 @@ function simSteps(state: LabState): Step[] {
     deck
       ? {
           icon: Play,
-          title: "Проверьте исправление на симуляции",
+          title: "Проверьте правки агента в симуляции",
           sub: `Синтетические клиенты сыграют сценарии ${BY_CRITERIA[deck.check]}.`,
           to: `${SECTIONS.simulations}?play=1`,
         }
@@ -561,7 +561,7 @@ function simSteps(state: LabState): Step[] {
           {
             icon: Bot,
             title: "Подключите агента",
-            sub: "Чтобы проверять исправления, не дожидаясь новой выгрузки чата.",
+            sub: "Чтобы проверять правки агента, не дожидаясь новой выгрузки чата.",
             to: SECTIONS.agent,
           },
         ]),

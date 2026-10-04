@@ -26,7 +26,7 @@ const cases = (n: number) => count(n, "случай", "случая", "случ�
 
 /**
  * «Проверка» of a stage: a person answers, one case at a time, whether what the checks found is an error — disputed cases
- * first. Among the cases without an answer every fifth is one the model found no error in («Здесь правда нет ошибки?»),
+ * first. Among the cases without an answer every fifth is one the model found no error in («Здесь действительно нет ошибки?»),
  * so its misses are checked too. The answer is saved and the next case comes; «Отменить» brings the last one back. The
  * queue is fixed when it opens, so answering does not reshuffle it.
  */
@@ -217,8 +217,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
           )}
 
           {stage === "sim" && state && !run ? (
-            <EmptyState drop title="Прогонов ещё не было" className="py-24">
-              Здесь будут случаи из разговоров синтетических клиентов.
+            <EmptyState drop title="Здесь будут случаи из прогонов" className="py-24">
+              Сыграйте сценарии в «Симуляциях», и модель оценит разговоры синтетических клиентов.
             </EmptyState>
           ) : !data || frozen?.id !== id ? (
             <Skeleton className="mt-8 h-[480px]" />
@@ -241,8 +241,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
             >
               {queue === "disputed"
                 ? twice
-                  ? "Две проверки совпали во всех случаях этого отбора."
-                  : "Второй проверки у этих разговоров не было."
+                  ? "Две модели совпали во всех случаях этого отбора."
+                  : "Вторая модель эти разговоры не проверяла."
                 : queue === "unchecked"
                   ? counted
                   : "Случаи появятся после проверки разговоров."}

@@ -65,7 +65,7 @@ function Lens({ c, side, on, onSelect }: { c: Criterion; side: SideKey; on: bool
         <>
           <span aria-hidden>·</span>
           <span>
-            две проверки совпали в {second.agree}
+            две модели совпали в {second.agree}
             {"\u00a0"}из{"\u00a0"}
             {second.checked}
           </span>

@@ -13,7 +13,7 @@ export const VERDICTS: { value: Verdict; label: string }[] = [
   { value: "serious", label: "С серьёзной ошибкой" },
   { value: "pass", label: "Без ошибок" },
   { value: "none", label: "Не удалось проверить" },
-  { value: "disputed", label: "Проверки разошлись" },
+  { value: "disputed", label: "Модели разошлись" },
 ];
 
 export function matchesRow(

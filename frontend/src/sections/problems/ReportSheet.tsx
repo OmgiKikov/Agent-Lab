@@ -47,7 +47,7 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
             {s.failed} из {checked(s)}
           </b>{" "}
           {plural(checked(s), "разговора", "разговоров", "разговоров")}, где критерий удалось проверить.
-          {second.checked > 0 && ` Две проверки совпали в\u00a0${second.agree} из\u00a0${second.checked}.`}
+          {second.checked > 0 && ` Две модели совпали в\u00a0${second.agree} из\u00a0${second.checked}.`}
           {c.r.topics.length > 0 && ` Темы: ${c.r.topics.join(", ").toLowerCase()}.`}
         </p>
       </div>

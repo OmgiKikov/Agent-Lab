@@ -63,9 +63,9 @@ export function CriteriaTable({
             {hasSecond && (
               <th
                 className="hidden py-2.5 pr-5 text-right font-medium md:table-cell"
-                title="В скольких ошибках в диалогах две проверки совпали"
+                title="В скольких ошибках в диалогах две модели совпали"
               >
-                Проверки совпали
+                Модели совпали
               </th>
             )}
             <th

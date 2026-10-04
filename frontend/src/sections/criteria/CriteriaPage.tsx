@@ -189,7 +189,7 @@ export function CriteriaPage({ check }: { check: Check }) {
     { checked: 0, agree: 0 },
   );
   const people = decisions(data);
-  // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Проверки совпали» and «Две
+  // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Модели совпали» and «Две
   // проверки» would only say «—» and «не с чем сравнить» on every criterion: nothing to tell.
   const twice = (s: SideKey) => list.some((c) => c.r[s].examples.some((e) => !!e.second));
   const panelOpen = !!chosen && (wide || !!asked);
@@ -212,7 +212,7 @@ export function CriteriaPage({ check }: { check: Check }) {
             {second.checked > 0 && (
               <>
                 {" "}
-                · две проверки совпали в {second.agree}
+                · две модели совпали в {second.agree}
                 {"\u00a0"}из{"\u00a0"}
                 {second.checked} ошибок в диалогах
               </>

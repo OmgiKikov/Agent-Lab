@@ -66,7 +66,7 @@ function Row({
     >
       <span className="flex items-center gap-2">
         <VerdictWord status={r.status} />
-        {r.disputed && <span className="text-small text-warn">· проверки разошлись</span>}
+        {r.disputed && <span className="text-small text-warn">· модели разошлись</span>}
       </span>
       <span className="mt-1 line-clamp-2 text-body text-fg">{r.title}</span>
       <span className="mt-1 flex flex-wrap gap-x-1.5 text-small text-fg-3">

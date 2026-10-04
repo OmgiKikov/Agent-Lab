@@ -7,7 +7,7 @@ export const CHECK_NAME: Record<Check, string> = { tone: "Tone of voice", code: 
 
 /** «по критериям Tone of voice»: what a run or a scenario is counted by. */
 export const BY_CRITERIA: Record<Check, string> = {
-  tone: "по критериям Tone of voice",
+  tone: "по критериям Tone\u00a0of\u00a0voice",
   code: "по критериям точности",
 };
 

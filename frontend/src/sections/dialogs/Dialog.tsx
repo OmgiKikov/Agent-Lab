@@ -202,7 +202,7 @@ export function Dialog({
       <div className="max-w-4xl px-4 pb-16 pt-6 lg:px-10 lg:pt-8">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <VerdictWord status={row.status} />
-          {row.disputed && <span className="text-small text-warn">проверки разошлись</span>}
+          {row.disputed && <span className="text-small text-warn">модели разошлись</span>}
           <span className="text-small text-fg-3">{where}</span>
         </div>
         <div className="mt-2 flex items-start gap-5">

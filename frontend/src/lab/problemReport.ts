@@ -24,8 +24,8 @@ export function reliabilityWord(e: Example, who: "you" | "people" = "you"): stri
   const you = who === "you";
   if (e.review === "agree") return you ? "вы подтвердили" : "подтвердил человек";
   if (e.review === "disagree") return you ? "вы не согласились" : "человек не согласился";
-  if (e.second === "agree") return "две проверки совпали";
-  if (e.second === "disagree") return "проверки разошлись";
+  if (e.second === "agree") return "две модели совпали";
+  if (e.second === "disagree") return "модели разошлись";
   return you ? "вы ещё не проверяли" : "человек ещё не проверял";
 }
 
@@ -38,7 +38,7 @@ export function secondLine(e: Example, model: string | null): string {
     return e.secondStatus === "FAIL"
       ? `${who} смотрела разговор целиком и нашла в нём ошибку.`
       : `${who} смотрела разговор целиком и ошибок не нашла.`;
-  return e.second === "agree" ? "Две проверки совпали." : "Проверки разошлись: нужен ваш ответ.";
+  return e.second === "agree" ? "Две модели совпали." : "Модели разошлись. Нужен ваш ответ.";
 }
 
 type Source = "log" | "sim";

@@ -71,7 +71,7 @@ export function Checking({
                 {PROPOSING}
               </p>
               <p className="mt-2 text-read text-fg-3">
-                Все разговоры проверены. Итог откроется, когда модель предложит, какие ошибки серьёзные.
+                Все разговоры проверены. Итог откроется, когда модель отметит серьёзные ошибки.
               </p>
               <div className="mt-5 h-2 overflow-hidden rounded-full bg-well">
                 <div className="h-full w-full animate-pulse rounded-full bg-fg motion-reduce:animate-none" />

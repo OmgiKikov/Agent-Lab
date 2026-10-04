@@ -74,7 +74,7 @@ function SimResult() {
             ) : (
               <Link to={scenariosLink()}>
                 <Button variant="primary" icon={Hammer}>
-                  К сценариям
+                  Открыть сценарии
                 </Button>
               </Link>
             )

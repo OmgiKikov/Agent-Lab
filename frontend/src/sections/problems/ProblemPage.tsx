@@ -224,7 +224,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                   ·
                 </span>
                 <span>
-                  две проверки совпали в {second.agree}
+                  две модели совпали в {second.agree}
                   {"\u00a0"}из{"\u00a0"}
                   {second.checked}
                 </span>

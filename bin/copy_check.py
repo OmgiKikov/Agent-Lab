@@ -3,7 +3,7 @@ signs of machine-written text listed in docs/WRITING.md («Нейрослоп: �
 
 Reads string literals and JSX text that have Cyrillic letters in them; comments, docstrings and the prompts the models
 read are not texts for people. A line where a sign is meant says so with a comment `copy: ok` (on it or the line
-above). Exits 1 with every finding, 0 when there is none.
+above). Exits 1 with every finding, 0 when there is none; bin/check.sh runs it.
 """
 
 import ast
@@ -46,7 +46,7 @@ class Script:
     and regular expressions are skipped; code inside a template's ${…} is read as code, its strings as strings."""
 
     # After these a slash starts a regular expression, not a division.
-    BEFORE_REGEX = set('(,=:[!&|?{};+-*%<>~^')
+    BEFORE_REGEX = frozenset('(,=:[!&|?{};+-*%<>~^')
 
     def __init__(self, text: str) -> None:
         self.text, self.found = text, []
@@ -87,7 +87,9 @@ class Script:
                 i = self.string(i)
             elif c == '`':
                 i = self.template(i)
-            elif c == '/' and (self.previous(i) in self.BEFORE_REGEX or re.search(r'\breturn\s*$', text[max(0, i - 8) : i])):
+            elif c == '/' and (
+                self.previous(i) in self.BEFORE_REGEX or re.search(r'\breturn\s*$', text[max(0, i - 8) : i])
+            ):
                 i = self.regex(i)
             else:
                 depth += c == '{'

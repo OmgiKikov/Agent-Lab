@@ -7,7 +7,7 @@ import type { Discover } from "./types";
  * A check's result with people's answers taken in (spec 2026-10-04-answers-and-summary-design.md, 2.1), counted from
  * the result's own rows. A conversation is «с ошибкой с учётом ответов» when it keeps an error a person did not take
  * back («Нет» on «Это действительно ошибка?»), or a person found the error the check missed there («Нет» on «Здесь
- * правда нет ошибки?»); one where every error was taken back counts «без найденных ошибок». The denominator stays the
+ * действительно нет ошибки?»); one where every error was taken back counts «без найденных ошибок». The denominator stays the
  * check's: the conversations it could check. It never stands in for the check's own number, is never compared between
  * checks and never enters «было → стало» (DESIGN.md, «Честность чисел», 9).
  */
