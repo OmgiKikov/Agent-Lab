@@ -2,8 +2,9 @@
 import { AGENT } from "../app/agent";
 
 const API = import.meta.env.VITE_LAB_API_BASE_URL ?? "";
-/** Every call works inside the agent of the page (backend/lab/api.py, X-Agent). */
-const AGENT_HEADER: Record<string, string> = AGENT ? { "X-Agent": AGENT } : {};
+/** Every call works inside the agent of the page (backend/lab/api.py, X-Agent), or inside the one it names. */
+const agentHeader = (agent: string | null): Record<string, string> => (agent ? { "X-Agent": agent } : {});
+const AGENT_HEADER = agentHeader(AGENT);
 
 /** What went wrong in words: the service's own message, or the first of FastAPI's validation messages. */
 function problem(detail: unknown, status: number): string {
@@ -19,14 +20,15 @@ async function read<T>(response: Response): Promise<T> {
   return data as T;
 }
 
-/** GET without a body, POST with one. */
-export async function api<T>(path: string, body?: unknown): Promise<T> {
+/** GET without a body, POST with one; inside the agent of the page unless another is named (a new agent's first call). */
+export async function api<T>(path: string, body?: unknown, agent: string | null = AGENT): Promise<T> {
+  const headers = agentHeader(agent);
   const init =
     body === undefined
-      ? { headers: AGENT_HEADER }
+      ? { headers }
       : {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...AGENT_HEADER },
+          headers: { "Content-Type": "application/json", ...headers },
           body: JSON.stringify(body),
         };
   return read<T>(await fetch(API + path, init));

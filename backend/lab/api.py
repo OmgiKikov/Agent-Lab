@@ -103,6 +103,10 @@ class TonePolicyCommand(BaseModel):
     name: str = Field(default='Правила tone of voice', min_length=1, max_length=160)
 
 
+class ToneCopyCommand(BaseModel):
+    agent: str = Field(min_length=1, max_length=120)
+
+
 class ToneCheckCommand(BaseModel):
     ruleIds: list[str] = Field(min_length=1, max_length=20)
     count: int = Field(default=300, ge=1, le=300)
@@ -165,14 +169,30 @@ def result_line(check: str) -> dict | None:
     return {key: summary[key] for key in ('failed', 'measured', 'unmeasured')} | {'finishedAt': value['finishedAt']}
 
 
+def rules_line() -> dict | None:
+    """The current agent's rules of communication in a line, for taking them into another agent: their name, how many
+    criteria were collected from them (0 before that), and their hash, which says whether two agents' rules are the
+    same. None without rules."""
+    found = tone.rules()
+    if found is None:
+        return None
+    policy, draft = found
+    return {
+        'name': policy.get('name') or policy.get('origin') or '',
+        'criteria': len(draft['criteria']) if draft else 0,
+        'sha256': policy.get('sha256'),
+    }
+
+
 @app.get('/api/agents')
 def agents_view() -> list[dict]:
-    """Every agent with the result of each of its checks, read from its own database. Never ranked: the agents have
-    other dialogues and other rules; nor are an agent's two checks added up."""
+    """Every agent with the result of each of its checks and its rules of communication, read from its own database.
+    Never ranked: the agents have other dialogues and other rules; nor are an agent's two checks added up."""
     listed = []
     for agent in registry.listed():
         with registry.using(agent['id']):
-            listed.append({**agent, 'results': {check: result_line(check) for check in checks.RESULTS}})
+            results = {check: result_line(check) for check in checks.RESULTS}
+            listed.append({**agent, 'results': results, 'rules': rules_line()})
     return listed
 
 
@@ -424,6 +444,30 @@ async def save_tone_policy(payload: TonePolicyCommand) -> dict:
         raise HTTPException(409, str(error)) from error
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
+
+
+@app.post('/api/tone-of-voice/copy')
+async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
+    """The rules of communication of another agent (`agent`) and their criteria, with the clarifications people
+    confirmed, become this agent's own as a copy: later changes in either never reach the other (tone.take).
+    `unchanged` when this agent has the same rules and criteria already: nothing is written then."""
+    source = registry.get(payload.agent)
+    if source is None:
+        raise HTTPException(404, 'Агент не найден')
+    if registry.db_of(source['id']) == store.database():
+        raise HTTPException(400, 'Правила можно взять только у другого агента')
+    with registry.using(source['id']):
+        found = tone.rules()
+    if found is None:
+        raise HTTPException(400, f'У агента «{source["name"]}» нет правил общения')
+
+    async def work(progress: Progress) -> dict:
+        return {'ok': True, 'unchanged': not tone.take(*found)}
+
+    try:
+        return await jobs.perform('tone-policy', work)
+    except BusyError as error:
+        raise HTTPException(409, str(error)) from error
 
 
 @app.post('/api/tone-of-voice/read-file')

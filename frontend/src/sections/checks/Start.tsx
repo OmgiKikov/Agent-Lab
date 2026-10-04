@@ -23,7 +23,15 @@ export function needsOf(check: Check, state: LabState | null): Need[] {
   };
   if (check === "tone") {
     const policy = state?.sources.find((s) => s.id === TONE_ID);
-    return [dialogs, { label: "Правила общения", value: policy?.origin ?? null, later: "добавите на первом шаге" }];
+    // Criteria are collected from the rules on the second step, or come ready with rules taken from another agent.
+    const criteria = state?.toneOfVoice?.criteria.length ?? 0;
+    return [
+      dialogs,
+      { label: "Правила общения", value: policy?.origin ?? null, later: "добавите на первом шаге" },
+      ...(criteria
+        ? [{ label: "Критерии", value: count(criteria, "критерий", "критерия", "критериев"), later: "" }]
+        : []),
+    ];
   }
   const code = codeSources(state).length;
   return [
