@@ -7,6 +7,8 @@ import { useCriteria } from "../../lab/criteria";
 import { longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
+import { seriousOf } from "../../lab/severity";
+import { SeriousLine } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
 import { UploadButton } from "../../product/UploadLogs";
@@ -22,11 +24,12 @@ import { AccuracyStart, ToneStart } from "./Start";
 const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /**
- * «Итог» of a check: the real conversations of the export as this check judged them — one number and how it stands to
- * the check's previous check, then the problems it is made of, most frequent first, each beside its previous count,
- * and the criteria whose errors are no longer found. Without a result, how to get one. «Проверить снова», the same
- * words in both checks, repeats tone of voice step by step; accuracy is checked again here (?assess=1), by the same
- * criteria or by criteria read from the code anew.
+ * «Итог» of a check: the real conversations of the export as this check judged them — one number, the conversations
+ * with a serious error once a criterion is marked serious, and how it stands to the check's previous check; then the
+ * problems it is made of, serious first, then most frequent, each beside its previous count, and the criteria whose
+ * errors are no longer found. Without a result, how to get one. «Проверить снова», the same words in both checks,
+ * repeats tone of voice step by step; accuracy is checked again here (?assess=1), by the same criteria or by criteria
+ * read from the code anew.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -144,7 +147,8 @@ export function ResultPage({ check }: { check: Check }) {
         <Trust
           result={result}
           check={check}
-          compare={<CompareLine check={check} compare={compare} />}
+          serious={<SeriousLine data={data} check={check} />}
+          compare={<CompareLine check={check} compare={compare} serious={seriousOf(data)?.marked} />}
           className="mt-5"
         />
       )}
@@ -156,7 +160,11 @@ export function ResultPage({ check }: { check: Check }) {
         <div className="mt-2">
           <ProblemList list={list} stage={check} was={wasOf(compare)} />
         </div>
-        <NoLongerFound check={check} compare={compare} />
+        <NoLongerFound
+          check={check}
+          compare={compare}
+          serious={new Set(data.rules.filter((r) => r.serious).map((r) => r.id))}
+        />
       </section>
     </div>,
   );

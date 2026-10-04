@@ -125,8 +125,34 @@ class Book:
         found[at] = (example, title)
 
 
-def from_logs(book: Book, analysis: dict) -> dict | None:
-    """The audit's verdicts into the book; its line of counts."""
+def keys_of(analysis: dict) -> dict[str, str]:
+    """The key (rule_key) of each criterion id of a result, as the book keys its rules."""
+    return {
+        rule['id']: rule_key(rule.get('quote') or rule['text'])
+        for topic in analysis.get('topics') or []
+        for rule in topic['rules']
+    }
+
+
+def serious_counts(analysis: dict, serious: set[str]) -> dict[str, int]:
+    """Among the checked conversations of a result: those with an error by at least one criterion marked serious
+    (`failed`), and those where at least one such criterion could be checked (`checked`; elsewhere it did not apply or
+    could not be checked) — what that count rests on."""
+    keys = keys_of(analysis)
+    failed = checked = 0
+    for result in analysis.get('results') or []:
+        if result['status'] not in DECIDED:
+            continue
+        rows = [row for row in result.get('rules') or [] if keys.get(row.get('ruleId')) in serious]
+        checked += any(row.get('status') in DECIDED for row in rows)
+        failed += any(row.get('status') == 'FAIL' for row in rows)
+    return {'failed': failed, 'checked': checked}
+
+
+def from_logs(book: Book, analysis: dict, serious: set[str] = frozenset()) -> dict | None:
+    """The audit's verdicts into the book; its line of counts, once a criterion is marked serious with the
+    conversations that have a serious error (withSerious) and those where a serious criterion could be checked
+    (seriousChecked); no such keys before."""
     if not analysis:
         return None
     rules = {}
@@ -162,7 +188,7 @@ def from_logs(book: Book, analysis: dict) -> dict | None:
             book.add(book.entry(rule, topic), 'log', example['dialogueId'], example, row.get('title', ''))
     measured = [r for r in results if r['status'] in ('PASS', 'FAIL')]
     sampled = analysis.get('sampled', len(results))
-    return {
+    line = {
         'sampled': sampled,
         'assessed': len(measured),
         'withViolations': sum(1 for r in measured if r['status'] == 'FAIL'),
@@ -170,6 +196,10 @@ def from_logs(book: Book, analysis: dict) -> dict | None:
         'finishedAt': analysis.get('finishedAt'),
         'rulesSince': analysis.get('rulesSince'),
     }
+    if not serious:
+        return line
+    counts = serious_counts(analysis, serious)
+    return line | {'withSerious': counts['failed'], 'seriousChecked': counts['checked']}
 
 
 def recorded_rule(book: Book, row: dict, known: dict, has_snapshot: bool) -> dict | None:
@@ -264,7 +294,7 @@ def verdicts(entry: dict, where: str) -> tuple[dict, list[str]]:
     return side, titles
 
 
-def finish(entry: dict, deck: list[dict]) -> dict:
+def finish(entry: dict, deck: list[dict], serious: set[str] = frozenset()) -> dict:
     log, log_titles = verdicts(entry, 'log')
     sim, sim_titles = verdicts(entry, 'sim')
     failed = [e for e in log['examples'] + sim['examples'] if e['status'] == 'FAIL']
@@ -279,6 +309,7 @@ def finish(entry: dict, deck: list[dict]) -> dict:
     return {
         'id': entry['id'],
         'title': title,
+        'serious': entry['id'] in serious,
         'rule': entry['rule'],
         'topics': entry['topics'],
         'log': log,
@@ -295,15 +326,17 @@ def finish(entry: dict, deck: list[dict]) -> dict:
 
 def build(check: str, run_id: str | None = None) -> dict:
     """The check's rules and problems: its result on one side, the run asked for (else its newest finished run) on
-    the other. Its scenarios are named only when the deck was built from this check."""
+    the other. Its scenarios are named only when the deck was built from this check. The criteria a person marked
+    serious come first, then by frequency."""
     document = store.load(cards.DECK) or {}
     deck = document.get('cards') or []
+    serious = set(store.severity()[check])
     book = Book(sources.load())
-    log = from_logs(book, store.load(checks.result(check)) or {})
+    log = from_logs(book, store.load(checks.result(check)) or {}, serious)
     sim = from_run(book, chosen_run(check, run_id), deck)
     scenarios = deck if document.get('check') == check else []
-    rules = [finish(entry, scenarios) for entry in book.rules.values()]
-    rules.sort(key=lambda r: (-r['log']['failed'], -r['sim']['failed'], r['rule']['text']))
+    rules = [finish(entry, scenarios, serious) for entry in book.rules.values()]
+    rules.sort(key=lambda r: (not r['serious'], -r['log']['failed'], -r['sim']['failed'], r['rule']['text']))
     return {
         'check': check,
         'log': log,

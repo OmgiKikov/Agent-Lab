@@ -315,6 +315,32 @@ def code_reviews(check_id: str) -> list[dict]:
     return _reviews('code_check_reviews', check_id)
 
 
+def severity() -> dict[str, list[str]]:
+    """The criteria a person marked serious, per check (checks.SEVERITY); a check with none has an empty list."""
+    found = load(checks.SEVERITY) or {}
+    return {check: sorted(found.get(check) or []) for check in checks.RESULTS}
+
+
+def set_severity(check: str, rule: str, serious: bool) -> dict[str, list[str]]:
+    """Mark one criterion of a check serious, or take the mark back; the marks of every check after it."""
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        found = _document(connection, checks.SEVERITY) or {}
+        keys = {key for key in found.get(check) or [] if key != rule} | ({rule} if serious else set())
+        value = {key: sorted(found.get(key) or []) for key in checks.RESULTS} | {check: sorted(keys)}
+        _put(connection, checks.SEVERITY, value)
+    return value
+
+
+def take_severity(check: str, keys: list[str]) -> None:
+    """A check's marks as another agent has them (rules of communication taken as a copy, api.copy_tone_rules)."""
+    with _connection() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        found = _document(connection, checks.SEVERITY) or {}
+        value = {key: sorted(found.get(key) or []) for key in checks.RESULTS} | {check: sorted(set(keys))}
+        _put(connection, checks.SEVERITY, value)
+
+
 def tone_checks() -> list[dict]:
     with _connection() as connection:
         return [json.loads(row[0]) for row in connection.execute('SELECT summary FROM tone_checks ORDER BY rowid DESC')]

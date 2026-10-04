@@ -8,8 +8,8 @@ import { checked, errorIn, queueOf } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
 /**
- * The problems of a stage, most frequent first, with how many criteria have no error found; `limit` for the overview,
- * `was` for what each problem had in the previous check of a check.
+ * The problems of a stage, the serious ones first, then the most frequent, with how many criteria have no error found;
+ * `limit` for the overview, `was` for what each problem had in the previous check of a check.
  */
 export function ProblemList({
   list,

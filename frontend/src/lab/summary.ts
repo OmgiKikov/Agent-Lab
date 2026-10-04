@@ -2,7 +2,9 @@ import { agentKey } from "../app/agent";
 import { answersText, yesNoText, type Answers } from "./answers";
 import { CHECK_NAME, CHECKS } from "./checks";
 import { count, pct, plural } from "./format";
+import { headingOf } from "./problemReport";
 import { splitQuote } from "./quote";
+import { seriousText, type Serious } from "./severity";
 import type { Check } from "./types";
 
 /**
@@ -29,15 +31,24 @@ export type SummaryCheck = {
   failed: number;
   unmeasured: number;
   answers: Answers;
+  /**
+   * The checked conversations with a serious error, once a person marked a criterion serious (lab/severity), and
+   * their «было → стало» under the comparison of the whole check; none before.
+   */
+  serious: Serious | null;
   /** «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). …» — the short line of «Итог», or none. */
   compare: string | null;
-  /** Every problem of the check, most frequent first; the ticked ones go into the PDF and the letter. */
+  /** «С серьёзными ошибками: 3 из 53 (6%) → сейчас 6 из 53 (11%). …», or none. */
+  seriousCompare: string | null;
+  /** Every problem of the check, the serious ones first, then the most frequent; the ticked ones go into the PDF and the letter. */
   problems: SummaryProblem[];
 };
 
 export type SummaryProblem = {
   id: string;
   chosen: boolean;
+  /** A person marked its criterion serious: «серьёзная» beside its name. */
+  serious: boolean;
   title: string;
   /** What the agent must do, in the criterion's words. */
   duty: string;
@@ -104,6 +115,13 @@ export const HOW = [
   "Tone of voice и Точность проверяют разное и считаются отдельно: их числа не складываются.",
 ];
 
+/** Said once a person marked a criterion serious: who decides it, and that its count is part of the number. */
+export const HOW_SERIOUS =
+  "«С серьёзными ошибками» — те же проверенные разговоры, где есть ошибка хотя бы по одному критерию, который люди отметили серьёзным; тяжесть решают люди, автоматическая проверка её не назначает. Эти разговоры уже входят в число разговоров с ошибкой агента и не добавляются к нему.";
+
+/** The footnote of a summary: with the line about serious errors once a check of it has them marked. */
+export const howOf = (s: Summary) => (s.checks.some((c) => c.serious) ? [...HOW, HOW_SERIOUS] : HOW);
+
 /** A whole date with its year, for a page that leaves the product: «3 октября 2026 г.» */
 export const fullDay = (iso: string) =>
   new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
@@ -147,7 +165,13 @@ export function summaryMarkdown(s: Summary): string {
       SUMMARY_WHAT[c.check],
       "",
       [`${headline(c)}.`, unmeasuredText(c)].filter(Boolean).join(" "),
-      ...[answersText(c.answers, "people"), c.compare, rechecked(c.answers)].filter((x): x is string => !!x),
+      ...[
+        c.serious && seriousText(c.serious, "people"),
+        answersText(c.answers, "people"),
+        c.compare,
+        c.seriousCompare,
+        rechecked(c.answers),
+      ].filter((x): x is string => !!x),
     );
   }
   const chosen = s.checks.filter((c) => c.problems.some((p) => p.chosen));
@@ -158,7 +182,7 @@ export function summaryMarkdown(s: Summary): string {
       for (const p of c.problems.filter((x) => x.chosen)) {
         lines.push(
           "",
-          `#### ${p.title}`,
+          `#### ${headingOf(p)}`,
           "",
           `Что требуется от агента: ${p.duty}`,
           `${problemCount(p)}.`,
@@ -175,7 +199,7 @@ export function summaryMarkdown(s: Summary): string {
       }
     }
   }
-  lines.push("", "## Как считали", "", ...HOW, madeText(s));
+  lines.push("", "## Как считали", "", ...howOf(s), madeText(s));
   return lines.join("\n");
 }
 
@@ -207,18 +231,20 @@ export function writeChosen(chosen: Chosen) {
   }
 }
 
-/** How many of a check's problems the summary takes when the person has not ticked any: the most frequent. */
+/** How many of a check's problems the summary takes when the person has not ticked any and none is serious. */
 export const DEFAULT_CHOSEN = 3;
 
 /**
- * The ticked problems of a check, given its problems most frequent first: the person's ticks that still exist, else the
- * most frequent three. A person who unticked everything gets nothing; ticks that all belong to criteria gone since
- * (other rules, other code) count as none given.
+ * The ticked problems of a check, given its problems (serious first, then the most frequent) and the serious ones among
+ * them: the person's ticks that still exist, else the serious problems, else the most frequent three. A person who
+ * unticked everything gets nothing; ticks that all belong to criteria gone since (other rules, other code) count as
+ * none given.
  */
-export function chosenOf(stored: string[] | undefined, problems: string[]): Set<string> {
+export function chosenOf(stored: string[] | undefined, problems: string[], serious: string[] = []): Set<string> {
   if (stored) {
     const known = stored.filter((id) => problems.includes(id));
     if (known.length || !stored.length) return new Set(known);
   }
-  return new Set(problems.slice(0, DEFAULT_CHOSEN));
+  const grave = problems.filter((id) => serious.includes(id));
+  return new Set(grave.length ? grave : problems.slice(0, DEFAULT_CHOSEN));
 }

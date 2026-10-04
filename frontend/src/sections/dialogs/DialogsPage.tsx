@@ -15,13 +15,13 @@ import { UploadButton } from "../../product/UploadLogs";
 import { CheckHeader } from "../checks/CheckHeader";
 import { SimHeader, useSimRuns } from "../simulations/stage";
 import { Dialog } from "./Dialog";
-import { frozenNames, matchesRow, toVerdict, type Verdict } from "./model";
+import { frozenNames, matchesRow, seriousRows, toVerdict, type Verdict } from "./model";
 import { Rows } from "./Rows";
 
 /**
  * «Разговоры» of a stage: every conversation of the export as a check judged it, or every conversation one run played;
  * one in full with the quotes the checks cited, every criterion's result and the trace. Where a number of another page
- * leads, filtered by its criterion (?rule=) or its result (?v=).
+ * leads, filtered by its criterion (?rule=) or its result (?v=; `serious` — with an error by a criterion marked serious).
  */
 export function DialogsPage({ stage }: { stage: Stage }) {
   const { state, offline } = useLabState();
@@ -61,7 +61,11 @@ export function DialogsPage({ stage }: { stage: Stage }) {
         : null,
     [rule, stage],
   );
-  const rows = useMemo(() => all.filter((r) => matchesRow(r, verdict, query, only)), [all, verdict, query, only]);
+  const serious = useMemo(() => seriousRows(all, criteria), [all, criteria]);
+  const rows = useMemo(
+    () => all.filter((r) => matchesRow(r, verdict, query, only, serious)),
+    [all, verdict, query, only, serious],
+  );
   const key = params.get("d") ?? (wide ? (rows[0]?.key ?? null) : null);
   const selected = key ? all.find((r) => r.key === key) : undefined;
   const open = (k: string | null) =>
@@ -155,6 +159,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
             })
           }
           rule={rule ? (criteria.find((c) => c.r.id === rule.id) ?? null) : null}
+          serious={serious}
           onClearRule={() => set((n) => n.delete("rule"))}
           query={query}
           onQuery={setQuery}

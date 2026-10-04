@@ -41,6 +41,8 @@ export type Side = { failed: number; passed: number; unknown: number; examples: 
 export type RuleEntry = {
   id: string;
   title: string;
+  /** A person marked the criterion serious: its errors come first and are counted apart (lab/severity). */
+  serious: boolean;
   rule: {
     name?: string;
     text: string;
@@ -68,6 +70,10 @@ export type Problems = {
     unassessed: number;
     finishedAt: string | null;
     rulesSince: string | null;
+    /** The checked conversations with an error by a criterion marked serious; only once one is marked. */
+    withSerious?: number;
+    /** The checked conversations where a criterion marked serious could be checked: what `withSerious` rests on. */
+    seriousChecked?: number;
   } | null;
   sim: {
     runId: string;
@@ -86,13 +92,20 @@ export type Problems = {
 export type LogDialogue = { id: string; messages: { role: "user" | "assistant"; content: string }[] };
 export type SourceText = { id: string; kind: string; origin: string; sha256?: string; content: string };
 
-/** What makes the problems out of date: a new result, a run that started or finished, new scenarios, a task that ended. */
+/** The serious marks of both checks in a line: a mark reorders the problems and changes their count. */
+export const severityStamp = (state: LabState | null) =>
+  state?.severity ? `${state.severity.tone.join(",")}|${state.severity.code.join(",")}` : "";
+
+/**
+ * What makes the problems out of date: a new result, a run that started or finished, new scenarios, a task that ended,
+ * a criterion marked serious or minor.
+ */
 export function problemsStamp(state: LabState | null): string {
   if (!state) return "";
   const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}`).join(",");
   const sources = state.sources.map((s) => `${s.id}:${s.sha256 ?? ""}`).join(",");
   const results = `${state.checks.tone?.finishedAt ?? ""}|${state.checks.code?.finishedAt ?? ""}`;
-  return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}`;
+  return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}|${severityStamp(state)}`;
 }
 
 /** Every example of the record with the check it belongs to (Example.check). */

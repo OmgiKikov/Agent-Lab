@@ -10,6 +10,7 @@ import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
+import { SEVERITY_HINT } from "../../lab/severity";
 import { codeSources, TONE_ID } from "../../lab/tone";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -33,7 +34,8 @@ const byFrequency = (list: Criterion[], side: SideKey) =>
  * «Критерии» of a check: what the agent must do, where it is written and how it went — in the check's conversations
  * («Диалоги») and in the last run of its scenarios («Симуляции»). Accuracy shows the agent's prompt as code with each
  * criterion lit in place; tone of voice, the person's rules of communication the same way. The chosen criterion opens
- * with its conversations.
+ * with its conversations. Here a person marks a criterion «Серьёзная ошибка» (in its row and in its panel); until the
+ * first mark one quiet line says what the mark does.
  */
 export function CriteriaPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -195,28 +197,32 @@ export function CriteriaPage({ check }: { check: Check }) {
     <div className="flex h-full flex-col">
       {header}
       <div className="flex flex-col gap-2 border-b border-line px-4 py-3 lg:flex-row lg:items-center lg:gap-4 lg:px-5">
-        <p className="min-w-0 text-small text-fg-3 lg:flex-1">
-          <span className="text-fg-2">
-            {list.length} {plural(list.length, "критерий", "критерия", "критериев")}{" "}
-            {tone
-              ? "из правил общения"
-              : `из ${usedSources} ${plural(usedSources, "источника", "источников", "источников")} кода`}
-          </span>
-          {data.log?.rulesSince && <>, зафиксированы {day(data.log.rulesSince)}</>}
-          {second.checked > 0 && (
-            <>
-              {" "}
-              · две проверки совпали в {second.agree} из {second.checked} ошибок в диалогах
-            </>
-          )}
-          {people.agree + people.disagree > 0 && (
-            <>
-              {" "}
-              · вы ответили на {people.agree + people.disagree}{" "}
-              {plural(people.agree + people.disagree, "случай", "случая", "случаев")}, подтвердили {people.agree}
-            </>
-          )}
-        </p>
+        <div className="min-w-0 lg:flex-1">
+          <p className="text-small text-fg-3">
+            <span className="text-fg-2">
+              {list.length} {plural(list.length, "критерий", "критерия", "критериев")}{" "}
+              {tone
+                ? "из правил общения"
+                : `из ${usedSources} ${plural(usedSources, "источника", "источников", "источников")} кода`}
+            </span>
+            {data.log?.rulesSince && <>, зафиксированы {day(data.log.rulesSince)}</>}
+            {second.checked > 0 && (
+              <>
+                {" "}
+                · две проверки совпали в {second.agree} из {second.checked} ошибок в диалогах
+              </>
+            )}
+            {people.agree + people.disagree > 0 && (
+              <>
+                {" "}
+                · вы ответили на {people.agree + people.disagree}{" "}
+                {plural(people.agree + people.disagree, "случай", "случая", "случаев")}, подтвердили {people.agree}
+              </>
+            )}
+          </p>
+          {/* Once, quietly, until the first criterion of this check is marked serious. */}
+          {!list.some((c) => c.r.serious) && <p className="mt-0.5 text-small text-fg-3">{SEVERITY_HINT}</p>}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {sideOptions.length > 1 && (
             <Segmented<SideKey>
@@ -326,6 +332,7 @@ export function CriteriaPage({ check }: { check: Check }) {
         ) : (
           <CriteriaTable
             className={panelOpen && !wide ? "hidden" : undefined}
+            check={check}
             list={list}
             sources={sources}
             selected={chosen?.r.id ?? null}

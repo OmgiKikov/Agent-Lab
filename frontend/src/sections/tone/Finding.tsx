@@ -9,6 +9,7 @@ import { count } from "../../lab/format";
 import { reliabilityWord } from "../../lab/problemReport";
 import { useReview } from "../../lab/problems";
 import type { Discover, ToneDraft } from "../../lab/types";
+import { SeriousTag } from "../../product/Severity";
 import { Button } from "../../ui/Button";
 import { Advice } from "./Advice";
 
@@ -45,6 +46,7 @@ export function Finding({
         <div className="flex flex-wrap items-center justify-between gap-3 text-small text-fg-3">
           <span>
             Критерий {c.n} · {c.name}
+            {c.r.serious && <SeriousTag className="relative -top-px ml-2 align-middle" />}
           </span>
           <Link
             to={conversationsLink("tone", { rule: c.r.id, v: "fail" })}

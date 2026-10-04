@@ -99,6 +99,7 @@ export function Rows({
   verdict,
   onVerdict,
   rule,
+  serious,
   onClearRule,
   query,
   onQuery,
@@ -115,6 +116,8 @@ export function Rows({
   verdict: Verdict;
   onVerdict: (v: Verdict) => void;
   rule: Criterion | null;
+  /** The conversations with a serious error (model, seriousRows). */
+  serious: Set<string>;
   onClearRule: () => void;
   query: string;
   onQuery: (q: string) => void;
@@ -137,8 +140,11 @@ export function Rows({
           }),
       ),
     ].sort((a, b) => a - b);
-  const count = (v: Verdict) => all.filter((r) => matchesRow(r, v, "", null)).length;
+  const count = (v: Verdict) => all.filter((r) => matchesRow(r, v, "", null, serious)).length;
   const current = VERDICTS.find((v) => v.value === verdict)!;
+  // «С серьёзной ошибкой» once a criterion is marked serious, or when an address asks for it.
+  const marked = criteria.some((c) => c.r.serious);
+  const verdicts = VERDICTS.filter((v) => v.value !== "serious" || marked || verdict === "serious");
   return (
     <div className={cn("flex min-h-0 flex-col border-line lg:border-r", className)}>
       <div className="space-y-3 px-4 pb-3 pt-4">
@@ -151,7 +157,7 @@ export function Rows({
                 <ChevronDown aria-hidden className="size-4 text-fg-3" />
               </span>
             }
-            items={VERDICTS.map((v) => ({
+            items={verdicts.map((v) => ({
               key: v.value,
               label: v.label,
               sub: `${count(v.value)}`,

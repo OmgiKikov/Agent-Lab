@@ -14,6 +14,8 @@ import {
 } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
+import { seriousOf, seriousSentence } from "../../lab/severity";
+import { SeriousTag } from "../../product/Severity";
 import { shortOrigin } from "../../product/text";
 import { Button } from "../../ui/Button";
 import { Segmented } from "../../ui/Segmented";
@@ -35,7 +37,10 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
     <section className="mt-10 break-inside-avoid">
       <div className="grid grid-cols-[28px_minmax(0,1fr)] items-baseline">
         <span className="font-mono text-lead text-ink-3">{i}</span>
-        <h3 className="text-balance text-lead font-semibold text-ink">{c.r.title}</h3>
+        <h3 className="text-balance text-lead font-semibold text-ink">
+          {c.r.title}
+          {c.r.serious && <SeriousTag paper className="relative -top-px ml-2 align-middle font-normal" />}
+        </h3>
         <p className="col-start-2 mt-1 text-small text-ink-2">
           Ошибка в{" "}
           <b className="font-semibold text-ink-bad">
@@ -86,8 +91,10 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
 
 /**
  * «Отчёт»: a check's assessment as a protocol to send, a white sheet inside the product. Its conversations and its
- * simulation are never in one report. «Скопировать для письма» puts the same on the clipboard formatted and as plain
- * text without Markdown marks, each problem with its link; the downloaded file is Markdown.
+ * simulation are never in one report. The problems a person marked serious come first, marked «серьёзная», and the
+ * conversations with a serious error stand under the numbers of the conversations. «Скопировать для письма» puts the
+ * same on the clipboard formatted and as plain text without Markdown marks, each problem with its link; the downloaded
+ * file is Markdown.
  */
 export function ReportSheet({
   open,
@@ -116,6 +123,8 @@ export function ReportSheet({
     copyReport(markdown()).then(() => toast.notify("Отчёт скопирован: вставьте в письмо или тикет"), toast.error);
   const log = data.log;
   const sim = data.sim;
+  const serious = side === "log" ? seriousOf(data) : null;
+  const grave = serious && seriousSentence(serious, "people");
   const figures =
     side === "log" && log
       ? [
@@ -205,6 +214,12 @@ export function ReportSheet({
               </div>
             ))}
           </dl>
+          {grave && (
+            <p className="mt-4 text-read text-ink-2">
+              {grave.head} — <b className="whitespace-nowrap font-semibold text-ink">{grave.share}</b>
+              {grave.rest}
+            </p>
+          )}
           {items.map((c, i) => (
             <Section key={c.r.id} c={c} i={i + 1} side={side} />
           ))}

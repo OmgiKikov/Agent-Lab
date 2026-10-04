@@ -1,6 +1,7 @@
 import { historyLink, problemLink } from "../app/links";
-import { reliabilityWord } from "./problemReport";
+import { headingOf, reliabilityWord } from "./problemReport";
 import type { Problems, RuleEntry } from "./problems";
+import { seriousFirst, seriousOf, seriousText } from "./severity";
 import type { Discover } from "./types";
 import { count, pct } from "./format";
 
@@ -23,18 +24,22 @@ function nextAction(problem: RuleEntry): string {
 }
 
 /**
- * A short brief for the team, with the same number and words as the screen: «N из M — с ошибкой агента». Complete
- * criteria and evidence remain in the saved check, linked from the brief («История» of tone of voice). Links open
- * Agent Lab on the computer where the check ran; the brief says so, since it travels by e-mail.
+ * A short brief for the team, with the same number and words as the screen: «N из M — с ошибкой агента», and the
+ * conversations with a serious error once a criterion is marked serious. It tells the serious problems first, marked
+ * «серьёзная», then the most frequent: all the serious ones, and at least three. Complete criteria and evidence remain
+ * in the saved check, linked from the brief («История» of tone of voice). Links open Agent Lab on the computer where
+ * the check ran; the brief says so, since it travels by e-mail.
  */
 export function toneBrief(data: Problems, result: Discover, base: string, { filename }: { filename?: string }): string {
   const criteria = result.topics.flatMap((topic) => topic.rules);
   const quotes = new Set(criteria.map((criterion) => criterion.quote));
   const rules = data.rules.filter((rule) => quotes.has(rule.rule.quote));
-  const top = rules
+  const found = rules
     .filter((rule) => rule.log.failed > 0)
-    .sort((a, b) => b.log.failed - a.log.failed)
-    .slice(0, 3);
+    .sort((a, b) => seriousFirst(a, b) || b.log.failed - a.log.failed);
+  const grave = found.filter((rule) => rule.serious).length;
+  const top = found.slice(0, Math.max(3, grave));
+  const serious = seriousOf({ ...data, rules });
   const { measured, failed, passed, unmeasured } = result.summary;
   const reviews = rules.flatMap((rule) => rule.log.examples).filter((example) => example.review);
   const agrees = reviews.filter((example) => example.review === "agree").length;
@@ -49,6 +54,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
     measured
       ? `С ошибкой агента: ${failed} из ${count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(failed, measured)}%).`
       : `Ни один разговор не удалось проверить.`,
+    ...(measured && serious ? [seriousText(serious, "people")] : []),
     `Без найденных ошибок: ${passed}. Не удалось проверить: ${unmeasured} из ${result.sampled}; в счёт они не входят.`,
     `Ответы человека по отдельным оценкам критериев: ${reviews.length}; согласие с оценкой — ${agrees}, несогласие — ${reviews.length - agrees}. Это число оценок, а не разговоров.`,
     "",
@@ -70,7 +76,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
     const example =
       errors.find((e) => e.review === "agree") ?? errors.find((e) => e.review !== "disagree") ?? errors[0];
     lines.push(
-      `## ${index + 1}. ${short(problem.title, 140)}`,
+      `## ${index + 1}. ${headingOf({ ...problem, title: short(problem.title, 140) })}`,
       "",
       `Ошибка найдена в ${problem.log.failed} из ${count(problem.log.failed + problem.log.passed, "разговора", "разговоров", "разговоров")}, в которых удалось проверить этот критерий. Не удалось проверить критерий: ${problem.log.unknown}.`,
       "",
@@ -104,8 +110,11 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
     lines.push("", `Следующее действие: ${nextAction(problem)}`, "");
     if (!saved) lines.push(`Полное основание в Agent Lab: ${origin}${problemLink(problem.id, "tone")}`, "");
   }
-  if (rules.filter((rule) => rule.log.failed > 0).length > 3)
-    lines.push("В сводке — три наиболее частые проблемы. Полный список доступен в результате проверки.", "");
+  if (found.length > top.length)
+    lines.push(
+      `В сводке — ${grave >= 3 ? "серьёзные проблемы" : grave ? "серьёзные проблемы и самые частые из остальных" : "три наиболее частые проблемы"}. Полный список доступен в результате проверки.`,
+      "",
+    );
   if (saved)
     lines.push(
       "## Полное основание проверки",

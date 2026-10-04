@@ -3,6 +3,7 @@ import { CHECK_NAME } from "./checks";
 import { duty } from "./criteria";
 import { count, day, plural } from "./format";
 import type { Example, Problems, RuleEntry } from "./problems";
+import { seriousFirst, seriousOf, seriousText } from "./severity";
 
 const SOURCE_LABEL: Record<string, string> = {
   prompt: "Промпт требует",
@@ -64,12 +65,18 @@ const where = (p: RuleEntry, source?: Source) =>
     .filter(Boolean)
     .join(", ");
 
-/** One problem for a ticket or a message: what, how often, where the agent's code says it, one proof and the link. With a source, only that source is told. */
+/** «Перекладывает вину на клиента · серьёзная»: a problem's name as a letter or a ticket heads it. */
+export const headingOf = (p: Pick<RuleEntry, "title" | "serious">) => (p.serious ? `${p.title} · серьёзная` : p.title);
+
+/**
+ * One problem for a ticket or a message: what (with «серьёзная» when a person marked it so), how often, where the agent's
+ * code says it, one proof and the link. With a source, only that source is told.
+ */
 export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: Source): string {
   const own = source ? p[source].examples : [...p.log.examples, ...p.sim.examples];
   const e = own.find((x) => x.status === "FAIL");
   const lines = [
-    `${"#".repeat(level)} ${p.title}`,
+    `${"#".repeat(level)} ${headingOf(p)}`,
     "",
     `Ошибка ${where(p, source)}.`,
     "",
@@ -95,7 +102,8 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
 
 /**
  * The problems of one source of a check as a file: its conversations and its simulation are never told together. The
- * conversations name their export (filename), as the tone-of-voice brief does.
+ * conversations name their export (filename), as the tone-of-voice brief does, and the conversations with a serious
+ * error under their numbers once a criterion is marked serious. Serious problems first, then the most frequent.
  */
 export function problemsReport(
   data: Problems,
@@ -105,16 +113,21 @@ export function problemsReport(
 ): string {
   const lines = [`# ${summarySentence(data, source)}`, "", `Проверка «${CHECK_NAME[data.check]}».`];
   if (source === "log" && data.log && filename) lines.push(`Выгрузка: ${filename}.`);
-  if (source === "log" && data.log)
+  if (source === "log" && data.log) {
     lines.push(
       `Диалоги: проверено ${data.log.assessed} из ${count(data.log.sampled, "разговора", "разговоров", "разговоров")} ${day(data.log.finishedAt)}, ошибка в ${data.log.withViolations}, не удалось проверить ${data.log.unassessed}.`,
     );
+    const serious = seriousOf(data);
+    if (serious) lines.push(seriousText(serious, "people"));
+  }
   if (source === "sim" && data.sim)
     lines.push(
       `Симуляция: ${data.sim.target} · ${data.sim.version} от ${day(data.sim.finishedAt)}, проверено ${data.sim.assessed} из ${count(data.sim.dialogs, "разговора", "разговоров", "разговоров")}, ошибка в ${data.sim.withViolations}, не удалось проверить ${data.sim.unassessed}.`,
     );
   lines.push("");
-  const list = data.rules.filter((r) => r[source].failed > 0).sort((a, b) => b[source].failed - a[source].failed);
+  const list = data.rules
+    .filter((r) => r[source].failed > 0)
+    .sort((a, b) => seriousFirst(a, b) || b[source].failed - a[source].failed);
   for (const p of list)
     lines.push(
       problemMarkdown(

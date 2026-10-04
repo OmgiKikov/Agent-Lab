@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { resultOf } from "./checks";
-import { longDay } from "./format";
-import { notComparedText, shareText, shiftText, type Counts, type Summary } from "./history";
+import { longDay, plural } from "./format";
+import { FEW, notComparedText, shareText, shiftText, type Counts, type Summary } from "./history";
 import { useLabState } from "./LabProvider";
 import type { Check, Discover } from "./types";
 
@@ -41,17 +41,30 @@ export type Compare = {
   previous: CheckLine | null;
   overall?: { before: Counts; now: Counts; verdict: Verdict | null; direction: Direction | null };
   criteria?: CompareRow[];
+  /**
+   * The conversations with a serious error on both sides, by the marks as they are now, under the same rules as
+   * `overall`; only once a criterion of the check is marked serious (lab/severity).
+   */
+  serious?: {
+    before: Counts;
+    now: Counts;
+    /** The conversations of each side where a serious criterion could be checked; under 30 on a side — `few`. */
+    checked?: { before: number; now: number };
+    verdict: Verdict | null;
+    direction: Direction | null;
+  };
 };
 
 /**
  * The comparison of a check's current result with its previous saved check. It reads saved records only, and is asked
- * again when that check's result or the export changes.
+ * again when that check's result, the export or its serious marks change.
  */
 export function useCompare(check: Check | null) {
   const { state } = useLabState();
   const result = check ? resultOf(state, check) : null;
+  const marks = check ? (state?.severity?.[check] ?? []).join(",") : "";
   return useQuery({
-    queryKey: ["compare", check, result?.checkId ?? result?.finishedAt ?? null, state?.logs.updatedAt ?? null],
+    queryKey: ["compare", check, result?.checkId ?? result?.finishedAt ?? null, state?.logs.updatedAt ?? null, marks],
     queryFn: () => api<Compare>(`/api/compare?check=${check}`),
     enabled: !!state && !!check,
     staleTime: Infinity,
@@ -117,6 +130,33 @@ export function compareSentence(compare: Compare, { short = false } = {}): { hea
   const file = !short && previous.file ? `, «${previous.file}»` : "";
   const said = verdict && verdict !== "same" ? ` ${VERDICT[verdict]}` : "";
   return { head: "Прошлая проверка", rest: `, ${longDay(previous.finishedAt)}${file}: ${counts}.${said}` };
+}
+
+/**
+ * «С серьёзными ошибками: 6 из 53 (11%) → сейчас 0 из 71 (0%). Мало разговоров, чтобы судить: серьёзные критерии
+ * удалось проверить в 16 разговорах тогда и в 4 сейчас.» — the line under the comparison of the whole check, in its
+ * words: the same counts and arrow, the same verdict (few, beyond chance or within it), and for a re-evaluation of the
+ * same conversations — that the difference is the evaluation's. Both sides by the serious marks as they are now
+ * (`marked` of them in the current result). The share rests on the conversations where a serious criterion could be
+ * checked: with few of them the line says how few. Null when nothing is marked or the checks are not compared.
+ */
+export function seriousCompareText(compare: Compare, marked = 2): string | null {
+  const serious = compare.serious;
+  if (!serious || (compare.kind !== "new-data" && compare.kind !== "same-data")) return null;
+  const { before, now, checked, verdict, direction } = serious;
+  const same = direction === "same";
+  const both = !!before.measured && !!now.measured;
+  const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}; сейчас ${sideText(now)}`;
+  if (compare.kind === "same-data")
+    return `С серьёзными ошибками: ${counts}.${both && !same ? " Разница — разброс оценки, а не агента." : ""}`;
+  const criteria = marked === 1 ? "серьёзный критерий" : "серьёзные критерии";
+  const said =
+    verdict === "few" && checked && Math.min(checked.before, checked.now) < FEW
+      ? ` Мало разговоров, чтобы судить: ${criteria} удалось проверить в\u00a0${checked.before}\u00a0${plural(checked.before, "разговоре", "разговорах", "разговорах")} тогда и в\u00a0${checked.now} сейчас.`
+      : verdict && verdict !== "same"
+        ? ` ${VERDICT[verdict]}`
+        : "";
+  return `С серьёзными ошибками: ${counts}.${said}`;
 }
 
 /** «было 6 из 52»: what a criterion with errors now had in the previous check, beside its count. */

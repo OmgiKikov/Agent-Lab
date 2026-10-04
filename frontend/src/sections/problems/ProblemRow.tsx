@@ -5,11 +5,13 @@ import { yesNoText } from "../../lab/answers";
 import type { Criterion } from "../../lab/criteria";
 import { pct } from "../../lab/format";
 import { humansOf } from "../../lab/problemStats";
+import { SeriousTag } from "../../product/Severity";
 import { checked, errorIn, violationsOf, type SideKey } from "./model";
 
 /**
- * One problem in a list, on the page itself, no box: its rank by frequency, the agent's behaviour as a sentence, one real
- * exchange (the customer's words and the agent's, marked), and «N из M» with a quiet bar. Red stays in the result above.
+ * One problem in a list, on the page itself, no box: its rank (serious first, then by frequency), the agent's behaviour
+ * as a sentence with «серьёзная» when a person marked it so, one real exchange (the customer's words and the agent's,
+ * marked), and «N из M» with a quiet bar. Red stays in the result above and in that quiet word.
  * Under the count (on a phone, under the text): the person's answers on its errors, once there are any, and `was` —
  * what the criterion had in the previous check of this check.
  */
@@ -37,7 +39,10 @@ export function ProblemRow({
     >
       <span className="pt-0.5 text-read tabular-nums text-fg-4">{rank ?? ""}</span>
       <span className="min-w-0">
-        <span className="block text-lead font-medium text-fg">{c.r.title}</span>
+        <span className="block text-lead font-medium text-fg">
+          {c.r.title}
+          {c.r.serious && <SeriousTag className="relative -top-px ml-2 align-middle" />}
+        </span>
         {e && (
           <span className="mt-1 block truncate text-body text-fg-3">
             «{e.opening}»
