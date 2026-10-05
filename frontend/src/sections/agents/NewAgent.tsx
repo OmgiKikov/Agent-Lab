@@ -43,7 +43,9 @@ function RulesChoice({
 /**
  * A new agent: a name and one line about it. Its own dialogues and results start empty; its rules of communication
  * too, or they are taken from another agent that has them — a copy with the criteria and the clarifications people
- * confirmed, taken before the agent opens, so it starts with its criteria ready. The agent opens at «Обзор».
+ * confirmed, taken before the agent opens, so it starts with its criteria ready. The agent opens at «Обзор». Once
+ * «Создать» is pressed nothing can call it off — the service creates the agent anyway — so «Отмена», Esc and the
+ * backdrop wait, and a line says so.
  */
 export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void }) {
   const sources = useRulesSources(null);
@@ -76,6 +78,7 @@ export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void
     }
   };
   const close = () => {
+    if (busy) return;
     if (created) void client.invalidateQueries({ queryKey: ["agents"] });
     setName("");
     setDescription("");
@@ -91,7 +94,9 @@ export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void
       title="Новый агент"
       footer={
         <>
-          <Button onClick={close}>Отмена</Button>
+          <Button onClick={close} disabled={busy}>
+            Отмена
+          </Button>
           <Button variant="primary" loading={busy} disabled={!name.trim()} onClick={() => void submit()}>
             {!created ? "Создать" : source ? "Попробовать снова" : "Открыть агента"}
           </Button>
@@ -105,7 +110,7 @@ export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void
             autoFocus
             value={name}
             maxLength={80}
-            disabled={!!created}
+            disabled={!!created || busy}
             onChange={(e) => setName(e.target.value)}
             placeholder="Например: Агент по кредитам"
             className={FIELD}
@@ -116,7 +121,7 @@ export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void
           <input
             value={description}
             maxLength={200}
-            disabled={!!created}
+            disabled={!!created || busy}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Например: СберБизнес · чат поддержки"
             className={FIELD}
@@ -154,6 +159,11 @@ export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void
         {error && (
           <p role="alert" className="text-small text-bad">
             {error}
+          </p>
+        )}
+        {busy && (
+          <p role="status" className="text-small text-fg-3">
+            {!created ? "Создаём агента." : source ? "Берём правила." : "Открываем агента."} Отменить уже нельзя.
           </p>
         )}
         <button type="submit" hidden />
