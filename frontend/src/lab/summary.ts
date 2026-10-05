@@ -2,7 +2,7 @@ import { agentKey } from "../app/agent";
 import { answersText, yesNoText, type Answers } from "./answers";
 import { CHECK_NAME, CHECKS } from "./checks";
 import { count, pct, plural } from "./format";
-import { headingOf } from "./problemReport";
+import { headingOf, inlineText, quoteText } from "./problemReport";
 import { splitQuote } from "./quote";
 import type { Severity } from "./problems";
 import { lineText, type Serious, type SeverityLine } from "./severity";
@@ -169,13 +169,14 @@ const wholeReply = (reply: string, quote: string) => {
 
 /**
  * The summary as a letter (lab/problemReport, copyReport): the same as the page, the ticked problems only. Headings,
- * paragraphs and a quote: the only Markdown the reports write.
+ * paragraphs and a quote: the only Markdown the reports write. The words of the customer, the agent and the criteria
+ * stay words (inlineText, quoteText): never a link, a heading or a quote of their own.
  */
 export function summaryMarkdown(s: Summary): string {
   const lines = [
-    `# Сводка для руководителя: ${s.agent}`,
+    `# Сводка для руководителя: ${inlineText(s.agent)}`,
     "",
-    stop([s.file ? `Выгрузка «${s.file}»` : null, daysText(s.days)].filter(Boolean).join(" · ")),
+    stop([s.file ? `Выгрузка «${inlineText(s.file)}»` : null, daysText(s.days)].filter(Boolean).join(" · ")),
   ];
   for (const c of s.checks) {
     lines.push(
@@ -201,13 +202,21 @@ export function summaryMarkdown(s: Summary): string {
     for (const c of chosen) {
       lines.push("", `### ${CHECK_NAME[c.check]}`);
       for (const p of c.problems.filter((x) => x.chosen)) {
-        lines.push("", `#### ${headingOf(p)}`, "", `Агент должен: ${p.duty}`, `${problemCount(p)}.`, problemAnswers(p));
+        lines.push(
+          "",
+          `#### ${headingOf(p)}`,
+          "",
+          `Агент должен: ${inlineText(p.duty)}`,
+          `${problemCount(p)}.`,
+          problemAnswers(p),
+        );
         const e = p.example;
         if (e) {
           lines.push("");
-          if (e.customer) lines.push(`Клиент: ${e.customer}`);
-          lines.push(...`Агент: ${e.reply ?? `«${e.quote}»`}`.split("\n").map((line) => `> ${line}`));
-          if (e.reply && !wholeReply(e.reply, e.quote)) lines.push(`Проверка указала на слова: ${quoted(e.quote)}`);
+          if (e.customer) lines.push(`Клиент: ${inlineText(e.customer)}`);
+          lines.push(quoteText(`Агент: ${e.reply ?? `«${e.quote}»`}`));
+          if (e.reply && !wholeReply(e.reply, e.quote))
+            lines.push(`Проверка указала на слова: ${quoted(inlineText(e.quote))}`);
           if (e.refuted) lines.push("Люди ответили, что здесь ошибки нет.");
         }
       }

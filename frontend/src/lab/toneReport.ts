@@ -1,17 +1,15 @@
 import { historyLink, problemLink } from "../app/links";
-import { headingOf, reliabilityWord } from "./problemReport";
+import { headingOf, inlineText, quoteText, reliabilityWord } from "./problemReport";
 import type { Problems, RuleEntry } from "./problems";
 import { seriousFirst, severityText } from "./severity";
 import type { Discover } from "./types";
 import { count, pct } from "./format";
 
 const excerpt = (value: string, limit = 300) => value.trim().slice(0, limit).trimEnd();
-const short = (value: string, limit = 300) => excerpt(value, limit) + (value.trim().length > limit ? "…" : "");
-const quote = (value: string) =>
-  excerpt(value)
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
+const cut = (value: string, limit = 300) => excerpt(value, limit) + (value.trim().length > limit ? "…" : "");
+/** Someone else's text cut short, on one line, its Markdown marks escaped (inlineText). */
+const short = (value: string, limit = 300) => inlineText(cut(value, limit));
+const quote = (value: string) => quoteText(excerpt(value));
 const date = (value: string) => new Date(value).toLocaleString("ru-RU", { dateStyle: "long", timeStyle: "short" });
 /** A word that begins a sentence. */
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -80,7 +78,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
     const example =
       errors.find((e) => e.review === "agree") ?? errors.find((e) => e.review !== "disagree") ?? errors[0];
     lines.push(
-      `## ${index + 1}. ${headingOf({ ...problem, title: short(problem.title, 140) })}`,
+      `## ${index + 1}. ${headingOf({ ...problem, title: cut(problem.title, 140) })}`,
       "",
       `Ошибка в\u00a0${problem.log.failed}\u00a0из\u00a0${count(problem.log.failed + problem.log.passed, "разговора", "разговоров", "разговоров")}, где критерий удалось проверить.${problem.log.unknown ? ` Ещё в\u00a0${problem.log.unknown} его не удалось проверить.` : ""}`,
       "",

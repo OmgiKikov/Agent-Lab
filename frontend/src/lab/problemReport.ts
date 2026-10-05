@@ -1,3 +1,4 @@
+import { shareBase } from "../app/agent";
 import { problemLink } from "../app/links";
 import { CHECK_NAME } from "./checks";
 import { duty } from "./criteria";
@@ -14,6 +15,34 @@ export const sourceLabel = (kind: string) => SOURCE_LABEL[kind] ?? "Источн
 
 /** A word that begins a sentence. */
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * Markdown's marks in a text a report quotes, escaped (CommonMark backslash escapes): «[…](…)», «<…>», «#», «|» and «`»
+ * stay the characters they are. The copy and the plain text read them back as written (pieces).
+ */
+const marks = (text: string) => text.replace(/[\\`[\]<>#|]/g, "\\$&");
+
+/**
+ * Someone else's text inside a line of a report — the customer's and the agent's words, a model's reason, a quote from
+ * the rules or the code, a name: on one line, since its line breaks would start blocks of their own (a heading, a
+ * quote), and with its marks escaped, so a «[link](…)» in it stays words and none of its addresses becomes a link.
+ */
+export const inlineText = (text: string) => marks(text.replace(/\s+/g, " ").trim());
+
+/**
+ * Someone else's text of several lines as a quote: every line «> …», with its marks escaped, and what would begin a
+ * list, a rule or a heading at its start escaped too, so each line stays a line of the quote.
+ */
+export const quoteText = (text: string) =>
+  text
+    .split("\n")
+    .map(
+      (line) =>
+        `> ${marks(line.trim())
+          .replace(/^([-+*=_~])/, "\\$1")
+          .replace(/^(\d+)([.)])/, "$1\\$2")}`,
+    )
+    .join("\n");
 
 /**
  * How well an example is backed, in words: a person's answer first, then whether the two automatic checks (two models
@@ -70,8 +99,12 @@ const where = (p: RuleEntry, source?: Source) =>
     .filter(Boolean)
     .join(", ");
 
-/** «Перекладывает вину на клиента · серьёзная»: a problem's name as a letter or a ticket heads it. */
-export const headingOf = (p: Pick<RuleEntry, "title" | "serious">) => (p.serious ? `${p.title} · серьёзная` : p.title);
+/**
+ * «Перекладывает вину на клиента · серьёзная»: a problem's name as a letter or a ticket heads it, in Markdown (the name
+ * comes from a model that read the customers' words: inlineText).
+ */
+export const headingOf = (p: Pick<RuleEntry, "title" | "serious">) =>
+  p.serious ? `${inlineText(p.title)} · серьёзная` : inlineText(p.title);
 
 /**
  * One problem for a ticket or a message: what (with «серьёзная» when its errors are serious), how often, where the
@@ -85,10 +118,10 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
     "",
     `Ошибка ${where(p, source)}.`,
     "",
-    `Агент должен: ${duty(p.rule.text)}`,
+    `Агент должен: ${inlineText(duty(p.rule.text))}`,
     "",
     p.rule.quote
-      ? `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${p.rule.origin})` : ""}: «${p.rule.quote}»`
+      ? `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${inlineText(p.rule.origin)})` : ""}: «${inlineText(p.rule.quote)}»`
       : "Цитата не сохранилась.",
   ];
   if (e)
@@ -96,9 +129,9 @@ export function problemMarkdown(p: RuleEntry, link: string, level = 1, source?: 
       "",
       `${"#".repeat(level + 1)} Пример`,
       "",
-      `Клиент: ${e.opening}`,
-      `Агент: «${e.agentQuote}»`,
-      `Почему это ошибка: ${e.reason}`,
+      `Клиент: ${inlineText(e.opening)}`,
+      `Агент: «${inlineText(e.agentQuote)}»`,
+      `Почему это ошибка: ${inlineText(e.reason)}`,
       `${capital(reliabilityWord(e, "people"))}.`,
     );
   lines.push("", link);
@@ -118,7 +151,7 @@ export function problemsReport(
   { filename }: { filename?: string } = {},
 ): string {
   const lines = [`# ${summarySentence(data, source)}`, "", `Проверка «${CHECK_NAME[data.check]}».`];
-  if (source === "log" && data.log && filename) lines.push(`Выгрузка «${filename}».`);
+  if (source === "log" && data.log && filename) lines.push(`Выгрузка «${inlineText(filename)}».`);
   if (source === "log" && data.log) {
     lines.push(
       `Диалоги ${day(data.log.finishedAt)}: проверено ${data.log.assessed}\u00a0из\u00a0${count(data.log.sampled, "разговора", "разговоров", "разговоров")}.`,
@@ -170,36 +203,72 @@ function blocksOf(markdown: string): Block[] {
 const escape = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** A line as HTML: «[text](https://…)» and a bare address become links, the rest is text. */
-function inline(line: string): string {
-  let html = "";
+/** A piece of a line of a report: words, or a link of the report's own to a place of this Lab (`href`). */
+type Piece = { text: string; href?: string };
+
+/** An address of this Lab inside the page's agent (shareBase): the only addresses a report links. */
+const ownAddress = (href: string, base: string) =>
+  href === base || href.startsWith(`${base}/`) || href.startsWith(`${base}?`);
+
+/**
+ * A line of a report in pieces. «[text](address)» and a bare address become links only when the address is this
+ * Lab's own (`base`): the report's own links. Any other address stays the words it is, never a link a customer or the
+ * agent could have written, and an escaped mark is its character again (inlineText, quoteText).
+ */
+function pieces(line: string, base: string): Piece[] {
+  const out: Piece[] = [];
+  let words = "";
   let at = 0;
-  for (const m of line.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>«»"]+)/g)) {
-    const href = m[2] ?? m[3];
-    html += `${escape(line.slice(at, m.index))}<a href="${escape(href)}">${escape(m[1] ?? href)}</a>`;
+  for (const m of line.matchAll(
+    /\\([!-/:-@[-`{-~])|\[([^\]\\]+)\]\((https?:\/\/[^\s)\\]+)\)|(https?:\/\/[^\s<>«»"\\]+)/g,
+  )) {
+    words += line.slice(at, m.index);
     at = m.index + m[0].length;
+    const href = m[3] ?? m[4];
+    if (!href || !ownAddress(href, base)) {
+      words += m[1] ?? m[0];
+      continue;
+    }
+    if (words) out.push({ text: words });
+    words = "";
+    out.push({ text: m[2] ?? href, href });
   }
-  return html + escape(line.slice(at));
+  words += line.slice(at);
+  return words ? [...out, { text: words }] : out;
 }
 
-/** The report as an e-mail shows it: headings, quotes, paragraphs and links. */
-export function reportHtml(markdown: string): string {
+/** A line as HTML: the report's own links to this Lab as links, every other word as text. */
+const inline = (line: string, base: string) =>
+  pieces(line, base)
+    .map((p) => (p.href ? `<a href="${escape(p.href)}">${escape(p.text)}</a>` : escape(p.text)))
+    .join("");
+
+/** The report as an e-mail shows it: headings, quotes, paragraphs and its own links to this Lab (`base`). */
+export function reportHtml(markdown: string, base = shareBase()): string {
+  const line = (text: string) => inline(text, base);
   const html = blocksOf(markdown).map((b) =>
     b.kind === "h"
-      ? `<h${Math.min(b.level, 4)}>${inline(b.text)}</h${Math.min(b.level, 4)}>`
+      ? `<h${Math.min(b.level, 4)}>${line(b.text)}</h${Math.min(b.level, 4)}>`
       : b.kind === "quote"
-        ? `<blockquote style="margin:0 0 0 4px;padding-left:12px;border-left:3px solid #d6d6d6">${b.lines.map(inline).join("<br>")}</blockquote>`
-        : `<p>${b.lines.map(inline).join("<br>")}</p>`,
+        ? `<blockquote style="margin:0 0 0 4px;padding-left:12px;border-left:3px solid #d6d6d6">${b.lines.map(line).join("<br>")}</blockquote>`
+        : `<p>${b.lines.map(line).join("<br>")}</p>`,
   );
   return `<div>${html.join("\n")}</div>`;
 }
 
-/** The report as text, without Markdown marks: no «#», «>», «[…](…)»; a link is its words and its address. */
-export function reportText(markdown: string): string {
+/**
+ * A line of a report as plain words, without Markdown marks: a link of its own is its words and its address, an
+ * escaped mark its character; anything else stays as written.
+ */
+export const plainLine = (line: string, base = shareBase()) =>
+  pieces(line, base)
+    .map((p) => (p.href && p.text !== p.href ? `${p.text}: ${p.href}` : p.text))
+    .join("");
+
+/** The report as text, without Markdown marks: no «#», «>», «[…](…)» or escapes (plainLine). */
+export function reportText(markdown: string, base = shareBase()): string {
   return blocksOf(markdown)
-    .map((b) =>
-      (b.kind === "h" ? b.text : b.lines.join("\n")).replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1: $2"),
-    )
+    .map((b) => (b.kind === "h" ? [b.text] : b.lines).map((line) => plainLine(line, base)).join("\n"))
     .join("\n\n");
 }
 
