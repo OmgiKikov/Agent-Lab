@@ -2,7 +2,9 @@
 
 Excel exports contain CLIENT/AGENT turns and the real message count in the order column. Some exports
 repeat every exchange twice. Only that complete, count-confirmed export pattern is removed; a customer's
-actual repeated question is preserved. Parsing is pure so a cancelled import cannot commit from a thread.
+actual repeated question is preserved. Voice360 writes a whole conversation on one line and repeats some of
+its messages; those repeats are collapsed, and a conversation that still does not match its count is left out.
+Parsing is pure so a cancelled import cannot commit from a thread.
 """
 
 import io
@@ -25,6 +27,8 @@ SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
 # The export starts every turn on its own line; «HOST AGENT NOT FOUND» inside a message is the customer's words.
 MARKER = re.compile(r'^[ \t]*(CLIENT|AGENT)\b', re.M)
+# Voice360 writes the whole conversation on one line, so there a marker is any CLIENT/AGENT word after a space.
+INLINE_MARKER = re.compile(r'(?:^|(?<=\s))(CLIENT|AGENT)\b')
 # A chat button the agent sent, written into the export's text as «` ` ` transition-code CODE ` ` `».
 CONTROL = re.compile(r'`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_-]*)\s*`\s*`\s*`')
 # The line as_seen puts under a reply for those buttons.
@@ -57,8 +61,8 @@ def read(dialogue_id: str) -> dict | None:
     return next((dialogue for dialogue in load() if dialogue['id'] == dialogue_id), None)
 
 
-def turns(text: str) -> list[dict]:
-    marks = list(MARKER.finditer(text))
+def turns(text: str, marker: re.Pattern = MARKER) -> list[dict]:
+    marks = list(marker.finditer(text))
     return [
         {
             'role': 'user' if mark.group(1) == 'CLIENT' else 'assistant',
@@ -79,6 +83,12 @@ def _message_count(order: object) -> int:
     return len(value)
 
 
+def _messages(text: str, count: int) -> list[dict] | None:
+    if _is_one_line(text):
+        return _one_line_messages(text, count)
+    return _export_messages(turns(text), count)
+
+
 def _export_messages(messages: list[dict], count: int) -> list[dict]:
     if len(messages) == count:
         return messages
@@ -89,6 +99,44 @@ def _export_messages(messages: list[dict], count: int) -> list[dict]:
         if all(block[:2] == block[2:] for block in blocks):
             return [message for block in blocks for message in block[:2]]
     raise ValueError('текст не совпадает с порядком сообщений')
+
+
+def _is_one_line(text: str) -> bool:
+    """The Voice360 layout: several turns, and no turn after the first starts a line. A text of one turn stays with
+    the line-by-line reading, which refuses a mismatch instead of leaving the conversation out."""
+    return len(MARKER.findall(text)) <= 1 < len(INLINE_MARKER.findall(text))
+
+
+def _one_line_messages(text: str, count: int) -> list[dict] | None:
+    """The conversation, or None when even without its repeats it does not match its count: unlike a line-by-line
+    export, this layout has repeats that are not exact, so one such conversation must not refuse the whole file."""
+    messages = _collapse_repeated_pairs(_collapse_repeated_messages(turns(text, INLINE_MARKER)))
+    return messages if len(messages) == count else None
+
+
+def _collapse_repeated_messages(messages: list[dict]) -> list[dict]:
+    kept = []
+    for message in messages:
+        if not kept or not _same(kept[-1], message):
+            kept.append(message)
+    return kept
+
+
+def _collapse_repeated_pairs(messages: list[dict]) -> list[dict]:
+    kept, index = [], 0
+    while index < len(messages):
+        pair = messages[index : index + 2]
+        if len(pair) == 2 and len(kept) >= 2 and all(map(_same, kept[-2:], pair)):
+            index += 2
+        else:
+            kept.append(messages[index])
+            index += 1
+    return kept
+
+
+def _same(first: dict, second: dict) -> bool:
+    """The export ends the whole text with a period, so the last copy of a repeat differs from the first by it."""
+    return first['role'] == second['role'] and first['content'].rstrip(' .') == second['content'].rstrip(' .')
 
 
 def _check_parts(data: bytes) -> None:
@@ -137,10 +185,11 @@ def from_excel(data: bytes) -> list[dict]:
             dialogue_id = _cell(row, column[ID])
             try:
                 count = _message_count(_cell(row, column[ORDER]))
-                messages = _export_messages(turns(str(_cell(row, column[TEXT]) or '')), count)
+                messages = _messages(str(_cell(row, column[TEXT]) or ''), count)
             except ValueError as error:
                 raise ValueError(f'В диалоге {dialogue_id} {error}.') from error
-            dialogues.append({'id': dialogue_id, 'messages': messages})
+            if messages is not None:
+                dialogues.append({'id': dialogue_id, 'messages': messages})
         return dialogues
     finally:
         workbook.close()
