@@ -76,6 +76,8 @@ export type LabRun = {
   check?: Check;
   /** Grows with every change of the run: a conversation played or judged again, a person's answer. */
   revision?: number;
+  /** When the run changed last; older services have no such field. */
+  updatedAt?: string;
 };
 /** A run as /api/state lists it: its summary, without the conversations, and always with its check. */
 export type RunSummary = LabRun & { check: Check };
@@ -149,6 +151,8 @@ export type Discover = {
   purpose?: string;
   criteriaRevision?: string;
   sampled: number;
+  /** Accuracy: the sampled conversations that fell into no topic, so no criterion applied to them. */
+  unassigned?: number;
   model: string;
   finishedAt: string;
   rulesSince?: string;
@@ -184,8 +188,12 @@ export type LabState = {
   models: Models;
   settings: Settings;
   sources: Source[];
-  /** When the agent's code was read last and from which folder, as the person wrote it; null before the first read. */
-  sourcesRead?: { readAt: string; repo: string } | null;
+  /**
+   * When the agent's code was read last and from which folder, as the person wrote it; null before the first read.
+   * `overBudget`: where the prompts are that the read found and left out of the criteria planner's budget
+   * (sources.MAX_TOTAL); older records have no such field.
+   */
+  sourcesRead?: { readAt: string; repo: string; overBudget?: string[] } | null;
   logs: { total: number; file?: string | null; updatedAt?: string | null };
   /** The result of each check, or null: tone of voice and accuracy never replace each other. */
   checks: Record<Check, Discover | null>;
@@ -219,10 +227,12 @@ export type ToneDraft = {
 
 /** A tool the agent called during its turn, as the service logged it. */
 export type ToolCall = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };
-/** One turn of a conversation: who spoke, the logged text, the tools called, and how the turn ended. */
+/** One turn of a conversation: who spoke, the logged text, the buttons sent, the tools called, and how the turn ended. */
 export type Turn = {
   role: "customer" | "agent";
   text: string;
+  /** The buttons a simulated agent sent with its reply, by their words; an export writes its own into the text. */
+  options?: string[];
   events?: ToolCall[];
   ok?: boolean;
   status?: string;

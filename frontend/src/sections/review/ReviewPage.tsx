@@ -15,10 +15,11 @@ import { Duty } from "../../product/Duty";
 import { ExampleCard } from "../../product/ExampleCard";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
 import { CheckHeader } from "../checks/CheckHeader";
-import { SimTabs, useSimRuns } from "../simulations/stage";
+import { NoSuchRun, SimTabs, useSimRuns } from "../simulations/stage";
 
 const QUEUES: Queue[] = ["disputed", "unchecked", "all"];
 /** The queues count cases (one criterion in one conversation, an error or «без ошибки») and say so. */
@@ -35,10 +36,13 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const navigate = useNavigate();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
-  const { run } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
+  const { run, newest, missing } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   const runId = stage === "sim" ? (run?.id ?? null) : null;
   // A check's cases are of its result; a run's, of the run, counted by the criteria of its check.
-  const { data, isPlaceholderData } = useProblems(stage === "sim" ? (run?.check ?? null) : stage, runId);
+  const { data, isPlaceholderData, error, isFetching, refetch } = useProblems(
+    stage === "sim" ? (run?.check ?? null) : stage,
+    runId,
+  );
   const source = side(stage);
   const review = useReview();
   const ruleId = params.get("rule");
@@ -133,6 +137,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const saving = useIsMutating({ mutationKey: ["review"] }) > 0;
   const counted = saving ? "Сохраняем ответы…" : "Ответы уже учтены в счёте.";
   const rule = ruleId && data ? data.rules.find((r) => r.id === ruleId) : undefined;
+  // A criterion the address names that this result (or run) does not have: said so, with all of its cases instead.
+  const noRule = !!ruleId && !!data && !rule;
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
   // Without a second model nothing can be disputed: an empty queue then says so, not that two checks agreed.
   const twice = [...byKey.values()].some((v) => !!v.example.second);
@@ -150,6 +156,13 @@ export function ReviewPage({ stage }: { stage: Stage }) {
         <ServiceDown />
       </div>
     );
+  if (missing)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <NoSuchRun newest={newest} />
+      </div>
+    );
 
   return (
     <div className="flex h-full flex-col">
@@ -158,7 +171,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
           brings into view — the last message, a word found, a focused link — stops above it, not behind it. */}
       <div className="min-h-0 flex-1 overflow-auto scroll-pb-40">
         <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-10">
-          {data && (
+          {data && !noRule && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
               <Menu
                 trigger={
@@ -220,8 +233,36 @@ export function ReviewPage({ stage }: { stage: Stage }) {
             <EmptyState drop title="Здесь будут случаи из прогонов" className="py-24">
               Сыграйте сценарии в «Симуляциях», и модель оценит разговоры синтетических клиентов.
             </EmptyState>
+          ) : !data && error && !isFetching ? (
+            <LoadFailed
+              page
+              title="Не удалось загрузить случаи"
+              error={error}
+              onRetry={() => void refetch()}
+              className="py-24"
+            />
           ) : !data || frozen?.id !== id ? (
             <Skeleton className="mt-8 h-[480px]" />
+          ) : noRule ? (
+            <EmptyState
+              drop
+              title="Такого критерия нет"
+              className="py-24"
+              action={
+                <Button
+                  onClick={() =>
+                    set((n) => {
+                      n.delete("rule");
+                      n.set("queue", "all");
+                    })
+                  }
+                >
+                  Все случаи · {queueOf(data, "all", null, source).length}
+                </Button>
+              }
+            >
+              {stage === "sim" ? "Критерия из ссылки нет в этом прогоне." : "Критерия из ссылки нет в этом итоге."}
+            </EmptyState>
           ) : !keys.length ? (
             <EmptyState
               drop

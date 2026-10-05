@@ -67,7 +67,7 @@ function AgentTitle() {
   useEffect(() => {
     if (!data) return;
     const agent = data.find((a) => a.id === AGENT);
-    if (!agent) window.location.replace("/agents");
+    if (!agent) window.location.replace(`/agents?missing=${encodeURIComponent(AGENT ?? "")}`);
     else document.title = `${agent.name} · Agent Lab`;
   }, [data]);
   return null;

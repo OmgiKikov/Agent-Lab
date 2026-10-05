@@ -5,15 +5,17 @@ import { side, type Stage } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { useCriteria } from "../../lab/criteria";
 import { logKey, logRows, simKey, simRows } from "../../lab/dialogs";
-import { longDay } from "../../lab/format";
+import { count, longDay, plural } from "../../lab/format";
 import { runTitle, useRun } from "../../lab/runs";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
+import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { UploadButton } from "../../product/UploadLogs";
 import { CheckHeader } from "../checks/CheckHeader";
-import { SimHeader, useSimRuns } from "../simulations/stage";
+import { NoSuchRun, SimHeader, useSimRuns } from "../simulations/stage";
 import { Dialog } from "./Dialog";
 import { frozenNames, matchesRow, seriousRows, toVerdict, type Verdict } from "./model";
 import { Rows } from "./Rows";
@@ -27,9 +29,10 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const wide = useWide();
-  const { finished, run: simRun } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
+  const { finished, run: simRun, newest, missing } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   const runId = stage === "sim" ? (simRun?.id ?? null) : null;
-  const { data: problems, list: criteria } = useCriteria(stage === "sim" ? (simRun?.check ?? null) : stage, runId);
+  const record = useCriteria(stage === "sim" ? (simRun?.check ?? null) : stage, runId);
+  const { data: problems, list: criteria } = record;
   const run = useRun(runId, state);
   const [query, setQuery] = useState("");
   const verdict = toVerdict(params.get("v"));
@@ -50,24 +53,43 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   );
   const named = useMemo(() => (stage === "sim" ? frozenNames(criteria, all) : undefined), [stage, criteria, all]);
   const rule = ruleId ? problems?.rules.find((r) => r.id === ruleId) : undefined;
+  const own = rule ? criteria.find((c) => c.r.id === rule.id) : undefined;
+  // A criterion with errors here opens the conversations with its errors; one without them (the line «Ошибок в этой
+  // выгрузке не нашли» leads here) opens the conversations it was checked in, with or without an error.
+  const broken = !!rule && rule[side(stage)].failed > 0;
+  // Over the list: the criterion it is filtered by, or that the one the address names is not in this result or run.
+  const chip = rule
+    ? { text: own ? `${broken ? "Ошибка по критерию" : "Проверены по критерию"} ${own.n}: ${own.name}` : rule.title }
+    : ruleId && problems
+      ? {
+          text: `Критерия из ссылки нет в этом ${stage === "sim" ? "прогоне" : "итоге"}. Показаны разговоры без отбора по нему.`,
+          gone: true,
+        }
+      : null;
   const only = useMemo(
     () =>
       rule
         ? new Set(
             rule[side(stage)].examples
-              .filter((e) => e.status === "FAIL")
+              .filter((e) => e.status === "FAIL" || (!broken && e.status === "PASS"))
               .map((e) => (stage === "sim" ? simKey(e.runId ?? "", e.index ?? 0) : logKey(e.dialogueId ?? ""))),
           )
         : null,
-    [rule, stage],
+    [rule, stage, broken],
   );
   const serious = useMemo(() => seriousRows(all, criteria), [all, criteria]);
   const rows = useMemo(
     () => all.filter((r) => matchesRow(r, verdict, query, only, serious)),
     [all, verdict, query, only, serious],
   );
-  const key = params.get("d") ?? (wide ? (rows[0]?.key ?? null) : null);
+  // The list waits for what it is made of: the run's conversations, and the criteria when a filter is by them.
+  const waitRun = stage === "sim" && !!simRun && !run.data;
+  const waitRecord = (!!ruleId || verdict === "serious") && !problems && (record.loading || !!record.error);
+  const asked = params.get("d");
+  const key = asked ?? (wide && !waitRun && !waitRecord ? (rows[0]?.key ?? null) : null);
   const selected = key ? all.find((r) => r.key === key) : undefined;
+  // A conversation the address names that this result or run does not have: said so in its place, never a blank one.
+  const lost = !!asked && !selected && !waitRun;
   const open = (k: string | null) =>
     set((n) => {
       if (k) n.set("d", k);
@@ -75,7 +97,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
       n.delete("dt");
     }, wide);
   const step = (d: 1 | -1) => {
-    if (!rows.length) return;
+    if (!rows.length || waitRun || waitRecord) return;
     const i = rows.findIndex((r) => r.key === key);
     open(rows[Math.max(0, Math.min(rows.length - 1, (i < 0 ? -1 : i) + d))].key);
   };
@@ -101,6 +123,13 @@ export function DialogsPage({ stage }: { stage: Stage }) {
         <div className="p-5">
           <Skeleton className="h-[480px]" />
         </div>
+      </div>
+    );
+  if (missing)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <NoSuchRun newest={newest} />
       </div>
     );
 
@@ -137,13 +166,35 @@ export function DialogsPage({ stage }: { stage: Stage }) {
         <span className="text-small text-fg-3">прогон {longDay(r.startedAt)}</span>
       )
     ) : null;
-  const showDetail = !!selected && (wide || !!params.get("d"));
+  const showDetail = (!!selected || lost) && (wide || !!asked);
   const empty =
     stage === "sim"
-      ? "В этом прогоне нет разговоров."
+      ? simRun
+        ? "В этом прогоне нет разговоров."
+        : "Прогонов ещё не было. Здесь будут разговоры синтетических клиентов с агентом."
       : !state.logs.total
         ? "Здесь будут разговоры выгрузки. Сначала загрузите диалоги."
         : "Разговоры появятся после проверки.";
+  const pending = waitRun ? (
+    run.error && !run.isFetching ? (
+      <LoadFailed title="Не удалось загрузить разговоры прогона" error={run.error} onRetry={() => void run.refetch()} />
+    ) : (
+      <Skeleton className="mt-2 h-64" />
+    )
+  ) : waitRecord ? (
+    record.error ? (
+      <LoadFailed title="Не удалось загрузить критерии" error={record.error} onRetry={record.retry} />
+    ) : (
+      <Skeleton className="mt-2 h-64" />
+    )
+  ) : null;
+  // «Не удалось проверить» on the result counts the sampled conversations of accuracy that fell into no topic too:
+  // they have no row, since no criterion applied to them, and the line under the list says how many there are.
+  const unassigned = stage === "sim" ? 0 : (state.checks[stage]?.unassigned ?? 0);
+  const note =
+    verdict === "none" && !ruleId && unassigned > 0
+      ? `Ещё ${count(unassigned, "разговор", "разговора", "разговоров")} ${plural(unassigned, "не попал", "не попали", "не попали")} ни в одну тему, поэтому критериев для ${plural(unassigned, "него", "них", "них")} не было.`
+      : null;
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -151,6 +202,8 @@ export function DialogsPage({ stage }: { stage: Stage }) {
         <Rows
           className={showDetail && !wide ? "hidden" : undefined}
           empty={empty}
+          pending={pending}
+          note={note}
           all={all}
           rows={rows}
           verdict={verdict}
@@ -161,7 +214,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
               n.delete("d");
             })
           }
-          rule={rule ? (criteria.find((c) => c.r.id === rule.id) ?? null) : null}
+          rule={chip}
           serious={serious}
           onClearRule={() => set((n) => n.delete("rule"))}
           query={query}
@@ -180,8 +233,18 @@ export function DialogsPage({ stage }: { stage: Stage }) {
             named={named}
             onBack={wide ? undefined : () => open(null)}
           />
+        ) : showDetail && lost ? (
+          <EmptyState
+            drop
+            title="Такого разговора нет"
+            className="justify-center"
+            action={<Button onClick={() => open(null)}>Все разговоры</Button>}
+          >
+            {stage === "sim" ? "Разговора из ссылки нет в этом прогоне." : "Разговора из ссылки нет в этом итоге."}
+          </EmptyState>
         ) : (
-          wide && (
+          wide &&
+          !pending && (
             <EmptyState drop title={all.length ? "Выберите разговор" : "Разговоров нет"} className="justify-center">
               {all.length ? "Слева все разговоры. Листайте их клавишами J и K." : empty}
             </EmptyState>

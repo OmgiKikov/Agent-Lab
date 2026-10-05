@@ -14,6 +14,7 @@ import { codeSources, TONE_ID } from "../../lab/tone";
 import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Segmented } from "../../ui/Segmented";
 import { CheckHeader } from "../checks/CheckHeader";
@@ -42,7 +43,7 @@ export function CriteriaPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const wide = useWide();
-  const { data, list } = useCriteria(check);
+  const { data, list, error, retry } = useCriteria(check);
   const tone = check === "tone";
   const [reextract, setReextract] = useState(false);
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
@@ -67,13 +68,16 @@ export function CriteriaPage({ check }: { check: Check }) {
   );
   const asked = params.get("c");
   const chosen = (asked ? list.find((c) => c.r.id === asked) : wide ? ordered[0] : undefined) ?? null;
+  // A criterion the address names that this check does not have: said so in the panel's place, never a blank one.
+  const lost = !!asked && !!data && !chosen;
   const fileId =
     params.get("f") ??
     chosen?.r.rule.sourceId ??
     sources.find((s) => list.some((c) => c.r.rule.sourceId === s.id))?.id ??
     null;
   const source = sources.find((s) => s.id === fileId) ?? null;
-  const { data: text, isLoading } = useSource(view === "code" ? fileId : null);
+  // Only a source the service lists is asked for: one an address names that is gone is said so, not waited for.
+  const text = useSource(view === "code" ? (source?.id ?? null) : null);
   const items = useMemo(() => list.filter((c) => c.r.rule.sourceId === fileId), [list, fileId]);
   const shownRaw = params.get("x") as Shown | null;
   const shown: Shown =
@@ -144,6 +148,13 @@ export function CriteriaPage({ check }: { check: Check }) {
         <ServiceDown />
       </div>
     );
+  if (!data && error)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <LoadFailed page title="Не удалось загрузить критерии" error={error} onRetry={retry} />
+      </div>
+    );
   if (!state || !data)
     return (
       <div className="flex h-full flex-col">
@@ -192,7 +203,7 @@ export function CriteriaPage({ check }: { check: Check }) {
   // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Модели совпали» and «Две
   // проверки» would only say «—» and «не с чем сравнить» on every criterion: nothing to tell.
   const twice = (s: SideKey) => list.some((c) => c.r[s].examples.some((e) => !!e.second));
-  const panelOpen = !!chosen && (wide || !!asked);
+  const panelOpen = (!!chosen || lost) && (wide || !!asked);
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -320,22 +331,49 @@ export function CriteriaPage({ check }: { check: Check }) {
                   </span>
                 </div>
               )}
-              {isLoading || !text ? (
+              {!source ? (
+                <EmptyState
+                  drop
+                  title="Источника нет"
+                  className="flex-1 justify-center"
+                  action={
+                    <Button
+                      onClick={() =>
+                        set((n) => {
+                          n.set("view", "list");
+                          n.delete("f");
+                        })
+                      }
+                    >
+                      Критерии списком
+                    </Button>
+                  }
+                >
+                  {tone
+                    ? "Текста правил общения нет среди сохранённых. Критерии из него есть в списке."
+                    : "Этого файла нет в прочитанном коде агента. Критерии есть в списке."}
+                </EmptyState>
+              ) : text.data ? (
+                <CodeView
+                  label={tone ? "Текст правил общения с критериями" : "Код агента с критериями"}
+                  source={source}
+                  content={text.data.content}
+                  items={items}
+                  side={side}
+                  selected={chosen?.r.id ?? null}
+                  onSelect={select}
+                />
+              ) : text.error && !text.isFetching ? (
+                <LoadFailed
+                  title={tone ? "Не удалось загрузить текст правил общения" : "Не удалось загрузить файл кода"}
+                  error={text.error}
+                  onRetry={() => void text.refetch()}
+                  className="px-6"
+                />
+              ) : (
                 <div className="p-6">
                   <Skeleton className="h-[420px]" />
                 </div>
-              ) : (
-                source && (
-                  <CodeView
-                    label={tone ? "Текст правил общения с критериями" : "Код агента с критериями"}
-                    source={source}
-                    content={text.content}
-                    items={items}
-                    side={side}
-                    selected={chosen?.r.id ?? null}
-                    onSelect={select}
-                  />
-                )
               )}
             </div>
           </>
@@ -363,6 +401,18 @@ export function CriteriaPage({ check }: { check: Check }) {
             onShown={(v) => set((n) => n.set("x", v))}
             onBack={wide ? undefined : () => set((n) => n.delete("c"), false)}
           />
+        )}
+        {panelOpen && lost && (
+          <aside className="flex min-h-0 flex-col border-line bg-side lg:border-l" aria-label="Критерий из ссылки">
+            <EmptyState
+              drop
+              title="Такого критерия нет"
+              className="flex-1 justify-center"
+              action={<Button onClick={() => set((n) => n.delete("c"), false)}>Все критерии</Button>}
+            >
+              Критерия из ссылки нет в этой проверке.
+            </EmptyState>
+          </aside>
         )}
       </div>
       {!tone && <Reextract open={reextract} onClose={() => setReextract(false)} />}

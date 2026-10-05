@@ -5,11 +5,20 @@ import type { Card, LabRun, LabState } from "./types";
 
 export const FROM_LOG = "Ошибка из лога";
 
-/** A run with its conversations; fetched again whenever the service reports that it changed. */
+/**
+ * A run with its conversations; fetched again whenever the service reports that it changed. Its revision grows with
+ * every change, so a run judged again with the same totals is fetched again too: other verdicts, reasons and quotes.
+ */
 export function useRun(id: string | null | undefined, state: LabState | null) {
   const client = useQueryClient();
   const summary = state?.runs.find((r) => r.id === id);
-  const stamp = `${summary?.status}|${summary?.finishedAt}|${JSON.stringify(summary?.metric ?? null)}`;
+  const stamp = [
+    summary?.status,
+    summary?.finishedAt,
+    summary?.revision,
+    summary?.updatedAt,
+    JSON.stringify(summary?.metric ?? null),
+  ].join("|");
   const seen = useRef(stamp);
   useEffect(() => {
     if (!id || seen.current === stamp) return;

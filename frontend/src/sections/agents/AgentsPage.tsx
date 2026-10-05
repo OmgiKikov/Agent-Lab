@@ -96,6 +96,9 @@ export function AgentsPage() {
   const { data, isLoading, error } = useAgents();
   const [params, setParams] = useSearchParams();
   const [creating, setCreating] = useState(params.get("new") === "1");
+  // An address of an agent the Lab does not have leads here (app/Shell, ?missing=): said, so the list is not taken for it.
+  const missing = params.get("missing");
+  const unknown = missing && data && !data.some((a) => a.id === missing) ? missing : null;
   const close = () => {
     setCreating(false);
     if (params.get("new")) setParams({}, { replace: true });
@@ -119,6 +122,11 @@ export function AgentsPage() {
           Каждый агент проверяется на своих разговорах по своим правилам. Откройте агента, чтобы увидеть, где он
           ошибается и чем это доказано.
         </p>
+        {unknown && (
+          <p role="status" className="mt-6 max-w-[64ch] rounded-block bg-inset px-4 py-3 text-read text-fg-2">
+            Агент «{unknown}» не найден.{data?.length ? " Откройте агента из списка." : ""}
+          </p>
+        )}
         {error ? (
           <div className="mt-10">
             <ServiceDown />
