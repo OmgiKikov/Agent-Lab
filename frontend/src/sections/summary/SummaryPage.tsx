@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQueries } from "@tanstack/react-query";
-import { Copy, FileDown } from "lucide-react";
+import { Copy, FileDown, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AGENT } from "../../app/agent";
 import { Header } from "../../app/Header";
 import { SECTIONS } from "../../app/links";
-import { useAgent } from "../../lab/agents";
+import { useAgents } from "../../lab/agents";
 import { answersOf, answersSentence } from "../../lab/answers";
 import { api } from "../../lab/api";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
@@ -14,7 +15,7 @@ import { duty, useCriteria, type Criterion } from "../../lab/criteria";
 import { pct } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { copyReport } from "../../lab/problemReport";
-import type { Example, LogDialogue } from "../../lab/problems";
+import { useProblems, type Example, type LogDialogue } from "../../lab/problems";
 import { humansOf } from "../../lab/problemStats";
 import { splitQuote } from "../../lab/quote";
 import {
@@ -76,14 +77,23 @@ function exampleOf(e: Example, dialogue: LogDialogue | undefined): SummaryExampl
  * must do, its count, people's answers and one reply of the agent.
  * The ticks are kept in this browser, per agent; «Скачать PDF» prints the page (no navigation, buttons or ticks; A4),
  * «Скопировать для письма» puts the same on the clipboard. Numbers, answers and examples; no verdict on the agent.
+ * Both wait for the agent's name and for the problems: what could not be loaded says so, with «Повторить».
  */
 export function SummaryPage() {
   const { state, offline } = useLabState();
-  const agent = useAgent();
+  const agents = useAgents();
+  const agent = agents.data?.find((a) => a.id === AGENT);
+  // The letter and the PDF are named after the agent: never sent under a placeholder while its name is unknown.
+  const nameless = agents.isError || (!!agents.data && !agent);
   const toast = useToast();
   const criteria: Record<Check, ReturnType<typeof useCriteria>> = {
     tone: useCriteria(resultOf(state, "tone") ? "tone" : null),
     code: useCriteria(resultOf(state, "code") ? "code" : null),
+  };
+  // The same records as the criteria's, for whether they failed to load: then «Главное» says so instead of waiting.
+  const loads: Record<Check, ReturnType<typeof useProblems>> = {
+    tone: useProblems(resultOf(state, "tone") ? "tone" : null),
+    code: useProblems(resultOf(state, "code") ? "code" : null),
   };
   const compares = { tone: useComparison("tone"), code: useComparison("code") };
   const [stored, setStored] = useState<Chosen>(readChosen);
@@ -145,7 +155,8 @@ export function SummaryPage() {
 
   const summary: Summary | null = state
     ? {
-        agent: agent?.name ?? "Агент",
+        // Told only once the name is at hand (`ready`): the page waits for it, never shows another.
+        agent: agent?.name ?? "",
         file: state.logs.file ?? null,
         days: [...new Set(checks.map((c) => fullDay(resultOf(state, c)!.finishedAt)))],
         madeAt: new Date().toISOString(),
@@ -187,7 +198,7 @@ export function SummaryPage() {
         }),
       }
     : null;
-  const ready = !!summary && checks.every((c) => problems[c]) && dialogues.every((d) => !d.isLoading);
+  const ready = !!summary && !!agent && checks.every((c) => problems[c]) && dialogues.every((d) => !d.isLoading);
 
   const copy = () => {
     if (summary) copyReport(summaryMarkdown(summary)).then(() => toast.notify("Сводка скопирована"), toast.error);
@@ -254,7 +265,13 @@ export function SummaryPage() {
     <article className="max-w-[860px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12 print:max-w-none print:p-0">
       {/* On paper the page has no head: the title goes on the sheet. */}
       <p className="hidden text-read text-fg-3 print:block">Сводка для руководителя</p>
-      <h2 className="text-page font-semibold text-fg print:mt-1">{summary.agent}</h2>
+      {agent ? (
+        <h2 className="text-page font-semibold text-fg print:mt-1">{agent.name}</h2>
+      ) : nameless ? (
+        <Failed text="Не удалось загрузить имя агента." onRetry={() => void agents.refetch()} />
+      ) : (
+        <Skeleton className="h-10 w-72 max-w-full" />
+      )}
       <p className="mt-2 break-words text-read text-fg-2">
         {summary.file ? `Выгрузка «${summary.file}» · ` : ""}
         {daysText(summary.days)}
@@ -275,7 +292,14 @@ export function SummaryPage() {
             : "Сразу отмечены три самые частые проблемы каждой проверки."}
         </p>
         {summary.checks.map((c) => (
-          <CheckProblems key={c.check} c={c} loading={!problems[c.check]} onToggle={(id) => toggle(c.check, id)} />
+          <CheckProblems
+            key={c.check}
+            c={c}
+            loading={!problems[c.check]}
+            failed={loads[c.check].isError && !problems[c.check]}
+            onRetry={() => void loads[c.check].refetch()}
+            onToggle={(id) => toggle(c.check, id)}
+          />
         ))}
       </section>
 
@@ -297,7 +321,9 @@ export function SummaryPage() {
  * previous check and who found the errors.
  */
 function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
-  const answers = answersSentence(c.answers, "people");
+  // People's answers count the checked conversations: with none checked there is no «0 из 0» to give.
+  const answers = c.measured ? answersSentence(c.answers, "people") : null;
+  const found = rechecked(c.answers);
   return (
     <section aria-label={CHECK_NAME[c.check]} className="mt-12 break-inside-avoid print:mt-8">
       <h3 className="text-title font-semibold text-fg">
@@ -324,20 +350,41 @@ function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
         )}
         {c.compare && <p>{c.compare}</p>}
         {c.seriousCompare && <p className="whitespace-pre-line">{c.seriousCompare}</p>}
-        <p>{rechecked(c.answers)}</p>
+        {found && <p>{found}</p>}
       </div>
     </section>
   );
 }
 
-/** «Главное» of one check: every problem with its tick; a ticked one with what it is, its answers and one reply. */
+/** What could not be loaded, and «Повторить»; on screen only, the PDF waits for it. */
+function Failed({ text, onRetry, className }: { text: string; onRetry: () => void; className?: string }) {
+  return (
+    <div className={cn("print:hidden", className)}>
+      <p role="alert" className="text-read text-fg-2">
+        {text}
+      </p>
+      <Button className="mt-3" icon={RotateCcw} onClick={onRetry}>
+        Повторить
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * «Главное» of one check: every problem with its tick; a ticked one with what it is, its answers and one reply. While
+ * the problems load, their place; if they could not be loaded, that and «Повторить».
+ */
 function CheckProblems({
   c,
   loading,
+  failed,
+  onRetry,
   onToggle,
 }: {
   c: SummaryCheck;
   loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
   onToggle: (id: string) => void;
 }) {
   const any = c.problems.some((p) => p.chosen);
@@ -345,10 +392,14 @@ function CheckProblems({
     <div className={cn("mt-8", !any && "print:hidden")}>
       {/* On paper a heading never stays at the foot of a sheet without its first problem. */}
       <h4 className="text-lead font-semibold text-fg print:break-after-avoid">{CHECK_NAME[c.check]}</h4>
-      {loading ? (
+      {failed ? (
+        <Failed className="mt-2" text="Не удалось загрузить проблемы." onRetry={onRetry} />
+      ) : loading ? (
         <Skeleton className="mt-3 h-40" />
       ) : !c.problems.length ? (
-        <p className="mt-2 text-read text-fg-3">Автоматическая проверка ошибок не нашла.</p>
+        <p className="mt-2 text-read text-fg-3">
+          {c.measured ? "Автоматическая проверка ошибок не нашла." : "Ни один разговор не удалось проверить."}
+        </p>
       ) : (
         <ul className="mt-2 divide-y divide-line">
           {c.problems.map((p) => (

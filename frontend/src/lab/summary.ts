@@ -82,22 +82,34 @@ export const SUMMARY_WHAT: Record<Check, string> = {
 
 const ofConversations = (n: number) => count(n, "разговора", "разговоров", "разговоров");
 
-/** «С ошибкой агента — 22 из 53 проверенных разговоров (42%)» */
+/**
+ * «С ошибкой агента — 22 из 53 проверенных разговоров (42%)». With none checked there is no count to give, as on «Итог»
+ * (product/StageResult): «Ни один из 60 разговоров не удалось проверить», never «0 из 0».
+ */
 export const headline = (c: SummaryCheck) =>
-  `С ошибкой агента — ${c.failed}\u00a0из\u00a0${count(c.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(c.failed, c.measured)}%)`;
+  c.measured
+    ? `С ошибкой агента — ${c.failed}\u00a0из\u00a0${count(c.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(c.failed, c.measured)}%)`
+    : `Ни один ${c.unmeasured ? `из\u00a0${count(c.unmeasured, "разговора", "разговоров", "разговоров")}` : "разговор"} не удалось проверить`;
 
-/** «Ещё 4 разговора не удалось проверить, в счёт они не входят.» — a separate number, never in the count. */
+/**
+ * «Ещё 4 разговора не удалось проверить, в счёт они не входят.» — a separate number, never in the count. With none
+ * checked the headline says it.
+ */
 export const unmeasuredText = (c: SummaryCheck) =>
-  c.unmeasured
+  c.unmeasured && c.measured
     ? `Ещё ${count(c.unmeasured, "разговор", "разговора", "разговоров")} не удалось проверить, в счёт ${c.unmeasured === 1 ? "он не входит" : "они не входят"}.`
     : null;
 
 /** «из 29 найденных», «из 21 найденной»: of the errors the check found. */
 const ofFound = (n: number) => `${n}\u00a0${plural(n, "найденной", "найденных", "найденных")}`;
 
-/** «Ошибки нашла автоматическая проверка. Люди перепроверили 11 из 29 найденных и согласились с 10.» */
-export function rechecked(a: Answers): string {
+/**
+ * «Ошибки нашла автоматическая проверка. Люди перепроверили 11 из 29 найденных и согласились с 10.» Nothing when it
+ * could check no conversation: it found no errors only because it saw none.
+ */
+export function rechecked(a: Answers): string | null {
   const answered = a.confirmed + a.removed;
+  if (!a.measured) return null;
   if (!a.errors) return "Автоматическая проверка ошибок не нашла.";
   return answered
     ? `Ошибки нашла автоматическая проверка. Люди перепроверили ${answered}\u00a0из\u00a0${ofFound(a.errors)} и согласились с\u00a0${a.confirmed}.`
@@ -174,9 +186,13 @@ export function summaryMarkdown(s: Summary): string {
       "",
       [`${headline(c)}.`, unmeasuredText(c)].filter(Boolean).join(" "),
       ...c.severity.map(lineText),
-      ...[answersText(c.answers, "people"), c.compare, c.seriousCompare, rechecked(c.answers)].filter(
-        (x): x is string => !!x,
-      ),
+      // People's answers count the checked conversations: with none checked there is no «0 из 0» to give.
+      ...[
+        c.measured ? answersText(c.answers, "people") : null,
+        c.compare,
+        c.seriousCompare,
+        rechecked(c.answers),
+      ].filter((x): x is string => !!x),
     );
   }
   const chosen = s.checks.filter((c) => c.problems.some((p) => p.chosen));
