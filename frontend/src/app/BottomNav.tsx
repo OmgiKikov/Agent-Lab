@@ -25,17 +25,22 @@ function MobileItem({ item }: { item: NavItem }) {
   );
 }
 
-/** A phone keeps the work in sight: «Обзор · Tone · Точность · Симуляции»; the agent, settings and all agents under «Ещё». */
+// Four places and «Ещё» are what fit the width of a phone; the places of the work after them go under «Ещё».
+const ON_BAR = 4;
+const BAR = WORK.slice(0, ON_BAR);
+const MORE = [...WORK.slice(ON_BAR), ...SETUP];
+
+/** A phone keeps the first places of the work in sight; the rest, the agent, settings and all agents under «Ещё». */
 export function BottomNav() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const more = SETUP.some((item) => isActive(item, pathname));
+  const more = MORE.some((item) => isActive(item, pathname));
   return (
     <nav
       aria-label="Разделы"
       className="fixed inset-x-0 bottom-0 z-30 grid h-[calc(56px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-line bg-list pb-[env(safe-area-inset-bottom)] lg:hidden print:hidden"
     >
-      {WORK.map((item) => (
+      {BAR.map((item) => (
         <MobileItem key={item.to} item={item} />
       ))}
       <Menu
@@ -53,7 +58,7 @@ export function BottomNav() {
           </span>
         }
         items={[
-          ...SETUP.map((i) => ({
+          ...MORE.map((i) => ({
             key: i.to,
             label: i.label,
             on: isActive(i, pathname),

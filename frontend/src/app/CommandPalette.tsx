@@ -15,6 +15,7 @@ import {
   MessagesSquare,
   Play,
   Presentation,
+  Repeat,
   Route,
   Search,
   Settings,
@@ -152,6 +153,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         sub: "Бизнес-сценарии из ошибок проверки",
         icon: Route,
         run: go(scenariosLink()),
+      },
+      {
+        id: "s-replay",
+        group: "Разделы",
+        label: "Повтор логов",
+        sub: "Разговоры выгрузки заново через агента на этом компьютере",
+        icon: Repeat,
+        run: go(SECTIONS.replay),
       },
       {
         id: "s-agent",

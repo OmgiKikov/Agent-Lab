@@ -1,0 +1,178 @@
+import { useState } from "react";
+import { Repeat } from "lucide-react";
+import { Header } from "../../app/Header";
+import { SectionJob } from "../../app/SectionJob";
+import { api } from "../../lab/api";
+import { count, longDay, pct, time } from "../../lab/format";
+import { useLabState } from "../../lab/LabProvider";
+import { FAMILIES, FAMILY_NAME, useReplay } from "../../lab/replay";
+import type { FamilyScore, ReplayDialogue, ReplayResult, Target } from "../../lab/types";
+import { Button } from "../../ui/Button";
+import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { useToast } from "../../ui/toast";
+import { Dot } from "../simulations/parts";
+import { StepView } from "./StepView";
+
+const MAX_COUNT = 200;
+const FIELD =
+  "mt-1 block rounded-control border border-line bg-canvas px-3 py-2 text-body text-fg outline-none focus-visible:ring-2 focus-visible:ring-run";
+
+/** Only an agent on this computer gives its trace (backend/lab/replay.py, NOT_LOCAL): the bank's stand is left out. */
+const localTargets = (targets: Target[]) => targets.filter((t) => t.id !== "prod");
+const defaultTarget = (targets: Target[]) => (targets.find((t) => t.kind === "code") ?? targets[0])?.id ?? "";
+
+/**
+ * «Повтор логов»: conversations of the export play again through the local agent, a step for every customer message.
+ * Each step shows production's reply beside the new one, what the agent looked up and the verdicts on the new reply.
+ */
+export function ReplayPage() {
+  const { state, offline } = useLabState();
+  const replay = useReplay(state);
+  const result = replay.data && "id" in replay.data ? replay.data : null;
+  const header = (
+    <Header
+      title="Повтор логов"
+      sub="Разговоры из выгрузки проходят через агента заново"
+      below={<SectionJob kinds={["replay"]} />}
+    />
+  );
+  if (offline && !state)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <ServiceDown />
+      </div>
+    );
+  return (
+    <div className="flex h-full flex-col">
+      {header}
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className="max-w-[1040px] space-y-8 px-4 pb-24 pt-8 lg:px-10">
+          <StartForm />
+          {result ? (
+            <Result result={result} />
+          ) : replay.isError ? (
+            <EmptyState title="Не удалось прочитать повтор">{replay.error.message}</EmptyState>
+          ) : state?.replay ? (
+            <Skeleton className="h-36" />
+          ) : (
+            <EmptyState title="Здесь будут повторённые разговоры">
+              Выберите агента на этом компьютере и запустите повтор.
+            </EmptyState>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StartForm() {
+  const { state, refresh } = useLabState();
+  const toast = useToast();
+  const targets = localTargets(state?.targets ?? []);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [dialogues, setDialogues] = useState(10);
+  const target = picked ?? defaultTarget(targets);
+  const busy = !!state?.job.running;
+  const valid = Number.isInteger(dialogues) && dialogues >= 1 && dialogues <= MAX_COUNT;
+
+  const start = () => {
+    api("/api/replay", { target, count: dialogues })
+      .then(() => refresh())
+      .catch(toast.error);
+  };
+
+  return (
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="text-small text-fg-3">
+        Агент
+        <select className={FIELD} value={target} onChange={(e) => setPicked(e.target.value)}>
+          {targets.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="text-small text-fg-3">
+        Разговоров
+        <input
+          type="number"
+          min={1}
+          max={MAX_COUNT}
+          className={`${FIELD} w-24 tabular-nums`}
+          value={dialogues}
+          onChange={(e) => setDialogues(Number(e.target.value))}
+        />
+      </label>
+      <Button
+        variant="primary"
+        icon={Repeat}
+        onClick={start}
+        disabled={!target || !valid || busy}
+        title={busy ? "Сейчас идёт другая задача" : undefined}
+      >
+        Повторить
+      </Button>
+    </div>
+  );
+}
+
+function Result({ result }: { result: ReplayResult }) {
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <div className="space-y-6">
+      <p className="text-small text-fg-3">
+        Повтор {longDay(result.finishedAt)} в {time(result.finishedAt)} · версия агента {result.version || "—"}
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {FAMILIES.map((family) => (
+          <Score key={family} name={FAMILY_NAME[family]} score={result.metric[family]} />
+        ))}
+      </div>
+      <ul>
+        {result.dialogues.map((d) => (
+          <Dialogue
+            key={d.dialogueId}
+            dialogue={d}
+            open={open === d.dialogueId}
+            onToggle={() => setOpen(open === d.dialogueId ? null : d.dialogueId)}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function Score({ name, score }: { name: string; score: FamilyScore }) {
+  const total = score.pass + score.fail;
+  return (
+    <div className="rounded-control border border-line p-3">
+      <div className="text-small text-fg-3">{name}</div>
+      <div className="text-title font-semibold tabular-nums text-fg">
+        {score.accuracy === null ? "—" : `${pct(score.pass, total)}%`}
+      </div>
+      <div className="text-small text-fg-3">
+        выполнено {score.pass} из {total}
+      </div>
+    </div>
+  );
+}
+
+function Dialogue({ dialogue, open, onToggle }: { dialogue: ReplayDialogue; open: boolean; onToggle: () => void }) {
+  return (
+    <li className="border-t border-line">
+      <button
+        type="button"
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 py-3 text-left text-body text-fg"
+        onClick={onToggle}
+      >
+        <Dot status={dialogue.status} />
+        <span className="min-w-0 flex-1 truncate">{dialogue.steps[0]?.customer}</span>
+        <span className="text-small text-fg-3">{count(dialogue.steps.length, "шаг", "шага", "шагов")}</span>
+      </button>
+      {open && dialogue.steps.map((step) => <StepView key={step.index} step={step} />)}
+    </li>
+  );
+}
