@@ -23,6 +23,7 @@ from . import (
     policy_files,
     problems,
     registry,
+    replay,
     scenarios,
     severity,
     simulate,
@@ -88,6 +89,11 @@ class DiscoverCommand(BaseModel):
     replan: bool = False
     # After the check the model proposes which errors are serious (severity.propose); the screens ask for it.
     propose: bool = False
+
+
+class ReplayCommand(BaseModel):
+    target: str
+    count: int = Field(default=10, ge=1, le=200)
 
 
 class SettingsCommand(BaseModel):
@@ -280,6 +286,7 @@ def state() -> dict:
             {key: summary.get(key) for key in RUN_FIELDS} | {'targetName': agents.run_name(summary)}
             for summary in store.run_summaries()
         ],
+        'replay': replay.summary(),
         'targets': [agents.public(key, config) for key, config in agents.configs().items()],
         'personas': personas.public(),
     }
@@ -682,6 +689,18 @@ async def start_run(payload: RunCommand) -> dict:
             payload.target, payload.cardIds or None, payload.label, progress, payload.repeats, chosen
         ),
     )
+
+
+@app.post('/api/replay')
+async def start_replay(payload: ReplayCommand) -> dict:
+    if payload.target not in agents.configs():
+        raise HTTPException(400, UNKNOWN_WAY)
+    return start('replay', lambda progress: replay.run(payload.target, payload.count, progress))
+
+
+@app.get('/api/replay')
+def replay_result() -> dict:
+    return store.load(replay.RESULT) or {}
 
 
 @app.post('/api/runs/{run_id}/rejudge')

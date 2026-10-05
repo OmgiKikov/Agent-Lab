@@ -419,6 +419,16 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['revision'], 2)
         self.assertEqual(store.recover_runs(), 0)
 
+    async def test_replay_rejects_an_unknown_way_to_the_agent(self) -> None:
+        response = await self.client.post('/api/replay', json={'target': 'nowhere', 'count': 3})
+        self.assertEqual(response.status_code, 400)
+
+    async def test_no_replay_yet_is_an_empty_result(self) -> None:
+        self.assertEqual((await self.client.get('/api/replay')).json(), {})
+
+    async def test_state_has_no_replay_before_the_first_one(self) -> None:
+        self.assertIsNone((await self.client.get('/api/state')).json()['replay'])
+
 
 if __name__ == '__main__':
     unittest.main()
