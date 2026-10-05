@@ -1,4 +1,4 @@
-# Real bank data never enters this public repository: logs, cards, runs, settings, addresses, certificates.
+# Real bank data never enters this repository: logs, cards, runs, settings, addresses, certificates.
 /data/
 /certs/
 *.xlsx
@@ -20,6 +20,8 @@ __pycache__/
 
 # Earlier experiments (LangWatch, Latitude, FutureAGI, review UI, old scripts), kept on this computer only.
 /archive/
+
+# Claude Code: its local settings and skills.
 /.claude/
 skills-lock.json
 
