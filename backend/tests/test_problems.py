@@ -358,6 +358,28 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('review', store.run('run-1')['items'][0]['rules'][0])
         self.assertEqual((await self.client.post('/api/review', json={**body, 'status': 'FAIL'})).status_code, 200)
 
+    async def test_an_answer_given_meanwhile_elsewhere_is_never_overwritten_unseen(self) -> None:
+        """Two tabs show «без ответа» on the same case: the first answer stands, the second is refused (409) and the
+        screen gets the first one. A request that names no previous answer (an older screen) is not compared."""
+        body = {'source': 'log', 'dialogueId': 'd1', 'ruleId': 't1r1', 'status': 'FAIL', 'before': None}
+        first = await self.client.post('/api/review', json={**body, 'decision': 'agree'})
+        self.assertEqual(first.status_code, 200, first.text)
+        second = await self.client.post('/api/review', json={**body, 'decision': 'disagree'})
+        self.assertEqual(second.status_code, 409, second.text)
+        self.assertEqual(second.json()['detail'], store.ANSWERED)
+        self.assertEqual(store.load(discover.RESULT)['results'][0]['rules'][0]['review'], 'agree')
+        changed = await self.client.post('/api/review', json={**body, 'before': 'agree', 'decision': 'disagree'})
+        self.assertEqual(changed.status_code, 200, changed.text)
+        older = {key: value for key, value in body.items() if key != 'before'}
+        self.assertEqual((await self.client.post('/api/review', json={**older, 'decision': None})).status_code, 200)
+        self.assertNotIn(store.load(discover.RESULT)['results'][0]['rules'][0]['review'], ('agree', 'disagree'))
+        store.create_run(played_run())
+        sim = {'source': 'sim', 'run': 'run-1', 'index': 0, 'ruleId': 'c1', 'status': 'FAIL', 'before': None}
+        self.assertEqual((await self.client.post('/api/review', json={**sim, 'decision': 'agree'})).status_code, 200)
+        refused = await self.client.post('/api/review', json={**sim, 'decision': 'disagree'})
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertEqual(store.run('run-1')['items'][0]['rules'][0]['review'], 'agree')
+
     async def test_log_answers_wait_for_a_running_audit(self) -> None:
         with patch.dict(api.jobs.state, {'running': True, 'kind': 'discover'}):
             body = {'source': 'log', 'dialogueId': 'd1', 'ruleId': 't1r1', 'decision': 'agree'}

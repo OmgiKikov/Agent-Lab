@@ -170,7 +170,8 @@ export function Dialog({
   const shownOf = (r: Rule): Example => {
     const e = exampleFor(row, r);
     const k = keyOf(e);
-    return k in decided ? { ...e, review: decided[k] } : e;
+    // The person's own answer here is on this criterion (as lab/problems withDecision puts it).
+    return k in decided ? { ...e, review: decided[k], reviewScope: decided[k] ? "rule" : null } : e;
   };
   const decide = (e: Example, d: Decision) => {
     const next = e.review === d ? null : d;

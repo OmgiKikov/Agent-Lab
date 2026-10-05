@@ -119,7 +119,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
     toast.notify(saysError(e.status, d) ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
       label: "Отменить",
       run: () => {
-        review.mutate({ example: e, decision: before, finishedAt });
+        review.mutate({ example: e, decision: before, finishedAt, seen: d });
         forget(k);
         setDir(-1);
         setAt(was);

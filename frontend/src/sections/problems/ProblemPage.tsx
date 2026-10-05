@@ -98,7 +98,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
     if (next)
       toast.notify(next === "agree" ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
         label: "Отменить",
-        run: () => review.mutate({ example: e, decision: before, finishedAt }),
+        run: () => review.mutate({ example: e, decision: before, finishedAt, seen: next }),
       });
   };
   useKeys({

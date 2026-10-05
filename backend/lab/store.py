@@ -26,6 +26,9 @@ COUNTED = 'logs.json'
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 # A person's answer on a verdict that is no longer the one they saw.
 CHANGED = 'Ответ не сохранён: оценка изменилась. Обновите страницу.'
+ANSWERED = 'Ответ не сохранён: на этот случай уже ответили, пока вы смотрели. Проверьте ответ на экране.'
+# The answer a person saw on a case, when a request does not name one (an older screen): then it is not compared.
+UNSEEN: Any = object()
 
 
 def now() -> str:
@@ -676,10 +679,16 @@ def _decision(decision: str | None) -> str | None:
 
 
 def set_review(
-    run_id: str, index: int, decision: str | None, rule_id: str | None = None, status: str | None = None
+    run_id: str,
+    index: int,
+    decision: str | None,
+    rule_id: str | None = None,
+    status: str | None = None,
+    before: Any = UNSEEN,
 ) -> dict:
     """A person's decision on a simulated conversation: on one criterion's verdict, or (older requests) on the whole.
-    With the verdict the person answered about (status), a changed verdict refuses the decision."""
+    With the verdict the person answered about (status), a changed verdict refuses the decision; with the answer they
+    saw on it (before), an answer given meanwhile elsewhere refuses it too, never overwritten unseen."""
     _decision(decision)
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
         raise IndexError(index)
@@ -694,6 +703,8 @@ def set_review(
             raise KeyError(rule_id)
         if status and row.get('status') != status:
             raise ValueError(CHANGED)
+        if before is not UNSEEN and row.get('review') != before:
+            raise ValueError(ANSWERED)
         row['review'] = decision
 
     return _mutate_run(run_id, mutate)
@@ -706,9 +717,11 @@ def set_log_review(
     decision: str | None,
     finished_at: str | None = None,
     status: str | None = None,
+    before: Any = UNSEEN,
 ) -> None:
     """A person's decision on one criterion's verdict in a logged conversation, kept in the log assessment.
-    It lands only on the result (finished_at) and the verdict (status) the person saw, when they are given."""
+    It lands only on the result (finished_at), the verdict (status) and the answer (before) the person saw, when they
+    are given: an answer given meanwhile in another tab or browser is never overwritten unseen."""
     _decision(decision)
 
     def mutate(value: dict | None) -> None:
@@ -720,6 +733,8 @@ def set_log_review(
             raise KeyError(rule_id)
         if status and row.get('status') != status:
             raise ValueError(CHANGED)
+        if before is not UNSEEN and row.get('review') != before:
+            raise ValueError(ANSWERED)
         row['review'] = decision
 
     with _connection() as connection:

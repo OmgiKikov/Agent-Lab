@@ -182,7 +182,16 @@ function withDecision(data: Problems, target: Example, decision: Decision | null
  * A person's answer on one verdict, as the screen shows it: the example with its status, and the logs' result it comes
  * from (`finishedAt`). The service refuses it when either has changed since, so it never lands on another check.
  */
-export type Answer = { example: Example; decision: Decision | null; finishedAt: string | null | undefined };
+export type Answer = {
+  example: Example;
+  decision: Decision | null;
+  finishedAt: string | null | undefined;
+  /**
+   * The answer the person saw on this criterion, when it is not the example's own: «Отменить» takes back the answer
+   * just given, so it saw that one. Otherwise the example's answer, unless it is on the whole conversation.
+   */
+  seen?: Decision | null;
+};
 
 /**
  * Why answers on a check's result wait, in one line, or null. While that check runs, its new result replaces the one
@@ -207,8 +216,11 @@ export function useReview() {
   const { refresh } = useLabState();
   return useMutation({
     mutationKey: ["review"],
-    mutationFn: ({ example, decision, finishedAt }: Answer) =>
-      api(
+    mutationFn: ({ example, decision, finishedAt, seen }: Answer) => {
+      // The answer the person saw on this criterion: one given meanwhile in another tab or browser is never overwritten
+      // unseen (the service refuses, and the screen gets that answer). An answer on the whole conversation is not this.
+      const before = seen !== undefined ? seen : example.reviewScope === "dialogue" ? null : example.review;
+      return api(
         "/api/review",
         example.source === "log"
           ? {
@@ -219,6 +231,7 @@ export function useReview() {
               decision,
               finishedAt,
               status: example.status,
+              before,
             }
           : {
               source: "sim",
@@ -227,8 +240,10 @@ export function useReview() {
               ruleId: example.ruleId,
               decision,
               status: example.status,
+              before,
             },
-      ),
+      );
+    },
     onMutate: ({ example, decision }) => {
       client.setQueriesData<Problems>({ queryKey: ["problems"] }, (old) =>
         old ? withDecision(old, example, decision) : old,

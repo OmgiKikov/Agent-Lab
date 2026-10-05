@@ -164,8 +164,9 @@ class ToneClarificationCommand(BaseModel):
 class ReviewCommand(BaseModel):
     """A person's decision on what the judge found: on one criterion of a logged or simulated conversation, or (older
     requests without ruleId) on a simulated conversation as a whole. On a logged one, check names the check whose
-    result it goes to. finishedAt (the check's result) and status (the verdict) are what the person saw: when either
-    changed meanwhile, the decision is refused."""
+    result it goes to. finishedAt (the check's result), status (the verdict) and before (the answer on it, null for
+    none) are what the person saw: when any changed meanwhile, the decision is refused. Without before (older
+    screens) the answer on the case is not compared."""
 
     source: Literal['log', 'sim'] = 'sim'
     check: Literal['tone', 'code'] | None = None
@@ -176,6 +177,11 @@ class ReviewCommand(BaseModel):
     decision: Literal['agree', 'disagree'] | None = None
     finishedAt: str | None = None
     status: str | None = None
+    before: Literal['agree', 'disagree'] | None = None
+
+    def seen(self) -> object:
+        """The answer the person saw on the case, or store.UNSEEN when the request does not say."""
+        return self.before if 'before' in self.model_fields_set else store.UNSEEN
 
 
 class CardsCommand(BaseModel):
@@ -778,6 +784,7 @@ async def review(payload: ReviewCommand) -> dict:
                 payload.decision,
                 payload.finishedAt,
                 payload.status,
+                payload.seen(),
             )
         except KeyError as error:
             raise HTTPException(404, NOT_CHECKED) from error
@@ -787,7 +794,9 @@ async def review(payload: ReviewCommand) -> dict:
     if payload.index is None:
         raise HTTPException(422, 'Нужны run и index')
     try:
-        record = store.set_review(payload.run, payload.index, payload.decision, payload.ruleId or None, payload.status)
+        record = store.set_review(
+            payload.run, payload.index, payload.decision, payload.ruleId or None, payload.status, payload.seen()
+        )
     except (KeyError, IndexError) as error:
         raise HTTPException(404, 'Разговор не найден') from error
     except ValueError as error:
