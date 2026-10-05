@@ -11,6 +11,8 @@ import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Modal } from "../../ui/Modal";
+import { useToast } from "../../ui/toast";
+import { stopFailed } from "./Checking";
 
 /** One check takes at most this many criteria (backend/lab/api.py, ToneCheckCommand). */
 const MAX_CRITERIA = 20;
@@ -28,6 +30,7 @@ export const toneDeck = (state: LabState) => state.cards?.check === "tone" && !!
 
 export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack: () => void; onStarted: () => void }) {
   const { refresh } = useLabState();
+  const toast = useToast();
   const draft = state.toneOfVoice;
   const result = toneResult(state);
   const [choice, setChoice] = useState<{ revision: string; ids: string[] } | null>(null);
@@ -89,10 +92,9 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
           <Button
             className="mt-3"
             onClick={() =>
-              api("/api/job/stop", {}).then(
-                () => refresh(),
-                () => refresh(),
-              )
+              api("/api/job/stop", {})
+                .catch((e) => toast.error(stopFailed("сборку критериев", e)))
+                .finally(() => void refresh())
             }
           >
             Остановить
