@@ -165,6 +165,8 @@ def from_jsonl(data: bytes) -> list[dict]:
 
 
 def _validated(dialogues: list[dict]) -> list[dict]:
+    """The conversations a check can read: the customer writes first and the agent answers. The others are left out
+    (read_export counts them); an export without one usable conversation is refused."""
     usable, seen = [], set()
     for index, dialogue in enumerate(dialogues, 1):
         if not isinstance(dialogue, dict):
@@ -196,6 +198,12 @@ def _validated(dialogues: list[dict]) -> list[dict]:
 
 def prepare(name: str, data: bytes) -> list[dict]:
     """Validate an entire upload before its caller atomically replaces the stored conversations."""
+    return read_export(name, data)[0]
+
+
+def read_export(name: str, data: bytes) -> tuple[list[dict], int]:
+    """The usable conversations of an upload, and how many it had that a check cannot read (the agent wrote first, or
+    never answered): the person is told how many were left out."""
     if name.lower().endswith('.jsonl'):
         dialogues = from_jsonl(data)
     elif name.lower().endswith('.xlsx'):
@@ -206,13 +214,13 @@ def prepare(name: str, data: bytes) -> list[dict]:
             raise ValueError('Файл .xlsx повреждён или зашифрован. Сохраните выгрузку заново.') from error
     else:
         raise ValueError('Нужна выгрузка в .xlsx или .jsonl.')
-    return _validated(dialogues)
+    usable = _validated(dialogues)
+    return usable, len(dialogues) - len(usable)
 
 
 def commit(dialogues: list[dict], name: str | None = None) -> int:
-    store.replace_inputs(FILE, dialogues)
-    if name:
-        store.save(META, {'file': name, 'updatedAt': store.now()})
+    """The new export with its file name, in one transaction: a saved check never names the previous file."""
+    store.replace_inputs(FILE, dialogues, {META: {'file': name, 'updatedAt': store.now()}} if name else None)
     return len(dialogues)
 
 

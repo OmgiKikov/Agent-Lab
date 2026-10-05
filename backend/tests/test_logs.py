@@ -158,7 +158,30 @@ class LogImportTests(unittest.TestCase):
     def test_commit_has_one_storage_write(self):
         with patch.object(logs.store, 'replace_inputs') as save:
             self.assertEqual(logs.commit([{'id': 'one', 'messages': []}]), 1)
-        save.assert_called_once_with('logs.json', [{'id': 'one', 'messages': []}])
+        save.assert_called_once_with('logs.json', [{'id': 'one', 'messages': []}], None)
+
+    def test_the_export_and_its_file_name_are_one_write(self):
+        """A failure between two writes would leave the new export under the previous file's name, and the history of
+        the next check would name the wrong file."""
+        with (
+            patch.object(logs.store, 'replace_inputs') as save,
+            patch.object(logs.store, 'save', side_effect=AssertionError('one write')),
+            patch.object(logs.store, 'now', return_value='2026-10-05T10:00:00.000+00:00'),
+        ):
+            logs.commit([{'id': 'one', 'messages': []}], 'Октябрь.xlsx')
+        meta = {'file': 'Октябрь.xlsx', 'updatedAt': '2026-10-05T10:00:00.000+00:00'}
+        save.assert_called_once_with('logs.json', [{'id': 'one', 'messages': []}], {logs.META: meta})
+
+    def test_an_export_says_how_many_conversations_a_check_cannot_read(self):
+        talk = [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}]
+        rows = [
+            {'id': 'usable', 'messages': talk},
+            {'id': 'agent-first', 'messages': list(reversed(talk))},
+            {'id': 'no-answer', 'messages': talk[:1]},
+        ]
+        data = '\n'.join(json.dumps(row, ensure_ascii=False) for row in rows).encode()
+        dialogues, skipped = logs.read_export('export.jsonl', data)
+        self.assertEqual(([d['id'] for d in dialogues], skipped), (['usable'], 2))
 
 
 class SeenTextTests(unittest.TestCase):

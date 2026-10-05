@@ -7,8 +7,25 @@ from .context import sources
 
 
 def saved_checks(check: str) -> list[dict]:
-    """The saved checks of one check, the newest first: their lines."""
-    return store.tone_checks() if check == checks.TONE else store.code_checks()
+    """The saved checks of one check, the newest first: their lines. A line compared with the one before it says, as
+    «было → стало» on the result does, what a person may read into the difference (history.verdict); «не удалось
+    проверить» counts its whole sample (history.with_unmeasured)."""
+    lines = store.tone_checks() if check == checks.TONE else store.code_checks()
+    for line in lines:
+        line['summary'] = history.with_unmeasured(line['summary'], line.get('sampled'))
+    by_id = {line['id']: line for line in lines}
+    for line in lines:
+        comparison = line.get('comparison') or {}
+        previous = by_id.get(comparison.get('previousId'))
+        if previous is None or comparison.get('kind') not in ('new-data', 'same-data'):
+            continue
+        before, now = (
+            {'failed': record['summary']['failed'], 'measured': record['summary']['measured']}
+            for record in (previous, line)
+        )
+        verdict, direction = history.verdict(before, now)
+        line['comparison'] = {**comparison, 'verdict': verdict, 'direction': direction}
+    return lines
 
 
 def saved_check(check: str, check_id: str) -> dict | None:

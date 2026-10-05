@@ -150,6 +150,13 @@ class StoreTests(unittest.TestCase):
                 'sources.json', [code | {'content': 'Срок.', 'sha256': 'c2'}, policy]
             ),
             'code read again unchanged': lambda: store.replace_inputs('sources.json', [code, policy]),
+            # An import added above the prompt: the same text found a line lower.
+            'code read again, a prompt moved down a line': lambda: store.replace_inputs(
+                'sources.json', [code | {'name': 'agent.py:2', 'origin': 'agent.py:2'}, policy]
+            ),
+            'communication rules saved under another name': lambda: store.replace_inputs(
+                'sources.json', [code, policy | {'name': 'ToV, версия 2.docx', 'origin': 'ToV, версия 2.docx'}]
+            ),
             'new tone-of-voice criteria': lambda: store.save_tone_draft({'revision': 'r2'}),
             'tone-of-voice criteria saved unchanged': lambda: store.save_tone_draft({'revision': 'r1'}),
             'new tone-of-voice result': lambda: store.save_tone_check(next(checked)),
@@ -161,6 +168,8 @@ class StoreTests(unittest.TestCase):
             'communication rules changed': ('C', 'CK', 'C'),
             'code changed': ('DTK', 'DT', 'DT'),
             'code read again unchanged': ('DTCK', 'DTCK', 'DTCK'),
+            'code read again, a prompt moved down a line': ('DTCK', 'DTCK', 'DTCK'),
+            'communication rules saved under another name': ('DTCK', 'DTCK', 'DTCK'),
             'new tone-of-voice criteria': ('DTC', 'DTCK', 'DTC'),
             'tone-of-voice criteria saved unchanged': ('DTCK', 'DTCK', 'DTCK'),
             'new tone-of-voice result': ('DTC', 'DTCK', 'DTC'),

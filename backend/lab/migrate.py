@@ -75,7 +75,7 @@ def migrate(source: Path) -> dict[str, int]:
             changed, reset = _recompute_verdict(result)
             recomputed += changed
             reset_reviews += reset
-        analysis['summary'] = discover.summarize(analysis['results'], analysis['topics'])
+        analysis['summary'] = discover.summarize(analysis['results'], analysis['topics'], analysis.get('sampled'))
     return {**store.import_legacy(documents, records), 'recomputedVerdicts': recomputed, 'resetReviews': reset_reviews}
 
 

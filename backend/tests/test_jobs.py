@@ -2,7 +2,7 @@ import asyncio
 import threading
 import unittest
 
-from lab.jobs import STOPPED, BusyError, Jobs
+from lab.jobs import STOPPED, BusyError, Jobs, message
 
 
 class JobsTests(unittest.IsolatedAsyncioTestCase):
@@ -98,3 +98,12 @@ class JobsTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class JobMessageTests(unittest.TestCase):
+    def test_errors_of_a_task_group_are_told_in_their_own_words(self) -> None:
+        group = ExceptionGroup('unhandled errors in a TaskGroup', [ValueError('Нет кода агента.')])
+        self.assertEqual(message(group), 'Нет кода агента.')
+        twice = ExceptionGroup('x', [ValueError('Один.'), ExceptionGroup('y', [ValueError('Один.'), KeyError('k')])])
+        self.assertEqual(message(twice), "Один.; 'k'")
+        self.assertEqual(message(RuntimeError()), 'RuntimeError')

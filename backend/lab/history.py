@@ -37,6 +37,16 @@ def evaluation_fingerprint(result: dict) -> str:
     )
 
 
+def with_unmeasured(summary: dict, sampled: object) -> dict:
+    """A check's counts with «не удалось проверить» counted from its sample: every conversation it took and gave no
+    verdict, those Точность's planner put in no topic included. Every screen, the history, the list of agents and the
+    summary for management then say the same number as the result's own screen (problems.from_logs). A record without
+    its sample keeps its own count."""
+    if not isinstance(sampled, int) or not isinstance(summary.get('measured'), int):
+        return summary
+    return {**summary, 'unmeasured': max(0, sampled - summary['measured'])}
+
+
 def comparison(check: dict, previous: dict | None) -> dict:
     """How a saved check stands to the one saved before it: comparable only with the same criteria and models."""
     if previous is None:

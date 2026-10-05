@@ -1,6 +1,8 @@
 """Agent Lab HTTP commands. Long work has one owner; computation precedes persistence."""
 
 import asyncio
+import hashlib
+import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -17,6 +19,7 @@ from . import (
     checks,
     compare,
     discover,
+    history,
     llm,
     logs,
     personas,
@@ -192,10 +195,23 @@ class AgentCommand(BaseModel):
 def result_line(check: str) -> dict | None:
     """The current agent's result of one check in one line: errors of measured, not checked, when."""
     value = store.load(checks.result(check)) or {}
-    summary = value.get('summary') or {}
+    summary = history.with_unmeasured(value.get('summary') or {}, value.get('sampled'))
     if not value.get('finishedAt') or any(key not in summary for key in ('failed', 'measured', 'unmeasured')):
         return None  # nothing finished, or a record of another shape: never a reason to hide the other agents
     return {key: summary[key] for key in ('failed', 'measured', 'unmeasured')} | {'finishedAt': value['finishedAt']}
+
+
+def reviews_stamp(results: dict[str, dict | None]) -> str:
+    """What changes with every answer on the checks' results, given in this tab, another one or another browser: the
+    screens ask for the problems again by it, so a case answered elsewhere is never offered again as unanswered."""
+    answers = sorted(
+        (check, str(result.get('dialogueId')), str(row.get('ruleId')), row['review'])
+        for check, value in results.items()
+        for result in (value or {}).get('results') or []
+        for row in result.get('rules') or []
+        if row.get('review') in ('agree', 'disagree')
+    )
+    return hashlib.sha1(json.dumps(answers, ensure_ascii=False).encode()).hexdigest()[:12]
 
 
 def rules_line() -> dict | None:
@@ -261,17 +277,20 @@ def source_summary(analysis: dict | None) -> list[dict]:
 def state() -> dict:
     """Polled every 1.5 s during a job: each check's result is read once; runs and dialogues are not parsed at all."""
     results = {check: store.load(checks.result(check)) for check in checks.RESULTS}
-    for result in results.values():
-        if result and not result.get('summary'):  # every result stores its summary; an older one may not
+    for result in filter(None, results.values()):
+        if not result.get('summary'):  # every result stores its summary; an older one may not
             result['summary'] = discover.summarize(result['results'], result['topics'])
+        result['summary'] = history.with_unmeasured(result['summary'], result.get('sampled'))
     return {
         'job': jobs.state,
         'model': llm.MODEL,
         'models': llm.describe(),
         'settings': agents.settings(),
         'sources': source_summary(results[checks.CODE]),
+        'sourcesRead': store.load(sources.READ),
         'logs': {'total': store.length(logs.FILE), **logs.meta()},
         'checks': results,
+        'reviewsStamp': reviews_stamp(results),
         'toneOfVoice': store.load(tone.DRAFT),
         'severity': store.severity(),
         'severityStamp': store.severity_stamp(),
@@ -324,10 +343,12 @@ async def check_models() -> dict:
 @app.post('/api/sources')
 async def collect_sources() -> dict:
     async def work(progress: Progress) -> list[dict]:
+        folder = agents.settings()['repo']
         collected = await asyncio.to_thread(sources.collect, agents.repo())
         # The tone-of-voice policy is a person's document, not the agent's code: re-reading the code keeps it.
         policy = [source for source in sources.load() if source['kind'] == tone.KIND]
-        store.replace_inputs(sources.FILE, [*collected, *policy])
+        read = {'readAt': store.now(), 'repo': folder}
+        store.replace_inputs(sources.FILE, [*collected, *policy], {sources.READ: read})
         return collected
 
     return start('sources', work)
@@ -356,19 +377,19 @@ async def uploaded(request: Request, limit: int, advice: str) -> bytes:
 async def upload_logs(request: Request, name: str) -> dict:
     data = await uploaded(request, logs.LIMIT, 'Выгрузите разговоры за меньший срок.')
 
-    async def work(progress: Progress) -> int:
-        dialogues = await asyncio.to_thread(logs.prepare, name, data)
-        return logs.commit(dialogues, name)
+    async def work(progress: Progress) -> dict:
+        dialogues, skipped = await asyncio.to_thread(logs.read_export, name, data)
+        # skipped: the conversations a check cannot read (the agent wrote first, or never answered), left out.
+        return {'total': logs.commit(dialogues, name), 'skipped': skipped}
 
     try:
-        count = await jobs.perform('logs', work)
+        return await jobs.perform('logs', work)
     except BusyError as error:
         raise HTTPException(409, str(error)) from error
     except asyncio.CancelledError as error:
         raise HTTPException(409, 'Загрузка остановлена') from error
     except (ValueError, KeyError, OSError) as error:
         raise HTTPException(400, f'Не удалось прочитать файл. {error}') from error
-    return {'total': count}
 
 
 @app.get('/api/logs/{dialogue_id}')
@@ -626,6 +647,9 @@ def with_reviews(snapshot: dict | None, reviews: list[dict]) -> dict:
     """A saved check with the answers people gave on it since it finished, over the ones it was saved with."""
     if snapshot is None:
         raise HTTPException(404, 'Проверка не найдена')
+    for record in (snapshot['check'], snapshot['result']):
+        if isinstance(record.get('summary'), dict):
+            record['summary'] = history.with_unmeasured(record['summary'], record.get('sampled'))
     decisions = {(row['dialogueId'], row['ruleId']): row['decision'] for row in reviews}
     for result in snapshot['result']['results']:
         for row in result.get('rules', []):

@@ -321,7 +321,7 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
             {key: source[key] for key in ('id', 'kind', 'origin', 'sha256')}
             | {'chars': len(source['content']), 'rules': len(criteria)}
         ],
-        'summary': discover.summarize(results, [topic]),
+        'summary': discover.summarize(results, [topic], len(dialogues)),
     }
 
 

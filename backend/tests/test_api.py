@@ -36,7 +36,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         }
         response = await self.client.post('/api/logs?name=sample.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'total': 1})
+        self.assertEqual(response.json(), {'total': 1, 'skipped': 0})
         response = await self.client.get('/api/logs/dialogue-1')
         self.assertEqual(response.json(), {**dialogue, 'evaluation': None})
         evaluation = {'dialogueId': 'dialogue-1', 'status': 'FAIL'}
@@ -396,6 +396,65 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         state, _ = await self.state_parsing()
         found = state['checks']['code']['summary']
         self.assertEqual((found['failed'], found['measured']), (1, 1))
+
+    async def test_not_checked_counts_the_whole_sample_on_every_screen(self) -> None:
+        """«Не удалось проверить» is the conversations taken without a verdict, those in no topic included: the result's
+        screen, the summary for management, the history and the list of agents say the same number."""
+        summary = {'checked': 3, 'measured': 2, 'failed': 1, 'passed': 1, 'unmeasured': 1, 'patterns': []}
+        store.save(
+            api.discover.RESULT,
+            {'results': [], 'topics': [], 'sampled': 5, 'unassigned': 2, 'summary': summary, 'finishedAt': 'now'},
+        )
+        state = (await self.client.get('/api/state')).json()
+        self.assertEqual(state['checks']['code']['summary']['unmeasured'], 3)
+        self.assertEqual(api.result_line('code')['unmeasured'], 3)
+
+    async def test_an_answer_given_anywhere_changes_the_stamp_the_screens_refresh_by(self) -> None:
+        result = {
+            'finishedAt': 'now',
+            'topics': [],
+            'results': [{'dialogueId': 'd1', 'status': 'FAIL', 'rules': [{'ruleId': 't1r1', 'status': 'FAIL'}]}],
+        }
+        store.save(api.discover.RESULT, result)
+        before = (await self.client.get('/api/state')).json()['reviewsStamp']
+        store.set_log_review(api.discover.RESULT, 'd1', 't1r1', 'agree')
+        after = (await self.client.get('/api/state')).json()['reviewsStamp']
+        self.assertNotEqual(before, after)
+        store.set_log_review(api.discover.RESULT, 'd1', 't1r1', None)
+        self.assertEqual((await self.client.get('/api/state')).json()['reviewsStamp'], before)
+
+    async def test_the_agent_page_names_the_read_that_succeeded(self) -> None:
+        """When the code was read, and from which folder: written with the sources, so a read that failed names
+        nothing, and a folder saved later is not said to be the one read."""
+        source = {'id': 's1', 'kind': 'prompt', 'name': 'a.py:1', 'origin': 'a.py:1', 'sha256': 'x', 'content': 'p'}
+        await self.client.post('/api/settings', json={'repo': '~/agent'})
+        with patch.object(api.sources, 'collect', return_value=[source]):
+            await self.client.post('/api/sources')
+            await self.wait_job()
+        read = (await self.client.get('/api/state')).json()['sourcesRead']
+        self.assertEqual(read['repo'], '~/agent')
+        self.assertTrue(read['readAt'])
+        await self.client.post('/api/settings', json={'repo': '~/elsewhere'})
+        with patch.object(api.sources, 'collect', side_effect=RuntimeError('В папке нет кода агента.')):
+            await self.client.post('/api/sources')
+            await self.wait_job()
+        self.assertEqual((await self.client.get('/api/state')).json()['sourcesRead'], read)
+
+    async def test_a_task_says_when_it_started(self) -> None:
+        async def work(progress) -> None:
+            pass
+
+        api.jobs.start('sources', work)
+        first = (await self.client.get('/api/state')).json()['job']['startedAt']
+        await self.wait_job()
+        self.assertTrue(first)
+
+    async def wait_job(self) -> None:
+        for _ in range(500):
+            if not api.jobs.state['running']:
+                return
+            await asyncio.sleep(0.002)
+        self.fail('background job did not finish')
 
     async def test_startup_recovers_interrupted_run_and_retains_finished_items_and_reviews(self) -> None:
         store.create_run(

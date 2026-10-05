@@ -15,15 +15,31 @@ class BusyError(RuntimeError):
     pass
 
 
+def message(error: BaseException) -> str:
+    """What went wrong, in the words of the error itself: a task group's errors are told by their own messages, each
+    once, never as «unhandled errors in a TaskGroup»."""
+    return '; '.join(dict.fromkeys(str(leaf) or type(leaf).__name__ for leaf in _leaves(error)))
+
+
+def _leaves(error: BaseException) -> list[BaseException]:
+    if isinstance(error, BaseExceptionGroup):
+        return [leaf for child in error.exceptions for leaf in _leaves(child)]
+    return [error]
+
+
 class Jobs:
     def __init__(self) -> None:
-        self.state: dict = {'kind': None, 'running': False, 'error': None, 'progress': {}}
+        # startedAt tells one task from the next of the same kind: a screen that saw neither run still says how the
+        # newest one ended, and a failure it was told to hide is not hidden again when it comes back (TaskCard).
+        self.state: dict = {'kind': None, 'running': False, 'error': None, 'progress': {}, 'startedAt': None}
         self._task: asyncio.Task | None = None
 
     def _launch(self, kind: str, work: Work, propagate: bool) -> asyncio.Task:
         if self.state['running']:
             raise BusyError('Сейчас идёт другая задача. Дождитесь её или остановите.')
-        self.state.update(kind=kind, running=True, error=None, progress={'message': 'Запускаем…'})
+        self.state.update(
+            kind=kind, running=True, error=None, progress={'message': 'Запускаем…'}, startedAt=store.now()
+        )
 
         def progress(**values: Any) -> None:
             if not task.cancelling():
@@ -37,7 +53,7 @@ class Jobs:
                 if propagate:
                     raise
             except Exception as error:
-                self.state['error'] = str(error) or type(error).__name__
+                self.state['error'] = message(error)
                 if propagate:
                     raise
             finally:

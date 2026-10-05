@@ -210,8 +210,10 @@ def carry_reviews(previous: dict, results: list[dict]) -> None:
                 row['review'] = decision
 
 
-def summarize(results: list[dict], topics: list[dict]) -> dict:
-    """Counts, the second judge's agreement and the recurring violations, most frequent first."""
+def summarize(results: list[dict], topics: list[dict], sampled: int | None = None) -> dict:
+    """Counts, the second judge's agreement and the recurring violations, most frequent first. With the sample
+    (`sampled`), «не удалось проверить» counts every conversation taken without a verdict, those in no topic included
+    (history.with_unmeasured)."""
     measured = [r for r in results if r['status'] != 'UNMEASURED']
     failed = [r for r in results if r['status'] == 'FAIL']
     # One problem = one quote from the source: the same rule restated in several topics is merged.
@@ -258,7 +260,7 @@ def summarize(results: list[dict], topics: list[dict]) -> dict:
     if twice:
         agree = sum(1 for r in twice if r['second']['status'] == r['status'])
         second = {'model': twice[0]['second']['model'], 'checked': len(twice), 'agree': agree}
-    return {
+    counts = {
         'checked': len(results),
         'measured': len(measured),
         'failed': len(failed),
@@ -267,6 +269,7 @@ def summarize(results: list[dict], topics: list[dict]) -> dict:
         'secondJudge': second,
         'patterns': sorted(patterns.values(), key=lambda p: -p['count']),
     }
+    return history.with_unmeasured(counts, sampled)
 
 
 async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None, replan: bool = False) -> dict:
@@ -335,6 +338,6 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
         'droppedRules': dropped,
         'topics': topics,
         'results': results,
-        'summary': summarize(results, topics),
+        'summary': summarize(results, topics, len(dialogues)),
     }
     return value

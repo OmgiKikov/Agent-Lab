@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
 
-from . import agents, cards, checks, judge, llm, personas, store
+from . import agents, cards, checks, jobs, judge, llm, personas, store
 from .agents import world
 from .prompts import PERSONA_OPENING, SIMULATOR
 from .transcript import with_buttons
@@ -140,12 +140,6 @@ def new_item(card: dict, persona: str, attempt: int) -> dict:
     }
 
 
-def _error_message(error: Exception) -> str:
-    if isinstance(error, ExceptionGroup):
-        return '; '.join(_error_message(child) for child in error.exceptions)
-    return str(error) or type(error).__name__
-
-
 async def run(
     key: str,
     card_ids: list[str] | None = None,
@@ -196,7 +190,7 @@ async def run(
         record.update(status='stopped', error='Прогон остановлен')
         raise
     except Exception as error:
-        record.update(status='failed', error=_error_message(error))
+        record.update(status='failed', error=jobs.message(error))
     finally:
         # What the stop or the failure cut short, with the final status, in one write: not one per conversation.
         cut = {}

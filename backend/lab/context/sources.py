@@ -90,6 +90,9 @@ def tools(repo: Path) -> dict | None:
 
 
 FILE = 'sources.json'
+# When the agent's code was read last, and from which folder (the setting as the person wrote it): written with the
+# sources, so «Агент» names the read that succeeded, not the one asked for.
+READ = 'sources-read.json'
 
 
 def load() -> list[dict]:

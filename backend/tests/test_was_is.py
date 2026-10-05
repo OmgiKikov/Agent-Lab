@@ -218,6 +218,18 @@ class ChanceTests(unittest.TestCase):
 
         self.history = history
 
+    async def test_the_history_says_what_the_result_says_about_the_difference(self):
+        """A line of the history compared with the one before it carries the same verdict as «было → стало» on the
+        result: the screen never draws two conclusions from one pair of checks."""
+        await self.assess_code('FAIL')
+        await self.assess_code('PASS')
+        compare = await self.get('/api/compare?check=code')
+        lines = (await self.get('/api/history/code'))['checks']
+        self.assertEqual(lines[0]['comparison']['kind'], compare['kind'])
+        self.assertEqual(lines[0]['comparison']['verdict'], compare['overall']['verdict'])
+        self.assertEqual(lines[0]['comparison']['direction'], compare['overall']['direction'])
+        self.assertNotIn('verdict', lines[1]['comparison'])
+
     def test_fisher_exact_two_sided(self):
         self.assertAlmostEqual(self.history.fisher(3, 1, 1, 3), 0.4857, places=4)  # the lady tasting tea
         self.assertAlmostEqual(self.history.fisher(10, 0, 0, 10), 2 / 184756, places=10)

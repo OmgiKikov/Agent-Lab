@@ -206,13 +206,15 @@ def _update_document(connection: sqlite3.Connection, name: str, mutate: Callable
     return value
 
 
-def replace_inputs(name: str, value: Any) -> None:
+def replace_inputs(name: str, value: Any, about: dict[str, Any] | None = None) -> None:
     """Replace sources or logs together with what was derived from them, and only that. A new export clears the
     results of both checks and the deck; their saved checks stay in their histories, and the criteria of both wait for
     the next check (tone of voice's in their draft, Точность's in checks.CODE_CRITERIA). The checks derive from
     different sources: changed communication rules (the tone-of-voice policy) clear its criteria, its result and a deck
     built from it; changed code of the agent clears the accuracy result, its kept criteria and a deck built from it;
-    code read again unchanged clears nothing. Runs and answers stay.
+    code read again unchanged clears nothing, wherever its prompts now stand in their files. Runs and answers stay.
+    `about`: documents that describe the new inputs (the export's file name, when the code was read), written in the
+    same transaction, so they never name the previous ones.
     """
     if name not in ('sources.json', 'logs.json'):
         raise ValueError('Only source and log documents are inputs')
@@ -223,10 +225,12 @@ def replace_inputs(name: str, value: Any) -> None:
             _keep_code_criteria(connection)
         else:
             before = _document(connection, name)
-            changed = [check for check, part in _SOURCES_OF.items() if part(before) != part(value)]
+            changed = [check for check, part in _SOURCES_OF.items() if _content(part(before)) != _content(part(value))]
             if checks.CODE in changed:
                 _put(connection, checks.CODE_CRITERIA, None)
         _put(connection, name, value)
+        for document, described in (about or {}).items():
+            _put(connection, document, described)
         # Keep the names: a repeated legacy import must not resurrect intentionally cleared results.
         for check in changed:
             _put(connection, checks.result(check), None)
@@ -269,6 +273,17 @@ def _code(items: list[dict] | None) -> list[dict]:
 
 # The sources each check's criteria come from.
 _SOURCES_OF = {checks.TONE: _tone_policy, checks.CODE: _code}
+
+
+def _content(items: list[dict]) -> list[tuple]:
+    """What the criteria of a check stand on: each source's id, kind and text. Not where it was found nor what it is
+    called: a prompt that moved down a line (`origin` is path:line) or rules saved under another name are the same
+    sources. The id stays: criteria name their source by it (sourceId)."""
+    return [(item.get('id'), item.get('kind'), _text_hash(item)) for item in items]
+
+
+def _text_hash(item: dict) -> str:
+    return item.get('sha256') or hashlib.sha256(str(item.get('content')).encode()).hexdigest()
 
 
 def _drop_deck(connection: sqlite3.Connection, changed: Collection[str]) -> None:
