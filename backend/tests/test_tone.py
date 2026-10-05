@@ -7,8 +7,8 @@ from zipfile import ZipFile
 
 import support
 
-from lab import api, config, models, storage
-from lab.domain import policy_files, quotes
+from lab import config, models, storage
+from lab.domain import checks, policy_files, quotes
 from lab.domain import tone as tone_rules
 from lab.flows import accuracy, conversations, inputs, tone
 from lab.roles import tone as criteria_role
@@ -165,7 +165,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_policy_keeps_existing_code_sources_and_creates_reviewable_criteria(self):
         code = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'original prompt'}
-        storage.documents.save(api.inputs.SOURCES, [code])
+        storage.documents.save(inputs.SOURCES, [code])
         draft = await self.prepared()
         self.assertEqual(len(draft['criteria']), 2)
         self.assertEqual(inputs.sources()[0], code)
@@ -175,7 +175,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rereading_agent_code_keeps_the_policy_its_criteria_and_result(self):
         storage.documents.save(
-            api.inputs.SOURCES, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'old prompt'}]
+            inputs.SOURCES, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'old prompt'}]
         )
         draft = await self.prepared()
         response = await self.client.post(
@@ -193,17 +193,17 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await self.wait_job()
         result = storage.documents.load(tone.RESULT)
-        storage.documents.save(api.scenarios.DECK, {'check': 'code', 'cards': ['built from the code']})
+        storage.documents.save(checks.DECK, {'check': 'code', 'cards': ['built from the code']})
         policy = inputs.sources()[-1]
         code = [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'new prompt'}]
-        with patch.object(api.inputs.agent_sources, 'collect', return_value=(code, [])):
+        with patch.object(inputs.agent_sources, 'collect', return_value=(code, [])):
             await self.client.post('/api/sources')
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
         self.assertEqual(inputs.sources(), [*code, policy])
         self.assertEqual(storage.documents.load(tone.DRAFT), draft)
         self.assertEqual(storage.documents.load(tone.RESULT), result)
-        self.assertIsNone(storage.documents.load(api.scenarios.DECK))
+        self.assertIsNone(storage.documents.load(checks.DECK))
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция'})
         self.assertIsNone(storage.documents.load(tone.DRAFT))
         self.assertIsNone(storage.documents.load(tone.RESULT))

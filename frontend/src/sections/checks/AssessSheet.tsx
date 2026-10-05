@@ -20,7 +20,7 @@ const SIZES = [100, 200, 300];
 
 /**
  * How many conversations of the export the accuracy check takes: 100, 200 or all up to 300; the last check's number
- * while it fits. The service takes 5 to 300 (backend/lab/api.py, DiscoverCommand).
+ * while it fits. The service takes 5 to 300 (backend/lab/api/checks.py, DiscoverCommand).
  */
 export function useSampleSize() {
   const { state } = useLabState();
@@ -97,7 +97,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
   const criteria = data ? checkedIn(data, "log").length : 0;
   const total = state?.logs.total ?? 0;
   const deck = state?.cards?.check === "code" && !!state.cards.cards.length;
-  // The service checks only with the code read (backend/lab/discover.py): without it, every start would fail.
+  // The service checks only with the code read (backend/lab/flows/accuracy.py): without it, every start would fail.
   const code = codeSources(state).length > 0;
   const why = state?.job.running
     ? "Сейчас идёт другая задача"

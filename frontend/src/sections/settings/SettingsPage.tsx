@@ -8,7 +8,7 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Group, Row } from "./parts";
 
-/** Where the conversations go without the bank's gateway and an endpoint of one's own (backend/lab/llm, _via). */
+/** Where the conversations go without the bank's gateway and an endpoint of one's own (backend/lab/models/__init__.py, _via). */
 const OPENROUTER = "OpenRouter";
 
 /** «Настройки»: what the product itself runs on — the models and where it answers. How to reach the agent lives in «Агент». */

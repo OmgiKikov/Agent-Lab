@@ -10,8 +10,9 @@ from unittest.mock import patch
 
 import support
 
-from lab import api, config, jobs, migrate, storage
+from lab import config, jobs, migrate, storage
 from lab.app import create, lifespan
+from lab.flows import connection
 from lab.storage import registry
 
 
@@ -135,13 +136,13 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
         with registry.using(self.first):
             storage.documents.save('settings.json', {'prodUrl': 'http://agent.example/chat'})
         seen = {}
-        original = api.connection.ways
+        original = connection.ways
 
         def ways() -> dict:
             seen['url'] = original()['prod']['url']
             return {}
 
-        with patch.object(api.connection, 'ways', side_effect=ways):
+        with patch.object(connection, 'ways', side_effect=ways):
             await self.client.post('/api/agents/prod/check', headers={'X-Agent': self.first})
         self.assertEqual(seen.get('url'), 'http://agent.example/chat')
 

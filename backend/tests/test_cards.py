@@ -107,7 +107,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             previous = {'cards': [{'id': 'previous'}]}
             storage.documents.save(checks.DECK, previous)
             storage.documents.save('discover.json', analysis())
-            await api.start_cards(jobs, api.CardsCommand(check='code'))
+            await api.scenarios.start_cards(jobs, api.scenarios.CardsCommand(check='code'))
             await jobs._task
             self.assertEqual(storage.documents.load(checks.DECK), previous)
             self.assertIn('model unavailable', jobs.state['error'])

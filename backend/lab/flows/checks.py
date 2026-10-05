@@ -18,6 +18,37 @@ def current(check: str) -> dict | None:
     return answers.on_result(result, storage.reviews.visible(answers.LOG, answers.record_of(check, result)))
 
 
+def shown(check: str) -> dict | None:
+    """The check's current result as the screens read it (GET /api/checks/{check}): with the answers on its verdicts
+    and its counts of the whole sample."""
+    result = current(check)
+    return {**result, 'summary': _counted(result)} if result else None
+
+
+def head(check: str) -> dict | None:
+    """The check's current result in brief, as /api/state gives it every 1.5 s: everything but the verdicts of its
+    conversations and the recurring errors (summary.patterns), with how many conversations it judged and its count with
+    people's answers taken in (answers.counts). The screens fetch the verdicts by it (shown), the problems from
+    /api/problems."""
+    result = current(check)
+    if not result:
+        return None
+    summary = {key: value for key, value in _counted(result).items() if key != 'patterns'}
+    brief = {key: value for key, value in result.items() if key != 'results'}
+    return brief | {
+        'summary': summary,
+        'conversations': len(result.get('results') or []),
+        'answers': answers.counts(result),
+    }
+
+
+def _counted(result: dict) -> dict:
+    """A result's counts with «не удалось проверить» of its whole sample (results.with_unmeasured); an older result
+    without its summary is counted now."""
+    summary = result.get('summary') or results.summarize(result['results'], result['topics'])
+    return results.with_unmeasured(summary, result.get('sampled'))
+
+
 def chosen_run(check: str, run_id: str | None) -> dict | None:
     """The run asked for; else, as «Обзор» shows it, the newest finished run of this check with a conversation checked:
     a newer run the model could check nothing of is no latest result. Without one, the newest finished run of this

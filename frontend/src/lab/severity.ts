@@ -18,7 +18,7 @@ import type { Check, Job } from "./types";
  */
 export type Mark = { check: Check; rule: string; serious: boolean };
 
-/** What the service says while the automatic check proposes (backend/lab/severity.py), and the name of its task. */
+/** What the service says while the automatic check proposes (backend/lab/flows/severity.py), and the name of its task. */
 export const PROPOSING = "Отмечаем серьёзные ошибки";
 
 /** The person reading («вы») or, on a page someone else reads (the summary, a report, a letter), people («люди»). */

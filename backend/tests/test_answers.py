@@ -9,6 +9,7 @@ import unittest
 import support
 
 from lab import storage
+from lab.domain.answers import counts
 from lab.flows import accuracy, answers
 from lab.flows import checks as results_of
 
@@ -115,6 +116,33 @@ class AnswerJournalTests(unittest.TestCase):
         answers.on_log('code', 'd1', 'r1', None)
         stamps.append(storage.reviews.stamp())
         self.assertEqual(len(set(stamps)), 4)
+
+
+class CountTests(unittest.TestCase):
+    def test_a_result_is_counted_with_peoples_answers_taken_in(self) -> None:
+        """An error taken back leaves its conversation without one, a miss found gives one, and a conversation the
+        check could not check stays out of the count whatever was answered on it."""
+        result = {
+            'results': [
+                {'status': 'FAIL', 'rules': [dict(verdict('r1', 'FAIL'), review='disagree'), verdict('r2', 'PASS')]},
+                {'status': 'FAIL', 'rules': [dict(verdict('r1', 'FAIL'), review='agree')]},
+                {'status': 'PASS', 'rules': [dict(verdict('r1', 'PASS'), review='disagree')]},
+                {'status': 'UNMEASURED', 'rules': [dict(verdict('r1', 'FAIL'), review='agree')]},
+            ]
+        }
+        self.assertEqual(
+            counts(result),
+            {
+                'measured': 3,
+                'failed': 2,
+                'counted': 2,
+                'errors': 3,
+                'confirmed': 2,
+                'removed': 1,
+                'clean': 1,
+                'missed': 1,
+            },
+        )
 
 
 class OlderDatabaseTests(unittest.TestCase):

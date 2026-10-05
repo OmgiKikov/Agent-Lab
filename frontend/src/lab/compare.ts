@@ -4,10 +4,10 @@ import { resultOf } from "./checks";
 import { longDay, plural } from "./format";
 import { FEW, notComparedText, shareText, shiftText, type Counts, type Summary } from "./history";
 import { useLabState } from "./LabProvider";
-import type { Check, Discover } from "./types";
+import type { Check, ResultHead } from "./types";
 
 /**
- * What a person may read into two shares of errors (backend/lab/history.py, verdict): under 30 checked conversations on
+ * What a person may read into two shares of errors (backend/lab/domain/statistics.py, verdict): under 30 checked conversations on
  * a side — nothing more; otherwise whether chance explains the difference (Fisher's exact test), or there is none.
  */
 export type Verdict = "few" | "beyond-chance" | "within-chance" | "same";
@@ -75,7 +75,7 @@ export function useCompare(check: Check | null) {
  * The comparison of the result on the screen, or nothing: an answer about another result (one replaced meanwhile)
  * says nothing about it, and a result is compared only once the service has it in the history.
  */
-export function comparisonOf(compare: Compare | undefined, result: Discover | null): Compare | null {
+export function comparisonOf(compare: Compare | undefined, result: ResultHead | null): Compare | null {
   if (!compare) return null;
   if (!result) return compare.kind === "none" || compare.kind === "first" ? compare : null;
   return compare.current && compare.current.id === result.checkId ? compare : null;

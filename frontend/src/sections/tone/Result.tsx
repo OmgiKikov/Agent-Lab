@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, FileText, History, RotateCcw } from "lucide-react";
 import { conversationsLink, historyLink, reviewLink, toneCheckLink } from "../../app/links";
+import { useResult } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useProblems } from "../../lab/problems";
@@ -21,6 +22,7 @@ import { NextStage } from "./NextStage";
 
 export function Result({ state, onAgain }: { state: LabState; onAgain: () => void }) {
   const result = toneResult(state);
+  const { data: shown } = useResult("tone", state);
   const { data, list } = useCriteria("tone");
   const evidence = useProblems("tone");
   const compare = useComparison("tone");
@@ -34,7 +36,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
   const selectedFinding = problems.find((c) => c.r.id === selected) ?? problems[0];
   const current = data?.log?.finishedAt === result.finishedAt;
   const previousRevision = result.criteriaRevision !== state.toneOfVoice?.revision;
-  const modelError = !measured ? result.results.find((r) => r.error)?.error : null;
+  const modelError = !measured ? shown?.results.find((r) => r.error)?.error : null;
   return (
     <section aria-labelledby="tone-result-title">
       <div className="flex flex-wrap items-start justify-between gap-4">

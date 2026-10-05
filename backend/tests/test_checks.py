@@ -10,8 +10,9 @@ import support
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, models, storage
-from lab.flows import accuracy, answers, conversations, tone
+from lab import models, storage
+from lab.flows import accuracy, answers, conversations, inputs, tone
+from lab.flows import checks as results_of
 from lab.flows import scenarios as cards
 
 TONE_RESULT, CODE_RESULT = 'tone-result.json', 'discover.json'
@@ -49,7 +50,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
-        with patch.object(api.inputs.agent_sources, 'collect', return_value=([CODE], [])):
+        with patch.object(inputs.agent_sources, 'collect', return_value=([CODE], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
@@ -102,15 +103,39 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         await self.check_tone(status='PASS')
         state = (await self.client.get('/api/state')).json()
         self.assertNotIn('discover', state)
-        self.assertEqual(
-            state['checks'], {'tone': storage.documents.load(TONE_RESULT), 'code': storage.documents.load(CODE_RESULT)}
-        )
+        # Each result in brief; its verdicts come from GET /api/checks/{check}.
+        for check, name in (('tone', TONE_RESULT), ('code', CODE_RESULT)):
+            stored, brief = storage.documents.load(name), state['checks'][check]
+            self.assertEqual(
+                {key: value for key, value in brief.items() if key not in ('summary', 'conversations', 'answers')},
+                {key: value for key, value in stored.items() if key not in ('summary', 'results')},
+            )
+            self.assertEqual(brief['conversations'], len(stored['results']))
+            self.assertEqual(brief['answers']['measured'], stored['summary']['measured'])  # nobody answered yet
+            self.assertNotIn('patterns', brief['summary'])
+            shown = (await self.client.get(f'/api/checks/{check}')).json()
+            self.assertEqual(
+                (shown['results'], shown['summary']['patterns']), (stored['results'], stored['summary']['patterns'])
+            )
         summaries = {check: state['checks'][check]['summary'] for check in ('tone', 'code')}
         self.assertEqual(
             {check: (s['passed'], s['failed']) for check, s in summaries.items()}, {'tone': (1, 0), 'code': (0, 1)}
         )
         # The agent's sources count the criteria of the accuracy result: the communication rules are tone of voice's.
         self.assertEqual({source['id']: source['rules'] for source in state['sources']}, {'s1': 1, 'tone-of-voice': 0})
+
+    async def test_the_result_itself_comes_with_the_answers_on_its_verdicts(self):
+        response = await self.client.get('/api/checks/tone')
+        self.assertEqual(
+            (response.status_code, response.json()['detail']), (404, 'У проверки «Tone of voice» ещё нет итога.')
+        )
+        await self.check_tone()
+        result = storage.documents.load(TONE_RESULT)
+        self.assertEqual((await self.answer(result['finishedAt'], 'pronouns')).status_code, 200)
+        shown = (await self.client.get('/api/checks/tone')).json()
+        row = next(row for row in shown['results'][0]['rules'] if row['ruleId'] == 'pronouns')
+        self.assertEqual(row['review'], 'agree')
+        self.assertNotIn('review', storage.documents.load(TONE_RESULT)['results'][0]['rules'][0])
 
     async def test_the_state_lists_each_run_with_its_check(self):
         item = {'cardId': 'c1', 'status': 'PASS', 'topic': 'Tone of voice', 'criteria': [], 'conversation': []}
@@ -151,7 +176,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
     def review(document, rule_id):
         """The answer on a criterion of the first conversation of a check's current result, as the screens see it."""
         check = {TONE_RESULT: 'tone', CODE_RESULT: 'code'}[document]
-        rows = api.results_of.current(check)['results'][0]['rules']
+        rows = results_of.current(check)['results'][0]['rules']
         return next(row for row in rows if row['ruleId'] == rule_id).get('review')
 
     async def test_an_answer_lands_on_the_result_the_person_saw(self):

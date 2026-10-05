@@ -7,7 +7,7 @@ import type { Check, Discover, ToneCriterion } from "./types";
 /**
  * Below this many conversations where a criterion could be checked, on either side, a share says little (Hamel Husain:
  * under ~60 an interval is too wide): under the number («Проверено меньше 30 разговоров», product/Trust.tsx) and in
- * «было → стало» (backend/lab/history.py, FEW).
+ * «было → стало» (backend/lab/domain/statistics.py, FEW).
  */
 export const FEW = 30;
 
@@ -18,7 +18,7 @@ export type Summary = Counts & { passed: number; unmeasured: number };
 /**
  * How a saved check stands to the one saved before it; only the service declares two checks comparable. Compared
  * (same-data, new-data), a line carries what a person may read into the difference, as «было → стало» on the result
- * says it (backend/lab/compare.py, saved_checks). Older services have no verdict.
+ * says it (backend/lab/flows/checks.py, saved_checks). Older services have no verdict.
  */
 export type Comparison = {
   kind: "same-data" | "new-data" | "incompatible" | "first";

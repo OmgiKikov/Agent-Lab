@@ -1,4 +1,6 @@
-import type { Check, LabState } from "./types";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "./api";
+import type { Check, Discover, LabState } from "./types";
 
 export const CHECKS: Check[] = ["tone", "code"];
 
@@ -14,8 +16,24 @@ export const BY_CRITERIA: Record<Check, string> = {
 /** The task of the service that writes a check's result. */
 export const JOB_OF: Record<Check, string> = { tone: "tone-check", code: "discover" };
 
-/** The result of a check, or null while it has none. */
+/** The result of a check in brief (the state's), or null while it has none. */
 export const resultOf = (state: LabState | null, check: Check) => state?.checks[check] ?? null;
+
+/**
+ * The result of a check itself, with the verdicts on every conversation and the answers people gave on them: fetched
+ * when the state says there is one, and again when it is another result or anyone answered anything (reviewsStamp).
+ * Until the new one comes the screen keeps the one it had; a result cleared (a new export) is never kept.
+ */
+export function useResult(check: Check | null, state: LabState | null) {
+  const brief = check ? resultOf(state, check) : null;
+  return useQuery({
+    queryKey: ["result", check, brief?.checkId ?? brief?.finishedAt ?? null, state?.reviewsStamp ?? null],
+    queryFn: () => api<Discover>(`/api/checks/${check}`),
+    enabled: !!brief,
+    staleTime: Infinity,
+    placeholderData: (previous, query) => (brief && query?.queryKey[1] === check ? previous : undefined),
+  });
+}
 
 /**
  * Where an address from before the checks had their own sections leads (spec §3): into the check that has a result,

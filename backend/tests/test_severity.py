@@ -12,10 +12,10 @@ from test_checks import CODE, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, models, storage
+from lab import models, storage
 from lab.domain import checks
 from lab.domain.problems import rule_key
-from lab.flows import accuracy, conversations, severity, tone
+from lab.flows import accuracy, conversations, inputs, severity, tone
 from lab.jobs import PerAgent
 from lab.roles import severity as proposals
 from lab.storage import registry
@@ -447,7 +447,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.severity.marks()['tone'], {pronouns: True, simple: False})
 
     async def test_an_accuracy_check_proposes_for_its_criteria_too(self):
-        with patch.object(api.inputs.agent_sources, 'collect', return_value=([CODE], [])):
+        with patch.object(inputs.agent_sources, 'collect', return_value=([CODE], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
 

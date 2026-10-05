@@ -2,7 +2,7 @@ import { historyLink, problemLink } from "../app/links";
 import { agentLine, headingOf, inlineText, quoteText, reliabilityWord } from "./problemReport";
 import type { Problems, RuleEntry } from "./problems";
 import { seriousFirst, severityText } from "./severity";
-import type { Discover } from "./types";
+import type { ResultHead } from "./types";
 import { count, pct } from "./format";
 
 const excerpt = (value: string, limit = 300) => value.trim().slice(0, limit).trimEnd();
@@ -42,7 +42,7 @@ function nextAction(problem: RuleEntry): string {
  */
 export function toneBrief(
   data: Problems,
-  result: Discover,
+  result: ResultHead,
   base: string,
   { filename, agent }: { filename?: string; agent?: string },
 ): string {

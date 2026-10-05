@@ -6,14 +6,14 @@ import { copyReport, download, reportFile, useReportAgent } from "../../lab/prob
 import { useProblems } from "../../lab/problems";
 import { toneResult } from "../../lab/tone";
 import { toneBrief } from "../../lab/toneReport";
-import type { Discover, LabState } from "../../lab/types";
+import type { LabState, ResultHead } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
 import { BriefPreview } from "./BriefPreview";
 
 /** The criteria of one tone-of-voice result, matched by their quote: the problems service holds every criterion. */
-export const ownCriteria = (result: Discover, list: Criterion[]) => {
+export const ownCriteria = (result: ResultHead, list: Criterion[]) => {
   const quotes = new Set(result.topics.flatMap((t) => t.rules.map((r) => r.quote)));
   return list.filter((c) => quotes.has(c.r.rule.quote));
 };

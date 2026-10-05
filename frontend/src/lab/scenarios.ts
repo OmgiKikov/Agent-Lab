@@ -4,7 +4,7 @@ import { nameFromText, quoteKey, type Criterion } from "./criteria";
 import type { Card, Check, LabState, Persona, Status } from "./types";
 
 /**
- * A scenario as a test (GET /api/scenarios, backend/lab/scenarios.py): the error of the real conversation it
+ * A scenario as a test (GET /api/scenarios, backend/lab/flows/scenarios.py): the error of the real conversation it
  * reproduces, and its own result in every run of its check. The runs stand side by side; nothing compares them.
  */
 export type Reproduced = { ruleId: string; name: string; text: string; agentQuote: string };

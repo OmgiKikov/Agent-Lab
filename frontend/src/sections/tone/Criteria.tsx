@@ -14,7 +14,7 @@ import { Modal } from "../../ui/Modal";
 import { useToast } from "../../ui/toast";
 import { stopFailed } from "./Checking";
 
-/** One check takes at most this many criteria (backend/lab/api.py, ToneCheckCommand). */
+/** One check takes at most this many criteria (backend/lab/api/tone.py, ToneCheckCommand). */
 const MAX_CRITERIA = 20;
 
 /** The clarifications people confirmed on the criteria: the work that collecting criteria again can take away. */

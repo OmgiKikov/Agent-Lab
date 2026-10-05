@@ -4,10 +4,10 @@ from unittest.mock import patch
 
 import support
 
-from lab import api, storage
+from lab import storage
 from lab.domain import checks, scenarios
 from lab.domain.results import carry_reviews, summarize
-from lab.flows import accuracy, answers
+from lab.flows import accuracy, answers, inputs
 from lab.flows import checks as problems
 
 SOURCE = {'id': 'src-1', 'kind': 'prompt', 'origin': 'prompts/main.txt', 'content': 'Не отправляй клиента в поддержку.'}
@@ -109,7 +109,7 @@ def played_run() -> dict:
 class ProblemsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         support.serve(self)
-        storage.documents.save(api.inputs.SOURCES, [SOURCE])
+        storage.documents.save(inputs.SOURCES, [SOURCE])
         storage.documents.save(accuracy.RESULT, audit())
 
     def test_a_rule_restated_in_two_topics_is_one_rule_counted_per_conversation(self) -> None:
@@ -236,7 +236,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(rule['rule']['quote'] == '' and rule['sim']['failed'] == 1 for rule in found))
 
     async def test_the_problems_are_those_of_one_check_with_its_runs_and_its_scenarios(self) -> None:
-        storage.documents.save(api.inputs.SOURCES, [SOURCE, POLICY])
+        storage.documents.save(inputs.SOURCES, [SOURCE, POLICY])
         storage.documents.save('tone-result.json', tone_result())
         storage.runs.create(played_run())  # of Точность
         storage.runs.create(tone_run())  # of tone of voice, the newest run
@@ -291,7 +291,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary['target'], 'Тестовый стенд банка')
 
     async def test_state_exposes_the_revision_used_by_source_cache(self) -> None:
-        api.inputs.replace_sources([dict(SOURCE, sha256='source-revision')])
+        inputs.replace_sources([dict(SOURCE, sha256='source-revision')])
         state = (await self.client.get('/api/state')).json()
         source = (await self.client.get('/api/sources/src-1')).json()
         self.assertEqual(state['sources'][0]['sha256'], source['sha256'])

@@ -15,7 +15,7 @@ export type Rules = { name: string; criteria: number; sha256: string | null };
 
 /**
  * An agent the Lab checks, with the result of each check and its rules of communication, read from its own database
- * (backend/lab/api.py, /api/agents).
+ * (backend/lab/api/agents.py, /api/agents).
  */
 export type Agent = {
   id: string;

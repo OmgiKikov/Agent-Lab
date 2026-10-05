@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { reviewLink, type Check } from "../app/links";
 import { answersOf, answersSentence } from "../lab/answers";
 import { FEW } from "../lab/history";
-import type { Discover } from "../lab/types";
+import type { ResultBrief } from "../lab/types";
 
 /**
  * The lines right under a check's number: how far it can be trusted, and how it stands to the previous check. What
@@ -25,7 +25,7 @@ export function Trust({
   compare,
   className,
 }: {
-  result: Discover;
+  result: ResultBrief;
   check: Check;
   serious?: ReactNode;
   compare?: ReactNode;

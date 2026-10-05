@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, patch
 import support
 from test_tone import POLICY
 
-from lab import api, models, storage
+from lab import models, storage
 from lab.flows import answers as answering
+from lab.flows import checks as results_of
 from lab.flows import conversations, simulation, tone
 from lab.flows import scenarios as cards
 
@@ -91,7 +92,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
     async def check(self, rule_ids=None, model='model-a', count=1, down=(), status='FAIL'):
         await self.start_check(judged(status, model, down), rule_ids, count)
         self.assertIsNone(self.jobs.state['error'])
-        return api.results_of.current('tone')  # with the answers people gave on it, as the screens see it
+        return results_of.current('tone')  # with the answers people gave on it, as the screens see it
 
     async def answer(self, result, rule_id, decision, dialogue_id='d1'):
         """A person's answer on the result and the verdict they see, as every screen sends it."""
@@ -221,7 +222,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(api.results_of.current('tone')['results'][0]['rules'][0]['review'], 'disagree')
+        self.assertEqual(results_of.current('tone')['results'][0]['rules'][0]['review'], 'disagree')
         await self.client.post('/api/logs?name=second.jsonl', content=json.dumps({**self.dialogue, 'id': 'd2'}))
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция.'})
         self.assertIsNone(storage.documents.load(tone.DRAFT))
@@ -264,7 +265,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             self.assertRaises(sqlite3.OperationalError),
         ):
             answering.on_log('tone', 'd1', 'pronouns', 'agree', result['finishedAt'])
-        self.assertEqual(api.results_of.current('tone'), result)
+        self.assertEqual(results_of.current('tone'), result)
         self.assertEqual(storage.reviews.listed('log', result['checkId']), [])
 
     async def test_new_check_invalidates_deck_and_retains_frozen_runs_and_previous_check(self):

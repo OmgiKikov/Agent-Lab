@@ -11,7 +11,8 @@ import support
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, jobs, storage
+from lab import jobs, storage
+from lab.domain import checks
 from lab.domain import tone as tone_rules
 from lab.flows import accuracy, conversations, inputs, tone
 from lab.storage import registry
@@ -124,12 +125,12 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         old = await self.check(self.target)
         with registry.using(self.target):
             storage.documents.save(accuracy.RESULT, {'finishedAt': '2026-10-01T09:00:00+00:00', 'results': []})
-            storage.documents.save(api.scenarios.DECK, {'check': 'tone', 'cards': ['from the old rules']})
+            storage.documents.save(checks.DECK, {'check': 'tone', 'cards': ['from the old rules']})
         response = await self.copy(self.target)
         self.assertEqual(response.json(), {'ok': True, 'unchanged': False})
         with registry.using(self.target):
             self.assertIsNone(storage.documents.load(tone.RESULT))
-            self.assertIsNone(storage.documents.load(api.scenarios.DECK))
+            self.assertIsNone(storage.documents.load(checks.DECK))
             self.assertEqual([check['id'] for check in storage.history.lines('tone')], [old['checkId']])
             self.assertEqual(storage.documents.load(accuracy.RESULT)['finishedAt'], '2026-10-01T09:00:00+00:00')
             self.assertEqual(tone.current_policy()['content'], POLICY.strip())

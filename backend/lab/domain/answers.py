@@ -134,6 +134,38 @@ def counted(record: dict, visible: dict[tuple[str, str], dict]) -> dict:
     return {**record, 'metric': kept | ({'human': found} if found else {})}
 
 
+def counts(result: dict) -> dict[str, int]:
+    """A check's result with people's answers taken in (docs/superpowers/specs/2026-10-04-answers-and-summary-design.md,
+    2.1), from its rows with the answers laid on (on_result): the one count the line under a check's number, «Обзор» and
+    the summary for management share. A conversation is «с ошибкой с учётом ответов» when it keeps an error a person
+    did not take back («Нет» on «Это действительно ошибка?»), or a person found the error the check missed there («Нет»
+    on «Здесь действительно нет ошибки?»). The denominator stays the check's: the conversations it could check.
+    measured, failed: the check's own count; counted: the same conversations with an error, answers taken in; errors:
+    the errors the check found (a criterion in a conversation), confirmed and removed by people; clean: the verdicts
+    «без ошибки» people answered, missed: those where they found the error the check missed."""
+    found = dict.fromkeys(('measured', 'failed', 'counted', 'errors', 'confirmed', 'removed', 'clean', 'missed'), 0)
+    for conversation in result.get('results') or []:
+        error = False
+        for row in conversation.get('rules') or []:
+            review = row.get('review')
+            if row.get('status') == 'FAIL':
+                found['errors'] += 1
+                found['confirmed'] += review == 'agree'
+                found['removed'] += review == 'disagree'
+                error = error or review != 'disagree'
+            elif row.get('status') == 'PASS' and review:
+                found['clean'] += 1
+                found['missed'] += review == 'disagree'
+                error = error or review == 'disagree'
+        # A conversation the check could not check stays out of the count, as on the screen: answers do not bring it in.
+        if conversation.get('status') not in ('FAIL', 'PASS'):
+            continue
+        found['measured'] += 1
+        found['failed'] += conversation.get('status') == 'FAIL'
+        found['counted'] += error
+    return found
+
+
 def human(visible: dict[tuple[str, str], dict]) -> dict | None:
     """A person's decisions on a run's verdicts: on each conversation its answers on criteria, else the answer on the
     whole conversation (older screens). None without a decision."""

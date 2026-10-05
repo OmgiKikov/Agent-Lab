@@ -12,10 +12,10 @@ from test_checks import CODE, CODE_RESULT, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, storage
+from lab import storage
 from lab.domain import comparison, sampling, statistics
 from lab.domain.problems import rule_key
-from lab.flows import accuracy, conversations, tone
+from lab.flows import accuracy, conversations, inputs, tone
 
 CRITERIA = 'accuracy-criteria.json'
 
@@ -53,7 +53,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
     async def read_code(self, source):
-        with patch.object(api.inputs.agent_sources, 'collect', return_value=([source], [])):
+        with patch.object(inputs.agent_sources, 'collect', return_value=([source], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])

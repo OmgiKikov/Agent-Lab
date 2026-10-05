@@ -5,7 +5,7 @@ import { api } from "./api";
 import { JOB_OF } from "./checks";
 import type { Check, LabRun, LabState, Turn } from "./types";
 
-/** The service's record of rules and problems (lab/problems.py; spec, section 8). */
+/** The service's record of rules and problems (backend/lab/flows/checks.py, problems; spec, section 8). */
 export type Decision = "agree" | "disagree";
 export type Scope = "rule" | "dialogue";
 export type Example = {
@@ -195,7 +195,7 @@ export type Answer = {
 
 /**
  * Why answers on a check's result wait, in one line, or null. While that check runs, its new result replaces the one
- * the person answers on, and the service refuses answers to it (backend/lab/api.py, review); the other check's
+ * the person answers on, and the service refuses answers to it (backend/lab/api/reviews.py); the other check's
  * result takes answers as usual.
  */
 export function answersWait(state: LabState | null, example: Pick<Example, "source" | "check">): string | null {

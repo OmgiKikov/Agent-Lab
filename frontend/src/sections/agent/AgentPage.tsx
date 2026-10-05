@@ -18,7 +18,7 @@ import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
 import { ConnectionForm } from "./Connection";
 
-/** The characters of prompts the criteria planner takes (backend/lab/context/sources.py, MAX_TOTAL). */
+/** The characters of prompts the criteria planner takes (backend/lab/agents/sources.py, MAX_TOTAL). */
 const BUDGET = "60\u00a0000";
 
 /**

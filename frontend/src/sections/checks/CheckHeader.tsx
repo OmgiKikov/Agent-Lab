@@ -25,7 +25,7 @@ function CheckTabs({ check }: { check: Check }) {
     <StageTabs
       stage={check}
       counts={{
-        conversations: state?.checks[check]?.results.length,
+        conversations: state?.checks[check]?.conversations,
         review: data?.log ? queueOf(data, "disputed", null, "log").length : undefined,
       }}
     />

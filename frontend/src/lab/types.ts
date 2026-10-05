@@ -132,7 +132,7 @@ export type Persona = { id: string; name: string; note: string };
 export type Settings = { prodUrl: string; epk: string[]; repo: string };
 export type Source = { id: string; kind: string; origin: string; chars: number; rules: number; sha256?: string | null };
 /**
- * The models as /api/state describes them (backend/lab/llm, describe): where the conversations go, where the second
+ * The models as /api/state describes them (backend/lab/models/__init__.py, describe): where the conversations go, where the second
  * check's go when elsewhere, and why the models cannot be used now: the bank's gateway, set up, does not work, or
  * OpenRouter has no key.
  */
@@ -167,7 +167,8 @@ export type Discover = {
     failed: number;
     passed: number;
     unmeasured: number;
-    patterns: Pattern[];
+    /** The recurring errors: in the result itself (GET /api/checks/{check}), not in its brief in the state. */
+    patterns?: Pattern[];
     secondJudge?: { model: string; checked: number; agree: number } | null;
   };
 };
@@ -182,6 +183,38 @@ export type Job = {
   /** When the task started: tells one task from the next of the same kind. Older services have no such field. */
   startedAt?: string | null;
 };
+/**
+ * A check's result with people's answers taken in, counted by the service from the result's rows with the answers on
+ * them (spec 2026-10-04-answers-and-summary-design.md, 2.1). A conversation is «с ошибкой с учётом ответов» when it
+ * keeps an error a person did not take back, or a person found the error the check missed there. The denominator stays
+ * the check's: the conversations it could check. It never stands in for the check's own number, is never compared
+ * between checks and never enters «было → стало» (DESIGN.md, «Честность чисел», 9).
+ */
+export type Answers = {
+  /** The check's own count: the conversations it could check, and those it found an error in. */
+  measured: number;
+  failed: number;
+  /** The same conversations with an error, people's answers taken in. */
+  counted: number;
+  /** The errors the check found (one criterion in one conversation), and people's «да» and «нет» on them. */
+  errors: number;
+  confirmed: number;
+  removed: number;
+  /** The verdicts «без ошибки» people answered, and in how many they found the error the check missed. */
+  clean: number;
+  missed: number;
+};
+
+/**
+ * A check's result in brief, as /api/state gives it every 1.5 s: everything but the verdicts of its conversations and
+ * the recurring errors, with how many conversations it judged and its count with people's answers. The verdicts come
+ * from the result itself (lab/checks, useResult).
+ */
+export type ResultBrief = ResultHead & { conversations: number; answers: Answers };
+
+/** What a result and its brief share: everything but the verdicts on the conversations. */
+export type ResultHead = Omit<Discover, "results">;
+
 export type LabState = {
   toneOfVoice?: ToneDraft | null;
   job: Job;
@@ -196,8 +229,8 @@ export type LabState = {
    */
   sourcesRead?: { readAt: string; repo: string; overBudget?: string[] } | null;
   logs: { total: number; file?: string | null; updatedAt?: string | null };
-  /** The result of each check, or null: tone of voice and accuracy never replace each other. */
-  checks: Record<Check, Discover | null>;
+  /** The result of each check in brief, or null: tone of voice and accuracy never replace each other. */
+  checks: Record<Check, ResultBrief | null>;
   /**
    * The serious criteria, per check, by their key (the problem's id, problems.rule_key): by a person's decision, else
    * by the automatic check's proposal; without either an error is minor (spec 2026-10-04-severity-design.md). Older
@@ -209,7 +242,10 @@ export type LabState = {
    * confirmed a proposal: whose decision it is changed). Older services have no such field.
    */
   severityStamp?: string;
-  /** Changes with every answer on the checks' results, given in this tab or any other. Older services have none. */
+  /**
+   * Changes with every answer given or taken back, on a check's result or on a run, in this tab or any other: the
+   * results, the problems and an open run are fetched again by it. Older services have none.
+   */
   reviewsStamp?: string;
   cards: null | Deck;
   runs: RunSummary[];

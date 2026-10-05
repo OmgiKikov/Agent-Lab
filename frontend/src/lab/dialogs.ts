@@ -2,7 +2,7 @@ import { conversationsLink } from "../app/links";
 import { CHECK_NAME } from "./checks";
 import { inlineText, quoteText } from "./problemReport";
 import type { Decision, Example } from "./problems";
-import type { Check, Criterion, LabRun, LabState, Rule, Status } from "./types";
+import type { Check, Criterion, Discover, LabRun, Rule, Status } from "./types";
 
 /** One row of a stage's conversations: a logged conversation or a simulated one. */
 export type Source = "log" | "sim";
@@ -60,9 +60,8 @@ export const twoChecks = (status: Status | null, second?: DialogRow["second"]): 
 
 const disputedOf = (status: Status, second?: DialogRow["second"]) => twoChecks(status, second) === "disagree";
 
-/** The conversations of the export as one check's result judged them. */
-export function logRows(state: LabState, check: Check): DialogRow[] {
-  const d = state.checks[check];
+/** The conversations of the export as one check's result judged them (the result itself, lab/checks useResult). */
+export function logRows(d: Discover | null | undefined, check: Check): DialogRow[] {
   if (!d) return [];
   const topics = new Map(d.topics.map((t) => [t.id, t.title]));
   return d.results.map((r) => ({
@@ -105,7 +104,7 @@ export function simRows(run: LabRun | null | undefined): DialogRow[] {
   }));
 }
 
-/** The second check on one verdict, as backend/lab/problems.py second_of: per rule, or on the whole conversation. */
+/** The second check on one verdict, as backend/lab/domain/problems.py second_of: per rule, or on the whole conversation. */
 function secondFor(row: DialogRow, rule: Rule): Pick<Example, "second" | "secondScope" | "secondStatus"> {
   const none = { second: null, secondScope: null, secondStatus: null };
   const second = row.second;

@@ -1,63 +1,18 @@
 import { count, plural } from "./format";
 import { shareText } from "./history";
 import { MISSES_FROM } from "./verdicts";
-import type { Discover } from "./types";
+import type { Answers, ResultBrief } from "./types";
 
-/**
- * A check's result with people's answers taken in (spec 2026-10-04-answers-and-summary-design.md, 2.1), counted from
- * the result's own rows. A conversation is «с ошибкой с учётом ответов» when it keeps an error a person did not take
- * back («Нет» on «Это действительно ошибка?»), or a person found the error the check missed there («Нет» on «Здесь
- * действительно нет ошибки?»); one where every error was taken back counts «без найденных ошибок». The denominator stays the
- * check's: the conversations it could check. It never stands in for the check's own number, is never compared between
- * checks and never enters «было → стало» (DESIGN.md, «Честность чисел», 9).
- */
-export type Answers = {
-  /** The check's own count: the conversations it could check, and those it found an error in. */
-  measured: number;
-  failed: number;
-  /** The same conversations with an error, people's answers taken in. */
-  counted: number;
-  /** The errors the check found (one criterion in one conversation), and people's «да» and «нет» on them. */
-  errors: number;
-  confirmed: number;
-  removed: number;
-  /** The verdicts «без ошибки» people answered, and in how many they found the error the check missed. */
-  clean: number;
-  missed: number;
-};
+export type { Answers };
 
 /** Every answered verdict of a result: on the errors it found and on the cases «без ошибки». */
 const answeredOf = (a: Answers) => a.confirmed + a.removed + a.clean;
 
-/** The result's answers, from its own rows: the one count the line under the number, «Обзор» and the summary share. */
-export function answersOf(result: Discover | null | undefined): Answers | null {
-  if (!result) return null;
-  const a: Answers = { measured: 0, failed: 0, counted: 0, errors: 0, confirmed: 0, removed: 0, clean: 0, missed: 0 };
-  for (const conversation of result.results) {
-    const measured = conversation.status === "FAIL" || conversation.status === "PASS";
-    let error = false;
-    for (const row of conversation.rules) {
-      if (row.status === "FAIL") {
-        a.errors++;
-        if (row.review === "agree") a.confirmed++;
-        if (row.review === "disagree") a.removed++;
-        else error = true;
-      } else if (row.status === "PASS" && row.review) {
-        a.clean++;
-        if (row.review === "disagree") {
-          a.missed++;
-          error = true;
-        }
-      }
-    }
-    // A conversation the check could not check stays out of the count, as on the screen: answers do not bring it in.
-    if (!measured) continue;
-    a.measured++;
-    if (conversation.status === "FAIL") a.failed++;
-    if (error) a.counted++;
-  }
-  return a;
-}
+/**
+ * A check's result with people's answers taken in: counted by the service from the result's own rows (/api/state,
+ * the brief's `answers`), the one count the line under the number, «Обзор» and the summary share.
+ */
+export const answersOf = (result: ResultBrief | null | undefined): Answers | null => result?.answers ?? null;
 
 /**
  * «С учётом ваших ответов — 21 из 53 (40%). Вы проверили 11 оценок, сняли 1 ошибку и нашли 0 пропущенных.» In three

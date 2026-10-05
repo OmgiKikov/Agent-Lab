@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { ChevronDown } from "lucide-react";
 import { side, type Stage } from "../../app/links";
 import { useWide } from "../../app/useWide";
+import { resultOf, useResult } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
 import { logKey, logRows, simKey, simRows } from "../../lab/dialogs";
 import { count, longDay, plural } from "../../lab/format";
@@ -34,6 +35,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const record = useCriteria(stage === "sim" ? (simRun?.check ?? null) : stage, runId);
   const { data: problems, list: criteria } = record;
   const run = useRun(runId, state);
+  const shown = useResult(stage === "sim" ? null : stage, state);
   const [query, setQuery] = useState("");
   const verdict = toVerdict(params.get("v"));
   const ruleId = params.get("rule");
@@ -48,8 +50,8 @@ export function DialogsPage({ stage }: { stage: Stage }) {
     );
 
   const all = useMemo(
-    () => (stage === "sim" ? simRows(run.data) : state ? logRows(state, stage) : []),
-    [stage, state, run.data],
+    () => (stage === "sim" ? simRows(run.data) : logRows(shown.data, stage)),
+    [stage, shown.data, run.data],
   );
   const named = useMemo(() => (stage === "sim" ? frozenNames(criteria, all) : undefined), [stage, criteria, all]);
   const rule = ruleId ? problems?.rules.find((r) => r.id === ruleId) : undefined;
@@ -82,8 +84,9 @@ export function DialogsPage({ stage }: { stage: Stage }) {
     () => all.filter((r) => matchesRow(r, verdict, query, only, serious)),
     [all, verdict, query, only, serious],
   );
-  // The list waits for what it is made of: the run's conversations, and the criteria when a filter is by them.
-  const waitRun = stage === "sim" && !!simRun && !run.data;
+  // The list waits for what it is made of: the run's conversations or the result's verdicts, and the criteria when a
+  // filter is by them.
+  const waitRun = stage === "sim" ? !!simRun && !run.data : !!resultOf(state, stage) && !shown.data;
   const waitRecord = (!!ruleId || verdict === "serious") && !problems && (record.loading || !!record.error);
   const asked = params.get("d");
   const key = asked ?? (wide && !waitRun && !waitRecord ? (rows[0]?.key ?? null) : null);
@@ -175,9 +178,14 @@ export function DialogsPage({ stage }: { stage: Stage }) {
       : !state.logs.total
         ? "Здесь будут разговоры выгрузки. Сначала загрузите диалоги."
         : "Разговоры появятся после проверки.";
+  const loading = stage === "sim" ? run : shown;
   const pending = waitRun ? (
-    run.error && !run.isFetching ? (
-      <LoadFailed title="Не удалось загрузить разговоры прогона" error={run.error} onRetry={() => void run.refetch()} />
+    loading.error && !loading.isFetching ? (
+      <LoadFailed
+        title={stage === "sim" ? "Не удалось загрузить разговоры прогона" : "Не удалось загрузить итог проверки"}
+        error={loading.error}
+        onRetry={() => void loading.refetch()}
+      />
     ) : (
       <Skeleton className="mt-2 h-64" />
     )
