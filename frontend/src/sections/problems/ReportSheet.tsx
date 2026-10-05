@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Copy, FileDown } from "lucide-react";
+import { Copy, FileDown, RotateCcw } from "lucide-react";
 import { CHECK_NAME } from "../../lab/checks";
 import type { Criterion } from "../../lab/criteria";
 import { day, plural } from "../../lab/format";
@@ -9,8 +9,10 @@ import {
   download,
   problemsReport,
   reliabilityWord,
+  reportFile,
   sourceLabel,
   summarySentence,
+  useReportAgent,
 } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
@@ -95,7 +97,7 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
  * a serious error stand under the numbers of the conversations, with whose decision that is: while some criteria are
  * the automatic check's proposals, how many of them people checked. «Скопировать для письма» puts the same on the
  * clipboard formatted and as plain text without Markdown marks, each problem with its link; the downloaded file is
- * Markdown.
+ * Markdown. Both name the agent, the file too, and wait for its name: every agent's report looks alike.
  */
 export function ReportSheet({
   open,
@@ -111,6 +113,7 @@ export function ReportSheet({
   const toast = useToast();
   // The export the conversations come from: named as the tone-of-voice report names it.
   const file = useLabState().state?.logs.file ?? undefined;
+  const agent = useReportAgent();
   const sides = (
     [
       ["log", "Диалоги"],
@@ -119,7 +122,7 @@ export function ReportSheet({
   ).filter(([k]) => (k === "log" ? !!data.log : !!data.sim));
   const [side, setSide] = useState<SideKey>(data.log ? "log" : "sim");
   const items = queueOf(list, side);
-  const markdown = () => problemsReport(data, shareBase(), side, { filename: file });
+  const markdown = () => problemsReport(data, shareBase(), side, { filename: file, agent: agent.name ?? undefined });
   const copy = () => copyReport(markdown()).then(() => toast.notify("Отчёт скопирован"), toast.error);
   const log = data.log;
   const sim = data.sim;
@@ -164,17 +167,29 @@ export function ReportSheet({
             variant="ghost"
             icon={FileDown}
             aria-label="Скачать Markdown"
-            onClick={() => download(`otchet-${side === "log" ? "dialogi" : "simulyaciya"}.md`, markdown())}
+            disabled={!agent.name}
+            onClick={() => download(reportFile(`otchet-${side === "log" ? "dialogi" : "simulyaciya"}`), markdown())}
           />
-          <Button variant="primary" icon={Copy} onClick={copy}>
+          <Button variant="primary" icon={Copy} disabled={!agent.name} onClick={copy}>
             Скопировать для письма
           </Button>
         </>
       }
     >
       <div className="bg-canvas px-3 py-6 sm:px-8">
+        {agent.failed && (
+          <div className="mx-auto mb-4 max-w-3xl">
+            <p role="alert" className="text-read text-fg-2">
+              Не удалось загрузить имя агента.
+            </p>
+            <Button className="mt-3" icon={RotateCcw} onClick={agent.retry}>
+              Повторить
+            </Button>
+          </div>
+        )}
         <article className="mx-auto max-w-3xl rounded-block bg-paper px-6 pb-12 pt-9 text-ink shadow-pop sm:px-12">
           <Cap>
+            {agent.name && <span className="normal-case tracking-normal">{agent.name} · </span>}
             {side === "log" ? (
               <>
                 {CHECK_NAME[data.check]} · диалоги

@@ -1,5 +1,5 @@
 import { historyLink, problemLink } from "../app/links";
-import { headingOf, inlineText, quoteText, reliabilityWord } from "./problemReport";
+import { agentLine, headingOf, inlineText, quoteText, reliabilityWord } from "./problemReport";
 import type { Problems, RuleEntry } from "./problems";
 import { seriousFirst, severityText } from "./severity";
 import type { Discover } from "./types";
@@ -28,9 +28,15 @@ function nextAction(problem: RuleEntry): string {
  * conversations with a serious error with whose decision that is (lab/severity, severityText). It tells the serious
  * problems first, marked «серьёзная», then the most frequent: all the serious ones, and at least three. Complete
  * criteria and evidence remain in the saved check, linked from the brief («История» of tone of voice). Links open Agent
- * Lab on the computer where the check ran; the brief says so, since it travels by e-mail.
+ * Lab on the computer where the check ran; the brief says so, since it travels by e-mail. Its first line names the
+ * agent (agentLine): every agent's brief looks alike.
  */
-export function toneBrief(data: Problems, result: Discover, base: string, { filename }: { filename?: string }): string {
+export function toneBrief(
+  data: Problems,
+  result: Discover,
+  base: string,
+  { filename, agent }: { filename?: string; agent?: string },
+): string {
   const criteria = result.topics.flatMap((topic) => topic.rules);
   const quotes = new Set(criteria.map((criterion) => criterion.quote));
   const rules = data.rules.filter((rule) => quotes.has(rule.rule.quote));
@@ -48,6 +54,7 @@ export function toneBrief(data: Problems, result: Discover, base: string, { file
   const lines = [
     "# Tone of voice: отчёт для команды",
     "",
+    ...(agent ? [agentLine(agent)] : []),
     `Проверка закончилась ${date(result.finishedAt)}.`,
     ...(filename ? [`Выгрузка «${short(filename, 160)}».`] : []),
     `В выборке ${count(result.sampled, "разговор", "разговора", "разговоров")}, проверка шла по\u00a0${count(criteria.length, "критерию", "критериям", "критериям")}.`,

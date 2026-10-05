@@ -3,10 +3,8 @@ import { Link } from "react-router-dom";
 import { useQueries } from "@tanstack/react-query";
 import { Copy, FileDown, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { AGENT } from "../../app/agent";
 import { Header } from "../../app/Header";
 import { SECTIONS } from "../../app/links";
-import { useAgents } from "../../lab/agents";
 import { answersOf, answersSentence } from "../../lab/answers";
 import { api } from "../../lab/api";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
@@ -14,7 +12,7 @@ import { compareSentence, seriousCompareText } from "../../lab/compare";
 import { duty, useCriteria, type Criterion } from "../../lab/criteria";
 import { pct } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { copyReport } from "../../lab/problemReport";
+import { copyReport, useReportAgent } from "../../lab/problemReport";
 import { useProblems, type Example, type LogDialogue } from "../../lab/problems";
 import { humansOf } from "../../lab/problemStats";
 import { splitQuote } from "../../lab/quote";
@@ -81,10 +79,8 @@ function exampleOf(e: Example, dialogue: LogDialogue | undefined): SummaryExampl
  */
 export function SummaryPage() {
   const { state, offline } = useLabState();
-  const agents = useAgents();
-  const agent = agents.data?.find((a) => a.id === AGENT);
   // The letter and the PDF are named after the agent: never sent under a placeholder while its name is unknown.
-  const nameless = agents.isError || (!!agents.data && !agent);
+  const agent = useReportAgent();
   const toast = useToast();
   const criteria: Record<Check, ReturnType<typeof useCriteria>> = {
     tone: useCriteria(resultOf(state, "tone") ? "tone" : null),
@@ -100,13 +96,13 @@ export function SummaryPage() {
 
   // The tab, and the PDF saved from it, are named after the summary and its agent while the page is open.
   useEffect(() => {
-    if (!agent) return;
+    if (!agent.name) return;
     const before = document.title;
     document.title = `Сводка для руководителя — ${agent.name}`;
     return () => {
       document.title = before;
     };
-  }, [agent]);
+  }, [agent.name]);
 
   // The checks with a result, each with its problems, serious first, then the most frequent — of that very result,
   // not of one replaced meanwhile (null until they are at hand) — its serious count, and the ones ticked: by default
@@ -156,7 +152,7 @@ export function SummaryPage() {
   const summary: Summary | null = state
     ? {
         // Told only once the name is at hand (`ready`): the page waits for it, never shows another.
-        agent: agent?.name ?? "",
+        agent: agent.name ?? "",
         file: state.logs.file ?? null,
         days: [...new Set(checks.map((c) => fullDay(resultOf(state, c)!.finishedAt)))],
         madeAt: new Date().toISOString(),
@@ -198,7 +194,7 @@ export function SummaryPage() {
         }),
       }
     : null;
-  const ready = !!summary && !!agent && checks.every((c) => problems[c]) && dialogues.every((d) => !d.isLoading);
+  const ready = !!summary && !!agent.name && checks.every((c) => problems[c]) && dialogues.every((d) => !d.isLoading);
 
   const copy = () => {
     if (summary) copyReport(summaryMarkdown(summary)).then(() => toast.notify("Сводка скопирована"), toast.error);
@@ -265,10 +261,10 @@ export function SummaryPage() {
     <article className="max-w-[860px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12 print:max-w-none print:p-0">
       {/* On paper the page has no head: the title goes on the sheet. */}
       <p className="hidden text-read text-fg-3 print:block">Сводка для руководителя</p>
-      {agent ? (
+      {agent.name ? (
         <h2 className="text-page font-semibold text-fg print:mt-1">{agent.name}</h2>
-      ) : nameless ? (
-        <Failed text="Не удалось загрузить имя агента." onRetry={() => void agents.refetch()} />
+      ) : agent.failed ? (
+        <Failed text="Не удалось загрузить имя агента." onRetry={agent.retry} />
       ) : (
         <Skeleton className="h-10 w-72 max-w-full" />
       )}
