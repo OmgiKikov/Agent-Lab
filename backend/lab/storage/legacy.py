@@ -14,8 +14,10 @@ def insert(found: dict[str, Any], records: list[dict]) -> dict[str, int]:
     """The legacy documents (by name) and runs; how many of each were inserted."""
     counts = {'documents': 0, 'runs': 0}
     with db.transaction(), db.connect() as connection:
+        # Asked before anything is inserted: the legacy files may bring the record of their own export with it.
+        uploaded = dialogues.uploaded()
         for name, value in found.items():
-            if name == EXPORT and dialogues.uploaded():
+            if name == EXPORT and uploaded:
                 continue  # an export was uploaded here, possibly one with no conversation: it stays
             counts['documents'] += connection.execute(
                 'INSERT OR IGNORE INTO documents (name, value) VALUES (?, ?)', (name, db.dump(value))

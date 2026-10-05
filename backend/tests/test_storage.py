@@ -300,6 +300,19 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(storage.documents.load('cards.json')['check'], 'tone')
         self.assertEqual((storage.runs.get('run-1')['check'], storage.runs.summaries()[0]['check']), ('tone', 'tone'))
 
+    def test_the_legacy_export_comes_with_the_record_of_its_file(self) -> None:
+        """Legacy files with the export and the record of its file bring both: the record, read first, never makes the
+        export look uploaded already."""
+        talk = {
+            'id': 'd1',
+            'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
+        }
+        meta = {'file': 'Сентябрь.xlsx', 'updatedAt': '2026-09-01T10:00:00+00:00'}
+        self.assertEqual(
+            legacy_import.insert({'logs-meta.json': meta, 'logs.json': [talk]}, []), {'documents': 2, 'runs': 0}
+        )
+        self.assertEqual((storage.dialogues.read(), storage.dialogues.meta()), ([talk], meta))
+
     def test_repeated_import_cannot_restore_invalidated_audit_or_scenarios(self) -> None:
         legacy = self.path / 'legacy'
         legacy.mkdir()

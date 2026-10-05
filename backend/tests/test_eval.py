@@ -2,9 +2,12 @@
 instructions and check, from the answers they gave on its verdicts; and how the calls to the models went."""
 
 import json
+import sqlite3
 import unittest
+from pathlib import Path
 
 import support
+from test_answers import SCHEMA_6
 
 import lab.eval as lab_eval
 from lab import storage
@@ -38,6 +41,15 @@ def result(check_id: str, review: str | None = None) -> dict:
             }
         ],
     }
+
+
+def older(path: Path) -> None:
+    """A database as a Lab of schema 6 left it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as connection:
+        connection.executescript(SCHEMA_6)
+        connection.execute('PRAGMA user_version = 6')
+    connection.close()
 
 
 def published(check_id: str, review: str | None = None) -> None:
@@ -111,6 +123,22 @@ class AnsweredTests(unittest.TestCase):
             ],
         )
 
+    def test_a_persons_word_on_a_verdict_stays_after_a_later_judgement_changed_it(self) -> None:
+        """The verdicts people disagreed with are the ones a better judge changes: an answer the Lab took back from a
+        changed verdict is still that person's word on what the earlier version said, and counts for it."""
+        rows = [verdict('r1', 'FAIL', 'звоните'), verdict('r2', 'PASS')]
+        item = {'cardId': 'card-1', 'status': 'FAIL', 'judgeVersion': 'v1', 'rules': rows}
+        storage.runs.create({'id': 'run-1', 'status': 'done', 'items': [item]})
+        answers.on_run('run-1', 0, 'disagree', 'r1')
+        answers.on_run('run-1', 0, 'agree', 'r2')
+        judged = {'status': 'PASS', 'judgeVersion': 'v2', 'rules': [verdict('r1', 'PASS'), verdict('r2', 'PASS')]}
+        storage.runs.update_items('run-1', {0: judged})
+        self.assertIsNone(storage.runs.get('run-1')['items'][0]['rules'][0]['review'])  # taken back on the screen
+        self.assertEqual(
+            [(found['version'], found['status'], found['decision']) for found in evaluation.answered()],
+            [('v1', 'FAIL', 'disagree'), ('v1', 'PASS', 'agree')],
+        )
+
 
 class ReportTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -134,6 +162,55 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((one['agents'], one['rows'][0]['answered']), (['Агент эквайринга'], 1))
         with self.assertRaisesRegex(ValueError, 'Нет агента «nope»'):
             lab_eval.report('judge', 'nope')
+
+    def test_the_report_reads_only_and_leaves_a_database_of_another_version_as_it_is(self) -> None:
+        """Beside a working Lab of another version the report never brings its database to this schema (that Lab would
+        set up its own again, and its screens would lose what moved), nor creates a database or the registry."""
+        path = storage.db.default_database()
+        older(path)
+        self.assertEqual(
+            lab_eval.report('judge').splitlines(),
+            [
+                'Согласие людей с судьёй',
+                '',
+                'Не прочитана база Lab: её записала другая версия.',
+                'Откройте Lab этой версии, он обновит базу. Потом повторите отчёт.',
+            ],
+        )
+        with sqlite3.connect(path) as connection:
+            version = connection.execute('PRAGMA user_version').fetchone()[0]
+            tables = {name for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        connection.close()
+        self.assertEqual(version, 6)
+        self.assertIn('tone_checks', tables)
+        self.assertNotIn('reviews', tables)
+        self.assertFalse((path.parent / 'agents.sqlite3').exists())
+        found = json.loads(lab_eval.report('calls', as_json=True))
+        self.assertEqual((found['agents'], found['unread']), ([], ['Lab без агентов']))
+
+    def test_an_agent_of_another_version_is_named_and_the_others_are_read(self) -> None:
+        """A Lab of this version brings an agent's database to its schema when the agent is opened in it: the agents
+        opened since it started are read, the others named. An agent that never opened its database has nothing."""
+        for name in ('Агент эквайринга', 'Агент кредитов', 'Агент вкладов'):
+            registry.create(name)
+        with registry.using('agent-ekvayringa'):
+            published('c1')
+            answers.on_log('code', 'd1', 'r1', 'agree')
+        older(registry.db_of('agent-kreditov'))
+        text = lab_eval.report('judge')
+        self.assertIn('Агенты: Агент эквайринга, Агент вкладов.', text)
+        self.assertIn('Ответили на 1\u00a0вердикт, согласны с\u00a01: 100%', text)
+        self.assertTrue(
+            text.endswith(
+                'Не прочитан агент: Агент кредитов. Его базу записала другая версия Lab.\n'
+                'Откройте агента в Lab этой версии, Lab обновит базу. Потом повторите отчёт.'
+            )
+        )
+        self.assertFalse(registry.db_of('agent-vkladov').exists())
+        older(registry.db_of('agent-vkladov'))
+        found = json.loads(lab_eval.report('judge', as_json=True))
+        self.assertEqual(found['unread'], ['Агент кредитов', 'Агент вкладов'])
+        self.assertIn('Не прочитаны агенты: Агент кредитов, Агент вкладов.', lab_eval.report('judge'))
 
     def test_without_answers_or_calls_the_reports_say_so(self) -> None:
         self.assertIn('Люди ещё не ответили ни на один вердикт судьи.', lab_eval.report('judge'))

@@ -118,10 +118,17 @@ def _export_to_rows(connection: sqlite3.Connection) -> None:
 
 def _one_history(connection: sqlite3.Connection) -> None:
     """The saved checks, a table per check before schema 7, go into one in the order they were saved. The answers on
-    them become rows: first the ones a record carried from the check before it, then the ones people gave on it, in the
-    order they gave them, each with the verdict it was given on. The old tables go."""
+    them become rows: first the ones a record kept in its result, then the ones people gave on it, in the order they
+    gave them, each with the verdict it was given on. The old tables go.
+
+    Who gave an answer a record kept: the Lab, which carried it from the check before (author lab), except in the
+    first saved check of Точность, which an older Lab made of a result from before the history of checks, with the
+    answers people had given on it (no check before it to carry from: author person). A row of the old tables is a
+    person's click (author person, also when it repeats the answer shown), except the copies of the carried answers a
+    check of tone of voice wrote there when it was saved (at its time, with the answer it kept)."""
     tables = {name for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     verdicts: dict[tuple[str, str, str], tuple[Any, Any, Any]] = {}
+    kept: dict[tuple[str, str, str], tuple[str | None, str | None]] = {}  # the record's answer and when it was saved
     for kind, table in ((checks.TONE, 'tone_checks'), (checks.CODE, 'code_checks')):
         if table not in tables:
             continue
@@ -139,7 +146,12 @@ def _one_history(connection: sqlite3.Connection) -> None:
                 'INSERT OR IGNORE INTO history (id, kind, summary, value) VALUES (?, ?, ?, ?)',
                 (check_id, kind, summary, _dump({**record, 'result': result} if 'result' in record else record)),
             )
-            _answer(connection, answers.LOG, check_id, carried, LAB, (record.get('check') or {}).get('finishedAt'))
+            saved = record.get('check') or {}
+            first = not (saved.get('comparison') or {}).get('previousId')
+            for answer in carried:
+                kept[(check_id, answer['conversation'], answer['rule'])] = (answer['decision'], saved.get('finishedAt'))
+            author = PERSON if kind == checks.CODE and first else LAB
+            _answer(connection, answers.LOG, check_id, carried, author, saved.get('finishedAt'))
         connection.execute(f'DROP TABLE {table}')
     for table in ('tone_check_reviews', 'code_check_reviews'):
         if table not in tables:
@@ -148,6 +160,8 @@ def _one_history(connection: sqlite3.Connection) -> None:
             f'SELECT check_id, dialogue_id, rule_id, decision, updated_at FROM {table} ORDER BY updated_at, rowid'
         ).fetchall()
         for check_id, dialogue_id, rule_id, decision, at in rows:
+            if table == 'tone_check_reviews' and kept.get((check_id, dialogue_id, rule_id)) == (decision, at):
+                continue  # the copy of a carried answer, written with the check
             status, quote, version = verdicts.get((check_id, dialogue_id, rule_id), (None, None, None))
             given = {
                 'conversation': dialogue_id,
@@ -157,7 +171,7 @@ def _one_history(connection: sqlite3.Connection) -> None:
                 'quote': quote,
                 'version': version,
             }
-            _answer(connection, answers.LOG, check_id, [given], PERSON, at)
+            _answer(connection, answers.LOG, check_id, [given], PERSON, at, again=True)
         connection.execute(f'DROP TABLE {table}')
 
 
@@ -214,9 +228,17 @@ def _answers_to_rows(connection: sqlite3.Connection) -> None:
 
 
 def _answer(
-    connection: sqlite3.Connection, source: str, record_id: str, found: list[dict], author: str, at: str | None
+    connection: sqlite3.Connection,
+    source: str,
+    record_id: str,
+    found: list[dict],
+    author: str,
+    at: str | None,
+    *,
+    again: bool = False,
 ) -> None:
-    """Answers into the journal (answers.found), each only when it is not the visible answer on its case already."""
+    """Answers into the journal (answers.found), each only when it is not the visible answer on its case already, or
+    `again` when it is: a person who gave the answer shown gave it too."""
     visible = {
         (conversation, rule_id): decision
         for conversation, rule_id, decision in connection.execute(
@@ -226,7 +248,7 @@ def _answer(
     }
     for answer in found:
         key = (answer['conversation'], answer['rule'])
-        if key in visible and visible[key] == answer['decision']:
+        if not again and key in visible and visible[key] == answer['decision']:
             continue
         connection.execute(
             'INSERT INTO reviews (source, record_id, conversation, rule_id, decision, status, quote, version, '

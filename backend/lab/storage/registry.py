@@ -73,6 +73,13 @@ def db_of(agent_id: str) -> Path:
 @contextmanager
 def _connection() -> Iterator[sqlite3.Connection]:
     path = _registry()
+    if db.read_only():  # a reader never creates the registry nor its table (db.reading)
+        connection = sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True, timeout=10)
+        try:
+            yield connection
+        finally:
+            connection.close()
+        return
     db.private_folder(path.parent)
     connection = sqlite3.connect(path, timeout=10)
     try:
@@ -92,6 +99,8 @@ def _row(row: tuple) -> dict:
 
 
 def listed() -> list[dict]:
+    if db.read_only() and not _registry().is_file():
+        return []
     with _connection() as connection:
         rows = connection.execute('SELECT id, name, description, created_at FROM agents ORDER BY rowid').fetchall()
     return [_row(row) for row in rows]

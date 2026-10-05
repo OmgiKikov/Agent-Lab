@@ -189,6 +189,44 @@ class OlderDatabaseTests(unittest.TestCase):
             connection.execute('PRAGMA user_version = 6')
         connection.close()
 
+    def test_the_answers_an_older_lab_kept_are_credited_to_whoever_gave_them(self) -> None:
+        """A record of Точность kept the answers the Lab carried to it, except the first one, which an older Lab made
+        of a result from before the history of checks with the answers people had given on it. A row of the old tables
+        is a person's click, also one that repeats the answer shown, except the copy of a carried answer a check of
+        tone of voice wrote with itself."""
+        first = {'id': 'c1', 'finishedAt': 'at-1', 'comparison': {'kind': 'first', 'previousId': None}}
+        second = {'id': 'c2', 'finishedAt': 'at-2', 'comparison': {'kind': 'same-data', 'previousId': 'c1'}}
+        tone = {'id': 't1', 'finishedAt': 'at-3', 'comparison': {'kind': 'first', 'previousId': None}}
+        records = [
+            ('code_checks', {'check': first, 'result': result('c1', 'at-1', 'disagree')}),
+            ('code_checks', {'check': second, 'result': result('c2', 'at-2', 'disagree')}),
+            ('tone_checks', {'check': tone, 'result': result('t1', 'at-3', 'agree')}),
+        ]
+        path = storage.db.default_database()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(path) as connection:
+            connection.executescript(SCHEMA_6)
+            for table, record in records:
+                values = (record['check']['id'], json.dumps(record['check']), json.dumps(record))
+                connection.execute(f'INSERT INTO {table} VALUES (?, ?, ?)', values)
+            rows = [
+                ('code_check_reviews', 'c2', 'disagree', 'at-9'),  # the person said again what the Lab carried
+                ('tone_check_reviews', 't1', 'agree', 'at-3'),  # the copy written with the check
+            ]
+            for table, check_id, decision, at in rows:
+                connection.execute(f'INSERT INTO {table} VALUES (?, ?, ?, ?, ?)', (check_id, 'd1', 'r1', decision, at))
+            connection.execute('PRAGMA user_version = 6')
+        connection.close()
+        self.assertEqual(
+            [(row['recordId'], row['decision'], row['author']) for row in storage.reviews.journal('log')],
+            [
+                ('t1', 'agree', 'lab'),
+                ('c1', 'disagree', 'person'),
+                ('c2', 'disagree', 'lab'),
+                ('c2', 'disagree', 'person'),
+            ],
+        )
+
     def test_an_older_database_keeps_what_its_screens_showed_with_answers_as_rows(self) -> None:
         self.schema_6()
         # The export: rows in its order, its file still named.

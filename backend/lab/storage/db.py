@@ -20,6 +20,29 @@ from . import schema
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 # The transaction a process holds open (transaction): its database and its connection.
 _HELD: ContextVar[tuple[Path, sqlite3.Connection] | None] = ContextVar('transaction', default=None)
+# Reads that never write (reading).
+_READING: ContextVar[bool] = ContextVar('reading', default=False)
+
+
+class Unreadable(Exception):
+    """A database a reader that never writes cannot read as it is: missing, or of another schema (another version of
+    the Lab wrote it, and only a Lab of this version brings it to this schema)."""
+
+
+@contextmanager
+def reading() -> Iterator[None]:
+    """Whatever is read inside never writes: a database is opened read-only, and never created, set up or brought to
+    this schema (Unreadable). For reports beside a working Lab, of whatever version (python -m lab.eval)."""
+    token = _READING.set(True)
+    try:
+        yield
+    finally:
+        _READING.reset(token)
+
+
+def read_only() -> bool:
+    """Whether the code runs inside reading()."""
+    return _READING.get()
 
 
 def now() -> str:
@@ -75,11 +98,16 @@ def begin(connection: sqlite3.Connection) -> None:
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     """The connection of the transaction held on this database, else a new one, committed when the block ends. A
-    database is set up (schema.set_up) when it is new or of another schema."""
+    database is set up (schema.set_up) when it is new or of another schema. Inside reading(), a read-only one, and a
+    database missing or of another schema is Unreadable."""
     path = database()
     held = _HELD.get()
     if held is not None and held[0] == path:
         yield held[1]  # the transaction commits or rolls back as a whole
+        return
+    if _READING.get():
+        with _read_only(path) as connection:
+            yield connection
         return
     private_folder(path.parent)
     connection = sqlite3.connect(path, timeout=10)
@@ -88,6 +116,20 @@ def connect() -> Iterator[sqlite3.Connection]:
             schema.set_up(connection, path)
         with connection:
             yield connection
+    finally:
+        connection.close()
+
+
+@contextmanager
+def _read_only(path: Path) -> Iterator[sqlite3.Connection]:
+    if not path.is_file():
+        raise Unreadable(f'Нет базы {path}.')
+    connection = sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True, timeout=10)
+    try:
+        version = connection.execute('PRAGMA user_version').fetchone()[0]
+        if version != schema.SCHEMA:
+            raise Unreadable(f'База {path} записана другой версией Lab (схема {version}, нужна {schema.SCHEMA}).')
+        yield connection
     finally:
         connection.close()
 
