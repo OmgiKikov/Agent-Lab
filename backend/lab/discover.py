@@ -208,18 +208,19 @@ def ensure_grounded(topics: list[dict], previous: dict | None) -> None:
 
 
 def carry_reviews(previous: dict, results: list[dict]) -> None:
-    """A person's decision stays with a verdict that did not change: the same conversation, rule and status.
-    Only with frozen rules: extracted anew, the same rule id may be another rule."""
+    """A person's decision stays with a verdict that did not change: the same conversation, rule and status, and for
+    an error the same words of the agent (quotes.same_finding). Only with frozen rules: extracted anew, the same rule
+    id may be another rule."""
     kept = {
-        (str(result['dialogueId']), row['ruleId'], row['status']): row['review']
+        (str(result['dialogueId']), row['ruleId'], row['status']): (row['review'], row.get('agentQuote'))
         for result in previous.get('results') or []
         for row in result.get('rules') or []
         if row.get('review') in ('agree', 'disagree')
     }
     for result in results:
         for row in result['rules']:
-            decision = kept.get((str(result['dialogueId']), row['ruleId'], row['status']))
-            if decision:
+            decision, quote = kept.get((str(result['dialogueId']), row['ruleId'], row['status']), (None, None))
+            if decision and quotes.same_finding(row['status'], quote, row.get('agentQuote')):
                 row['review'] = decision
 
 

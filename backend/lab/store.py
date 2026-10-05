@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import checks, history
+from . import checks, history, quotes
 from .metric import metric
 from .settings import DATA
 
@@ -607,9 +607,9 @@ def update_run(run_id: str, **fields: Any) -> dict:
     return _mutate_run(run_id, lambda record: record.update(fields))
 
 
-def _rule_reviews(rows: list[dict] | None) -> dict[str, tuple[str | None, str]]:
+def _rule_reviews(rows: list[dict] | None) -> dict[str, tuple[str | None, str, str | None]]:
     return {
-        row['ruleId']: (row.get('status'), row['review'])
+        row['ruleId']: (row.get('status'), row['review'], row.get('agentQuote'))
         for row in rows or []
         if row.get('ruleId') and row.get('review') in ('agree', 'disagree')
     }
@@ -623,7 +623,8 @@ def _patch_item(item: dict, fields: dict) -> None:
     """Keep human confirmation through progress, but never attach it to a changed judgment.
 
     A decision on the whole conversation is dropped when its status or verdicts change. A decision on one criterion
-    belongs to the person, not to the producer's copy: it stays with that criterion while its verdict is the same."""
+    belongs to the person, not to the producer's copy: it stays with that criterion while its verdict is the same, an
+    error with the same words of the agent (quotes.same_finding)."""
     patch = {key: value for key, value in fields.items() if key != 'review'}
     changed = ('status' in patch and patch['status'] != item.get('status')) or (
         'rules' in patch and _without_reviews(patch['rules']) != _without_reviews(item.get('rules'))
@@ -633,8 +634,8 @@ def _patch_item(item: dict, fields: dict) -> None:
     if 'rules' in patch:
         rows = []
         for row in _without_reviews(patch['rules']):
-            status, decision = kept.get(row.get('ruleId'), (None, None))
-            if decision and status == row.get('status'):
+            status, decision, quote = kept.get(row.get('ruleId'), (None, None, None))
+            if decision and status == row.get('status') and quotes.same_finding(status, quote, row.get('agentQuote')):
                 row['review'] = decision
             rows.append(row)
         item['rules'] = rows

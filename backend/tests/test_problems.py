@@ -402,3 +402,23 @@ class RuleReviewStoreTests(unittest.TestCase):
         changed[0]['rules'][0]['status'] = 'PASS'
         discover.carry_reviews(previous, changed)
         self.assertNotIn('review', changed[0]['rules'][0])
+
+    def test_an_answer_on_an_error_stays_with_the_words_it_pointed_at(self) -> None:
+        """«Нет, это не ошибка» on «Здравствуйте!!!» says nothing of «Вы сами виноваты»: a new error by the same
+        criterion in the same conversation, citing other words, waits for its own answer. An answer on «без ошибки»
+        is about the conversation, whatever words show it."""
+        previous = audit()
+        previous['results'][0]['rules'][0].update(agentQuote='Здравствуйте!!!', review='disagree')
+        previous['results'][1]['rules'][0]['review'] = 'disagree'  # the person found an error the check missed
+        results = audit()['results']
+        results[0]['rules'][0]['agentQuote'] = 'Вы сами виноваты, читайте договор'
+        results[1]['rules'][0]['agentQuote'] = 'зайдите в раздел «Возвраты»'
+        discover.carry_reviews(previous, results)
+        self.assertNotIn('review', results[0]['rules'][0])
+        self.assertEqual(results[1]['rules'][0]['review'], 'disagree')
+        # The same in a run judged again.
+        store.create_run(played_run())
+        store.set_review('run-1', 0, 'agree', 'c1')
+        other = {'ruleId': 'c1', 'status': 'FAIL', 'reason': 'Грубит', 'agentQuote': 'сами разбирайтесь'}
+        record = store.update_item('run-1', 0, {'rules': [other]})
+        self.assertNotIn('review', record['items'][0]['rules'][0])

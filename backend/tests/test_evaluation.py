@@ -84,10 +84,44 @@ class EvaluationTests(unittest.TestCase):
                 self.assertEqual(rows[0]['status'], 'UNKNOWN')
                 self.assertFalse(quotes.cited(quote, text))
         # Long parts stand, and so does the agent's own «…» quoted whole.
-        quote = 'Оформить возврат можно в личном кабинете … после закрытия смены'
+        quote = 'Оформить возврат можно в личном кабинете … деньги вернуть нельзя после закрытия смены'
         rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], reply)
         self.assertEqual(rows[0]['status'], 'PASS')
+        # A long part that starts right after the «нельзя» it leaves out does not.
+        self.assertFalse(quotes.cited('Оформить возврат можно в личном кабинете … после закрытия смены', reply))
         self.assertTrue(quotes.cited('Минутку… Проверяю данные', 'Минутку… Проверяю данные по терминалу.'))
+
+    def test_a_quote_that_leaves_out_a_negation_is_not_the_agents_words(self):
+        """«можно оплатить картой» is not in «невозможно оплатить картой»: a quote starts where a word starts, and
+        never right after a «не» it leaves out. A verdict standing on such a quote counts as not measured."""
+        reply = 'К сожалению, это невозможно оплатить картой. Терминал недоступен для возврата. Не обещаем сроки.'
+        for quote in ('можно оплатить картой', 'доступен для возврата', 'обещаем сроки', 'ожно оплатить картой'):
+            with self.subTest(quote=quote):
+                self.assertFalse(quotes.cited(quote, reply))
+                rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], reply)
+                self.assertEqual(rows[0]['status'], 'UNKNOWN')
+        for quote in ('невозможно оплатить картой', 'Не обещаем сроки', 'Терминал недоступен для возврата'):
+            with self.subTest(quote=quote):
+                self.assertTrue(quotes.cited(quote, reply))
+        # The same for a criterion grounded in the agent's code: «обещай сроки» is not what «Не обещай сроки» says.
+        self.assertFalse(quotes.found('обещай сроки клиенту', 'Никогда не обещай сроки клиенту.'))
+        self.assertTrue(quotes.found('не обещай сроки клиенту', 'Никогда не обещай сроки клиенту.'))
+
+    def test_a_faithful_copy_written_with_other_typography_is_the_same_quote(self):
+        reply = 'Поддержка работает с 9:00 до 18:00 — по Москве… Приложение «Бизнес­Онлайн» обновится в пятницу.'
+        for quote in (
+            'с 9:00 до 18:00 - по Москве',
+            'с 9:00 до 18:00 – по Москве',
+            'по Москве... Приложение',
+            'Приложение «БизнесОнлайн» обновится',
+        ):
+            with self.subTest(quote=quote):
+                self.assertTrue(quotes.cited(quote, reply))
+        decomposed = 'Пожалуйста, подойдите к кассе № 2'.replace('й', 'й')
+        self.assertTrue(quotes.cited('Пожалуйста, подойдите к кассе', decomposed))
+        self.assertTrue(quotes.cited('Клиент’s заказ готов к выдаче', "Клиент's заказ готов к выдаче"))
+        # The key decisions are stored by does not change with this.
+        self.assertEqual(quotes.normalized('Время — по «Москве»'), 'время — по москве')
 
     def test_grounding_never_substitutes_an_unrelated_source(self):
         topics = [{'title': 'Возврат', 'rules': [dict(criterion(), sourceId='missing', quote='Вернуть терминал')]}]

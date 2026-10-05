@@ -211,13 +211,6 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         await self.upload('d2', name='Октябрь.jsonl')
         self.assertEqual([c['id'] for c in store.code_checks()], [saved[0]['id']])
 
-
-class ChanceTests(unittest.TestCase):
-    def setUp(self):
-        from lab import history  # here, so that each test failed on its own before the module existed
-
-        self.history = history
-
     async def test_the_history_says_what_the_result_says_about_the_difference(self):
         """A line of the history compared with the one before it carries the same verdict as «было → стало» on the
         result: the screen never draws two conclusions from one pair of checks."""
@@ -229,6 +222,22 @@ class ChanceTests(unittest.TestCase):
         self.assertEqual(lines[0]['comparison']['verdict'], compare['overall']['verdict'])
         self.assertEqual(lines[0]['comparison']['direction'], compare['overall']['direction'])
         self.assertNotIn('verdict', lines[1]['comparison'])
+
+
+class ChanceTests(unittest.TestCase):
+    def setUp(self):
+        from lab import history  # here, so that each test failed on its own before the module existed
+
+        self.history = history
+
+    def test_a_failed_second_check_is_not_another_model(self):
+        """One outage of the second model records its configured name, not the name it answers with: the checks stay
+        comparable, as the main count does not depend on the second check."""
+        answered = {'model': 'main', 'second': {'model': 'openai/gpt-5-2025-08-07', 'status': 'PASS'}}
+        failed = {'model': 'main', 'second': {'model': 'openai/gpt-5', 'status': 'ERROR', 'error': 'нет связи'}}
+        one = self.history.evaluation_fingerprint({'model': 'main', 'results': [answered, answered]})
+        other = self.history.evaluation_fingerprint({'model': 'main', 'results': [answered, failed]})
+        self.assertEqual(one, other)
 
     def test_fisher_exact_two_sided(self):
         self.assertAlmostEqual(self.history.fisher(3, 1, 1, 3), 0.4857, places=4)  # the lady tasting tea

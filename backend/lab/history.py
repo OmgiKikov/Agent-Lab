@@ -24,14 +24,17 @@ def dataset_fingerprint(dialogues: list[dict]) -> str:
 
 
 def evaluation_fingerprint(result: dict) -> str:
-    """The models that checked the conversations of a result: its own records' main and second models."""
+    """The models that checked the conversations of a result: its own records' main and second models. A second check
+    that failed checked nothing: its configured name, unlike the name a model answers with, would make one passing
+    outage read as «Изменились модели проверки»."""
     records = result['results']
+    seconds = [record['second'] for record in records if record.get('second')]
     return fingerprint(
         {
             'main': sorted({record['model'] for record in records if record.get('model')}),
             'fallbackMain': result['model'] if not any(record.get('model') for record in records) else None,
             'second': sorted(
-                {record['second']['model'] for record in records if (record.get('second') or {}).get('model')}
+                {second['model'] for second in seconds if second.get('model') and second.get('status') != 'ERROR'}
             ),
         }
     )
