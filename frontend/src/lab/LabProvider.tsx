@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "./api";
 import type { LabState } from "./types";
 
@@ -7,15 +7,28 @@ type Lab = { state: LabState | null; offline: boolean; refresh: () => Promise<vo
 const LabContext = createContext<Lab>({ state: null, offline: false, refresh: async () => {} });
 export const useLabState = () => useContext(LabContext);
 
-/** The service's state for the whole app: polled every 1.5 s while a task runs, every 10 s otherwise, and on focus. */
+/**
+ * The service's state for the whole app: polled every 1.5 s while a task runs, every 10 s otherwise, and on focus.
+ * Several requests can be under way at once (the poll, the focus, a refresh after an action), and they may come back in
+ * any order: an answer is taken only when it was asked after the one on screen, so an older state never replaces a
+ * newer one.
+ */
 export function LabProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LabState | null>(null);
   const [offline, setOffline] = useState(false);
+  const asked = useRef(0);
+  const shown = useRef(0);
   const refresh = useCallback(async () => {
+    const order = ++asked.current;
     try {
-      setState(await api<LabState>("/api/state"));
+      const next = await api<LabState>("/api/state");
+      if (order < shown.current) return;
+      shown.current = order;
+      setState(next);
       setOffline(false);
     } catch {
+      if (order < shown.current) return;
+      shown.current = order;
       setOffline(true);
     }
   }, []);
