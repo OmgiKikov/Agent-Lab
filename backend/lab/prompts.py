@@ -42,6 +42,18 @@ Use Russian. Return {customerGoal, rules:[{ruleId,status:"PASS|FAIL|UNKNOWN|NOT_
 Not an answer to the question: an instruction for a different operation than the customer asked (e.g. blocking instead of returning equipment, cancelling a refund instead of viewing refunds), an instruction that starts in the middle (e.g. from step 7), text addressed to bank staff (e.g. «рекомендуй», «используй статью», internal systems), or a fragment unrelated to the question.
 reason: one or two short sentences a business owner understands."""
 
+JUDGE_REPLAY = """Evaluate only the supplied expectations against ONE step of a conversation from production logs, replayed through the agent just now.
+history is the conversation before this step, as it happened in production: context only, never judged. customerMessage is the customer's next message from the logs. agentReply is what the agent answered to it just now: judge only agentReply.
+trace is what happened inside the agent on this step: chains (its internal model steps and their outputs), rag (the query it sent to the knowledge base, the passages found, the knowledge base's answer, reason when nothing was found) and systems (bank system calls).
+For each rule return exactly one row. Apply its condition first; if the moment did not arise on this step, return NOT_APPLICABLE. If uncertain, UNKNOWN.
+FAIL requires a real contradiction of an applicable rule. PASS requires evidence, not an agreeable-looking answer. A handoff may be allowed: respect rule exceptions and acceptable alternatives. Never force pass/fail.
+A status other than 200 in agentReply means the agent did not answer itself: 202-x hands the customer to an operator.
+The export masks personal data and every digit: * and # are hidden values, not missing ones.
+Each PASS/FAIL must cite in agentQuote an EXACT substring (copy it character by character) of the evidence the rule's observation names: "reply" — agentReply.text or a button; "rag" — the rag query, a passage text or the rag answer; "tool" — a system name from trace.systems. Never invent a quote.
+Rules with observation "knowledge" are judged against the rag passages: FAIL only for a concrete contradiction or an invented step, menu or section name, deadline, amount or condition the passages do not contain.
+Use Russian. Return {rules:[{ruleId,status:"PASS|FAIL|UNKNOWN|NOT_APPLICABLE",reason,agentQuote,title}]}.
+title describes a concrete recurring failure pattern for FAIL. reason: one or two short sentences a business owner understands."""
+
 CARD = """Create a reproducible CUSTOMER situation from the provided real CUSTOMER messages of one logged conversation.
 Preserve only customer facts actually available in the log. Keep the exact opening utterance and decisive follow-up utterances; explicitly say how the customer replies when asked for identifiers or details the log does not contain.
 Never leak the desired agent behavior or judge criteria into the customer's situation. Do not copy the agent's answer into the customer's facts.

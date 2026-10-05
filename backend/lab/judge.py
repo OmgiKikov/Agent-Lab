@@ -9,10 +9,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from . import llm, logs, quotes
+from . import llm, logs, quotes, rag
 from .context import knowledge
 from .judge_reply import JudgeReply, RuleReply
-from .prompts import JUDGE_LOG, JUDGE_RUN
+from .prompts import JUDGE_LOG, JUDGE_REPLAY, JUDGE_RUN
 from .transcript import for_judge, tool_calls
 
 NO_QUOTE = 'Модель привела цитату, которой нет в ответах агента. Вывод не засчитан. '
@@ -47,7 +47,13 @@ def _parse_reply(value: dict, rules: list[dict], *, customer_goal: bool = False)
 
 
 def checked(
-    rows: list[RuleReply], rules: list[dict], agent_text: str, *, tools: str = '', knowledge_available: bool = False
+    rows: list[RuleReply],
+    rules: list[dict],
+    agent_text: str,
+    *,
+    tools: str = '',
+    knowledge_available: bool = False,
+    rag: str = '',
 ) -> list[dict]:
     """One row per criterion; validate reply, tool and knowledge evidence at this single seam.
 
@@ -74,10 +80,11 @@ def checked(
         status, reason, quote = row.status, row.reason, row.agent_quote
         if status in ('PASS', 'FAIL'):
             observation = rule.get('observation', 'reply')
-            evidence = tools if observation == 'tool' else agent_text
+            evidence = {'tool': tools, 'rag': rag}.get(observation, agent_text)
             missing_evidence = {
                 'reply': '',
                 'tool': '' if tools else 'Вызовы инструментов не записаны. ',
+                'rag': '' if rag else 'Обращение к базе знаний не записано. ',
                 'state': 'Изменения в системах банка не записаны. ',
                 'knowledge': ''
                 if knowledge_available
@@ -162,6 +169,37 @@ async def _run_prepared(evidence: _RunEvidence, endpoint: llm.Endpoint | None = 
 async def run_verdict(card: dict, conversation: list[dict], endpoint: llm.Endpoint | None = None) -> Verdict:
     """A conversation the synthetic customer just had with the agent, against the card's criteria."""
     return await _run_prepared(await _prepare_run(card, conversation), endpoint)
+
+
+async def step_verdict(rules: list[dict], step: dict, endpoint: llm.Endpoint | None = None) -> Verdict:
+    """One step of a replayed conversation (replay.py): the agent's new reply and its trace against the rules."""
+    reply, trace = step['reply'], step.get('trace')
+    shown_history = [
+        {'role': 'CUSTOMER', 'text': m['text']}
+        if m['role'] == 'customer'
+        else {'role': 'AGENT', 'text': logs.as_seen(m['text'])}
+        for m in step['history']
+    ]
+    payload = {
+        'expectations': rules,
+        'history': shown_history,
+        'customerMessage': step['customer'],
+        'agentReply': {'text': reply['text'], 'status': reply['status'], 'buttons': reply.get('options') or []},
+        'trace': rag.for_judge(trace),
+    }
+    answer = await llm.structured(
+        JUDGE_REPLAY, payload, parse=lambda value: _parse_reply(value, rules), endpoint=endpoint
+    )
+    agent_text = '\n'.join([reply['text'], *(reply.get('options') or [])])
+    rows = checked(
+        answer.value.rules,
+        rules,
+        agent_text,
+        tools=rag.tools(trace),
+        knowledge_available=rag.called(trace),
+        rag=rag.evidence(trace),
+    )
+    return Verdict(rows, verdict_of(rows), answer.model)
 
 
 async def second_opinion(verdict: Callable[..., Awaitable[Verdict]], *args) -> dict | None:
