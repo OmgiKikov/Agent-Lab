@@ -40,16 +40,11 @@ LAB_DATA, сертификаты — LAB_CERTS. С одной папкой да�
 
 Интерфейс — на :5900, запросы к /api Vite передаёт в Python на :5901.
 
-    sh bin/check.sh      # перед коммитом: Ruff, тесты, тексты, ESLint, Prettier, сборка
-    sh bin/format.sh     # исправить стиль и форматирование
+    sh bin/check.sh      # перед коммитом: Ruff, тесты, ESLint, Prettier, сборка
 
 Backend — FastAPI и SQLite. Слои `api → flows → roles → models → storage → domain`, импорты только вниз, это
 проверяет `backend/tests/test_architecture.py`. Инструкции моделей — `backend/lab/roles/prompts/`.
 Frontend — React, Vite, TanStack Query, Tailwind. По папке на раздел в `frontend/src/sections/`.
-
-Проход на настоящих модели и агенте, когда Lab запущен:
-
-    python3 bin/real_pass.py --export выгрузка.xlsx --rules правила.docx
 
 Насколько модель-судья согласна с ответами людей:
 

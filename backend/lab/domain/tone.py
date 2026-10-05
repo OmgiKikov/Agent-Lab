@@ -74,7 +74,7 @@ def coded_criteria(source: dict) -> list[dict]:
             'quote': ' … '.join(block for block, _ in parts),
             'sourceId': source['id'],
             'observation': 'reply',
-            # copy: ok — the model judges by it, and saved checks compare by it (criteria_fingerprint)
+            # The model judges by it, and saved checks compare by it (criteria_fingerprint).
             'condition': 'Проверять только ответы агента; реплики клиента — контекст.',
             'acceptable': principles,
         }
