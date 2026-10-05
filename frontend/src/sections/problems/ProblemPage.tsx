@@ -325,7 +325,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
             {/* The case an address names is not among the examples now: another one is shown, and that is said. */}
             {lostExample && example && (
               <p role="status" className="mt-3 text-read text-fg-3">
-                Случая из ссылки среди примеров нет. Показан пример{" "}
+                Случая из ссылки среди примеров нет. Показан пример{"\u00a0"}
                 {at + 1}.
               </p>
             )}

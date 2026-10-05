@@ -19,7 +19,7 @@ import { nameOf } from "../criteria/model";
 import { ConnectionForm } from "./Connection";
 
 /** The characters of prompts the criteria planner takes (backend/lab/context/sources.py, MAX_TOTAL). */
-const BUDGET = "60 000";
+const BUDGET = "60\u00a0000";
 
 /**
  * «Агент»: who is checked and what the product knows of it — how to reach it, and what was read from its code: when
@@ -119,7 +119,7 @@ export function AgentPage() {
                 <p className="text-warn">
                   {count(over.length, "инструкция", "инструкции", "инструкций")}{" "}
                   {plural(over.length, "не вошла", "не вошли", "не вошли")} в лимит {BUDGET}
-                  {" "}знаков. Критерии из {plural(over.length, "неё", "них", "них")} не собраны.
+                  {"\u00a0"}знаков. Критерии из {plural(over.length, "неё", "них", "них")} не собраны.
                 </p>
                 <ul className="mt-1 space-y-0.5">
                   {over.map((origin) => (
