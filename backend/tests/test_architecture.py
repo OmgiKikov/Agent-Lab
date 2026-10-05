@@ -27,6 +27,7 @@ USES = {
 LAYERS = {
     'lab.app': 'app',
     'lab.migrate': 'app',
+    'lab.eval': 'app',
     'lab.api': 'api',
     'lab.jobs': 'api',
     'lab.config': 'config',

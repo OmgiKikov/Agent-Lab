@@ -39,7 +39,8 @@ extend-immutable-calls = ["fastapi.Body"]
 max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
-# CLI stdout is a machine-readable migration report.
+# CLI stdout is the report: of the migration (machine-readable), of the Lab's instruments.
 "lab/migrate.py" = ["T201"]
+"lab/eval.py" = ["T201"]
 # Flexible mock/fixture call signatures are not exported production contracts.
 "tests/**/*.py" = ["ANN001", "ANN201", "ANN202", "ANN204"]

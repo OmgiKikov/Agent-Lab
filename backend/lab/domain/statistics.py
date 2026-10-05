@@ -1,7 +1,7 @@
 """Whether the difference between two shares of errors says more than chance (docs/superpowers/specs/
 2026-10-04-was-is-design.md, section 3): a fact about the shares, not a judgement of the agent."""
 
-from math import comb
+from math import comb, sqrt
 
 # Below this many conversations where a criterion could be checked, on either side, a share says little: the same
 # threshold as «Проверено мало разговоров: вывод предварительный» (frontend/src/product/Trust.tsx).
@@ -24,6 +24,17 @@ def fisher(a: int, b: int, c: int, d: int) -> float:
     low, high = max(0, row - (total - column)), min(row, column)
     # The tables no more probable than the one observed; the tolerance absorbs rounding in the comparison.
     return min(1.0, sum(p for p in map(probability, range(low, high + 1)) if p <= observed * (1 + 1e-7)))
+
+
+def wilson(hits: int, total: int, z: float = 1.96) -> tuple[float, float] | None:
+    """Where a share hits/total may lie beyond these cases, 95% of the time (Wilson's score interval): honest with few
+    cases and at 0% or 100%, unlike the share ± its error. None without a case."""
+    if not total:
+        return None
+    share, square = hits / total, z * z
+    centre = (share + square / (2 * total)) / (1 + square / total)
+    margin = z * sqrt(share * (1 - share) / total + square / (4 * total * total)) / (1 + square / total)
+    return max(0.0, centre - margin), min(1.0, centre + margin)
 
 
 def verdict(before: dict | None, now: dict | None) -> tuple[str | None, str | None]:

@@ -28,7 +28,7 @@ async def uploaded(request: Request, limit: int, advice: str) -> bytes:
     """The uploaded file: refused by its declared length before a byte is read, and never read past the limit; the
     refusal says what to do (advice)."""
     size = f'{limit / 1_000_000:g}'.replace('.', ',')
-    message = f'Файл больше {size} МБ. {advice}'
+    message = f'Файл больше {size}\u00a0МБ. {advice}'
     try:
         declared = int(request.headers.get('content-length') or 0)
     except ValueError:

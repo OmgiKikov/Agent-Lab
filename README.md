@@ -51,6 +51,12 @@ Vite открывается на :5900 и направляет /api в Python н
 
     sh bin/check.sh
 
+Как работает сам прибор — согласие людей с судьёй по версиям его инструкции и вызовы моделей (подробнее в
+[docs/backend.md](docs/backend.md)):
+
+    uv run --directory backend python -m lab.eval judge
+    uv run --directory backend python -m lab.eval calls
+
 Автоматическое исправление стиля и форматирование:
 
     sh bin/format.sh
@@ -75,6 +81,7 @@ CI запускает те же проверки, включая формати�
         models/            доступ к моделям: OpenRouter, любой OpenAI-совместимый endpoint, шлюз банка; журнал вызовов
         storage/           SQLite агента: документы, разговоры, прогоны, история, ответы людей, журнал вызовов; реестр
         migrate.py         явный импорт прежних JSON/JSONL
+        eval.py            отчёт о приборе: согласие людей с судьёй, вызовы моделей
       tests/               проверки поведения без внешних моделей
     frontend/              текущий интерфейс Agent Lab
     bin/                   запуск и общие проверки
