@@ -68,6 +68,8 @@ export function CriteriaPage({ check }: { check: Check }) {
   );
   const asked = params.get("c");
   const chosen = (asked ? list.find((c) => c.r.id === asked) : wide ? ordered[0] : undefined) ?? null;
+  // A criterion the address names that this check does not have: said so in the panel's place, never a blank one.
+  const lost = !!asked && !!data && !chosen;
   const fileId =
     params.get("f") ??
     chosen?.r.rule.sourceId ??
@@ -201,7 +203,7 @@ export function CriteriaPage({ check }: { check: Check }) {
   // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Модели совпали» and «Две
   // проверки» would only say «—» and «не с чем сравнить» on every criterion: nothing to tell.
   const twice = (s: SideKey) => list.some((c) => c.r[s].examples.some((e) => !!e.second));
-  const panelOpen = !!chosen && (wide || !!asked);
+  const panelOpen = (!!chosen || lost) && (wide || !!asked);
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -399,6 +401,18 @@ export function CriteriaPage({ check }: { check: Check }) {
             onShown={(v) => set((n) => n.set("x", v))}
             onBack={wide ? undefined : () => set((n) => n.delete("c"), false)}
           />
+        )}
+        {panelOpen && lost && (
+          <aside className="flex min-h-0 flex-col border-line bg-side lg:border-l" aria-label="Критерий из ссылки">
+            <EmptyState
+              drop
+              title="Такого критерия нет"
+              className="flex-1 justify-center"
+              action={<Button onClick={() => set((n) => n.delete("c"), false)}>Все критерии</Button>}
+            >
+              Критерия из ссылки нет в этой проверке.
+            </EmptyState>
+          </aside>
         )}
       </div>
       {!tone && <Reextract open={reextract} onClose={() => setReextract(false)} />}

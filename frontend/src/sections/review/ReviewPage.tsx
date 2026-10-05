@@ -137,6 +137,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const saving = useIsMutating({ mutationKey: ["review"] }) > 0;
   const counted = saving ? "Сохраняем ответы…" : "Ответы уже учтены в счёте.";
   const rule = ruleId && data ? data.rules.find((r) => r.id === ruleId) : undefined;
+  // A criterion the address names that this result (or run) does not have: said so, with all of its cases instead.
+  const noRule = !!ruleId && !!data && !rule;
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
   // Without a second model nothing can be disputed: an empty queue then says so, not that two checks agreed.
   const twice = [...byKey.values()].some((v) => !!v.example.second);
@@ -169,7 +171,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
           brings into view — the last message, a word found, a focused link — stops above it, not behind it. */}
       <div className="min-h-0 flex-1 overflow-auto scroll-pb-40">
         <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-10">
-          {data && (
+          {data && !noRule && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
               <Menu
                 trigger={
@@ -241,6 +243,26 @@ export function ReviewPage({ stage }: { stage: Stage }) {
             />
           ) : !data || frozen?.id !== id ? (
             <Skeleton className="mt-8 h-[480px]" />
+          ) : noRule ? (
+            <EmptyState
+              drop
+              title="Такого критерия нет"
+              className="py-24"
+              action={
+                <Button
+                  onClick={() =>
+                    set((n) => {
+                      n.delete("rule");
+                      n.set("queue", "all");
+                    })
+                  }
+                >
+                  Все случаи · {queueOf(data, "all", null, source).length}
+                </Button>
+              }
+            >
+              {stage === "sim" ? "Критерия из ссылки нет в этом прогоне." : "Критерия из ссылки нет в этом итоге."}
+            </EmptyState>
           ) : !keys.length ? (
             <EmptyState
               drop

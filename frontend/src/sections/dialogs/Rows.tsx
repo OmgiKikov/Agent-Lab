@@ -120,7 +120,11 @@ export function Rows({
   rows: DialogRow[];
   verdict: Verdict;
   onVerdict: (v: Verdict) => void;
-  rule: Criterion | null;
+  /**
+   * The filter by one criterion in words, «Ошибка по критерию 3: …»; `gone` — the address names a criterion this list
+   * does not have, and the words say so.
+   */
+  rule: { text: string; gone?: boolean } | null;
   /** The conversations with a serious error (model, seriousRows). */
   serious: Set<string>;
   onClearRule: () => void;
@@ -174,10 +178,13 @@ export function Rows({
         </div>
         <Search value={query} onChange={onQuery} placeholder="Найти по словам клиента" />
         {rule && (
-          <span className="flex items-center gap-2 rounded-full bg-hover py-1 pl-3 pr-1.5 text-small text-fg">
-            <span className="min-w-0 flex-1 truncate">
-              Ошибка по критерию {rule.n}: {rule.name}
-            </span>
+          <span
+            className={cn(
+              "flex items-center gap-2 py-1 pl-3 pr-1.5 text-small",
+              rule.gone ? "rounded-control bg-inset text-fg-2" : "rounded-full bg-hover text-fg",
+            )}
+          >
+            <span className={cn("min-w-0 flex-1", !rule.gone && "truncate")}>{rule.text}</span>
             <button
               type="button"
               onClick={onClearRule}

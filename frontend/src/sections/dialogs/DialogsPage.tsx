@@ -9,6 +9,7 @@ import { longDay } from "../../lab/format";
 import { runTitle, useRun } from "../../lab/runs";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
+import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
@@ -52,6 +53,16 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   );
   const named = useMemo(() => (stage === "sim" ? frozenNames(criteria, all) : undefined), [stage, criteria, all]);
   const rule = ruleId ? problems?.rules.find((r) => r.id === ruleId) : undefined;
+  const own = rule ? criteria.find((c) => c.r.id === rule.id) : undefined;
+  // Over the list: the criterion it is filtered by, or that the one the address names is not in this result or run.
+  const chip = rule
+    ? { text: own ? `Ошибка по критерию ${own.n}: ${own.name}` : rule.title }
+    : ruleId && problems
+      ? {
+          text: `Критерия из ссылки нет в этом ${stage === "sim" ? "прогоне" : "итоге"}. Показаны разговоры без отбора по нему.`,
+          gone: true,
+        }
+      : null;
   const only = useMemo(
     () =>
       rule
@@ -71,8 +82,11 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   // The list waits for what it is made of: the run's conversations, and the criteria when a filter is by them.
   const waitRun = stage === "sim" && !!simRun && !run.data;
   const waitRecord = (!!ruleId || verdict === "serious") && !problems && (record.loading || !!record.error);
-  const key = params.get("d") ?? (wide && !waitRun && !waitRecord ? (rows[0]?.key ?? null) : null);
+  const asked = params.get("d");
+  const key = asked ?? (wide && !waitRun && !waitRecord ? (rows[0]?.key ?? null) : null);
   const selected = key ? all.find((r) => r.key === key) : undefined;
+  // A conversation the address names that this result or run does not have: said so in its place, never a blank one.
+  const lost = !!asked && !selected && !waitRun;
   const open = (k: string | null) =>
     set((n) => {
       if (k) n.set("d", k);
@@ -149,7 +163,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
         <span className="text-small text-fg-3">прогон {longDay(r.startedAt)}</span>
       )
     ) : null;
-  const showDetail = !!selected && (wide || !!params.get("d"));
+  const showDetail = (!!selected || lost) && (wide || !!asked);
   const empty =
     stage === "sim"
       ? simRun
@@ -189,7 +203,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
               n.delete("d");
             })
           }
-          rule={rule ? (criteria.find((c) => c.r.id === rule.id) ?? null) : null}
+          rule={chip}
           serious={serious}
           onClearRule={() => set((n) => n.delete("rule"))}
           query={query}
@@ -208,6 +222,15 @@ export function DialogsPage({ stage }: { stage: Stage }) {
             named={named}
             onBack={wide ? undefined : () => open(null)}
           />
+        ) : showDetail && lost ? (
+          <EmptyState
+            drop
+            title="Такого разговора нет"
+            className="justify-center"
+            action={<Button onClick={() => open(null)}>Все разговоры</Button>}
+          >
+            {stage === "sim" ? "Разговора из ссылки нет в этом прогоне." : "Разговора из ссылки нет в этом итоге."}
+          </EmptyState>
         ) : (
           wide &&
           !pending && (

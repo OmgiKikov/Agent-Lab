@@ -335,21 +335,28 @@ function SnapshotBody({ saved, previous }: { saved: Saved; previous?: SavedCheck
   );
 }
 
+/**
+ * One saved check as a sheet (?id=). A check the history does not list (`listed` — the list came) is said to be not
+ * there, with the way back to the list: asking again would not bring it.
+ */
 function Snapshot({
   check,
   id,
   checks,
+  listed,
   onClose,
 }: {
   check: Check;
   id: string | null;
   checks: SavedCheck[];
+  listed: boolean;
   onClose: () => void;
 }) {
+  const gone = listed && !!id && !checks.some((item) => item.id === id);
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["history-snapshot", check, id],
     queryFn: () => loadSaved(check, id!),
-    enabled: !!id,
+    enabled: !!id && !gone,
     staleTime: 0,
   });
   const saved = useMemo(() => (data ? ("policy" in data ? toneSaved(data) : codeSaved(data)) : null), [data]);
@@ -363,23 +370,36 @@ function Snapshot({
       title="Сохранённая проверка"
       sub={line ? finished(line.finishedAt) : undefined}
     >
-      {isLoading && (
-        <div className="space-y-4 p-5" aria-label="Загружаем сохранённую проверку">
-          <Skeleton className="h-20" />
-          <Skeleton className="h-64" />
-        </div>
-      )}
-      {error && (
+      {gone ? (
         <div className="p-5">
           <p role="alert" className="text-body text-fg-2">
-            Не удалось открыть проверку.
+            Проверки из ссылки в истории нет.
           </p>
-          <Button className="mt-4" icon={RotateCcw} onClick={() => void refetch()}>
-            Повторить
+          <Button className="mt-4" onClick={onClose}>
+            К истории проверок
           </Button>
         </div>
+      ) : (
+        <>
+          {isLoading && (
+            <div className="space-y-4 p-5" aria-label="Загружаем сохранённую проверку">
+              <Skeleton className="h-20" />
+              <Skeleton className="h-64" />
+            </div>
+          )}
+          {error && (
+            <div className="p-5">
+              <p role="alert" className="text-body text-fg-2">
+                Не удалось открыть проверку.
+              </p>
+              <Button className="mt-4" icon={RotateCcw} onClick={() => void refetch()}>
+                Повторить
+              </Button>
+            </div>
+          )}
+          {saved && <SnapshotBody key={saved.check.id} saved={saved} previous={previous} />}
+        </>
       )}
-      {saved && <SnapshotBody key={saved.check.id} saved={saved} previous={previous} />}
     </Sheet>
   );
 }
@@ -500,7 +520,7 @@ export function HistoryPage({ check }: { check: Check }) {
           </div>
         )}
       </div>
-      <Snapshot check={check} id={selected} checks={checks} onClose={() => select(null)} />
+      <Snapshot check={check} id={selected} checks={checks} listed={!!data} onClose={() => select(null)} />
     </div>
   );
 }

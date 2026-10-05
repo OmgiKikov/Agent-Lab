@@ -211,7 +211,9 @@ export function ScenariosPage() {
     );
 
   const fromErrors = cards.filter((c) => c.origin === FROM_LOG).length;
-  const showDetail = !!card && (wide || !!params.get("s"));
+  // A scenario the address names that is not among the ones built: said so in its place, never a blank one.
+  const lost = !!params.get("s") && !card;
+  const showDetail = (!!card || lost) && (wide || !!params.get("s"));
   const status: RecordState = card && records.has(card.id) ? "ready" : isError && !isFetching ? "error" : "loading";
   const busy = !!state.job.running;
   return (
@@ -319,6 +321,15 @@ export function ScenariosPage() {
             onPlay={() => set((n) => n.set("play", card.id), false)}
             onBack={wide ? undefined : () => pick(null)}
           />
+        ) : showDetail && lost ? (
+          <EmptyState
+            drop
+            title="Такого сценария нет"
+            className="justify-center"
+            action={<Button onClick={() => pick(null)}>Все сценарии</Button>}
+          >
+            Сценария из ссылки нет среди собранных. Новые сценарии заменяют прежние.
+          </EmptyState>
         ) : (
           wide && (
             <EmptyState drop title="Выберите сценарий" className="justify-center">

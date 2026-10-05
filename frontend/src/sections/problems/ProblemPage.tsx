@@ -65,7 +65,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
 
   const examples = c ? violationsOf(c, here) : [];
-  const at = exampleAt(examples, params.get("e"));
+  const { at, missing: lostExample } = exampleAt(examples, params.get("e"));
   const example = examples[at];
   /** The example in the address by its conversation: «Нет» sends it to the end of the order, it stays on screen. */
   const pin = (e: Example) =>
@@ -317,6 +317,13 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                 onClick={() => go(at + 1)}
               />
             </div>
+            {/* The case an address names is not among the examples now: another one is shown, and that is said. */}
+            {lostExample && example && (
+              <p role="status" className="mt-3 text-read text-fg-3">
+                Случая из ссылки среди примеров нет. Показан пример{" "}
+                {at + 1}.
+              </p>
+            )}
             <div className="mt-4">
               {example ? (
                 <div
