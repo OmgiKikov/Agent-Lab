@@ -277,14 +277,17 @@ def source_summary(analysis: dict | None) -> list[dict]:
 
 @app.get('/api/state')
 def state() -> dict:
-    """Polled every 1.5 s during a job: each check's result is read once; runs and dialogues are not parsed at all."""
+    """Polled every 1.5 s during a job: each check's result is read once; runs and dialogues are not parsed at all.
+    The task is read first, as it stands: it runs on while this answer is put together in a worker thread, and a task
+    said to be finished has its data in the same answer (a live state would say «done» beside the data it replaced)."""
+    job = dict(jobs.state)
     results = {check: store.load(checks.result(check)) for check in checks.RESULTS}
     for result in filter(None, results.values()):
         if not result.get('summary'):  # every result stores its summary; an older one may not
             result['summary'] = discover.summarize(result['results'], result['topics'])
         result['summary'] = history.with_unmeasured(result['summary'], result.get('sampled'))
     return {
-        'job': jobs.state,
+        'job': job,
         'model': llm.MODEL,
         'models': llm.describe(),
         'settings': agents.settings(),

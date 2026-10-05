@@ -492,6 +492,22 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job()
         self.assertEqual((await self.client.get('/api/state')).json()['sourcesRead'], read)
 
+    async def test_a_task_said_finished_has_its_data_in_the_same_answer(self) -> None:
+        """The state is put together in a worker thread while the task runs on: a task that finishes meanwhile is
+        still running in this answer, never «done» beside the data it has just replaced."""
+        api.jobs.state.update(kind='sources', running=True)
+        summary = api.source_summary
+
+        def finishing(analysis):
+            listed = summary(analysis)
+            api.jobs.state.update(running=False)  # the task commits and finishes after the sources were read
+            return listed
+
+        with patch.object(api, 'source_summary', finishing):
+            job = (await self.client.get('/api/state')).json()['job']
+        self.assertTrue(job['running'])
+        api.jobs.state.update(kind=None, running=False)
+
     async def test_a_task_says_when_it_started(self) -> None:
         async def work(progress) -> None:
             pass
