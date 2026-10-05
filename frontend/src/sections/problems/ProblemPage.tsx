@@ -42,10 +42,15 @@ import { shareBase } from "../../app/agent";
  * («Серьёзная ошибка» on its criterion, with whose decision it is: the automatic check's proposal with its reason and
  * «Подтвердить», or the person's), how often (one line of numbers), then the case itself — the conversation as the
  * customer saw it — and the person's answer. One stage at a time: in a check, its conversations; in the simulation,
- * one run of that check's scenarios. The other is one link away.
+ * one run of that check's scenarios. The other is one link away. Another problem of the same stage opens afresh: the
+ * page is keyed by the problem, so nothing unfolded, opened or lit on one stays on the next.
  */
 export function ProblemPage({ stage }: { stage: Stage }) {
   const { id = "" } = useParams();
+  return <Problem key={id} stage={stage} id={id} />;
+}
+
+function Problem({ stage, id }: { stage: Stage; id: string }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const toast = useToast();
