@@ -1,10 +1,14 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
+import { cn } from "@/lib/utils";
+import { SECTIONS } from "../../app/links";
 import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
 import { count, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { checkedIn } from "../../lab/problemReport";
-import { Button } from "../../ui/Button";
+import { codeSources } from "../../lab/tone";
+import { Button, buttonClass } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
 import { Sheet } from "../../ui/Sheet";
@@ -76,7 +80,8 @@ export function useAssess(onStarted?: () => void) {
 
 /**
  * «Проверить снова» of accuracy: by the same criteria, how many conversations and one button; or «Извлечь критерии
- * заново» when the agent has changed. Only this check's result is replaced.
+ * заново» when the agent has changed. Only this check's result is replaced. Its criteria come from the agent's code:
+ * opened before the code was read (⌘K «Проверить точность»), it says to read the code first, and nothing starts.
  */
 export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state } = useLabState();
@@ -86,7 +91,15 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
   const criteria = data ? checkedIn(data, "log").length : 0;
   const total = state?.logs.total ?? 0;
   const deck = state?.cards?.check === "code" && !!state.cards.cards.length;
-  const why = state?.job.running ? "Сейчас идёт другая задача" : !total ? "Сначала загрузите разговоры" : undefined;
+  // The service checks only with the code read (backend/lab/discover.py): without it, every start would fail.
+  const code = codeSources(state).length > 0;
+  const why = state?.job.running
+    ? "Сейчас идёт другая задача"
+    : !code
+      ? "Сначала прочитайте код агента"
+      : !total
+        ? "Сначала загрузите разговоры"
+        : undefined;
   return (
     <Sheet
       open={open}
@@ -95,10 +108,21 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
       sub="Модель проверит разговоры выгрузки по критериям из кода агента. Сам агент не запускается."
     >
       <div className="space-y-6 px-5 py-5">
-        <p className="text-read text-fg-2">
-          В выгрузке {count(total, "разговор", "разговора", "разговоров")}.{" "}
-          {criteria ? `Критерии те же, их ${criteria}.` : "Критерии те же, что в прошлый раз."}
-        </p>
+        {code ? (
+          <p className="text-read text-fg-2">
+            В выгрузке {count(total, "разговор", "разговора", "разговоров")}.{" "}
+            {criteria ? `Критерии те же, их ${criteria}.` : "Критерии те же, что в прошлый раз."}
+          </p>
+        ) : (
+          <div>
+            <p className="text-read text-fg-2">
+              Код агента ещё не прочитан, а критерии точности берутся из него дословно. Прочитайте код в «Агенте».
+            </p>
+            <Link to={SECTIONS.agent} className={cn("mt-3", buttonClass())}>
+              Прочитать код
+            </Link>
+          </div>
+        )}
         <SizePicker sizes={sizes} size={size} onSize={setSize} />
         <div className="flex flex-wrap items-center gap-3">
           <Button
