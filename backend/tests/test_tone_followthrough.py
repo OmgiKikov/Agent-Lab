@@ -1,16 +1,13 @@
 import asyncio
 import json
 import sqlite3
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import support
 from test_tone import POLICY
 
 from lab import api, cards, discover, judge, llm, simulate, store, tone
-from lab.jobs import Jobs
 
 
 def judged(status='FAIL', model='model-a', down=()):
@@ -46,18 +43,7 @@ def judged(status='FAIL', model='model-a', down=()):
 class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # The flow is checked with both judges: a second vendor configured.
-        second = patch.object(llm, 'SECOND', ('http://second/v1', 'second-judge'))
-        second.start()
-        self.addCleanup(second.stop)
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
+        support.serve(self, second_url='http://second/v1', second_model='second-judge')
         self.dialogue = {
             'id': 'd1',
             'messages': [
@@ -77,13 +63,9 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
 
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
-
     async def wait_job(self):
         for _ in range(100):
-            if not api.jobs.state['running']:
+            if not self.jobs.state['running']:
                 return
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
@@ -104,7 +86,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
 
     async def check(self, rule_ids=None, model='model-a', count=1, down=(), status='FAIL'):
         await self.start_check(judged(status, model, down), rule_ids, count)
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         return store.load(tone.RESULT)
 
     async def answer(self, result, rule_id, decision, dialogue_id='d1'):
@@ -139,7 +121,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/tone-of-voice/check', json=request)
             await self.wait_job()
         self.assertEqual(
-            api.jobs.state['error'],
+            self.jobs.state['error'],
             'Модель проверки не ответила ни по одному разговору. Проверьте модель в разделе «Настройки».',
         )
         self.assertIsNone(store.load(tone.RESULT))
@@ -150,7 +132,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/tone-of-voice/check', json=request)
             await self.wait_job()
         self.assertEqual(
-            api.jobs.state['error'],
+            self.jobs.state['error'],
             'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён. '
             'Проверьте модель в разделе «Настройки».',
         )
@@ -311,7 +293,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/cards')
             await self.wait_job()
             model.assert_not_awaited()
-        self.assertIn('проверьте разговоры заново', api.jobs.state['error'])
+        self.assertIn('проверьте разговоры заново', self.jobs.state['error'])
         store.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'also-stale'}]})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
@@ -349,7 +331,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.client.post('/api/cards')
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         card = store.load(cards.DECK)['cards'][0]
         self.assertEqual(card['criteria'][0]['quote'], original_rule['quote'])
         self.assertEqual(card['criteria'][0]['clarifications'], [note])
@@ -463,7 +445,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         self.assertEqual(len(seen), 2)
         self.assertTrue(all(note in data['expectations'][0]['text'] for data in seen))
         self.assertEqual(store.tone_checks()[0]['comparison']['kind'], 'incompatible')
@@ -590,7 +572,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(tone, '_judge', side_effect=superseded):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await self.wait_job()
-        self.assertIn('Материалы проверки изменились', api.jobs.state['error'])
+        self.assertIn('Материалы проверки изменились', self.jobs.state['error'])
         self.assertEqual(store.load(tone.RESULT), previous)
         self.assertEqual(len(store.tone_checks()), 1)
 
@@ -609,7 +591,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await entered.wait()
             await self.client.post('/api/job/stop')
-        self.assertEqual(api.jobs.state['error'], 'Остановлено')
+        self.assertEqual(self.jobs.state['error'], 'Остановлено')
         self.assertEqual(store.load(tone.RESULT), previous)
         self.assertEqual(len(store.tone_checks()), 1)
 

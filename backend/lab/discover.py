@@ -11,7 +11,7 @@ import uuid
 from collections import Counter
 from collections.abc import Callable
 
-from . import checks, history, judge, llm, logs, quotes, store
+from . import checks, config, history, judge, llm, logs, quotes, store
 from .context import sources
 from .prompts import ASSIGN, PLAN
 
@@ -180,7 +180,7 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
 async def judge_each(todo: list[tuple[dict, dict]], done: Callable[[dict], None]) -> None:
     """Judge conversations a few at a time, each with both checks, so the count moves from the first seconds.
     All at once, the model gate would run every first check before any second one and the count would wait minutes."""
-    slots = asyncio.Semaphore(llm.CONCURRENCY)
+    slots = asyncio.Semaphore(config.current().concurrency)
 
     async def one(dialogue: dict, topic: dict) -> None:
         async with slots:

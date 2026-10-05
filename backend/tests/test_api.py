@@ -7,27 +7,14 @@ import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import support
 
 from lab import api, history, store
-from lab.jobs import Jobs
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
-
-    async def asyncTearDown(self) -> None:
-        await api.jobs.close()
-        await self.client.aclose()
+        support.serve(self)
 
     async def test_uploaded_log_transcript_has_current_evaluation(self) -> None:
         dialogue = {
@@ -110,10 +97,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                     response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
                     self.assertEqual(response.status_code, 200, response.text)
                     for _ in range(100):
-                        if not api.jobs.state['running']:
+                        if not self.jobs.state['running']:
                             break
                         await asyncio.sleep(0.002)
-                self.assertIsNone(api.jobs.state['error'])
+                self.assertIsNone(self.jobs.state['error'])
                 self.assertEqual(store.load(api.discover.RESULT), audit)
                 self.assertEqual(store.load(api.cards.DECK) is not None, kept)
 
@@ -139,12 +126,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/discover', json={'count': 5})
             self.assertEqual(response.status_code, 200, response.text)
             for _ in range(100):
-                if not api.jobs.state['running']:
+                if not self.jobs.state['running']:
                     break
                 await asyncio.sleep(0.002)
         down.assert_awaited_once()
         self.assertEqual(
-            api.jobs.state['error'],
+            self.jobs.state['error'],
             'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён. '
             'Проверьте модель в разделе «Настройки».',
         )
@@ -190,11 +177,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/discover', json={'count': 5, 'replan': True})
             self.assertEqual(response.status_code, 200, response.text)
             for _ in range(100):
-                if not api.jobs.state['running']:
+                if not self.jobs.state['running']:
                     break
                 await asyncio.sleep(0.002)
         self.assertEqual(
-            api.jobs.state['error'],
+            self.jobs.state['error'],
             'Ни один критерий не подтвердился дословной цитатой из кода агента. Прежний итог сохранён. '
             'Извлеките критерии ещё раз.',
         )
@@ -221,7 +208,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
                 response = await self.client.post('/api/job/stop')
                 self.assertEqual(response.status_code, 200)
-                self.assertFalse(api.jobs.state['running'])
+                self.assertFalse(self.jobs.state['running'])
             finally:
                 release.set()
                 await asyncio.to_thread(finished.wait, 2)
@@ -237,7 +224,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await release.wait()
 
-        api.jobs.start('discover', work)
+        self.jobs.start('discover', work)
         await entered.wait()
         response = await self.client.post('/api/logs?name=sample.jsonl', content='{}')
         self.assertEqual(response.status_code, 409)
@@ -245,7 +232,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 409)
         response = await self.client.post('/api/job/stop')
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(api.jobs.state['running'])
+        self.assertFalse(self.jobs.state['running'])
 
     async def test_settings_cannot_change_under_an_active_job(self) -> None:
         store.save(api.agents.SETTINGS, {'repo': '/old/agent'})
@@ -255,7 +242,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await asyncio.Event().wait()
 
-        api.jobs.start('run', work)
+        self.jobs.start('run', work)
         await entered.wait()
         response = await self.client.post('/api/settings', json={'repo': '/new/agent'})
         self.assertEqual(response.status_code, 409)
@@ -330,7 +317,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/runs', json={'target': 'prod'})
         self.assertEqual(response.status_code, 200, response.text)
         for _ in range(100):
-            if not api.jobs.state['running']:
+            if not self.jobs.state['running']:
                 break
             await asyncio.sleep(0.002)
         run = store.runs()[0]
@@ -362,7 +349,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.client.get('/api/cards')).status_code, 405)
             response = await self.client.post('/api/cards', json={'check': 'code'})
             self.assertEqual(response.status_code, 200)
-            await api.jobs._task
+            await self.jobs._task
         self.assertEqual(store.load(api.cards.DECK)['cards'], [{'id': 'card-1'}])
 
     async def test_review_and_state_expose_current_revision(self) -> None:
@@ -495,31 +482,31 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_task_said_finished_has_its_data_in_the_same_answer(self) -> None:
         """The state is put together in a worker thread while the task runs on: a task that finishes meanwhile is
         still running in this answer, never «done» beside the data it has just replaced."""
-        api.jobs.state.update(kind='sources', running=True)
+        self.jobs.state.update(kind='sources', running=True)
         summary = api.source_summary
 
         def finishing(analysis):
             listed = summary(analysis)
-            api.jobs.state.update(running=False)  # the task commits and finishes after the sources were read
+            self.jobs.state.update(running=False)  # the task commits and finishes after the sources were read
             return listed
 
         with patch.object(api, 'source_summary', finishing):
             job = (await self.client.get('/api/state')).json()['job']
         self.assertTrue(job['running'])
-        api.jobs.state.update(kind=None, running=False)
+        self.jobs.state.update(kind=None, running=False)
 
     async def test_a_task_says_when_it_started(self) -> None:
         async def work(progress) -> None:
             pass
 
-        api.jobs.start('sources', work)
+        self.jobs.start('sources', work)
         first = (await self.client.get('/api/state')).json()['job']['startedAt']
         await self.wait_job()
         self.assertTrue(first)
 
     async def wait_job(self) -> None:
         for _ in range(500):
-            if not api.jobs.state['running']:
+            if not self.jobs.state['running']:
                 return
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
@@ -535,7 +522,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 ],
             }
         )
-        async with api.app.router.lifespan_context(api.app):
+        async with self.app.router.lifespan_context(self.app):
             result = (await self.client.get('/api/runs/interrupted')).json()
             self.assertEqual(result['status'], 'stopped')
             self.assertTrue(result['finishedAt'])

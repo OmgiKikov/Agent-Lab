@@ -1,15 +1,12 @@
-"""Agent Lab HTTP commands. Long work has one owner; computation precedes persistence."""
+"""Agent Lab HTTP commands. Long work has one owner per agent (app.state.jobs); computation precedes persistence."""
 
 import asyncio
 import hashlib
 import json
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from . import (
@@ -36,45 +33,15 @@ from . import (
 from .context import knowledge, sources
 from .jobs import BusyError, PerAgent, Progress, Work
 
-jobs = PerAgent()
+router = APIRouter()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    with registry.only_process():  # a second Lab on the same data starts nothing, recovers nothing
-        registry.adopt_legacy()
-        registry.recover_lost()
-        agents = registry.listed()
-        if not agents and store.DB.exists():
-            store.recover_runs()  # before any agent: the default database, never created here
-        for agent in agents:
-            with registry.using(agent['id']):
-                store.recover_runs()
-        try:
-            yield
-        finally:
-            await jobs.close()
+async def jobs_of(request: Request) -> PerAgent:
+    """The owner of long work of the app the request came to (app.create): one per agent."""
+    return request.app.state.jobs
 
 
-app = FastAPI(title='Agent Lab', lifespan=lifespan)
-
-
-@app.middleware('http')
-async def agent_of_request(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """A product request works inside one agent: the X-Agent header, or the first agent. Its jobs keep that agent."""
-    path = request.url.path
-    if not path.startswith('/api/') or path == '/api/agents':  # the list of agents is above any agent
-        return await call_next(request)
-    agent_id = request.headers.get('x-agent') or registry.default_id()
-    if agent_id is None:
-        return await call_next(request)
-    if registry.get(agent_id) is None:
-        return JSONResponse({'detail': 'Агент не найден'}, status_code=404)
-    token = store.AGENT.set(registry.db_of(agent_id))
-    try:
-        return await call_next(request)
-    finally:
-        store.AGENT.reset(token)
+Jobs = Annotated[PerAgent, Depends(jobs_of)]
 
 
 RUN_FIELDS = (
@@ -188,7 +155,7 @@ class CardsCommand(BaseModel):
     check: Literal['tone', 'code'] | None = None
 
 
-def start(kind: str, work: Work) -> dict:
+def start(jobs: PerAgent, kind: str, work: Work) -> dict:
     try:
         return jobs.start(kind, work)
     except BusyError as error:
@@ -237,7 +204,7 @@ def rules_line() -> dict | None:
     }
 
 
-@app.get('/api/agents')
+@router.get('/api/agents')
 def agents_view() -> list[dict]:
     """Every agent with the result of each of its checks and its rules of communication, read from its own database.
     Never ranked: the agents have other dialogues and other rules; nor are an agent's two checks added up."""
@@ -249,7 +216,7 @@ def agents_view() -> list[dict]:
     return listed
 
 
-@app.post('/api/agents')
+@router.post('/api/agents')
 def create_agent(payload: AgentCommand) -> dict:
     try:
         return registry.create(payload.name, payload.description)
@@ -257,8 +224,8 @@ def create_agent(payload: AgentCommand) -> dict:
         raise HTTPException(400, str(error)) from error
 
 
-@app.post('/api/job/stop')
-async def stop_job() -> dict:
+@router.post('/api/job/stop')
+async def stop_job(jobs: Jobs) -> dict:
     try:
         await jobs.stop()
     except BusyError as error:
@@ -281,8 +248,8 @@ def source_summary(analysis: dict | None) -> list[dict]:
     ]
 
 
-@app.get('/api/state')
-def state() -> dict:
+@router.get('/api/state')
+def state(jobs: Jobs) -> dict:
     """Polled every 1.5 s during a job: each check's result is read once; runs and dialogues are not parsed at all.
     The task is read first, as it stands: it runs on while this answer is put together in a worker thread, and a task
     said to be finished has its data in the same answer (a live state would say «done» beside the data it replaced)."""
@@ -294,7 +261,7 @@ def state() -> dict:
         result['summary'] = history.with_unmeasured(result['summary'], result.get('sampled'))
     return {
         'job': job,
-        'model': llm.MODEL,
+        'model': llm.main_model(),
         'models': llm.describe(),
         'settings': agents.settings(),
         'sources': source_summary(results[checks.CODE]),
@@ -315,8 +282,8 @@ def state() -> dict:
     }
 
 
-@app.post('/api/settings')
-async def save_settings(payload: SettingsCommand) -> dict:
+@router.post('/api/settings')
+async def save_settings(jobs: Jobs, payload: SettingsCommand) -> dict:
     if jobs.state['running']:
         raise HTTPException(409, 'Настройки нельзя менять, пока идёт задача. Дождитесь её или остановите.')
     try:
@@ -325,7 +292,7 @@ async def save_settings(payload: SettingsCommand) -> dict:
         raise HTTPException(400, str(error)) from error
 
 
-@app.post('/api/agents/{key}/check')
+@router.post('/api/agents/{key}/check')
 async def check_agent(key: str) -> dict:
     if key not in agents.configs():
         raise HTTPException(404, UNKNOWN_WAY)
@@ -342,17 +309,17 @@ async def check_agent(key: str) -> dict:
         return {'ok': False, 'error': str(error)}
 
 
-@app.post('/api/models/check')
+@router.post('/api/models/check')
 async def check_models() -> dict:
-    endpoint = llm.second_judge()
+    main, endpoint = llm.endpoints().main, llm.second_judge()
     if endpoint is None:
-        return {'main': await llm.check(llm.MAIN), 'second': None}
-    main, second = await asyncio.gather(llm.check(llm.MAIN), llm.check(endpoint))
+        return {'main': await llm.check(main), 'second': None}
+    main, second = await asyncio.gather(llm.check(main), llm.check(endpoint))
     return {'main': main, 'second': second}
 
 
-@app.post('/api/sources')
-async def collect_sources() -> dict:
+@router.post('/api/sources')
+async def collect_sources(jobs: Jobs) -> dict:
     async def work(progress: Progress) -> list[dict]:
         folder = agents.settings()['repo']
         collected, over_budget = await asyncio.to_thread(sources.collect, agents.repo())
@@ -362,7 +329,7 @@ async def collect_sources() -> dict:
         store.replace_inputs(sources.FILE, [*collected, *policy], {sources.READ: read})
         return collected
 
-    return start('sources', work)
+    return start(jobs, 'sources', work)
 
 
 async def uploaded(request: Request, limit: int, advice: str) -> bytes:
@@ -384,8 +351,8 @@ async def uploaded(request: Request, limit: int, advice: str) -> bytes:
     return bytes(data)
 
 
-@app.post('/api/logs')
-async def upload_logs(request: Request, name: str) -> dict:
+@router.post('/api/logs')
+async def upload_logs(jobs: Jobs, request: Request, name: str) -> dict:
     data = await uploaded(request, logs.LIMIT, 'Выгрузите разговоры за меньший срок.')
 
     async def work(progress: Progress) -> dict:
@@ -403,7 +370,7 @@ async def upload_logs(request: Request, name: str) -> dict:
         raise HTTPException(400, f'Не удалось прочитать файл. {error}') from error
 
 
-@app.get('/api/logs/{dialogue_id}')
+@router.get('/api/logs/{dialogue_id}')
 def log_detail(dialogue_id: str, check: Literal['tone', 'code'] | None = None) -> dict:
     """A logged conversation with its evaluation in the result of the check asked for; without one, in tone of voice's
     result, then in Точность's."""
@@ -421,7 +388,7 @@ def log_detail(dialogue_id: str, check: Literal['tone', 'code'] | None = None) -
     return {**dialogue, 'evaluation': evaluation}
 
 
-@app.get('/api/problems')
+@router.get('/api/problems')
 def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None = None) -> dict:
     """Every rule of one check with its verdicts in the logs and in one run of that check; the rules found violated
     are the problems. A run is measured by its own check's criteria, so its check is taken; without either, tone of
@@ -434,7 +401,7 @@ def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None 
     return problems.build(check, run)
 
 
-@app.post('/api/severity')
+@router.post('/api/severity')
 def mark_severity(payload: SeverityCommand) -> dict:
     """A person decides whether a criterion's errors are serious or minor
     (docs/superpowers/specs/2026-10-04-severity-design.md): serious ones come first and are counted apart. The decision
@@ -442,8 +409,8 @@ def mark_severity(payload: SeverityCommand) -> dict:
     return {'severity': store.set_severity(payload.check, payload.rule, payload.serious)}
 
 
-@app.post('/api/severity/propose')
-async def propose_severity(payload: SeverityProposeCommand) -> dict:
+@router.post('/api/severity/propose')
+async def propose_severity(jobs: Jobs, payload: SeverityProposeCommand) -> dict:
     """«Предложить»: the model proposes which errors of the check's criteria are serious — for a result checked before
     proposals, after a failed proposal, or `again` for every criterion a person has not decided."""
 
@@ -454,29 +421,29 @@ async def propose_severity(payload: SeverityProposeCommand) -> dict:
             raise llm.ModelError(error)
         return {'severity': store.severity()}
 
-    return start('severity', work)
+    return start(jobs, 'severity', work)
 
 
-@app.post('/api/severity/confirm')
+@router.post('/api/severity/confirm')
 def confirm_severity(payload: SeverityConfirmCommand) -> dict:
     """«Подтвердить все»: a person takes the model's proposals for the criteria of the check's result as their own."""
     return {'severity': store.confirm_severity(payload.check, list(severity.criteria(payload.check)))}
 
 
-@app.get('/api/compare')
+@router.get('/api/compare')
 def compare_view(check: Literal['tone', 'code'] = checks.TONE) -> dict:
     """«Было → стало»: the check's current result against its previous saved check, criterion by criterion, when both
     have the same criteria and models; otherwise only how they stand to each other. Reads saved records only."""
     return compare.build(check)
 
 
-@app.get('/api/history/{check}')
+@router.get('/api/history/{check}')
 def history_view(check: Literal['tone', 'code']) -> dict:
     """The saved checks of one check, the newest first, each with how it stands to the one saved before it."""
     return {'checks': compare.saved_checks(check)}
 
 
-@app.get('/api/history/{check}/{check_id}')
+@router.get('/api/history/{check}/{check_id}')
 def history_detail(check: Literal['tone', 'code'], check_id: str) -> dict:
     """A saved check with its evidence and the answers given on it: tone of voice's as /api/tone-of-voice/history/{id};
     Точность's with its result and the conversations it judged."""
@@ -485,14 +452,14 @@ def history_detail(check: Literal['tone', 'code'], check_id: str) -> dict:
     return with_reviews(store.code_check(check_id), store.code_reviews(check_id))
 
 
-@app.get('/api/scenarios')
+@router.get('/api/scenarios')
 def scenarios_view() -> dict:
     """Each scenario of the deck as a test: the error of the real conversation it reproduces, and its own result in
     every run of the deck's check, newest first. Results of runs stand side by side; nothing compares them."""
     return scenarios.build()
 
 
-@app.get('/api/sources/{source_id}')
+@router.get('/api/sources/{source_id}')
 def source_view(source_id: str) -> dict:
     """The text of a source the rules are quoted from: a prompt or the list of the agent's tools."""
     found = next((source for source in sources.load() if source['id'] == source_id), None)
@@ -501,7 +468,7 @@ def source_view(source_id: str) -> dict:
     return {key: found.get(key) for key in ('id', 'kind', 'origin', 'sha256', 'content')}
 
 
-@app.get('/api/articles/{article_id}')
+@router.get('/api/articles/{article_id}')
 def article_view(article_id: str) -> dict:
     """A knowledge-base article the agent read during a simulated turn: its title and text."""
     found = knowledge.article(article_id)
@@ -510,7 +477,7 @@ def article_view(article_id: str) -> dict:
     return found
 
 
-@app.get('/api/runs/{run_id}')
+@router.get('/api/runs/{run_id}')
 def run_detail(run_id: str) -> dict:
     record = store.run(run_id)
     if record is None:
@@ -530,8 +497,8 @@ async def proposed_after(check: str, progress: Progress) -> None:
             current.uncancel()
 
 
-@app.post('/api/discover')
-async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -> dict:
+@router.post('/api/discover')
+async def start_discover(jobs: Jobs, payload: DiscoverCommand | None = Body(default=None)) -> dict:
     payload = payload or DiscoverCommand()
 
     async def work(progress: Progress) -> dict:
@@ -541,11 +508,11 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
             await proposed_after(checks.CODE, progress)
         return result
 
-    return start('discover', work)
+    return start(jobs, 'discover', work)
 
 
-@app.post('/api/cards')
-async def start_cards(payload: CardsCommand | None = Body(default=None)) -> dict:
+@router.post('/api/cards')
+async def start_cards(jobs: Jobs, payload: CardsCommand | None = Body(default=None)) -> dict:
     """Scenarios from the errors of one check: the one asked for, else the only check with a result."""
     check = payload.check if payload else None
     if check is None:
@@ -562,11 +529,11 @@ async def start_cards(payload: CardsCommand | None = Body(default=None)) -> dict
         store.save(cards.DECK, document)
         return deck
 
-    return start('cards', work)
+    return start(jobs, 'cards', work)
 
 
-@app.post('/api/tone-of-voice/policy')
-async def save_tone_policy(payload: TonePolicyCommand) -> dict:
+@router.post('/api/tone-of-voice/policy')
+async def save_tone_policy(jobs: Jobs, payload: TonePolicyCommand) -> dict:
     async def work(progress: Progress) -> dict:
         source = tone.policy(payload.name.strip(), payload.text)
         kept = [item for item in sources.load() if item['kind'] != tone.KIND]
@@ -581,8 +548,8 @@ async def save_tone_policy(payload: TonePolicyCommand) -> dict:
         raise HTTPException(400, str(error)) from error
 
 
-@app.post('/api/tone-of-voice/copy')
-async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
+@router.post('/api/tone-of-voice/copy')
+async def copy_tone_rules(jobs: Jobs, payload: ToneCopyCommand) -> dict:
     """The rules of communication of another agent (`agent`) and their criteria, with the clarifications people
     confirmed, become this agent's own as a copy: later changes in either never reach the other (tone.take). The
     marks of serious errors come with the criteria. `unchanged` when this agent had the same rules, criteria and marks
@@ -615,7 +582,7 @@ async def copy_tone_rules(payload: ToneCopyCommand) -> dict:
         raise HTTPException(409, str(error)) from error
 
 
-@app.post('/api/tone-of-voice/read-file')
+@router.post('/api/tone-of-voice/read-file')
 async def read_tone_file(request: Request, name: str) -> dict:
     data = await uploaded(request, policy_files.LIMIT, 'Оставьте в файле только правила общения.')
     try:
@@ -625,18 +592,18 @@ async def read_tone_file(request: Request, name: str) -> dict:
     return {'text': text, 'name': name}
 
 
-@app.post('/api/tone-of-voice/criteria')
-async def prepare_tone_criteria() -> dict:
+@router.post('/api/tone-of-voice/criteria')
+async def prepare_tone_criteria(jobs: Jobs) -> dict:
     async def work(progress: Progress) -> dict:
         draft = await tone.prepare(progress)
         store.save_tone_draft(draft)
         return draft
 
-    return start('tone-criteria', work)
+    return start(jobs, 'tone-criteria', work)
 
 
-@app.post('/api/tone-of-voice/check')
-async def check_tone(payload: ToneCheckCommand) -> dict:
+@router.post('/api/tone-of-voice/check')
+async def check_tone(jobs: Jobs, payload: ToneCheckCommand) -> dict:
     try:
         criteria = tone.selection(payload.ruleIds, payload.revision)
     except ValueError as error:
@@ -649,10 +616,10 @@ async def check_tone(payload: ToneCheckCommand) -> dict:
             await proposed_after(checks.TONE, progress)
         return result
 
-    return start('tone-check', work)
+    return start(jobs, 'tone-check', work)
 
 
-@app.get('/api/tone-of-voice/history')
+@router.get('/api/tone-of-voice/history')
 def tone_history() -> dict:
     result = store.load(tone.RESULT) or {}
     return {
@@ -661,7 +628,7 @@ def tone_history() -> dict:
     }
 
 
-@app.get('/api/tone-of-voice/history/{check_id}')
+@router.get('/api/tone-of-voice/history/{check_id}')
 def tone_history_detail(check_id: str) -> dict:
     return with_reviews(store.tone_check(check_id), store.tone_reviews(check_id))
 
@@ -683,8 +650,8 @@ def with_reviews(snapshot: dict | None, reviews: list[dict]) -> dict:
     return snapshot
 
 
-@app.post('/api/tone-of-voice/advice')
-async def tone_advice_command(payload: ToneAdviceCommand) -> dict:
+@router.post('/api/tone-of-voice/advice')
+async def tone_advice_command(jobs: Jobs, payload: ToneAdviceCommand) -> dict:
     async def work(progress: Progress) -> dict:
         progress(message='Готовим предложение')
         return await tone_advice.suggest(
@@ -703,8 +670,8 @@ async def tone_advice_command(payload: ToneAdviceCommand) -> dict:
         raise HTTPException(502, str(error)) from error
 
 
-@app.post('/api/tone-of-voice/clarification')
-async def tone_clarification(payload: ToneClarificationCommand) -> dict:
+@router.post('/api/tone-of-voice/clarification')
+async def tone_clarification(jobs: Jobs, payload: ToneClarificationCommand) -> dict:
     async def work(progress: Progress) -> dict:
         draft = tone.clarified(payload.revision, payload.ruleId, payload.text)
         store.save_tone_draft(draft)
@@ -718,12 +685,13 @@ async def tone_clarification(payload: ToneClarificationCommand) -> dict:
         raise HTTPException(400, str(error)) from error
 
 
-@app.post('/api/runs')
-async def start_run(payload: RunCommand) -> dict:
+@router.post('/api/runs')
+async def start_run(jobs: Jobs, payload: RunCommand) -> dict:
     if payload.target not in agents.configs():
         raise HTTPException(400, UNKNOWN_WAY)
     chosen = [key for key in payload.personas if key in personas.PERSONAS] or [personas.DEFAULT]
     return start(
+        jobs,
         'run',
         lambda progress: simulate.run(
             payload.target, payload.cardIds or None, payload.label, progress, payload.repeats, chosen
@@ -731,12 +699,12 @@ async def start_run(payload: RunCommand) -> dict:
     )
 
 
-@app.post('/api/runs/{run_id}/rejudge')
-async def rejudge(run_id: str) -> dict:
+@router.post('/api/runs/{run_id}/rejudge')
+async def rejudge(jobs: Jobs, run_id: str) -> dict:
     record = store.run(run_id)
     if record is None:
         raise HTTPException(404, 'Прогон не найден')
-    return start('rejudge', lambda progress: simulate.rejudge(record, progress))
+    return start(jobs, 'rejudge', lambda progress: simulate.rejudge(record, progress))
 
 
 def has_verdict(analysis: dict, dialogue_id: str, rule_id: str) -> bool:
@@ -766,8 +734,8 @@ def answered_check(payload: ReviewCommand) -> str:
     return found
 
 
-@app.post('/api/review')
-async def review(payload: ReviewCommand) -> dict:
+@router.post('/api/review')
+async def review(jobs: Jobs, payload: ReviewCommand) -> dict:
     if payload.source == 'log':
         if not payload.dialogueId or not payload.ruleId:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')

@@ -1,13 +1,10 @@
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-import httpx
+import support
 
 from lab import api, cards, discover, problems, store
-from lab.jobs import Jobs
 
 SOURCE = {'id': 'src-1', 'kind': 'prompt', 'origin': 'prompts/main.txt', 'content': 'Не отправляй клиента в поддержку.'}
 QUOTE = 'Не отправляй клиента в поддержку'
@@ -107,21 +104,9 @@ def played_run() -> dict:
 
 class ProblemsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
+        support.serve(self)
         store.save(api.sources.FILE, [SOURCE])
         store.save(discover.RESULT, audit())
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
-
-    async def asyncTearDown(self) -> None:
-        await api.jobs.close()
-        await self.client.aclose()
 
     def test_a_rule_restated_in_two_topics_is_one_rule_counted_per_conversation(self) -> None:
         value = problems.build('code')
@@ -381,7 +366,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.run('run-1')['items'][0]['rules'][0]['review'], 'agree')
 
     async def test_log_answers_wait_for_a_running_audit(self) -> None:
-        with patch.dict(api.jobs.state, {'running': True, 'kind': 'discover'}):
+        with patch.dict(self.jobs.state, {'running': True, 'kind': 'discover'}):
             body = {'source': 'log', 'dialogueId': 'd1', 'ruleId': 't1r1', 'decision': 'agree'}
             response = await self.client.post('/api/review', json=body)
         self.assertEqual(response.status_code, 409)
@@ -406,11 +391,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
 
 class RuleReviewStoreTests(unittest.TestCase):
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        database = patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3')
-        database.start()
-        self.addCleanup(database.stop)
+        support.lab(self)
 
     def test_a_decision_stays_with_an_unchanged_verdict_and_leaves_a_changed_one(self) -> None:
         store.create_run(played_run())

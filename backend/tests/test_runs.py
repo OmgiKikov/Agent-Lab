@@ -1,8 +1,8 @@
 import asyncio
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+import support
 
 from lab import simulate, store
 from lab.jobs import Jobs
@@ -40,11 +40,9 @@ class FakeAgent:
 
 class RunsTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
+        support.lab(self)
         self.agent = FakeAgent()
         patches = [
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
             patch.object(simulate.cards, 'deck', return_value=[card()]),
             patch.object(simulate.agents, 'configs', return_value={'test': {'name': 'Test'}}),
             patch.object(simulate.agents, 'create', return_value=self.agent),

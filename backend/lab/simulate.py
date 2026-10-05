@@ -111,7 +111,7 @@ def new_run(key: str, config: dict, label: str, repeats: int, persona_ids: list[
         'customer': config.get('customer', ''),
         'startedAt': store.now(),
         'finishedAt': None,
-        'model': llm.MODEL,
+        'model': llm.main_model(),
         'status': 'running',
         'items': [],
         'metric': None,

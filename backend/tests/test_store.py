@@ -1,13 +1,14 @@
+import contextvars
 import itertools
 import json
 import sqlite3
-import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from unittest.mock import patch
 
-from lab import store
+import support
+
+from lab import config, store
 from lab.migrate import migrate
 
 
@@ -22,12 +23,8 @@ def record() -> dict:
 
 class StoreTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name)
-        self.database = patch.object(store, 'DB', self.path / 'lab.sqlite3')
-        self.database.start()
-        self.addCleanup(self.database.stop)
+        self.settings = support.lab(self)
+        self.path = self.settings.data
 
     def test_producer_patch_preserves_review_and_recomputes_metric(self) -> None:
         stale = record()
@@ -56,7 +53,7 @@ class StoreTests(unittest.TestCase):
                 store.set_review('run-1', 0, 'agree')
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [pool.submit(progress), pool.submit(review)]
+            futures = [pool.submit(contextvars.copy_context().run, work) for work in (progress, review)]
             for future in futures:
                 future.result()
         result = store.run('run-1')
@@ -233,7 +230,7 @@ class StoreTests(unittest.TestCase):
 
     def test_the_database_lets_screens_read_while_a_job_writes(self) -> None:
         store.save('settings.json', {'x': 1})
-        with sqlite3.connect(store.DB) as connection:
+        with sqlite3.connect(store.default_database()) as connection:
             self.assertEqual(connection.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
 
     def test_the_schema_is_set_up_once_per_database_not_on_every_connection(self) -> None:
@@ -257,7 +254,7 @@ class StoreTests(unittest.TestCase):
             store.create_run(record())
             self.assertEqual([sql for sql in statements if setup(sql)], [])
             # Another database (another agent) is set up on its first use, and only then.
-            with patch.object(store, 'DB', self.path / 'other' / 'lab.sqlite3'):
+            with config.using(support.changed(self.settings, data=self.path / 'other')):
                 self.assertIsNone(store.load('settings.json'))
                 self.assertTrue(any(setup(sql) for sql in statements))
                 self.assertEqual(store.run('run-1'), None)
@@ -266,7 +263,7 @@ class StoreTests(unittest.TestCase):
     def test_runs_of_an_older_database_and_every_write_keep_a_summary_without_conversations(self) -> None:
         older = record()
         older.update(status='done', items=[{'cardId': 'card-1', 'status': 'PASS', 'conversation': []}])
-        with sqlite3.connect(store.DB) as connection:
+        with sqlite3.connect(store.default_database()) as connection:
             connection.execute('CREATE TABLE runs (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
             connection.execute('INSERT INTO runs (id, value) VALUES (?, ?)', ('run-1', json.dumps(older)))
         connection.close()
@@ -282,7 +279,7 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(all('items' not in summary for summary in store.run_summaries()))
 
     def test_the_number_of_dialogues_is_kept_beside_them_by_every_write(self) -> None:
-        with sqlite3.connect(store.DB) as connection:
+        with sqlite3.connect(store.default_database()) as connection:
             connection.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
             connection.execute('INSERT INTO documents VALUES (?, ?)', ('logs.json', json.dumps([{'id': '1'}] * 2)))
         connection.close()
@@ -297,7 +294,7 @@ class StoreTests(unittest.TestCase):
             store.length('discover.json')
         # A SQLite without JSON functions keeps no number: the dialogues are read and counted.
         with (
-            patch.object(store, 'DB', self.path / 'plain' / 'lab.sqlite3'),
+            config.using(support.changed(self.settings, data=self.path / 'plain')),
             patch.object(store, '_json_functions', return_value=False),
         ):
             self.assertEqual(store.length('logs.json'), 0)
@@ -325,7 +322,7 @@ class StoreTests(unittest.TestCase):
         """A database of schema 3, when both checks shared one result (discover.json) and a deck or a run named no
         check: these documents and runs in it, before its next connection."""
         store.save('settings.json', {})
-        with sqlite3.connect(store.DB) as connection:
+        with sqlite3.connect(store.default_database()) as connection:
             for name, value in documents.items():
                 connection.execute('INSERT OR REPLACE INTO documents VALUES (?, ?)', (name, json.dumps(value)))
             for run in runs:
@@ -347,7 +344,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(store.load('cards.json'), deck | {'check': 'tone'})
         self.assertEqual((store.run('run-1')['check'], store.run_summaries()[0]['check']), ('tone', 'tone'))
         # Separated once: set up again, it stays as it is.
-        with sqlite3.connect(store.DB) as connection:
+        with sqlite3.connect(store.default_database()) as connection:
             connection.execute('PRAGMA user_version = 3')
         connection.close()
         self.assertEqual(

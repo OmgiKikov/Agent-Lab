@@ -51,11 +51,11 @@ def release(port: int | None) -> None:
 
 
 class CodeAgent(HttpAgent):
-    def __init__(self, config: dict) -> None:
-        super().__init__({**config, 'url': '', 'profile': 'local'})
-        self.preferred = int(config.get('port', 8081))
+    def __init__(self, connection: dict) -> None:
+        super().__init__({**connection, 'url': '', 'profile': 'local'})
+        self.preferred = int(connection.get('port', 8081))
         self.port: int | None = None
-        self.repo = Path(config['repo']).expanduser()
+        self.repo = Path(connection['repo']).expanduser()
         self.process: subprocess.Popen | None = None
 
     async def open(self) -> None:

@@ -11,18 +11,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import checks, history, quotes
+from . import checks, config, history, quotes
 from .metric import metric
-from .settings import DATA
 
-DB = DATA / 'lab.sqlite3'
 # The database's user_version once its schema (_set_up) is in place. Raise it with every change to _set_up: a database
 # is set up again only when its user_version differs.
 SCHEMA = 5
 # The uploaded dialogues: every write keeps their number beside them (lengths), so the state polled every 1.5 s
 # counts them without reading megabytes of conversations.
 COUNTED = 'logs.json'
-# The database of the agent a request works in (registry.using, api.py); without one, DB above.
+# The database of the agent a request works in (registry.using, app.py); without one, default_database().
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 # A person's answer on a verdict that is no longer the one they saw.
 CHANGED = 'Ответ не сохранён: оценка изменилась. Обновите страницу.'
@@ -35,9 +33,14 @@ def now() -> str:
     return datetime.now(UTC).isoformat(timespec='milliseconds')
 
 
+def default_database() -> Path:
+    """The database of a Lab without agents (tests, the legacy import), in its data folder, beside the agents."""
+    return config.current().data / 'lab.sqlite3'
+
+
 def database() -> Path:
     """The database the current request or job works in; its folder holds the rest of that agent's files."""
-    return AGENT.get() or DB
+    return AGENT.get() or default_database()
 
 
 def private_folder(folder: Path) -> None:

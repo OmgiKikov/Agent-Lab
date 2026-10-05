@@ -1,10 +1,10 @@
 import asyncio
 import hashlib
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+import support
 
 from lab import api, cards, llm, store
 from lab.agents import world
@@ -31,6 +31,9 @@ def dialogue():
 
 
 class CardsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        support.lab(self)
+
     async def test_unmeasured_logs_supply_scenarios_without_becoming_passes(self):
         audit = analysis()
         with patch.object(cards.logs, 'load', return_value=[dialogue()]):
@@ -96,21 +99,19 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             await cards.run('code')
 
     async def test_generation_failure_keeps_saved_deck_and_is_visible(self):
+        jobs = Jobs()
         with (
-            tempfile.TemporaryDirectory() as folder,
-            patch.object(store, 'DB', Path(folder) / 'test.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
             patch.object(cards.logs, 'load', return_value=[dialogue()]),
             patch.object(cards, 'build_card', AsyncMock(side_effect=llm.ModelError('model unavailable'))),
         ):
             previous = {'cards': [{'id': 'previous'}]}
             store.save(cards.DECK, previous)
             store.save('discover.json', analysis())
-            await api.start_cards(api.CardsCommand(check='code'))
-            await api.jobs._task
+            await api.start_cards(jobs, api.CardsCommand(check='code'))
+            await jobs._task
             self.assertEqual(store.load(cards.DECK), previous)
-            self.assertIn('model unavailable', api.jobs.state['error'])
-            self.assertFalse(api.jobs.state['running'])
+            self.assertIn('model unavailable', jobs.state['error'])
+            self.assertFalse(jobs.state['running'])
 
     async def test_a_failed_card_does_not_cancel_the_others_and_is_reported(self):
         failed, release = asyncio.Event(), asyncio.Event()

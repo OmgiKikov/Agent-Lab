@@ -1,15 +1,11 @@
 """A scenario is a test: the error of the real conversation it reproduces, and its own result in every run of its check
 (docs/superpowers/specs/2026-10-03-scenario-cards-design.md)."""
 
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
-import httpx
+import support
 
-from lab import api, cards, checks, store
-from lab.jobs import Jobs
+from lab import cards, checks, store
 
 FROM_LOG, COVERAGE = 'Ошибка из лога', 'Покрытие темы'
 TERM = {'id': 't1r1', 'name': 'Называет срок', 'text': 'Агент называет срок доставки терминала', 'quote': 'Срок'}
@@ -63,19 +59,7 @@ def run(run_id: str, started: str, items: list[dict], check: str = checks.CODE, 
 
 class ScenariosTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
-
-    async def asyncTearDown(self) -> None:
-        await api.jobs.close()
-        await self.client.aclose()
+        support.serve(self)
 
     async def scenarios(self) -> dict:
         response = await self.client.get('/api/scenarios')

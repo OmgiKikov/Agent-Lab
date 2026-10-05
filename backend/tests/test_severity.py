@@ -4,18 +4,16 @@ person confirms or changes it; serious errors come first and are counted apart
 
 import asyncio
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import support
 from test_checks import CODE, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
 from lab import api, checks, discover, llm, problems, registry, severity, store, tone
-from lab.jobs import Jobs, PerAgent
+from lab.jobs import PerAgent
 
 
 def talk(dialogue_id: str) -> dict:
@@ -86,15 +84,7 @@ SILENT = AsyncMock(side_effect=AssertionError('the model was asked to propose se
 
 class SeverityTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
+        support.serve(self)
         await self.prepare()
 
     async def prepare(self, agent=None):
@@ -102,10 +92,6 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         await self.post('/api/tone-of-voice/policy', {'text': POLICY, 'name': 'ToV.docx'}, agent)
         await self.post('/api/tone-of-voice/criteria', {}, agent)
         await self.wait_job(agent)
-
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
 
     async def post(self, path, body, agent=None):
         return await self.client.post(path, json=body, headers={'X-Agent': agent} if agent else {})
@@ -119,9 +105,9 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(200):
             if agent:
                 with registry.using(agent):
-                    running = api.jobs.state['running']
+                    running = self.jobs.state['running']
             else:
-                running = api.jobs.state['running']
+                running = self.jobs.state['running']
             if not running:
                 return
             await asyncio.sleep(0.002)
@@ -146,7 +132,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
 
     def key(self, rule_id):
         criterion = next(c for c in store.load(tone.DRAFT)['criteria'] if c['id'] == rule_id)
@@ -245,7 +231,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(next(rule for rule in found['rules'] if rule['id'] == pronouns)['serious'])
 
     async def test_rules_taken_from_another_agent_bring_their_marks(self):
-        with patch.object(api, 'jobs', PerAgent()):
+        with patch.object(self.app.state, 'jobs', PerAgent()) as jobs, patch.object(self, 'jobs', jobs):
             source = registry.create('Агент эквайринга')['id']
             target = registry.create('Агент кредитов')['id']
             await self.prepare(source)
@@ -256,10 +242,10 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             with registry.using(target):
                 self.assertEqual(store.severity_marks()['tone'], {pronouns: True})
-            await api.jobs.close()
+            await self.jobs.close()
 
     async def test_rules_taken_from_another_agent_bring_its_proposals(self):
-        with patch.object(api, 'jobs', PerAgent()):
+        with patch.object(self.app.state, 'jobs', PerAgent()) as jobs, patch.object(self, 'jobs', jobs):
             source = registry.create('Агент эквайринга')['id']
             target = registry.create('Агент кредитов')['id']
             await self.prepare(source)
@@ -274,10 +260,10 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
                     store.severity_proposed()['tone']['proposals'],
                     {simple: {'serious': True, 'reason': 'Мешает понять ответ.'}},
                 )
-            await api.jobs.close()
+            await self.jobs.close()
 
     async def test_rules_taken_without_criteria_leave_the_marks(self):
-        with patch.object(api, 'jobs', PerAgent()):
+        with patch.object(self.app.state, 'jobs', PerAgent()) as jobs, patch.object(self, 'jobs', jobs):
             source = registry.create('Агент эквайринга')['id']
             target = registry.create('Агент кредитов')['id']
             await self.upload('d1', agent=source)
@@ -290,10 +276,10 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(response.json()['unchanged'])
             with registry.using(target):
                 self.assertEqual(store.severity()['tone'], [pronouns])  # the marks belong to criteria
-            await api.jobs.close()
+            await self.jobs.close()
 
     async def test_the_same_rules_with_other_marks_are_not_the_same(self):
-        with patch.object(api, 'jobs', PerAgent()):
+        with patch.object(self.app.state, 'jobs', PerAgent()) as jobs, patch.object(self, 'jobs', jobs):
             source = registry.create('Агент эквайринга')['id']
             target = registry.create('Агент кредитов')['id']
             await self.prepare(source)
@@ -307,7 +293,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(store.severity()['tone'], [pronouns])
             again = await self.post('/api/tone-of-voice/copy', {'agent': source}, target)
             self.assertTrue(again.json()['unchanged'])
-            await api.jobs.close()
+            await self.jobs.close()
 
     async def test_a_check_proposes_for_each_criterion_whether_its_errors_are_serious(self):
         model = proposing('«вы»')
@@ -350,7 +336,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             stopped = await self.client.post('/api/job/stop')
             self.assertEqual(stopped.status_code, 200, stopped.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])  # not «Остановлено»: the check stands
+        self.assertIsNone(self.jobs.state['error'])  # not «Остановлено»: the check stands
         self.assertEqual(store.load(tone.RESULT)['summary']['failed'], 1)
         self.assertEqual(len(store.tone_checks()), 1)
 
@@ -370,9 +356,9 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             response = await self.post('/api/severity/propose', {'check': 'tone', 'again': True})
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         # The task says which check it proposes for: the screens lead to its criteria.
-        self.assertEqual(api.jobs.state['progress'], {'message': 'Отмечаем серьёзные ошибки', 'check': 'tone'})
+        self.assertEqual(self.jobs.state['progress'], {'message': 'Отмечаем серьёзные ошибки', 'check': 'tone'})
         self.assertEqual(len(model.await_args.args[1]['criteria']), 1)  # the decided one is not asked about
         found = await self.get('/api/problems?check=tone')
         rules = {rule['id']: rule for rule in found['rules']}
@@ -408,12 +394,12 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(severity.llm, 'structured', down):
             await self.post('/api/severity/propose', {'check': 'tone'})
             await self.wait_job()
-        self.assertIn('Модель недоступна', api.jobs.state['error'])
+        self.assertIn('Модель недоступна', self.jobs.state['error'])
         with patch.object(severity.llm, 'structured', proposing('«вы»')):
             response = await self.post('/api/severity/propose', {'check': 'tone'})
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         found = await self.get('/api/problems?check=tone')
         self.assertEqual(found['severity'], {'criteria': 2, 'proposed': 2, 'decided': 0, 'error': None})
 
@@ -466,7 +452,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/discover', json={'count': 5, 'propose': True})
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         self.assertEqual(
             model.await_args.args[1]['criteria'][0]['requirement'], 'Агент называет срок доставки терминала'
         )

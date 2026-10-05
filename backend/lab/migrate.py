@@ -5,7 +5,7 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 
-from . import checks, discover, judge, logs, registry, store
+from . import checks, config, discover, judge, logs, registry, store
 from .metric import metric
 
 
@@ -98,12 +98,13 @@ def main() -> None:
     parser.add_argument('--source', required=True, type=Path, help='Папка старых data/*.json, logs.jsonl и runs/*.json')
     parser.add_argument('--agent', help='id агента, как в адресе /a/<id>. Без него — единственный агент')
     args = parser.parse_args()
-    try:
-        agent = target(args.agent)
-    except ValueError as error:
-        parser.error(str(error))
-    with registry.using(agent) if agent else nullcontext():
-        report = migrate(args.source)
+    with config.using(config.Settings.from_environment()):
+        try:
+            agent = target(args.agent)
+        except ValueError as error:
+            parser.error(str(error))
+        with registry.using(agent) if agent else nullcontext():
+            report = migrate(args.source)
     print(json.dumps({**report, 'agent': agent}, ensure_ascii=False))
 
 

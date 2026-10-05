@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import store
+from . import config, store
 
 try:
     import fcntl
@@ -56,9 +56,9 @@ LATIN = {
 
 
 def _root() -> Path:
-    """Where agents live: beside the default database, so whatever data directory a process (or a test) uses, its
-    agents are there too and never in another one."""
-    return store.DB.parent
+    """Where agents live: the data folder of the Lab's settings, beside the default database, so whatever data folder a
+    process (or a test) uses, its agents are there too and never in another one."""
+    return config.current().data
 
 
 def _registry() -> Path:
@@ -172,7 +172,7 @@ def adopt_legacy() -> None:
     an adopted database already on disk stays (the registry was lost: it is registered again), and the old file is
     renamed to lab.sqlite3.before-agents, or to a dated name if that backup exists. An empty database is not adopted.
     A copy finished on disk precedes the registry entry, so an interrupted start simply repeats the adoption."""
-    old = store.DB
+    old = store.default_database()
     if listed() or not old.exists() or not _has_data(old):
         return
     target = db_of(FIRST['id'])

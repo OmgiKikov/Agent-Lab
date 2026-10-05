@@ -1,16 +1,21 @@
-"""One Python process serves the Lab's HTTP routes and the built frontend."""
+"""One Python process serves the Lab: its HTTP routes and the built pages, on the settings it started with.
 
-import os
-from collections.abc import Awaitable, Callable
+uvicorn lab.app:create --factory: the settings are read from the environment as the process starts (config.py) and
+every request and job works with them; a test creates the app on its own.
+"""
+
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
-from fastapi import HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.convertors import Convertor, register_url_convertor
 from starlette.types import Scope
 
-from .api import app
-from .settings import FRONTEND
+from . import api, config, registry, store
+from .jobs import PerAgent
 
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 DEFAULT_PORTS = {'http': 80, 'https': 443}
@@ -23,10 +28,61 @@ HEADERS = {
 }
 
 
-def allowed_hosts() -> set[str]:
-    """This computer's own names, and the ones a person adds in LAB_ALLOWED_HOSTS (separated by commas or spaces)."""
-    added = os.environ.get('LAB_ALLOWED_HOSTS', '').replace(',', ' ').split()
-    return {*LOOPBACK, *(name.strip('[]').lower() for name in added)}
+def create(settings: config.Settings | None = None) -> FastAPI:
+    """The Lab on these settings; without them, on the environment's."""
+    app = FastAPI(title='Agent Lab', lifespan=lifespan)
+    app.state.settings = settings or config.Settings.from_environment()
+    # One owner of long work per agent: agents are checked in parallel, and each screen sees its own agent's work.
+    app.state.jobs = PerAgent()
+    app.include_router(api.router)
+    # The one added last runs first: a request from a foreign page or name never reaches an agent's database.
+    app.middleware('http')(in_context)
+    app.middleware('http')(local_browser_commands)
+    frontend = app.state.settings.frontend
+    app.add_api_route('/health', health)
+    if frontend and (frontend / 'assets').is_dir():
+        app.mount('/assets', Assets(directory=frontend / 'assets'), name='assets')
+    app.include_router(pages)
+    return app
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """A second Lab on the same data starts nothing and recovers nothing (registry.only_process)."""
+    with config.using(app.state.settings), registry.only_process():
+        registry.adopt_legacy()
+        registry.recover_lost()
+        agents = registry.listed()
+        if not agents and store.default_database().exists():
+            store.recover_runs()  # before any agent: the default database, never created here
+        for agent in agents:
+            with registry.using(agent['id']):
+                store.recover_runs()
+        try:
+            yield
+        finally:
+            await app.state.jobs.close()
+
+
+async def in_context(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """A request works with the Lab's settings and, on the product's API, inside one agent: the X-Agent header, or the
+    first agent. The jobs it starts keep both."""
+    with config.using(request.app.state.settings):
+        path = request.url.path
+        if not path.startswith('/api/') or path == '/api/agents':  # the list of agents is above any agent
+            return await call_next(request)
+        agent_id = request.headers.get('x-agent') or registry.default_id()
+        if agent_id is None:
+            return await call_next(request)
+        if registry.get(agent_id) is None:
+            return JSONResponse({'detail': 'Агент не найден'}, status_code=404)
+        with registry.using(agent_id):
+            return await call_next(request)
+
+
+def allowed_hosts(settings: config.Settings) -> set[str]:
+    """This computer's own names, and the ones a person adds in LAB_ALLOWED_HOSTS."""
+    return {*LOOPBACK, *settings.allowed_hosts}
 
 
 def _host(value: str) -> tuple[str, int | None] | None:
@@ -53,14 +109,13 @@ def _origin(value: str) -> tuple[str, str, int | None] | None:
     return parts.scheme, parts.hostname, port or DEFAULT_PORTS.get(parts.scheme)
 
 
-@app.middleware('http')
 async def local_browser_commands(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """A page on another name that resolves to this computer (DNS rebinding) reads and changes nothing, pages
     included. A browser's command comes only from the Lab's own page: another local service on another port (Jupyter,
     a stand's Swagger) cannot replace the export or start paid work. A request without Origin is not a browser page's.
     """
     host = _host(request.headers.get('host', ''))
-    if host is None or host[0] not in allowed_hosts():
+    if host is None or host[0] not in allowed_hosts(request.app.state.settings):
         detail = 'Agent Lab открывается по адресу 127.0.0.1 или localhost. Другое имя добавьте в LAB_ALLOWED_HOSTS.'
         return JSONResponse({'detail': detail}, status_code=400)
     origin = request.headers.get('origin')
@@ -74,7 +129,6 @@ async def local_browser_commands(request: Request, call_next: Callable[[Request]
     return response
 
 
-@app.get('/health')
 def health() -> dict:
     return {'status': 'ok', 'product': 'agent-lab'}
 
@@ -89,27 +143,39 @@ class Assets(StaticFiles):
         return response
 
 
-if (FRONTEND / 'assets').is_dir():
-    app.mount('/assets', Assets(directory=FRONTEND / 'assets'), name='assets')
+class Page(Convertor):
+    """A path of the product's pages: never the API's nor the built files', so a request to them that matches no route
+    is answered as such (404, or 405 for a known one asked with another method), never with the page."""
+
+    regex = r'(?!api(?:/|$)|assets/).*'
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: str) -> str:
+        return value
 
 
-@app.get('/favicon.svg')
-def favicon() -> FileResponse:
-    path = FRONTEND / 'favicon.svg'
-    if not path.is_file():
+register_url_convertor('page', Page())
+pages = APIRouter()
+
+
+@pages.get('/favicon.svg')
+def favicon(request: Request) -> FileResponse:
+    frontend = request.app.state.settings.frontend
+    if frontend is None or not (frontend / 'favicon.svg').is_file():
         raise HTTPException(404, 'Not found')
-    return FileResponse(path)
+    return FileResponse(frontend / 'favicon.svg')
 
 
-@app.get('/')
-@app.get('/{path:path}')
-def frontend(path: str = '') -> FileResponse:
+@pages.get('/')
+@pages.get('/{path:page}')
+def page(request: Request, path: str = '') -> FileResponse:
     """Every page of the product is the same built page, drawn by the browser's router (/overview, /logs/…,
-    /simulations/…, and the earlier /lab/… addresses it redirects). API and asset addresses are never pages."""
-    if path == 'api' or path.startswith(('api/', 'assets/')):
-        raise HTTPException(404, 'Not found')
-    index = FRONTEND / 'index.html'
-    if not index.is_file():
+    /simulations/…, and the earlier /lab/… addresses it redirects)."""
+    frontend = request.app.state.settings.frontend
+    index = frontend / 'index.html' if frontend else None
+    if index is None or not index.is_file():
         raise HTTPException(503, 'Интерфейс не собран. Выполните npm --prefix frontend run build.')
     # After a rebuild the browser asks again and gets the new page, never yesterday's interface from its cache.
     return FileResponse(index, headers={'Cache-Control': 'no-cache'})

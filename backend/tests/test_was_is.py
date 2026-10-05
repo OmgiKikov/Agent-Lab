@@ -4,18 +4,15 @@ no longer erases the result of Точность (docs/superpowers/specs/2026-10-
 import asyncio
 import json
 import sqlite3
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import support
 from test_checks import CODE, CODE_RESULT, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
 from lab import api, discover, problems, store, tone
-from lab.jobs import Jobs
 
 CRITERIA = 'accuracy-criteria.json'
 
@@ -32,26 +29,17 @@ def talk(dialogue_id: str) -> dict:
 
 class WasIsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.db = Path(directory.name) / 'lab.sqlite3'
-        for mocked in (patch.object(store, 'DB', self.db), patch.object(api, 'jobs', Jobs())):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
+        support.serve(self)
+        self.db = store.default_database()
         await self.upload('d1', name='Сентябрь.jsonl')
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
         await self.read_code(CODE)
 
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
-
     async def wait_job(self):
         for _ in range(200):
-            if not api.jobs.state['running']:
+            if not self.jobs.state['running']:
                 return
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
@@ -65,7 +53,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(api.sources, 'collect', return_value=([source], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
 
     async def check_tone(self, status='FAIL', count=5):
         draft = store.load(tone.DRAFT)
@@ -74,7 +62,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
 
     async def assess_code(self, status='FAIL', replan=False, topic=CODE_TOPIC):
         """«Оценить разговоры» in Точность: the planner puts each conversation in the one topic; the check is fake."""
@@ -94,7 +82,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         return store.load(CODE_RESULT)
 
     async def get(self, path):

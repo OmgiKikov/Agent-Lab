@@ -1,16 +1,13 @@
 import asyncio
 import io
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from zipfile import ZipFile
 
-import httpx
+import support
 
-from lab import api, discover, llm, policy_files, quotes, store, tone
-from lab.jobs import Jobs
+from lab import api, config, discover, llm, policy_files, quotes, store, tone
 
 POLICY = """## Главные принципы
 Отказ сам по себе не является нарушением. Не оценивай достоверность фактов.
@@ -99,6 +96,9 @@ class PolicyTests(unittest.TestCase):
 
 
 class JudgingOrderTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        support.lab(self)
+
     async def test_conversations_are_judged_a_few_at_a_time_so_the_count_moves_from_the_start(self):
         active, most, done = 0, 0, []
 
@@ -110,25 +110,17 @@ class JudgingOrderTests(unittest.IsolatedAsyncioTestCase):
             active -= 1
             return {'dialogueId': dialogue['id'], 'status': 'PASS', 'rules': [], 'second': None}
 
-        dialogues = [{'id': str(i)} for i in range(llm.CONCURRENCY * 4)]
+        dialogues = [{'id': str(i)} for i in range(config.current().concurrency * 4)]
         with patch.object(discover, 'judge_dialogue', judged):
             results = await tone._judge(dialogues, {'id': 't', 'rules': []}, lambda **values: done.append(values))
-        self.assertLessEqual(most, llm.CONCURRENCY)
+        self.assertLessEqual(most, config.current().concurrency)
         self.assertEqual([r['dialogueId'] for r in results], [d['id'] for d in dialogues])
         self.assertEqual(done[-1]['done'], len(dialogues))
 
 
 class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
+        support.serve(self)
         self.dialogue = {
             'id': 'd1',
             'messages': [
@@ -138,13 +130,9 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         }
         await self.client.post('/api/logs?name=fixture.jsonl', content=json.dumps(self.dialogue))
 
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
-
     async def wait_job(self):
         for _ in range(100):
-            if not api.jobs.state['running']:
+            if not self.jobs.state['running']:
                 return
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
@@ -158,7 +146,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/tone-of-voice/criteria')
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         return store.load(tone.DRAFT)
 
     async def test_file_preview_does_not_change_inputs_or_existing_results(self):
@@ -205,7 +193,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(api.sources, 'collect', return_value=(code, [])):
             await self.client.post('/api/sources')
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         self.assertEqual(api.sources.load(), [*code, policy])
         self.assertEqual(store.load(tone.DRAFT), draft)
         self.assertEqual(store.load(tone.RESULT), result)
@@ -262,7 +250,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         judge.assert_awaited_once()
         result = store.load(tone.RESULT)
         self.assertEqual(result['purpose'], 'tone-of-voice')
@@ -291,7 +279,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
                 '/api/tone-of-voice/check', json={'ruleIds': ['pronouns', 'simple_language'], 'count': 1}
             )
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         result = store.load(tone.RESULT)
         self.assertEqual([row['status'] for row in result['results'][0]['rules']], ['PASS', 'UNKNOWN'])
         self.assertEqual(result['results'][0]['status'], 'UNMEASURED')
@@ -320,7 +308,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await asyncio.Event().wait()
 
-        api.jobs.start('run', busy)
+        self.jobs.start('run', busy)
         await entered.wait()
         response = await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY})
         self.assertEqual(response.status_code, 409)
@@ -339,4 +327,4 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             await entered.wait()
             await self.client.post('/api/job/stop')
         self.assertIsNone(store.load(tone.DRAFT))
-        self.assertEqual(api.jobs.state['error'], 'Остановлено')
+        self.assertEqual(self.jobs.state['error'], 'Остановлено')

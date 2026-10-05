@@ -3,7 +3,9 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from lab import cards, discover, judge, llm, quotes
+import support
+
+from lab import cards, config, discover, judge, llm, quotes
 from lab.judge_reply import RuleReply
 from lab.metric import metric
 
@@ -134,9 +136,7 @@ class EvaluationTests(unittest.TestCase):
 class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         # These tests exercise the second judge, which runs only with a second vendor configured.
-        second = patch.object(llm, 'SECOND', ('http://second/v1', 'second-judge'))
-        second.start()
-        self.addCleanup(second.stop)
+        self.settings = support.lab(self, second_url='http://second/v1', second_model='second-judge')
 
     async def test_both_judges_share_prepared_evidence_and_next_evaluation_refreshes_it(self):
         payloads = []
@@ -214,7 +214,8 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
                 {'role': 'assistant', 'content': 'Вернуть терминал в банк'},
             ],
         }
-        with patch.object(llm, 'MAIN', same), patch.object(llm, 'SECOND', same), patch.object(llm, 'chat', model):
+        one = {'model_url': same[0], 'model': same[1], 'second_url': None, 'second_model': None}
+        with config.using(support.changed(self.settings, **one)), patch.object(llm, 'chat', model):
             result = await discover.judge_dialogue(dialogue, {'id': 't1', 'rules': [criterion()]})
         self.assertIsNone(result['second'])
         self.assertEqual(len(calls), 1)

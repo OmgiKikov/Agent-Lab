@@ -3,17 +3,14 @@
 
 import asyncio
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import support
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
 from lab import api, cards, discover, llm, store, tone
-from lab.jobs import Jobs
 
 TONE_RESULT, CODE_RESULT = 'tone-result.json', 'discover.json'
 CODE = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'Называй срок доставки терминала.'}
@@ -38,15 +35,7 @@ CODE_TOPIC = {
 
 class ChecksTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
+        support.serve(self)
         self.dialogue = {
             'id': 'd1',
             'messages': [
@@ -61,15 +50,11 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(api.sources, 'collect', return_value=([CODE], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
-        self.assertIsNone(api.jobs.state['error'])
-
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
+        self.assertIsNone(self.jobs.state['error'])
 
     async def wait_job(self):
         for _ in range(200):
-            if not api.jobs.state['running']:
+            if not self.jobs.state['running']:
                 return
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
@@ -82,7 +67,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        return api.jobs.state['error']
+        return self.jobs.state['error']
 
     async def assess_code(self, status='FAIL', replan=False):
         """The accuracy assessment («Оценить N разговоров») with its planner and its check replaced; its error."""
@@ -93,7 +78,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
-        return api.jobs.state['error']
+        return self.jobs.state['error']
 
     async def test_a_tone_check_and_the_accuracy_assessment_keep_each_others_results(self):
         self.assertIsNone(await self.assess_code())
@@ -195,14 +180,14 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.answer(None, 'pronouns', check='tone')).status_code, 200)
         self.assertEqual(self.review(TONE_RESULT, 'pronouns'), 'agree')
         # While a check runs, answers on its own result wait; the other check's result takes them.
-        with patch.dict(api.jobs.state, {'running': True, 'kind': 'discover'}):
+        with patch.dict(self.jobs.state, {'running': True, 'kind': 'discover'}):
             code = await self.answer(code_result['finishedAt'], 't1r1', check='code')
             own = await self.answer(tone_result['finishedAt'], 'pronouns', check='tone', decision='disagree')
         self.assertEqual((code.status_code, own.status_code), (409, 200))
         self.assertEqual(
             code.json()['detail'], 'Ответ не сохранится, пока идёт проверка «Точность». Ответьте после неё.'
         )
-        with patch.dict(api.jobs.state, {'running': True, 'kind': 'tone-check'}):
+        with patch.dict(self.jobs.state, {'running': True, 'kind': 'tone-check'}):
             code = await self.answer(code_result['finishedAt'], 't1r1')
             own = await self.answer(tone_result['finishedAt'], 'pronouns')
         self.assertEqual((code.status_code, own.status_code), (200, 409))
@@ -224,14 +209,14 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
     async def test_scenarios_are_built_from_the_errors_of_one_check(self):
         self.assertEqual((await self.build_cards()).status_code, 200)
         self.assertEqual(
-            api.jobs.state['error'], 'Сценарии собираются из найденных ошибок. Сначала проверьте разговоры.'
+            self.jobs.state['error'], 'Сценарии собираются из найденных ошибок. Сначала проверьте разговоры.'
         )
         response = await self.build_cards({'check': 'code'})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(api.jobs.state['error'], 'У проверки «Точность» ещё нет итога. Сначала проверьте разговоры.')
+        self.assertEqual(self.jobs.state['error'], 'У проверки «Точность» ещё нет итога. Сначала проверьте разговоры.')
         await self.check_tone()
         self.assertEqual((await self.build_cards()).status_code, 200)  # the only check with a result
-        self.assertIsNone(api.jobs.state['error'])
+        self.assertIsNone(self.jobs.state['error'])
         deck = store.load(cards.DECK)
         self.assertEqual((deck['check'], [card['topic'] for card in deck['cards']]), ('tone', ['Tone of voice']))
         await self.assess_code()

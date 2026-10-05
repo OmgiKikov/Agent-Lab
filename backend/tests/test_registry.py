@@ -1,27 +1,23 @@
 import asyncio
 import io
 import json
+import os
 import sqlite3
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
 from unittest.mock import patch
 
-import httpx
+import support
 
-from lab import api, jobs, logs, migrate, registry, store
+from lab import api, config, jobs, logs, migrate, registry, store
+from lab.app import create, lifespan
 
 
 class RegistryTests(unittest.TestCase):
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name)
-        mocked = patch.object(store, 'DB', self.root / 'lab.sqlite3')
-        mocked.start()
-        self.addCleanup(mocked.stop)
+        self.settings = support.lab(self)
+        self.root = self.settings.data
 
     def test_the_registry_lives_beside_the_default_database(self) -> None:
         registry.create('Первый', '')
@@ -53,19 +49,9 @@ class RegistryTests(unittest.TestCase):
 
 class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
-        for mocked in (patch.object(store, 'DB', root / 'lab.sqlite3'), patch.object(api, 'jobs', jobs.PerAgent())):
-            mocked.start()
-            self.addCleanup(mocked.stop)
+        support.serve(self, jobs.PerAgent())
         self.first = registry.create('Первый', '')['id']
         self.second = registry.create('Второй', '')['id']
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
-
-    async def asyncTearDown(self) -> None:
-        await api.jobs.close()
-        await self.client.aclose()
 
     async def test_a_request_works_inside_the_agent_it_names(self) -> None:
         dialogue = {
@@ -88,13 +74,13 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
 
         with registry.using(self.first):
-            api.jobs.start('discover', slow)
+            self.jobs.start('discover', slow)
         await asyncio.sleep(0)
         second = (await self.client.get('/api/state', headers={'X-Agent': self.second})).json()
         first = (await self.client.get('/api/state', headers={'X-Agent': self.first})).json()
         self.assertEqual((first['job']['running'], second['job']['running']), (True, False))
         with registry.using(self.second):
-            self.assertEqual(api.jobs.start('discover', slow), {'ok': True})
+            self.assertEqual(self.jobs.start('discover', slow), {'ok': True})
         release.set()
 
     async def test_a_job_writes_into_the_agent_it_was_started_in(self) -> None:
@@ -105,13 +91,13 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
             store.save('marker.json', {'agent': 'first'})
 
         with registry.using(self.first):
-            api.jobs.start('discover', work)
+            self.jobs.start('discover', work)
         await self.client.get('/api/state', headers={'X-Agent': self.second})
         release.set()
         for _ in range(50):
             await asyncio.sleep(0.01)
             with registry.using(self.first):
-                if not api.jobs.state['running']:
+                if not self.jobs.state['running']:
                     break
         with registry.using(self.first):
             self.assertEqual(store.load('marker.json'), {'agent': 'first'})
@@ -168,12 +154,8 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
 
 class AdoptionTests(unittest.TestCase):
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name)
-        mocked = patch.object(store, 'DB', self.root / 'lab.sqlite3')
-        mocked.start()
-        self.addCleanup(mocked.stop)
+        self.settings = support.lab(self)
+        self.root = self.settings.data
 
     def test_the_existing_database_becomes_the_first_agent_once(self) -> None:
         store.save('logs.json', [{'id': 'd1'}])
@@ -193,11 +175,10 @@ class AdoptionTests(unittest.TestCase):
         store.save('logs.json', [{'id': 'd1'}])
 
         async def start() -> None:
-            async with api.lifespan(api.app):
+            async with lifespan(create(self.settings)):
                 pass
 
-        with patch.object(api, 'jobs', jobs.PerAgent()):
-            asyncio.run(start())
+        asyncio.run(start())
         self.assertEqual([a['id'] for a in registry.listed()], ['acquiring'])
         self.assertFalse((self.root / 'lab.sqlite3').exists())
 
@@ -222,11 +203,10 @@ class AdoptionTests(unittest.TestCase):
 
     def test_a_fresh_start_creates_no_database(self) -> None:
         async def start() -> None:
-            async with api.lifespan(api.app):
+            async with lifespan(create(self.settings)):
                 pass
 
-        with patch.object(api, 'jobs', jobs.PerAgent()):
-            asyncio.run(start())
+        asyncio.run(start())
         self.assertFalse((self.root / 'lab.sqlite3').exists())
 
     def test_a_fresh_install_starts_without_agents(self) -> None:
@@ -249,11 +229,10 @@ class AdoptionTests(unittest.TestCase):
         (self.root / 'agents.sqlite3').unlink()
 
         async def start() -> None:
-            async with api.lifespan(api.app):
+            async with lifespan(create(self.settings)):
                 pass
 
-        with patch.object(api, 'jobs', jobs.PerAgent()):
-            asyncio.run(start())
+        asyncio.run(start())
         self.assertEqual(
             [(a['id'], a['name']) for a in registry.listed()],
             [('acquiring', 'Агент эквайринга'), ('agent-kreditov', 'agent-kreditov')],
@@ -265,12 +244,11 @@ class AdoptionTests(unittest.TestCase):
         store.save('logs.json', [{'id': 'd1'}])
 
         async def start() -> None:
-            async with api.lifespan(api.app):
+            async with lifespan(create(self.settings)):
                 pass
 
         with (
             registry.only_process(),
-            patch.object(api, 'jobs', jobs.PerAgent()),
             patch.object(store, 'recover_runs') as recover,
             self.assertRaises(RuntimeError) as refused,
         ):
@@ -279,13 +257,12 @@ class AdoptionTests(unittest.TestCase):
         self.assertIn('LAB_DATA', str(refused.exception))
         recover.assert_not_called()
         self.assertEqual(registry.listed(), [])  # the old database is not adopted twice
-        with patch.object(api, 'jobs', jobs.PerAgent()):
-            asyncio.run(start())  # the first one gone, the lock goes with it
+        asyncio.run(start())  # the first one gone, the lock goes with it
         self.assertEqual([a['id'] for a in registry.listed()], ['acquiring'])
 
     def test_the_folders_of_the_lab_are_readable_by_its_user_only(self) -> None:
         nested = self.root / 'data' / 'lab.sqlite3'
-        with patch.object(store, 'DB', nested):
+        with config.using(support.changed(self.settings, data=nested.parent)):
             agent = registry.create('Агент эквайринга')['id']
             for folder in (nested.parent, nested.parent / 'agents', registry.db_of(agent).parent):
                 with self.subTest(folder=folder.name):
@@ -296,12 +273,8 @@ class LegacyImportTests(unittest.TestCase):
     """python -m lab.migrate writes where the app reads: into an agent's database."""
 
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name)
-        mocked = patch.object(store, 'DB', self.root / 'lab.sqlite3')
-        mocked.start()
-        self.addCleanup(mocked.stop)
+        self.settings = support.lab(self)
+        self.root = self.settings.data
         self.legacy = self.root / 'legacy'
         self.legacy.mkdir()
         dialogue = {'id': 'd1', 'messages': [{'role': 'user', 'content': 'Q'}, {'role': 'assistant', 'content': 'A'}]}
@@ -309,7 +282,11 @@ class LegacyImportTests(unittest.TestCase):
 
     def run_import(self, *arguments: str) -> dict:
         printed = io.StringIO()
-        with patch.object(sys, 'argv', ['migrate', '--source', str(self.legacy), *arguments]), redirect_stdout(printed):
+        with (
+            patch.object(sys, 'argv', ['migrate', '--source', str(self.legacy), *arguments]),
+            patch.dict(os.environ, {'LAB_DATA': str(self.root)}),
+            redirect_stdout(printed),
+        ):
             migrate.main()
         return json.loads(printed.getvalue())
 
@@ -333,7 +310,7 @@ class LegacyImportTests(unittest.TestCase):
         only = registry.create('Агент эквайринга')['id']
         self.assertEqual(self.run_import()['agent'], only)
         self.assertEqual(len(self.logs_of(only)), 1)
-        self.assertFalse(store.DB.exists())
+        self.assertFalse(store.default_database().exists())
 
     def test_with_several_agents_the_import_is_told_which(self) -> None:
         first = registry.create('Первый')['id']
@@ -345,4 +322,4 @@ class LegacyImportTests(unittest.TestCase):
                 self.assertIn('--agent', said)
         self.assertEqual(self.run_import('--agent', second)['agent'], second)
         self.assertEqual((len(self.logs_of(first)), len(self.logs_of(second))), (0, 1))
-        self.assertFalse(store.DB.exists())
+        self.assertFalse(store.default_database().exists())

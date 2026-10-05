@@ -4,12 +4,10 @@ rules (GET /api/agents, `rules`)."""
 
 import asyncio
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-import httpx
+import support
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
@@ -24,15 +22,7 @@ COPIED_AT = '2030-01-01T00:00:00.000+00:00'
 
 class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', jobs.PerAgent()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
+        support.serve(self, jobs.PerAgent())
         self.source = registry.create('Агент эквайринга')['id']
         self.target = registry.create('Агент кредитов')['id']
         await self.upload(self.source)
@@ -45,10 +35,6 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
 
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
-
     async def post(self, agent, path, body):
         return await self.client.post(path, json=body, headers={'X-Agent': agent})
 
@@ -58,7 +44,7 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
     async def wait_job(self, agent):
         for _ in range(200):
             with registry.using(agent):
-                if not api.jobs.state['running']:
+                if not self.jobs.state['running']:
                     return
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
@@ -94,7 +80,7 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job(agent)
         with registry.using(agent):
-            self.assertIsNone(api.jobs.state['error'])
+            self.assertIsNone(self.jobs.state['error'])
             return store.load(tone.RESULT)
 
     def draft(self, agent):
@@ -222,7 +208,7 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         with registry.using(self.target):
-            api.jobs.start('run', busy)
+            self.jobs.start('run', busy)
         await entered.wait()
         response = await self.copy(self.target)
         self.assertEqual(response.status_code, 409)
@@ -231,19 +217,7 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
 
 class AgentRulesTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', jobs.PerAgent()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
-
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
+        support.serve(self, jobs.PerAgent())
 
     async def test_each_agent_is_listed_with_its_rules_of_communication(self):
         ruled = registry.create('Агент эквайринга')['id']

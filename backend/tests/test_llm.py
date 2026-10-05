@@ -1,13 +1,15 @@
 import asyncio
 import json
+import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import support
 
-from lab import judge, llm
+from lab import config, judge, llm
 from lab.judge_reply import JudgeReply
 
 Client = httpx.AsyncClient
@@ -22,6 +24,9 @@ def json_response(value):
 
 
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.settings = support.lab(self)
+
     async def test_structured_returns_parsed_reply_without_leaving_an_untyped_dictionary(self):
         value = {'rules': [{'ruleId': 'r', 'status': 'UNKNOWN', 'reason': 'Нет доказательств', 'agentQuote': ''}]}
         with patch.object(llm, 'chat', AsyncMock(return_value=llm.Answer(json.dumps(value), 'actual-model'))):
@@ -178,9 +183,9 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
+        two = {'model_url': 'http://provider/v1', 'model': 'main-alias', 'second_model': 'second-alias'}
         with (
-            patch.object(llm, 'MAIN', ('http://provider/v1', 'main-alias')),
-            patch.object(llm, 'SECOND', ('http://provider/v1', 'second-alias')),
+            config.using(support.changed(self.settings, **two)),
             patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
             patch.object(judge.knowledge, 'retrieved', return_value=[]),
         ):
@@ -195,7 +200,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             llm.models_used([{'model': 'first'}, {'model': 'second'}, {'model': 'first'}]), 'first, second'
         )
-        self.assertEqual(llm.models_used([{}]), llm.MODEL)
+        self.assertEqual(llm.models_used([{}]), llm.main_model())
 
 
 ANSWER = {'choices': [{'message': {'content': '{"ready": true}'}}], 'model': 'm'}
@@ -218,6 +223,9 @@ def broken(kind: type[httpx.TransportError]):
 
 class RetryTests(unittest.IsolatedAsyncioTestCase):
     """What is asked again and after which pause; asyncio.sleep is patched, nothing waits for real."""
+
+    def setUp(self):
+        support.lab(self)
 
     async def ask(self, *replies, structured: bool = False):
         """(answer or ModelError, requests the provider got, pauses taken) for these replies in turn."""
@@ -338,55 +346,55 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DefaultModelsTests(unittest.TestCase):
-    def second(self, value: str = 'llm.second_judge()', **extra: str) -> str:
-        """What the value is in a fresh process with only these LAB_* and OpenRouter settings."""
-        import os
-        import subprocess
-        import sys
-        import tempfile
-
+    def started(self, value=lambda: llm.second_judge(), **environment: str):
+        """What the value is in a Lab started with only these LAB_* and OpenRouter settings."""
         with tempfile.TemporaryDirectory() as folder:
-            env = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'OPENROUTER_'))}
-            env.update(LAB_DATA=folder, LAB_CERTS=folder, AGENT_LAB_GATEWAY_FILE=f'{folder}/none.json', **extra)
-            script = f'from lab import llm; print({value})'
-            done = subprocess.run([sys.executable, '-c', script], env=env, capture_output=True, text=True, check=True)
-            return done.stdout.strip()
+            places = {'LAB_DATA': folder, 'LAB_CERTS': folder, 'AGENT_LAB_GATEWAY_FILE': f'{folder}/none.json'}
+            with config.using(config.Settings.from_environment({**places, **environment})):
+                return value()
 
     def test_one_model_by_default_and_a_second_vendor_only_when_named(self) -> None:
-        self.assertEqual(self.second(), 'None')
+        self.assertIsNone(self.started())
         self.assertEqual(
-            self.second(LAB_SECOND_MODEL='openai/gpt-5.2'), "('https://openrouter.ai/api/v1', 'openai/gpt-5.2')"
+            self.started(LAB_SECOND_MODEL='openai/gpt-5.2'), ('https://openrouter.ai/api/v1', 'openai/gpt-5.2')
         )
 
     def test_the_second_judge_goes_where_the_main_one_goes_unless_named(self) -> None:
         main = {'LAB_MODEL_URL': 'http://models.bank.test/v1', 'LAB_SECOND_MODEL': 'openai/gpt-5.2'}
-        self.assertEqual(self.second(**main), "('http://models.bank.test/v1', 'openai/gpt-5.2')")
+        self.assertEqual(self.started(**main), ('http://models.bank.test/v1', 'openai/gpt-5.2'))
         self.assertEqual(
-            self.second(**main, LAB_SECOND_URL='http://other.test/v1'), "('http://other.test/v1', 'openai/gpt-5.2')"
+            self.started(**main, LAB_SECOND_URL='http://other.test/v1'), ('http://other.test/v1', 'openai/gpt-5.2')
         )
 
     def test_the_main_key_goes_to_another_host_never_and_the_second_has_its_own(self) -> None:
+        second_key = lambda: llm.endpoints().second_key  # noqa: E731
         main = {'LAB_MODEL_URL': 'http://a.test/v1', 'LAB_MODEL_KEY': 'sk-main', 'LAB_SECOND_MODEL': 'openai/gpt-5.2'}
         elsewhere = {**main, 'LAB_SECOND_URL': 'http://b.test/v1'}
-        self.assertEqual(self.second('llm.SECOND_KEY', **elsewhere), 'None')
-        self.assertEqual(self.second('llm.SECOND_KEY', **elsewhere, LAB_SECOND_KEY='sk-second'), 'sk-second')
-        self.assertEqual(self.second('llm.SECOND_KEY', **main), 'sk-main')  # the same address
+        self.assertIsNone(self.started(second_key, **elsewhere))
+        self.assertEqual(self.started(second_key, **elsewhere, LAB_SECOND_KEY='sk-second'), 'sk-second')
+        self.assertEqual(self.started(second_key, **main), 'sk-main')  # the same address
 
     def test_openrouter_is_the_endpoint_without_another_and_its_key_goes_only_there(self) -> None:
-        self.assertEqual(self.second('llm.MAIN[0]'), 'https://openrouter.ai/api/v1')
-        self.assertEqual(self.second('llm.API_KEY', OPENROUTER_API_KEY='sk-or'), 'sk-or')
-        self.assertEqual(self.second('llm.SECOND_KEY', LAB_SECOND_MODEL='x', OPENROUTER_API_KEY='sk-or'), 'sk-or')
+        main_key, second_key = lambda: llm.endpoints().main_key, lambda: llm.endpoints().second_key
+        self.assertEqual(self.started(lambda: llm.endpoints().main[0]), 'https://openrouter.ai/api/v1')
+        self.assertEqual(self.started(main_key, OPENROUTER_API_KEY='sk-or'), 'sk-or')
+        self.assertEqual(self.started(second_key, LAB_SECOND_MODEL='x', OPENROUTER_API_KEY='sk-or'), 'sk-or')
         own = {'LAB_MODEL_URL': 'http://models.bank.test/v1', 'OPENROUTER_API_KEY': 'sk-or'}
-        self.assertEqual(self.second('llm.API_KEY', **own), 'None')  # OpenRouter's key never goes to another host
-        self.assertEqual(self.second('llm.describe()["problem"]'), llm.NO_KEY)
-        self.assertEqual(self.second('llm.describe()["problem"]', OPENROUTER_API_KEY='sk-or'), 'None')
+        self.assertIsNone(self.started(main_key, **own))  # OpenRouter's key never goes to another host
+        self.assertEqual(self.started(lambda: llm.describe()['problem']), llm.NO_KEY)
+        self.assertIsNone(self.started(lambda: llm.describe()['problem'], OPENROUTER_API_KEY='sk-or'))
+
+    def test_a_variable_set_to_nothing_is_not_set(self) -> None:
+        self.assertEqual(
+            self.started(lambda: llm.endpoints().main, LAB_MODEL_URL='', LAB_MODEL=' '),
+            (llm.OPENROUTER, llm.DEFAULT_MODEL),
+        )
 
 
 class DescribeTests(unittest.TestCase):
     def via(self, main: tuple, second: tuple | None = None) -> tuple:
         with (
-            patch.object(llm, 'MAIN', main),
-            patch.object(llm, 'SECOND', second or main),
+            patch.object(llm, 'endpoints', return_value=llm.Endpoints(main, second or main, None, None)),
             patch.object(llm.gateway, 'chosen_models', return_value={}),
             patch.object(llm.gateway, 'problem', return_value=None),
         ):
@@ -410,17 +418,20 @@ class KeyTests(unittest.IsolatedAsyncioTestCase):
             seen.append((request.url.host, request.headers.get('Authorization')))
             return json_response(ANSWER)
 
-        with (
-            patch.object(llm, 'MAIN', ('http://a.test/v1', 'main')),
-            patch.object(llm, 'SECOND', ('http://b.test/v1', 'second')),
-            patch.object(llm, 'API_KEY', 'sk-main'),
-            patch.object(llm, 'SECOND_KEY', None, create=True),
-            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
-        ):
-            for endpoint in (llm.MAIN, llm.SECOND, ('http://c.test/v1', 'other')):
+        settings = support.lab(
+            self,
+            model_url='http://a.test/v1',
+            model='main',
+            model_key='sk-main',
+            second_url='http://b.test/v1',
+            second_model='second',
+        )
+        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            found = llm.endpoints()
+            for endpoint in (found.main, found.second, ('http://c.test/v1', 'other')):
                 await llm.chat('system', 'question', endpoint=endpoint)
-            with patch.object(llm, 'SECOND_KEY', 'sk-second'):
-                await llm.chat('system', 'question', endpoint=llm.SECOND)
+            with config.using(support.changed(settings, second_key='sk-second')):
+                await llm.chat('system', 'question', endpoint=found.second)
         self.assertEqual(
             seen, [('a.test', 'Bearer sk-main'), ('b.test', None), ('c.test', None), ('b.test', 'Bearer sk-second')]
         )
@@ -434,13 +445,8 @@ class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
             seen.append((str(request.url), request.headers.get('Authorization'), json.loads(request.content)))
             return json_response(ANSWER)
 
-        endpoint = (llm.OPENROUTER, 'z-ai/glm-5.3')
-        with (
-            patch.object(llm, 'MAIN', endpoint),
-            patch.object(llm, 'SECOND', endpoint),
-            patch.object(llm, 'API_KEY', 'sk-or'),
-            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
-        ):
+        support.lab(self, model_url=None, openrouter_key='sk-or')
+        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
             await llm.chat('system', 'question')
         url, key, body = seen[0]
         self.assertEqual((url, key), ('https://openrouter.ai/api/v1/chat/completions', 'Bearer sk-or'))
@@ -448,13 +454,9 @@ class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_without_its_key_no_conversation_is_sent_and_the_check_says_what_to_set(self):
         endpoint = (llm.OPENROUTER, 'z-ai/glm-5.3')
+        support.lab(self, model_url=None)
         sent = AsyncMock(side_effect=AssertionError('a conversation was sent without a key'))
-        with (
-            patch.object(llm, 'MAIN', endpoint),
-            patch.object(llm, 'SECOND', endpoint),
-            patch.object(llm, 'API_KEY', None),
-            patch.object(llm.httpx.AsyncClient, 'post', sent),
-        ):
+        with patch.object(llm.httpx.AsyncClient, 'post', sent):
             with self.assertRaises(llm.ModelError) as refused:
                 await llm.chat('system', 'question')
             checked = await llm.check(endpoint)
@@ -468,6 +470,7 @@ class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
             seen.append(json.loads(request.content))
             return json_response(ANSWER)
 
+        support.lab(self)
         with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
             await llm.chat('system', 'question', endpoint=('http://models.bank.test/v1', 'glm'))
         self.assertNotIn('reasoning', seen[0])

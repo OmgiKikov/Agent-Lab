@@ -26,8 +26,10 @@ trap 'exit 143' TERM
 if [ -n "${LAB_MODEL_URL:-}" ]; then
   echo "Модели: endpoint из LAB_MODEL_URL"
 else
-  LAB_GATEWAY="$(cd backend && "$LAB_PYTHON" -c 'from lab.llm import gateway
-print(gateway.problem() or ("ready" if gateway.configured() else "absent"))')" ||
+  LAB_GATEWAY="$(cd backend && "$LAB_PYTHON" -c 'from lab import config
+from lab.llm import gateway
+with config.using(config.Settings.from_environment()):
+    print(gateway.problem() or ("ready" if gateway.configured() else "absent"))')" ||
     LAB_GATEWAY="сертификаты не проверились, ошибка выше"
   case "$LAB_GATEWAY" in
   absent)
@@ -49,7 +51,7 @@ print(gateway.problem() or ("ready" if gateway.configured() else "absent"))')" |
 fi
 echo "Agent Lab: http://127.0.0.1:${LAB_PORT:-5899}/"
 cd backend
-"$LAB_PYTHON" -m uvicorn lab.app:app --host 127.0.0.1 --port "${LAB_PORT:-5899}" &
+"$LAB_PYTHON" -m uvicorn lab.app:create --factory --host 127.0.0.1 --port "${LAB_PORT:-5899}" &
 LAB_SERVER_PID=$!
 LAB_OWNED_PIDS="$LAB_OWNED_PIDS $LAB_SERVER_PID"
 wait "$LAB_SERVER_PID"
