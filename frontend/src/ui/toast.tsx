@@ -10,16 +10,28 @@ const ToastContext = createContext<Toasts>({ error: () => {}, notify: () => {} }
 export const useToast = () => useContext(ToastContext);
 
 let next = 1;
+const SHOWN = 3;
 
-/** Quiet notices at the bottom right — a task finished, a call failed. They go away on their own. */
+/**
+ * Quiet notices at the bottom right — a task finished, a call failed. A notice goes away on its own after 5 s. An error
+ * stays until it is closed: an answer the service refused is never missed while the screen moves on. Over three, the
+ * oldest notice goes first, then the oldest error.
+ */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<Item[]>([]);
   const dismiss = useCallback((id: number) => setItems((list) => list.filter((t) => t.id !== id)), []);
   const push = useCallback(
     (item: Omit<Item, "id">) => {
       const id = next++;
-      setItems((list) => [...list.slice(-2), { ...item, id }]);
-      window.setTimeout(() => dismiss(id), item.tone === "error" ? 8000 : 5000);
+      setItems((list) => {
+        const all = [...list, { ...item, id }];
+        while (all.length > SHOWN) {
+          const notice = all.slice(0, -1).findIndex((t) => t.tone !== "error");
+          all.splice(notice >= 0 ? notice : 0, 1);
+        }
+        return all;
+      });
+      if (item.tone !== "error") window.setTimeout(() => dismiss(id), 5000);
     },
     [dismiss],
   );
