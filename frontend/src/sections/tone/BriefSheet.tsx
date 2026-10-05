@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Download } from "lucide-react";
+import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import { shareBase } from "../../app/agent";
 import { useCriteria, type Criterion } from "../../lab/criteria";
 import { copyReport, download } from "../../lab/problemReport";
+import { useProblems } from "../../lab/problems";
 import { toneResult } from "../../lab/tone";
 import { toneBrief } from "../../lab/toneReport";
 import type { Discover, LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
+import { Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
 import { BriefPreview } from "./BriefPreview";
 
@@ -31,9 +33,11 @@ export function useToneBrief(state: LabState | null): string {
 /**
  * «Отчёт для письма» of a tone-of-voice result: the same one from the result, «Обзор» and the section, with the screen's
  * number and words. It is read here, then copied (formatted, and as plain text without Markdown marks) or downloaded
- * (Markdown); reading it calls no model.
+ * (Markdown); reading it calls no model. Until the findings are here, their place; when they could not be loaded,
+ * that and «Повторить» instead of an empty sheet.
  */
 export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: () => void; brief: string }) {
+  const findings = useProblems("tone");
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   useEffect(() => {
@@ -75,7 +79,20 @@ export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: (
             Не удалось скопировать. Скачайте отчёт или выделите текст.
           </p>
         )}
-        <BriefPreview text={brief} />
+        {brief ? (
+          <BriefPreview text={brief} />
+        ) : findings.isError ? (
+          <div>
+            <p role="alert" className="text-read text-fg-2">
+              Не удалось загрузить находки.
+            </p>
+            <Button className="mt-4" icon={RotateCcw} onClick={() => void findings.refetch()}>
+              Повторить
+            </Button>
+          </div>
+        ) : (
+          <Skeleton className="h-96" />
+        )}
       </div>
     </Sheet>
   );
