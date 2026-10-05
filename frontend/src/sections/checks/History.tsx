@@ -122,7 +122,8 @@ function codeSaved(data: CodeSnapshot): Saved {
         </ul>
       ),
     },
-    note: "Разговоры, критерии, оценки модели и ваши ответы сохранены такими, какими были в конце проверки.",
+    // The service lays the latest answers given on this check over the saved ones (api.with_reviews), as for tone.
+    note: "Разговоры, критерии и оценки модели сохранены такими, какими были в конце проверки. Ваши ответы хранятся отдельно, здесь показаны последние.",
   };
 }
 
