@@ -2,7 +2,7 @@ import { agentKey } from "../app/agent";
 import { answersText, yesNoText, type Answers } from "./answers";
 import { CHECK_NAME, CHECKS } from "./checks";
 import { count, pct, plural } from "./format";
-import { headingOf } from "./problemReport";
+import { headingOf, inlineText, quoteText } from "./problemReport";
 import { splitQuote } from "./quote";
 import type { Severity } from "./problems";
 import { lineText, type Serious, type SeverityLine } from "./severity";
@@ -82,22 +82,34 @@ export const SUMMARY_WHAT: Record<Check, string> = {
 
 const ofConversations = (n: number) => count(n, "разговора", "разговоров", "разговоров");
 
-/** «С ошибкой агента — 22 из 53 проверенных разговоров (42%)» */
+/**
+ * «С ошибкой агента — 22 из 53 проверенных разговоров (42%)». With none checked there is no count to give, as on «Итог»
+ * (product/StageResult): «Ни один из 60 разговоров не удалось проверить», never «0 из 0».
+ */
 export const headline = (c: SummaryCheck) =>
-  `С ошибкой агента — ${c.failed}\u00a0из\u00a0${count(c.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(c.failed, c.measured)}%)`;
+  c.measured
+    ? `С ошибкой агента — ${c.failed}\u00a0из\u00a0${count(c.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(c.failed, c.measured)}%)`
+    : `Ни один ${c.unmeasured ? `из\u00a0${count(c.unmeasured, "разговора", "разговоров", "разговоров")}` : "разговор"} не удалось проверить`;
 
-/** «Ещё 4 разговора не удалось проверить, в счёт они не входят.» — a separate number, never in the count. */
+/**
+ * «Ещё 4 разговора не удалось проверить, в счёт они не входят.» — a separate number, never in the count. With none
+ * checked the headline says it.
+ */
 export const unmeasuredText = (c: SummaryCheck) =>
-  c.unmeasured
+  c.unmeasured && c.measured
     ? `Ещё ${count(c.unmeasured, "разговор", "разговора", "разговоров")} не удалось проверить, в счёт ${c.unmeasured === 1 ? "он не входит" : "они не входят"}.`
     : null;
 
 /** «из 29 найденных», «из 21 найденной»: of the errors the check found. */
 const ofFound = (n: number) => `${n}\u00a0${plural(n, "найденной", "найденных", "найденных")}`;
 
-/** «Ошибки нашла автоматическая проверка. Люди перепроверили 11 из 29 найденных и согласились с 10.» */
-export function rechecked(a: Answers): string {
+/**
+ * «Ошибки нашла автоматическая проверка. Люди перепроверили 11 из 29 найденных и согласились с 10.» Nothing when it
+ * could check no conversation: it found no errors only because it saw none.
+ */
+export function rechecked(a: Answers): string | null {
   const answered = a.confirmed + a.removed;
+  if (!a.measured) return null;
   if (!a.errors) return "Автоматическая проверка ошибок не нашла.";
   return answered
     ? `Ошибки нашла автоматическая проверка. Люди перепроверили ${answered}\u00a0из\u00a0${ofFound(a.errors)} и согласились с\u00a0${a.confirmed}.`
@@ -157,13 +169,14 @@ const wholeReply = (reply: string, quote: string) => {
 
 /**
  * The summary as a letter (lab/problemReport, copyReport): the same as the page, the ticked problems only. Headings,
- * paragraphs and a quote: the only Markdown the reports write.
+ * paragraphs and a quote: the only Markdown the reports write. The words of the customer, the agent and the criteria
+ * stay words (inlineText, quoteText): never a link, a heading or a quote of their own.
  */
 export function summaryMarkdown(s: Summary): string {
   const lines = [
-    `# Сводка для руководителя: ${s.agent}`,
+    `# Сводка для руководителя: ${inlineText(s.agent)}`,
     "",
-    stop([s.file ? `Выгрузка «${s.file}»` : null, daysText(s.days)].filter(Boolean).join(" · ")),
+    stop([s.file ? `Выгрузка «${inlineText(s.file)}»` : null, daysText(s.days)].filter(Boolean).join(" · ")),
   ];
   for (const c of s.checks) {
     lines.push(
@@ -174,9 +187,13 @@ export function summaryMarkdown(s: Summary): string {
       "",
       [`${headline(c)}.`, unmeasuredText(c)].filter(Boolean).join(" "),
       ...c.severity.map(lineText),
-      ...[answersText(c.answers, "people"), c.compare, c.seriousCompare, rechecked(c.answers)].filter(
-        (x): x is string => !!x,
-      ),
+      // People's answers count the checked conversations: with none checked there is no «0 из 0» to give.
+      ...[
+        c.measured ? answersText(c.answers, "people") : null,
+        c.compare,
+        c.seriousCompare,
+        rechecked(c.answers),
+      ].filter((x): x is string => !!x),
     );
   }
   const chosen = s.checks.filter((c) => c.problems.some((p) => p.chosen));
@@ -185,13 +202,21 @@ export function summaryMarkdown(s: Summary): string {
     for (const c of chosen) {
       lines.push("", `### ${CHECK_NAME[c.check]}`);
       for (const p of c.problems.filter((x) => x.chosen)) {
-        lines.push("", `#### ${headingOf(p)}`, "", `Агент должен: ${p.duty}`, `${problemCount(p)}.`, problemAnswers(p));
+        lines.push(
+          "",
+          `#### ${headingOf(p)}`,
+          "",
+          `Агент должен: ${inlineText(p.duty)}`,
+          `${problemCount(p)}.`,
+          problemAnswers(p),
+        );
         const e = p.example;
         if (e) {
           lines.push("");
-          if (e.customer) lines.push(`Клиент: ${e.customer}`);
-          lines.push(...`Агент: ${e.reply ?? `«${e.quote}»`}`.split("\n").map((line) => `> ${line}`));
-          if (e.reply && !wholeReply(e.reply, e.quote)) lines.push(`Проверка указала на слова: ${quoted(e.quote)}`);
+          if (e.customer) lines.push(`Клиент: ${inlineText(e.customer)}`);
+          lines.push(quoteText(`Агент: ${e.reply ?? `«${e.quote}»`}`));
+          if (e.reply && !wholeReply(e.reply, e.quote))
+            lines.push(`Проверка указала на слова: ${quoted(inlineText(e.quote))}`);
           if (e.refuted) lines.push("Люди ответили, что здесь ошибки нет.");
         }
       }

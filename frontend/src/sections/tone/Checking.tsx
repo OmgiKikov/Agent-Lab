@@ -2,13 +2,19 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
+import { plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { PROPOSING, proposalCheck } from "../../lab/severity";
 import { toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
+import { useToast } from "../../ui/toast";
 
 const STOPPED = "Остановлено";
+
+/** «Не удалось остановить проверку. Задача уже закончилась.»: what failed first, then the service's words. */
+export const stopFailed = (what: string, e: unknown) =>
+  `Не удалось остановить ${what}. ${e instanceof Error ? e.message : String(e)}`;
 
 export function Checking({
   state,
@@ -24,6 +30,7 @@ export function Checking({
   onResult: () => void;
 }) {
   const { refresh } = useLabState();
+  const toast = useToast();
   const job = state.job;
   const active = job.kind === "tone-check";
   const finished = !!toneResult(state);
@@ -87,7 +94,10 @@ export function Checking({
                   {total || "…"}
                 </span>
               </p>
-              <p className="mt-2 text-read text-fg-3">разговоров проверено</p>
+              <p className="mt-2 text-read text-fg-3">
+                {/* After «из 21» the noun agrees with the total: «разговора проверено», «из 53 разговоров». */}
+                {plural(total, "разговора", "разговоров", "разговоров")} проверено
+              </p>
               <p className="mt-1 text-read text-fg-3">Проверка продолжится, даже если перейти в другие разделы.</p>
               <div className="mt-5 h-2 overflow-hidden rounded-full bg-well">
                 <div
@@ -101,10 +111,9 @@ export function Checking({
             className="mt-6"
             disabled={!job.running}
             onClick={() =>
-              api("/api/job/stop", {}).then(
-                () => refresh(),
-                () => refresh(),
-              )
+              api("/api/job/stop", {})
+                .catch((e) => toast.error(stopFailed("проверку", e)))
+                .finally(() => void refresh())
             }
           >
             Остановить проверку

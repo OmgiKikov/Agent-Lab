@@ -74,16 +74,22 @@ function Destination({ models }: { models: LabState["models"] }) {
   );
 }
 
-/** Who judges and who plays the customer, and who judges again; «Проверить» asks each model once and says what it answered. */
+/**
+ * Who judges and who plays the customer, and who judges again; «Проверить» asks each model once and says what it
+ * answered. When the check itself fails, it says so under the button: that tells nothing about either model, and the
+ * second may not exist at all.
+ */
 function Models({ state }: { state: LabState }) {
   const [checks, setChecks] = useState<{ main: Probe; second: Probe | null } | "pending" | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   const check = () => {
     setChecks("pending");
+    setFailed(null);
     api<{ main: Probe; second: Probe | null }>("/api/models/check", {})
       .then(setChecks)
       .catch((e) => {
-        const failed = { ok: false, error: String(e?.message ?? e) };
-        setChecks({ main: failed, second: failed });
+        setChecks(null);
+        setFailed(e instanceof Error ? e.message : String(e));
       });
   };
   const rows = [
@@ -145,6 +151,11 @@ function Models({ state }: { state: LabState }) {
       <Button className="mt-4" icon={ShieldCheck} loading={checks === "pending"} onClick={check}>
         Проверить модели
       </Button>
+      {failed && (
+        <p role="alert" className="mt-2 break-words text-small text-fg-2">
+          Не удалось проверить модели. {failed}
+        </p>
+      )}
     </>
   );
 }

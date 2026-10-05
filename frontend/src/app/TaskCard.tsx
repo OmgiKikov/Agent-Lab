@@ -29,9 +29,21 @@ function markTab(word: string) {
 }
 
 /**
+ * Whether the end of `job` is news to the page that saw `before`: the task it saw running has ended, or a task started
+ * after the one it saw (`startedAt`) has ended already, between two looks at the service — a quick failure too. A task
+ * that had ended when the page opened is not news. A service without `startedAt`: only a task seen running.
+ */
+function ended(before: Job | null, job: Job): boolean {
+  if (!before || job.running || !job.kind) return false;
+  if (job.startedAt) return before.running || job.startedAt !== before.startedAt;
+  return before.running && before.kind === job.kind;
+}
+
+/**
  * When the service's task ends: one notice with the way to its result, or the reason it failed. Mounted once for the
  * whole product (the task card is drawn twice: the side of a wide window, the bar of a narrow one). A person already
- * looking at the result's section gets no notice: the screen itself changes.
+ * looking at the result's section gets no notice: the screen itself changes. Each task is told once, by its start,
+ * even when an older answer of the service comes in late.
  */
 export function JobNotices() {
   const { state } = useLabState();
@@ -40,13 +52,17 @@ export function JobNotices() {
   const { pathname } = useLocation();
   const job = state?.job;
   const was = useRef<Job | null>(null);
+  // The start of the task whose end was told, or had ended when the page opened.
+  const told = useRef<string | null | undefined>(undefined);
   const here = useRef(pathname);
   here.current = pathname;
   useEffect(() => {
     if (!job) return;
     const before = was.current;
     was.current = job;
-    if (!before?.running || job.running || before.kind !== job.kind) return;
+    if (!before && !job.running) told.current = job.startedAt;
+    if (!ended(before, job) || (job.startedAt && job.startedAt === told.current)) return;
+    told.current = job.startedAt;
     const info = jobOf(job);
     const label = info?.label ?? "Задача";
     if (job.error !== STOPPED) markTab(job.error ? "Не удалось" : "Готово");
@@ -160,7 +176,8 @@ export function TaskCard({ bar }: { bar?: boolean }) {
       </div>
     );
   }
-  const key = `${job.kind}:${job.error}`;
+  // Hidden is this failure of this task: the same failure of a task started later shows again.
+  const key = `${job.kind}:${job.startedAt ?? ""}:${job.error}`;
   if (!job.error || job.error === STOPPED || hidden === key) return null;
   return (
     <div

@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Download } from "lucide-react";
+import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import { shareBase } from "../../app/agent";
 import { useCriteria, type Criterion } from "../../lab/criteria";
-import { copyReport, download } from "../../lab/problemReport";
+import { copyReport, download, reportFile, useReportAgent } from "../../lab/problemReport";
+import { useProblems } from "../../lab/problems";
 import { toneResult } from "../../lab/tone";
 import { toneBrief } from "../../lab/toneReport";
 import type { Discover, LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
+import { Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
 import { BriefPreview } from "./BriefPreview";
 
@@ -17,23 +19,27 @@ export const ownCriteria = (result: Discover, list: Criterion[]) => {
 };
 
 /**
- * The brief of the current tone-of-voice result, or "" while it cannot be told yet: no result, or the problems service
- * still holds an older check than the one on screen.
+ * The brief of the current tone-of-voice result, or "" while it cannot be told yet: no result, the agent's name it is
+ * about not here yet (useReportAgent), or the problems service still holds an older check than the one on screen.
  */
 export function useToneBrief(state: LabState | null): string {
   const { data, list } = useCriteria("tone");
+  const agent = useReportAgent();
   const result = toneResult(state);
-  if (!state || !result || !data || data.log?.finishedAt !== result.finishedAt) return "";
+  if (!state || !result || !data || !agent.name || data.log?.finishedAt !== result.finishedAt) return "";
   const report = { ...data, rules: ownCriteria(result, list).map((c) => c.r) };
-  return toneBrief(report, result, shareBase(), { filename: state.logs.file ?? undefined });
+  return toneBrief(report, result, shareBase(), { filename: state.logs.file ?? undefined, agent: agent.name });
 }
 
 /**
  * «Отчёт для письма» of a tone-of-voice result: the same one from the result, «Обзор» and the section, with the screen's
  * number and words. It is read here, then copied (formatted, and as plain text without Markdown marks) or downloaded
- * (Markdown); reading it calls no model.
+ * (Markdown, the file named after the agent); reading it calls no model. Until the findings and the agent's name are
+ * here, their place; when either could not be loaded, that and «Повторить» instead of an empty sheet.
  */
 export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: () => void; brief: string }) {
+  const findings = useProblems("tone");
+  const agent = useReportAgent();
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   useEffect(() => {
@@ -41,6 +47,18 @@ export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: (
     const timer = setTimeout(() => setCopied(false), 2000);
     return () => clearTimeout(timer);
   }, [copied]);
+  const failed =
+    findings.isError && agent.failed
+      ? "Не удалось загрузить находки и имя агента."
+      : findings.isError
+        ? "Не удалось загрузить находки."
+        : agent.failed
+          ? "Не удалось загрузить имя агента."
+          : null;
+  const retry = () => {
+    if (findings.isError) void findings.refetch();
+    if (agent.failed) agent.retry();
+  };
   return (
     <Sheet open={open} onClose={onClose} title="Отчёт для письма" width="lg">
       <div className="px-5 py-6 sm:px-7">
@@ -49,7 +67,7 @@ export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: (
             size="lg"
             icon={Download}
             disabled={!brief}
-            onClick={() => download("otchet-tone-of-voice.md", brief)}
+            onClick={() => download(reportFile("otchet-tone-of-voice"), brief)}
           >
             Скачать отчёт
           </Button>
@@ -75,7 +93,20 @@ export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: (
             Не удалось скопировать. Скачайте отчёт или выделите текст.
           </p>
         )}
-        <BriefPreview text={brief} />
+        {brief ? (
+          <BriefPreview text={brief} />
+        ) : failed ? (
+          <div>
+            <p role="alert" className="text-read text-fg-2">
+              {failed}
+            </p>
+            <Button className="mt-4" icon={RotateCcw} onClick={retry}>
+              Повторить
+            </Button>
+          </div>
+        ) : (
+          <Skeleton className="h-96" />
+        )}
       </div>
     </Sheet>
   );

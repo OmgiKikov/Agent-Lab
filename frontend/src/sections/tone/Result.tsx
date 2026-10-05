@@ -54,13 +54,8 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
             {count(result.topics.flatMap((t) => t.rules).length, "критерий", "критерия", "критериев")}
           </p>
         </div>
-        <Button
-          className="hidden sm:inline-flex"
-          size="lg"
-          icon={FileText}
-          disabled={!brief}
-          onClick={() => setShowReport(true)}
-        >
+        {/* The sheet says itself what it still waits for, or what could not be loaded. */}
+        <Button className="hidden sm:inline-flex" size="lg" icon={FileText} onClick={() => setShowReport(true)}>
           Отчёт для письма
         </Button>
       </div>
@@ -200,7 +195,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
         </div>
       )}
       <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-line pt-5">
-        <Button className="sm:hidden" size="lg" icon={FileText} disabled={!brief} onClick={() => setShowReport(true)}>
+        <Button className="sm:hidden" size="lg" icon={FileText} onClick={() => setShowReport(true)}>
           Отчёт для письма
         </Button>
         <Link

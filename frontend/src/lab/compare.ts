@@ -95,7 +95,8 @@ export function previousOf(
   return { line: compare.previous, newExport };
 }
 
-const VERDICT: Record<Exclude<Verdict, "same">, string> = {
+/** What a person may read into a difference, as the result says it; the history says the same (comparisonText). */
+export const VERDICT: Record<Exclude<Verdict, "same">, string> = {
   few: "Мало разговоров, чтобы судить.",
   "beyond-chance": "Разница больше случайных колебаний, но могли измениться темы разговоров и клиенты.",
   "within-chance": "Разница в пределах случайных колебаний.",
