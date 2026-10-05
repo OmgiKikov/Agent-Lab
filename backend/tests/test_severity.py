@@ -326,6 +326,34 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found['log']['withSerious'], 1)
         self.assertEqual((await self.get('/api/state'))['severity'], {'tone': [pronouns], 'code': []})
 
+    async def test_a_stop_while_the_model_proposes_ends_the_proposals_not_the_saved_check(self):
+        asked = asyncio.Event()
+
+        async def endless(*args, **kwargs):
+            asked.set()
+            await asyncio.Event().wait()
+
+        draft = store.load(tone.DRAFT)
+        request = {
+            'ruleIds': ['pronouns', 'simple_language'],
+            'count': 5,
+            'revision': draft['revision'],
+            'propose': True,
+        }
+        with (
+            patch.object(discover, 'judge_dialogue', side_effect=judge_by({'d1': {'pronouns'}})),
+            patch.object(severity.llm, 'structured', endless),
+        ):
+            response = await self.client.post('/api/tone-of-voice/check', json=request)
+            self.assertEqual(response.status_code, 200, response.text)
+            await asyncio.wait_for(asked.wait(), 2)
+            stopped = await self.client.post('/api/job/stop')
+            self.assertEqual(stopped.status_code, 200, stopped.text)
+            await self.wait_job()
+        self.assertIsNone(api.jobs.state['error'])  # not «Остановлено»: the check stands
+        self.assertEqual(store.load(tone.RESULT)['summary']['failed'], 1)
+        self.assertEqual(len(store.tone_checks()), 1)
+
     async def test_a_check_not_asked_to_propose_asks_no_model(self):
         await self.check_tone({'d1': {'pronouns'}})
         found = await self.get('/api/problems?check=tone')

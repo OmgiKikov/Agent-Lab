@@ -512,6 +512,18 @@ def run_detail(run_id: str) -> dict:
     return record
 
 
+async def proposed_after(check: str, progress: Progress) -> None:
+    """The serious errors the model proposes after a check it follows, which is published by then. «Остановить» here
+    stops only the proposals: the task ends as done, with the check saved, never «Остановлено» beside a result that
+    stands. Each answered part is saved at once (severity.propose); «Отметить автоматически» asks for the rest."""
+    try:
+        await severity.propose(check, progress)
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None:
+            current.uncancel()
+
+
 @app.post('/api/discover')
 async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -> dict:
     payload = payload or DiscoverCommand()
@@ -520,7 +532,7 @@ async def start_discover(payload: DiscoverCommand | None = Body(default=None)) -
         result = await discover.run(payload.count, progress, payload.replan)
         accuracy_history.commit(result, new_criteria=payload.replan)
         if payload.propose:
-            await severity.propose(checks.CODE, progress)
+            await proposed_after(checks.CODE, progress)
         return result
 
     return start('discover', work)
@@ -628,7 +640,7 @@ async def check_tone(payload: ToneCheckCommand) -> dict:
         result = await tone.assess(criteria, payload.count, progress)
         tone.commit(result)
         if payload.propose:
-            await severity.propose(checks.TONE, progress)
+            await proposed_after(checks.TONE, progress)
         return result
 
     return start('tone-check', work)
