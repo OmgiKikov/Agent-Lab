@@ -454,11 +454,11 @@ class RagEvidenceTests(unittest.TestCase):
         return RuleReply.model_validate({'ruleId': 'rag:query', 'status': 'PASS', 'reason': 'ok', 'agentQuote': quote})
 
     def test_rag_quote_is_found_in_the_trace(self) -> None:
-        rows = judge.checked([self.row('вернуть платёж')], [RAG_RULE], 'ответ агента', rag='как вернуть платёж')
+        rows = judge.checked([self.row('вернуть платёж')], [RAG_RULE], 'ответ агента', rag_text='как вернуть платёж')
         self.assertEqual(rows[0]['status'], 'PASS')
 
     def test_rag_quote_from_the_reply_is_not_evidence(self) -> None:
-        rows = judge.checked([self.row('ответ агента')], [RAG_RULE], 'ответ агента', rag='как вернуть платёж')
+        rows = judge.checked([self.row('ответ агента')], [RAG_RULE], 'ответ агента', rag_text='как вернуть платёж')
         self.assertEqual(rows[0]['status'], 'UNKNOWN')
 
 

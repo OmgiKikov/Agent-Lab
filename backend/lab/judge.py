@@ -16,6 +16,7 @@ from .prompts import JUDGE_LOG, JUDGE_REPLAY, JUDGE_RUN
 from .transcript import for_judge, tool_calls
 
 NO_QUOTE = 'Модель привела цитату, которой нет в ответах агента. Вывод не засчитан. '
+NO_RAG_QUOTE = 'Модель привела цитату, которой нет в обращении к базе знаний. Вывод не засчитан. '
 
 
 @dataclass(frozen=True)
@@ -53,9 +54,10 @@ def checked(
     *,
     tools: str = '',
     knowledge_available: bool = False,
-    rag: str = '',
+    rag_text: str = '',
 ) -> list[dict]:
-    """One row per criterion; validate reply, tool and knowledge evidence at this single seam.
+    """One row per criterion; validate reply, tool, knowledge and knowledge-base call (rag_text) evidence at this
+    single seam.
 
     The Lab does not record backend state changes, so a state criterion cannot be measured here.
     Applicability is evaluated separately: a criterion that did not arise remains NOT_APPLICABLE.
@@ -80,11 +82,11 @@ def checked(
         status, reason, quote = row.status, row.reason, row.agent_quote
         if status in ('PASS', 'FAIL'):
             observation = rule.get('observation', 'reply')
-            evidence = {'tool': tools, 'rag': rag}.get(observation, agent_text)
+            evidence = {'tool': tools, 'rag': rag_text}.get(observation, agent_text)
             missing_evidence = {
                 'reply': '',
                 'tool': '' if tools else 'Вызовы инструментов не записаны. ',
-                'rag': '' if rag else 'Обращение к базе знаний не записано. ',
+                'rag': '' if rag_text else 'Обращение к базе знаний не записано. ',
                 'state': 'Изменения в системах банка не записаны. ',
                 'knowledge': ''
                 if knowledge_available
@@ -92,7 +94,7 @@ def checked(
             }
             missing = missing_evidence.get(observation, 'Неизвестный способ проверки критерия. ')
             if missing or not quotes.cited(quote, evidence):
-                status, reason = 'UNKNOWN', (missing or NO_QUOTE) + reason
+                status, reason = 'UNKNOWN', (missing or (NO_RAG_QUOTE if observation == 'rag' else NO_QUOTE)) + reason
         out.append(
             {
                 'ruleId': rule['id'],
@@ -197,7 +199,7 @@ async def step_verdict(rules: list[dict], step: dict, endpoint: llm.Endpoint | N
         agent_text,
         tools=rag.tools(trace),
         knowledge_available=rag.called(trace),
-        rag=rag.evidence(trace),
+        rag_text=rag.evidence(trace),
     )
     return Verdict(rows, verdict_of(rows), answer.model)
 
