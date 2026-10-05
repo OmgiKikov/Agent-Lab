@@ -162,8 +162,11 @@ function Live({ run, state }: { run: LabRun; state: LabState }) {
         )}
       </p>
       <p className="mt-3 text-lead text-fg-2">
-        {plural(total || done, "разговор сыгран", "разговора сыграно", "разговоров сыграно")} · модель оценивает их по
-        ходу прогона
+        {/* After «из 21» the word agrees with the number in the genitive: «из 21 разговора», «из 4 разговоров». */}
+        {total
+          ? `${plural(total, "разговора", "разговоров", "разговоров")} сыграно`
+          : plural(done, "разговор сыгран", "разговора сыграно", "разговоров сыграно")}{" "}
+        · модель оценивает их по ходу прогона
       </p>
       <div className="mt-6 h-2 max-w-[640px] overflow-hidden rounded-full bg-well">
         <div
