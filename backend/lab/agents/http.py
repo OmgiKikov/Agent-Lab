@@ -170,7 +170,8 @@ class HttpAgent:
         self, conversation_id: str, text: str, world: dict | None = None, history: list[dict] | None = None
     ) -> dict:
         """One turn: the reply, its status and buttons, seconds taken, the systems it called (local stand) and, from a
-        local agent, what happened inside it (trace; None when the agent does not give one)."""
+        local agent in a replayed conversation (history), what happened inside it (trace; None when the agent does not
+        give one or the turn is not replayed)."""
         if not address_valid(self.url):
             raise AgentError(BAD_ADDRESS)  # saved before addresses were checked: the agent cannot be reached
         headers, body = self.request(conversation_id, text, history)
@@ -186,7 +187,8 @@ class HttpAgent:
                 raise AgentError(f'Нет связи с агентом ({type(error).__name__}).') from error
             seconds = round(time.monotonic() - started, 2)
             events = await _mock_events(client, cursor, headers.get('x-trace-id'))
-            trace = await agent_trace(client, self.url, headers['x-trace-id']) if self.mocked else None
+            traced = self.mocked and history is not None
+            trace = await agent_trace(client, self.url, headers['x-trace-id']) if traced else None
         if response.status_code >= 500 or response.status_code in (401, 403, 404):
             raise AgentError(f'Агент ответил ошибкой (HTTP {response.status_code}).')
         try:

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import httpx
 
@@ -51,3 +52,31 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_agent_without_traces_gives_none(self) -> None:
         self.assertIsNone(await self.fetch(404, {'detail': 'Not Found'}))
+
+
+class SayTraceTests(unittest.IsolatedAsyncioTestCase):
+    async def requested(self, history: list[dict] | None) -> list[str]:
+        """The paths a local agent's turn reached, the agent and the stand's mocks answering."""
+        seen = []
+        client = httpx.AsyncClient
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            if request.method == 'POST' and request.url.path == http.AGENT_PATH:
+                return httpx.Response(200, json={'message': {'content': {'status_code': '200', 'result': 'Ответ'}}})
+            return httpx.Response(200, json={})
+
+        agent = http.HttpAgent({'url': f'http://127.0.0.1:8080{http.AGENT_PATH}', 'profile': 'local'})
+        with patch.object(
+            http.httpx,
+            'AsyncClient',
+            side_effect=lambda **kwargs: client(transport=httpx.MockTransport(answer), **kwargs),
+        ):
+            await agent.say('c-1', 'вопрос', history=history)
+        return seen
+
+    async def test_a_simulated_turn_does_not_ask_for_the_trace(self) -> None:
+        self.assertFalse([path for path in await self.requested(None) if path.startswith(http.TRACE_PATH)])
+
+    async def test_a_replayed_turn_asks_for_its_trace(self) -> None:
+        self.assertTrue([path for path in await self.requested([]) if path.startswith(http.TRACE_PATH)])

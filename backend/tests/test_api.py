@@ -429,6 +429,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_state_has_no_replay_before_the_first_one(self) -> None:
         self.assertIsNone((await self.client.get('/api/state')).json()['replay'])
 
+    async def test_state_tells_the_latest_replay_without_parsing_it(self) -> None:
+        stamp = {'id': 'replay-1', 'finishedAt': '2026-10-05T10:00:00.000+00:00'}
+        store.save(api.replay.RESULT, {**stamp, 'dialogues': [{'dialogueId': 'replayed-dialogue', 'steps': []}]})
+        store.save(api.replay.REPLAY_SUMMARY, stamp)
+        state, parsed = await self.state_parsing()
+        self.assertEqual(state['replay'], stamp)
+        self.assertFalse([text for text in parsed if 'replayed-dialogue' in text])
+
 
 if __name__ == '__main__':
     unittest.main()
