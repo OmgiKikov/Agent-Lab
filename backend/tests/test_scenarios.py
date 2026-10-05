@@ -1,5 +1,5 @@
-"""A scenario is a test: the error of the real conversation it reproduces, and its own result in every run of its check
-(docs/superpowers/specs/2026-10-03-scenario-cards-design.md)."""
+"""A scenario is a test: the error of the real conversation it reproduces, and its own result in every run of its
+check."""
 
 import unittest
 

@@ -1,5 +1,4 @@
-"""Tone of voice and Точность: two checks of the same conversations, each with its own result, answers and scenarios
-(docs/superpowers/specs/2026-10-03-checks-as-sections-design.md, sections 2 and 4)."""
+"""Tone of voice and Точность: two checks of the same conversations, each with its own result, answers and scenarios."""
 
 import asyncio
 import json

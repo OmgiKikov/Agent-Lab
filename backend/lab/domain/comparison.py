@@ -1,6 +1,6 @@
 """What two saved checks of one check have in common: the same criteria, the same models and instructions of the judge,
 the same conversations. Pure functions over saved records, shared by the histories of both checks: no model is called,
-nothing is read or stored (docs/superpowers/specs/2026-10-04-was-is-design.md, section 3). Whether the difference
+nothing is read or stored. Whether the difference
 between them says more than chance is statistics.py's.
 """
 

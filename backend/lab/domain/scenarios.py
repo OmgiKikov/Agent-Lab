@@ -3,7 +3,7 @@
 A scenario (a card) is a situation for the synthetic customer taken from a real conversation, its frozen criteria (the
 grounded rules of its topic, observable in the agent's replies or its system calls) and its test data for the mocked
 bank's systems. A card from an error names the criteria the agent failed in that conversation (reproduces): the
-scenario is a test of that error (docs/superpowers/specs/2026-10-03-scenario-cards-design.md). Its result in every run
+scenario is a test of that error. Its result in every run
 of the deck's check stands beside the others; nothing here says whether the agent got better or worse. Pure functions.
 """
 

@@ -1,6 +1,5 @@
 """Serious and minor errors: after a check the model proposes for each criterion whether its errors are serious, and a
-person confirms or changes it; serious errors come first and are counted apart
-(docs/superpowers/specs/2026-10-04-severity-design.md)."""
+person confirms or changes it; serious errors come first and are counted apart."""
 
 import asyncio
 import json

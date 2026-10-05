@@ -7,7 +7,7 @@ uv run --locked --directory backend ruff check
 uv run --locked --directory backend ruff format --check
 # The tests ask no model: an address nobody answers on, as in CI, so a key in the environment is never spent.
 LAB_MODEL_URL=http://127.0.0.1:9/v1 uv run --locked --directory backend python -m unittest discover -s tests -v
-# The texts people read keep the rules of docs/WRITING.md.
+# The texts people read carry no signs of machine-written text.
 uv run --locked --directory backend python ../bin/copy_check.py
 npm --prefix frontend run lint
 npm --prefix frontend run format:check

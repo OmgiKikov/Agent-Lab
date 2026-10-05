@@ -9,7 +9,7 @@ import { lineText, type Serious, type SeverityLine } from "./severity";
 import type { Check } from "./types";
 
 /**
- * «Сводка для руководителя» (spec 2026-10-04-answers-and-summary-design.md, 2.2): one page of the agent for a person who
+ * «Сводка для руководителя»: one page of the agent for a person who
  * does not use the product. The page and the letter are told from this one model, so they never differ: numbers with
  * their denominators, people's answers and examples, and no verdict on the agent — the reader draws the conclusion.
  * No «промпт», «модель», conversation ids or file paths: «автоматическая проверка» found the errors.

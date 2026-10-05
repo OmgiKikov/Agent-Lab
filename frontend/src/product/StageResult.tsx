@@ -20,7 +20,7 @@ export function StageResult({
   checked: number;
   unchecked?: number;
   size?: "hero" | "display";
-  /** Where each part's conversations open: every number leads to what it is made of (DESIGN.md, честность 5). */
+  /** Where each part's conversations open: every number leads to what it is made of. */
   link?: (part: "bad" | "ok" | "none") => string;
   className?: string;
 }) {

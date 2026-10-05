@@ -1,5 +1,5 @@
 """«Было → стало»: each check compares itself with its previous saved check, criterion by criterion, and a new export
-no longer erases the result of Точность (docs/superpowers/specs/2026-10-04-was-is-design.md)."""
+no longer erases the result of Точность."""
 
 import asyncio
 import json

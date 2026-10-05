@@ -1,4 +1,4 @@
-"""bin/copy_check.py reads the texts people read (docs/WRITING.md): what it reads as a text is checked here."""
+"""bin/copy_check.py reads the texts people read: what it reads as a text is checked here."""
 
 import importlib.util
 import unittest

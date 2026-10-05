@@ -1,4 +1,4 @@
-"""Serious and minor errors (docs/superpowers/specs/2026-10-04-severity-design.md): a person's decision on a criterion,
+"""Serious and minor errors: a person's decision on a criterion,
 the model's proposals and taking them all."""
 
 from typing import Literal

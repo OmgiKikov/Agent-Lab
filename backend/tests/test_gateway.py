@@ -255,7 +255,7 @@ class SetupTests(GatewayCase):
             self.assertIn('url.txt пустой', models.describe()['problem'])
 
     def test_starting_the_lab_on_the_gateway_opens_no_database(self) -> None:
-        """Importing the Lab reads no agent's database (docs/backend.md: no hidden migration at import). A database
+        """Importing the Lab reads no agent's database. A database
         from before agents stays as it was until the start adopts it, so its backup is the file as it was; a fresh
         folder gets no empty database; the second judge comes only from LAB_SECOND_MODEL."""
         data = self.certs.parent / 'data'

@@ -12,7 +12,7 @@ export default {
         sans: ["Onest Variable", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono Variable", "ui-monospace", "monospace"],
       },
-      // The named scale (docs/DESIGN.md): reading text is 15 and 17; nothing with a meaning under 13. The big sizes
+      // The named scale: reading text is 15 and 17; nothing with a meaning under 13. The big sizes
       // are for the one number a screen exists to say.
       fontSize: {
         label: ["11px", { lineHeight: "16px" }],

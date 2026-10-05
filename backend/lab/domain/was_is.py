@@ -1,6 +1,6 @@
 """«Было → стало»: the current result of a check beside its previous saved check, criterion by criterion, when both
 have the same criteria and models (comparison.comparison); what a person may read into each difference is
-statistics.verdict's (docs/superpowers/specs/2026-10-04-was-is-design.md, section 4). Pure functions."""
+statistics.verdict's. Pure functions."""
 
 from . import problems, statistics
 

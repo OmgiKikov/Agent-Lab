@@ -20,7 +20,9 @@ __pycache__/
 
 # Earlier experiments (LangWatch, Latitude, FutureAGI, review UI, old scripts), kept on this computer only.
 /archive/
-/.claude/*
+/.claude/
+skills-lock.json
 
-# Claude Code skills travel with the repository, so every session has them.
-!/.claude/skills/
+# Local secrets and TypeScript build info.
+.env
+*.tsbuildinfo

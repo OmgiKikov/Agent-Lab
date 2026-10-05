@@ -107,6 +107,36 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(storage.documents.load('marker.json'))
         self.assertIsNone(storage.documents.load('marker.json'))
 
+    async def test_a_deleted_agent_leaves_the_list_and_its_data_is_moved_aside(self) -> None:
+        with registry.using(self.first):
+            storage.dialogues.replace([{'id': '1'}])
+        response = await self.client.post('/api/agents/delete', json={'id': self.first})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([a['id'] for a in (await self.client.get('/api/agents')).json()], [self.second])
+        self.assertFalse(registry.db_of(self.first).parent.exists())
+        (kept,) = (self.settings.data / 'deleted').iterdir()
+        self.assertTrue(kept.name.startswith(self.first + '-'))
+        self.assertTrue((kept / 'lab.sqlite3').is_file())
+        self.assertEqual((await self.client.get('/api/state', headers={'X-Agent': self.first})).status_code, 404)
+        # Moved out of data/agents/, the folder is not found again on the next start.
+        self.assertEqual(registry.recover_lost(), [])
+        self.assertEqual((await self.client.post('/api/agents/delete', json={'id': self.first})).status_code, 404)
+
+    async def test_an_agent_is_not_deleted_while_its_task_runs(self) -> None:
+        release = asyncio.Event()
+
+        async def slow(progress) -> None:
+            await release.wait()
+
+        with registry.using(self.first):
+            self.jobs.start('discover', slow)
+        await asyncio.sleep(0)
+        response = await self.client.post('/api/agents/delete', json={'id': self.first})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('идёт задача', response.json()['detail'])
+        self.assertIsNotNone(registry.get(self.first))
+        release.set()
+
     async def test_agents_are_listed_with_the_result_of_each_check_and_created_by_name(self) -> None:
         with registry.using(self.first):
             summary = {'checked': 100, 'measured': 92, 'failed': 78, 'passed': 14, 'unmeasured': 8}

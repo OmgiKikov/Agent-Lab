@@ -1,5 +1,5 @@
 """Serious and minor errors: for each criterion of a check, whether one error by it is serious, with a reason a person
-can weigh (docs/superpowers/specs/2026-10-04-severity-design.md). A proposal; a person's decision always wins."""
+can weigh. A proposal; a person's decision always wins."""
 
 from typing import Annotated
 

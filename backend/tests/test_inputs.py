@@ -1,6 +1,5 @@
 """The Lab's inputs and what a new one resets (flows/inputs.py), with what a new result or new criteria reset
-(flows/accuracy.publish, flows/tone.save_draft, flows/tone.publish): «Что сбрасывает что» of
-docs/superpowers/specs/2026-10-03-checks-as-sections-design.md."""
+(flows/accuracy.publish, flows/tone.save_draft, flows/tone.publish)."""
 
 import itertools
 import sqlite3
@@ -54,7 +53,7 @@ class InputsTests(unittest.TestCase):
         self.assertIsNone(storage.documents.load('tone-of-voice-criteria.json'))
 
     def test_what_resets_what(self) -> None:
-        """The table «Что сбрасывает что» of docs/superpowers/specs/2026-10-03-checks-as-sections-design.md: what each
+        """What resets what: what each
         event leaves of the tone-of-voice criteria (D), the results of tone of voice (T) and Точность (C), and the
         deck (K) built from tone of voice, from Точность, or one that names no check."""
         policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь на вы.', 'sha256': 'p1'}

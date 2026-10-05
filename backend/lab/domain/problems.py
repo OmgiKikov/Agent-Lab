@@ -3,9 +3,7 @@ of that check.
 
 A rule is keyed by its source quote, as in results.summarize: the same rule restated in several topics is one rule.
 A problem is a rule the judge found violated at least once. Logs and a run are two sides of a rule, counted apart:
-other conversations, other customers. The record is described in section 8 of
-docs/superpowers/specs/2026-09-30-agent-lab-unified-product-design.md; one per check since
-docs/superpowers/specs/2026-10-03-checks-as-sections-design.md.
+other conversations, other customers. One record per check.
 """
 
 import hashlib

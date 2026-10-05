@@ -367,7 +367,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_rejudge_the_model_did_not_answer_leaves_the_verdicts_and_the_answers(self) -> None:
         """An outage is not a verdict: «Оценить заново» while the model is down fails, and the run keeps its verdicts
-        and the answers people gave on them (docs/backend.md: a failed pass leaves the run as it was)."""
+        and the answers people gave on them."""
         source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
         item = simulation.new_item(card(), 'default', 1)
         row = {'ruleId': 'r1', 'status': 'FAIL', 'reason': 'нет срока', 'agentQuote': 'answer'}

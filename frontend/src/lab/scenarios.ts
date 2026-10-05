@@ -56,7 +56,7 @@ export function useScenarios(state: LabState | null) {
 /**
  * «Контроль: …»: what the real conversation of a control shows in the current result of its check, as the check said
  * it — no error found, an error found now (the control was built from it without one), or it could not be checked;
- * never «ошибок не было» (docs/DESIGN.md, «Честность чисел»). Missing only when the result has no such conversation.
+ * never «ошибок не было». Missing only when the result has no such conversation.
  */
 export const controlLine = (sourceStatus: Status | null | undefined) =>
   !sourceStatus

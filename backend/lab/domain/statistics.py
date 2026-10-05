@@ -1,5 +1,5 @@
-"""Whether the difference between two shares of errors says more than chance (docs/superpowers/specs/
-2026-10-04-was-is-design.md, section 3): a fact about the shares, not a judgement of the agent."""
+"""Whether the difference between two shares of errors says more than chance: a fact about the shares, not a judgement
+of the agent."""
 
 from math import comb, sqrt
 

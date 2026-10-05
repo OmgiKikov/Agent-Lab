@@ -1,4 +1,4 @@
-"""Serious and minor errors (docs/superpowers/specs/2026-10-04-severity-design.md). After a check, when the screens ask
+"""Serious and minor errors. After a check, when the screens ask
 for it, the model proposes for each criterion of the check's result whether an error by it is serious, with a reason a
 person can weigh; a person confirms or changes it. A person's decision always wins: the model is never asked about a
 criterion a person decided, and its proposals live apart from the decisions (storage.severity)."""

@@ -1,5 +1,5 @@
 /**
- * The two checks of the real conversations of the export (docs/DESIGN.md): tone of voice by a person's rules of
+ * The two checks of the real conversations of the export: tone of voice by a person's rules of
  * communication, accuracy by the criteria read from the agent's code. Each has its own criteria, result and answers.
  */
 export type Check = "tone" | "code";
@@ -185,10 +185,10 @@ export type Job = {
 };
 /**
  * A check's result with people's answers taken in, counted by the service from the result's rows with the answers on
- * them (spec 2026-10-04-answers-and-summary-design.md, 2.1). A conversation is «с ошибкой с учётом ответов» when it
+ * them. A conversation is «с ошибкой с учётом ответов» when it
  * keeps an error a person did not take back, or a person found the error the check missed there. The denominator stays
  * the check's: the conversations it could check. It never stands in for the check's own number, is never compared
- * between checks and never enters «было → стало» (DESIGN.md, «Честность чисел», 9).
+ * between checks and never enters «было → стало».
  */
 export type Answers = {
   /** The check's own count: the conversations it could check, and those it found an error in. */
@@ -233,7 +233,7 @@ export type LabState = {
   checks: Record<Check, ResultBrief | null>;
   /**
    * The serious criteria, per check, by their key (the problem's id, problems.rule_key): by a person's decision, else
-   * by the automatic check's proposal; without either an error is minor (spec 2026-10-04-severity-design.md). Older
+   * by the automatic check's proposal; without either an error is minor. Older
    * services have no such field.
    */
   severity?: Record<Check, string[]>;

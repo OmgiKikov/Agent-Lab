@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "./Button";
 import { EmptyState } from "./EmptyState";
 
-/** The service's own words on why, when it gave them: after what happened, small (docs/WRITING.md, «Ошибка»). */
+/** The service's own words on why, when it gave them: after what happened, small. */
 const reasonOf = (error: unknown) => (error instanceof Error && error.message ? error.message : null);
 
 /**

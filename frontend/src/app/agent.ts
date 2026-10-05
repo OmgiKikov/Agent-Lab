@@ -30,6 +30,15 @@ export function rememberAgent(id: string) {
   }
 }
 
+/** A deleted agent is not the one «/» returns to. */
+export function forgetAgent(id: string) {
+  try {
+    if (localStorage.getItem(KEY) === id) localStorage.removeItem(KEY);
+  } catch {
+    /* private mode or blocked storage: nothing was remembered */
+  }
+}
+
 export function lastAgent(): string | null {
   try {
     return localStorage.getItem(KEY);

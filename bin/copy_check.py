@@ -1,5 +1,5 @@
 """The texts people read — of the screens (frontend/src) and of the service's messages (backend/lab) — without the
-signs of machine-written text listed in docs/WRITING.md («Нейрослоп: чего не пишем»).
+signs of machine-written text.
 
 Reads string literals and JSX text that have Cyrillic letters in them; comments, docstrings and the prompts the models
 read are not texts for people. A line where a sign is meant says so with a comment `copy: ok` (on it or the line
@@ -195,7 +195,7 @@ def main() -> int:
     found = [line for path in paths for line in findings(path)]
     for line in found:
         print(line)
-    print(f'Приметы нейрослопа в текстах: {len(found)} (docs/WRITING.md)' if found else 'Тексты без примет нейрослопа')
+    print(f'Приметы нейрослопа в текстах: {len(found)}' if found else 'Тексты без примет нейрослопа')
     return 1 if found else 0
 
 

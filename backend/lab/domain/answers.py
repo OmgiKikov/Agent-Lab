@@ -135,11 +135,11 @@ def counted(record: dict, visible: dict[tuple[str, str], dict]) -> dict:
 
 
 def counts(result: dict) -> dict[str, int]:
-    """A check's result with people's answers taken in (docs/superpowers/specs/2026-10-04-answers-and-summary-design.md,
-    2.1), from its rows with the answers laid on (on_result): the one count the line under a check's number, «Обзор» and
-    the summary for management share. A conversation is «с ошибкой с учётом ответов» when it keeps an error a person
-    did not take back («Нет» on «Это действительно ошибка?»), or a person found the error the check missed there («Нет»
-    on «Здесь действительно нет ошибки?»). The denominator stays the check's: the conversations it could check.
+    """A check's result with people's answers taken in, from its rows with the answers laid on (on_result): the one
+    count the line under a check's number, «Обзор» and the summary for management share. A conversation is «с ошибкой с
+    учётом ответов» when it keeps an error a person did not take back («Нет» on «Это действительно ошибка?»), or a
+    person found the error the check missed there («Нет» on «Здесь действительно нет ошибки?»). The denominator stays
+    the check's: the conversations it could check.
     measured, failed: the check's own count; counted: the same conversations with an error, answers taken in; errors:
     the errors the check found (a criterion in a conversation), confirmed and removed by people; clean: the verdicts
     «без ошибки» people answered, missed: those where they found the error the check missed."""

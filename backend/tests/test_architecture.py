@@ -1,4 +1,4 @@
-"""The layers of backend/lab and the one direction of their imports (docs/backend.md, «Слои»).
+"""The layers of backend/lab and the one direction of their imports.
 
 A module imports from its own layer or from a layer its layer may use, never from one above, and no modules import
 each other in a circle, not even inside a function. Nothing breaks it today, and the lists of exceptions are empty: a
@@ -11,7 +11,7 @@ from pathlib import Path
 
 LAB = Path(__file__).resolve().parents[1] / 'lab'
 
-# What each layer may import besides itself (docs/superpowers/specs/2026-10-05-backend-architecture-design.md, п. 2).
+# What each layer may import besides itself.
 USES = {
     'app': {'api', 'flows', 'roles', 'agents', 'domain', 'storage', 'models', 'config'},
     'api': {'flows', 'agents', 'domain', 'storage', 'models', 'config'},

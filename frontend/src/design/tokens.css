@@ -1,6 +1,6 @@
 /*
  * The product's tokens: every colour of the interface comes from here, sizes and radii from tailwind.config.js.
- * Quiet and light (docs/DESIGN.md): white content, a light grey navigation, near-black ink in two greys, black pills for
+ * Quiet and light: white content, a light grey navigation, near-black ink in two greys, black pills for
  * the main action, a highlighter yellow for the agent's words the judge cited, and red only where an error is the point.
  * Colours are rgb channels, so Tailwind's alpha works (`bg-bad/10`).
  */

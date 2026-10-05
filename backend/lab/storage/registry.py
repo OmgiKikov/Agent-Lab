@@ -150,6 +150,22 @@ def create(name: str, description: str = '', agent_id: str | None = None) -> dic
     return get(chosen) or {}
 
 
+def remove(agent_id: str) -> Path | None:
+    """The agent out of the registry, then its folder moved to data/deleted/<id>-<time>/: never erased, a person can
+    bring it back by hand. A start in between finds the folder and registers the agent again (recover_lost), so nothing
+    is lost on the way. Where its data went; None when it had none. LookupError for an agent the Lab does not have."""
+    with _connection() as connection:
+        if not connection.execute('DELETE FROM agents WHERE id = ?', (agent_id,)).rowcount:
+            raise LookupError(agent_id)
+    folder = db_of(agent_id).parent
+    if not folder.exists():
+        return None
+    target = _root() / 'deleted' / f'{agent_id}-{re.sub(r"[^0-9]", "", db.now())[:14]}'
+    db.private_folder(target.parent)
+    folder.replace(target)
+    return target
+
+
 @contextmanager
 def using(agent_id: str) -> Iterator[None]:
     """Run inside one agent: storage reads and writes its database."""

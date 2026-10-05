@@ -8,13 +8,13 @@ import type { Problems, RuleEntry } from "./problems";
 import type { Check, Job } from "./types";
 
 /**
- * Serious and minor errors (spec 2026-10-04-severity-design.md). After each check the automatic check proposes, for
+ * Serious and minor errors. After each check the automatic check proposes, for
  * every criterion of the result, whether its errors are serious, with a reason; a person confirms or changes it — in
  * the criteria, on the problem's page, or all at once («Подтвердить все») — and a person's decision always wins: no new
  * proposal changes it. Without either an error is minor. Both live in the service by the criterion's key (the
  * problem's id), apart from the criteria: they change neither what is checked nor how. Serious problems come first
  * everywhere, carry «серьёзная», and the conversations with a serious error are counted beside the check's number —
- * never instead of it, never added to it; every screen says whose decision it is (DESIGN.md, «Честность чисел», 4).
+ * never instead of it, never added to it; every screen says whose decision it is.
  */
 export type Mark = { check: Check; rule: string; serious: boolean };
 
@@ -177,7 +177,7 @@ export type SeverityLine =
   | { kind: "text"; text: string; action?: "check" | "propose" | "again" };
 
 /**
- * What a check says about serious errors, line by line (DESIGN.md, «Честность чисел», 4). Once a criterion is
+ * What a check says about serious errors, line by line. Once a criterion is
  * serious: the count of the same checked conversations; which criteria are serious and whose decision it is; where
  * they could be checked, when not everywhere; what is not decided yet. With none serious: whose decision that is. While
  * nothing is marked: that, or why it failed. A page someone else reads (`people`) says nothing until something is
