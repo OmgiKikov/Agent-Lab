@@ -18,7 +18,7 @@ import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
 import { ProblemList } from "../problems/ProblemList";
 import { RunMatrix } from "./RunMatrix";
-import { SimHeader, useSimRuns } from "./stage";
+import { NoSuchRun, SimHeader, useSimRuns } from "./stage";
 
 /**
  * «Симуляции»: synthetic customers play business scenarios with the agent, built from the errors of one check, and that
@@ -37,7 +37,7 @@ export function SimResultPage() {
 function SimResult() {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
-  const { finished, run } = useSimRuns(state, params.get("run"));
+  const { finished, run, newest, missing } = useSimRuns(state, params.get("run"));
   const criteria = useCriteria(run?.check ?? null, run && !isRunning(run) ? run.id : null);
   const { data, list } = criteria;
   const header = <SimHeader runId={run?.id ?? null} />;
@@ -56,6 +56,13 @@ function SimResult() {
           <Skeleton className="h-36 max-w-3xl" />
           <Skeleton className="h-80 max-w-5xl" />
         </div>
+      </div>
+    );
+  if (missing)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <NoSuchRun newest={newest} />
       </div>
     );
   if (!run) {

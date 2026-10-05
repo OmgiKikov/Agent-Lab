@@ -19,7 +19,7 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
 import { CheckHeader } from "../checks/CheckHeader";
-import { SimTabs, useSimRuns } from "../simulations/stage";
+import { NoSuchRun, SimTabs, useSimRuns } from "../simulations/stage";
 
 const QUEUES: Queue[] = ["disputed", "unchecked", "all"];
 /** The queues count cases (one criterion in one conversation, an error or «без ошибки») and say so. */
@@ -36,7 +36,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const navigate = useNavigate();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
-  const { run } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
+  const { run, newest, missing } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   const runId = stage === "sim" ? (run?.id ?? null) : null;
   // A check's cases are of its result; a run's, of the run, counted by the criteria of its check.
   const { data, isPlaceholderData, error, isFetching, refetch } = useProblems(
@@ -152,6 +152,13 @@ export function ReviewPage({ stage }: { stage: Stage }) {
       <div className="flex h-full flex-col">
         {header}
         <ServiceDown />
+      </div>
+    );
+  if (missing)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <NoSuchRun newest={newest} />
       </div>
     );
 

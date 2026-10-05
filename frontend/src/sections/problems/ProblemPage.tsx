@@ -31,7 +31,7 @@ import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
-import { useSimRuns } from "../simulations/stage";
+import { NoSuchRun, useSimRuns } from "../simulations/stage";
 import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
 import { checked, violationsOf } from "./model";
@@ -50,7 +50,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const navigate = useNavigate();
   const toast = useToast();
   const { state, offline } = useLabState();
-  const { run: simRun } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
+  const { run: simRun, newest, missing } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   // A check's problem is of that check; a run's, of the check whose scenarios it played.
   const check = stage === "sim" ? (simRun?.check ?? null) : stage;
   const { data, list, error, retry } = useCriteria(check, stage === "sim" ? (simRun?.id ?? null) : null);
@@ -129,6 +129,13 @@ export function ProblemPage({ stage }: { stage: Stage }) {
       <div className="flex h-full flex-col">
         {header}
         <ServiceDown />
+      </div>
+    );
+  if (missing)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <NoSuchRun newest={newest} />
       </div>
     );
   if (!data && error)

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { StageTabs } from "../../app/StageTabs";
-import { runLink, toneCheckLink, type Check } from "../../app/links";
+import { runLink, scenariosLink, toneCheckLink, type Check } from "../../app/links";
 import { api } from "../../lab/api";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
 import { count, longDay } from "../../lab/format";
@@ -13,27 +13,59 @@ import { useLabState } from "../../lab/LabProvider";
 import { useProblems } from "../../lab/problems";
 import { isRunning } from "../../lab/runs";
 import { toneResult } from "../../lab/tone";
-import type { LabState } from "../../lab/types";
+import type { LabState, RunSummary } from "../../lab/types";
 import { queueOf } from "../../lab/verdicts";
-import { Button } from "../../ui/Button";
+import { Button, buttonClass } from "../../ui/Button";
+import { EmptyState } from "../../ui/EmptyState";
 import { Modal } from "../../ui/Modal";
 import { useToast } from "../../ui/toast";
 import { PlayDialog } from "./PlayDialog";
 
-/** The runs of the simulation, newest first, and the one being looked at: named in the address, else the newest finished. */
+/**
+ * The runs of the simulation, newest first, and the one being looked at: named in the address, else the newest finished
+ * (`newest`). A run the address names that this agent does not have is `missing`: then no run is looked at, so another
+ * one never stands in its place (NoSuchRun says so).
+ */
 export function useSimRuns(state: LabState | null, wanted: string | null) {
   const runs = useMemo(
     () => [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)),
     [state?.runs],
   );
   const finished = useMemo(() => runs.filter((r) => r.items !== null && !isRunning(r)), [runs]);
-  const run = runs.find((r) => r.id === wanted) ?? finished[0] ?? runs[0] ?? null;
-  return { runs, finished, run };
+  const newest = finished[0] ?? runs[0] ?? null;
+  const missing = !!state && !!wanted && !runs.some((r) => r.id === wanted);
+  const run = missing ? null : (runs.find((r) => r.id === wanted) ?? newest);
+  return { runs, finished, run, newest, missing };
+}
+
+/**
+ * The run an address names is not among this agent's runs (a link from another agent, or an old one): said, with the
+ * newest run one click away.
+ */
+export function NoSuchRun({ newest }: { newest: RunSummary | null }) {
+  return (
+    <EmptyState
+      drop
+      title="Такого прогона нет"
+      className="h-full justify-center"
+      action={
+        <Link to={newest ? runLink(newest.id) : scenariosLink()} className={buttonClass({ variant: "primary" })}>
+          {newest ? "Открыть последний прогон" : "Открыть сценарии"}
+        </Link>
+      }
+    >
+      {newest
+        ? `Прогона из ссылки у этого агента нет. Последний прогон ${isRunning(newest) ? "идёт с" : newest.status === "failed" ? "начат" : "сыгран"} ${longDay(newest.startedAt)}.`
+        : "Прогона из ссылки у этого агента нет. Прогонов ещё не было."}
+    </EmptyState>
+  );
 }
 
 /** The tabs of the simulation with their counts; the run being looked at travels with them. */
 export function SimTabs({ state, runId }: { state: LabState | null; runId: string | null }) {
-  const { run } = useSimRuns(state, runId);
+  const [params] = useSearchParams();
+  // A page without a run of its own is of the run its address names: none, when that one is missing.
+  const { run } = useSimRuns(state, runId ?? params.get("run"));
   const { data } = useProblems(run?.check ?? null, run?.id ?? null);
   return (
     <StageTabs

@@ -14,7 +14,7 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { UploadButton } from "../../product/UploadLogs";
 import { CheckHeader } from "../checks/CheckHeader";
-import { SimHeader, useSimRuns } from "../simulations/stage";
+import { NoSuchRun, SimHeader, useSimRuns } from "../simulations/stage";
 import { Dialog } from "./Dialog";
 import { frozenNames, matchesRow, seriousRows, toVerdict, type Verdict } from "./model";
 import { Rows } from "./Rows";
@@ -28,7 +28,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const wide = useWide();
-  const { finished, run: simRun } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
+  const { finished, run: simRun, newest, missing } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   const runId = stage === "sim" ? (simRun?.id ?? null) : null;
   const record = useCriteria(stage === "sim" ? (simRun?.check ?? null) : stage, runId);
   const { data: problems, list: criteria } = record;
@@ -106,6 +106,13 @@ export function DialogsPage({ stage }: { stage: Stage }) {
         <div className="p-5">
           <Skeleton className="h-[480px]" />
         </div>
+      </div>
+    );
+  if (missing)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <NoSuchRun newest={newest} />
       </div>
     );
 
