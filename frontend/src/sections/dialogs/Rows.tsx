@@ -199,21 +199,26 @@ export function Rows({
           </span>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto px-2 pb-2" role="list" aria-label="Разговоры">
+      <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
         {pending ? (
           <div className="px-2">{pending}</div>
         ) : (
           <>
-            {rows.map((r) => (
-              <Row
-                key={r.key}
-                r={r}
-                on={r.key === selected}
-                onOpen={() => onOpen(r.key)}
-                numbers={numbers(r)}
-                personas={personas}
-              />
-            ))}
+            {rows.length > 0 && (
+              <ul aria-label="Разговоры">
+                {rows.map((r) => (
+                  <li key={r.key}>
+                    <Row
+                      r={r}
+                      on={r.key === selected}
+                      onOpen={() => onOpen(r.key)}
+                      numbers={numbers(r)}
+                      personas={personas}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
             {!rows.length && (
               <p className="px-3 py-10 text-center text-small text-fg-3">
                 {all.length ? "В этом отборе разговоров нет." : empty}
