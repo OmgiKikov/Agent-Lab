@@ -94,10 +94,12 @@ function Row({
 /**
  * The conversations of one stage: which result, one criterion, a search; one row per conversation. `pending` stands
  * in the list's place while what it is made of loads or after it failed: no counts then, and no «нет разговоров».
+ * `note` — one line under the list about what it lacks.
  */
 export function Rows({
   empty,
   pending,
+  note,
   all,
   rows,
   verdict,
@@ -116,6 +118,7 @@ export function Rows({
 }: {
   empty: string;
   pending?: ReactNode;
+  note?: string | null;
   all: DialogRow[];
   rows: DialogRow[];
   verdict: Verdict;
@@ -219,11 +222,16 @@ export function Rows({
           </>
         )}
       </div>
-      {!pending && rows.length > 0 && (
+      {!pending && (rows.length > 0 || note) && (
         <div className="border-t border-line px-4 py-2 text-small text-fg-3">
-          {rows.length}
-          {"\u00a0"}из{"\u00a0"}
-          {all.length}
+          {rows.length > 0 && (
+            <p>
+              {rows.length}
+              {"\u00a0"}из{"\u00a0"}
+              {all.length}
+            </p>
+          )}
+          {note && <p className={cn(rows.length > 0 && "mt-1")}>{note}</p>}
         </div>
       )}
     </div>

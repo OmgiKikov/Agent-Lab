@@ -151,6 +151,8 @@ export type Discover = {
   purpose?: string;
   criteriaRevision?: string;
   sampled: number;
+  /** Accuracy: the sampled conversations that fell into no topic, so no criterion applied to them. */
+  unassigned?: number;
   model: string;
   finishedAt: string;
   rulesSince?: string;

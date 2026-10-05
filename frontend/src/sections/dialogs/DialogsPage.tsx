@@ -5,7 +5,7 @@ import { side, type Stage } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { useCriteria } from "../../lab/criteria";
 import { logKey, logRows, simKey, simRows } from "../../lab/dialogs";
-import { longDay } from "../../lab/format";
+import { count, longDay, plural } from "../../lab/format";
 import { runTitle, useRun } from "../../lab/runs";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
@@ -54,9 +54,12 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const named = useMemo(() => (stage === "sim" ? frozenNames(criteria, all) : undefined), [stage, criteria, all]);
   const rule = ruleId ? problems?.rules.find((r) => r.id === ruleId) : undefined;
   const own = rule ? criteria.find((c) => c.r.id === rule.id) : undefined;
+  // A criterion with errors here opens the conversations with its errors; one without them (the line «Ошибок в этой
+  // выгрузке не нашли» leads here) opens the conversations it was checked in, with or without an error.
+  const errors = !!rule && rule[side(stage)].failed > 0;
   // Over the list: the criterion it is filtered by, or that the one the address names is not in this result or run.
   const chip = rule
-    ? { text: own ? `Ошибка по критерию ${own.n}: ${own.name}` : rule.title }
+    ? { text: own ? `${errors ? "Ошибка по критерию" : "Проверены по критерию"} ${own.n}: ${own.name}` : rule.title }
     : ruleId && problems
       ? {
           text: `Критерия из ссылки нет в этом ${stage === "sim" ? "прогоне" : "итоге"}. Показаны разговоры без отбора по нему.`,
@@ -68,11 +71,11 @@ export function DialogsPage({ stage }: { stage: Stage }) {
       rule
         ? new Set(
             rule[side(stage)].examples
-              .filter((e) => e.status === "FAIL")
+              .filter((e) => e.status === "FAIL" || (!errors && e.status === "PASS"))
               .map((e) => (stage === "sim" ? simKey(e.runId ?? "", e.index ?? 0) : logKey(e.dialogueId ?? ""))),
           )
         : null,
-    [rule, stage],
+    [rule, stage, errors],
   );
   const serious = useMemo(() => seriousRows(all, criteria), [all, criteria]);
   const rows = useMemo(
@@ -185,6 +188,13 @@ export function DialogsPage({ stage }: { stage: Stage }) {
       <Skeleton className="mt-2 h-64" />
     )
   ) : null;
+  // «Не удалось проверить» on the result counts the sampled conversations of accuracy that fell into no topic too:
+  // they have no row, since no criterion applied to them, and the line under the list says how many there are.
+  const unassigned = stage === "sim" ? 0 : (state.checks[stage]?.unassigned ?? 0);
+  const note =
+    verdict === "none" && !ruleId && unassigned > 0
+      ? `Ещё ${count(unassigned, "разговор", "разговора", "разговоров")} ${plural(unassigned, "не попал", "не попали", "не попали")} ни в одну тему, поэтому критериев для ${plural(unassigned, "него", "них", "них")} не было.`
+      : null;
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -193,6 +203,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
           className={showDetail && !wide ? "hidden" : undefined}
           empty={empty}
           pending={pending}
+          note={note}
           all={all}
           rows={rows}
           verdict={verdict}
