@@ -40,7 +40,7 @@ LAB_DATA, сертификаты — LAB_CERTS. С одной папкой да�
 
 Интерфейс — на :5900, запросы к /api Vite передаёт в Python на :5901.
 
-    sh bin/check.sh      # то же, что в CI: Ruff, тесты, тексты, ESLint, Prettier, сборка
+    sh bin/check.sh      # перед коммитом: Ruff, тесты, тексты, ESLint, Prettier, сборка
     sh bin/format.sh     # исправить стиль и форматирование
 
 Backend — FastAPI и SQLite. Слои `api → flows → roles → models → storage → domain`, импорты только вниз, это
