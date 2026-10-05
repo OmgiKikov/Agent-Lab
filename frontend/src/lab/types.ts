@@ -174,6 +174,8 @@ export type Job = {
   error: string | null;
   /** `check`: the check a proposal of which errors are serious is for (task `severity`, lab/severity). */
   progress: { message?: string; done?: number; total?: number; run?: string; check?: Check };
+  /** When the task started: tells one task from the next of the same kind. Older services have no such field. */
+  startedAt?: string | null;
 };
 export type LabState = {
   toneOfVoice?: ToneDraft | null;
@@ -182,6 +184,8 @@ export type LabState = {
   models: Models;
   settings: Settings;
   sources: Source[];
+  /** When the agent's code was read last and from which folder, as the person wrote it; null before the first read. */
+  sourcesRead?: { readAt: string; repo: string } | null;
   logs: { total: number; file?: string | null; updatedAt?: string | null };
   /** The result of each check, or null: tone of voice and accuracy never replace each other. */
   checks: Record<Check, Discover | null>;
@@ -196,6 +200,8 @@ export type LabState = {
    * confirmed a proposal: whose decision it is changed). Older services have no such field.
    */
   severityStamp?: string;
+  /** Changes with every answer on the checks' results, given in this tab or any other. Older services have none. */
+  reviewsStamp?: string;
   cards: null | Deck;
   runs: RunSummary[];
   targets: Target[];

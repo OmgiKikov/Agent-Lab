@@ -1,5 +1,6 @@
 import { api } from "./api";
 import { pct } from "./format";
+import type { Direction, Verdict } from "./compare";
 import type { LogDialogue } from "./problems";
 import type { Check, Discover, ToneCriterion } from "./types";
 
@@ -14,11 +15,17 @@ export const FEW = 30;
 export type Counts = { failed: number; measured: number };
 export type Summary = Counts & { passed: number; unmeasured: number };
 
-/** How a saved check stands to the one saved before it; only the service declares two checks comparable. */
+/**
+ * How a saved check stands to the one saved before it; only the service declares two checks comparable. Compared
+ * (same-data, new-data), a line carries what a person may read into the difference, as «было → стало» on the result
+ * says it (backend/lab/compare.py, saved_checks). Older services have no verdict.
+ */
 export type Comparison = {
   kind: "same-data" | "new-data" | "incompatible" | "first";
   previousId: string | null;
   reason: string;
+  verdict?: Verdict | null;
+  direction?: Direction | null;
 };
 
 /** A saved check of tone of voice or of Точность, as its history lists it (GET /api/history/{check}). */
