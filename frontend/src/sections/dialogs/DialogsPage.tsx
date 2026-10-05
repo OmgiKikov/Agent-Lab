@@ -56,10 +56,10 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const own = rule ? criteria.find((c) => c.r.id === rule.id) : undefined;
   // A criterion with errors here opens the conversations with its errors; one without them (the line «Ошибок в этой
   // выгрузке не нашли» leads here) opens the conversations it was checked in, with or without an error.
-  const errors = !!rule && rule[side(stage)].failed > 0;
+  const broken = !!rule && rule[side(stage)].failed > 0;
   // Over the list: the criterion it is filtered by, or that the one the address names is not in this result or run.
   const chip = rule
-    ? { text: own ? `${errors ? "Ошибка по критерию" : "Проверены по критерию"} ${own.n}: ${own.name}` : rule.title }
+    ? { text: own ? `${broken ? "Ошибка по критерию" : "Проверены по критерию"} ${own.n}: ${own.name}` : rule.title }
     : ruleId && problems
       ? {
           text: `Критерия из ссылки нет в этом ${stage === "sim" ? "прогоне" : "итоге"}. Показаны разговоры без отбора по нему.`,
@@ -71,11 +71,11 @@ export function DialogsPage({ stage }: { stage: Stage }) {
       rule
         ? new Set(
             rule[side(stage)].examples
-              .filter((e) => e.status === "FAIL" || (!errors && e.status === "PASS"))
+              .filter((e) => e.status === "FAIL" || (!broken && e.status === "PASS"))
               .map((e) => (stage === "sim" ? simKey(e.runId ?? "", e.index ?? 0) : logKey(e.dialogueId ?? ""))),
           )
         : null,
-    [rule, stage, errors],
+    [rule, stage, broken],
   );
   const serious = useMemo(() => seriousRows(all, criteria), [all, criteria]);
   const rows = useMemo(
