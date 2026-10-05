@@ -196,6 +196,25 @@ class OneLineExportTests(unittest.TestCase):
         dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2]'))
         self.assertEqual(contents(dialogues[0]), ['Вопрос', 'Ответ'])
 
+    def test_an_exchange_repeated_as_its_order_confirms_is_kept(self):
+        text = 'CLIENT Вопрос AGENT Ответ CLIENT Вопрос AGENT Ответ'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3, 4]'))
+        self.assertEqual(contents(dialogues[0]), ['Вопрос', 'Ответ', 'Вопрос', 'Ответ'])
+
+    def test_a_customer_message_repeated_as_its_order_confirms_is_kept(self):
+        text = 'CLIENT оператор CLIENT оператор AGENT Переключаю'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3]'))
+        self.assertEqual(contents(dialogues[0]), ['оператор', 'оператор', 'Переключаю'])
+
+    def test_a_marker_word_inside_a_one_line_message_splits_it_and_the_conversation_is_left_out(self):
+        data = undeclared(
+            [
+                ['d1', 'CLIENT Вопрос AGENT Ответ', '[1, 2]'],
+                ['d2', 'CLIENT Позовите AGENT человека AGENT Соединяю', '[1, 2]'],
+            ]
+        )
+        self.assertEqual([dialogue['id'] for dialogue in logs.prepare('export.xlsx', data)], ['d1'])
+
     def test_a_one_line_conversation_that_still_does_not_match_its_order_is_left_out(self):
         data = undeclared(
             [

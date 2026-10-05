@@ -3,7 +3,8 @@
 Excel exports contain CLIENT/AGENT turns and the real message count in the order column. Some exports
 repeat every exchange twice. Only that complete, count-confirmed export pattern is removed; a customer's
 actual repeated question is preserved. Voice360 writes a whole conversation on one line and repeats some of
-its messages; those repeats are collapsed, and a conversation that still does not match its count is left out.
+its messages; those repeats are collapsed only as far as the count asks, and a conversation that still does not match
+its count is left out.
 Parsing is pure so a cancelled import cannot commit from a thread.
 """
 
@@ -108,10 +109,14 @@ def _is_one_line(text: str) -> bool:
 
 
 def _one_line_messages(text: str, count: int) -> list[dict] | None:
-    """The conversation, or None when even without its repeats it does not match its count: unlike a line-by-line
-    export, this layout has repeats that are not exact, so one such conversation must not refuse the whole file."""
-    messages = _collapse_repeated_pairs(_collapse_repeated_messages(turns(text, INLINE_MARKER)))
-    return messages if len(messages) == count else None
+    """The first reading that matches the count: as written, without repeated messages, then also without repeated
+    exchanges. The count comes first, so a repeat the customer really made stays. None when no reading matches:
+    unlike a line-by-line export, this layout has repeats that are not exact, so one such conversation must not refuse
+    the whole file."""
+    written = turns(text, INLINE_MARKER)
+    without_messages = _collapse_repeated_messages(written)
+    readings = (written, without_messages, _collapse_repeated_pairs(without_messages))
+    return next((messages for messages in readings if len(messages) == count), None)
 
 
 def _collapse_repeated_messages(messages: list[dict]) -> list[dict]:
