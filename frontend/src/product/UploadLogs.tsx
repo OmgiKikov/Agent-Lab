@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Upload } from "lucide-react";
 import { SECTIONS, toneCheckLink, type Check } from "../app/links";
 import { upload } from "../lab/api";
-import { count } from "../lab/format";
+import { count, plural } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import type { LabState } from "../lab/types";
 import { Button } from "../ui/Button";
@@ -96,11 +96,15 @@ function useUpload(check?: Check) {
   const send = async (file: File) => {
     setBusy(true);
     try {
-      const { total } = await upload<{ total: number }>("/api/logs", file);
+      const { total, skipped = 0 } = await upload<{ total: number; skipped?: number }>("/api/logs", file);
       await refresh();
       const next = check === "code" ? `${SECTIONS.accuracy}?assess=1` : check === "tone" ? toneCheckLink() : null;
+      // The conversations a check cannot read are left out by the service: the person learns how many and why.
+      const left = skipped
+        ? `. Ещё ${count(skipped, "разговор не загружен", "разговора не загружены", "разговоров не загружены")}: ${plural(skipped, "в нём", "в них", "в них")} первым пишет агент или он не отвечает.`
+        : "";
       toast.notify(
-        `Загружено ${count(total, "разговор", "разговора", "разговоров")}`,
+        `Загружено ${count(total, "разговор", "разговора", "разговоров")}${left}`,
         next
           ? {
               label: "Проверить",
