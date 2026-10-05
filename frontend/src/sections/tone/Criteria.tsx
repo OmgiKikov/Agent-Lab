@@ -6,13 +6,25 @@ import { duty } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { toneResult } from "../../lab/tone";
-import type { LabState } from "../../lab/types";
+import type { LabState, ToneDraft } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
+import { Modal } from "../../ui/Modal";
 
 /** One check takes at most this many criteria (backend/lab/api.py, ToneCheckCommand). */
 const MAX_CRITERIA = 20;
+
+/** The clarifications people confirmed on the criteria: the work that collecting criteria again can take away. */
+export const clarificationsOf = (draft: ToneDraft | null | undefined) =>
+  (draft?.criteria ?? []).reduce((n, c) => n + (c.clarifications?.length ?? 0), 0);
+
+/** «У критериев 3 подтверждённых уточнения.» — how many there are, the first words of what happens to them. */
+export const clarifiedText = (n: number, of = "У критериев") =>
+  `${of} ${count(n, "подтверждённое уточнение", "подтверждённых уточнения", "подтверждённых уточнений")}.`;
+
+/** The tone of voice scenarios of the agent: new criteria take them away (store.save_tone_draft). */
+export const toneDeck = (state: LabState) => state.cards?.check === "tone" && !!state.cards.cards.length;
 
 export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack: () => void; onStarted: () => void }) {
   const { refresh } = useLabState();
@@ -32,6 +44,9 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
   const [size, setSize] = useState(100);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Collecting the criteria anew from the same rules is asked first: it can take away what people made of them.
+  const [asking, setAsking] = useState(false);
+  const clarified = clarificationsOf(draft);
   const running = state.job.running;
   const generating = running && state.job.kind === "tone-criteria";
   const serviceError = state.job.kind === "tone-criteria" ? state.job.error : null;
@@ -203,12 +218,45 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
             icon={RotateCcw}
             disabled={running || !state.logs.total}
             title={state.logs.total ? undefined : "Сначала загрузите диалоги"}
-            onClick={regenerate}
+            onClick={draft ? () => setAsking(true) : regenerate}
           >
             {draft ? "Собрать заново" : "Собрать критерии"}
           </Button>
         )}
       </div>
+      <Modal
+        open={asking}
+        onClose={() => setAsking(false)}
+        title="Собрать критерии заново?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setAsking(false)}>
+              Отмена
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setAsking(false);
+                regenerate();
+              }}
+            >
+              Собрать заново
+            </Button>
+          </>
+        }
+      >
+        <p className="text-read text-fg-2">
+          Критерии соберутся заново из тех же правил общения.
+          {result ? " Итог tone of voice останется, но будет относиться к предыдущей версии критериев." : ""}
+          {toneDeck(state) ? " Сценарии, собранные из tone of voice, сбросятся." : ""}
+        </p>
+        {clarified > 0 && (
+          <p className="mt-3 text-read text-fg-2">
+            {clarifiedText(clarified)} {clarified === 1 ? "Оно останется" : "Каждое останется"}, если цитата его
+            критерия не изменится, иначе пропадёт.
+          </p>
+        )}
+      </Modal>
     </section>
   );
 }
