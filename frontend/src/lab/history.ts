@@ -1,6 +1,6 @@
 import { api } from "./api";
 import { pct } from "./format";
-import type { Direction, Verdict } from "./compare";
+import { VERDICT, type Direction, type Verdict } from "./compare";
 import type { LogDialogue } from "./problems";
 import type { Check, Discover, ToneCriterion } from "./types";
 
@@ -76,12 +76,15 @@ const sameShare = (before: Counts, now: Counts) => before.failed * now.measured 
 
 /**
  * «22 из 53 (42%) → сейчас 4 из 12 (33%)»: two counts of one check, the earlier first; `later` names the other one
- * («сейчас»). The arrow is neutral, a fact about the count; when the share is the same there is no arrow at all.
+ * («сейчас»). The arrow is neutral, a fact about the count; when the share is the same there is no arrow at all. Nor
+ * between two equal percents of different shares: «22 из 53 (42%), сейчас 21 из 50 (42%)», without «доля та же».
  */
 export function shiftText(before: Counts, now: Counts, same: boolean, later = "") {
   const next = later ? `${later}\u00a0` : "";
   if (unchanged(before, now)) return `${shareText(before)}, ${later ? `${later} ` : ""}столько же`;
   if (same) return `${shareText(before)}, ${next}${shareText(now)}, доля та же`;
+  if (pct(before.failed, before.measured) === pct(now.failed, now.measured))
+    return `${shareText(before)}, ${next}${shareText(now)}`;
   return `${shareText(before)}\u00a0→ ${next}${shareText(now)}`;
 }
 
@@ -92,7 +95,9 @@ export const notComparedText = (reason: string) =>
 /**
  * How a saved check stands to the one before it, in the list of the history. Only the service declares two checks
  * comparable; a different sample never proves anything about the agent, a re-evaluation measures the evaluation, and
- * numbers that did not change get no arrow.
+ * numbers that did not change get no arrow. Other conversations are judged as «было → стало» on the result judges the
+ * same pair, in its words: the service's verdict (lab/compare, VERDICT); an older service without one is told by the
+ * number of conversations alone.
  */
 export function comparisonText(check: SavedCheck, previous?: SavedCheck): string {
   const kind = check.comparison.kind;
@@ -108,11 +113,14 @@ export function comparisonText(check: SavedCheck, previous?: SavedCheck): string
   if (!before.measured || !now.measured)
     return `${context} В одной из проверок нет проверенных разговоров, доли не сравнить.`;
   const same = sameShare(before, now);
+  const verdict = check.comparison.verdict;
   const caveat =
     kind === "same-data"
       ? !same && "Разница — разброс оценки, а не агента."
-      : Math.min(before.measured, now.measured) < FEW
-        ? "Мало разговоров, чтобы судить."
-        : !same && "Могли измениться темы разговоров и клиенты.";
+      : verdict !== undefined
+        ? verdict && verdict !== "same" && VERDICT[verdict]
+        : Math.min(before.measured, now.measured) < FEW
+          ? VERDICT.few
+          : !same && "Могли измениться темы разговоров и клиенты.";
   return `${context} С ошибкой агента: ${shiftText(before, now, same)}.${caveat ? ` ${caveat}` : ""}`;
 }
