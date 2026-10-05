@@ -4,6 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lab import rag, replay, store
+from lab.agents import AgentError
+from lab.judge import Verdict
 
 DIALOGUE = {
     'id': 'd-1',
@@ -57,3 +59,94 @@ class CriteriaTests(unittest.IsolatedAsyncioTestCase):
         )
         found = await replay.criteria_by_dialogue([DIALOGUE])
         self.assertEqual([r['id'] for r in found['d-1']], ['code:r1', *(r['id'] for r in rag.CRITERIA)])
+
+
+TRACE = {'traceId': 't', 'chains': [], 'rag': [{'query': 'q', 'passages': [], 'answer': 'a'}], 'systems': []}
+
+
+class FakeAgent:
+    """A local agent that answers every message, or fails on the ones it is told to."""
+
+    mocked = True
+    version = 'v1'
+
+    def __init__(self, failing: tuple[str, ...] = (), trace: dict | None = TRACE) -> None:
+        self.failing, self.trace, self.heard = failing, trace, []
+
+    async def open(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+    async def say(
+        self, conversation_id: str, text: str, world: dict | None = None, history: list | None = None
+    ) -> dict:
+        self.heard.append((conversation_id, text, len(history or [])))
+        if text in self.failing:
+            raise AgentError('Нет связи с агентом.')
+        return {
+            'text': f'ответ на {text}',
+            'status': '200',
+            'ok': True,
+            'options': [],
+            'seconds': 0.1,
+            'events': [],
+            'trace': self.trace,
+        }
+
+
+async def passing_judge(rules: list[dict], step: dict, endpoint=None) -> Verdict:
+    rows = [
+        {'ruleId': r['id'], 'rule': r['text'], 'status': 'PASS', 'reason': 'ok', 'agentQuote': 'x', 'title': ''}
+        for r in rules
+    ]
+    return Verdict(rows, 'PASS', 'judge-model')
+
+
+class RunTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        db = patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3')
+        db.start()
+        self.addCleanup(db.stop)
+        store.save(replay.logs.FILE, [DIALOGUE])
+
+    async def play(self, agent: FakeAgent) -> dict:
+        return await replay.run('local', 5, lambda **_: None, create=lambda _key: agent, verdict=passing_judge)
+
+    async def test_steps_of_a_dialogue_share_one_conversation(self) -> None:
+        agent = FakeAgent()
+        await self.play(agent)
+        self.assertEqual(len({conversation for conversation, _, _ in agent.heard}), 1)
+        self.assertEqual([size for _, _, size in agent.heard], [0, 2, 3])
+
+    async def test_result_is_saved_with_verdicts_per_step(self) -> None:
+        result = await self.play(FakeAgent())
+        self.assertEqual(store.load(replay.RESULT)['id'], result['id'])
+        dialogue = result['dialogues'][0]
+        self.assertEqual(dialogue['status'], 'PASS')
+        self.assertEqual(dialogue['steps'][0]['reply']['text'], 'ответ на вернуть платёж')
+        self.assertEqual(result['metric']['rag']['pass'], 3 * len(rag.CRITERIA))
+
+    async def test_agent_failure_leaves_the_step_unmeasured(self) -> None:
+        result = await self.play(FakeAgent(failing=('через QR',)))
+        step = result['dialogues'][0]['steps'][1]
+        self.assertEqual((step['status'], step['error']), ('UNMEASURED', 'Нет связи с агентом.'))
+        self.assertEqual(result['dialogues'][0]['status'], 'UNMEASURED')
+
+    async def test_rag_criteria_are_not_applicable_without_a_knowledge_base_call(self) -> None:
+        result = await self.play(FakeAgent(trace={**TRACE, 'rag': []}))
+        rows = result['dialogues'][0]['steps'][0]['rules']
+        self.assertTrue(all(r['status'] == 'NOT_APPLICABLE' for r in rows if r['ruleId'].startswith('rag:')))
+
+    async def test_agent_without_trace_stops_the_replay(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, 'трейс'):
+            await self.play(FakeAgent(trace=None))
+
+    async def test_remote_agent_is_refused(self) -> None:
+        agent = FakeAgent()
+        agent.mocked = False
+        with self.assertRaisesRegex(RuntimeError, 'локальн'):
+            await self.play(agent)
