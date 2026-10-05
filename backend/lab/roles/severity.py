@@ -5,7 +5,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
-from ..checks import CODE, TONE
+from ..domain.checks import CODE, TONE
 from .base import Answer, Role, ask, instructions
 
 # What the model is told the check is about.

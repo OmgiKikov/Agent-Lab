@@ -1,14 +1,19 @@
-"""Requested, evidence-grounded suggestions; never changes the policy or a verdict."""
+"""A suggestion on an error tone of voice found, at a person's request: grounded in the evidence of the current
+result, never changing the rules, the quote or the verdict (roles.advice)."""
 
-from . import discover, logs, models, quotes, store, tone
-from .domain import export, verdicts
-from .roles import advice
+from .. import models, store
+from ..domain import export, quotes, verdicts
+from ..domain.tone import KIND
+from ..roles import advice
+from . import tone
 
 
 def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
+    """The evidence of an error of the current result the person saw (finished_at); a ValueError when the result, the
+    criteria or the rules changed since, or the error has no quote of the agent's words."""
     analysis = store.load(tone.RESULT) or {}
     draft = store.load(tone.DRAFT) or {}
-    if analysis.get('purpose') != tone.KIND or analysis.get('finishedAt') != finished_at:
+    if analysis.get('purpose') != KIND or analysis.get('finishedAt') != finished_at:
         raise ValueError('Итог проверки изменился. Обновите страницу.')
     if analysis.get('criteriaRevision') != draft.get('revision'):
         raise ValueError('Критерии изменились. Сначала проверьте разговоры по новым критериям.')
@@ -19,14 +24,14 @@ def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
     )
     result = next((item for item in analysis['results'] if str(item['dialogueId']) == dialogue_id), None)
     verdict = next((row for row in (result or {}).get('rules', []) if row['ruleId'] == rule_id), None)
-    dialogue = logs.read(dialogue_id)
+    dialogue = store.dialogue(dialogue_id)
     if rule is None or verdict is None or dialogue is None:
         raise ValueError('В текущем итоге нет этого разговора или критерия.')
     if verdict['status'] != 'FAIL':
         raise ValueError('Предложение можно получить только для найденной ошибки.')
     # The quote is checked as the judge checked it, and the model reads the replies as the judge read them: with
     # the buttons the customer saw instead of the export's control code.
-    if not quotes.cited(verdict.get('agentQuote', ''), verdicts.log_words(discover.conversation(dialogue))):
+    if not quotes.cited(verdict.get('agentQuote', ''), verdicts.log_words(export.conversation(dialogue))):
         raise ValueError('Для этой ошибки нет подтверждённой цитаты ответа агента.')
     return {
         'criterion': rule,
@@ -41,6 +46,8 @@ def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
 
 
 async def suggest(finished_at: str, dialogue_id: str, rule_id: str, mode: str, note: str) -> dict:
+    """A rewrite of the agent's words (mode rewrite) or a clarification of the criterion by the person's note (mode
+    clarify), still for the result the person saw."""
     evidence = context(finished_at, dialogue_id, rule_id)
     note = note.strip()
     if mode == 'clarify' and not 10 <= len(note) <= 2000:

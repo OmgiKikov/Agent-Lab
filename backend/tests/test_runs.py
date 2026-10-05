@@ -4,9 +4,10 @@ from unittest.mock import AsyncMock, patch
 
 import support
 
-from lab import simulate, store
+from lab import store
+from lab.domain.metric import metric
+from lab.flows import inputs, simulation
 from lab.jobs import Jobs
-from lab.metric import metric
 
 
 def card(key: str = 'card-1', text: str = 'question') -> dict:
@@ -43,9 +44,9 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         support.lab(self)
         self.agent = FakeAgent()
         patches = [
-            patch.object(simulate.cards, 'deck', return_value=[card()]),
-            patch.object(simulate.agents, 'configs', return_value={'test': {'name': 'Test'}}),
-            patch.object(simulate.agents, 'create', return_value=self.agent),
+            patch.object(simulation.scenarios, 'deck', return_value=[card()]),
+            patch.object(simulation.connection, 'ways', return_value={'test': {'name': 'Test'}}),
+            patch.object(simulation.connection, 'connect', return_value=self.agent),
         ]
         for mocked in patches:
             mocked.start()
@@ -61,10 +62,10 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             item.update(status='PASS', rules=[], model=f'actual-judge-{scenario["id"]}')
 
         with (
-            patch.object(simulate.cards, 'deck', return_value=[card(), card('card-2')]),
-            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(simulation.scenarios, 'deck', return_value=[card(), card('card-2')]),
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
         ):
-            task = asyncio.create_task(simulate.run('test'))
+            task = asyncio.create_task(simulation.run('test'))
             await entered.wait()
             run_id = store.runs()[0]['id']
             store.set_review(run_id, 0, 'disagree')
@@ -95,20 +96,20 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
         reported = []
         with (
-            patch.object(simulate.cards, 'deck', return_value=[card(), card('card-2')]),
+            patch.object(simulation.scenarios, 'deck', return_value=[card(), card('card-2')]),
             patch.object(self.agent, 'say', side_effect=say),
-            patch.object(simulate, 'customer_says', side_effect=customer),
-            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(simulation, 'customer_says', side_effect=customer),
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
             patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes,
         ):
-            task = asyncio.create_task(simulate.run('test', progress=lambda **values: reported.append(values)))
+            task = asyncio.create_task(simulation.run('test', progress=lambda **values: reported.append(values)))
             await entered.wait()
             live = store.runs()[0]
             release.set()
             result = await task
         # The live view reads the record: a finished conversation is there while another one still plays.
         self.assertEqual([item['status'] for item in live['items']], ['PASS', 'RUNNING'])
-        self.assertEqual(len(live['items'][0]['conversation']), 2 * simulate.MAX_AGENT_TURNS)
+        self.assertEqual(len(live['items'][0]['conversation']), 2 * simulation.MAX_AGENT_TURNS)
         self.assertEqual(live['metric']['total'], 1)
         # The agent's version, each conversation once when it ends, the finished run: never once per turn.
         self.assertEqual(writes.call_count, 1 + len(result['items']) + 1)
@@ -117,8 +118,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item['status'] for item in result['items']], ['PASS', 'PASS'])
 
     async def test_rejudge_patches_a_current_record_instead_of_stale_snapshot(self) -> None:
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        item = simulate.new_item(card(), 'default', 1)
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulation.new_item(card(), 'default', 1)
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], review=None)
         source.update(items=[item], status='done')
         stale = store.create_run(source)
@@ -129,8 +130,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             item.update(status='FAIL')
 
-        with patch.object(simulate.judge, 'evaluate', side_effect=evaluate):
-            task = asyncio.create_task(simulate.rejudge(stale))
+        with patch.object(simulation, 'evaluate', side_effect=evaluate):
+            task = asyncio.create_task(simulation.rejudge(stale))
             await entered.wait()
             store.set_review(source['id'], 0, 'disagree')
             release.set()
@@ -161,11 +162,11 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             self.agent.closed = True
 
         with (
-            patch.object(simulate.cards, 'deck', return_value=[card('bad', 'bad'), card('slow')]),
+            patch.object(simulation.scenarios, 'deck', return_value=[card('bad', 'bad'), card('slow')]),
             patch.object(self.agent, 'say', side_effect=say),
             patch.object(self.agent, 'close', side_effect=close),
         ):
-            result = await simulate.run('test')
+            result = await simulation.run('test')
         self.assertEqual(result['status'], 'failed')
         self.assertIn('unexpected agent failure', result['error'])
         self.assertEqual([item['status'] for item in result['items']], ['UNMEASURED', 'UNMEASURED'])
@@ -180,8 +181,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await asyncio.Event().wait()
 
-        with patch.object(simulate.judge, 'evaluate', side_effect=evaluate):
-            task = asyncio.create_task(simulate.run('test'))
+        with patch.object(simulation, 'evaluate', side_effect=evaluate):
+            task = asyncio.create_task(simulation.run('test'))
             await entered.wait()
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
@@ -200,12 +201,12 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             playing.set()
             await asyncio.Event().wait()  # every conversation waits for the agent; the rest are queued
 
-        scenarios = [card(f'card-{number}') for number in range(2 * simulate.PARALLEL)]
+        scenarios = [card(f'card-{number}') for number in range(2 * simulation.PARALLEL)]
         with (
-            patch.object(simulate.cards, 'deck', return_value=scenarios),
+            patch.object(simulation.scenarios, 'deck', return_value=scenarios),
             patch.object(self.agent, 'say', side_effect=say),
         ):
-            task = asyncio.create_task(simulate.run('test'))
+            task = asyncio.create_task(simulation.run('test'))
             await playing.wait()
             with patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes:
                 task.cancel()
@@ -222,7 +223,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unexpected_open_failure_is_terminal(self) -> None:
         with patch.object(self.agent, 'open', new=AsyncMock(side_effect=RuntimeError('cannot launch'))):
-            result = await simulate.run('test')
+            result = await simulation.run('test')
         self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['error'], 'cannot launch')
         self.assertTrue(result['finishedAt'])
@@ -234,11 +235,11 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         run."""
 
         async def unreachable(conversation_id: str, message: str, world: dict) -> dict:
-            raise simulate.agents.AgentError('Нет связи с агентом (ConnectError).')
+            raise simulation.agents.AgentError('Нет связи с агентом (ConnectError).')
 
         async def once(conversation_id: str, message: str, world: dict) -> dict:
             if message == 'card-2':
-                raise simulate.agents.AgentError('Нет связи с агентом (ConnectError).')
+                raise simulation.agents.AgentError('Нет связи с агентом (ConnectError).')
             return {'text': 'answer', 'status': '202', 'ok': False, 'options': [], 'events': []}
 
         async def passed(scenario: dict, item: dict) -> None:
@@ -250,11 +251,11 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         ):
             with (
                 self.subTest(say=say.__name__),
-                patch.object(simulate.cards, 'deck', return_value=[card(), card('card-2', 'card-2')]),
+                patch.object(simulation.scenarios, 'deck', return_value=[card(), card('card-2', 'card-2')]),
                 patch.object(self.agent, 'say', side_effect=say),
-                patch.object(simulate.judge, 'evaluate', side_effect=passed),
+                patch.object(simulation, 'evaluate', side_effect=passed),
             ):
-                result = await simulate.run('test')
+                result = await simulation.run('test')
                 self.assertEqual((result['status'], result['error']), expected)
                 self.assertEqual(result['items'][1]['error'], 'Нет связи с агентом (ConnectError).')
                 # The list of runs (/api/state) has the reason without reading the conversations.
@@ -266,10 +267,10 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             item.update(status='PASS')
 
         with (
-            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
             patch.object(self.agent, 'close', new=AsyncMock(side_effect=RuntimeError('cannot close process'))),
         ):
-            result = await simulate.run('test')
+            result = await simulation.run('test')
         self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['error'], 'cannot close process')
         self.assertEqual(result['items'][0]['status'], 'PASS')
@@ -294,9 +295,9 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         jobs = Jobs()
         with (
             patch.object(self.agent, 'close', side_effect=close),
-            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
         ):
-            jobs.start('run', lambda progress: simulate.run('test', progress=progress))
+            jobs.start('run', lambda progress: simulation.run('test', progress=progress))
             await entered.wait()
             stopping = asyncio.create_task(jobs.stop())
             await asyncio.sleep(0)
@@ -326,9 +327,9 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         jobs = Jobs()
         with (
             patch.object(self.agent, 'close', side_effect=close),
-            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
         ):
-            jobs.start('run', lambda progress: simulate.run('test', progress=progress))
+            jobs.start('run', lambda progress: simulation.run('test', progress=progress))
             await entered.wait()
             stopping = [asyncio.create_task(jobs.stop()), asyncio.create_task(jobs.stop())]
             await asyncio.sleep(0)
@@ -343,8 +344,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['finishedAt'])
 
     async def test_rejudge_retries_previous_model_failure_and_clears_error(self) -> None:
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        item = simulate.new_item(card(), 'default', 1)
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulation.new_item(card(), 'default', 1)
         item.update(
             status='UNMEASURED',
             conversation=[{'role': 'agent', 'text': 'answer'}],
@@ -357,8 +358,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         async def evaluate(scenario: dict, item: dict) -> None:
             item.update(status='PASS', rules=[{'status': 'PASS'}])
 
-        with patch.object(simulate.judge, 'evaluate', side_effect=evaluate) as judge:
-            result = await simulate.rejudge(store.run(source['id']))
+        with patch.object(simulation, 'evaluate', side_effect=evaluate) as judge:
+            result = await simulation.rejudge(store.run(source['id']))
         judge.assert_awaited_once()
         self.assertEqual(result['items'][0]['status'], 'PASS')
         self.assertIsNone(result['items'][0]['error'])
@@ -367,20 +368,20 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_rejudge_the_model_did_not_answer_leaves_the_verdicts_and_the_answers(self) -> None:
         """An outage is not a verdict: «Оценить заново» while the model is down fails, and the run keeps its verdicts
         and the answers people gave on them (docs/backend.md: a failed pass leaves the run as it was)."""
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        item = simulate.new_item(card(), 'default', 1)
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulation.new_item(card(), 'default', 1)
         row = {'ruleId': 'r1', 'status': 'FAIL', 'reason': 'нет срока', 'agentQuote': 'answer'}
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], rules=[row], ended=True)
         source.update(items=[item], status='done')
         store.create_run(source)
         store.set_review(source['id'], 0, 'agree', 'r1', 'FAIL')
         before = store.run(source['id'])
-        down = simulate.models.ModelError('Модель недоступна (ConnectError).')
+        down = simulation.models.ModelError('Модель недоступна (ConnectError).')
         with (
-            patch.object(simulate.judge, 'evaluate', side_effect=down),
-            self.assertRaises(simulate.models.ModelError) as caught,
+            patch.object(simulation, 'evaluate', side_effect=down),
+            self.assertRaises(simulation.models.ModelError) as caught,
         ):
-            await simulate.rejudge(store.run(source['id']))
+            await simulation.rejudge(store.run(source['id']))
         self.assertIn('1\u00a0из\u00a01', str(caught.exception))
         self.assertIn('Прогон остался прежним', str(caught.exception))
         self.assertIn('Модель недоступна (ConnectError).', str(caught.exception))
@@ -388,10 +389,10 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.run(source['id'])['items'][0]['rules'][0]['review'], 'agree')
 
     async def test_a_rejudge_with_one_conversation_unanswered_writes_none_of_the_new_verdicts(self) -> None:
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
         items = []
         for index in range(2):
-            item = simulate.new_item(card(f'card-{index}'), 'default', 1)
+            item = simulation.new_item(card(f'card-{index}'), 'default', 1)
             item.update(status='PASS', conversation=[{'role': 'agent', 'text': 'answer'}], rules=[], ended=True)
             items.append(item)
         source.update(items=items, status='done')
@@ -400,27 +401,27 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
         async def evaluate(scenario: dict, item: dict) -> None:
             if scenario['cardId'] == 'card-1':
-                raise simulate.models.ModelError('Не удалось разобрать ответ модели.')
+                raise simulation.models.ModelError('Не удалось разобрать ответ модели.')
             item.update(status='FAIL', rules=[{'ruleId': 'r1', 'status': 'FAIL'}])
 
         with (
-            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
-            self.assertRaises(simulate.models.ModelError) as caught,
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
+            self.assertRaises(simulation.models.ModelError) as caught,
         ):
-            await simulate.rejudge(store.run(source['id']))
+            await simulation.rejudge(store.run(source['id']))
         self.assertIn('1\u00a0из\u00a02', str(caught.exception))
         self.assertEqual(store.run(source['id']), before)
 
     async def test_rejudge_keeps_frozen_criteria_after_inputs_replace_and_deck_changes(self) -> None:
         frozen = card()
         frozen['criteria'] = [{'id': 'original', 'text': 'Original rule'}]
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        item = simulate.new_item(frozen, 'default', 1)
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulation.new_item(frozen, 'default', 1)
         frozen['criteria'][0]['text'] = 'Edited later'
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], review='agree')
         source.update(items=[item], status='done')
         store.create_run(source)
-        store.replace_inputs('logs.json', [])
+        inputs.replace_export([])
         observed = []
 
         async def evaluate(scenario: dict, item: dict) -> None:
@@ -428,18 +429,18 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             item.update(status='PASS', rules=[{'status': 'PASS'}])
 
         with (
-            patch.object(simulate.cards, 'deck', return_value=[]),
-            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(simulation.scenarios, 'deck', return_value=[]),
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
         ):
-            result = await simulate.rejudge(store.run(source['id']))
+            result = await simulation.rejudge(store.run(source['id']))
         self.assertEqual(observed, [{'id': 'original', 'text': 'Original rule'}])
         self.assertEqual(result['items'][0]['status'], 'PASS')
         self.assertIsNone(result['items'][0]['review'])
         self.assertTrue(result['rejudgedAt'])
 
     async def test_legacy_rejudge_uses_matching_original_card_and_saves_criteria(self) -> None:
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        item = simulate.new_item(card(), 'default', 1)
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulation.new_item(card(), 'default', 1)
         del item['criteria']
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}])
         source.update(items=[item], status='done')
@@ -452,40 +453,40 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             item.update(status='PASS')
 
         with (
-            patch.object(simulate.cards, 'deck', return_value=[original]),
-            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            patch.object(simulation.scenarios, 'deck', return_value=[original]),
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
         ):
-            result = await simulate.rejudge(store.run(source['id']))
+            result = await simulation.rejudge(store.run(source['id']))
         self.assertEqual(result['items'][0]['criteria'], original['criteria'])
 
     async def test_legacy_rejudge_without_original_criteria_fails_without_false_completion(self) -> None:
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        item = simulate.new_item(card(), 'default', 1)
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        item = simulation.new_item(card(), 'default', 1)
         del item['criteria']
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}])
         source.update(items=[item], status='done')
         store.create_run(source)
         with (
-            patch.object(simulate.cards, 'deck', return_value=[]),
-            patch.object(simulate.judge, 'evaluate') as judge,
+            patch.object(simulation.scenarios, 'deck', return_value=[]),
+            patch.object(simulation, 'evaluate') as judge,
             self.assertRaisesRegex(RuntimeError, 'не сохранены критерии'),
         ):
-            await simulate.rejudge(store.run(source['id']))
+            await simulation.rejudge(store.run(source['id']))
         judge.assert_not_awaited()
         self.assertNotIn('rejudgedAt', store.run(source['id']))
 
     async def test_rejudge_without_agent_answers_fails_without_false_completion(self) -> None:
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        source.update(items=[simulate.new_item(card(), 'default', 1)], status='stopped')
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        source.update(items=[simulation.new_item(card(), 'default', 1)], status='stopped')
         store.create_run(source)
         with self.assertRaisesRegex(RuntimeError, 'нет записанных ответов'):
-            await simulate.rejudge(store.run(source['id']))
+            await simulation.rejudge(store.run(source['id']))
         self.assertNotIn('rejudgedAt', store.run(source['id']))
 
     def played(self, count: int = 3) -> str:
         """A finished run whose conversations all passed under an older model."""
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        items = [simulate.new_item(card(f'card-{n}'), 'default', 1) for n in range(count)]
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        items = [simulation.new_item(card(f'card-{n}'), 'default', 1) for n in range(count)]
         for item in items:
             item.update(
                 status='PASS',
@@ -509,8 +510,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             first.set()
 
         jobs = Jobs()
-        with patch.object(simulate.judge, 'evaluate', side_effect=evaluate):
-            jobs.start('rejudge', lambda progress: simulate.rejudge(store.run(run_id), progress))
+        with patch.object(simulation, 'evaluate', side_effect=evaluate):
+            jobs.start('rejudge', lambda progress: simulation.rejudge(store.run(run_id), progress))
             await first.wait()
             await asyncio.sleep(0)
             await jobs.stop()
@@ -529,20 +530,20 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             item.update(status='FAIL', model='new-model', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
 
         with (
-            patch.object(simulate.judge, 'evaluate', side_effect=crashes),
+            patch.object(simulation, 'evaluate', side_effect=crashes),
             self.assertRaisesRegex(ExceptionGroup, 'unhandled errors'),
         ):
-            await simulate.rejudge(store.run(run_id))
+            await simulation.rejudge(store.run(run_id))
         self.assertEqual([item['status'] for item in store.run(run_id)['items']], ['PASS'] * 3)
 
         async def fails(scenario: dict, item: dict) -> None:
             item.update(status='FAIL', model='new-model', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
 
         with (
-            patch.object(simulate.judge, 'evaluate', side_effect=fails),
+            patch.object(simulation, 'evaluate', side_effect=fails),
             patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes,
         ):
-            result = await simulate.rejudge(store.run(run_id))
+            result = await simulation.rejudge(store.run(run_id))
         self.assertEqual(writes.call_count, 1)
         self.assertEqual([item['status'] for item in result['items']], ['FAIL'] * 3)
         self.assertEqual((result['model'], result['metric']['failed']), ('new-model', 3))
@@ -551,12 +552,12 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
     async def test_rejudge_keeps_conversations_the_agent_or_the_customer_model_cut_short(self) -> None:
         async def say(conversation_id: str, message: str, world: dict) -> dict:
             if message == 'agent-broke again':
-                raise simulate.agents.AgentError('Агент ответил HTTP 500')
+                raise simulation.agents.AgentError('Агент ответил HTTP 500')
             return {'text': 'answer', 'status': '200', 'ok': True, 'options': [], 'events': []}
 
         async def customer(scenario: dict, conversation: list[dict], details: str = '', persona: str | None = None):
             if scenario['id'] == 'customer-broke':
-                raise simulate.models.ModelError('Модель недоступна')
+                raise simulation.models.ModelError('Модель недоступна')
             return f'{scenario["id"]} again'
 
         async def passed(scenario: dict, item: dict) -> None:
@@ -567,14 +568,14 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
         scenarios = [card('whole'), card('agent-broke'), card('customer-broke')]
         with (
-            patch.object(simulate.cards, 'deck', return_value=scenarios),
+            patch.object(simulation.scenarios, 'deck', return_value=scenarios),
             patch.object(self.agent, 'say', side_effect=say),
-            patch.object(simulate, 'customer_says', side_effect=customer),
-            patch.object(simulate.judge, 'evaluate', side_effect=passed),
+            patch.object(simulation, 'customer_says', side_effect=customer),
+            patch.object(simulation, 'evaluate', side_effect=passed),
         ):
-            played = await simulate.run('test')
-        with patch.object(simulate.judge, 'evaluate', side_effect=failed):
-            result = await simulate.rejudge(played)
+            played = await simulation.run('test')
+        with patch.object(simulation, 'evaluate', side_effect=failed):
+            result = await simulation.rejudge(played)
         whole, agent_broke, customer_broke = result['items']
         self.assertEqual(whole['status'], 'FAIL')
         self.assertEqual((agent_broke['status'], agent_broke['error']), ('UNMEASURED', 'Агент ответил HTTP 500'))
@@ -594,26 +595,29 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(self.agent, 'say', side_effect=say),
-            patch.object(simulate, 'customer_says', side_effect=customer),
+            patch.object(simulation, 'customer_says', side_effect=customer),
         ):
-            task = asyncio.create_task(simulate.run('test'))
+            task = asyncio.create_task(simulation.run('test'))
             await answered.wait()
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
         stopped = store.runs()[0]
         with (
-            patch.object(simulate.judge, 'evaluate') as judge,
+            patch.object(simulation, 'evaluate') as judge,
             self.assertRaisesRegex(RuntimeError, 'нет записанных ответов'),
         ):
-            await simulate.rejudge(stopped)
+            await simulation.rejudge(stopped)
         judge.assert_not_awaited()
         item = store.run(stopped['id'])['items'][0]
         self.assertEqual((item['status'], item['error']), ('UNMEASURED', 'Прогон остановлен'))
 
     async def test_rejudge_of_an_older_record_keeps_a_conversation_that_ended_on_the_customer(self) -> None:
-        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
-        whole, broken = simulate.new_item(card('whole'), 'default', 1), simulate.new_item(card('broken'), 'default', 1)
+        source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        whole, broken = (
+            simulation.new_item(card('whole'), 'default', 1),
+            simulation.new_item(card('broken'), 'default', 1),
+        )
         whole.update(status='PASS', conversation=[{'role': 'customer', 'text': 'q'}, {'role': 'agent', 'text': 'a'}])
         broken.update(
             status='UNMEASURED',
@@ -630,27 +634,27 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         async def failed(scenario: dict, item: dict) -> None:
             item.update(status='FAIL', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
 
-        with patch.object(simulate.judge, 'evaluate', side_effect=failed):
-            result = await simulate.rejudge(store.run(source['id']))
+        with patch.object(simulation, 'evaluate', side_effect=failed):
+            result = await simulation.rejudge(store.run(source['id']))
         self.assertEqual(result['items'][0]['status'], 'FAIL')
         self.assertEqual(
             (result['items'][1]['status'], result['items'][1]['error']), ('UNMEASURED', 'Агент ответил HTTP 500')
         )
 
     async def test_a_run_remembers_the_check_its_deck_was_built_from(self) -> None:
-        store.save(simulate.cards.DECK, {'check': 'tone', 'cards': [card()]})
+        store.save(simulation.scenarios.DECK, {'check': 'tone', 'cards': [card()]})
 
         async def evaluate(scenario: dict, item: dict) -> None:
             item.update(status='PASS', rules=[])
 
-        with patch.object(simulate.judge, 'evaluate', side_effect=evaluate):
-            result = await simulate.run('test')
+        with patch.object(simulation, 'evaluate', side_effect=evaluate):
+            result = await simulation.run('test')
         self.assertEqual(result['check'], 'tone')
         self.assertEqual(store.run_summaries()[0]['check'], 'tone')
 
     def test_a_run_from_before_runs_remembered_their_check_has_the_check_of_its_criteria(self) -> None:
         def played(run_id: str, criterion: dict, topic: str = 'Терминалы') -> None:
-            item = simulate.new_item(dict(card(), topic=topic, criteria=[criterion]), 'default', 1)
+            item = simulation.new_item(dict(card(), topic=topic, criteria=[criterion]), 'default', 1)
             store.create_run({'id': run_id, 'startedAt': run_id, 'status': 'done', 'items': [item]})
 
         played('1', {'id': 'pronouns', 'text': 'На вы', 'sourceId': 'tone-of-voice'})
@@ -664,19 +668,19 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_customer_messages_and_cached_openings_consume_labelled_model_answers(self) -> None:
         scenario = card()
-        store.save(simulate.cards.DECK, {'cards': [scenario]})
+        store.save(simulation.scenarios.DECK, {'cards': [scenario]})
         with patch.object(
-            simulate.models,
+            simulation.models,
             'chat',
             side_effect=[
-                simulate.models.Reply(' "next question" ', 'actual-customer'),
-                simulate.models.Reply(' "rewritten opening" ', 'actual-customer'),
+                simulation.models.Reply(' "next question" ', 'actual-customer'),
+                simulation.models.Reply(' "rewritten opening" ', 'actual-customer'),
             ],
         ) as chat:
-            message = await simulate.customer_says(scenario, [{'role': 'agent', 'text': 'answer'}])
-            await simulate.prepare_openings([scenario], ['impatient'], lambda **values: None)
-            cached = store.load(simulate.cards.DECK)['cards']
-            await simulate.prepare_openings(cached, ['impatient'], lambda **values: None)
+            message = await simulation.customer_says(scenario, [{'role': 'agent', 'text': 'answer'}])
+            await simulation.prepare_openings([scenario], ['impatient'], lambda **values: None)
+            cached = store.load(simulation.scenarios.DECK)['cards']
+            await simulation.prepare_openings(cached, ['impatient'], lambda **values: None)
         self.assertEqual(message, 'next question')
         self.assertEqual(cached[0]['openings']['impatient'], 'rewritten opening')
         self.assertEqual(chat.await_count, 2)

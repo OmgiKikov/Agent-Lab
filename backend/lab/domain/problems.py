@@ -1,7 +1,7 @@
 """Rules and problems of one check: every rule of its result with its verdicts in the logs and in one simulator run
 of that check.
 
-A rule is keyed by its source quote, as in discover.summarize: the same rule restated in several topics is one rule.
+A rule is keyed by its source quote, as in results.summarize: the same rule restated in several topics is one rule.
 A problem is a rule the judge found violated at least once. Logs and a run are two sides of a rule, counted apart:
 other conversations, other customers. The record is described in section 8 of
 docs/superpowers/specs/2026-09-30-agent-lab-unified-product-design.md; one per check since
@@ -11,9 +11,9 @@ docs/superpowers/specs/2026-10-03-checks-as-sections-design.md.
 import hashlib
 from collections import Counter
 
-from . import agents, cards, checks, personas, quotes, store
-from .context import sources
-from .metric import metric
+from . import quotes
+from .personas import DEFAULT
+from .scenarios import ANSWERS_THE_QUESTION, FOLLOWS_KNOWLEDGE
 
 COUNTED = {'FAIL': 'failed', 'PASS': 'passed', 'UNKNOWN': 'unknown'}
 WORSE = {'FAIL': 2, 'PASS': 1, 'UNKNOWN': 0}
@@ -24,21 +24,6 @@ DECIDED = ('PASS', 'FAIL')
 
 def rule_key(quote: str) -> str:
     return 'r-' + hashlib.sha1(quotes.normalized(quote).encode()).hexdigest()[:10]
-
-
-def chosen_run(check: str, run_id: str | None) -> dict | None:
-    """The run asked for; else, as «Обзор» shows it, the newest finished run of this check with a conversation checked:
-    a newer run the model could check nothing of is no latest result. Without one, the newest finished run of this
-    check that has conversations."""
-    if run_id:
-        return store.run(run_id)
-    finished = [
-        r
-        for r in store.runs()
-        if r.get('finishedAt') and r.get('status') != 'running' and r.get('items') and checks.of_run(r) == check
-    ]
-    checked = (r for r in finished if (r.get('metric') or metric(r['items']))['measured'])
-    return next(checked, finished[0] if finished else None)
 
 
 def second_of(
@@ -218,15 +203,16 @@ def recorded_rule(book: Book, row: dict, known: dict, has_snapshot: bool) -> dic
         rule = book.by_text.get(quotes.normalized(text))
         if rule:
             return rule
-        for builtin in (cards.ANSWERS_THE_QUESTION, cards.FOLLOWS_KNOWLEDGE):
+        for builtin in (ANSWERS_THE_QUESTION, FOLLOWS_KNOWLEDGE):
             if row.get('ruleId') == builtin['id'] and quotes.normalized(text) == quotes.normalized(builtin['text']):
                 return builtin
     return {'text': text, 'quote': ''}
 
 
-def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
+def from_run(book: Book, run: dict | None, deck: list[dict], target: str = '') -> dict | None:
     """The run's verdicts into the book; its line of counts. A rule is the criterion frozen in the played item (else
-    its scenario's), or the audit's rule with the same text."""
+    its scenario's), or the audit's rule with the same text. target: the way the run reached its agent, by its current
+    name (agents.run_name)."""
     if not run:
         return None
     by_card = {card['id']: card.get('criteria') or [] for card in deck}
@@ -252,7 +238,7 @@ def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
                 'opening': conversation[0]['text'] if conversation else item.get('name', ''),
                 'topic': item.get('topic', ''),
                 'name': item.get('name', ''),
-                'persona': item.get('persona') or personas.DEFAULT,
+                'persona': item.get('persona') or DEFAULT,
                 'attempt': item.get('attempt', 1),
                 'agentQuote': row.get('agentQuote', ''),
                 'reason': row.get('reason', ''),
@@ -269,7 +255,7 @@ def from_run(book: Book, run: dict | None, deck: list[dict]) -> dict | None:
     assessed = sum(1 for i in done if i['status'] in ('PASS', 'FAIL'))
     return {
         'runId': run['id'],
-        'target': agents.run_name(run),
+        'target': target,
         'version': run.get('version', ''),
         'dialogs': len(done),
         'assessed': assessed,
@@ -338,39 +324,4 @@ def finish(
         },
         'human': {'agree': reviewed.count('agree'), 'disagree': reviewed.count('disagree')},
         'scenarioIds': [c['id'] for c in deck if str(c.get('sourceDialogueId')) in dialogues],
-    }
-
-
-def build(check: str, run_id: str | None = None) -> dict:
-    """The check's rules and problems: its result on one side, the run asked for (else its newest finished run) on
-    the other. Its scenarios are named only when the deck was built from this check. The serious criteria come first
-    (a person's decision, else the model's proposal), then by frequency; `severity` counts, among the criteria of the
-    check's result, the ones the model proposed for and a person did not decide yet, the ones a person decided, and says
-    why the last proposal failed while one of them has neither."""
-    document = store.load(cards.DECK) or {}
-    deck = document.get('cards') or []
-    serious = set(store.severity()[check])
-    marks = store.severity_marks()[check]
-    proposed = store.severity_proposed()[check]
-    book = Book(sources.load())
-    log = from_logs(book, store.load(checks.result(check)) or {}, serious)
-    sim = from_run(book, chosen_run(check, run_id), deck)
-    scenarios = deck if document.get('check') == check else []
-    rules = [finish(entry, scenarios, serious, marks, proposed['proposals']) for entry in book.rules.values()]
-    rules.sort(key=lambda r: (not r['serious'], -r['log']['failed'], -r['sim']['failed'], r['rule']['text']))
-    # The criteria of the result: the model proposes for these and «Подтвердить все» confirms them; one only a run has
-    # is listed, but nobody proposes for it.
-    by = [rule['severity']['by'] for rule in rules if rule['log']['ruleIds']]
-    return {
-        'check': check,
-        'log': log,
-        'sim': sim,
-        'rules': rules,
-        'problems': [r['id'] for r in rules if r['log']['failed'] or r['sim']['failed']],
-        'severity': {
-            'criteria': len(by),
-            'proposed': by.count('model'),
-            'decided': by.count('person'),
-            'error': proposed['error'] if None in by else None,
-        },
     }

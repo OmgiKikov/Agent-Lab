@@ -10,7 +10,6 @@ from pathlib import Path
 
 import httpx
 
-from .. import store
 from .http import AGENT_PATH, AgentError, HttpAgent
 
 LOG = 'local-code-agent.log'  # beside the database of the agent being checked: agents run in parallel (jobs.PerAgent)
@@ -52,10 +51,12 @@ def release(port: int | None) -> None:
 
 class CodeAgent(HttpAgent):
     def __init__(self, connection: dict) -> None:
+        """connection['log']: where the agent's output goes, in a folder readable by this user only."""
         super().__init__({**connection, 'url': '', 'profile': 'local'})
         self.preferred = int(connection.get('port', 8081))
         self.port: int | None = None
         self.repo = Path(connection['repo']).expanduser()
+        self.log = Path(connection['log'])
         self.process: subprocess.Popen | None = None
 
     async def open(self) -> None:
@@ -64,8 +65,7 @@ class CodeAgent(HttpAgent):
             raise AgentError(f'Нет файла {script}. Проверьте папку с кодом в разделе «Агент».')
         self.port = free_port(self.preferred)
         self.url = f'http://127.0.0.1:{self.port}{AGENT_PATH}'
-        log = store.database().parent / LOG
-        store.private_folder(log.parent)
+        log = self.log
         # The agent's output may quote the bank's data: readable by this user only.
         descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         os.fchmod(descriptor, 0o600)

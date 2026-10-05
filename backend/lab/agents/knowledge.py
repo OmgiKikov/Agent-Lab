@@ -8,8 +8,6 @@ import json
 import re
 from pathlib import Path
 
-from .. import agents
-
 # In the agent's repository: the knowledge base of the stand's mock, ready answers, service messages.
 KB = 'local/mocks/fixtures/kb_gigar.json'
 TEXTS = ('src/aigw_service/texts', 'src/aigw_service/exception')
@@ -29,9 +27,10 @@ def _articles(repo: Path) -> dict:
     }
 
 
-def article(article_id: str) -> dict | None:
-    """One article of the agent's knowledge base, as the agent read it on the stand; None when the base lacks it."""
-    found = _articles(agents.repo()).get(article_id)
+def article(repo: Path, article_id: str) -> dict | None:
+    """One article of the agent's knowledge base (in its repository), as the agent read it on the stand; None when the
+    base lacks it."""
+    found = _articles(repo).get(article_id)
     return {'article': article_id, **found} if found else None
 
 
@@ -68,8 +67,9 @@ def _matching_answers(reply: str, answers: list[tuple[str, str, str]]) -> list[t
     return [(origin, text) for _, origin, text in sorted(hits, reverse=True)[:2]]
 
 
-def retrieved(conversation: list[dict]) -> list[dict]:
-    repo = agents.repo()
+def retrieved(repo: Path, conversation: list[dict]) -> list[dict]:
+    """The articles the agent read in a played conversation and the ready answers of its code its replies match: what
+    its instructions may rest on, for the judge."""
     kb, seen = _articles(repo), []
     for message in conversation:
         for event in message.get('events') or []:

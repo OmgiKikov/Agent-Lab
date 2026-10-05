@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import support
 
-from lab import config, judge, models, roles, store
+from lab import config, models, roles, store
+from lab.flows import simulation
 
 Client = httpx.AsyncClient
 
@@ -131,10 +132,10 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         with (
             config.using(support.changed(self.settings, **two)),
             patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)),
-            patch.object(judge.knowledge, 'retrieved', return_value=[]),
+            patch.object(simulation.knowledge, 'retrieved', return_value=[]),
         ):
             items = [{'conversation': [{'role': 'agent', 'text': 'Подробный ответ клиенту'}]} for _ in range(3)]
-            await asyncio.gather(*(judge.evaluate({'criteria': [criterion]}, item) for item in items))
+            await asyncio.gather(*(simulation.evaluate({'criteria': [criterion]}, item) for item in items))
         for item in items:
             self.assertEqual(item['model'], 'actual-main-alias')
             self.assertEqual(item['second']['model'], 'actual-second-alias')

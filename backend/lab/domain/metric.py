@@ -37,7 +37,7 @@ def metric(items: list[dict]) -> dict:
         'measured': measured,
         'total': len(done),
     }
-    # As discover.summarize: a check that decided nothing is no second opinion, so it neither agrees nor disagrees.
+    # As results.summarize: a check that decided nothing is no second opinion, so it neither agrees nor disagrees.
     twice = [i for i in done if i['status'] in DECIDED and (i.get('second') or {}).get('status') in DECIDED]
     if twice:
         value['secondJudge'] = {

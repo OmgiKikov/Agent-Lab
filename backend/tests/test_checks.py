@@ -10,7 +10,9 @@ import support
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, cards, discover, models, store, tone
+from lab import api, models, store
+from lab.flows import accuracy, conversations, tone
+from lab.flows import scenarios as cards
 
 TONE_RESULT, CODE_RESULT = 'tone-result.json', 'discover.json'
 CODE = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'Называй срок доставки терминала.'}
@@ -47,7 +49,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
-        with patch.object(api.sources, 'collect', return_value=([CODE], [])):
+        with patch.object(api.inputs.agent_sources, 'collect', return_value=([CODE], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
@@ -63,7 +65,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         """A tone-of-voice check through its screen, the model replaced by a fake one; its error, if any."""
         draft = store.load(tone.DRAFT)
         request = {'ruleIds': ['pronouns'], 'count': 1, 'revision': draft['revision']}
-        with patch.object(discover, 'judge_dialogue', side_effect=judged(status, down=down)):
+        with patch.object(conversations, 'judge_dialogue', side_effect=judged(status, down=down)):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
@@ -72,8 +74,8 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
     async def assess_code(self, status='FAIL', replan=False):
         """The accuracy assessment («Оценить N разговоров») with its planner and its check replaced; its error."""
         with (
-            patch.object(discover, 'plan_topics', AsyncMock(return_value=([CODE_TOPIC], 0))),
-            patch.object(discover, 'judge_dialogue', side_effect=judged(status)),
+            patch.object(accuracy, 'plan_topics', AsyncMock(return_value=([CODE_TOPIC], 0))),
+            patch.object(conversations, 'judge_dialogue', side_effect=judged(status)),
         ):
             response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
             self.assertEqual(response.status_code, 200, response.text)

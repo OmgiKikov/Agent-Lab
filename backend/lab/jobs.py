@@ -5,26 +5,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from . import store
+from .flows import Progress, error_text
 
-Progress = Callable[..., None]
 Work = Callable[[Progress], Awaitable[Any]]
 STOPPED = 'Остановлено'
 
 
 class BusyError(RuntimeError):
     pass
-
-
-def message(error: BaseException) -> str:
-    """What went wrong, in the words of the error itself: a task group's errors are told by their own messages, each
-    once, never as «unhandled errors in a TaskGroup»."""
-    return '; '.join(dict.fromkeys(str(leaf) or type(leaf).__name__ for leaf in _leaves(error)))
-
-
-def _leaves(error: BaseException) -> list[BaseException]:
-    if isinstance(error, BaseExceptionGroup):
-        return [leaf for child in error.exceptions for leaf in _leaves(child)]
-    return [error]
 
 
 class Jobs:
@@ -53,7 +41,7 @@ class Jobs:
                 if propagate:
                     raise
             except Exception as error:
-                self.state['error'] = message(error)
+                self.state['error'] = error_text(error)
                 if propagate:
                     raise
             finally:

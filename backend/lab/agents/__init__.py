@@ -3,18 +3,16 @@
 - prod:       the agent on the IFT stand, reachable from the work computer;
 - local-http: the acquiring agent already running on this computer (localhost:8080);
 - local-code: the Lab starts the agent from its repository for one run.
-Their settings are set on the page and kept in data/settings.json.
+The settings they are reached by are set on the page (flows.connection keeps them); here is how to reach each.
 """
 
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .. import store
+from .code import START, CodeAgent
 from .http import AGENT_PATH, BAD_ADDRESS, AgentError, HttpAgent, address_valid
 from .session import session
-from .source import START, CodeAgent
 
-SETTINGS = 'settings.json'
 DEFAULT_REPO = '~/Desktop/aigw-local'
 # The three ways to reach the agent, in words without a developer's slang: the same in «Агент», «Сыграть», the runs and
 # the reports. A run keeps the name it was played under (targetName); it is shown under the current one (run_name).
@@ -26,10 +24,10 @@ STAND_CUSTOMER = (
 )
 
 
-def settings() -> dict:
+def settings(saved: dict) -> dict:
     """prodUrl: the agent's address on the IFT stand; epk: the customers' EPK ids to talk as (none: an
-    unauthorized test customer); repo: the agent's repository with its prompts, tools and knowledge base."""
-    saved = store.load(SETTINGS, {}) or {}
+    unauthorized test customer); repo: the agent's repository with its prompts, tools and knowledge base. saved: the
+    settings as the page last saved them."""
     return {
         'prodUrl': str(saved.get('prodUrl') or '').strip(),
         'epk': [str(e).strip() for e in saved.get('epk') or [] if str(e).strip()],
@@ -37,26 +35,20 @@ def settings() -> dict:
     }
 
 
-def save_settings(values: dict) -> dict:
-    """A typo in the agent's address is refused here, in words, instead of surfacing later inside a check or a run;
-    an empty address clears it."""
-    current = settings()
-    current.update({k: v for k, v in values.items() if k in current})
-    if isinstance(current['epk'], str):
-        current['epk'] = current['epk'].split()
-    current['prodUrl'] = current['prodUrl'].strip()
-    if current['prodUrl'] and not address_valid(current['prodUrl']):
+def changed(current: dict, values: dict) -> dict:
+    """The settings with a person's changes. A typo in the agent's address is refused here, in words, instead of
+    surfacing later inside a check or a run; an empty address clears it."""
+    found = current | {key: value for key, value in values.items() if key in current}
+    if isinstance(found['epk'], str):
+        found['epk'] = found['epk'].split()
+    found['prodUrl'] = found['prodUrl'].strip()
+    if found['prodUrl'] and not address_valid(found['prodUrl']):
         raise ValueError(BAD_ADDRESS)
-    store.save(SETTINGS, current)
-    return settings()
+    return found
 
 
-def repo() -> Path:
-    return Path(settings()['repo']).expanduser()
-
-
-def configs() -> dict[str, dict]:
-    current = settings()
+def configs(current: dict) -> dict[str, dict]:
+    """How to reach the agent each way, by the settings (settings)."""
     return {
         'prod': {
             'name': NAMES['prod'],
@@ -113,11 +105,9 @@ def run_name(run: dict) -> str:
     return NAMES.get(str(run.get('target') or ''), run.get('targetName') or '')
 
 
-def create(key: str) -> HttpAgent:
-    config = configs().get(key)
-    if not config:
-        raise AgentError(f'Неизвестный способ подключения агента: {key}.')
-    return CodeAgent(config) if config['kind'] == 'code' else HttpAgent(config)
+def create(connection: dict) -> HttpAgent:
+    """The agent reached this way (configs); one started from its code writes its output to connection['log']."""
+    return CodeAgent(connection) if connection['kind'] == 'code' else HttpAgent(connection)
 
 
 __all__ = [
@@ -126,10 +116,10 @@ __all__ = [
     'AgentError',
     'CodeAgent',
     'HttpAgent',
+    'changed',
     'configs',
     'create',
     'public',
-    'repo',
     'run_name',
     'session',
     'settings',

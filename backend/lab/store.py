@@ -1,4 +1,9 @@
-"""Local SQLite persistence. Run mutations read and patch the current record in one transaction."""
+"""Local SQLite persistence: the documents, the runs, the saved checks and the answers on them, the journal of calls.
+
+Storage knows nothing of the processes: what a new input resets, when a result goes to the history, is decided in
+flows/, which opens a transaction (transaction) and writes through these functions inside it. A run's mutations read
+and patch the current record in one transaction.
+"""
 
 import hashlib
 import json
@@ -11,15 +16,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import checks, config, history, quotes
-from .metric import metric
+from . import config
+from .domain import accuracy, checks, quotes
+from .domain.comparison import dataset_fingerprint
+from .domain.metric import metric
 
 # The database's user_version once its schema (_set_up) is in place. Raise it with every change to _set_up: a database
 # is set up again only when its user_version differs.
 SCHEMA = 6
 # The uploaded dialogues: every write keeps their number beside them (lengths), so the state polled every 1.5 s
 # counts them without reading megabytes of conversations.
-COUNTED = 'logs.json'
+COUNTED = EXPORT = 'logs.json'
+EXPORT_META = 'logs-meta.json'  # the name and time of the last upload
 # The database of the agent a request works in (registry.using, app.py); without one, default_database().
 AGENT: ContextVar[Path | None] = ContextVar('agent_db', default=None)
 # A person's answer on a verdict that is no longer the one they saw.
@@ -52,9 +60,44 @@ def private_folder(folder: Path) -> None:
         missing.mkdir(mode=0o700, exist_ok=True)
 
 
+# The transaction a process holds open (transaction): every read and write inside goes through its connection.
+_HELD: ContextVar[tuple[Path, sqlite3.Connection] | None] = ContextVar('transaction', default=None)
+
+
+@contextmanager
+def transaction() -> Iterator[None]:
+    """What is written inside is written together, or none of it: one connection to the current database, BEGIN
+    IMMEDIATE, the commit at the end. A process (flows/) holds it around the writes one change of the product makes,
+    and awaits nothing inside: another task's writes wait for it, and its connection stays on its thread."""
+    path = database()
+    held = _HELD.get()
+    if held is not None:
+        if held[0] != path:
+            raise RuntimeError('A transaction is held in another database')
+        yield
+        return
+    with _connection() as connection:
+        _begin(connection)
+        token = _HELD.set((path, connection))
+        try:
+            yield
+        finally:
+            _HELD.reset(token)
+
+
+def _begin(connection: sqlite3.Connection) -> None:
+    """A write that reads first takes the database at once, unless a transaction holds it already."""
+    if not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
+
+
 @contextmanager
 def _connection() -> Iterator[sqlite3.Connection]:
     path = database()
+    held = _HELD.get()
+    if held is not None and held[0] == path:
+        yield held[1]  # the transaction commits or rolls back as a whole
+        return
     private_folder(path.parent)
     connection = sqlite3.connect(path, timeout=10)
     try:
@@ -73,7 +116,7 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
     connection.execute('PRAGMA journal_mode=WAL')
     path.chmod(0o600)
     with connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         connection.execute('CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
         # summary: the run without its conversations, written with it (_summary), for the list of runs.
         connection.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL, summary TEXT)')
@@ -148,18 +191,16 @@ def _save_accuracy_history(connection: sqlite3.Connection) -> None:
     """A result of Точность from before its history becomes its first saved check, with the conversations of the export
     it was made of (still the current one: a new export clears the result), so that the next export no longer erases
     it. A result already saved stays as it is."""
-    from . import accuracy_history  # imports this module: only once both are loaded
-
     result = _document(connection, checks.result(checks.CODE))
     if not result or not result.get('results') or result.get('checkId'):
         return
     judged = {str(item['dialogueId']) for item in result['results']}
     uploaded = _document(connection, COUNTED) or []
     dialogues = [dialogue for dialogue in uploaded if str(dialogue['id']) in judged]
-    result = {**result, 'checkId': uuid.uuid4().hex, 'datasetFingerprint': history.dataset_fingerprint(dialogues)}
-    meta = _document(connection, 'logs-meta.json') or {}
-    record = accuracy_history.saved(result, dialogues, meta.get('file'), len(uploaded), None)
-    _save_code_check(connection, record)
+    result = {**result, 'checkId': uuid.uuid4().hex, 'datasetFingerprint': dataset_fingerprint(dialogues)}
+    meta = _document(connection, EXPORT_META) or {}
+    record = accuracy.saved(result, dialogues, meta.get('file'), len(uploaded), None)
+    _insert_check(connection, 'code_checks', record)
     _put(connection, checks.result(checks.CODE), result)
 
 
@@ -236,6 +277,35 @@ def calls(subject: str | None = None) -> list[dict]:
     return [{'id': row[0], **dict(zip(CALL_COLUMNS, row[1:], strict=True))} for row in rows]
 
 
+def dialogue_ids() -> list[str]:
+    """The ids of the export's conversations, in the export's order."""
+    return [str(dialogue['id']) for dialogue in dialogues()]
+
+
+def dialogues(ids: Collection[str] | None = None) -> list[dict]:
+    """The export's conversations, in its order; only these when ids are named, in the order named."""
+    found = load(EXPORT, []) or []
+    if ids is None:
+        return found
+    by_id = {str(dialogue['id']): dialogue for dialogue in found}
+    return [by_id[dialogue_id] for dialogue_id in ids if dialogue_id in by_id]
+
+
+def dialogue(dialogue_id: str) -> dict | None:
+    """One conversation of the export, by its id."""
+    return next(iter(dialogues([dialogue_id])), None)
+
+
+def dialogue_count() -> int:
+    """How many conversations the export has, without reading them."""
+    return length(EXPORT)
+
+
+def export_meta() -> dict:
+    """The export the conversations came from: its file name and when it was uploaded, when that is known."""
+    return load(EXPORT_META) or {'file': None, 'updatedAt': None}
+
+
 def length(name: str) -> int:
     """How many dialogues are uploaded, from the number kept beside them: the dialogues themselves are not read."""
     if name != COUNTED:
@@ -259,7 +329,7 @@ def save(name: str, value: Any) -> None:
 def update(name: str, mutate: Callable[[Any], None]) -> Any:
     """Read, change and write one document in a single transaction, so concurrent writers do not lose changes."""
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         value = _update_document(connection, name, mutate)
     return value
 
@@ -274,49 +344,6 @@ def _update_document(connection: sqlite3.Connection, name: str, mutate: Callable
     return value
 
 
-def replace_inputs(name: str, value: Any, about: dict[str, Any] | None = None) -> None:
-    """Replace sources or logs together with what was derived from them, and only that. A new export clears the
-    results of both checks and the deck; their saved checks stay in their histories, and the criteria of both wait for
-    the next check (tone of voice's in their draft, Точность's in checks.CODE_CRITERIA). The checks derive from
-    different sources: changed communication rules (the tone-of-voice policy) clear its criteria, its result and a deck
-    built from it; changed code of the agent clears the accuracy result, its kept criteria and a deck built from it;
-    code read again unchanged clears nothing, wherever its prompts now stand in their files. Runs and answers stay.
-    `about`: documents that describe the new inputs (the export's file name, when the code was read), written in the
-    same transaction, so they never name the previous ones.
-    """
-    if name not in ('sources.json', 'logs.json'):
-        raise ValueError('Only source and log documents are inputs')
-    with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
-        if name == 'logs.json':
-            changed = list(checks.RESULTS)
-            _keep_code_criteria(connection)
-        else:
-            before = _document(connection, name)
-            changed = [check for check, part in _SOURCES_OF.items() if _content(part(before)) != _content(part(value))]
-            if checks.CODE in changed:
-                _put(connection, checks.CODE_CRITERIA, None)
-        _put(connection, name, value)
-        for document, described in (about or {}).items():
-            _put(connection, document, described)
-        # Keep the names: a repeated legacy import must not resurrect intentionally cleared results.
-        for check in changed:
-            _put(connection, checks.result(check), None)
-        if name == 'sources.json' and checks.TONE in changed:
-            _put(connection, 'tone-of-voice-criteria.json', None)
-        _drop_deck(connection, changed)
-
-
-def _keep_code_criteria(connection: sqlite3.Connection) -> None:
-    """A new export: the criteria of Точность's result wait for its next check (checks.CODE_CRITERIA), which sorts the
-    new conversations into the same topics; without a result, the criteria kept already stay."""
-    from . import accuracy_history  # imports this module: only once both are loaded
-
-    result = _document(connection, checks.result(checks.CODE))
-    if result and result.get('topics'):
-        _put(connection, checks.CODE_CRITERIA, accuracy_history.criteria_of(result))
-
-
 def _document(connection: sqlite3.Connection, name: str) -> Any:
     row = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
     return json.loads(row[0]) if row else None
@@ -329,61 +356,21 @@ def _put(connection: sqlite3.Connection, name: str, value: Any) -> None:
     )
 
 
-def _tone_policy(items: list[dict] | None) -> list[dict]:
-    """The supplied tone-of-voice policy among the sources (tone.KIND)."""
-    return [item for item in items or [] if item.get('kind') == checks.TONE_OF_VOICE]
-
-
-def _code(items: list[dict] | None) -> list[dict]:
-    """The agent's prompts and tools among the sources: everything but the tone-of-voice policy."""
-    return [item for item in items or [] if item.get('kind') != checks.TONE_OF_VOICE]
-
-
-# The sources each check's criteria come from.
-_SOURCES_OF = {checks.TONE: _tone_policy, checks.CODE: _code}
-
-
-def _content(items: list[dict]) -> list[tuple]:
-    """What the criteria of a check stand on: each source's id, kind and text. Not where it was found nor what it is
-    called: a prompt that moved down a line (`origin` is path:line) or rules saved under another name are the same
-    sources. The id stays: criteria name their source by it (sourceId)."""
-    return [(item.get('id'), item.get('kind'), _text_hash(item)) for item in items]
-
-
-def _text_hash(item: dict) -> str:
-    return item.get('sha256') or hashlib.sha256(str(item.get('content')).encode()).hexdigest()
-
-
-def _drop_deck(connection: sqlite3.Connection, changed: Collection[str]) -> None:
-    """The scenarios go with the result or the criteria of the check they were built from (changed); a deck that names
-    no check goes with any."""
-    deck = _document(connection, checks.DECK)
-    if changed and (deck is None or deck.get('check') in (None, *changed)):
-        _put(connection, checks.DECK, None)
-
-
-def save_audit(value: dict, *, new_criteria: bool, record: dict | None = None) -> None:
-    """Publish an accuracy result, with its record in the history (accuracy_history.saved) in the same transaction;
-    criteria extracted anew no longer match the scenarios built from the old ones, so those go with it. A deck from
-    tone of voice stays."""
-    with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
-        if record is not None:
-            _save_code_check(connection, record)
-        _put(connection, checks.result(checks.CODE), value)
-        if new_criteria:
-            _drop_deck(connection, [checks.CODE])
-
-
-def _save_code_check(connection: sqlite3.Connection, record: dict) -> None:
+def _insert_check(connection: sqlite3.Connection, table: str, record: dict) -> None:
     connection.execute(
-        'INSERT INTO code_checks (id, summary, value) VALUES (?, ?, ?)',
+        f'INSERT INTO {table} (id, summary, value) VALUES (?, ?, ?)',
         (record['check']['id'], _json(record['check']), _json(record)),
     )
 
 
+def save_code_check(record: dict) -> None:
+    """A finished check of Точность in its history (domain.accuracy.saved): its line and its whole record."""
+    with _connection() as connection:
+        _insert_check(connection, 'code_checks', record)
+
+
 def code_checks() -> list[dict]:
-    """The saved checks of Точность, the newest first: their lines (accuracy_history.saved)."""
+    """The saved checks of Точность, the newest first: their lines (domain.accuracy.saved)."""
     with _connection() as connection:
         return [json.loads(row[0]) for row in connection.execute('SELECT summary FROM code_checks ORDER BY rowid DESC')]
 
@@ -473,7 +460,7 @@ def set_severity(check: str, rule: str, serious: bool) -> dict[str, list[str]]:
     """A person decides whether the errors of one criterion of a check are serious; no proposal ever changes it. The
     serious criteria of every check after it."""
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         marks, proposed = _severity_of(connection)
         marks[check][rule] = serious
         _put(connection, checks.SEVERITY, marks)
@@ -484,7 +471,7 @@ def confirm_severity(check: str, keys: list[str]) -> dict[str, list[str]]:
     """A person takes the model's proposals for these criteria as their own decisions; a criterion the person decided
     already or the model has not proposed for stays as it is."""
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         marks, proposed = _severity_of(connection)
         proposals = proposed[check]['proposals']
         for key in keys:
@@ -497,7 +484,7 @@ def confirm_severity(check: str, keys: list[str]) -> dict[str, list[str]]:
 def propose_severity(check: str, proposals: dict[str, dict], model: str | None) -> None:
     """The model's proposals for some criteria of a check, beside the ones it made before; the last failure is over."""
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         proposed = _severity_of(connection)[1]
         proposed[check] = {
             'proposals': proposed[check]['proposals'] | proposals,
@@ -511,7 +498,7 @@ def propose_severity(check: str, proposals: dict[str, dict], model: str | None) 
 def severity_failed(check: str, error: str) -> None:
     """Why the model's last proposal for a check failed; what it proposed before stays."""
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         proposed = _severity_of(connection)[1]
         proposed[check] = proposed[check] | {'error': error, 'at': now()}
         _put(connection, checks.SEVERITY_PROPOSED, proposed)
@@ -521,7 +508,7 @@ def take_severity(check: str, marks: dict[str, bool], proposed: dict) -> None:
     """A check's decisions and proposals as another agent has them (rules of communication taken as a copy,
     api.copy_tone_rules)."""
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         own_marks, own_proposed = _severity_of(connection)
         _put(connection, checks.SEVERITY, own_marks | {check: dict(marks)})
         _put(connection, checks.SEVERITY_PROPOSED, own_proposed | {check: _proposed(proposed)})
@@ -530,17 +517,6 @@ def take_severity(check: str, marks: dict[str, bool], proposed: dict) -> None:
 def tone_checks() -> list[dict]:
     with _connection() as connection:
         return [json.loads(row[0]) for row in connection.execute('SELECT summary FROM tone_checks ORDER BY rowid DESC')]
-
-
-def save_tone_draft(draft: dict) -> None:
-    """A new rubric revision invalidates the scenarios built from tone of voice, while the prior assessment stays
-    reviewable."""
-    with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
-        previous = _document(connection, 'tone-of-voice-criteria.json') or {}
-        _put(connection, 'tone-of-voice-criteria.json', draft)
-        if previous.get('revision') != draft['revision']:
-            _drop_deck(connection, [checks.TONE])
 
 
 def tone_check(check_id: str) -> dict | None:
@@ -593,30 +569,16 @@ def _save_review(connection: sqlite3.Connection, table: str, review: tuple) -> N
     )
 
 
-def save_tone_check(snapshot: dict) -> None:
-    """Publish the live result, in tone of voice's own place, and its immutable evidence snapshot in one transaction.
-
-    Initial carried reviews seed separate annotations; later reviews never rewrite historical model evidence.
-    """
+def save_tone_check(record: dict) -> None:
+    """A finished check of tone of voice in its history (domain.tone.snapshot): its line and its immutable evidence."""
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
-        connection.execute(
-            'INSERT INTO tone_checks (id, summary, value) VALUES (?, ?, ?)',
-            (snapshot['check']['id'], _json(snapshot['check']), _json(snapshot)),
-        )
-        _put(connection, checks.result(checks.TONE), snapshot['result'])
-        _drop_deck(connection, [checks.TONE])
-        for result in snapshot['result']['results']:
-            for row in result.get('rules', []):
-                if row.get('review') in ('agree', 'disagree'):
-                    _save_tone_review(
-                        connection,
-                        snapshot['check']['id'],
-                        str(result['dialogueId']),
-                        row['ruleId'],
-                        row['review'],
-                        snapshot['check']['finishedAt'],
-                    )
+        _insert_check(connection, 'tone_checks', record)
+
+
+def save_tone_review(check_id: str, dialogue_id: str, rule_id: str, decision: str | None, at: str) -> None:
+    """A person's answer on a saved check of tone of voice, apart from its record, which never changes."""
+    with _connection() as connection:
+        _save_tone_review(connection, check_id, dialogue_id, rule_id, decision, at)
 
 
 def runs() -> list[dict]:
@@ -658,7 +620,7 @@ def _save_run(connection: sqlite3.Connection, record: dict) -> None:
 
 def _mutate_run(run_id: str, mutate: Callable[[dict], None]) -> dict:
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         row = connection.execute('SELECT value FROM runs WHERE id = ?', (run_id,)).fetchone()
         if row is None:
             raise KeyError(run_id)
@@ -794,7 +756,7 @@ def set_log_review(
         row['review'] = decision
 
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         value = _update_document(connection, analysis, mutate)
         # The answer stays with the saved check of this result too, which outlives the result (a new export).
         check_id = value.get('checkId')
@@ -809,7 +771,7 @@ def recover_runs() -> int:
     """On process startup, finish interrupted runs whose worker no longer exists."""
     recovered = 0
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         for (raw,) in connection.execute('SELECT value FROM runs').fetchall():
             record = json.loads(raw)
             if record.get('status') != 'running':
@@ -829,7 +791,7 @@ def import_legacy(documents: dict[str, Any], records: list[dict]) -> dict[str, i
     """Repeatable migration: existing data wins, including newer human reviews."""
     counts = {'documents': 0, 'runs': 0}
     with _connection() as connection:
-        connection.execute('BEGIN IMMEDIATE')
+        _begin(connection)
         for name, value in documents.items():
             counts['documents'] += connection.execute(
                 'INSERT OR IGNORE INTO documents (name, value) VALUES (?, ?)', (name, _json(value))

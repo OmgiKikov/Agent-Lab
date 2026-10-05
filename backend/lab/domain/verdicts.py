@@ -10,7 +10,7 @@ calls the stand recorded.
 from collections.abc import Sequence
 from typing import Protocol
 
-from .. import quotes
+from . import quotes
 from .export import words
 
 NO_QUOTE = 'Модель привела цитату, которой нет в ответах агента. Вывод не засчитан. '

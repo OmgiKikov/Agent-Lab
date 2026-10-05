@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import support
 
-from lab import api, config, jobs, logs, migrate, registry, store
+from lab import api, config, jobs, migrate, registry, store
 from lab.app import create, lifespan
 
 
@@ -134,13 +134,13 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
         with registry.using(self.first):
             store.save('settings.json', {'prodUrl': 'http://agent.example/chat'})
         seen = {}
-        original = api.agents.configs
+        original = api.connection.ways
 
-        def configs() -> dict:
+        def ways() -> dict:
             seen['url'] = original()['prod']['url']
             return {}
 
-        with patch.object(api.agents, 'configs', side_effect=configs):
+        with patch.object(api.connection, 'ways', side_effect=ways):
             await self.client.post('/api/agents/prod/check', headers={'X-Agent': self.first})
         self.assertEqual(seen.get('url'), 'http://agent.example/chat')
 
@@ -298,11 +298,11 @@ class LegacyImportTests(unittest.TestCase):
 
     def logs_of(self, agent_id: str) -> list:
         with registry.using(agent_id):
-            return store.load(logs.FILE) or []
+            return store.dialogues()
 
     def test_without_agents_the_import_waits_in_the_database_the_next_start_adopts(self) -> None:
         self.assertEqual(self.run_import()['agent'], None)
-        self.assertEqual(len(store.load(logs.FILE)), 1)
+        self.assertEqual(len(store.dialogues()), 1)
         registry.adopt_legacy()
         self.assertEqual(len(self.logs_of('acquiring')), 1)
 

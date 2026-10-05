@@ -1,7 +1,7 @@
 """The two checks of the real conversations, and the one way to find a check's result.
 
-- tone: Tone of voice, by the criteria from the person's communication rules (tone.py);
-- code: Точность, by the criteria from the agent's prompts and tools (discover.py).
+- tone: Tone of voice, by the criteria from the person's communication rules (flows/tone.py);
+- code: Точность, by the criteria from the agent's prompts and tools (flows/accuracy.py).
 Each keeps its own criteria, result and answers: neither replaces the other, and their counts never add up. Imports
 nothing of the Lab, so storage can use it too.
 """
@@ -11,12 +11,12 @@ RESULTS = {TONE: 'tone-result.json', CODE: 'discover.json'}
 NAMES = {TONE: 'Tone of voice', CODE: 'Точность'}
 DECK = 'cards.json'  # the scenarios, built from the errors of one check: {check, createdAt, model, cards}
 # The criteria of Точность waiting for its next check after a new export: its topics and their criteria without the
-# conversations of the old export (store.replace_inputs, accuracy_history.criteria_of); changed code clears them.
+# conversations of the old export (flows.inputs.replace_export, accuracy.criteria_of); changed code clears them.
 CODE_CRITERIA = 'accuracy-criteria.json'
 # Serious and minor errors, per check, by the criterion's key (problems.rule_key): a person's decisions
 # {tone: {key: true|false}, code: {…}} (an older record listed only the serious keys), and apart from them the model's
-# proposals {tone: {proposals: {key: {serious, reason}}, model, at, error}, code: {…}} (severity.py), which never touch
-# a decision. Both apart from the criteria: severity changes neither what is checked nor how, so it makes no new
+# proposals {tone: {proposals: {key: {serious, reason}}, model, at, error}, code: {…}} (flows/severity.py), which never
+# touch a decision. Both apart from the criteria: severity changes neither what is checked nor how, so it makes no new
 # version of the criteria.
 SEVERITY = 'severity.json'
 SEVERITY_PROPOSED = 'severity-proposed.json'

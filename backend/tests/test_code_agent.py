@@ -7,8 +7,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import support
+
 from lab import store
-from lab.agents import source
+from lab.agents import code
+from lab.flows import connection
 
 # A stand-in for the agent's local/run-app.sh: it serves the identity check on APP_PORT under its own pid.
 SERVER = """
@@ -48,17 +51,29 @@ class CodeAgentTests(unittest.IsolatedAsyncioTestCase):
         os.environ['SERVER'] = SERVER
         self.addCleanup(os.environ.pop, 'SERVER', None)
 
-    async def start(self, agent: source.CodeAgent, database: Path) -> None:
-        store.AGENT.set(database)  # inside its own task, as a job inside its agent
-        await agent.open()
+    def started(self, database: Path) -> code.CodeAgent:
+        """An agent from its code as a run of the agent whose database this is would start it."""
+        return code.CodeAgent(
+            {'repo': str(self.root / 'repo'), 'port': a_free_port(), 'log': database.parent / code.LOG}
+        )
 
     async def test_the_agent_writes_its_log_beside_the_database_of_the_agent_being_checked(self) -> None:
-        agent = source.CodeAgent({'repo': str(self.root / 'repo'), 'port': a_free_port()})
+        support.lab(self)
         database = self.root / 'agents' / 'first' / 'lab.sqlite3'
+
+        async def connect() -> code.CodeAgent:
+            store.AGENT.set(database)  # inside its own task, as a job inside its agent
+            connection.save_settings({'repo': str(self.root / 'repo')})
+            agent = connection.connect('local-code')
+            await agent.open()
+            return agent
+
+        task = asyncio.create_task(connect())
         try:
-            await asyncio.create_task(self.start(agent, database))
+            agent = await task
         finally:
-            await agent.close()
+            if task.done() and not task.exception():
+                await task.result().close()
         log = database.parent / 'local-code-agent.log'
         self.assertIn(f'listening on {agent.port}', log.read_text())
         self.assertEqual(log.stat().st_mode & 0o777, 0o600)
@@ -74,10 +89,11 @@ class CodeAgentTests(unittest.IsolatedAsyncioTestCase):
         environment = patch.dict(os.environ, secrets)
         environment.start()
         self.addCleanup(environment.stop)
-        agent = source.CodeAgent({'repo': str(self.root / 'repo'), 'port': a_free_port()})
         database = self.root / 'agents' / 'first' / 'lab.sqlite3'
+        database.parent.mkdir(parents=True)
+        agent = self.started(database)
         try:
-            await asyncio.create_task(self.start(agent, database))
+            await agent.open()
         finally:
             await agent.close()
         log = (database.parent / 'local-code-agent.log').read_text()
@@ -85,14 +101,19 @@ class CodeAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('own settings card-tool', log)
 
     async def test_two_agents_started_at_once_each_get_their_own_port(self) -> None:
-        config = {'repo': str(self.root / 'repo'), 'port': a_free_port()}
-        first, second = source.CodeAgent(config), source.CodeAgent(config)
+        port = a_free_port()
         databases = [self.root / 'agents' / name / 'lab.sqlite3' for name in ('first', 'second')]
+        for database in databases:
+            database.parent.mkdir(parents=True)
+        first, second = (
+            code.CodeAgent({'repo': str(self.root / 'repo'), 'port': port, 'log': database.parent / code.LOG})
+            for database in databases
+        )
         try:
-            await asyncio.gather(self.start(first, databases[0]), self.start(second, databases[1]))
+            await asyncio.gather(first.open(), second.open())
             self.assertNotEqual(first.port, second.port)
             self.assertEqual((first.version, second.version), ('test', 'test'))
         finally:
             await asyncio.gather(first.close(), second.close())
-        self.assertEqual(source.free_port(config['port']), config['port'])  # a stopped agent's port is free again
-        source.release(config['port'])
+        self.assertEqual(code.free_port(port), port)  # a stopped agent's port is free again
+        code.release(port)

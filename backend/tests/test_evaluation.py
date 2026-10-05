@@ -5,9 +5,12 @@ from unittest.mock import AsyncMock, patch
 
 import support
 
-from lab import cards, config, discover, judge, models, quotes, roles
-from lab.domain import verdicts
-from lab.metric import metric
+from lab import config, models, roles, store
+from lab.domain import export, quotes, verdicts
+from lab.domain.accuracy import ground
+from lab.domain.metric import metric
+from lab.flows import accuracy, conversations, simulation
+from lab.flows import scenarios as cards
 from lab.roles import judge as roles_judge
 from lab.roles.judge import RuleReply
 
@@ -129,7 +132,7 @@ class EvaluationTests(unittest.TestCase):
 
     def test_grounding_never_substitutes_an_unrelated_source(self):
         topics = [{'title': 'Возврат', 'rules': [dict(criterion(), sourceId='missing', quote='Вернуть терминал')]}]
-        grounded, dropped = discover.ground(topics, [{'id': 's1', 'content': 'Вернуть терминал в банк'}])
+        grounded, dropped = ground(topics, [{'id': 's1', 'content': 'Вернуть терминал в банк'}])
         self.assertEqual(dropped, 1)
         self.assertEqual(grounded[0]['rules'], [])
         self.assertEqual(len(topics[0]['rules']), 1)
@@ -150,12 +153,12 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             return completion({'customerGoal': 'Вернуть терминал', 'rules': [verdict()]})
 
         with (
-            patch.object(judge.knowledge, 'retrieved', side_effect=[first, second]) as retrieve,
+            patch.object(simulation.knowledge, 'retrieved', side_effect=[first, second]) as retrieve,
             patch.object(models, 'chat', model),
         ):
             for _ in range(2):
                 item = {'conversation': [{'role': 'agent', 'text': 'Вернуть терминал в банк'}]}
-                await judge.evaluate({'criteria': [criterion()]}, item)
+                await simulation.evaluate({'criteria': [criterion()]}, item)
                 self.assertEqual(item['status'], 'PASS')
             self.assertEqual(retrieve.call_count, 2)
         self.assertEqual(payloads, [first, first, second, second])
@@ -167,9 +170,9 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 models, 'chat', AsyncMock(side_effect=[completion(without_goal), completion(with_goal)])
             ) as chat,
-            patch.object(judge.knowledge, 'retrieved', return_value=[]),
+            patch.object(simulation.knowledge, 'retrieved', return_value=[]),
         ):
-            result = await judge.run_verdict(
+            result = await simulation.run_verdict(
                 {'criteria': [criterion()]}, [{'role': 'agent', 'text': 'Вернуть терминал в банк'}]
             )
         self.assertEqual(chat.await_count, 2)
@@ -183,10 +186,10 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(models, 'chat', model),
-            patch.object(judge.knowledge, 'retrieved', return_value=[]) as retrieve,
+            patch.object(simulation.knowledge, 'retrieved', return_value=[]) as retrieve,
         ):
             item = {'conversation': [{'role': 'agent', 'text': 'Вернуть терминал в банк'}]}
-            await judge.evaluate({'criteria': [criterion()]}, item)
+            await simulation.evaluate({'criteria': [criterion()]}, item)
         self.assertEqual(retrieve.call_count, 1)
         self.assertEqual(item['status'], 'PASS')
         self.assertEqual(item['second']['status'], 'ERROR')
@@ -197,8 +200,8 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
         topic = {'id': 't1', 'rules': [criterion('r1'), criterion('r2')]}
-        with patch.object(discover.judge, 'log_verdict', AsyncMock(side_effect=models.ModelError('timeout'))):
-            result = await discover.judge_dialogue(dialogue, topic)
+        with patch.object(conversations.judge, 'log_verdict', AsyncMock(side_effect=models.ModelError('timeout'))):
+            result = await conversations.judge_dialogue(dialogue, topic)
         self.assertEqual(result['status'], 'UNMEASURED')
         self.assertEqual([row['status'] for row in result['rules']], ['UNKNOWN', 'UNKNOWN'])
         self.assertEqual(result['error'], 'timeout')
@@ -220,7 +223,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         }
         one = {'model_url': same[0], 'model': same[1], 'second_url': None, 'second_model': None}
         with config.using(support.changed(self.settings, **one)), patch.object(models, 'chat', model):
-            result = await discover.judge_dialogue(dialogue, {'id': 't1', 'rules': [criterion()]})
+            result = await conversations.judge_dialogue(dialogue, {'id': 't1', 'rules': [criterion()]})
         self.assertIsNone(result['second'])
         self.assertEqual(len(calls), 1)
 
@@ -234,7 +237,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
                 bad = {'topics': [dict(topic, dialogueIds=assigned)]}
                 good = {'topics': [topic]}
                 with patch.object(models, 'chat', AsyncMock(side_effect=[completion(bad), completion(good)])) as chat:
-                    topics, dropped = await discover.plan_topics([source], [dialogue])
+                    topics, dropped = await accuracy.plan_topics([source], [dialogue])
                 self.assertEqual(chat.await_count, 2)
                 self.assertEqual(topics[0]['dialogueIds'], ['stable'])
                 self.assertEqual(dropped, 0)
@@ -249,14 +252,14 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         second = {'title': 'Тарифы', 'dialogueIds': ['d1', 'd2'], 'rules': [rule]}
         answer = completion({'topics': [first, second]})
         with patch.object(models, 'chat', AsyncMock(return_value=answer)) as chat:
-            topics, _ = await discover.plan_topics([source], dialogues)
+            topics, _ = await accuracy.plan_topics([source], dialogues)
         self.assertEqual(chat.await_count, 1)
         self.assertEqual(topics[0]['dialogueIds'], [f'c{n}' for n in range(19)])
         self.assertEqual(topics[1]['dialogueIds'], [])
         previous = {'topics': [{'id': 't1', 'title': 'Возврат', 'rules': []}], 'results': []}
         assignments = [{'dialogueId': f'd{n}', 'topicId': 't1'} for n in (1, 1, *range(2, 20))]
         with patch.object(models, 'chat', AsyncMock(return_value=completion({'assignments': assignments}))) as chat:
-            topics = await discover.keep_topics(previous, dialogues)
+            topics = await accuracy.keep_topics(previous, dialogues)
         self.assertEqual(chat.await_count, 1)
         self.assertEqual(topics[0]['dialogueIds'], [f'c{n}' for n in range(19)])
 
@@ -266,7 +269,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         bad = {'assignments': [{'dialogueId': 'd1', 'topicId': 'unknown'}]}
         good = {'assignments': [{'dialogueId': 'd1', 'topicId': 't1'}]}
         with patch.object(models, 'chat', AsyncMock(side_effect=[completion(bad), completion(good)])) as chat:
-            topics = await discover.keep_topics(previous, [dialogue])
+            topics = await accuracy.keep_topics(previous, [dialogue])
         self.assertEqual(chat.await_count, 2)
         self.assertEqual(topics[0]['dialogueIds'], ['stable'])
 
@@ -342,7 +345,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         ):
             answer = {'rules': [verdict('special_characters', 'FAIL', quote)]}
             with self.subTest(quote=quote), patch.object(models, 'chat', AsyncMock(return_value=completion(answer))):
-                result = await roles_judge.log_verdict(rules, discover.conversation(dialogue))
+                result = await roles_judge.log_verdict(rules, export.conversation(dialogue))
                 self.assertEqual(result.rows[0]['status'], expected)
         played = [{'role': 'agent', 'text': 'Выберите, что сделать дальше.', 'options': ['Позвать оператора']}]
         for quote, expected in (('Позвать оператора', 'PASS'), ('[Кнопки: Позвать оператора]', 'UNMEASURED')):
@@ -350,9 +353,9 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             with (
                 self.subTest(quote=quote),
                 patch.object(models, 'chat', AsyncMock(return_value=completion(answer))),
-                patch.object(judge.knowledge, 'retrieved', return_value=[]),
+                patch.object(simulation.knowledge, 'retrieved', return_value=[]),
             ):
-                result = await judge.run_verdict({'criteria': [criterion()]}, played)
+                result = await simulation.run_verdict({'criteria': [criterion()]}, played)
                 self.assertEqual(result.status, expected)
 
     async def test_duplicate_verdict_ids_are_retried(self):
@@ -382,18 +385,20 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             with (
                 self.subTest(events=events),
                 patch.object(models, 'chat', AsyncMock(return_value=completion(answer))),
-                patch.object(judge.knowledge, 'retrieved', return_value=[]),
+                patch.object(simulation.knowledge, 'retrieved', return_value=[]),
             ):
-                result = await judge.run_verdict(card, [{'role': 'agent', 'text': 'getLkkTariff', 'events': events}])
+                result = await simulation.run_verdict(
+                    card, [{'role': 'agent', 'text': 'getLkkTariff', 'events': events}]
+                )
             self.assertEqual(result.status, expected)
 
     async def test_generated_handoff_marker_cannot_replace_missing_reply_evidence(self):
         answer = {'customerGoal': 'Вернуть терминал', 'rules': [verdict(quote='разговор передан оператору')]}
         with (
             patch.object(models, 'chat', AsyncMock(return_value=completion(answer))),
-            patch.object(judge.knowledge, 'retrieved', return_value=[]),
+            patch.object(simulation.knowledge, 'retrieved', return_value=[]),
         ):
-            result = await judge.run_verdict(
+            result = await simulation.run_verdict(
                 {'criteria': [criterion()]}, [{'role': 'agent', 'text': 'Нет ответа', 'ok': False, 'status': 500}]
             )
         self.assertEqual(result.status, 'UNMEASURED')
@@ -404,9 +409,9 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             with (
                 self.subTest(articles=articles),
                 patch.object(models, 'chat', AsyncMock(return_value=completion(answer))),
-                patch.object(judge.knowledge, 'retrieved', return_value=articles),
+                patch.object(simulation.knowledge, 'retrieved', return_value=articles),
             ):
-                result = await judge.run_verdict(
+                result = await simulation.run_verdict(
                     {'criteria': [criterion(observation='knowledge')]},
                     [{'role': 'agent', 'text': 'Вернуть терминал в банк'}],
                 )
@@ -427,10 +432,10 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         item = {'conversation': []}
         with (
             patch.object(models, 'chat', model),
-            patch.object(judge.knowledge, 'retrieved', return_value=[]),
+            patch.object(simulation.knowledge, 'retrieved', return_value=[]),
             self.assertRaises(models.ModelError),
         ):
-            await judge.evaluate({'criteria': []}, item)
+            await simulation.evaluate({'criteria': []}, item)
         self.assertTrue(cancelled.is_set())
         self.assertNotIn('status', item)
 
@@ -442,14 +447,14 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         topic = {'id': 't1', 'title': 'Возврат', 'dialogueIds': ['stable'], 'rules': [criterion()]}
         result = {'dialogueId': 'stable', 'topicId': 't1', 'status': 'UNMEASURED', 'rules': [], 'opening': 'Вопрос'}
         with (
-            patch.object(discover.sources, 'load', return_value=[{'id': 's1', 'kind': 'prompt', 'content': 'text'}]),
-            patch.object(discover, 'sample', return_value=[dialogue]),
-            patch.object(discover.store, 'load', return_value={}),
-            patch.object(discover, 'plan_topics', AsyncMock(return_value=([topic], 0))),
-            patch.object(discover, 'judge_dialogue', AsyncMock(return_value=result)),
-            patch.object(discover.store, 'save') as save,
+            patch.object(accuracy.inputs, 'sources', return_value=[{'id': 's1', 'kind': 'prompt', 'content': 'text'}]),
+            patch.object(accuracy.conversations, 'sample', return_value=[dialogue]),
+            patch.object(store, 'load', return_value={}),
+            patch.object(accuracy, 'plan_topics', AsyncMock(return_value=([topic], 0))),
+            patch.object(accuracy.conversations, 'judge_dialogue', AsyncMock(return_value=result)),
+            patch.object(store, 'save') as save,
         ):
-            analysis = await discover.run()
+            analysis = await accuracy.assess()
         self.assertEqual(analysis['results'][0]['dialogueId'], 'stable')
         self.assertNotIn('runId', analysis['results'][0])
         save.assert_not_called()
@@ -465,13 +470,13 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         result = {'dialogueId': 'stable', 'topicId': 't1', 'status': 'UNMEASURED', 'rules': [], 'opening': 'Вопрос'}
         plan = AsyncMock(return_value=([topic], 0))
         with (
-            patch.object(discover.sources, 'load', return_value=[code, policy]),
-            patch.object(discover, 'sample', return_value=[dialogue]),
-            patch.object(discover.store, 'load', return_value=None),
-            patch.object(discover, 'plan_topics', plan),
-            patch.object(discover, 'judge_dialogue', AsyncMock(return_value=result)),
+            patch.object(accuracy.inputs, 'sources', return_value=[code, policy]),
+            patch.object(accuracy.conversations, 'sample', return_value=[dialogue]),
+            patch.object(store, 'load', return_value=None),
+            patch.object(accuracy, 'plan_topics', plan),
+            patch.object(accuracy.conversations, 'judge_dialogue', AsyncMock(return_value=result)),
         ):
-            analysis = await discover.run()
+            analysis = await accuracy.assess()
         plan.assert_awaited_once_with([code], [dialogue])
         self.assertEqual([source['id'] for source in analysis['sources']], ['s1'])
         self.assertNotIn('purpose', analysis)
@@ -479,20 +484,21 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_assessment_without_the_agents_code_names_where_to_read_it(self):
         policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь к клиенту на вы.'}
         with (
-            patch.object(discover.sources, 'load', return_value=[policy]),
-            patch.object(discover.store, 'load', return_value=None),
+            patch.object(accuracy.inputs, 'sources', return_value=[policy]),
+            patch.object(store, 'load', return_value=None),
             self.assertRaises(RuntimeError) as refused,
         ):
-            await discover.run()
+            await accuracy.assess()
         self.assertEqual(str(refused.exception), 'Код агента ещё не прочитан. Прочитайте его в разделе «Агент».')
 
     async def test_card_generation_does_not_commit(self):
         with (
-            patch.object(cards.store, 'load', return_value={'topics': [], 'results': []}),
-            patch.object(cards, 'pick', return_value=[({}, {}, 'Coverage')]),
+            patch.object(store, 'load', return_value={'topics': [], 'results': []}),
+            patch.object(store, 'dialogues', return_value=[{'id': 'd'}]),
+            patch.object(cards.scenarios, 'pick', return_value=[({}, 'd', 'Coverage')]),
             patch.object(cards, 'build_card', AsyncMock(return_value={'id': 'card', 'model': 'actual-main'})),
-            patch.object(cards.store, 'save') as save,
+            patch.object(store, 'save') as save,
         ):
-            result = await cards.run('code')
+            result = await cards.built('code')
         self.assertEqual(result, [{'id': 'card', 'model': 'actual-main'}])
         save.assert_not_called()

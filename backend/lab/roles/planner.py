@@ -62,6 +62,19 @@ PLANNER = Role('planner', instructions('planner'), Plan)
 ROUTER = Role('router', instructions('router'), Placement)
 
 
+def requests(dialogues: list[dict]) -> list[dict]:
+    """What the planner and the router see of the conversations: short ids (d1..dN) and the customer's words."""
+    return [
+        {'id': f'd{i}', 'customer': '\n'.join(m['content'] for m in d['messages'] if m['role'] == 'user')[:600]}
+        for i, d in enumerate(dialogues, 1)
+    ]
+
+
+def short_ids(dialogues: list[dict]) -> dict[str, str]:
+    """The conversation each short id of the requests stands for."""
+    return {f'd{i}': str(d['id']) for i, d in enumerate(dialogues, 1)}
+
+
 def _placed_enough(placed: set[str], expected: set[str], message: str) -> None:
     if len(placed & expected) < PLACED * len(expected):
         raise ValueError(message)

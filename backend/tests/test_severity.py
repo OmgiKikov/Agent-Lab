@@ -12,7 +12,10 @@ from test_checks import CODE, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, checks, discover, models, problems, registry, severity, store, tone
+from lab import api, models, registry, store
+from lab.domain import checks
+from lab.domain.problems import rule_key
+from lab.flows import accuracy, conversations, severity, tone
 from lab.jobs import PerAgent
 from lab.roles import severity as proposals
 
@@ -28,8 +31,8 @@ def talk(dialogue_id: str) -> dict:
 
 
 def judge_by(failing: dict[str, set[str]], inapplicable: dict[str, set[str]] | None = None):
-    """discover.judge_dialogue with a fake model: a conversation fails exactly the criteria named for it; the criteria
-    named in `inapplicable` for it did not apply there (their situation never came up)."""
+    """conversations.judge_dialogue with a fake model: a conversation fails exactly the criteria named for it; the
+    criteria named in `inapplicable` for it did not apply there (their situation never came up)."""
 
     async def judge(dialogue, topic):
         fails = failing.get(dialogue['id'], set())
@@ -127,7 +130,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         if propose:
             request['propose'] = True
         with (
-            patch.object(discover, 'judge_dialogue', side_effect=judge_by(failing, inapplicable)),
+            patch.object(conversations, 'judge_dialogue', side_effect=judge_by(failing, inapplicable)),
             patch.object(severity.models, 'chat', propose or SILENT),
         ):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
@@ -137,7 +140,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
 
     def key(self, rule_id):
         criterion = next(c for c in store.load(tone.DRAFT)['criteria'] if c['id'] == rule_id)
-        return problems.rule_key(criterion['quote'])
+        return rule_key(criterion['quote'])
 
     async def mark(self, rule_id, serious=True, agent=None, check='tone'):
         response = await self.post(
@@ -328,7 +331,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             'propose': True,
         }
         with (
-            patch.object(discover, 'judge_dialogue', side_effect=judge_by({'d1': {'pronouns'}})),
+            patch.object(conversations, 'judge_dialogue', side_effect=judge_by({'d1': {'pronouns'}})),
             patch.object(severity.models, 'chat', endless),
         ):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
@@ -443,7 +446,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.severity_marks()['tone'], {pronouns: True, simple: False})
 
     async def test_an_accuracy_check_proposes_for_its_criteria_too(self):
-        with patch.object(api.sources, 'collect', return_value=([CODE], [])):
+        with patch.object(api.inputs.agent_sources, 'collect', return_value=([CODE], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
 
@@ -452,8 +455,8 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
 
         model = proposing('срок')
         with (
-            patch.object(discover, 'plan_topics', AsyncMock(side_effect=plan)),
-            patch.object(discover, 'judge_dialogue', side_effect=judged('FAIL')),
+            patch.object(accuracy, 'plan_topics', AsyncMock(side_effect=plan)),
+            patch.object(conversations, 'judge_dialogue', side_effect=judged('FAIL')),
             patch.object(severity.models, 'chat', model),
         ):
             response = await self.client.post('/api/discover', json={'count': 5, 'propose': True})

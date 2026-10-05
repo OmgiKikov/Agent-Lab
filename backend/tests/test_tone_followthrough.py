@@ -7,12 +7,15 @@ from unittest.mock import AsyncMock, patch
 import support
 from test_tone import POLICY
 
-from lab import api, cards, discover, judge, models, simulate, store, tone
+from lab import models, store
+from lab.flows import conversations, simulation, tone
+from lab.flows import scenarios as cards
 
 
 def judged(status='FAIL', model='model-a', down=()):
-    """discover.judge_dialogue with a fake model: every criterion gets this verdict on the agent's reply; a conversation
-    in `down` is one the model did not answer, so every criterion of it stays unknown, with the model's error."""
+    """conversations.judge_dialogue with a fake model: every criterion gets this verdict on the agent's reply; a
+    conversation in `down` is one the model did not answer, so every criterion of it stays unknown, with the model's
+    error."""
 
     async def judge(dialogue, topic):
         failed = dialogue['id'] in down
@@ -72,7 +75,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
 
     async def start_check(self, judge, rule_ids=None, count=1):
         draft = store.load(tone.DRAFT)
-        with patch.object(discover, 'judge_dialogue', side_effect=judge):
+        with patch.object(conversations, 'judge_dialogue', side_effect=judge):
             response = await self.client.post(
                 '/api/tone-of-voice/check',
                 json={
@@ -329,7 +332,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(card['criteria'][0]['quote'], original_rule['quote'])
         self.assertEqual(card['criteria'][0]['clarifications'], [note])
         self.assertIn(note, card['criteria'][0]['text'])
-        item = simulate.new_item(card, 'calm', 0)
+        item = simulation.new_item(card, 'calm', 0)
         item['conversation'] = [{'role': 'agent', 'text': self.dialogue['messages'][1]['content']}]
         # A later card rebuild must not alter the criteria saved with the played conversation.
         card['criteria'][0]['text'] = 'New card criterion'
@@ -356,9 +359,9 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(models, 'chat', side_effect=chat),
-            patch.object(judge.knowledge, 'retrieved', return_value=[]),
+            patch.object(simulation.knowledge, 'retrieved', return_value=[]),
         ):
-            await judge.evaluate({'criteria': item['criteria']}, item)
+            await simulation.evaluate({'criteria': item['criteria']}, item)
         self.assertEqual(len(seen), 2)
         self.assertTrue(all(note in data['expectations'][0]['text'] for data in seen))
         self.assertTrue(all(data['expectations'][0]['quote'] == original_rule['quote'] for data in seen))
@@ -559,7 +562,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(models, 'chat', AsyncMock(return_value=answer)):
                 response = await self.client.post('/api/tone-of-voice/advice', json=request)
             self.assertEqual(response.status_code, status, response.text)
-        self.assertEqual(store.load(api.logs.FILE), [self.dialogue])
+        self.assertEqual(store.load(store.EXPORT), [self.dialogue])
         self.assertEqual(store.load(tone.RESULT), result)
 
     async def test_late_result_cannot_publish_after_a_draft_revision_change(self):
@@ -569,7 +572,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             store.update(tone.DRAFT, lambda draft: draft.update(revision='new-revision'))
             return previous['results']
 
-        with patch.object(tone, '_judge', side_effect=superseded):
+        with patch.object(tone, 'judge', side_effect=superseded):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await self.wait_job()
         self.assertIn('Материалы проверки изменились', self.jobs.state['error'])
@@ -587,7 +590,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 return previous['results']
 
-        with patch.object(tone, '_judge', side_effect=swallow_cancel):
+        with patch.object(tone, 'judge', side_effect=swallow_cancel):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await entered.wait()
             await self.client.post('/api/job/stop')
@@ -645,5 +648,5 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         snapshot = store.tone_check(result['checkId'])
         snapshot['result']['finishedAt'] = 'replacement'
         with self.assertRaises(sqlite3.IntegrityError):
-            store.save_tone_check(snapshot)
+            tone.publish(snapshot['result'], snapshot)
         self.assertEqual(store.load(tone.RESULT), result)

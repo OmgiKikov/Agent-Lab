@@ -3,7 +3,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import quotes
+from ..domain import quotes
 from .base import Answer, NonBlank, Role, ask, instructions
 
 

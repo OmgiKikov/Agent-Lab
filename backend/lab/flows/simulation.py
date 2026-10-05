@@ -1,4 +1,10 @@
-"""Play scenarios against an agent; persist each conversation and evaluation in the Lab."""
+"""Runs: the deck's scenarios played against the agent by the synthetic customer, each conversation judged when it
+ends, and a run judged again.
+
+A conversation's turns stay in memory, in the job's progress; it is written once, when it ends with a verdict or an
+error. Both judges of a played conversation see one prepared set of evidence (evidence). A run judged again takes the
+new verdicts together, at the end: a stopped or failed pass leaves the run as it was.
+"""
 
 import asyncio
 import time
@@ -7,18 +13,19 @@ from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
 
-from . import agents, cards, checks, jobs, judge, models, personas, store
-from .agents import world
-from .domain import world as scenario_world
-from .roles import customer
-from .transcript import with_buttons
+from .. import agents, models, store
+from ..agents import knowledge, world
+from ..domain import checks, personas
+from ..domain import world as scenario_world
+from ..domain.transcript import for_judge, tool_calls, with_buttons
+from ..roles import customer, judge
+from . import Progress, connection, error_text, scenarios
 
 MAX_AGENT_TURNS = 3
 PARALLEL = 4
 NO_REPLIES = 'Агент не ответил ни в одном разговоре'
 # What a re-judge changes in a conversation.
 JUDGED = ('status', 'rules', 'model', 'judgeVersion', 'second', 'error', 'criteria')
-Progress = Callable[..., None]
 
 
 async def customer_says(card: dict, conversation: list[dict], details: str = '', persona: str | None = None) -> str:
@@ -49,7 +56,7 @@ async def prepare_openings(chosen: list[dict], persona_ids: list[str], progress:
     async with asyncio.TaskGroup() as group:
         for card, key in missing:
             group.create_task(rewrite(card, key))
-    cards.remember_openings({card['id']: card['openings'] for card, _ in missing})
+    scenarios.remember_openings({card['id']: card['openings'] for card, _ in missing})
 
 
 def opening(card: dict, persona: str) -> str:
@@ -57,21 +64,24 @@ def opening(card: dict, persona: str) -> str:
 
 
 async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, changed: Callable[[], None]) -> None:
+    """One conversation of the scenario with the agent, up to MAX_AGENT_TURNS replies, then judged. A conversation the
+    agent or the model broke keeps its turns and says why."""
     conversation = item['conversation']
-    test_data = scenario_world.overrides(card.get('world'), world.templates()) if agent.mocked else {}
+    shapes = world.templates(connection.repo()) if agent.mocked else None
+    test_data = scenario_world.overrides(card.get('world'), shapes) if agent.mocked else {}
     details = scenario_world.customer_profile(card.get('world')) if test_data else record.get('customer', '')
     # Whether the conversation ran to its end: only such a conversation may be judged again (ended).
     item.update(world=bool(test_data), ended=False)
     persona = item.get('persona') or personas.DEFAULT
-    message, from_log = opening(card, persona), persona == personas.DEFAULT
+    line, from_log = opening(card, persona), persona == personas.DEFAULT
     try:
         for turn in range(1, MAX_AGENT_TURNS + 1):
             conversation.append(
-                {'role': 'customer', 'text': message, 'fromLog': from_log, 'rewritten': turn == 1 and not from_log}
+                {'role': 'customer', 'text': line, 'fromLog': from_log, 'rewritten': turn == 1 and not from_log}
             )
             item['stage'] = f'ход {turn}: агент отвечает'
             changed()
-            reply = await agent.say(item['conversationId'], message, test_data)
+            reply = await agent.say(item['conversationId'], line, test_data)
             conversation.append({'role': 'agent', **reply})
             changed()
             if not reply['text']:
@@ -80,13 +90,13 @@ async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, ch
                 break
             item['stage'] = f'ход {turn + 1}: клиент пишет'
             changed()
-            message, from_log = await customer_says(card, conversation, details, persona), False
-            if customer.END in message or not message:
+            line, from_log = await customer_says(card, conversation, details, persona), False
+            if customer.END in line or not line:
                 break
         item['ended'] = True
         item['stage'] = 'модель оценивает'
         changed()
-        await judge.evaluate(card, item)
+        await evaluate(card, item)
     except (agents.AgentError, models.ModelError) as error:
         item.update(status='UNMEASURED', error=str(error))
     item['stage'] = ''
@@ -140,16 +150,16 @@ async def run(
     repeats: int = 1,
     persona_ids: list[str] | None = None,
 ) -> dict:
-    chosen = [card for card in cards.deck() if not card_ids or card['id'] in card_ids]
+    chosen = [card for card in scenarios.deck() if not card_ids or card['id'] in card_ids]
     if not chosen:
         raise RuntimeError('Нет сценариев для прогона. Сначала соберите сценарии.')
     persona_ids = [p for p in personas.PERSONAS if p in (persona_ids or [personas.DEFAULT])] or [personas.DEFAULT]
-    config = agents.configs()[key]
+    config = connection.ways()[key]
     record = new_run(key, config, label, repeats, persona_ids)
     plan = [(card, persona, attempt) for attempt in range(1, repeats + 1) for persona in persona_ids for card in chosen]
     record['items'] = [new_item(card, persona, attempt) for card, persona, attempt in plan]
     # The run is measured by the criteria of the check its deck was built from, and remembers it.
-    record['check'] = cards.check() or checks.of_run(record)
+    record['check'] = scenarios.check() or checks.of_run(record)
     store.create_run(record)
 
     def changed(index: int) -> None:
@@ -165,7 +175,7 @@ async def run(
     with models.about(f'run:{record["id"]}'):
         try:
             await prepare_openings(chosen, persona_ids, progress)
-            async with agents.session(agents.create(key)) as agent:
+            async with agents.session(connection.connect(key)) as agent:
                 record['version'] = agent.version
                 store.update_run(record['id'], version=agent.version)
                 gate = asyncio.Semaphore(PARALLEL)
@@ -184,7 +194,7 @@ async def run(
             record.update(status='stopped', error='Прогон остановлен')
             raise
         except Exception as error:
-            record.update(status='failed', error=jobs.message(error))
+            record.update(status='failed', error=error_text(error))
         finally:
             # What the stop or the failure cut short, with the final status, in one write: not one per conversation.
             cut = {}
@@ -235,7 +245,7 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
         raise RuntimeError('В прогоне нет записанных ответов агента: ни один разговор не дошёл до конца.')
     legacy = [(index, item) for index, item in items if not isinstance(item.get('criteria'), list)]
     if legacy:
-        by_id = {card['id']: card for card in cards.deck()}
+        by_id = {card['id']: card for card in scenarios.deck()}
         for _, item in legacy:
             card = by_id.get(item['cardId'])
             if card is None:
@@ -249,7 +259,7 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
     async def one(item: dict) -> None:
         nonlocal done
         try:
-            await judge.evaluate(item, item)
+            await evaluate(item, item)
             item['error'] = None
         except models.ModelError as error:
             failed[str(error)] += 1
@@ -268,3 +278,39 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
         )
     verdicts = {index: {key: item[key] for key in JUDGED if key in item} for index, item in items}
     return store.update_items(record['id'], verdicts, rejudgedAt=store.now(), model=models.models_used(record['items']))
+
+
+async def evidence(card: dict, conversation: list[dict]) -> judge.Evidence:
+    """What both judges see of a played conversation, with the knowledge articles the agent read in it."""
+    shown = [{'role': m['role'].upper(), 'text': for_judge(m)} for m in conversation]
+    replies = [message for message in conversation if message['role'] == 'agent']
+    # The agent's words and its buttons' labels: the agent wrote both, the Lab's «[Кнопки: …]» around them it did not.
+    agent_text = '\n'.join(line for reply in replies for line in (reply['text'], *(reply.get('options') or [])))
+    calls = '\n'.join(call for reply in replies for call in tool_calls(reply))
+    retrieved = await asyncio.to_thread(knowledge.retrieved, connection.repo(), conversation)
+    payload = {
+        'expectations': card['criteria'],
+        'conversation': shown,
+        'toolCallsObserved': bool(calls),
+        'knowledge': retrieved,
+    }
+    return judge.Evidence(card['criteria'], payload, agent_text, calls, bool(retrieved))
+
+
+async def run_verdict(card: dict, conversation: list[dict], model: models.Endpoint | None = None) -> judge.Verdict:
+    """A conversation the synthetic customer just had with the agent, against the card's criteria."""
+    return await judge.run_verdict(await evidence(card, conversation), model)
+
+
+async def evaluate(card: dict, item: dict) -> None:
+    """Judge a run's conversation in place: rows, verdict and the second judge's verdict."""
+    prepared = await evidence(card, item['conversation'])
+    try:
+        async with asyncio.TaskGroup() as tasks:
+            primary = tasks.create_task(judge.run_verdict(prepared))
+            secondary = tasks.create_task(judge.second_opinion(judge.run_verdict, prepared))
+    except* models.ModelError as errors:
+        raise models.ModelError(str(errors.exceptions[0])) from errors
+    result = primary.result()
+    item.update(rules=result.rows, status=result.status, model=result.model, judgeVersion=result.version)
+    item['second'] = secondary.result()

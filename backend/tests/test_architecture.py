@@ -1,8 +1,8 @@
 """The layers of backend/lab and the one direction of their imports (docs/backend.md, «Слои»).
 
 A module imports from its own layer or from a layer its layer may use, never from one above, and no modules import
-each other in a circle, not even inside a function. What the code still breaks is listed here by name, and the lists
-only shrink: a fixed import fails the test until it leaves the list, a new one fails it at once.
+each other in a circle, not even inside a function. Nothing breaks it today, and the lists of exceptions are empty: a
+new import up the layers or a new circle fails the test.
 """
 
 import ast
@@ -30,54 +30,14 @@ LAYERS = {
     'lab.api': 'api',
     'lab.jobs': 'api',
     'lab.config': 'config',
-    # Until they move into their packages.
-    'lab.discover': 'flows',
-    'lab.tone': 'flows',
-    'lab.tone_advice': 'flows',
-    'lab.tone_history': 'flows',
-    'lab.accuracy_history': 'flows',
-    'lab.cards': 'flows',
-    'lab.simulate': 'flows',
-    'lab.severity': 'flows',
-    'lab.scenarios': 'flows',
-    'lab.problems': 'flows',
-    'lab.compare': 'flows',
-    'lab.judge': 'flows',
-    'lab.quotes': 'domain',
-    'lab.history': 'domain',
-    'lab.metric': 'domain',
-    'lab.checks': 'domain',
-    'lab.personas': 'domain',
-    'lab.transcript': 'domain',
-    'lab.policy_files': 'domain',
-    'lab.logs': 'storage',
+    # Until they move into their package.
     'lab.store': 'storage',
     'lab.registry': 'storage',
-    'lab.context': 'agents',
 }
-# Imports that go up today, importer → imported.
-UPWARD = {
-    ('lab.agents', 'lab.store'),  # agents → storage
-    ('lab.agents.source', 'lab.store'),  # agents → storage
-    ('lab.context.sources', 'lab.store'),  # agents → storage
-    ('lab.severity', 'lab.jobs'),  # flows → api
-    ('lab.simulate', 'lab.jobs'),  # flows → api
-    ('lab.store', 'lab.accuracy_history'),  # storage → flows
-    ('lab.tone', 'lab.jobs'),  # flows → api
-}
-# Modules that import each other in a circle today: store → accuracy_history → discover → roles → models → store.
-CIRCLES = {
-    'lab.accuracy_history',
-    'lab.context.sources',
-    'lab.discover',
-    'lab.logs',
-    'lab.models',
-    'lab.models.gateway',
-    'lab.roles.base',
-    'lab.roles.judge',
-    'lab.roles.planner',
-    'lab.store',
-}
+# Imports that go up the layers, importer → imported: none. A new one fails the test; it is fixed, not listed.
+UPWARD: set[tuple[str, str]] = set()
+# Modules that import each other in a circle: none.
+CIRCLES: set[str] = set()
 
 
 def module_of(path: Path) -> str:

@@ -2,7 +2,8 @@ import asyncio
 import threading
 import unittest
 
-from lab.jobs import STOPPED, BusyError, Jobs, message
+from lab.flows import error_text as message
+from lab.jobs import STOPPED, BusyError, Jobs
 
 
 class JobsTests(unittest.IsolatedAsyncioTestCase):

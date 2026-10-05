@@ -5,9 +5,9 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 
-from . import checks, config, discover, logs, registry, store
-from .domain import verdicts
-from .metric import metric
+from . import config, registry, store
+from .domain import checks, export, results, verdicts
+from .domain.metric import metric
 
 
 def _recompute_verdict(value: dict) -> tuple[int, int]:
@@ -39,12 +39,12 @@ def _load_documents(source: Path) -> dict:
         else:
             documents[name] = value
     log_file = source / 'logs.jsonl'
-    if logs.FILE in documents:
-        log_data = '\n'.join(json.dumps(row, ensure_ascii=False) for row in documents[logs.FILE]).encode('utf-8')
-        documents[logs.FILE] = logs.prepare('logs.jsonl', log_data) if log_data.strip() else []
+    if store.EXPORT in documents:
+        log_data = '\n'.join(json.dumps(row, ensure_ascii=False) for row in documents[store.EXPORT]).encode('utf-8')
+        documents[store.EXPORT] = export.prepare('logs.jsonl', log_data) if log_data.strip() else []
     elif log_file.exists():
         log_data = log_file.read_bytes()
-        documents[logs.FILE] = logs.prepare('logs.jsonl', log_data) if log_data.strip() else []
+        documents[store.EXPORT] = export.prepare('logs.jsonl', log_data) if log_data.strip() else []
     return documents
 
 
@@ -76,7 +76,7 @@ def migrate(source: Path) -> dict[str, int]:
             changed, reset = _recompute_verdict(result)
             recomputed += changed
             reset_reviews += reset
-        analysis['summary'] = discover.summarize(analysis['results'], analysis['topics'], analysis.get('sampled'))
+        analysis['summary'] = results.summarize(analysis['results'], analysis['topics'], analysis.get('sampled'))
     return {**store.import_legacy(documents, records), 'recomputedVerdicts': recomputed, 'resetReviews': reset_reviews}
 
 

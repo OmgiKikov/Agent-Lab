@@ -5,9 +5,11 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import support
 from openpyxl import Workbook
 
-from lab import discover, logs
+from lab import store
+from lab.domain import export as logs
 
 
 def excel(text, order, dialogue_id='d1', include_order=True):
@@ -116,7 +118,7 @@ class LogImportTests(unittest.TestCase):
         }
         invalid = dict(valid, id='two', messages=[{'role': 'assistant', 'content': None}])
         data = ('\n'.join(json.dumps(row) for row in (valid, invalid))).encode()
-        with patch.object(logs.store, 'save') as save, self.assertRaises(ValueError):
+        with patch.object(store, 'save') as save, self.assertRaises(ValueError):
             logs.prepare('logs.jsonl', data)
         save.assert_not_called()
 
@@ -147,30 +149,14 @@ class LogImportTests(unittest.TestCase):
             logs.prepare('logs.jsonl', data)
 
     def test_complete_transcript_uses_the_stable_dialogue_id(self):
+        support.lab(self)
         dialogue = {
             'id': 'one',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
-        with patch.object(logs.store, 'load', return_value=[dialogue]):
-            self.assertEqual(logs.read('one'), dialogue)
-            self.assertIsNone(logs.read('missing'))
-
-    def test_commit_has_one_storage_write(self):
-        with patch.object(logs.store, 'replace_inputs') as save:
-            self.assertEqual(logs.commit([{'id': 'one', 'messages': []}]), 1)
-        save.assert_called_once_with('logs.json', [{'id': 'one', 'messages': []}], None)
-
-    def test_the_export_and_its_file_name_are_one_write(self):
-        """A failure between two writes would leave the new export under the previous file's name, and the history of
-        the next check would name the wrong file."""
-        with (
-            patch.object(logs.store, 'replace_inputs') as save,
-            patch.object(logs.store, 'save', side_effect=AssertionError('one write')),
-            patch.object(logs.store, 'now', return_value='2026-10-05T10:00:00.000+00:00'),
-        ):
-            logs.commit([{'id': 'one', 'messages': []}], 'Октябрь.xlsx')
-        meta = {'file': 'Октябрь.xlsx', 'updatedAt': '2026-10-05T10:00:00.000+00:00'}
-        save.assert_called_once_with('logs.json', [{'id': 'one', 'messages': []}], {logs.META: meta})
+        store.save(store.EXPORT, [dialogue])
+        self.assertEqual(store.dialogue('one'), dialogue)
+        self.assertIsNone(store.dialogue('missing'))
 
     def test_an_export_says_how_many_conversations_a_check_cannot_read(self):
         talk = [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}]
@@ -196,6 +182,6 @@ class SeenTextTests(unittest.TestCase):
                 },
             ],
         }
-        shown = discover.conversation(dialogue)
+        shown = logs.conversation(dialogue)
         self.assertEqual(shown[0], {'role': 'CUSTOMER', 'text': 'Как вернуть терминал?'})
         self.assertEqual(shown[1], {'role': 'AGENT', 'text': 'Нажмите кнопку ниже.\n[Кнопки: TRANSFER_INTO_CHAT]'})

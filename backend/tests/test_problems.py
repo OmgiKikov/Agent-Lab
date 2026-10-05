@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 import support
 
-from lab import api, cards, discover, problems, store
+from lab import api, store
+from lab.domain import checks, scenarios
+from lab.domain.results import carry_reviews, summarize
+from lab.flows import accuracy
+from lab.flows import checks as problems
 
 SOURCE = {'id': 'src-1', 'kind': 'prompt', 'origin': 'prompts/main.txt', 'content': 'Не отправляй клиента в поддержку.'}
 QUOTE = 'Не отправляй клиента в поддержку'
@@ -105,11 +109,11 @@ def played_run() -> dict:
 class ProblemsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         support.serve(self)
-        store.save(api.sources.FILE, [SOURCE])
-        store.save(discover.RESULT, audit())
+        store.save(api.inputs.SOURCES, [SOURCE])
+        store.save(accuracy.RESULT, audit())
 
     def test_a_rule_restated_in_two_topics_is_one_rule_counted_per_conversation(self) -> None:
-        value = problems.build('code')
+        value = problems.problems('code')
         self.assertEqual(len(value['rules']), 1)
         rule = value['rules'][0]
         self.assertEqual(rule['topics'], ['Терминалы', 'Возвраты'])
@@ -132,9 +136,9 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         # A verdict keeps the wording the check saw (a clarified criterion's text grows): screens match it by id.
         value = audit()
         value['results'][0]['rules'][0]['rule'] = RULE['text'] + '\n\nУточнения, подтверждённые человеком:\n…'
-        store.save(discover.RESULT, value)
+        store.save(accuracy.RESULT, value)
         store.create_run(played_run())
-        rule = problems.build('code', 'run-1')['rules'][0]
+        rule = problems.problems('code', 'run-1')['rules'][0]
         self.assertEqual((rule['log']['ruleIds'], rule['sim']['ruleIds']), (['t1r1', 't2r1'], ['c1']))
 
     def test_the_first_example_of_a_problem_shows_what_its_title_says(self) -> None:
@@ -150,8 +154,8 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             failed('d2', 'Пишет канцеляритом'),
             failed('d3', 'Пишет канцеляритом'),
         ]
-        store.save(discover.RESULT, value)
-        rule = problems.build('code')['rules'][0]
+        store.save(accuracy.RESULT, value)
+        rule = problems.problems('code')['rules'][0]
         self.assertEqual(rule['title'], 'Пишет канцеляритом')
         self.assertEqual(rule['log']['examples'][0]['title'], 'Пишет канцеляритом')
 
@@ -167,23 +171,23 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             failed('d2', 'Пишет канцеляритом', 'disagree'),
             failed('d3', 'Пишет канцеляритом', 'disagree'),
         ]
-        store.save(discover.RESULT, value)
-        rule = problems.build('code')['rules'][0]
+        store.save(accuracy.RESULT, value)
+        rule = problems.problems('code')['rules'][0]
         self.assertEqual(rule['log']['examples'][0]['dialogueId'], 'd1')
 
     def test_a_second_check_without_a_verdict_is_not_a_disagreement(self) -> None:
         value = audit()
         value['results'][0]['second'] = {'model': 'm', 'status': 'UNMEASURED'}
-        store.save(discover.RESULT, value)
-        example = problems.build('code')['rules'][0]['log']['examples'][0]
+        store.save(accuracy.RESULT, value)
+        example = problems.problems('code')['rules'][0]['log']['examples'][0]
         self.assertEqual(example['status'], 'FAIL')
         self.assertIsNone(example['second'])
 
     def test_a_second_verdict_on_the_whole_conversation_says_what_it_found(self) -> None:
         value = audit()
         value['results'][1]['second'] = {'model': 'm', 'status': 'PASS'}
-        store.save(discover.RESULT, value)
-        example = next(e for e in problems.build('code')['rules'][0]['log']['examples'] if e['dialogueId'] == 'd2')
+        store.save(accuracy.RESULT, value)
+        example = next(e for e in problems.problems('code')['rules'][0]['log']['examples'] if e['dialogueId'] == 'd2')
         self.assertEqual(
             (example['second'], example['secondScope'], example['secondStatus']), ('agree', 'dialogue', 'PASS')
         )
@@ -194,11 +198,11 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             {'status': 'FAIL', 'rules': [], 'second': {'model': 'm', 'status': 'UNMEASURED'}},
             {'status': 'UNMEASURED', 'rules': [], 'second': {'model': 'm', 'status': 'UNMEASURED'}},
         ]
-        self.assertEqual(discover.summarize(results, [])['secondJudge'], {'model': 'm', 'checked': 1, 'agree': 1})
+        self.assertEqual(summarize(results, [])['secondJudge'], {'model': 'm', 'checked': 1, 'agree': 1})
 
     def test_run_side_uses_the_criterion_frozen_in_the_item(self) -> None:
         store.create_run(played_run())
-        value = problems.build('code')
+        value = problems.problems('code')
         rule = value['rules'][0]
         self.assertEqual(rule['sim']['failed'], 1)
         self.assertEqual(rule['sim']['examples'][0]['opening'], 'Не работает')
@@ -209,10 +213,10 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         record = played_run()
         item = record['items'][0]
         del item['criteria']
-        criterion = cards.FOLLOWS_KNOWLEDGE
+        criterion = scenarios.FOLLOWS_KNOWLEDGE
         item['rules'] = [{'ruleId': criterion['id'], 'rule': criterion['text'], 'status': 'FAIL'}]
         store.create_run(record)
-        value = problems.build('code', 'run-1')
+        value = problems.problems('code', 'run-1')
         found = next(rule for rule in value['rules'] if rule['sim']['failed'])
         self.assertEqual(found['rule']['quote'], criterion['quote'])
         self.assertEqual(found['sim']['failed'], 1)
@@ -226,18 +230,18 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             {'ruleId': 'lost-2', 'rule': 'Сообщает время работы', 'status': 'FAIL'},
         ]
         store.create_run(record)
-        found = [rule for rule in problems.build('code', 'run-1')['rules'] if rule['sim']['failed']]
+        found = [rule for rule in problems.problems('code', 'run-1')['rules'] if rule['sim']['failed']]
         self.assertEqual(len(found), 2)
         self.assertEqual(len({rule['id'] for rule in found}), 2)
         self.assertTrue(all(rule['rule']['quote'] == '' and rule['sim']['failed'] == 1 for rule in found))
 
     async def test_the_problems_are_those_of_one_check_with_its_runs_and_its_scenarios(self) -> None:
-        store.save(api.sources.FILE, [SOURCE, POLICY])
+        store.save(api.inputs.SOURCES, [SOURCE, POLICY])
         store.save('tone-result.json', tone_result())
         store.create_run(played_run())  # of Точность
         store.create_run(tone_run())  # of tone of voice, the newest run
         deck = {'check': 'code', 'cards': [{'id': 'card-1', 'sourceDialogueId': 'd1', 'criteria': []}]}
-        store.save(cards.DECK, deck)
+        store.save(checks.DECK, deck)
         code = (await self.client.get('/api/problems?check=code')).json()
         tone = (await self.client.get('/api/problems?check=tone')).json()
         self.assertEqual((code['check'], tone['check']), ('code', 'tone'))
@@ -287,7 +291,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary['target'], 'Тестовый стенд банка')
 
     async def test_state_exposes_the_revision_used_by_source_cache(self) -> None:
-        store.replace_inputs(api.sources.FILE, [dict(SOURCE, sha256='source-revision')])
+        api.inputs.replace_sources([dict(SOURCE, sha256='source-revision')])
         state = (await self.client.get('/api/state')).json()
         source = (await self.client.get('/api/sources/src-1')).json()
         self.assertEqual(state['sources'][0]['sha256'], source['sha256'])
@@ -333,10 +337,10 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post('/api/review', json={**body, **stale})
             self.assertEqual(response.status_code, 409, response.text)
             self.assertEqual(response.json()['detail'], 'Ответ не сохранён: оценка изменилась. Обновите страницу.')
-        self.assertNotIn('review', store.load(discover.RESULT)['results'][0]['rules'][0])
+        self.assertNotIn('review', store.load(accuracy.RESULT)['results'][0]['rules'][0])
         response = await self.client.post('/api/review', json={**body, 'status': 'FAIL'})
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(store.load(discover.RESULT)['results'][0]['rules'][0]['review'], 'agree')
+        self.assertEqual(store.load(accuracy.RESULT)['results'][0]['rules'][0]['review'], 'agree')
         store.create_run(played_run())
         body = {'source': 'sim', 'run': 'run-1', 'index': 0, 'ruleId': 'c1', 'decision': 'agree', 'status': 'PASS'}
         self.assertEqual((await self.client.post('/api/review', json=body)).status_code, 409)
@@ -352,12 +356,12 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         second = await self.client.post('/api/review', json={**body, 'decision': 'disagree'})
         self.assertEqual(second.status_code, 409, second.text)
         self.assertEqual(second.json()['detail'], store.ANSWERED)
-        self.assertEqual(store.load(discover.RESULT)['results'][0]['rules'][0]['review'], 'agree')
+        self.assertEqual(store.load(accuracy.RESULT)['results'][0]['rules'][0]['review'], 'agree')
         changed = await self.client.post('/api/review', json={**body, 'before': 'agree', 'decision': 'disagree'})
         self.assertEqual(changed.status_code, 200, changed.text)
         older = {key: value for key, value in body.items() if key != 'before'}
         self.assertEqual((await self.client.post('/api/review', json={**older, 'decision': None})).status_code, 200)
-        self.assertNotIn(store.load(discover.RESULT)['results'][0]['rules'][0]['review'], ('agree', 'disagree'))
+        self.assertNotIn(store.load(accuracy.RESULT)['results'][0]['rules'][0]['review'], ('agree', 'disagree'))
         store.create_run(played_run())
         sim = {'source': 'sim', 'run': 'run-1', 'index': 0, 'ruleId': 'c1', 'status': 'FAIL', 'before': None}
         self.assertEqual((await self.client.post('/api/review', json={**sim, 'decision': 'agree'})).status_code, 200)
@@ -370,7 +374,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             body = {'source': 'log', 'dialogueId': 'd1', 'ruleId': 't1r1', 'decision': 'agree'}
             response = await self.client.post('/api/review', json=body)
         self.assertEqual(response.status_code, 409)
-        self.assertNotIn('review', store.load(discover.RESULT)['results'][0]['rules'][0])
+        self.assertNotIn('review', store.load(accuracy.RESULT)['results'][0]['rules'][0])
 
     async def test_a_person_answers_on_one_criterion_of_a_simulated_conversation(self) -> None:
         store.create_run(played_run())
@@ -413,11 +417,11 @@ class RuleReviewStoreTests(unittest.TestCase):
         previous = audit()
         previous['results'][0]['rules'][0]['review'] = 'disagree'
         results = audit()['results']
-        discover.carry_reviews(previous, results)
+        carry_reviews(previous, results)
         self.assertEqual(results[0]['rules'][0]['review'], 'disagree')
         changed = audit()['results']
         changed[0]['rules'][0]['status'] = 'PASS'
-        discover.carry_reviews(previous, changed)
+        carry_reviews(previous, changed)
         self.assertNotIn('review', changed[0]['rules'][0])
 
     def test_an_answer_on_an_error_stays_with_the_words_it_pointed_at(self) -> None:
@@ -430,7 +434,7 @@ class RuleReviewStoreTests(unittest.TestCase):
         results = audit()['results']
         results[0]['rules'][0]['agentQuote'] = 'Вы сами виноваты, читайте договор'
         results[1]['rules'][0]['agentQuote'] = 'зайдите в раздел «Возвраты»'
-        discover.carry_reviews(previous, results)
+        carry_reviews(previous, results)
         self.assertNotIn('review', results[0]['rules'][0])
         self.assertEqual(results[1]['rules'][0]['review'], 'disagree')
         # The same in a run judged again.

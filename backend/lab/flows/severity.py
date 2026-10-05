@@ -3,9 +3,12 @@ for it, the model proposes for each criterion of the check's result whether an e
 person can weigh; a person confirms or changes it. A person's decision always wins: the model is never asked about a
 criterion a person decided, and its proposals live apart from the decisions (store.severity)."""
 
-from . import checks, models, problems, store
-from .jobs import Progress
-from .roles import severity as role
+import asyncio
+
+from .. import models, store
+from ..domain import checks, problems
+from ..roles import severity as role
+from . import Progress
 
 # Criteria asked about in one call: the reply stays short enough to answer for each.
 CHUNK = 30
@@ -51,3 +54,31 @@ async def propose(check: str, progress: Progress | None = None, again: bool = Fa
                 return str(error)
             store.propose_severity(check, {key: answer.value[id_] for id_, key in ids.items()}, answer.model)
     return None
+
+
+async def proposed_after(check: str, progress: Progress) -> None:
+    """The serious errors the model proposes after a check it follows, which is published by then. «Остановить» here
+    stops only the proposals: the task ends as done, with the check saved, never «Остановлено» beside a result that
+    stands. Each answered part is saved at once (propose); «Отметить автоматически» asks for the rest."""
+    try:
+        await propose(check, progress)
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None:
+            current.uncancel()
+
+
+async def propose_again(check: str, progress: Progress, *, again: bool = False) -> dict:
+    """«Предложить»: the model proposes which errors of the check's criteria are serious — for a result checked before
+    proposals, after a failed proposal, or `again` for every criterion a person has not decided. A failure is the
+    task's error."""
+    progress(message=PROPOSING, check=check)
+    error = await propose(check, progress, again=again)
+    if error:
+        raise models.ModelError(error)
+    return {'severity': store.severity()}
+
+
+def confirm(check: str) -> dict:
+    """«Подтвердить все»: a person takes the model's proposals for the criteria of the check's result as their own."""
+    return {'severity': store.confirm_severity(check, list(criteria(check)))}

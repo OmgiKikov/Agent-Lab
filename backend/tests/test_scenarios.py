@@ -5,7 +5,8 @@ import unittest
 
 import support
 
-from lab import cards, checks, store
+from lab import store
+from lab.domain import checks
 
 FROM_LOG, COVERAGE = 'Ошибка из лога', 'Покрытие темы'
 TERM = {'id': 't1r1', 'name': 'Называет срок', 'text': 'Агент называет срок доставки терминала', 'quote': 'Срок'}
@@ -77,7 +78,7 @@ class ScenariosTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         deck = [scenario('error', 'd1', reproduces=['t1r1']), scenario('control', 'd2', COVERAGE, reproduces=[])]
-        store.save(cards.DECK, {'check': checks.CODE, 'createdAt': '2026-10-01T09:00:00+00:00', 'cards': deck})
+        store.save(checks.DECK, {'check': checks.CODE, 'createdAt': '2026-10-01T09:00:00+00:00', 'cards': deck})
         older = [
             played('error', 'default', 'FAIL', failed=('t1r1', 't1r2')),
             played('control', 'default', 'UNMEASURED'),
@@ -130,7 +131,7 @@ class ScenariosTests(unittest.IsolatedAsyncioTestCase):
             scenario('control', 'd1', COVERAGE),  # a control reproduces no error, whatever its conversation has now
             scenario('kept', 'd1', reproduces=['t1r1']),  # the agent's words come only from a row that has the error
         ]
-        store.save(cards.DECK, {'check': checks.TONE, 'cards': deck})
+        store.save(checks.DECK, {'check': checks.TONE, 'cards': deck})
         found = {card['id']: card for card in (await self.scenarios())['cards']}
         self.assertEqual(
             found['old']['reproduces'],

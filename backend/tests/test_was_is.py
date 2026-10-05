@@ -12,7 +12,10 @@ from test_checks import CODE, CODE_RESULT, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, discover, problems, store, tone
+from lab import api, store
+from lab.domain import comparison, sampling, statistics
+from lab.domain.problems import rule_key
+from lab.flows import accuracy, conversations, tone
 
 CRITERIA = 'accuracy-criteria.json'
 
@@ -50,7 +53,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
     async def read_code(self, source):
-        with patch.object(api.sources, 'collect', return_value=([source], [])):
+        with patch.object(api.inputs.agent_sources, 'collect', return_value=([source], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
@@ -58,7 +61,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
     async def check_tone(self, status='FAIL', count=5):
         draft = store.load(tone.DRAFT)
         request = {'ruleIds': ['pronouns', 'simple_language'], 'count': count, 'revision': draft['revision']}
-        with patch.object(discover, 'judge_dialogue', side_effect=judged(status)):
+        with patch.object(conversations, 'judge_dialogue', side_effect=judged(status)):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
@@ -75,9 +78,9 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
 
         self.plan, self.keep = AsyncMock(side_effect=plan), AsyncMock(side_effect=keep)
         with (
-            patch.object(discover, 'plan_topics', self.plan),
-            patch.object(discover, 'keep_topics', self.keep),
-            patch.object(discover, 'judge_dialogue', side_effect=judged(status)),
+            patch.object(accuracy, 'plan_topics', self.plan),
+            patch.object(accuracy, 'keep_topics', self.keep),
+            patch.object(conversations, 'judge_dialogue', side_effect=judged(status)),
         ):
             response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
             self.assertEqual(response.status_code, 200, response.text)
@@ -151,7 +154,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         )
         criteria = {row['id']: row for row in compared['criteria']}
         rules = {rule['id']: rule for rule in store.load(tone.RESULT)['topics'][0]['rules']}
-        pronouns = criteria[problems.rule_key(rules['pronouns']['quote'])]
+        pronouns = criteria[rule_key(rules['pronouns']['quote'])]
         self.assertEqual(pronouns['before'], {'failed': 1, 'measured': 1})
         self.assertEqual(pronouns['now'], {'failed': 0, 'measured': 2})
         self.assertEqual((pronouns['verdict'], pronouns['direction']), ('few', 'fewer'))
@@ -214,27 +217,21 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
 
 class SampleTests(unittest.TestCase):
     def test_the_same_export_in_another_order_gives_the_same_conversations(self):
-        rows = [talk(f'd{number}') for number in range(60)]
-        with patch.object(discover.logs, 'load', side_effect=lambda: list(rows)):
-            first = [dialogue['id'] for dialogue in discover.sample(20)]
-            rows.reverse()
-            again = [dialogue['id'] for dialogue in discover.sample(20)]
+        ids = [f'd{number}' for number in range(60)]
+        first = sampling.sampled(ids, 20)
+        again = sampling.sampled(list(reversed(ids)), 20)
+        self.assertEqual(len(first), 20)
         self.assertEqual(first, again)
 
 
 class ChanceTests(unittest.TestCase):
-    def setUp(self):
-        from lab import history  # here, so that each test failed on its own before the module existed
-
-        self.history = history
-
     def test_a_failed_second_check_is_not_another_model(self):
         """One outage of the second model records its configured name, not the name it answers with: the checks stay
         comparable, as the main count does not depend on the second check."""
         answered = {'model': 'main', 'second': {'model': 'openai/gpt-5-2025-08-07', 'status': 'PASS'}}
         failed = {'model': 'main', 'second': {'model': 'openai/gpt-5', 'status': 'ERROR', 'error': 'нет связи'}}
-        one = self.history.evaluation_fingerprint({'model': 'main', 'results': [answered, answered]})
-        other = self.history.evaluation_fingerprint({'model': 'main', 'results': [answered, failed]})
+        one = comparison.evaluation_fingerprint({'model': 'main', 'results': [answered, answered]})
+        other = comparison.evaluation_fingerprint({'model': 'main', 'results': [answered, failed]})
         self.assertEqual(one, other)
 
     def test_other_instructions_of_the_judge_are_another_evaluation(self):
@@ -245,29 +242,29 @@ class ChanceTests(unittest.TestCase):
             'judgeVersion': 'a1',
             'second': {'model': 'other', 'status': 'PASS', 'judgeVersion': 'a1'},
         }
-        again = self.history.evaluation_fingerprint({'model': 'main', 'results': [judged, judged]})
-        self.assertEqual(again, self.history.evaluation_fingerprint({'model': 'main', 'results': [judged]}))
+        again = comparison.evaluation_fingerprint({'model': 'main', 'results': [judged, judged]})
+        self.assertEqual(again, comparison.evaluation_fingerprint({'model': 'main', 'results': [judged]}))
         rewritten = {**judged, 'judgeVersion': 'b2', 'second': {**judged['second'], 'judgeVersion': 'b2'}}
         older = {key: value for key, value in judged.items() if key != 'judgeVersion'} | {'second': None}
         for other in (rewritten, older):
             with self.subTest(other=other):
-                self.assertNotEqual(again, self.history.evaluation_fingerprint({'model': 'main', 'results': [other]}))
+                self.assertNotEqual(again, comparison.evaluation_fingerprint({'model': 'main', 'results': [other]}))
         before = {'id': 'c1', 'criteriaFingerprint': 'k', 'evaluationFingerprint': 'old', 'datasetFingerprint': 'd'}
         now = dict(before, id='c2', evaluationFingerprint=again)
-        self.assertEqual(self.history.comparison(now, before)['reason'], 'Изменились модели или инструкции проверки.')
+        self.assertEqual(comparison.comparison(now, before)['reason'], 'Изменились модели или инструкции проверки.')
 
     def test_fisher_exact_two_sided(self):
-        self.assertAlmostEqual(self.history.fisher(3, 1, 1, 3), 0.4857, places=4)  # the lady tasting tea
-        self.assertAlmostEqual(self.history.fisher(10, 0, 0, 10), 2 / 184756, places=10)
-        self.assertAlmostEqual(self.history.fisher(0, 5, 0, 5), 1.0)
+        self.assertAlmostEqual(statistics.fisher(3, 1, 1, 3), 0.4857, places=4)  # the lady tasting tea
+        self.assertAlmostEqual(statistics.fisher(10, 0, 0, 10), 2 / 184756, places=10)
+        self.assertAlmostEqual(statistics.fisher(0, 5, 0, 5), 1.0)
 
     def test_few_conversations_say_nothing_more(self):
-        verdict = self.history.verdict
+        verdict = statistics.verdict
         self.assertEqual(verdict({'failed': 6, 'measured': 52}, {'failed': 2, 'measured': 12}), ('few', 'more'))
         self.assertEqual(verdict({'failed': 6, 'measured': 29}, {'failed': 2, 'measured': 90}), ('few', 'fewer'))
 
     def test_a_difference_beyond_chance_or_within_it(self):
-        verdict = self.history.verdict
+        verdict = statistics.verdict
         self.assertEqual(
             verdict({'failed': 30, 'measured': 100}, {'failed': 10, 'measured': 100}), ('beyond-chance', 'fewer')
         )

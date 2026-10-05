@@ -1,26 +1,21 @@
-"""Scenario world: what the bank's business systems (SBE mocks of the local agent) answer in this scenario.
-
-The stand's default fixtures describe one client for every test. A card gets its own world instead:
-the client from the logged situation (organization, point of sale, terminals) and the data its
-question depends on (tariff, terminal state, operations, settlements, service requests).
-Responses keep the exact shape of the stand's fixtures, so the agent's parsers accept them; any
-generated tool whose shape differs is dropped and the stand's default answer is used.
-The world is sent to the mocks per request (POST /mock/overrides, keyed by x-trace-id).
-"""
+"""The stand's fixtures in the agent's repository: the shapes of what the bank's mocked systems answer, which the world
+of a scenario keeps (domain/world.py) so the agent's parsers accept it. The world is sent to the mocks per request
+(POST /mock/overrides, keyed by x-trace-id)."""
 
 import copy
 import json
+from pathlib import Path
 
 from ..domain.world import SETTLEMENT_ITEMS
-from . import repo
 
 FIXTURES = 'local/mocks/fixtures/sbe.json'  # in the agent's repository
 
 
-def templates() -> dict | None:
-    """The stand's fixture responses, or None where the stand is not installed (e.g. the work computer)."""
+def templates(repo: Path) -> dict | None:
+    """The stand's fixture responses in the agent's repository, or None where the stand is not installed (e.g. the
+    work computer)."""
     try:
-        tools = json.loads((repo() / FIXTURES).read_text(encoding='utf-8'))['tools']
+        tools = json.loads((repo / FIXTURES).read_text(encoding='utf-8'))['tools']
     except (OSError, ValueError, KeyError):
         return None
     shapes = {

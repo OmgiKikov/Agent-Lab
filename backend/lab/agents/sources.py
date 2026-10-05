@@ -9,8 +9,6 @@ import hashlib
 import re
 from pathlib import Path
 
-from .. import store
-
 MIN_PROMPT = 600
 MAX_TOTAL = 60000  # characters of prompts handed to the planner
 # The agent's tests, by the names test runners look for: their strings are test data, not the agent's instructions.
@@ -100,18 +98,6 @@ def tools(repo: Path) -> dict | None:
         'sha256': _sha(content),
         'content': content,
     }
-
-
-FILE = 'sources.json'
-# When the agent's code was read last, from which folder (the setting as the person wrote it) and which prompts were
-# over the planner's budget (overBudget, path:line): written with the sources, so «Агент» names the read that
-# succeeded, not the one asked for.
-READ = 'sources-read.json'
-
-
-def load() -> list[dict]:
-    """The sources collected last time."""
-    return store.load(FILE, []) or []
 
 
 def collect(repo: Path) -> tuple[list[dict], list[str]]:

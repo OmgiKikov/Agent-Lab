@@ -9,7 +9,9 @@ from unittest.mock import patch
 import support
 from test_logs import PAIR, excel
 
-from lab import logs, policy_files, store
+from lab import store
+from lab.domain import export as logs
+from lab.domain import policy_files
 
 
 def one_part(name: str, body: bytes, declared: int, crc: int, flags: int = 0) -> bytes:
@@ -107,4 +109,4 @@ class UploadBodyTests(unittest.IsolatedAsyncioTestCase):
                 response = await self.client.post(path, content=endless())
                 self.assertEqual(response.status_code, 413, response.text)
                 self.assertLessEqual(pulled, 11)
-        self.assertIsNone(store.load(logs.FILE))
+        self.assertIsNone(store.load(store.EXPORT))
