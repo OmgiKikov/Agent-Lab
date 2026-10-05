@@ -200,6 +200,8 @@ export type LabState = {
   runs: RunSummary[];
   targets: Target[];
   personas: Persona[];
+  /** The latest replay of exported conversations, enough to know it changed. Older services have no such field. */
+  replay?: { id: string; finishedAt: string } | null;
 };
 
 export type ToneCriterion = Criterion & { name: string; condition: string; acceptable: string };
@@ -221,4 +223,52 @@ export type Turn = {
   ok?: boolean;
   status?: string;
   seconds?: number;
+};
+
+/** What the local agent did inside one replayed step (aigw-local local/agent_lab_trace.py). */
+export type RagPassage = {
+  article: string | number | null;
+  passage: number | null;
+  text: string;
+  retrieval: number | null;
+  reranker: number | null;
+};
+export type RagCall = {
+  query: string;
+  filter: string | null;
+  systemPrompt: string;
+  passages: RagPassage[];
+  answer: string;
+  reason: string | null;
+  status: number;
+};
+export type AgentTrace = {
+  traceId: string;
+  chains: { name: string; output: string | null; seconds?: number; error?: string }[];
+  rag: RagCall[];
+  systems: { tool: string; arguments: unknown; status: number }[];
+};
+export type ReplayStep = {
+  index: number;
+  customer: string;
+  prodReply: string | null;
+  reply?: { text: string; status: string; options: string[]; seconds: number };
+  trace?: AgentTrace;
+  rules?: Rule[];
+  status?: Status;
+  error?: string | null;
+  second?: { model: string; status: string } | null;
+};
+export type ReplayDialogue = { dialogueId: string; status: Status; steps: ReplayStep[] };
+export type Family = "tone" | "code" | "rag";
+export type FamilyScore = { pass: number; fail: number; accuracy: number | null };
+export type ReplayResult = {
+  id: string;
+  target: string;
+  version: string;
+  startedAt: string;
+  finishedAt: string;
+  model: string;
+  metric: Record<Family, FamilyScore>;
+  dialogues: ReplayDialogue[];
 };
