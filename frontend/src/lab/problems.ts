@@ -118,15 +118,16 @@ export const severityStamp = (state: LabState | null) =>
   state?.severityStamp ?? (state?.severity ? `${state.severity.tone.join(",")}|${state.severity.code.join(",")}` : "");
 
 /**
- * What makes the problems out of date: a new result, a run that started or finished, new scenarios, a task that ended,
- * a decision or a proposal of whether a criterion's errors are serious.
+ * What makes the problems out of date: a new result, a run that started, finished or changed (judged again, answered:
+ * its revision), new scenarios, a task that ended, a decision or a proposal of whether a criterion's errors are
+ * serious, and any answer on the checks' results (reviewsStamp) — also one given in another tab or browser.
  */
 export function problemsStamp(state: LabState | null): string {
   if (!state) return "";
-  const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}`).join(",");
+  const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}:${r.revision ?? ""}`).join(",");
   const sources = state.sources.map((s) => `${s.id}:${s.sha256 ?? ""}`).join(",");
   const results = `${state.checks.tone?.finishedAt ?? ""}|${state.checks.code?.finishedAt ?? ""}`;
-  return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}|${severityStamp(state)}`;
+  return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}|${severityStamp(state)}|${state.reviewsStamp ?? ""}`;
 }
 
 /** Every example of the record with the check it belongs to (Example.check). */

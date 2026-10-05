@@ -76,6 +76,8 @@ export type LabRun = {
   check?: Check;
   /** Grows with every change of the run: a conversation played or judged again, a person's answer. */
   revision?: number;
+  /** When the run changed last; older services have no such field. */
+  updatedAt?: string;
 };
 /** A run as /api/state lists it: its summary, without the conversations, and always with its check. */
 export type RunSummary = LabRun & { check: Check };
