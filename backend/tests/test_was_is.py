@@ -224,6 +224,16 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('verdict', lines[1]['comparison'])
 
 
+class SampleTests(unittest.TestCase):
+    def test_the_same_export_in_another_order_gives_the_same_conversations(self):
+        rows = [talk(f'd{number}') for number in range(60)]
+        with patch.object(discover.logs, 'load', side_effect=lambda: list(rows)):
+            first = [dialogue['id'] for dialogue in discover.sample(20)]
+            rows.reverse()
+            again = [dialogue['id'] for dialogue in discover.sample(20)]
+        self.assertEqual(first, again)
+
+
 class ChanceTests(unittest.TestCase):
     def setUp(self):
         from lab import history  # here, so that each test failed on its own before the module existed

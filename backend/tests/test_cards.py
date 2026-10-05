@@ -39,6 +39,21 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(picks[0][2], 'Покрытие темы')
         self.assertEqual(audit['results'][0]['status'], 'UNMEASURED')
 
+    async def test_a_control_is_a_conversation_checked_without_an_error_before_one_never_checked(self):
+        audit = analysis()
+        audit['topics'][0]['rules'] = audit['topics'][0]['rules'][:1]
+        audit['results'] = [
+            {'topicId': 't', 'dialogueId': 'unchecked', 'status': 'UNMEASURED'},
+            {'topicId': 't', 'dialogueId': 'clean', 'status': 'PASS'},
+        ]
+        talks = [dict(dialogue(), id=dialogue_id) for dialogue_id in ('unchecked', 'clean')]
+        with patch.object(cards.logs, 'load', return_value=talks):
+            picks = cards.pick(audit)
+        self.assertEqual(
+            [(d['id'], origin) for _, d, origin, _ in picks],
+            [('clean', cards.COVERAGE), ('unchecked', cards.COVERAGE)],
+        )
+
     async def test_a_tone_check_gives_a_scenario_per_criterion_the_agent_failed_not_four_at_most(self):
         """Tone of voice has one topic: picking two errors and two controls per topic capped its deck at four. Every
         criterion the agent failed gets its own conversation first (the most frequent first, each conversation once),

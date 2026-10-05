@@ -23,10 +23,15 @@ OBSERVATIONS = ('reply', 'tool', 'state')
 UNANSWERED = 'Модель проверки не ответила ни по одному разговору.'
 # Every criterion the planner wrote cited words the agent's code does not have: there is nothing to check by.
 UNGROUNDED = 'Ни один критерий не подтвердился дословной цитатой из кода агента.'
+# One answer of the planner places 100–300 conversations: one it leaves out is in no topic and counts as «не удалось
+# проверить» (run: unassigned), one it repeats stays in its first topic. An answer that places fewer is asked again.
+PLACED = 0.9
 
 
 def sample(count: int) -> list[dict]:
-    rows = logs.load()
+    """The same conversations for the same export, in whatever order its rows come: the same set exported again in
+    another order is checked again as the same conversations, not as «другие разговоры»."""
+    rows = sorted(logs.load(), key=lambda dialogue: str(dialogue['id']))
     random.Random(SEED).shuffle(rows)
     return rows[:count]
 
@@ -96,7 +101,7 @@ def _parse_topics(value: dict, dialogues: list[dict]) -> dict:
     expected = set(short_ids(dialogues))
     if not all(isinstance(item, str) for item in assignments):
         raise ValueError('conversation assignment must be an ID')
-    if len(assignments) != len(expected) or set(assignments) != expected:
+    if len(set(assignments) & expected) < PLACED * len(expected):
         raise ValueError('assign every conversation exactly once')
     return value
 
@@ -109,9 +114,11 @@ async def plan_topics(srcs: list[dict], dialogues: list[dict]) -> tuple[list[dic
     plan = answer.value
     topics, dropped = ground(plan['topics'], srcs)
     topics = [t for t in topics if t['rules']]
-    real = short_ids(dialogues)
+    real, placed = short_ids(dialogues), set()
     for topic in topics:
-        topic['dialogueIds'] = [real[str(i)] for i in topic.get('dialogueIds') or [] if str(i) in real]
+        ids = [real[str(i)] for i in topic.get('dialogueIds') or [] if str(i) in real]
+        topic['dialogueIds'] = [i for i in dict.fromkeys(ids) if i not in placed]
+        placed.update(topic['dialogueIds'])
     return topics, dropped
 
 
@@ -124,27 +131,25 @@ async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
         payload = {'topics': [{'id': t['id'], 'title': t['title']} for t in topics], 'dialogues': requests(new)}
         real, ids = short_ids(new), {t['id'] for t in topics}
 
+        def placed(assignment: object) -> bool:
+            if not isinstance(assignment, dict):
+                return False
+            dialogue_id, topic_id = assignment.get('dialogueId'), assignment.get('topicId')
+            return (
+                isinstance(dialogue_id, str) and dialogue_id in real and isinstance(topic_id, str) and topic_id in ids
+            )
+
         def parse(value: dict) -> dict:
             assignments = value.get('assignments')
-            if not isinstance(assignments, list) or len(assignments) != len(real):
+            if not isinstance(assignments, list):
                 raise ValueError('assign every new conversation exactly once')
-            seen = set()
-            for assignment in assignments:
-                if not isinstance(assignment, dict):
-                    raise ValueError('invalid conversation assignment')
-                dialogue_id, topic_id = assignment.get('dialogueId'), assignment.get('topicId')
-                if not isinstance(dialogue_id, str) or dialogue_id not in real or dialogue_id in seen:
-                    raise ValueError('unknown or duplicated conversation assignment')
-                if not isinstance(topic_id, str) or topic_id not in ids:
-                    raise ValueError('unknown topic assignment')
-                seen.add(dialogue_id)
+            if len({a['dialogueId'] for a in assignments if placed(a)}) < PLACED * len(real):
+                raise ValueError('assign every new conversation exactly once to a known topic')
             return value
 
         answer = await llm.structured(ASSIGN, payload, parse=parse)
-        value = answer.value
-        for a in value['assignments']:
-            if a.get('topicId') in ids and str(a.get('dialogueId')) in real:
-                known[real[str(a['dialogueId'])]] = a['topicId']
+        for a in filter(placed, answer.value['assignments']):
+            known.setdefault(real[a['dialogueId']], a['topicId'])
     for topic in topics:
         topic['dialogueIds'] = [str(d['id']) for d in dialogues if known.get(str(d['id'])) == topic['id']]
     return topics

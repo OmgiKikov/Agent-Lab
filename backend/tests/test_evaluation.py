@@ -219,12 +219,12 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result['second'])
         self.assertEqual(len(calls), 1)
 
-    async def test_topic_planning_retries_missing_and_duplicated_assignments(self):
+    async def test_topic_planning_retries_an_answer_that_places_too_few_conversations(self):
         dialogue = {'id': 'stable', 'messages': [{'role': 'user', 'content': 'Вернуть терминал'}]}
         source = {'id': 's1', 'content': 'Вернуть терминал в банк'}
         rule = dict(criterion(), sourceId='s1', quote=source['content'], condition='', acceptable='')
         topic = {'title': 'Возврат', 'dialogueIds': ['d1'], 'rules': [rule]}
-        for assigned in ([], ['d1', 'd1'], ['other']):
+        for assigned in ([], ['other']):
             with self.subTest(assigned=assigned):
                 bad = {'topics': [dict(topic, dialogueIds=assigned)]}
                 good = {'topics': [topic]}
@@ -233,6 +233,27 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(chat.await_count, 2)
                 self.assertEqual(topics[0]['dialogueIds'], ['stable'])
                 self.assertEqual(dropped, 0)
+
+    async def test_a_planner_that_leaves_out_or_repeats_a_few_of_many_conversations_is_not_asked_again(self):
+        """One conversation left out of twenty is in no topic (it counts as «не удалось проверить»), one repeated stays
+        in its first topic: the whole check is not lost to one slip in an answer about hundreds of conversations."""
+        dialogues = [{'id': f'c{n}', 'messages': [{'role': 'user', 'content': 'Вернуть терминал'}]} for n in range(20)]
+        source = {'id': 's1', 'content': 'Вернуть терминал в банк'}
+        rule = dict(criterion(), sourceId='s1', quote=source['content'], condition='', acceptable='')
+        first = {'title': 'Возврат', 'dialogueIds': [f'd{n}' for n in range(1, 20)], 'rules': [rule]}
+        second = {'title': 'Тарифы', 'dialogueIds': ['d1', 'd2'], 'rules': [rule]}
+        answer = completion({'topics': [first, second]})
+        with patch.object(llm, 'chat', AsyncMock(return_value=answer)) as chat:
+            topics, _ = await discover.plan_topics([source], dialogues)
+        self.assertEqual(chat.await_count, 1)
+        self.assertEqual(topics[0]['dialogueIds'], [f'c{n}' for n in range(19)])
+        self.assertEqual(topics[1]['dialogueIds'], [])
+        previous = {'topics': [{'id': 't1', 'title': 'Возврат', 'rules': []}], 'results': []}
+        assignments = [{'dialogueId': f'd{n}', 'topicId': 't1'} for n in (1, 1, *range(2, 20))]
+        with patch.object(llm, 'chat', AsyncMock(return_value=completion({'assignments': assignments}))) as chat:
+            topics = await discover.keep_topics(previous, dialogues)
+        self.assertEqual(chat.await_count, 1)
+        self.assertEqual(topics[0]['dialogueIds'], [f'c{n}' for n in range(19)])
 
     async def test_frozen_topics_retry_unknown_assignments(self):
         dialogue = {'id': 'stable', 'messages': [{'role': 'user', 'content': 'Вернуть терминал'}]}

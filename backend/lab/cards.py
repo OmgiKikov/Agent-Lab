@@ -99,7 +99,8 @@ def pick(analysis: dict) -> list[tuple[dict, dict, str, list[str]]]:
             if rule['observation'] in ('reply', 'tool')
         }
         ordered = sorted((found for found in failing.values() if found), key=len, reverse=True)
-        controls = [r for r in results if r['status'] in ('PASS', 'UNMEASURED')]
+        # A conversation checked without an error first; one the model could not check only when none is left.
+        controls = [r for status in ('PASS', 'UNMEASURED') for r in results if r['status'] == status]
         topics.append((topic, ordered, controls))
     used: set[str] = set()
     picked = []
