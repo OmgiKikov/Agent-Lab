@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { Link } from "react-router-dom";
 import { Repeat } from "lucide-react";
 import { Header } from "../../app/Header";
+import { SECTIONS } from "../../app/links";
 import { SectionJob } from "../../app/SectionJob";
 import { api } from "../../lab/api";
 import { count, longDay, pct, time } from "../../lab/format";
@@ -10,15 +12,20 @@ import type { FamilyScore, ReplayDialogue, ReplayResult, Target } from "../../la
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
-import { Dot } from "../simulations/parts";
+import { Dot, dotOf } from "../simulations/parts";
 import { StepView } from "./StepView";
 
 const MAX_COUNT = 200;
 const FIELD =
   "mt-1 block rounded-control border border-line bg-canvas px-3 py-2 text-body text-fg outline-none focus-visible:ring-2 focus-visible:ring-run";
 
-/** Only an agent on this computer gives its trace (backend/lab/replay.py, NOT_LOCAL): the bank's stand is left out. */
-const localTargets = (targets: Target[]) => targets.filter((t) => t.local);
+const LINK = "rounded-sm text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3";
+
+/**
+ * Only an agent on this computer gives its trace (backend/lab/replay.py, NOT_LOCAL): the bank's stand is left out, and
+ * so is an agent not set up yet, which cannot answer.
+ */
+const replayTargets = (targets: Target[]) => targets.filter((t) => t.local && t.ready);
 const defaultTarget = (targets: Target[]) => (targets.find((t) => t.kind === "code") ?? targets[0])?.id ?? "";
 
 /**
@@ -69,11 +76,12 @@ export function ReplayPage() {
 function StartForm() {
   const { state, refresh } = useLabState();
   const toast = useToast();
-  const targets = localTargets(state?.targets ?? []);
+  const targets = replayTargets(state?.targets ?? []);
   const [picked, setPicked] = useState<string | null>(null);
   const [dialogues, setDialogues] = useState(10);
-  const target = picked ?? defaultTarget(targets);
+  const target = targets.some((t) => t.id === picked) ? (picked ?? "") : defaultTarget(targets);
   const busy = !!state?.job.running;
+  const busyTitle = state?.job.kind === "replay" ? "Повтор уже идёт" : "Сейчас идёт другая задача";
   const valid = Number.isInteger(dialogues) && dialogues >= 1 && dialogues <= MAX_COUNT;
 
   const start = () => {
@@ -84,16 +92,25 @@ function StartForm() {
 
   return (
     <div className="flex flex-wrap items-end gap-3">
-      <label className="text-small text-fg-3">
-        Агент
-        <select className={FIELD} value={target} onChange={(e) => setPicked(e.target.value)}>
-          {targets.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      {targets.length ? (
+        <label className="text-small text-fg-3">
+          Агент
+          <select className={FIELD} value={target} onChange={(e) => setPicked(e.target.value)}>
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <p className="w-full text-body text-fg-2">
+          Агент на этом компьютере не настроен.{" "}
+          <Link to={SECTIONS.agent} className={LINK}>
+            Настроить
+          </Link>
+        </p>
+      )}
       <label className="text-small text-fg-3">
         Разговоров
         <input
@@ -110,7 +127,7 @@ function StartForm() {
         icon={Repeat}
         onClick={start}
         disabled={!target || !valid || busy}
-        title={busy ? "Сейчас идёт другая задача" : undefined}
+        title={busy ? busyTitle : undefined}
       >
         Повторить
       </Button>
@@ -149,30 +166,39 @@ function Score({ name, score }: { name: string; score: FamilyScore }) {
   return (
     <div className="rounded-control border border-line p-3">
       <div className="text-small text-fg-3">{name}</div>
-      <div className="text-title font-semibold tabular-nums text-fg">
-        {score.accuracy === null ? "—" : `${pct(score.pass, total)}%`}
-      </div>
-      <div className="text-small text-fg-3">
-        выполнено {score.pass} из {total}
-      </div>
+      {total ? (
+        <>
+          <div className="text-title font-semibold tabular-nums text-fg">{pct(score.pass, total)}%</div>
+          <div className="text-small text-fg-3">
+            выполнено {score.pass} из {total}
+          </div>
+        </>
+      ) : (
+        <div className="text-body text-fg-3">Не удалось проверить</div>
+      )}
     </div>
   );
 }
 
 function Dialogue({ dialogue, open, onToggle }: { dialogue: ReplayDialogue; open: boolean; onToggle: () => void }) {
+  const stepsId = useId();
   return (
     <li className="border-t border-line">
       <button
         type="button"
         aria-expanded={open}
+        aria-controls={stepsId}
         className="flex w-full items-center gap-2 py-3 text-left text-body text-fg"
         onClick={onToggle}
       >
         <Dot status={dialogue.status} />
+        <span className="sr-only">{dotOf(dialogue.status).word}. </span>
         <span className="min-w-0 flex-1 truncate">{dialogue.steps[0]?.customer}</span>
         <span className="text-small text-fg-3">{count(dialogue.steps.length, "шаг", "шага", "шагов")}</span>
       </button>
-      {open && dialogue.steps.map((step) => <StepView key={step.index} step={step} />)}
+      <div id={stepsId} hidden={!open}>
+        {open && dialogue.steps.map((step) => <StepView key={step.index} step={step} />)}
+      </div>
     </li>
   );
 }

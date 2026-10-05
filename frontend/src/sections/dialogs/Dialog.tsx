@@ -22,7 +22,8 @@ import { criteriaByRule, type Named } from "./model";
 
 type Tab = "talk" | "details";
 const ORDER: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
-const WORD: Record<string, [string, string]> = {
+/** A criterion's verdict in one conversation as a word and its colour. */
+export const RULE_WORD: Record<string, [string, string]> = {
   FAIL: ["ошибка", "text-bad"],
   PASS: ["без ошибки", "text-ok"],
   UNKNOWN: ["не удалось проверить", "text-fg-3"],
@@ -59,7 +60,7 @@ function Verdicts({
           const shown = shownOf(r);
           // With one model there is no second check to speak of: the line is empty, and so is the place.
           const second = r.status === "FAIL" ? secondLine(shown, null) : "";
-          const [word, tone] = WORD[r.status] ?? [r.status, "text-fg-3"];
+          const [word, tone] = RULE_WORD[r.status] ?? [r.status, "text-fg-3"];
           const n = c?.n;
           return (
             <li

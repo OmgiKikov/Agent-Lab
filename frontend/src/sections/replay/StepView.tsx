@@ -1,15 +1,9 @@
 import { cn } from "@/lib/utils";
+import { twoChecks } from "../../lab/dialogs";
 import { familyOf, FAMILY_NAME } from "../../lab/replay";
-import type { AgentTrace, RagPassage, ReplayStep, Rule } from "../../lab/types";
-import { Dot } from "../simulations/parts";
-
-/** A criterion's verdict in the words of the dictionary (docs/DESIGN.md): an error, not a violation. */
-const WORD: Record<string, string> = {
-  PASS: "без ошибки",
-  FAIL: "ошибка",
-  UNKNOWN: "не удалось проверить",
-  UNMEASURED: "не удалось проверить",
-};
+import type { AgentTrace, RagPassage, ReplayStep, Rule, Status } from "../../lab/types";
+import { RULE_WORD } from "../dialogs/Dialog";
+import { Dot, dotOf } from "../simulations/parts";
 
 const score = (passage: RagPassage) => {
   const value = passage.reranker ?? passage.retrieval;
@@ -79,14 +73,7 @@ function Verdicts({ rules }: { rules: Rule[] }) {
     <ul className="space-y-2">
       {shown.map((r) => (
         <li key={r.ruleId} className="text-small">
-          <span
-            className={cn(
-              "font-medium",
-              r.status === "FAIL" ? "text-bad" : r.status === "PASS" ? "text-ok" : "text-fg-3",
-            )}
-          >
-            {WORD[r.status] ?? r.status}
-          </span>
+          <Word status={r.status} />
           <span className="text-fg-3"> · {FAMILY_NAME[familyOf(r.ruleId)]} · </span>
           {r.rule}
           {r.reason && <p className="text-fg-2">{r.reason}</p>}
@@ -97,12 +84,39 @@ function Verdicts({ rules }: { rules: Rule[] }) {
   );
 }
 
+function Word({ status }: { status: string }) {
+  const [word, tone] = RULE_WORD[status] ?? [status, "text-fg-3"];
+  return <span className={cn("font-medium", tone)}>{word}</span>;
+}
+
+/**
+ * The second model's opinion on the step in the words of «Разговоры»: two models agree or not, and when one of them
+ * decided nothing, what the second one found. Nothing with one model: asking it twice is not a second opinion.
+ */
+function Second({ step }: { step: ReplayStep }) {
+  const second = step.second;
+  if (!second) return null;
+  const agreement = twoChecks(step.status ?? null, second);
+  const line =
+    agreement === "agree"
+      ? "Две модели совпали."
+      : agreement === "disagree"
+        ? "Модели разошлись."
+        : `Вторая проверка: ${dotOf(second.status as Status).word}.`;
+  return (
+    <p className="text-small text-fg-3" title={[second.model, second.error].filter(Boolean).join(": ")}>
+      {line}
+    </p>
+  );
+}
+
 /** One customer message replayed: production's reply beside the new one, what the agent did, the verdicts. */
 export function StepView({ step }: { step: ReplayStep }) {
   return (
     <section className="space-y-3 border-t border-line py-4">
       <div className="flex items-center gap-2">
         <Dot status={step.status ?? "UNMEASURED"} />
+        <span className="sr-only">{dotOf(step.status ?? "UNMEASURED").word}. </span>
         <span className="text-body font-medium text-fg">Клиент: {step.customer}</span>
       </div>
       <div className="flex flex-col gap-3 lg:flex-row">
@@ -112,6 +126,7 @@ export function StepView({ step }: { step: ReplayStep }) {
       {step.reply && step.error && <p className="text-small text-fg-3">{step.error}</p>}
       {step.trace && <Trace trace={step.trace} />}
       {step.rules && <Verdicts rules={step.rules} />}
+      <Second step={step} />
     </section>
   );
 }

@@ -266,7 +266,8 @@ export type ReplayStep = {
   rules?: Rule[];
   status?: Status;
   error?: string | null;
-  second?: { model: string; status: string } | null;
+  /** The second model's verdict on the step (judge.second_opinion); null with one model. */
+  second?: { model: string; status: string; rules?: Rule[]; error?: string } | null;
 };
 export type ReplayDialogue = { dialogueId: string; status: Status; steps: ReplayStep[] };
 export type Family = "tone" | "code" | "rag";
