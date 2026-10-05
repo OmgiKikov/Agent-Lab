@@ -3,14 +3,18 @@
 On a computer without the bank's model gateway, the judges and the synthetic customer reach OpenRouter models
 through it (bin/start.sh starts one bridge per judge). Pi keeps the provider credentials; the bridge never sees them.
 PI_PROXY_PORT, PI_JUDGE_PROVIDER, PI_JUDGE_MODEL, PI_PROXY_CONCURRENCY, PI_PROXY_TOKEN (bin/start.sh makes a new one
-for each start). Only this computer's own names are served: a page that rebinds its name to 127.0.0.1 is refused.
+for each start; without one the bridge does not start). Only this computer's own names are served: a page that rebinds
+its name to 127.0.0.1 is refused. The conversation reaches Pi on its standard input and the system prompt in a file
+only this user reads: never on a command line, which every user of the computer sees and which Linux cuts at 128 KiB.
 """
 
+import hmac
 import json
 import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,24 +56,35 @@ def run_pi(request: dict) -> str:
         system.append('Return only valid JSON in the format requested by the caller.')
     if not turns:
         raise ValueError('No text messages in the request')
-    command = [
-        str(PI_BIN),
-        *('--provider', PROVIDER, '--model', MODEL, '--thinking', 'low'),
-        *(
-            '--no-tools',
-            '--no-extensions',
-            '--no-skills',
-            '--no-context-files',
-            '--no-prompt-templates',
-            '--no-session',
-        ),
-        *('--mode', 'text', '--print'),
-        *('--system-prompt', '\n\n'.join(system) or 'Answer the user request precisely.'),
-        '--',
-        '\n\n'.join(turns),
-    ]
-    with SLOTS:
-        result = subprocess.run(command, cwd=HERE, capture_output=True, text=True, timeout=TIMEOUT, check=False)
+    with tempfile.TemporaryDirectory(prefix='pi-bridge-') as folder:  # owner-only, removed with the call
+        prompt = Path(folder) / 'system.md'
+        prompt.write_text('\n\n'.join(system) or 'Answer the user request precisely.', encoding='utf-8')
+        command = [
+            str(PI_BIN),
+            *('--provider', PROVIDER, '--model', MODEL, '--thinking', 'low'),
+            *(
+                '--no-tools',
+                '--no-extensions',
+                '--no-skills',
+                '--no-context-files',
+                '--no-prompt-templates',
+                '--no-session',
+            ),
+            *('--mode', 'text', '--print'),
+            # Pi reads a --system-prompt that names a file from the file; the conversation it reads from stdin.
+            *('--system-prompt', str(prompt)),
+        ]
+        with SLOTS:
+            result = subprocess.run(
+                command,
+                cwd=HERE,
+                input='\n\n'.join(turns),
+                capture_output=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=TIMEOUT,
+                check=False,
+            )
     if result.returncode:
         raise RuntimeError(f'Pi failed with exit code {result.returncode}')  # its output may quote the conversation
     if not result.stdout.strip():
@@ -116,13 +131,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.refused_host():
             return
-        if self.headers.get('Authorization') != f'Bearer {TOKEN}':
+        given = (self.headers.get('Authorization') or '').encode()
+        if not hmac.compare_digest(given, f'Bearer {TOKEN}'.encode()):
             self.error(401, 'Local bridge token required')
             return
         if self.path.rstrip('/') != '/v1/chat/completions':
             self.error(404, 'Not found')
             return
-        length = int(self.headers.get('Content-Length', '0'))
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = -1
         if not 0 < length <= MAX_BODY:
             self.error(413, 'Invalid request size')
             return
@@ -155,5 +174,8 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     if not PI_BIN.is_file():
         raise SystemExit(f'Pi is missing: {PI_BIN} (npm ci in bridge/)')
+    if not os.environ.get('PI_PROXY_TOKEN'):
+        # A token everybody knows lets any program on this computer spend OpenRouter through the bridge.
+        raise SystemExit('PI_PROXY_TOKEN is not set: start the bridges with bin/start.sh, or set it for both sides')
     logger.info('Pi model bridge on http://127.0.0.1:%s/v1 · %s %s', PORT, PROVIDER, MODEL)
     ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()

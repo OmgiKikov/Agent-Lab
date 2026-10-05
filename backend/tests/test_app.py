@@ -154,7 +154,7 @@ asyncio.run(main())
             LAB_ALLOWED_HOSTS='lab.internal, Other.Local',
         )
 
-    def test_the_page_is_revalidated_and_hashed_assets_are_kept(self) -> None:
+    def test_the_page_is_revalidated_never_framed_and_hashed_assets_are_kept(self) -> None:
         self.probe(
             """
 import asyncio
@@ -167,6 +167,11 @@ async def main():
         assert page.headers.get('cache-control') == 'no-cache', page.headers
         asset = await client.get('/assets/app.js')
         assert 'immutable' in asset.headers.get('cache-control', ''), asset.headers
+        # No other site shows the Lab in a frame to have a person click in it.
+        for response in (page, asset, await client.get('/api/state')):
+            assert response.headers.get('x-frame-options') == 'DENY', response.headers
+            assert response.headers.get('content-security-policy') == "frame-ancestors 'none'", response.headers
+            assert response.headers.get('x-content-type-options') == 'nosniff', response.headers
 
 asyncio.run(main())
 """,

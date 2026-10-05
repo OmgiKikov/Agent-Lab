@@ -19,6 +19,18 @@ START_TIMEOUT = 180
 # Ports chosen by this process for agents it has not stopped yet: two runs starting at once must not both pick a port
 # their processes have not bound yet.
 _HELD: set[int] = set()
+# The Lab's own keys stay with the Lab: the agent's code, and every log it writes, never holds the means to spend the
+# Lab's models (the model keys, the Pi bridges' token) or to call the bank's gateway as the Lab.
+PRIVATE = ('LAB_MODEL_KEY', 'LAB_SECOND_KEY', 'PI_PROXY_TOKEN')
+PRIVATE_PREFIX = 'AGENT_LAB_GATEWAY_'
+
+
+def environment(port: int) -> dict[str, str]:
+    """What the agent's process starts with: the Lab's environment without its keys, and the port to listen on."""
+    kept = {
+        name: value for name, value in os.environ.items() if name not in PRIVATE and not name.startswith(PRIVATE_PREFIX)
+    }
+    return {**kept, 'APP_PORT': str(port)}
 
 
 def free_port(preferred: int) -> int:
@@ -53,7 +65,7 @@ class CodeAgent(HttpAgent):
         self.port = free_port(self.preferred)
         self.url = f'http://127.0.0.1:{self.port}{AGENT_PATH}'
         log = store.database().parent / LOG
-        log.parent.mkdir(parents=True, exist_ok=True)
+        store.private_folder(log.parent)
         # The agent's output may quote the bank's data: readable by this user only.
         descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         os.fchmod(descriptor, 0o600)
@@ -61,7 +73,7 @@ class CodeAgent(HttpAgent):
             self.process = subprocess.Popen(
                 [str(script)],
                 cwd=self.repo,
-                env={**os.environ, 'APP_PORT': str(self.port)},
+                env=environment(self.port),
                 stdout=output,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,

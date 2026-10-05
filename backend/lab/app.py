@@ -14,6 +14,13 @@ from .settings import FRONTEND
 
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 DEFAULT_PORTS = {'http': 80, 'https': 443}
+# No other page shows the Lab in a frame: a click a person makes there is a click on the Lab's own page, which the
+# Origin check lets through (clickjacking). And a file the Lab serves is never read as another type.
+HEADERS = {
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "frame-ancestors 'none'",
+    'X-Content-Type-Options': 'nosniff',
+}
 
 
 def allowed_hosts() -> set[str]:
@@ -61,7 +68,10 @@ async def local_browser_commands(request: Request, call_next: Callable[[Request]
         scheme = request.scope['scheme']
         if _origin(origin) != (scheme, host[0], host[1] or DEFAULT_PORTS.get(scheme)):
             return JSONResponse({'detail': 'Запрос с чужой страницы отклонён.'}, status_code=403)
-    return await call_next(request)
+    response = await call_next(request)
+    for name, value in HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
 
 
 @app.get('/health')

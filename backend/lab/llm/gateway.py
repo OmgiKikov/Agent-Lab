@@ -346,6 +346,12 @@ def chosen_models() -> dict:
     return store.load(MODELS, {}) or {}
 
 
+def _version(name: str) -> tuple[int, ...]:
+    """The version after «glm», numbers compared as numbers: glm-5.10 is newer than glm-5.9."""
+    found = re.search(r'glm\D*?(\d+(?:\.\d+)*)', name.lower())
+    return tuple(int(part) for part in found.group(1).split('.')) if found else ()
+
+
 async def auto_models(timeout: httpx.Timeout | float = 30) -> dict:
     """Unless chosen: the newest full GLM in the catalog, for the judge, the simulator and the second judge."""
     models = chosen_models()
@@ -354,7 +360,8 @@ async def auto_models(timeout: httpx.Timeout | float = 30) -> dict:
     names = await catalog(timeout)
     glm = [m for m in names if 'glm' in m.lower()]
     full = [m for m in glm if not any(light in m.lower() for light in ('flash', 'air', 'mini'))]
-    ranked = sorted(full or glm, reverse=True)  # a full model (glm-5.2) over a light one (glm-5.3-flash)
+    # A full model (glm-5.2) over a light one (glm-5.3-flash), the newest version first.
+    ranked = sorted(full or glm, key=lambda name: (_version(name), name), reverse=True)
     main = ranked[0] if ranked else (names[0] if names else None)
     models = {'model': main, 'second': main}
     store.save(MODELS, models)

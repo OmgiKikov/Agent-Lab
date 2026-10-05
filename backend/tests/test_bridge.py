@@ -1,6 +1,8 @@
-"""The Pi bridge serves only this computer's pages and never writes the customer's conversation into its log."""
+"""The Pi bridge serves only this computer's pages, never writes the customer's conversation into its log, and never
+puts it on a command line, which every user of the computer can read."""
 
 import importlib.util
+import socket
 import subprocess
 import threading
 import unittest
@@ -66,3 +68,40 @@ class BridgeTests(unittest.TestCase):
             ):
                 self.assertEqual(self.ask().status_code, 502)
             self.assertNotIn('7701234567', '\n'.join(logs.output))
+
+    def test_the_conversation_never_reaches_a_command_line(self) -> None:
+        """Pi reads the conversation from its standard input and the system prompt from a file only this user reads: a
+        command line is visible to every user of the computer, and Linux refuses one argument over 128 KiB."""
+        seen = {}
+
+        def pi(command, **options):
+            prompt = Path(command[command.index('--system-prompt') + 1])
+            seen.update(command=command, input=options['input'], prompt=prompt.read_text(encoding='utf-8'))
+            seen['mode'] = prompt.parent.stat().st_mode & 0o777
+            seen['file'] = prompt
+            return subprocess.CompletedProcess(command, 0, stdout='готов', stderr='')
+
+        long = CUSTOMER + ' Очень длинный разговор.' * 8000  # well over 128 KiB in UTF-8
+        body = {'messages': [{'role': 'system', 'content': 'Ты судья.'}, {'role': 'user', 'content': long}]}
+        with patch.object(pi_bridge.subprocess, 'run', side_effect=pi):
+            self.assertEqual(pi_bridge.run_pi(body), 'готов')
+        self.assertFalse([part for part in seen['command'] if '7701234567' in part])
+        self.assertIn(long, seen['input'])
+        self.assertEqual(seen['prompt'], 'Ты судья.')
+        self.assertEqual(seen['mode'], 0o700)
+        self.assertFalse(seen['file'].exists())
+
+    def test_a_wrong_token_or_a_broken_length_is_refused_without_running_pi(self) -> None:
+        url = f'http://127.0.0.1:{self.port}/v1/chat/completions'
+        with patch.object(pi_bridge.subprocess, 'run') as pi, httpx.Client(trust_env=False, timeout=10) as client:
+            wrong = client.post(url, json={'messages': []}, headers={'Authorization': 'Bearer guess'})
+            self.assertEqual(wrong.status_code, 401)
+            pi.assert_not_called()
+        request = (
+            'POST /v1/chat/completions HTTP/1.1\r\n'
+            f'Host: 127.0.0.1:{self.port}\r\nAuthorization: Bearer launch-token\r\nContent-Length: abc\r\n\r\n{{}}'
+        )
+        with socket.create_connection(('127.0.0.1', self.port), timeout=10) as connection:
+            connection.sendall(request.encode())
+            answer = connection.recv(1024).decode(errors='replace')
+        self.assertTrue(answer.startswith(('HTTP/1.0 413', 'HTTP/1.1 413')), answer[:80])

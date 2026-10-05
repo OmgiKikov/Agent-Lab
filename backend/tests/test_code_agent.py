@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from lab import store
 from lab.agents import source
@@ -22,6 +23,9 @@ class Identity(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 print('listening on', os.environ['APP_PORT'], flush=True)
+keys = ('LAB_MODEL_KEY', 'LAB_SECOND_KEY', 'PI_PROXY', 'AGENT_LAB_GATEWAY')
+print('lab keys', sorted(k for k in os.environ if k.startswith(keys)), flush=True)
+print('own settings', os.environ.get('SBE_TOOL_NAME_CARD'), flush=True)
 http.server.HTTPServer(('127.0.0.1', int(os.environ['APP_PORT'])), Identity).serve_forever()
 """
 
@@ -58,6 +62,27 @@ class CodeAgentTests(unittest.IsolatedAsyncioTestCase):
         log = database.parent / 'local-code-agent.log'
         self.assertIn(f'listening on {agent.port}', log.read_text())
         self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+
+    async def test_the_agent_starts_without_the_labs_keys(self) -> None:
+        secrets = {
+            'LAB_MODEL_KEY': 'sk-or-main',
+            'LAB_SECOND_KEY': 'sk-or-second',
+            'PI_PROXY_TOKEN': 'bridge-token',
+            'AGENT_LAB_GATEWAY_KEY_PATH': '/certs/client.key',
+            'SBE_TOOL_NAME_CARD': 'card-tool',  # the agent's own setting reaches it
+        }
+        environment = patch.dict(os.environ, secrets)
+        environment.start()
+        self.addCleanup(environment.stop)
+        agent = source.CodeAgent({'repo': str(self.root / 'repo'), 'port': a_free_port()})
+        database = self.root / 'agents' / 'first' / 'lab.sqlite3'
+        try:
+            await asyncio.create_task(self.start(agent, database))
+        finally:
+            await agent.close()
+        log = (database.parent / 'local-code-agent.log').read_text()
+        self.assertIn('lab keys []', log)
+        self.assertIn('own settings card-tool', log)
 
     async def test_two_agents_started_at_once_each_get_their_own_port(self) -> None:
         config = {'repo': str(self.root / 'repo'), 'port': a_free_port()}

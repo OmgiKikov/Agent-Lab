@@ -233,6 +233,64 @@ class AdoptionTests(unittest.TestCase):
         registry.adopt_legacy()
         self.assertEqual(registry.listed(), [])
 
+    def test_an_agent_given_by_its_id_is_never_a_second_empty_one(self) -> None:
+        registry.create('Агент эквайринга', agent_id='acquiring')
+        with self.assertRaises(ValueError):
+            registry.create('Агент эквайринга', agent_id='acquiring')
+        self.assertEqual([a['id'] for a in registry.listed()], ['acquiring'])
+        self.assertEqual(registry.create('Агент эквайринга')['id'], 'agent-ekvayringa')
+
+    def test_agents_whose_registry_is_lost_are_found_on_the_next_start(self) -> None:
+        for name, agent_id in (('Агент эквайринга', 'acquiring'), ('Агент кредитов', None), ('Пустой', None)):
+            created = registry.create(name, agent_id=agent_id)['id']
+            if name != 'Пустой':
+                with registry.using(created):
+                    store.save('logs.json', [{'id': 'd1'}])
+        (self.root / 'agents.sqlite3').unlink()
+
+        async def start() -> None:
+            async with api.lifespan(api.app):
+                pass
+
+        with patch.object(api, 'jobs', jobs.PerAgent()):
+            asyncio.run(start())
+        self.assertEqual(
+            [(a['id'], a['name']) for a in registry.listed()],
+            [('acquiring', 'Агент эквайринга'), ('agent-kreditov', 'agent-kreditov')],
+        )
+        with registry.using('agent-kreditov'):
+            self.assertEqual(store.load('logs.json'), [{'id': 'd1'}])
+
+    def test_a_second_lab_on_the_same_data_recovers_nothing_and_says_why(self) -> None:
+        store.save('logs.json', [{'id': 'd1'}])
+
+        async def start() -> None:
+            async with api.lifespan(api.app):
+                pass
+
+        with (
+            registry.only_process(),
+            patch.object(api, 'jobs', jobs.PerAgent()),
+            patch.object(store, 'recover_runs') as recover,
+            self.assertRaises(RuntimeError) as refused,
+        ):
+            asyncio.run(start())
+        self.assertIn('уже работает', str(refused.exception))
+        self.assertIn('LAB_DATA', str(refused.exception))
+        recover.assert_not_called()
+        self.assertEqual(registry.listed(), [])  # the old database is not adopted twice
+        with patch.object(api, 'jobs', jobs.PerAgent()):
+            asyncio.run(start())  # the first one gone, the lock goes with it
+        self.assertEqual([a['id'] for a in registry.listed()], ['acquiring'])
+
+    def test_the_folders_of_the_lab_are_readable_by_its_user_only(self) -> None:
+        nested = self.root / 'data' / 'lab.sqlite3'
+        with patch.object(store, 'DB', nested):
+            agent = registry.create('Агент эквайринга')['id']
+            for folder in (nested.parent, nested.parent / 'agents', registry.db_of(agent).parent):
+                with self.subTest(folder=folder.name):
+                    self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
+
 
 class LegacyImportTests(unittest.TestCase):
     """python -m lab.migrate writes where the app reads: into an agent's database."""

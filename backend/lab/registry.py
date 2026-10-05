@@ -13,6 +13,11 @@ from pathlib import Path
 
 from . import store
 
+try:
+    import fcntl
+except ImportError:  # no flock where there is no fcntl (Windows): only_process holds nothing there
+    fcntl = None
+
 LATIN = {
     'а': 'a',
     'б': 'b',
@@ -67,7 +72,7 @@ def db_of(agent_id: str) -> Path:
 @contextmanager
 def _connection() -> Iterator[sqlite3.Connection]:
     path = _registry()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    store.private_folder(path.parent)
     connection = sqlite3.connect(path, timeout=10)
     try:
         path.chmod(0o600)
@@ -112,7 +117,9 @@ def slug(name: str) -> str:
 
 
 def create(name: str, description: str = '', agent_id: str | None = None) -> dict:
-    """A new agent with an empty database of its own; a taken id gets a number."""
+    """A new agent with an empty database of its own; a taken id made from the name gets a number. An id given
+    (agent_id: the adopted first agent, an agent found on disk) is that agent's or nobody's: taken, it is refused,
+    never renumbered into a second, empty agent of the same name."""
     name, description = name.strip(), description.strip()
     if not name:
         raise ValueError('Введите имя агента.')
@@ -120,6 +127,8 @@ def create(name: str, description: str = '', agent_id: str | None = None) -> dic
     with _connection() as connection:
         connection.execute('BEGIN IMMEDIATE')
         taken = {row[0] for row in connection.execute('SELECT id FROM agents')}
+        if agent_id and agent_id in taken:
+            raise ValueError(f'Агент «{agent_id}» уже есть.')
         chosen, number = base, 2
         while chosen in taken:
             chosen, number = f'{base}-{number}', number + 1
@@ -127,7 +136,7 @@ def create(name: str, description: str = '', agent_id: str | None = None) -> dic
             'INSERT INTO agents (id, name, description, created_at) VALUES (?, ?, ?, ?)',
             (chosen, name, description, store.now()),
         )
-    db_of(chosen).parent.mkdir(parents=True, exist_ok=True)
+    store.private_folder(db_of(chosen).parent)
     return get(chosen) or {}
 
 
@@ -168,7 +177,7 @@ def adopt_legacy() -> None:
         return
     target = db_of(FIRST['id'])
     if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
+        store.private_folder(target.parent)
         partial = target.with_name(target.name + '.partial')
         source, copy = sqlite3.connect(old), sqlite3.connect(partial)
         try:
@@ -186,3 +195,45 @@ def adopt_legacy() -> None:
         path = old.with_name(old.name + suffix)
         if path.exists():
             path.replace(old.with_name(backup + suffix))
+
+
+def recover_lost() -> list[str]:
+    """Agents whose databases are on disk but not in the registry (agents.sqlite3 lost or replaced) are registered
+    again, under their id: their names went with the registry (the first agent's is known), their data never goes out
+    of reach. An empty database has nothing to recover."""
+    folder = _root() / 'agents'
+    if not folder.is_dir():
+        return []
+    known = {agent['id'] for agent in listed()}
+    found = []
+    for path in sorted(folder.iterdir()):
+        database = path / 'lab.sqlite3'
+        if path.name in known or not re.fullmatch(r'[a-z0-9-]+', path.name) or not database.is_file():
+            continue
+        if _has_data(database):
+            first = path.name == FIRST['id']
+            create(FIRST['name'] if first else path.name, FIRST['description'] if first else '', agent_id=path.name)
+            found.append(path.name)
+    return found
+
+
+@contextmanager
+def only_process() -> Iterator[None]:
+    """One Lab process per data folder. Uvicorn starts the application before it takes its port, so a second start
+    (bin/start.sh run twice, a development server beside it) would mark the runs the first one is playing as stopped
+    (store.recover_runs) and adopt the old database twice before failing on the port. The lock goes with the process."""
+    if fcntl is None:
+        yield
+        return
+    store.private_folder(_root())
+    with open(_root() / 'lab.lock', 'a') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise RuntimeError(
+                f'Agent Lab уже работает с папкой данных {_root()}. Остановите его или задайте другую LAB_DATA.'
+            ) from None
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)

@@ -41,17 +41,19 @@ jobs = PerAgent()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    registry.adopt_legacy()
-    agents = registry.listed()
-    if not agents and store.DB.exists():
-        store.recover_runs()  # before any agent: the default database, never created here
-    for agent in agents:
-        with registry.using(agent['id']):
-            store.recover_runs()
-    try:
-        yield
-    finally:
-        await jobs.close()
+    with registry.only_process():  # a second Lab on the same data starts nothing, recovers nothing
+        registry.adopt_legacy()
+        registry.recover_lost()
+        agents = registry.listed()
+        if not agents and store.DB.exists():
+            store.recover_runs()  # before any agent: the default database, never created here
+        for agent in agents:
+            with registry.using(agent['id']):
+                store.recover_runs()
+        try:
+            yield
+        finally:
+            await jobs.close()
 
 
 app = FastAPI(title='Agent Lab', lifespan=lifespan)

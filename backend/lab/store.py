@@ -37,10 +37,19 @@ def database() -> Path:
     return AGENT.get() or DB
 
 
+def private_folder(folder: Path) -> None:
+    """Create the folder, and the missing ones above it, readable by this user only: they hold the bank's
+    conversations, also when the Lab is started without bin/start.sh. A folder that exists keeps its mode."""
+    if folder.is_dir():
+        return
+    for missing in reversed([path for path in (folder, *folder.parents) if not path.exists()]):
+        missing.mkdir(mode=0o700, exist_ok=True)
+
+
 @contextmanager
 def _connection() -> Iterator[sqlite3.Connection]:
     path = database()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_folder(path.parent)
     connection = sqlite3.connect(path, timeout=10)
     try:
         if connection.execute('PRAGMA user_version').fetchone()[0] != SCHEMA:

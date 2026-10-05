@@ -12,11 +12,11 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from lab import llm
+from lab import llm, store
 from lab.llm import gateway
 
 Client = httpx.AsyncClient
@@ -358,3 +358,24 @@ class ReuseTests(GatewayCase):
         self.assertFalse(first.is_closed)
         self.assertIsNot(renewed, first)
         self.assertIsNot(other, renewed)
+
+
+class AutoModelTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        mocked = patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3')
+        mocked.start()
+        self.addCleanup(mocked.stop)
+
+    async def chosen(self, names: list[str]) -> str | None:
+        with patch.object(gateway, 'catalog', AsyncMock(return_value=names)):
+            return (await gateway.auto_models())['model']
+
+    async def test_the_newest_full_glm_is_chosen_by_its_numbers_not_its_letters(self) -> None:
+        self.assertEqual(await self.chosen(['glm-5.9', 'GLM-5.10', 'glm-5.11-flash', 'glm-4.6', 'gpt-oss']), 'GLM-5.10')
+
+    async def test_without_a_full_glm_the_newest_light_one_and_without_glm_the_first_model(self) -> None:
+        self.assertEqual(await self.chosen(['glm-4.5-air', 'glm-4.10-flash', 'qwen']), 'glm-4.10-flash')
+        store.save(gateway.MODELS, {})
+        self.assertEqual(await self.chosen(['qwen', 'gpt-oss']), 'qwen')
