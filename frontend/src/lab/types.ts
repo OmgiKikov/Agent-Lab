@@ -188,8 +188,12 @@ export type LabState = {
   models: Models;
   settings: Settings;
   sources: Source[];
-  /** When the agent's code was read last and from which folder, as the person wrote it; null before the first read. */
-  sourcesRead?: { readAt: string; repo: string } | null;
+  /**
+   * When the agent's code was read last and from which folder, as the person wrote it; null before the first read.
+   * `overBudget`: where the prompts are that the read found and left out of the criteria planner's budget
+   * (sources.MAX_TOTAL); older records have no such field.
+   */
+  sourcesRead?: { readAt: string; repo: string; overBudget?: string[] } | null;
   logs: { total: number; file?: string | null; updatedAt?: string | null };
   /** The result of each check, or null: tone of voice and accuracy never replace each other. */
   checks: Record<Check, Discover | null>;

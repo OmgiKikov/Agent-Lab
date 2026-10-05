@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Database, FileText, RotateCcw } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { criterionLink } from "../../app/links";
@@ -16,18 +17,15 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
 import { ConnectionForm } from "./Connection";
-import { agentKey } from "../../app/agent";
 
-const READ_AT = agentKey("lab.agent.sourcesReadAt");
-const readAt = () => {
-  try {
-    return localStorage.getItem(READ_AT);
-  } catch {
-    return null;
-  }
-};
+/** The characters of prompts the criteria planner takes (backend/lab/context/sources.py, MAX_TOTAL). */
+const BUDGET = "60 000";
 
-/** «Агент»: who is checked and what the product knows of it — how to reach it, and what was read from its code. */
+/**
+ * «Агент»: who is checked and what the product knows of it — how to reach it, and what was read from its code: when
+ * and from which folder the last read that succeeded took it (the service's `sourcesRead`), and the prompts it found
+ * that did not fit the planner's budget, so no criterion comes from them.
+ */
 export function AgentPage() {
   const { state, offline, refresh } = useLabState();
   const toast = useToast();
@@ -38,14 +36,7 @@ export function AgentPage() {
   const readCode = () => {
     setReading(true);
     api("/api/sources", {})
-      .then(() => {
-        try {
-          localStorage.setItem(READ_AT, new Date().toISOString());
-        } catch {
-          /* a nicety */
-        }
-        return refresh();
-      })
+      .then(() => refresh())
       .catch(toast.error)
       .finally(() => setReading(false));
   };
@@ -66,7 +57,7 @@ export function AgentPage() {
           {codeSources(state).length ? "Прочитать код заново" : "Прочитать код"}
         </Button>
       }
-      below={<SectionJob kinds={["sources", "names"]} />}
+      below={<SectionJob kinds={["sources"]} />}
     />
   );
   if (offline && !state)
@@ -86,7 +77,8 @@ export function AgentPage() {
       </div>
     );
   const sources = codeSources(state).sort((a, b) => b.rules - a.rules || b.chars - a.chars);
-  const date = day(readAt());
+  const read = state.sourcesRead;
+  const over = read?.overBudget ?? [];
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -104,16 +96,16 @@ export function AgentPage() {
           </div>
           <section aria-label="Код агента">
             <h2 className="text-title font-semibold text-fg">Код агента</h2>
-            <p className="mb-5 mt-1 text-small text-fg-3">
+            <p className={cn("mt-1 text-small text-fg-3", sources.length && over.length ? "mb-3" : "mb-5")}>
               {sources.length ? (
                 <>
                   {plural(sources.length, "Прочитан", "Прочитано", "Прочитано")}{" "}
                   {count(sources.length, "источник", "источника", "источников")}
-                  {date ? ` ${date}` : ""}
-                  {state.settings.repo ? (
+                  {read ? ` ${day(read.readAt)}` : ""}
+                  {read?.repo ? (
                     <>
                       {" "}
-                      из <span className="font-mono">{state.settings.repo}</span>
+                      из <span className="font-mono">{read.repo}</span>
                     </>
                   ) : null}
                   . {plural(sources.length, "Из него", "Из них", "Из них")} дословно берутся критерии точности.
@@ -122,6 +114,22 @@ export function AgentPage() {
                 "Код ещё не прочитан. Выберите «Запуск из кода», укажите папку с кодом и прочитайте код."
               )}
             </p>
+            {sources.length > 0 && over.length > 0 && (
+              <div className="mb-5 text-small">
+                <p className="text-warn">
+                  {count(over.length, "инструкция", "инструкции", "инструкций")}{" "}
+                  {plural(over.length, "не вошла", "не вошли", "не вошли")} в лимит {BUDGET}
+                  {" "}знаков. Критерии из {plural(over.length, "неё", "них", "них")} не собраны.
+                </p>
+                <ul className="mt-1 space-y-0.5">
+                  {over.map((origin) => (
+                    <li key={origin} className="break-all font-mono text-meta text-fg-3">
+                      {origin}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {sources.length > 0 && (
               <>
                 <Label>Инструкции и инструменты</Label>
