@@ -14,7 +14,6 @@
 /backend/.test-data/
 __pycache__/
 .ruff_cache/
-/backend/bridge/node_modules/
 /frontend/node_modules/
 /frontend/dist/
 .DS_Store

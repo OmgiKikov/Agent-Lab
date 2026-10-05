@@ -3,8 +3,8 @@
 Two backends, chosen at start:
 - the bank's model gateway (gateway.py) when its certificates are in certs/: the work computer; LAB_MODEL names its
   model, else the newest GLM of its catalog; a second judge only with LAB_SECOND_MODEL;
-- an OpenAI-compatible endpoint otherwise: the Pi bridges to OpenRouter started by bin/start.sh.
-  LAB_MODEL_URL / LAB_MODEL_KEY / LAB_MODEL; a second judge of another vendor only with LAB_SECOND_MODEL
+- an OpenAI-compatible endpoint otherwise: LAB_MODEL_URL / LAB_MODEL_KEY / LAB_MODEL, and without LAB_MODEL_URL
+  OpenRouter itself, with its key in OPENROUTER_API_KEY. A second judge of another vendor only with LAB_SECOND_MODEL
   (+ LAB_SECOND_URL / LAB_SECOND_KEY). It re-checks every verdict; its actual model is recorded in that result. Without
   it, or when it is the main model again, there is no second check (second_judge).
 A call that may pass on another try (no connection, 429, 5xx) is made again a few times (chat).
@@ -27,8 +27,7 @@ from .errors import MalformedAnswer, ModelError, refused
 
 GATEWAY = 'gateway'
 Endpoint = tuple[str, str]  # (base URL or GATEWAY, model)
-PI = 'http://127.0.0.1:11436/v1'  # the Pi bridges bin/start.sh starts without the gateway and LAB_MODEL_URL
-PI_SECOND = 'http://127.0.0.1:11437/v1'
+OPENROUTER = 'https://openrouter.ai/api/v1'  # without the gateway and LAB_MODEL_URL; its key is OPENROUTER_API_KEY
 
 if not os.environ.get('LAB_MODEL_URL') and gateway.configured():
     # 'auto': the newest GLM in the gateway's catalog, chosen once per agent at its first call (gateway.auto_models).
@@ -37,18 +36,21 @@ if not os.environ.get('LAB_MODEL_URL') and gateway.configured():
     # A second judge only when named, as on the other path: the gateway's catalog never adds one by itself.
     SECOND: Endpoint = (GATEWAY, os.environ['LAB_SECOND_MODEL']) if os.environ.get('LAB_SECOND_MODEL') else MAIN
 else:
-    MAIN = (os.environ.get('LAB_MODEL_URL', PI).rstrip('/'), os.environ.get('LAB_MODEL', 'z-ai/glm-5.3'))
+    MAIN = (os.environ.get('LAB_MODEL_URL', OPENROUTER).rstrip('/'), os.environ.get('LAB_MODEL', 'z-ai/glm-5.3'))
     # One model by default, as on the work computer; a second vendor only when named. It goes where the main one goes
-    # unless LAB_SECOND_URL says otherwise; to the second Pi bridge only on the Pi path.
-    _second_url = os.environ.get('LAB_SECOND_URL') or (MAIN[0] if os.environ.get('LAB_MODEL_URL') else PI_SECOND)
+    # unless LAB_SECOND_URL says otherwise.
+    _second_url = os.environ.get('LAB_SECOND_URL') or MAIN[0]
     SECOND = (_second_url.rstrip('/'), os.environ['LAB_SECOND_MODEL']) if os.environ.get('LAB_SECOND_MODEL') else MAIN
 MODEL = MAIN[1]
-PI_TOKEN = os.environ.get('PI_PROXY_TOKEN', 'pi-local-bridge')  # bin/start.sh gives the bridges a new one each start
-API_KEY = os.environ.get('LAB_MODEL_KEY', PI_TOKEN)
-# The main key goes only to the main model's address: elsewhere the second judge has a key of its own, or the bridges'.
+_OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY') or None
+API_KEY = os.environ.get('LAB_MODEL_KEY') or (_OPENROUTER_KEY if MAIN[0] == OPENROUTER else None)
+# The main key goes only to the main model's address: elsewhere the second judge has a key of its own, OpenRouter's key
+# only OpenRouter.
 SECOND_KEY = os.environ.get('LAB_SECOND_KEY') or (
-    API_KEY if SECOND[0] == MAIN[0] else PI_TOKEN if SECOND[0] == PI_SECOND else None
+    API_KEY if SECOND[0] == MAIN[0] else _OPENROUTER_KEY if SECOND[0] == OPENROUTER else None
 )
+# OpenRouter without its key: no conversation is sent, and the settings and every check say what to set.
+NO_KEY = 'Нет ключа OpenRouter. Задайте OPENROUTER_API_KEY и перезапустите Agent Lab.'
 CONCURRENCY = int(os.environ.get('LAB_MODEL_CONCURRENCY', '6'))
 ATTEMPTS = 3  # tries of a call that may pass later; after a read timeout, one more try only
 CONNECT_TIMEOUT = 10  # seconds: an unreachable model fails fast, while an answer may take the whole read timeout
@@ -164,6 +166,11 @@ async def _openai_chat(
     if json_mode:
         body['response_format'] = {'type': 'json_object'}
     key = _key((base, model))
+    if base == OPENROUTER:
+        if not key:
+            raise ModelError(NO_KEY)
+        # A short reasoning, so a reasoning model answers within its output limit; the others ignore it.
+        body['reasoning'] = {'effort': 'low'}
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             f'{base}/chat/completions', json=body, headers={'Authorization': f'Bearer {key}'} if key else {}
@@ -213,8 +220,7 @@ def second_judge() -> Endpoint | None:
 
 def describe() -> dict:
     """Which models judge and play the customer, and where the conversations go (secondVia: where the second judge's
-    go, when elsewhere); no second when only one model is available. problem: why the bank's gateway, set up, cannot be
-    used now."""
+    go, when elsewhere); no second when only one model is available; problem: why they cannot be used now."""
     main, second = _names()
     judge = second_judge()
     via, second_via = _via(MAIN[0]), _via(judge[0]) if judge else None
@@ -223,16 +229,23 @@ def describe() -> dict:
         'main': main,
         'second': second if judge else None,
         'secondVia': second_via if second_via != via else None,
-        'problem': gateway.problem() if MAIN[0] == GATEWAY else None,
+        'problem': _problem(),
     }
 
 
+def _problem() -> str | None:
+    """Why no conversation can be checked now: the bank's gateway, set up, does not work, or OpenRouter has no key."""
+    if MAIN[0] == GATEWAY:
+        return gateway.problem()
+    return NO_KEY if MAIN[0] == OPENROUTER and not API_KEY else None
+
+
 def _via(base: str) -> str:
-    """The bank's gateway, OpenRouter through the local Pi bridges, or the endpoint's host[:port]."""
+    """The bank's gateway, OpenRouter, or the endpoint's host[:port]."""
     if base == GATEWAY:
         return 'шлюз банка'
-    if base in (PI, PI_SECOND):
-        return 'OpenRouter через Pi'
+    if base == OPENROUTER:
+        return 'OpenRouter'
     try:
         address = urlsplit(base).netloc or base
     except ValueError:

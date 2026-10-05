@@ -133,7 +133,8 @@ export type Settings = { prodUrl: string; epk: string[]; repo: string };
 export type Source = { id: string; kind: string; origin: string; chars: number; rules: number; sha256?: string | null };
 /**
  * The models as /api/state describes them (backend/lab/llm, describe): where the conversations go, where the second
- * check's go when elsewhere, and why the bank's gateway, set up, cannot be used now.
+ * check's go when elsewhere, and why the models cannot be used now: the bank's gateway, set up, does not work, or
+ * OpenRouter has no key.
  */
 export type Models = {
   via: string;

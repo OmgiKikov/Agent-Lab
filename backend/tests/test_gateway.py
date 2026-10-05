@@ -246,7 +246,7 @@ class SetupTests(GatewayCase):
 
     def test_the_backend_starts_with_broken_certificates_and_stays_on_the_gateway(self) -> None:
         (self.certs / 'url.txt').write_text('')
-        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'AGENT_LAB', 'PI_'))}
+        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'AGENT_LAB', 'OPENROUTER_'))}
         environment.update(
             LAB_DATA=str(self.certs.parent / 'data'),
             LAB_CERTS=str(self.certs),
@@ -275,7 +275,7 @@ class SetupTests(GatewayCase):
         connection.commit()
         connection.close()
         before = legacy.read_bytes()
-        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'AGENT_LAB', 'PI_'))}
+        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'AGENT_LAB', 'OPENROUTER_'))}
         environment.update(LAB_DATA=str(data), LAB_CERTS=str(self.certs), AGENT_LAB_GATEWAY_FILE=str(gateway.FILE))
         script = 'import lab.app\nfrom lab import llm\nprint(llm.MAIN)\nprint(llm.SECOND)'
         done = subprocess.run(

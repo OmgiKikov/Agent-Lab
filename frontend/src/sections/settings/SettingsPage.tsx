@@ -8,7 +8,8 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Group, Row } from "./parts";
 
-const PI = "OpenRouter через Pi";
+/** Where the conversations go without the bank's gateway and an endpoint of one's own (backend/lab/llm, _via). */
+const OPENROUTER = "OpenRouter";
 
 /** «Настройки»: what the product itself runs on — the models and where it answers. How to reach the agent lives in «Агент». */
 export function SettingsPage() {
@@ -24,10 +25,14 @@ export function SettingsPage() {
               <>
                 {models?.problem && (
                   <div role="alert" className="mb-4 rounded-block border border-bad/30 bg-bad/[0.06] p-3">
-                    <p className="text-small font-medium text-bad">Шлюз банка не работает</p>
+                    <p className="text-small font-medium text-bad">
+                      {models.via === OPENROUTER ? "Модели не настроены" : "Шлюз банка не работает"}
+                    </p>
                     <p className="mt-1 break-words text-small text-fg-2">{models.problem}</p>
                     <p className="mt-1 text-small text-fg-3">
-                      Пока шлюз не исправлен, разговоры никуда не отправляются.
+                      {models.via === OPENROUTER
+                        ? "Пока ключа нет, разговоры никуда не отправляются."
+                        : "Пока шлюз не исправлен, разговоры никуда не отправляются."}
                     </p>
                   </div>
                 )}
@@ -59,12 +64,12 @@ const Address = ({ children }: { children: string }) => (
   <span className="select-all font-mono text-small text-fg-2">{children}</span>
 );
 
-/** Where the customers' conversations go — the bank's gateway, OpenRouter through Pi, or an endpoint's address — and, where it matters, where the gateway's certificates go. */
+/** Where the customers' conversations go — the bank's gateway, OpenRouter, or an endpoint's address — and, where it matters, where the gateway's certificates go. */
 function Destination({ models }: { models: LabState["models"] }) {
   return (
     <>
       Разговоры уходят в {models.via}.{models.secondVia && <> Вторая проверка — в {models.secondVia}.</>}
-      {(models.via === PI || models.problem) && (
+      {(models.via === OPENROUTER || models.problem) && (
         <>
           {" "}
           Сертификаты шлюза банка — в папке <span className="font-mono">certs/</span>.

@@ -23,7 +23,7 @@ class Identity(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 print('listening on', os.environ['APP_PORT'], flush=True)
-keys = ('LAB_MODEL_KEY', 'LAB_SECOND_KEY', 'PI_PROXY', 'AGENT_LAB_GATEWAY')
+keys = ('LAB_MODEL_KEY', 'LAB_SECOND_KEY', 'OPENROUTER_API_KEY', 'AGENT_LAB_GATEWAY')
 print('lab keys', sorted(k for k in os.environ if k.startswith(keys)), flush=True)
 print('own settings', os.environ.get('SBE_TOOL_NAME_CARD'), flush=True)
 http.server.HTTPServer(('127.0.0.1', int(os.environ['APP_PORT'])), Identity).serve_forever()
@@ -67,7 +67,7 @@ class CodeAgentTests(unittest.IsolatedAsyncioTestCase):
         secrets = {
             'LAB_MODEL_KEY': 'sk-or-main',
             'LAB_SECOND_KEY': 'sk-or-second',
-            'PI_PROXY_TOKEN': 'bridge-token',
+            'OPENROUTER_API_KEY': 'sk-or-lab',
             'AGENT_LAB_GATEWAY_KEY_PATH': '/certs/client.key',
             'SBE_TOOL_NAME_CARD': 'card-tool',  # the agent's own setting reaches it
         }

@@ -20,8 +20,8 @@ START_TIMEOUT = 180
 # their processes have not bound yet.
 _HELD: set[int] = set()
 # The Lab's own keys stay with the Lab: the agent's code, and every log it writes, never holds the means to spend the
-# Lab's models (the model keys, the Pi bridges' token) or to call the bank's gateway as the Lab.
-PRIVATE = ('LAB_MODEL_KEY', 'LAB_SECOND_KEY', 'PI_PROXY_TOKEN')
+# Lab's models (its model keys, OpenRouter's) or to call the bank's gateway as the Lab.
+PRIVATE = ('LAB_MODEL_KEY', 'LAB_SECOND_KEY', 'OPENROUTER_API_KEY')
 PRIVATE_PREFIX = 'AGENT_LAB_GATEWAY_'
 
 

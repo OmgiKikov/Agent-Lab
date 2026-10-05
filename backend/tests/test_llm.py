@@ -339,14 +339,14 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
 
 class DefaultModelsTests(unittest.TestCase):
     def second(self, value: str = 'llm.second_judge()', **extra: str) -> str:
-        """What the value is in a fresh process with only these LAB_*/PI_* settings."""
+        """What the value is in a fresh process with only these LAB_* and OpenRouter settings."""
         import os
         import subprocess
         import sys
         import tempfile
 
         with tempfile.TemporaryDirectory() as folder:
-            env = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'PI_'))}
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'OPENROUTER_'))}
             env.update(LAB_DATA=folder, LAB_CERTS=folder, AGENT_LAB_GATEWAY_FILE=f'{folder}/none.json', **extra)
             script = f'from lab import llm; print({value})'
             done = subprocess.run([sys.executable, '-c', script], env=env, capture_output=True, text=True, check=True)
@@ -355,7 +355,7 @@ class DefaultModelsTests(unittest.TestCase):
     def test_one_model_by_default_and_a_second_vendor_only_when_named(self) -> None:
         self.assertEqual(self.second(), 'None')
         self.assertEqual(
-            self.second(LAB_SECOND_MODEL='openai/gpt-5.2'), "('http://127.0.0.1:11437/v1', 'openai/gpt-5.2')"
+            self.second(LAB_SECOND_MODEL='openai/gpt-5.2'), "('https://openrouter.ai/api/v1', 'openai/gpt-5.2')"
         )
 
     def test_the_second_judge_goes_where_the_main_one_goes_unless_named(self) -> None:
@@ -371,7 +371,15 @@ class DefaultModelsTests(unittest.TestCase):
         self.assertEqual(self.second('llm.SECOND_KEY', **elsewhere), 'None')
         self.assertEqual(self.second('llm.SECOND_KEY', **elsewhere, LAB_SECOND_KEY='sk-second'), 'sk-second')
         self.assertEqual(self.second('llm.SECOND_KEY', **main), 'sk-main')  # the same address
-        self.assertEqual(self.second('llm.SECOND_KEY', LAB_SECOND_MODEL='x', PI_PROXY_TOKEN='launch'), 'launch')
+
+    def test_openrouter_is_the_endpoint_without_another_and_its_key_goes_only_there(self) -> None:
+        self.assertEqual(self.second('llm.MAIN[0]'), 'https://openrouter.ai/api/v1')
+        self.assertEqual(self.second('llm.API_KEY', OPENROUTER_API_KEY='sk-or'), 'sk-or')
+        self.assertEqual(self.second('llm.SECOND_KEY', LAB_SECOND_MODEL='x', OPENROUTER_API_KEY='sk-or'), 'sk-or')
+        own = {'LAB_MODEL_URL': 'http://models.bank.test/v1', 'OPENROUTER_API_KEY': 'sk-or'}
+        self.assertEqual(self.second('llm.API_KEY', **own), 'None')  # OpenRouter's key never goes to another host
+        self.assertEqual(self.second('llm.describe()["problem"]'), llm.NO_KEY)
+        self.assertEqual(self.second('llm.describe()["problem"]', OPENROUTER_API_KEY='sk-or'), 'None')
 
 
 class DescribeTests(unittest.TestCase):
@@ -387,8 +395,8 @@ class DescribeTests(unittest.TestCase):
 
     def test_the_settings_say_where_the_conversations_go(self) -> None:
         self.assertEqual(self.via((llm.GATEWAY, 'glm')), ('шлюз банка', None))
-        pi = ('http://127.0.0.1:11436/v1', 'glm'), ('http://127.0.0.1:11437/v1', 'gpt')
-        self.assertEqual(self.via(*pi), ('OpenRouter через Pi', None))
+        openrouter = (llm.OPENROUTER, 'z-ai/glm-5.3'), (llm.OPENROUTER, 'openai/gpt-5.2')
+        self.assertEqual(self.via(*openrouter), ('OpenRouter', None))
         self.assertEqual(self.via(('https://user:secret@llm.bank.test:8443/v1', 'glm')), ('llm.bank.test:8443', None))
         elsewhere = ('https://llm.bank.test/v1', 'glm'), ('https://api.vendor.test/v1', 'gpt')
         self.assertEqual(self.via(*elsewhere), ('llm.bank.test', 'api.vendor.test'))
@@ -416,6 +424,53 @@ class KeyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             seen, [('a.test', 'Bearer sk-main'), ('b.test', None), ('c.test', None), ('b.test', 'Bearer sk-second')]
         )
+
+
+class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_openrouter_is_asked_with_its_key_and_a_short_reasoning(self):
+        seen = []
+
+        def handler(request):
+            seen.append((str(request.url), request.headers.get('Authorization'), json.loads(request.content)))
+            return json_response(ANSWER)
+
+        endpoint = (llm.OPENROUTER, 'z-ai/glm-5.3')
+        with (
+            patch.object(llm, 'MAIN', endpoint),
+            patch.object(llm, 'SECOND', endpoint),
+            patch.object(llm, 'API_KEY', 'sk-or'),
+            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
+        ):
+            await llm.chat('system', 'question')
+        url, key, body = seen[0]
+        self.assertEqual((url, key), ('https://openrouter.ai/api/v1/chat/completions', 'Bearer sk-or'))
+        self.assertEqual((body['model'], body['reasoning']), ('z-ai/glm-5.3', {'effort': 'low'}))
+
+    async def test_without_its_key_no_conversation_is_sent_and_the_check_says_what_to_set(self):
+        endpoint = (llm.OPENROUTER, 'z-ai/glm-5.3')
+        sent = AsyncMock(side_effect=AssertionError('a conversation was sent without a key'))
+        with (
+            patch.object(llm, 'MAIN', endpoint),
+            patch.object(llm, 'SECOND', endpoint),
+            patch.object(llm, 'API_KEY', None),
+            patch.object(llm.httpx.AsyncClient, 'post', sent),
+        ):
+            with self.assertRaises(llm.ModelError) as refused:
+                await llm.chat('system', 'question')
+            checked = await llm.check(endpoint)
+        self.assertEqual(str(refused.exception), llm.NO_KEY)
+        self.assertEqual(checked, {'ok': False, 'error': llm.NO_KEY})
+
+    async def test_another_endpoint_gets_no_reasoning_setting_it_may_not_know(self):
+        seen = []
+
+        def handler(request):
+            seen.append(json.loads(request.content))
+            return json_response(ANSWER)
+
+        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            await llm.chat('system', 'question', endpoint=('http://models.bank.test/v1', 'glm'))
+        self.assertNotIn('reasoning', seen[0])
 
 
 class GlmReplyTests(unittest.TestCase):

@@ -20,9 +20,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-# Models: LAB_MODEL_URL; else the bank's gateway when certs/url.txt (or its settings) set it up; else Pi bridges to
-# OpenRouter. A gateway set up but broken is never replaced by OpenRouter: the reason is printed, the app still starts
-# and shows it, and the conversations go nowhere until it is fixed.
+# Models: LAB_MODEL_URL; else the bank's gateway when certs/url.txt (or its settings) set it up; else OpenRouter, with
+# its key in OPENROUTER_API_KEY. A gateway set up but broken is never replaced by OpenRouter: the reason is printed, the
+# app still starts and shows it, and the conversations go nowhere until it is fixed. So does OpenRouter without a key.
 if [ -n "${LAB_MODEL_URL:-}" ]; then
   echo "Модели: endpoint из LAB_MODEL_URL"
 else
@@ -31,33 +31,19 @@ print(gateway.problem() or ("ready" if gateway.configured() else "absent"))')" |
     LAB_GATEWAY="сертификаты не проверились, ошибка выше"
   case "$LAB_GATEWAY" in
   absent)
-    (cd backend/bridge && npm ci --silent)
-    # A new token for each start, shared by the bridges and the backend: no other process spends OpenRouter through
-    # them. A bridge already running is used only with the token it was given (PI_PROXY_TOKEN set by hand).
-    LAB_BRIDGES_REUSED="${PI_PROXY_TOKEN:+yes}"
-    PI_PROXY_TOKEN="${PI_PROXY_TOKEN:-$("$LAB_PYTHON" -c 'import secrets; print(secrets.token_urlsafe(32))')}"
-    export PI_PROXY_TOKEN
-    model_bridge() {
-      if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$1/health"; then
-        [ -n "$LAB_BRIDGES_REUSED" ] && return
-        echo "Порт $1 занят (мост Pi прежнего запуска?): остановите его, у этого запуска свой токен." >&2
-        exit 1
-      fi
-      PI_PROXY_PORT="$1" PI_PROXY_CONCURRENCY=6 PI_JUDGE_PROVIDER="${LAB_PI_PROVIDER:-openrouter}" PI_JUDGE_MODEL="$2" \
-        "$LAB_PYTHON" backend/bridge/pi_bridge.py >>"$LAB_RUNTIME/$3" 2>&1 &
-      LAB_OWNED_PIDS="$LAB_OWNED_PIDS $!"
-    }
-    model_bridge 11436 "${LAB_PI_MODEL:-z-ai/glm-5.3}" bridge.log
-    # A second judge of another vendor only when named: LAB_SECOND_MODEL=openai/gpt-5.2
-    if [ -n "${LAB_SECOND_MODEL:-}" ]; then model_bridge 11437 "$LAB_SECOND_MODEL" bridge-second.log; fi
-    echo "Модели: OpenRouter через Pi"
+    if [ -n "${OPENROUTER_API_KEY:-}${LAB_MODEL_KEY:-}" ]; then
+      echo "Модели: OpenRouter"
+    else
+      echo "Модели не настроены: задайте OPENROUTER_API_KEY или LAB_MODEL_URL, либо положите настройки шлюза в certs/." >&2
+      echo "Разговоры никуда не уходят. Причина видна и в «Настройках»." >&2
+    fi
     ;;
   ready)
     echo "Модели: шлюз банка (certs/)"
     ;;
   *)
     echo "Шлюз банка не работает: $LAB_GATEWAY" >&2
-    echo "Pi и OpenRouter не запускаются: разговоры уходят только в шлюз. Причина видна и в «Настройках»." >&2
+    echo "OpenRouter не подключается: разговоры уходят только в шлюз. Причина видна и в «Настройках»." >&2
     ;;
   esac
 fi

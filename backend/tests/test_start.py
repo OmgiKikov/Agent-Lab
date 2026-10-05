@@ -1,5 +1,5 @@
 """bin/start.sh as a person runs it: where the conversations go is decided here. uv and npm are stand-ins that note how
-they were called; the backend, the certificates' probe and the Pi bridge run for real (Pi itself is a stand-in)."""
+they were called; the backend and the certificates' probe run for real. No test sends a conversation anywhere."""
 
 import os
 import queue
@@ -62,7 +62,7 @@ class StartTests(unittest.TestCase):
 
     def start(self, **settings: str) -> str:
         """What bin/start.sh printed up to the address of the page; it keeps running until the test ends."""
-        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'PI_', 'AGENT_LAB'))}
+        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'OPENROUTER_', 'AGENT_LAB'))}
         environment.update(
             HOME=str(self.folder),
             PATH=f'{self.tools}:{environment["PATH"]}',
@@ -104,32 +104,38 @@ class StartTests(unittest.TestCase):
         reader.join(10)
         process.stdout.close()
 
-    def test_broken_certificates_start_no_pi_and_the_page_says_why(self) -> None:
+    def state(self) -> dict:
+        ready(f'http://127.0.0.1:{self.port}/health')
+        return httpx.get(f'http://127.0.0.1:{self.port}/api/state', timeout=10, trust_env=False).json()
+
+    def test_broken_certificates_send_nothing_to_openrouter_and_the_page_says_why(self) -> None:
         (self.certs / 'url.txt').write_text('')
-        printed = self.start()
+        printed = self.start(OPENROUTER_API_KEY='sk-or-test')
         self.assertIn('Шлюз банка не работает: ', printed)
         self.assertIn('url.txt пустой', printed)
-        self.assertNotIn('OpenRouter через Pi', printed)
+        self.assertNotIn('Модели: OpenRouter', printed)
         self.assertIn(f'Agent Lab: http://127.0.0.1:{self.port}/\n', printed)
-        self.assertNotIn('backend/bridge', (self.folder / 'calls').read_text())  # Pi's npm ci never ran
-        ready(f'http://127.0.0.1:{self.port}/health')
-        state = httpx.get(f'http://127.0.0.1:{self.port}/api/state', timeout=10, trust_env=False).json()
-        self.assertEqual(state['models']['via'], 'шлюз банка')
-        self.assertIn('url.txt пустой', state['models']['problem'])
-        self.assertFalse((self.folder / 'data/bridge.log').exists())  # no bridge was started
+        models = self.state()['models']
+        self.assertEqual(models['via'], 'шлюз банка')
+        self.assertIn('url.txt пустой', models['problem'])
 
-    @unittest.skipIf(busy(11436), 'a Pi bridge of another start listens on 11436')
-    def test_the_bridges_and_the_backend_share_a_token_of_this_start(self) -> None:
-        pi = self.tool('pi', 'echo готов')
-        self.assertIn('Модели: OpenRouter через Pi', self.start(PI_BIN=str(pi)))
-        ready('http://127.0.0.1:11436/health')
-        body = {'messages': [{'role': 'user', 'content': 'Проверка связи'}]}
-        public = {'Authorization': 'Bearer pi-local-bridge'}
-        bridge = httpx.post('http://127.0.0.1:11436/v1/chat/completions', json=body, headers=public, trust_env=False)
-        self.assertEqual(bridge.status_code, 401)
-        ready(f'http://127.0.0.1:{self.port}/health')
+    def test_without_the_gateway_the_lab_calls_openrouter_itself(self) -> None:
+        printed = self.start(OPENROUTER_API_KEY='sk-or-test')
+        self.assertIn('Модели: OpenRouter\n', printed)
+        self.assertEqual(self.state()['models']['via'], 'OpenRouter')
+        self.assertIsNone(self.state()['models']['problem'])
+        self.assertEqual(
+            [line for line in (self.folder / 'calls').read_text().splitlines() if line.startswith('npm')],
+            [f'npm {ROOT / "frontend"} ci --silent', f'npm {ROOT / "frontend"} run build'],
+        )  # nothing else is installed for the models
+
+    def test_without_a_key_nothing_is_sent_and_the_page_says_what_to_set(self) -> None:
+        printed = self.start()
+        self.assertIn('Модели не настроены: задайте OPENROUTER_API_KEY', printed)
+        self.assertIn('Нет ключа OpenRouter', self.state()['models']['problem'])
         page = {'Origin': f'http://127.0.0.1:{self.port}'}
         checked = httpx.post(
             f'http://127.0.0.1:{self.port}/api/models/check', headers=page, timeout=60, trust_env=False
-        )
-        self.assertEqual(checked.json()['main'], {'ok': True})
+        ).json()
+        self.assertFalse(checked['main']['ok'])
+        self.assertIn('OPENROUTER_API_KEY', checked['main']['error'])
