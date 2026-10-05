@@ -6,6 +6,7 @@ import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
 import { count, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
+import { previousOf } from "../../lab/compare";
 import { checkedIn } from "../../lab/problemReport";
 import { codeSources } from "../../lab/tone";
 import { Button, buttonClass } from "../../ui/Button";
@@ -13,6 +14,7 @@ import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
+import { useComparison } from "./Compare";
 
 const SIZES = [100, 200, 300];
 
@@ -81,11 +83,15 @@ export function useAssess(onStarted?: () => void) {
 /**
  * «Проверить снова» of accuracy: by the same criteria, how many conversations and one button; or «Извлечь критерии
  * заново» when the agent has changed. Only this check's result is replaced. Its criteria come from the agent's code:
- * opened before the code was read (⌘K «Проверить точность»), it says to read the code first, and nothing starts.
+ * opened before the code was read (⌘K «Проверить точность»), it says to read the code first, and nothing starts. With
+ * no criteria to keep — no result, and no previous check whose criteria a new export kept — the check extracts them:
+ * the sheet says so, not «те же, что в прошлый раз».
  */
 export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state } = useLabState();
   const { data } = useCriteria("code");
+  const previous = previousOf(useComparison("code"), state?.logs.updatedAt);
+  const fresh = !!state && !state.checks.code && !previous?.newExport;
   const { sizes, size, setSize } = useSampleSize();
   const { start, starting } = useAssess(onClose);
   const criteria = data ? checkedIn(data, "log").length : 0;
@@ -104,14 +110,18 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
     <Sheet
       open={open}
       onClose={onClose}
-      title="Проверить точность снова"
+      title={fresh ? "Проверить точность" : "Проверить точность снова"}
       sub="Модель проверит разговоры выгрузки по критериям из кода агента. Сам агент не запускается."
     >
       <div className="space-y-6 px-5 py-5">
         {code ? (
           <p className="text-read text-fg-2">
             В выгрузке {count(total, "разговор", "разговора", "разговоров")}.{" "}
-            {criteria ? `Критерии те же, их ${criteria}.` : "Критерии те же, что в прошлый раз."}
+            {fresh
+              ? "Модель извлечёт критерии из кода агента и проверит по ним разговоры."
+              : criteria
+                ? `Критерии те же, их ${criteria}.`
+                : "Критерии те же, что в прошлый раз."}
           </p>
         ) : (
           <div>
@@ -136,7 +146,8 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
           </Button>
           {why && <span className="text-small text-fg-3">{why}</span>}
         </div>
-        <div className="border-t border-line pt-5">
+        {/* A first check extracts the criteria anyway: nothing to extract «заново». */}
+        <div className={cn("border-t border-line pt-5", fresh && "hidden")}>
           <p className="max-w-[56ch] text-body text-fg-2">
             Если у агента новые инструкции или инструменты, извлеките критерии заново. Счёт, ссылки на проблемы и ваши
             ответы начнутся с нуля{deck ? ", сценарии из точности сбросятся" : ""}. Итог tone of voice не изменится.
