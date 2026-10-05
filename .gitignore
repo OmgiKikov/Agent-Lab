@@ -18,6 +18,10 @@ __pycache__/
 /frontend/node_modules/
 /frontend/dist/
 .DS_Store
+# Left at the root by the removed workshop/ app.
+/node_modules/
+/dist/
+/.cache/
 
 # Earlier experiments (LangWatch, Latitude, FutureAGI, review UI, old scripts), kept on this computer only.
 /archive/
