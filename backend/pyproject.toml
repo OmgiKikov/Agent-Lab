@@ -39,8 +39,6 @@ extend-immutable-calls = ["fastapi.Body"]
 max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
-# Prompts are prose: one sentence per line.
-"lab/prompts.py" = ["E501"]
 # CLI stdout is a machine-readable migration report.
 "lab/migrate.py" = ["T201"]
 # Flexible mock/fixture call signatures are not exported production contracts.

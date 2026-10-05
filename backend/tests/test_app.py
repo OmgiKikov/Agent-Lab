@@ -42,7 +42,7 @@ class HostingTests(unittest.IsolatedAsyncioTestCase):
         assert 'job' in (await client.get('/api/state')).json()
         assert (await client.get('/api/unknown')).status_code == 404
         assert (await client.get('/api')).status_code == 404
-        with patch.object(api.llm, 'check', new=AsyncMock(return_value={'ok': True})) as check:
+        with patch.object(api.models, 'check', new=AsyncMock(return_value={'ok': True})) as check:
             for origin in ('https://example.com', 'http://localhost.example.com', 'null', 'http://['):
                 response = await client.post('/api/models/check', headers={'Origin': origin})
                 assert response.status_code == 403, (origin, response.text)
@@ -72,7 +72,7 @@ class HostingTests(unittest.IsolatedAsyncioTestCase):
         """Jupyter, a stand's Swagger or `python -m http.server` is another origin on this computer: its page may post
         a simple form or text/plain body, which replaces the export or starts paid work."""
         client = self.client(built=False, base_url='http://127.0.0.1:5899')
-        with patch.object(api.llm, 'check', new=AsyncMock(return_value={'ok': True})) as check:
+        with patch.object(api.models, 'check', new=AsyncMock(return_value={'ok': True})) as check:
             others = (
                 'http://localhost:8888',
                 'http://127.0.0.1:5900',

@@ -11,21 +11,18 @@ import uuid
 from collections import Counter
 from collections.abc import Callable
 
-from . import checks, config, history, judge, llm, logs, quotes, store
+from . import checks, config, history, logs, models, quotes, store
 from .context import sources
-from .prompts import ASSIGN, PLAN
+from .domain import export, verdicts
+from .roles import judge, planner
 
 RESULT = checks.result(checks.CODE)  # discover.json: the accuracy result; tone of voice keeps its own (tone.RESULT)
 SEED = 20260928  # the same sample of conversations in every audit
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
 TONE = checks.TONE_OF_VOICE  # tone.KIND: the kind of the communication rules among the sources
-OBSERVATIONS = ('reply', 'tool', 'state')
 UNANSWERED = 'Модель проверки не ответила ни по одному разговору.'
 # Every criterion the planner wrote cited words the agent's code does not have: there is nothing to check by.
 UNGROUNDED = 'Ни один критерий не подтвердился дословной цитатой из кода агента.'
-# One answer of the planner places 100–300 conversations: one it leaves out is in no topic and counts as «не удалось
-# проверить» (run: unassigned), one it repeats stays in its first topic. An answer that places fewer is asked again.
-PLACED = 0.9
 
 
 def sample(count: int) -> list[dict]:
@@ -44,7 +41,7 @@ def conversation(dialogue: dict) -> list[dict]:
     return [
         {'role': 'CUSTOMER', 'text': m['content']}
         if m['role'] == 'user'
-        else {'role': 'AGENT', 'text': logs.as_seen(m['content'])}
+        else {'role': 'AGENT', 'text': export.as_seen(m['content'])}
         for m in dialogue['messages']
     ]
 
@@ -79,40 +76,12 @@ def ground(topics: list[dict], srcs: list[dict]) -> tuple[list[dict], int]:
     return grounded, dropped
 
 
-def _parse_topics(value: dict, dialogues: list[dict]) -> dict:
-    topics = value.get('topics')
-    if not isinstance(topics, list) or not topics:
-        raise ValueError('expected business topics')
-    assignments = []
-    for topic in topics:
-        if not isinstance(topic, dict) or not isinstance(topic.get('title'), str) or not topic['title'].strip():
-            raise ValueError('topic needs a title')
-        if not isinstance(topic.get('rules'), list) or not isinstance(topic.get('dialogueIds'), list):
-            raise ValueError('topic needs criteria and conversation assignments')
-        for rule in topic['rules']:
-            if not isinstance(rule, dict) or rule.get('observation') not in OBSERVATIONS:
-                raise ValueError('criterion needs a supported observation')
-            for field in ('text', 'sourceId', 'quote', 'condition', 'acceptable'):
-                if not isinstance(rule.get(field), str):
-                    raise ValueError(f'criterion needs {field}')
-            if not rule['text'].strip() or not rule['sourceId'].strip() or not rule['quote'].strip():
-                raise ValueError('criterion needs text and source evidence')
-        assignments.extend(topic['dialogueIds'])
-    expected = set(short_ids(dialogues))
-    if not all(isinstance(item, str) for item in assignments):
-        raise ValueError('conversation assignment must be an ID')
-    if len(set(assignments) & expected) < PLACED * len(expected):
-        raise ValueError('assign every conversation exactly once')
-    return value
-
-
 async def plan_topics(srcs: list[dict], dialogues: list[dict]) -> tuple[list[dict], int]:
-    """New topics and rules from the sources; every sampled conversation is put into one topic."""
-
-    payload = {'task': TASK, 'sources': srcs, 'dialogues': requests(dialogues)}
-    answer = await llm.structured(PLAN, payload, parse=lambda value: _parse_topics(value, dialogues))
-    plan = answer.value
-    topics, dropped = ground(plan['topics'], srcs)
+    """New topics and rules from the sources; every sampled conversation is put into one topic. A conversation the
+    planner left out is in no topic and counts as «не удалось проверить» (run: unassigned); one it repeated stays in
+    its first topic."""
+    answer = await planner.plan(TASK, srcs, requests(dialogues))
+    topics, dropped = ground(answer.value, srcs)
     topics = [t for t in topics if t['rules']]
     real, placed = short_ids(dialogues), set()
     for topic in topics:
@@ -128,28 +97,10 @@ async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
     new = [d for d in dialogues if str(d['id']) not in known]
     topics = [dict(t, dialogueIds=[]) for t in previous['topics']]
     if new:
-        payload = {'topics': [{'id': t['id'], 'title': t['title']} for t in topics], 'dialogues': requests(new)}
-        real, ids = short_ids(new), {t['id'] for t in topics}
-
-        def placed(assignment: object) -> bool:
-            if not isinstance(assignment, dict):
-                return False
-            dialogue_id, topic_id = assignment.get('dialogueId'), assignment.get('topicId')
-            return (
-                isinstance(dialogue_id, str) and dialogue_id in real and isinstance(topic_id, str) and topic_id in ids
-            )
-
-        def parse(value: dict) -> dict:
-            assignments = value.get('assignments')
-            if not isinstance(assignments, list):
-                raise ValueError('assign every new conversation exactly once')
-            if len({a['dialogueId'] for a in assignments if placed(a)}) < PLACED * len(real):
-                raise ValueError('assign every new conversation exactly once to a known topic')
-            return value
-
-        answer = await llm.structured(ASSIGN, payload, parse=parse)
-        for a in filter(placed, answer.value['assignments']):
-            known.setdefault(real[a['dialogueId']], a['topicId'])
+        real = short_ids(new)
+        answer = await planner.place(topics, requests(new))
+        for request, topic_id in answer.value:
+            known.setdefault(real[request], topic_id)
     for topic in topics:
         topic['dialogueIds'] = [str(d['id']) for d in dialogues if known.get(str(d['id'])) == topic['id']]
     return topics
@@ -159,11 +110,11 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
     rules, shown = topic['rules'], conversation(dialogue)
     try:
         verdict = await judge.log_verdict(rules, shown)
-        rows, status, model = verdict.rows, verdict.status, verdict.model
+        rows, status, model, version = verdict.rows, verdict.status, verdict.model, verdict.version
         second, error = await judge.second_opinion(judge.log_verdict, rules, shown), None
-    except llm.ModelError as exc:
-        rows = judge.checked([], rules, '')
-        status, second, error, model = judge.verdict_of(rows), None, str(exc), None
+    except models.ModelError as exc:
+        rows = verdicts.checked([], rules, '')
+        status, second, error, model, version = verdicts.verdict_of(rows), None, str(exc), None, None
     result = {
         'dialogueId': dialogue['id'],
         'topicId': topic['id'],
@@ -173,6 +124,7 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
         'opening': dialogue['messages'][0]['content'],
         'error': error,
         'model': model,
+        'judgeVersion': version,
     }
     return result
 
@@ -292,6 +244,13 @@ def summarize(results: list[dict], topics: list[dict], sampled: int | None = Non
 
 
 async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None, replan: bool = False) -> dict:
+    """A check of Точность: its calls to the models are about it in the journal (models.about)."""
+    check_id = uuid.uuid4().hex
+    with models.about(f'check:{check_id}'):
+        return await _run(check_id, count, progress, replan)
+
+
+async def _run(check_id: str, count: int, progress: Callable[..., None], replan: bool) -> dict:
     # The criteria come from the previous result, else from the ones a new export kept (checks.CODE_CRITERIA).
     result_before = store.load(RESULT) or {}
     previous = result_before or store.load(checks.CODE_CRITERIA) or {}
@@ -336,11 +295,11 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     rule_count = Counter(rule.get('sourceId') for topic in topics for rule in topic['rules'])
     value = {
         # The check's own id and the conversations it judged: its record in the history (accuracy_history.commit).
-        'checkId': uuid.uuid4().hex,
+        'checkId': check_id,
         'datasetFingerprint': history.dataset_fingerprint([dialogue for dialogue, _ in todo]),
         'startedAt': started,
         'finishedAt': store.now(),
-        'model': llm.models_used(results),
+        'model': models.models_used(results),
         'rulesSince': rules_since,
         'sources': [
             {

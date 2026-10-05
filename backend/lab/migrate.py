@@ -5,14 +5,15 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 
-from . import checks, config, discover, judge, logs, registry, store
+from . import checks, config, discover, logs, registry, store
+from .domain import verdicts
 from .metric import metric
 
 
 def _recompute_verdict(value: dict) -> tuple[int, int]:
     """Reaggregate existing evidence; migration never asks a model for new evidence."""
     changed = 0
-    status = judge.verdict_of(value.get('rules') or [])
+    status = verdicts.verdict_of(value.get('rules') or [])
     if status != value.get('status'):
         changed += 1
     reset = int(bool(changed and value.get('review') in ('agree', 'disagree')))

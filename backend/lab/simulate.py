@@ -7,16 +7,17 @@ from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
 
-from . import agents, cards, checks, jobs, judge, llm, personas, store
+from . import agents, cards, checks, jobs, judge, models, personas, store
 from .agents import world
-from .prompts import PERSONA_OPENING, SIMULATOR
+from .domain import world as scenario_world
+from .roles import customer
 from .transcript import with_buttons
 
 MAX_AGENT_TURNS = 3
 PARALLEL = 4
-END = '[КОНЕЦ]'
 NO_REPLIES = 'Агент не ответил ни в одном разговоре'
-JUDGED = ('status', 'rules', 'model', 'second', 'error', 'criteria')  # what a re-judge changes in a conversation
+# What a re-judge changes in a conversation.
+JUDGED = ('status', 'rules', 'model', 'judgeVersion', 'second', 'error', 'criteria')
 Progress = Callable[..., None]
 
 
@@ -25,17 +26,8 @@ async def customer_says(card: dict, conversation: list[dict], details: str = '',
         ('КЛИЕНТ (это ты): ' if message['role'] == 'customer' else 'АГЕНТ: ') + with_buttons(message)
         for message in conversation
     )
-    profile = ''
-    if details:
-        profile = f'Реквизиты (называй их, если агент спросит номер терминала, организацию или ИНН): {details}'
-    request = (
-        f'Переписка в чате:\n\n{transcript}\n\n'
-        'Напиши следующую реплику клиента в ответ на последнее сообщение агента или [КОНЕЦ].'
-    )
-    manner = personas.style(persona)
-    manner = f'Твоя манера общения (она важнее правил о длине и стиле ниже): {manner}' if manner else ''
-    answer = await llm.chat(SIMULATOR.format(situation=card['situation'], profile=profile, persona=manner), request)
-    return answer.value.strip().strip('"«»').strip()
+    answer = await customer.reply(card['situation'], transcript, details, personas.style(persona))
+    return answer.value
 
 
 async def prepare_openings(chosen: list[dict], persona_ids: list[str], progress: Progress) -> None:
@@ -51,8 +43,8 @@ async def prepare_openings(chosen: list[dict], persona_ids: list[str], progress:
     progress(done=0, total=len(missing), message='Переписываем первые реплики под типы клиентов')
 
     async def rewrite(card: dict, key: str) -> None:
-        answer = await llm.chat(PERSONA_OPENING.format(style=personas.style(key)), card['opening'])
-        card.setdefault('openings', {})[key] = answer.value.strip().strip('"«»').strip()
+        answer = await customer.opening(card['opening'], personas.style(key))
+        card.setdefault('openings', {})[key] = answer.value
 
     async with asyncio.TaskGroup() as group:
         for card, key in missing:
@@ -66,8 +58,8 @@ def opening(card: dict, persona: str) -> str:
 
 async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, changed: Callable[[], None]) -> None:
     conversation = item['conversation']
-    test_data = world.overrides(card.get('world')) if agent.mocked else {}
-    details = world.customer_profile(card.get('world')) if test_data else record.get('customer', '')
+    test_data = scenario_world.overrides(card.get('world'), world.templates()) if agent.mocked else {}
+    details = scenario_world.customer_profile(card.get('world')) if test_data else record.get('customer', '')
     # Whether the conversation ran to its end: only such a conversation may be judged again (ended).
     item.update(world=bool(test_data), ended=False)
     persona = item.get('persona') or personas.DEFAULT
@@ -89,13 +81,13 @@ async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, ch
             item['stage'] = f'ход {turn + 1}: клиент пишет'
             changed()
             message, from_log = await customer_says(card, conversation, details, persona), False
-            if END in message or not message:
+            if customer.END in message or not message:
                 break
         item['ended'] = True
         item['stage'] = 'модель оценивает'
         changed()
         await judge.evaluate(card, item)
-    except (agents.AgentError, llm.ModelError) as error:
+    except (agents.AgentError, models.ModelError) as error:
         item.update(status='UNMEASURED', error=str(error))
     item['stage'] = ''
     changed()
@@ -111,7 +103,7 @@ def new_run(key: str, config: dict, label: str, repeats: int, persona_ids: list[
         'customer': config.get('customer', ''),
         'startedAt': store.now(),
         'finishedAt': None,
-        'model': llm.main_model(),
+        'model': models.main_model(),
         'status': 'running',
         'items': [],
         'metric': None,
@@ -169,43 +161,45 @@ async def run(
         progress(run=record['id'], done=done, total=len(plan), message=f'Играем сценарии · {record["targetName"]}')
 
     progress(run=record['id'], done=0, total=len(plan), message=f'Подключаемся к агенту · {config["name"]}')
-    try:
-        await prepare_openings(chosen, persona_ids, progress)
-        async with agents.session(agents.create(key)) as agent:
-            record['version'] = agent.version
-            store.update_run(record['id'], version=agent.version)
-            gate = asyncio.Semaphore(PARALLEL)
+    # The customer's and the judges' calls are about this run in the journal.
+    with models.about(f'run:{record["id"]}'):
+        try:
+            await prepare_openings(chosen, persona_ids, progress)
+            async with agents.session(agents.create(key)) as agent:
+                record['version'] = agent.version
+                store.update_run(record['id'], version=agent.version)
+                gate = asyncio.Semaphore(PARALLEL)
 
-            async def one(card: dict, index: int) -> None:
-                async with gate:
-                    await play(card, agent, record, record['items'][index], lambda: changed(index))
+                async def one(card: dict, index: int) -> None:
+                    async with gate:
+                        await play(card, agent, record, record['items'][index], lambda: changed(index))
 
-            async with asyncio.TaskGroup() as group:
-                for index, (card, _, _) in enumerate(plan):
-                    group.create_task(one(card, index))
-        # A run the agent answered in no conversation has nothing to judge, now or later: it failed, and says why.
-        silent = unanswered(record['items'])
-        record.update(status='failed' if silent else 'done', error=silent)
-    except asyncio.CancelledError:
-        record.update(status='stopped', error='Прогон остановлен')
-        raise
-    except Exception as error:
-        record.update(status='failed', error=jobs.message(error))
-    finally:
-        # What the stop or the failure cut short, with the final status, in one write: not one per conversation.
-        cut = {}
-        for index, item in enumerate(record['items']):
-            if item['status'] == 'RUNNING':
-                item.update(status='UNMEASURED', stage='', error=record['error'])
-                cut[index] = item
-        store.update_items(
-            record['id'],
-            cut,
-            status=record['status'],
-            error=record['error'],
-            finishedAt=store.now(),
-            model=llm.models_used(record['items']),
-        )
+                async with asyncio.TaskGroup() as group:
+                    for index, (card, _, _) in enumerate(plan):
+                        group.create_task(one(card, index))
+            # A run the agent answered in no conversation has nothing to judge, now or later: it failed, and says why.
+            silent = unanswered(record['items'])
+            record.update(status='failed' if silent else 'done', error=silent)
+        except asyncio.CancelledError:
+            record.update(status='stopped', error='Прогон остановлен')
+            raise
+        except Exception as error:
+            record.update(status='failed', error=jobs.message(error))
+        finally:
+            # What the stop or the failure cut short, with the final status, in one write: not one per conversation.
+            cut = {}
+            for index, item in enumerate(record['items']):
+                if item['status'] == 'RUNNING':
+                    item.update(status='UNMEASURED', stage='', error=record['error'])
+                    cut[index] = item
+            store.update_items(
+                record['id'],
+                cut,
+                status=record['status'],
+                error=record['error'],
+                finishedAt=store.now(),
+                model=models.models_used(record['items']),
+            )
     return store.run(record['id'])
 
 
@@ -257,19 +251,20 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
         try:
             await judge.evaluate(item, item)
             item['error'] = None
-        except llm.ModelError as error:
+        except models.ModelError as error:
             failed[str(error)] += 1
         done += 1
         progress(done=done, total=len(items), message='Оцениваем разговоры заново')
 
-    async with asyncio.TaskGroup() as group:
-        for _, item in items:
-            group.create_task(one(item))
+    with models.about(f'run:{record["id"]}'):
+        async with asyncio.TaskGroup() as group:
+            for _, item in items:
+                group.create_task(one(item))
     if failed:
         reason = failed.most_common(1)[0][0]
-        raise llm.ModelError(
+        raise models.ModelError(
             f'Модель не оценила разговоры прогона: {failed.total()}\u00a0из\u00a0{len(items)}. '
             f'Прогон остался прежним. {reason}'
         )
     verdicts = {index: {key: item[key] for key in JUDGED if key in item} for index, item in items}
-    return store.update_items(record['id'], verdicts, rejudgedAt=store.now(), model=llm.models_used(record['items']))
+    return store.update_items(record['id'], verdicts, rejudgedAt=store.now(), model=models.models_used(record['items']))

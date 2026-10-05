@@ -1,0 +1,2 @@
+Assign every dialogue ID to exactly one of the given topics by the customer's business task (what the customer wants to get done).
+If no topic fits well, choose the closest one in business meaning. Return {assignments:[{dialogueId,topicId}]}.

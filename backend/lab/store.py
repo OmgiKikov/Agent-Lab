@@ -16,7 +16,7 @@ from .metric import metric
 
 # The database's user_version once its schema (_set_up) is in place. Raise it with every change to _set_up: a database
 # is set up again only when its user_version differs.
-SCHEMA = 5
+SCHEMA = 6
 # The uploaded dialogues: every write keeps their number beside them (lengths), so the state polled every 1.5 s
 # counts them without reading megabytes of conversations.
 COUNTED = 'logs.json'
@@ -99,6 +99,14 @@ def _set_up(connection: sqlite3.Connection, path: Path) -> None:
             'decision TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (check_id, dialogue_id, rule_id))'
         )
         _save_accuracy_history(connection)
+        # The journal of calls to the models (models.chat): one line per try, never a conversation.
+        connection.execute(
+            'CREATE TABLE IF NOT EXISTS calls ('
+            'id INTEGER PRIMARY KEY, at TEXT NOT NULL, role TEXT, version TEXT, subject TEXT, model TEXT NOT NULL, '
+            'answered_by TEXT, via TEXT NOT NULL, ms INTEGER NOT NULL, input_tokens INTEGER, output_tokens INTEGER, '
+            'cost REAL, outcome TEXT NOT NULL, status INTEGER, detail TEXT)'
+        )
+        connection.execute('CREATE INDEX IF NOT EXISTS calls_by_subject ON calls (subject)')
         connection.execute('CREATE TABLE IF NOT EXISTS lengths (name TEXT PRIMARY KEY, length INTEGER NOT NULL)')
         if _json_functions(connection):
             # Not INSERT OR REPLACE: in a trigger, the conflict policy of the write that fired it would apply.
@@ -181,6 +189,51 @@ def load(name: str, default: Any = None) -> Any:
     with _connection() as connection:
         row = connection.execute('SELECT value FROM documents WHERE name = ?', (name,)).fetchone()
     return json.loads(row[0]) if row else default
+
+
+# The journal's columns by the names its lines carry (models._journal).
+CALL_COLUMNS = {
+    'at': 'at',
+    'role': 'role',
+    'version': 'version',
+    'subject': 'subject',
+    'model': 'model',
+    'answeredBy': 'answered_by',
+    'via': 'via',
+    'ms': 'ms',
+    'inputTokens': 'input_tokens',
+    'outputTokens': 'output_tokens',
+    'cost': 'cost',
+    'outcome': 'outcome',
+    'status': 'status',
+    'detail': 'detail',
+}
+
+
+def journal(line: dict) -> int:
+    """One call to a model in the journal; its id, for the outcome found later (journal_outcome)."""
+    names = ', '.join(CALL_COLUMNS.values())
+    marks = ', '.join('?' for _ in CALL_COLUMNS)
+    with _connection() as connection:
+        cursor = connection.execute(
+            f'INSERT INTO calls ({names}) VALUES ({marks})', [line.get(key) for key in CALL_COLUMNS]
+        )
+        return int(cursor.lastrowid)
+
+
+def journal_outcome(call_id: int, outcome: str, detail: str) -> None:
+    """How a call ended, when it is known only after the answer is read: an answer nobody could use."""
+    with _connection() as connection:
+        connection.execute('UPDATE calls SET outcome = ?, detail = ? WHERE id = ?', (outcome, detail, call_id))
+
+
+def calls(subject: str | None = None) -> list[dict]:
+    """The journal, the oldest call first; only the calls about one subject when it is named."""
+    names = ', '.join(CALL_COLUMNS.values())
+    where, values = ('WHERE subject = ?', (subject,)) if subject is not None else ('', ())
+    with _connection() as connection:
+        rows = connection.execute(f'SELECT id, {names} FROM calls {where} ORDER BY id', values).fetchall()
+    return [{'id': row[0], **dict(zip(CALL_COLUMNS, row[1:], strict=True))} for row in rows]
 
 
 def length(name: str) -> int:

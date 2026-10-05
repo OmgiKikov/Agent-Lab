@@ -22,6 +22,7 @@ import httpx
 
 from .. import config, store
 from ..config import ROOT
+from .completion import Completion, usage
 from .errors import MalformedAnswer, ModelError, refused
 
 FORMAT = 'agent-lab-gateway-1'
@@ -365,8 +366,8 @@ async def auto_models(timeout: httpx.Timeout | float = 30) -> dict:
     return models
 
 
-async def chat(model: str, system: str, messages: list[dict], timeout: httpx.Timeout) -> tuple[str, str]:
-    """(answer, model that answered)."""
+async def chat(model: str, system: str, messages: list[dict], timeout: httpx.Timeout) -> Completion:
+    """The answer, the model that gave it, and its tokens and cost when the gateway names them."""
     if model == 'auto':
         model = (await auto_models(timeout))['model']
     if not model:
@@ -401,4 +402,4 @@ async def chat(model: str, system: str, messages: list[dict], timeout: httpx.Tim
     label = data.get('model', model)
     if not isinstance(label, str) or not label.strip():
         raise MalformedAnswer('Имя модели в ответе шлюза не строка.')
-    return ''.join(part['text'] for part in parts), label
+    return Completion(''.join(part['text'] for part in parts), label, **usage(data))

@@ -11,10 +11,11 @@ import hashlib
 import json
 from collections.abc import Callable, Sequence
 
-from . import checks, llm, logs, quotes, store, tone
+from . import checks, logs, models, quotes, store, tone
 from .agents import world
 from .context import sources
-from .prompts import CARD
+from .roles import scenario as scenario_role
+from .roles import world as world_role
 
 DECK = checks.DECK
 LIMIT = 30
@@ -67,13 +68,6 @@ def remember_openings(openings: dict[str, dict[str, str]]) -> None:
     for card in value.get('cards') or []:
         card.setdefault('openings', {}).update(openings.get(card['id'], {}))
     store.save(DECK, value)
-
-
-def _parse_card(value: dict) -> dict:
-    for field in ('name', 'situation'):
-        if not isinstance(value.get(field), str) or not value[field].strip():
-            raise ValueError(f'card needs {field}')
-    return value
 
 
 def failed_in(result: dict) -> list[str]:
@@ -133,7 +127,7 @@ async def build_card(
     """The card of one conversation. reproduces: the criteria the agent failed in it (pick); the card keeps the ones
     it checks, so a criterion the scenario cannot observe is never said to be reproduced by it."""
     customer = [m['content'] for m in dialogue['messages'] if m['role'] == 'user']
-    answer = await llm.structured(CARD, {'topic': topic['title'], 'customerMessages': customer}, parse=_parse_card)
+    answer = await scenario_role.scenario(topic['title'], customer)
     value = answer.value
     rules = [r for r in topic['rules'] if r['observation'] in ('reply', 'tool')]
     seen = {quotes.normalized(r['quote']) for r in rules}
@@ -154,16 +148,19 @@ async def build_card(
         }
         for r in rules
     ]
-    try:
-        test_data = await world.build(value['situation'], customer)
-    except llm.ModelError:
-        test_data = None
+    test_data, shapes = None, world.templates()
+    if shapes is not None:
+        # A scenario without test data is played against the stand's default answers.
+        try:
+            test_data = (await world_role.world(value.situation, customer, shapes)).value
+        except models.ModelError:
+            test_data = None
     checked = {criterion['id'] for criterion in criteria}
     card = {
         'topic': topic['title'],
         'topicId': topic['id'],
-        'name': value['name'].strip(),
-        'situation': value['situation'].strip(),
+        'name': value.name.strip(),
+        'situation': value.situation.strip(),
         'opening': customer[0],
         'criteria': criteria,
         'origin': origin,
@@ -198,7 +195,7 @@ async def run(check: str, progress: Callable[..., None] = lambda **_: None) -> l
     async def one(index: int, topic: dict, dialogue: dict, origin: str, reproduces: Sequence[str] = ()) -> None:
         try:
             built[index] = await build_card(topic, dialogue, origin, general, reproduces)
-        except llm.ModelError as error:
+        except models.ModelError as error:
             failed.append({'topic': topic['title'], 'dialogueId': str(dialogue['id']), 'error': str(error)})
         missing = f'. Не удалось собрать: {len(failed)}' if failed else ''
         progress(
@@ -210,9 +207,10 @@ async def run(check: str, progress: Callable[..., None] = lambda **_: None) -> l
         )
 
     progress(stage='cards', done=0, total=len(picks), message=BUILDING)
-    async with asyncio.TaskGroup() as tasks:
-        for index, chosen in enumerate(picks):
-            tasks.create_task(one(index, *chosen))
+    with models.about(f'deck:{check}'):
+        async with asyncio.TaskGroup() as tasks:
+            for index, chosen in enumerate(picks):
+                tasks.create_task(one(index, *chosen))
     if not built:
-        raise llm.ModelError(failed[0]['error'])
+        raise models.ModelError(failed[0]['error'])
     return [built[index] for index in sorted(built)]

@@ -17,8 +17,8 @@ from . import (
     compare,
     discover,
     history,
-    llm,
     logs,
+    models,
     personas,
     policy_files,
     problems,
@@ -261,8 +261,8 @@ def state(jobs: Jobs) -> dict:
         result['summary'] = history.with_unmeasured(result['summary'], result.get('sampled'))
     return {
         'job': job,
-        'model': llm.main_model(),
-        'models': llm.describe(),
+        'model': models.main_model(),
+        'models': models.describe(),
         'settings': agents.settings(),
         'sources': source_summary(results[checks.CODE]),
         'sourcesRead': store.load(sources.READ),
@@ -311,10 +311,10 @@ async def check_agent(key: str) -> dict:
 
 @router.post('/api/models/check')
 async def check_models() -> dict:
-    main, endpoint = llm.endpoints().main, llm.second_judge()
+    main, endpoint = models.endpoints().main, models.second_judge()
     if endpoint is None:
-        return {'main': await llm.check(main), 'second': None}
-    main, second = await asyncio.gather(llm.check(main), llm.check(endpoint))
+        return {'main': await models.check(main), 'second': None}
+    main, second = await asyncio.gather(models.check(main), models.check(endpoint))
     return {'main': main, 'second': second}
 
 
@@ -418,7 +418,7 @@ async def propose_severity(jobs: Jobs, payload: SeverityProposeCommand) -> dict:
         progress(message=severity.PROPOSING, check=payload.check)
         error = await severity.propose(payload.check, progress, again=payload.again)
         if error:
-            raise llm.ModelError(error)
+            raise models.ModelError(error)
         return {'severity': store.severity()}
 
     return start(jobs, 'severity', work)
@@ -525,7 +525,7 @@ async def start_cards(jobs: Jobs, payload: CardsCommand | None = Body(default=No
         if check is None:
             raise RuntimeError('Сценарии собираются из найденных ошибок. Сначала проверьте разговоры.')
         deck = await cards.run(check, progress)
-        document = {'check': check, 'createdAt': store.now(), 'model': llm.models_used(deck), 'cards': deck}
+        document = {'check': check, 'createdAt': store.now(), 'model': models.models_used(deck), 'cards': deck}
         store.save(cards.DECK, document)
         return deck
 
@@ -666,7 +666,7 @@ async def tone_advice_command(jobs: Jobs, payload: ToneAdviceCommand) -> dict:
         raise HTTPException(409, 'Подготовка предложения остановлена') from error
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
-    except llm.ModelError as error:
+    except models.ModelError as error:
         raise HTTPException(502, str(error)) from error
 
 

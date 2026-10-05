@@ -7,7 +7,8 @@ from zipfile import ZipFile
 
 import support
 
-from lab import api, config, discover, llm, policy_files, quotes, store, tone
+from lab import api, config, discover, models, policy_files, quotes, store, tone
+from lab.roles import tone as criteria_role
 
 POLICY = """## Главные принципы
 Отказ сам по себе не является нарушением. Не оценивай достоверность фактов.
@@ -83,6 +84,7 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(all(quotes.found(rule['quote'], source['content']) for rule in rules))
 
     def test_generated_criteria_cannot_invent_source_evidence(self):
+        support.lab(self)
         source = tone.policy('rules', 'Обращайтесь к клиенту на вы и не используйте эмодзи.')
         row = {
             'name': 'Обращение',
@@ -91,8 +93,9 @@ class PolicyTests(unittest.TestCase):
             'condition': '',
             'acceptable': '',
         }
-        with self.assertRaises(ValueError):
-            tone._parse({'criteria': [row]}, source)
+        invented = models.Reply(json.dumps({'criteria': [row]}, ensure_ascii=False), 'model-a')
+        with patch.object(models, 'chat', AsyncMock(return_value=invented)), self.assertRaises(models.ModelError):
+            asyncio.run(criteria_role.criteria(source))
 
 
 class JudgingOrderTests(unittest.IsolatedAsyncioTestCase):
@@ -140,9 +143,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
     async def prepared(self):
         response = await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY})
         self.assertEqual(response.status_code, 200, response.text)
-        with patch.object(
-            llm, 'structured', AsyncMock(side_effect=AssertionError('coded policy must not call a model'))
-        ):
+        with patch.object(models, 'chat', AsyncMock(side_effect=AssertionError('coded policy must not call a model'))):
             response = await self.client.post('/api/tone-of-voice/criteria')
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
@@ -259,21 +260,21 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_partial_unknown_is_not_a_successful_tone_check(self):
         """A criterion the judge could not measure keeps the conversation out of the share, for both models: the judge
-        decides it (judge.verdict_of), the tone check counts what it decided."""
+        decides it (verdicts.verdict_of), the tone check counts what it decided."""
         await self.prepared()
 
-        async def answered(system, payload, parse, attempts=2, endpoint=None):
+        async def answered(system, messages, endpoint=None, **kwargs):
             reply = {
                 'rules': [
                     {'ruleId': 'pronouns', 'status': 'PASS', 'reason': 'На вы', 'agentQuote': 'Уточните, пожалуйста'},
                     {'ruleId': 'simple_language', 'status': 'UNKNOWN', 'reason': 'Не по чему судить'},
                 ]
             }
-            return llm.Answer(parse(reply), endpoint[1] if endpoint else 'main')
+            return models.Reply(json.dumps(reply, ensure_ascii=False), endpoint[1] if endpoint else 'main')
 
         with (
-            patch.object(llm, 'structured', answered),
-            patch.object(llm, 'second_judge', return_value=('http://second.test/v1', 'second')),
+            patch.object(models, 'chat', answered),
+            patch.object(models, 'second_judge', return_value=('http://second.test/v1', 'second')),
         ):
             await self.client.post(
                 '/api/tone-of-voice/check', json={'ruleIds': ['pronouns', 'simple_language'], 'count': 1}
@@ -322,7 +323,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await asyncio.Event().wait()
 
-        with patch.object(llm, 'structured', side_effect=generate):
+        with patch.object(models, 'chat', side_effect=generate):
             await self.client.post('/api/tone-of-voice/criteria')
             await entered.wait()
             await self.client.post('/api/job/stop')

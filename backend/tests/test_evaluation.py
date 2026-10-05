@@ -5,13 +5,15 @@ from unittest.mock import AsyncMock, patch
 
 import support
 
-from lab import cards, config, discover, judge, llm, quotes
-from lab.judge_reply import RuleReply
+from lab import cards, config, discover, judge, models, quotes, roles
+from lab.domain import verdicts
 from lab.metric import metric
+from lab.roles import judge as roles_judge
+from lab.roles.judge import RuleReply
 
 
 def completion(value):
-    return llm.Answer(json.dumps(value), 'actual-main')
+    return models.Reply(json.dumps(value), 'actual-main')
 
 
 def criterion(rule_id='r1', observation='reply'):
@@ -39,28 +41,28 @@ class EvaluationTests(unittest.TestCase):
         ]
         for statuses, expected in cases:
             with self.subTest(statuses=statuses):
-                self.assertEqual(judge.verdict_of([{'status': status} for status in statuses]), expected)
-        value = metric([{'cardId': 'one', 'status': judge.verdict_of([verdict(), verdict('r2', 'UNKNOWN')])}])
+                self.assertEqual(verdicts.verdict_of([{'status': status} for status in statuses]), expected)
+        value = metric([{'cardId': 'one', 'status': verdicts.verdict_of([verdict(), verdict('r2', 'UNKNOWN')])}])
         self.assertIsNone(value['accuracy'])
         self.assertEqual(value['unmeasured'], 1)
 
     def test_observation_needs_its_own_evidence(self):
         for observation in ('tool', 'state', 'knowledge'):
             with self.subTest(observation=observation):
-                rows = judge.checked(
+                rows = verdicts.checked(
                     [RuleReply.model_validate(verdict())],
                     [criterion(observation=observation)],
                     'Вернуть терминал в банк',
                 )
                 self.assertEqual(rows[0]['status'], 'UNKNOWN')
                 self.assertEqual(rows[0]['agentQuote'], '')
-        rows = judge.checked(
+        rows = verdicts.checked(
             [RuleReply.model_validate(verdict(status='NOT_APPLICABLE'))], [criterion(observation='tool')], ''
         )
         self.assertEqual(rows[0]['status'], 'NOT_APPLICABLE')
 
     def test_tool_evidence_cannot_ground_a_reply_criterion(self):
-        rows = judge.checked(
+        rows = verdicts.checked(
             [RuleReply.model_validate(verdict(quote='getLkkTariff'))],
             [criterion()],
             'Нужен номер терминала',
@@ -82,12 +84,12 @@ class EvaluationTests(unittest.TestCase):
             ('Вернуть деньги на карту … можно', other),
         ):
             with self.subTest(quote=quote):
-                rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], text)
+                rows = verdicts.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], text)
                 self.assertEqual(rows[0]['status'], 'UNKNOWN')
                 self.assertFalse(quotes.cited(quote, text))
         # Long parts stand, and so does the agent's own «…» quoted whole.
         quote = 'Оформить возврат можно в личном кабинете … деньги вернуть нельзя после закрытия смены'
-        rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], reply)
+        rows = verdicts.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], reply)
         self.assertEqual(rows[0]['status'], 'PASS')
         # A long part that starts right after the «нельзя» it leaves out does not.
         self.assertFalse(quotes.cited('Оформить возврат можно в личном кабинете … после закрытия смены', reply))
@@ -100,7 +102,7 @@ class EvaluationTests(unittest.TestCase):
         for quote in ('можно оплатить картой', 'доступен для возврата', 'обещаем сроки', 'ожно оплатить картой'):
             with self.subTest(quote=quote):
                 self.assertFalse(quotes.cited(quote, reply))
-                rows = judge.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], reply)
+                rows = verdicts.checked([RuleReply.model_validate(verdict(quote=quote))], [criterion()], reply)
                 self.assertEqual(rows[0]['status'], 'UNKNOWN')
         for quote in ('невозможно оплатить картой', 'Не обещаем сроки', 'Терминал недоступен для возврата'):
             with self.subTest(quote=quote):
@@ -149,7 +151,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(judge.knowledge, 'retrieved', side_effect=[first, second]) as retrieve,
-            patch.object(llm, 'chat', model),
+            patch.object(models, 'chat', model),
         ):
             for _ in range(2):
                 item = {'conversation': [{'role': 'agent', 'text': 'Вернуть терминал в банк'}]}
@@ -162,7 +164,9 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         without_goal = {'rules': [verdict()]}
         with_goal = dict(without_goal, customerGoal='Вернуть терминал')
         with (
-            patch.object(llm, 'chat', AsyncMock(side_effect=[completion(without_goal), completion(with_goal)])) as chat,
+            patch.object(
+                models, 'chat', AsyncMock(side_effect=[completion(without_goal), completion(with_goal)])
+            ) as chat,
             patch.object(judge.knowledge, 'retrieved', return_value=[]),
         ):
             result = await judge.run_verdict(
@@ -174,11 +178,11 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_second_judge_preserves_primary_verdict_and_shared_evidence(self):
         async def model(system, messages, *, endpoint=None, **kwargs):
             if endpoint is not None:
-                raise llm.ModelError('second judge unavailable')
+                raise models.ModelError('second judge unavailable')
             return completion({'customerGoal': 'Вернуть терминал', 'rules': [verdict()]})
 
         with (
-            patch.object(llm, 'chat', model),
+            patch.object(models, 'chat', model),
             patch.object(judge.knowledge, 'retrieved', return_value=[]) as retrieve,
         ):
             item = {'conversation': [{'role': 'agent', 'text': 'Вернуть терминал в банк'}]}
@@ -193,7 +197,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
         topic = {'id': 't1', 'rules': [criterion('r1'), criterion('r2')]}
-        with patch.object(judge, 'log_verdict', AsyncMock(side_effect=llm.ModelError('timeout'))):
+        with patch.object(discover.judge, 'log_verdict', AsyncMock(side_effect=models.ModelError('timeout'))):
             result = await discover.judge_dialogue(dialogue, topic)
         self.assertEqual(result['status'], 'UNMEASURED')
         self.assertEqual([row['status'] for row in result['rules']], ['UNKNOWN', 'UNKNOWN'])
@@ -215,7 +219,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             ],
         }
         one = {'model_url': same[0], 'model': same[1], 'second_url': None, 'second_model': None}
-        with config.using(support.changed(self.settings, **one)), patch.object(llm, 'chat', model):
+        with config.using(support.changed(self.settings, **one)), patch.object(models, 'chat', model):
             result = await discover.judge_dialogue(dialogue, {'id': 't1', 'rules': [criterion()]})
         self.assertIsNone(result['second'])
         self.assertEqual(len(calls), 1)
@@ -229,7 +233,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(assigned=assigned):
                 bad = {'topics': [dict(topic, dialogueIds=assigned)]}
                 good = {'topics': [topic]}
-                with patch.object(llm, 'chat', AsyncMock(side_effect=[completion(bad), completion(good)])) as chat:
+                with patch.object(models, 'chat', AsyncMock(side_effect=[completion(bad), completion(good)])) as chat:
                     topics, dropped = await discover.plan_topics([source], [dialogue])
                 self.assertEqual(chat.await_count, 2)
                 self.assertEqual(topics[0]['dialogueIds'], ['stable'])
@@ -244,14 +248,14 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         first = {'title': 'Возврат', 'dialogueIds': [f'd{n}' for n in range(1, 20)], 'rules': [rule]}
         second = {'title': 'Тарифы', 'dialogueIds': ['d1', 'd2'], 'rules': [rule]}
         answer = completion({'topics': [first, second]})
-        with patch.object(llm, 'chat', AsyncMock(return_value=answer)) as chat:
+        with patch.object(models, 'chat', AsyncMock(return_value=answer)) as chat:
             topics, _ = await discover.plan_topics([source], dialogues)
         self.assertEqual(chat.await_count, 1)
         self.assertEqual(topics[0]['dialogueIds'], [f'c{n}' for n in range(19)])
         self.assertEqual(topics[1]['dialogueIds'], [])
         previous = {'topics': [{'id': 't1', 'title': 'Возврат', 'rules': []}], 'results': []}
         assignments = [{'dialogueId': f'd{n}', 'topicId': 't1'} for n in (1, 1, *range(2, 20))]
-        with patch.object(llm, 'chat', AsyncMock(return_value=completion({'assignments': assignments}))) as chat:
+        with patch.object(models, 'chat', AsyncMock(return_value=completion({'assignments': assignments}))) as chat:
             topics = await discover.keep_topics(previous, dialogues)
         self.assertEqual(chat.await_count, 1)
         self.assertEqual(topics[0]['dialogueIds'], [f'c{n}' for n in range(19)])
@@ -261,7 +265,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         previous = {'topics': [{'id': 't1', 'title': 'Возврат', 'rules': []}], 'results': []}
         bad = {'assignments': [{'dialogueId': 'd1', 'topicId': 'unknown'}]}
         good = {'assignments': [{'dialogueId': 'd1', 'topicId': 't1'}]}
-        with patch.object(llm, 'chat', AsyncMock(side_effect=[completion(bad), completion(good)])) as chat:
+        with patch.object(models, 'chat', AsyncMock(side_effect=[completion(bad), completion(good)])) as chat:
             topics = await discover.keep_topics(previous, [dialogue])
         self.assertEqual(chat.await_count, 2)
         self.assertEqual(topics[0]['dialogueIds'], ['stable'])
@@ -284,8 +288,8 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         for answer in invalid:
             with self.subTest(answer=answer):
                 chat = AsyncMock(side_effect=[completion(answer), completion(valid)])
-                with patch.object(llm, 'chat', chat):
-                    result = await judge.log_verdict(
+                with patch.object(models, 'chat', chat):
+                    result = await roles_judge.log_verdict(
                         [criterion()], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}]
                     )
                 self.assertEqual(chat.await_count, 2)
@@ -304,8 +308,8 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         for row in unmeasured:
             with self.subTest(row=row):
                 chat = AsyncMock(return_value=completion({'rules': [verdict(), row]}))
-                with patch.object(llm, 'chat', chat):
-                    result = await judge.log_verdict(
+                with patch.object(models, 'chat', chat):
+                    result = await roles_judge.log_verdict(
                         [criterion(), criterion('r2')], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}]
                     )
                 self.assertEqual(chat.await_count, 1)
@@ -317,8 +321,8 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         for measured in (without_quote, dict(verdict(), reason=None), dict(verdict(status='FAIL'), agentQuote=None)):
             with self.subTest(measured=measured):
                 chat = AsyncMock(side_effect=[completion({'rules': [measured]}), completion(valid)])
-                with patch.object(llm, 'chat', chat):
-                    await judge.log_verdict([criterion()], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}])
+                with patch.object(models, 'chat', chat):
+                    await roles_judge.log_verdict([criterion()], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}])
                 self.assertEqual(chat.await_count, 2)
 
     async def test_the_labs_line_of_buttons_is_never_the_agents_words(self):
@@ -337,15 +341,15 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             ('Нажмите кнопку ниже.', 'FAIL'),
         ):
             answer = {'rules': [verdict('special_characters', 'FAIL', quote)]}
-            with self.subTest(quote=quote), patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))):
-                result = await judge.log_verdict(rules, discover.conversation(dialogue))
+            with self.subTest(quote=quote), patch.object(models, 'chat', AsyncMock(return_value=completion(answer))):
+                result = await roles_judge.log_verdict(rules, discover.conversation(dialogue))
                 self.assertEqual(result.rows[0]['status'], expected)
         played = [{'role': 'agent', 'text': 'Выберите, что сделать дальше.', 'options': ['Позвать оператора']}]
         for quote, expected in (('Позвать оператора', 'PASS'), ('[Кнопки: Позвать оператора]', 'UNMEASURED')):
             answer = {'customerGoal': 'Вернуть терминал', 'rules': [verdict(quote=quote)]}
             with (
                 self.subTest(quote=quote),
-                patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
+                patch.object(models, 'chat', AsyncMock(return_value=completion(answer))),
                 patch.object(judge.knowledge, 'retrieved', return_value=[]),
             ):
                 result = await judge.run_verdict({'criteria': [criterion()]}, played)
@@ -354,19 +358,19 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_verdict_ids_are_retried(self):
         answer = {'rules': [verdict(), verdict()]}
         valid = {'rules': [verdict(), verdict('r2')]}
-        with patch.object(llm, 'chat', AsyncMock(side_effect=[completion(answer), completion(valid)])) as chat:
-            result = await judge.log_verdict(
+        with patch.object(models, 'chat', AsyncMock(side_effect=[completion(answer), completion(valid)])) as chat:
+            result = await roles_judge.log_verdict(
                 [criterion(), criterion('r2')], [{'role': 'AGENT', 'text': 'Вернуть терминал в банк'}]
             )
         self.assertEqual(chat.await_count, 2)
         self.assertEqual([row['ruleId'] for row in result.rows], ['r1', 'r2'])
         self.assertEqual(result.status, 'PASS')
 
-    async def test_structured_retries_non_object_json(self):
+    async def test_an_answer_that_is_no_json_object_is_asked_again(self):
         with patch.object(
-            llm, 'chat', AsyncMock(side_effect=[llm.Answer('[]', 'broken'), completion({'ready': True})])
+            models, 'chat', AsyncMock(side_effect=[models.Reply('[]', 'broken'), completion({'ready': True})])
         ) as chat:
-            answer = await llm.structured('System', {}, parse=lambda value: value)
+            answer = await roles.ask(roles.Role('test', 'System', dict), {})
         self.assertEqual(answer.value, {'ready': True})
         self.assertEqual(answer.model, 'actual-main')
         self.assertEqual(chat.await_count, 2)
@@ -377,7 +381,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         for events, expected in (([], 'UNMEASURED'), ([{'tool': 'Система банка · getLkkTariff'}], 'PASS')):
             with (
                 self.subTest(events=events),
-                patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
+                patch.object(models, 'chat', AsyncMock(return_value=completion(answer))),
                 patch.object(judge.knowledge, 'retrieved', return_value=[]),
             ):
                 result = await judge.run_verdict(card, [{'role': 'agent', 'text': 'getLkkTariff', 'events': events}])
@@ -386,7 +390,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
     async def test_generated_handoff_marker_cannot_replace_missing_reply_evidence(self):
         answer = {'customerGoal': 'Вернуть терминал', 'rules': [verdict(quote='разговор передан оператору')]}
         with (
-            patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
+            patch.object(models, 'chat', AsyncMock(return_value=completion(answer))),
             patch.object(judge.knowledge, 'retrieved', return_value=[]),
         ):
             result = await judge.run_verdict(
@@ -399,7 +403,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         for articles, expected in (([], 'UNMEASURED'), ([{'article': 'a', 'text': 'Вернуть терминал в банк'}], 'FAIL')):
             with (
                 self.subTest(articles=articles),
-                patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))),
+                patch.object(models, 'chat', AsyncMock(return_value=completion(answer))),
                 patch.object(judge.knowledge, 'retrieved', return_value=articles),
             ):
                 result = await judge.run_verdict(
@@ -414,7 +418,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         async def model(system, messages, *, endpoint=None, **kwargs):
             if endpoint is None:
                 await asyncio.sleep(0)
-                raise llm.ModelError('failed')
+                raise models.ModelError('failed')
             try:
                 await asyncio.Event().wait()
             finally:
@@ -422,9 +426,9 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
 
         item = {'conversation': []}
         with (
-            patch.object(llm, 'chat', model),
+            patch.object(models, 'chat', model),
             patch.object(judge.knowledge, 'retrieved', return_value=[]),
-            self.assertRaises(llm.ModelError),
+            self.assertRaises(models.ModelError),
         ):
             await judge.evaluate({'criteria': []}, item)
         self.assertTrue(cancelled.is_set())

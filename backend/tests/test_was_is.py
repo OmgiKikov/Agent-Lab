@@ -237,6 +237,25 @@ class ChanceTests(unittest.TestCase):
         other = self.history.evaluation_fingerprint({'model': 'main', 'results': [answered, failed]})
         self.assertEqual(one, other)
 
+    def test_other_instructions_of_the_judge_are_another_evaluation(self):
+        """The same models judging by another version of the judge's instructions (roles.Role.version) made another
+        evaluation; a record from before versions were kept was judged by instructions nobody knows."""
+        judged = {
+            'model': 'main',
+            'judgeVersion': 'a1',
+            'second': {'model': 'other', 'status': 'PASS', 'judgeVersion': 'a1'},
+        }
+        again = self.history.evaluation_fingerprint({'model': 'main', 'results': [judged, judged]})
+        self.assertEqual(again, self.history.evaluation_fingerprint({'model': 'main', 'results': [judged]}))
+        rewritten = {**judged, 'judgeVersion': 'b2', 'second': {**judged['second'], 'judgeVersion': 'b2'}}
+        older = {key: value for key, value in judged.items() if key != 'judgeVersion'} | {'second': None}
+        for other in (rewritten, older):
+            with self.subTest(other=other):
+                self.assertNotEqual(again, self.history.evaluation_fingerprint({'model': 'main', 'results': [other]}))
+        before = {'id': 'c1', 'criteriaFingerprint': 'k', 'evaluationFingerprint': 'old', 'datasetFingerprint': 'd'}
+        now = dict(before, id='c2', evaluationFingerprint=again)
+        self.assertEqual(self.history.comparison(now, before)['reason'], 'Изменились модели или инструкции проверки.')
+
     def test_fisher_exact_two_sided(self):
         self.assertAlmostEqual(self.history.fisher(3, 1, 1, 3), 0.4857, places=4)  # the lady tasting tea
         self.assertAlmostEqual(self.history.fisher(10, 0, 0, 10), 2 / 184756, places=10)

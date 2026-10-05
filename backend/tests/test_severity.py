@@ -12,8 +12,9 @@ from test_checks import CODE, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, checks, discover, llm, problems, registry, severity, store, tone
+from lab import api, checks, discover, models, problems, registry, severity, store, tone
 from lab.jobs import PerAgent
+from lab.roles import severity as proposals
 
 
 def talk(dialogue_id: str) -> dict:
@@ -59,10 +60,10 @@ def judge_by(failing: dict[str, set[str]], inapplicable: dict[str, set[str]] | N
 
 
 def proposing(*words: str, model: str = 'model-a', fail: Exception | None = None) -> AsyncMock:
-    """llm.structured as a model that proposes severity: a criterion whose requirement has one of `words` is serious,
+    """models.chat as a model that proposes severity: a criterion whose requirement has one of `words` is serious,
     each with its reason; with `fail` the model does not answer."""
 
-    async def structured(system, payload, parse, **kwargs):
+    async def chat(system, messages, **kwargs):
         if fail:
             raise fail
         rows = [
@@ -71,11 +72,11 @@ def proposing(*words: str, model: str = 'model-a', fail: Exception | None = None
                 'serious': any(word in criterion['requirement'] for word in words),
                 'reason': f'Пояснение: {criterion["name"]}',
             }
-            for criterion in payload['criteria']
+            for criterion in json.loads(messages)['criteria']
         ]
-        return llm.Answer(parse({'criteria': rows}), model)
+        return models.Reply(json.dumps({'criteria': rows}, ensure_ascii=False), model)
 
-    return AsyncMock(side_effect=structured)
+    return AsyncMock(side_effect=chat)
 
 
 # No model is asked unless the test proposes one.
@@ -127,7 +128,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             request['propose'] = True
         with (
             patch.object(discover, 'judge_dialogue', side_effect=judge_by(failing, inapplicable)),
-            patch.object(severity.llm, 'structured', propose or SILENT),
+            patch.object(severity.models, 'chat', propose or SILENT),
         ):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
             self.assertEqual(response.status_code, 200, response.text)
@@ -328,7 +329,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         }
         with (
             patch.object(discover, 'judge_dialogue', side_effect=judge_by({'d1': {'pronouns'}})),
-            patch.object(severity.llm, 'structured', endless),
+            patch.object(severity.models, 'chat', endless),
         ):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
             self.assertEqual(response.status_code, 200, response.text)
@@ -352,14 +353,14 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         pronouns, simple = self.key('pronouns'), self.key('simple_language')
         await self.mark('pronouns', serious=False)  # the person disagrees: an error of form
         model = proposing('«вы»', 'канцеляризм')
-        with patch.object(severity.llm, 'structured', model):
+        with patch.object(severity.models, 'chat', model):
             response = await self.post('/api/severity/propose', {'check': 'tone', 'again': True})
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
         # The task says which check it proposes for: the screens lead to its criteria.
         self.assertEqual(self.jobs.state['progress'], {'message': 'Отмечаем серьёзные ошибки', 'check': 'tone'})
-        self.assertEqual(len(model.await_args.args[1]['criteria']), 1)  # the decided one is not asked about
+        self.assertEqual(len(json.loads(model.await_args.args[1])['criteria']), 1)  # the decided one is not asked about
         found = await self.get('/api/problems?check=tone')
         rules = {rule['id']: rule for rule in found['rules']}
         self.assertEqual((rules[pronouns]['serious'], rules[pronouns]['severity']['by']), (False, 'person'))
@@ -383,7 +384,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual((await self.get('/api/state'))['severityStamp'], stamp)
 
     async def test_a_model_that_does_not_answer_leaves_the_check_and_says_why(self):
-        down = proposing(fail=llm.ModelError('Модель недоступна: ConnectError'))
+        down = proposing(fail=models.ModelError('Модель недоступна: ConnectError'))
         await self.check_tone({'d1': {'pronouns'}}, propose=down)  # the check itself stands, without an error
         self.assertIsNotNone(store.load(checks.result('tone')))
         found = await self.get('/api/problems?check=tone')
@@ -391,11 +392,11 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             found['severity'], {'criteria': 2, 'proposed': 0, 'decided': 0, 'error': 'Модель недоступна: ConnectError'}
         )
         # «Предложить» by hand: a failure is the task's error; then the model answers.
-        with patch.object(severity.llm, 'structured', down):
+        with patch.object(severity.models, 'chat', down):
             await self.post('/api/severity/propose', {'check': 'tone'})
             await self.wait_job()
         self.assertIn('Модель недоступна', self.jobs.state['error'])
-        with patch.object(severity.llm, 'structured', proposing('«вы»')):
+        with patch.object(severity.models, 'chat', proposing('«вы»')):
             response = await self.post('/api/severity/propose', {'check': 'tone'})
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
@@ -404,13 +405,19 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found['severity'], {'criteria': 2, 'proposed': 2, 'decided': 0, 'error': None})
 
     async def test_a_reply_answers_for_each_criterion_once(self):
-        ids = ['c1', 'c2']
+        shown = [proposals.shown({'text': 'Не грубит'}, 'c1'), proposals.shown({'text': 'На вы'}, 'c2')]
         rows = [
             {'id': 'c1', 'serious': True, 'reason': 'Вред клиенту.'},
             {'id': 'c2', 'serious': False, 'reason': 'Форма.'},
         ]
+
+        async def proposed(answer: object) -> dict:
+            reply = models.Reply(json.dumps(answer, ensure_ascii=False), 'model-a')
+            with patch.object(models, 'chat', AsyncMock(return_value=reply)):
+                return (await proposals.propose('tone', shown)).value
+
         self.assertEqual(
-            severity.parse({'criteria': rows}, ids),
+            await proposed({'criteria': rows}),
             {'c1': {'serious': True, 'reason': 'Вред клиенту.'}, 'c2': {'serious': False, 'reason': 'Форма.'}},
         )
         for bad in (
@@ -421,8 +428,8 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             {'criteria': [{**rows[0], 'reason': ' '}, rows[1]]},
             {'criteria': 'всё серьёзно'},
         ):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                severity.parse(bad, ids)
+            with self.subTest(bad=bad), self.assertRaises(models.ModelError):
+                await proposed(bad)
 
     async def test_marks_of_an_older_service_are_a_person_s_decisions(self):
         await self.check_tone({'d1': {'pronouns'}})
@@ -447,14 +454,14 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(discover, 'plan_topics', AsyncMock(side_effect=plan)),
             patch.object(discover, 'judge_dialogue', side_effect=judged('FAIL')),
-            patch.object(severity.llm, 'structured', model),
+            patch.object(severity.models, 'chat', model),
         ):
             response = await self.client.post('/api/discover', json={'count': 5, 'propose': True})
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
         self.assertEqual(
-            model.await_args.args[1]['criteria'][0]['requirement'], 'Агент называет срок доставки терминала'
+            json.loads(model.await_args.args[1])['criteria'][0]['requirement'], 'Агент называет срок доставки терминала'
         )
         found = await self.get('/api/problems?check=code')
         self.assertEqual([(rule['serious'], rule['severity']['by']) for rule in found['rules']], [(True, 'model')])

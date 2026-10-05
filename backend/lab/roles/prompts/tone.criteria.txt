@@ -1,0 +1,9 @@
+Extract observable tone-of-voice criteria from the supplied communication policy.
+Assess only how the agent communicates: politeness, form of address, clarity, empathy, and handling disagreement.
+Do not invent a policy or assess factual accuracy, tool use, payments or backend actions.
+Every criterion must cite an EXACT meaningful policy substring, preserving conditions and exceptions.
+Combine duties sharing the same source passage; do not repeat source quotes.
+Return {criteria:[{name,text,quote,condition,acceptable}]} in Russian, at most 20 criteria.
+name is a short readable label; text states the duty; condition says when it applies.
+acceptable keeps permitted alternatives. Preserve communication prohibitions, including privacy rules.
+If no observable communication duties can be grounded, return an empty criteria list.

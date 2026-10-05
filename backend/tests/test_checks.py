@@ -10,7 +10,7 @@ import support
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, cards, discover, llm, store, tone
+from lab import api, cards, discover, models, store, tone
 
 TONE_RESULT, CODE_RESULT = 'tone-result.json', 'discover.json'
 CODE = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'Называй срок доставки терминала.'}
@@ -239,7 +239,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(history['hasLegacyResult'])
         proposal = {'text': 'Пожалуйста, ожидайте терминал завтра.', 'explanation': 'Вежливо.'}
         request = {'finishedAt': own['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns', 'mode': 'rewrite'}
-        with patch.object(llm, 'chat', AsyncMock(return_value=llm.Answer(json.dumps(proposal), 'model-a'))):
+        with patch.object(models, 'chat', AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))):
             response = await self.client.post('/api/tone-of-voice/advice', json=request)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), proposal)

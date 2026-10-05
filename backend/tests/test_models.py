@@ -9,8 +9,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import support
 
-from lab import config, judge, llm
-from lab.judge_reply import JudgeReply
+from lab import config, judge, models, roles, store
 
 Client = httpx.AsyncClient
 
@@ -26,16 +25,6 @@ def json_response(value):
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.settings = support.lab(self)
-
-    async def test_structured_returns_parsed_reply_without_leaving_an_untyped_dictionary(self):
-        value = {'rules': [{'ruleId': 'r', 'status': 'UNKNOWN', 'reason': 'Нет доказательств', 'agentQuote': ''}]}
-        with patch.object(llm, 'chat', AsyncMock(return_value=llm.Answer(json.dumps(value), 'actual-model'))):
-            answer = await llm.structured('system', {}, parse=JudgeReply.model_validate)
-        self.assertIsInstance(answer.value, JudgeReply)
-        self.assertEqual(answer.value.rules[0].rule_id, 'r')
-        self.assertEqual(answer.value.rules[0].status, 'UNKNOWN')
-        self.assertEqual(answer.value.rules[0].title, '')
-        self.assertEqual(answer.model, 'actual-model')
 
     async def test_openai_malformed_envelopes_are_model_errors_for_plain_chat(self):
         invalid = [
@@ -53,75 +42,30 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             with (
                 self.subTest(body=body),
                 patch.object(
-                    llm.httpx, 'AsyncClient', side_effect=client_for(lambda _, body=body: json_response(body))
+                    models.httpx, 'AsyncClient', side_effect=client_for(lambda _, body=body: json_response(body))
                 ),
-                self.assertRaises(llm.ModelError),
+                self.assertRaises(models.ModelError),
             ):
-                await llm.chat('system', 'question', endpoint=('http://provider/v1', 'requested'))
+                await models.chat('system', 'question', endpoint=('http://provider/v1', 'requested'))
 
     async def test_non_json_provider_reply_is_model_error_and_check_returns_failure(self):
         with patch.object(
-            llm.httpx, 'AsyncClient', side_effect=client_for(lambda _: httpx.Response(200, text='<html>broken</html>'))
+            models.httpx,
+            'AsyncClient',
+            side_effect=client_for(lambda _: httpx.Response(200, text='<html>broken</html>')),
         ):
-            with self.assertRaises(llm.ModelError):
-                await llm.chat('system', 'question', endpoint=('http://provider/v1', 'requested'))
-            self.assertFalse((await llm.check(('http://provider/v1', 'requested')))['ok'])
+            with self.assertRaises(models.ModelError):
+                await models.chat('system', 'question', endpoint=('http://provider/v1', 'requested'))
+            self.assertFalse((await models.check(('http://provider/v1', 'requested')))['ok'])
 
     async def test_a_typo_in_the_model_address_is_a_model_error_and_check_says_so(self):
         endpoint = ('http://127.0.0.1:84 43/v1', 'requested')
-        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(lambda _: json_response({}))):
-            with self.assertRaises(llm.ModelError) as caught:
-                await llm.chat('system', 'question', endpoint=endpoint)
-            checked = await llm.check(endpoint)
+        with patch.object(models.httpx, 'AsyncClient', side_effect=client_for(lambda _: json_response({}))):
+            with self.assertRaises(models.ModelError) as caught:
+                await models.chat('system', 'question', endpoint=endpoint)
+            checked = await models.check(endpoint)
         self.assertIn('LAB_MODEL_URL', str(caught.exception))
         self.assertEqual(checked, {'ok': False, 'error': str(caught.exception)})
-
-    async def test_structured_retries_bad_envelope_and_carries_successful_model(self):
-        calls = []
-
-        def handler(request):
-            calls.append(request)
-            if len(calls) == 1:
-                return json_response({'choices': []})
-            return json_response({'choices': [{'message': {'content': '{"ready":true}'}}], 'model': 'actual-model'})
-
-        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
-            result = await llm.structured(
-                'system', {}, parse=lambda value: value, endpoint=('http://provider/v1', 'requested-alias')
-            )
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(result, llm.Answer({'ready': True}, 'actual-model'))
-
-    async def test_unfinished_code_fence_is_retried(self):
-        replies = [llm.Answer('```json', 'bad'), llm.Answer('{"ready":true}', 'good')]
-        with patch.object(llm, 'chat', AsyncMock(side_effect=replies)) as chat:
-            result = await llm.structured('system', {}, parse=lambda value: value)
-        self.assertEqual(chat.await_count, 2)
-        self.assertEqual(result.model, 'good')
-
-    async def test_an_answer_that_cannot_be_used_is_told_in_plain_words_and_its_technical_text_goes_to_the_log(self):
-        """«Не удалось получить ответ модели: ValueError: expected business topics» showed a Python class and an
-        internal message: the person reads what happened and what to do, whoever looks into it finds the text in the
-        log."""
-
-        def parse(value: dict) -> dict:
-            raise ValueError('expected business topics')
-
-        replies = [llm.Answer('{"topics": []}', 'm'), llm.Answer('{"topics": []}', 'm')]
-        # The error passes through the innermost assertLogs: what was logged on the way stays in `logged`.
-        with (
-            patch.object(llm, 'chat', AsyncMock(side_effect=replies)),
-            self.assertRaises(llm.ModelError) as caught,
-            self.assertLogs('lab.llm', 'WARNING') as logged,
-        ):
-            await llm.structured('system', {}, parse=parse)
-        told = str(caught.exception)
-        self.assertNotIn('ValueError', told)
-        self.assertNotIn('expected business topics', told)
-        self.assertIn('Попробуйте ещё раз', told)
-        self.assertIn('«Настройки»', told)
-        self.assertEqual(caught.exception.detail, 'ValueError: expected business topics')
-        self.assertIn('ValueError: expected business topics', '\n'.join(logged.output))
 
     async def test_gateway_malformed_envelopes_are_model_errors(self):
         invalid = [
@@ -138,24 +82,24 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             client = Client(transport=httpx.MockTransport(lambda _, body=body: json_response(body)))
             with (
                 self.subTest(body=body),
-                patch.object(llm.gateway, '_client', return_value=(client, 'http://gateway')),
-                self.assertRaises(llm.ModelError),
+                patch.object(models.gateway, '_client', return_value=(client, 'http://gateway')),
+                self.assertRaises(models.ModelError),
             ):
-                await llm.chat('system', 'question', endpoint=(llm.GATEWAY, 'requested'))
+                await models.chat('system', 'question', endpoint=(models.GATEWAY, 'requested'))
 
     async def test_gateway_auto_and_returned_model_identity_are_explicit(self):
         body = {'messages': [{'role': 'assistant', 'content': [{'text': 'hello '}, {'text': 'world'}]}]}
         client = Client(transport=httpx.MockTransport(lambda _, body=body: json_response(body)))
         with (
-            patch.object(llm.gateway, '_client', return_value=(client, 'http://gateway')),
-            patch.object(llm.gateway, 'auto_models', AsyncMock(return_value={'model': 'chosen-main'})),
+            patch.object(models.gateway, '_client', return_value=(client, 'http://gateway')),
+            patch.object(models.gateway, 'auto_models', AsyncMock(return_value={'model': 'chosen-main'})),
         ):
-            result = await llm.chat('system', 'question', endpoint=(llm.GATEWAY, 'auto'))
-        self.assertEqual(result, llm.Answer('hello world', 'chosen-main'))
+            result = await models.chat('system', 'question', endpoint=(models.GATEWAY, 'auto'))
+        self.assertEqual((result.text, result.model), ('hello world', 'chosen-main'))
         body['model'] = 'returned-model'
         client = Client(transport=httpx.MockTransport(lambda _, body=body: json_response(body)))
-        with patch.object(llm.gateway, '_client', return_value=(client, 'http://gateway')):
-            result = await llm.chat('system', 'question', endpoint=(llm.GATEWAY, 'requested'))
+        with patch.object(models.gateway, '_client', return_value=(client, 'http://gateway')):
+            result = await models.chat('system', 'question', endpoint=(models.GATEWAY, 'requested'))
         self.assertEqual(result.model, 'returned-model')
 
     async def test_gateway_bad_catalog_is_a_model_error(self):
@@ -163,10 +107,10 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             client = Client(transport=httpx.MockTransport(lambda _, body=body: json_response(body)))
             with (
                 self.subTest(body=body),
-                patch.object(llm.gateway, '_client', return_value=(client, 'http://gateway')),
-                self.assertRaises(llm.ModelError),
+                patch.object(models.gateway, '_client', return_value=(client, 'http://gateway')),
+                self.assertRaises(models.ModelError),
             ):
-                await llm.gateway.catalog()
+                await models.gateway.catalog()
 
     async def test_concurrent_judges_keep_actual_model_identity_per_call(self):
         criterion = {'id': 'r', 'text': 'Ответить клиенту', 'observation': 'reply'}
@@ -186,7 +130,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         two = {'model_url': 'http://provider/v1', 'model': 'main-alias', 'second_model': 'second-alias'}
         with (
             config.using(support.changed(self.settings, **two)),
-            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
+            patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)),
             patch.object(judge.knowledge, 'retrieved', return_value=[]),
         ):
             items = [{'conversation': [{'role': 'agent', 'text': 'Подробный ответ клиенту'}]} for _ in range(3)]
@@ -198,9 +142,9 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
 
     def test_models_used_is_derived_from_results_not_last_process_call(self):
         self.assertEqual(
-            llm.models_used([{'model': 'first'}, {'model': 'second'}, {'model': 'first'}]), 'first, second'
+            models.models_used([{'model': 'first'}, {'model': 'second'}, {'model': 'first'}]), 'first, second'
         )
-        self.assertEqual(llm.models_used([{}]), llm.main_model())
+        self.assertEqual(models.models_used([{}]), models.main_model())
 
 
 ANSWER = {'choices': [{'message': {'content': '{"ready": true}'}}], 'model': 'm'}
@@ -237,16 +181,16 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
 
         async def call():
             if structured:
-                return await llm.structured('system', {}, parse=lambda value: value, endpoint=('http://p/v1', 'm'))
-            return await llm.chat('system', 'question', endpoint=('http://p/v1', 'm'))
+                return await roles.ask(roles.Role('test', 'system', dict), {}, model=('http://p/v1', 'm'))
+            return await models.chat('system', 'question', endpoint=('http://p/v1', 'm'))
 
         with (
-            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
-            patch.object(llm.asyncio, 'sleep', AsyncMock(side_effect=pauses.append)),
+            patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)),
+            patch.object(models.asyncio, 'sleep', AsyncMock(side_effect=pauses.append)),
         ):
             try:
                 result = await call()
-            except llm.ModelError as error:
+            except models.ModelError as error:
                 result = error
         return result, len(requests), pauses
 
@@ -254,10 +198,28 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         result, requests, pauses = await self.ask(status(429, **{'Retry-After': '7'}), answered())
         self.assertEqual((result.model, requests, pauses), ('m', 2, [7]))
 
+    async def test_every_try_goes_to_the_journal_with_how_it_ended(self):
+        with models.about('run:r1'):
+            await self.ask(status(429, **{'Retry-After': '1'}), answered())
+            await self.ask(broken(httpx.ConnectError), status(400))
+        lines = store.calls('run:r1')
+        self.assertEqual(
+            [(line['outcome'], line['status'], line['model'], line['via']) for line in lines],
+            [
+                ('refused', 429, 'm', 'p'),
+                ('answered', None, 'm', 'p'),
+                ('failed', None, 'm', 'p'),
+                ('refused', 400, 'm', 'p'),
+            ],
+        )
+        self.assertEqual(lines[1]['answeredBy'], 'm')
+        self.assertTrue(all(line['ms'] >= 0 and line['at'] for line in lines))
+        self.assertEqual(store.calls('elsewhere'), [])
+
     async def test_a_long_retry_after_is_cut_and_three_tries_are_the_most(self):
         busy = status(429, **{'Retry-After': '3600'})
         result, requests, pauses = await self.ask(busy, busy, busy)
-        self.assertEqual((requests, pauses, result.status), (3, [llm.MAX_PAUSE, llm.MAX_PAUSE], 429))
+        self.assertEqual((requests, pauses, result.status), (3, [models.MAX_PAUSE, models.MAX_PAUSE], 429))
 
     async def test_a_retry_after_date_is_read_as_seconds(self):
         when = format_datetime(datetime.now(UTC) + timedelta(seconds=20), usegmt=True)
@@ -267,7 +229,7 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failing_model_is_asked_again_after_growing_pauses_with_jitter(self):
         result, requests, pauses = await self.ask(status(503), status(502), status(500))
         self.assertEqual((requests, result.status, str(result)), (3, 500, 'Модель ответила ошибкой (HTTP 500).'))
-        self.assertTrue(llm.PAUSE <= pauses[0] < 2 * llm.PAUSE <= pauses[1] < 3 * llm.PAUSE, pauses)
+        self.assertTrue(models.PAUSE <= pauses[0] < 2 * models.PAUSE <= pauses[1] < 3 * models.PAUSE, pauses)
 
     async def test_another_4xx_is_never_asked_again_even_by_structured(self):
         result, requests, pauses = await self.ask(status(400), structured=True)
@@ -277,7 +239,7 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_lost_connection_is_asked_again(self):
         replies = broken(httpx.ConnectError), broken(httpx.RemoteProtocolError), answered()
         result, requests, pauses = await self.ask(*replies)
-        self.assertEqual((result.value, requests, len(pauses)), ('{"ready": true}', 3, 2))
+        self.assertEqual((result.text, requests, len(pauses)), ('{"ready": true}', 3, 2))
 
     async def test_the_connection_check_answers_after_one_try(self):
         """«Проверить модели» says at once what is wrong: three tries with pauses hold the button half a minute."""
@@ -288,10 +250,10 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(503, request=request)
 
         with (
-            patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)),
-            patch.object(llm.asyncio, 'sleep', AsyncMock(side_effect=pauses.append)),
+            patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)),
+            patch.object(models.asyncio, 'sleep', AsyncMock(side_effect=pauses.append)),
         ):
-            checked = await llm.check(('http://p/v1', 'm'))
+            checked = await models.check(('http://p/v1', 'm'))
         self.assertEqual(
             (checked, len(requests), pauses), ({'ok': False, 'error': 'Модель ответила ошибкой (HTTP 503).'}, 1, [])
         )
@@ -302,8 +264,8 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         def handler(request):
             raise httpx.ConnectError('refused', request=request)
 
-        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
-            checked = await llm.check(('http://p/v1', 'm'))
+        with patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            checked = await models.check(('http://p/v1', 'm'))
         self.assertEqual(checked, {'ok': False, 'error': 'Модель недоступна (ConnectError).'})
 
     async def test_a_read_timeout_is_asked_again_once_only(self):
@@ -327,9 +289,9 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
             seen.append(request.extensions['timeout'])
             return json_response(ANSWER)
 
-        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
-            await llm.chat('system', 'question', endpoint=('http://p/v1', 'm'))
-        self.assertEqual((seen[0]['connect'], seen[0]['read']), (llm.CONNECT_TIMEOUT, 240))
+        with patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            await models.chat('system', 'question', endpoint=('http://p/v1', 'm'))
+        self.assertEqual((seen[0]['connect'], seen[0]['read']), (models.CONNECT_TIMEOUT, 240))
 
     async def test_the_gateway_follows_the_same_policy(self):
         answer = {'messages': [{'role': 'assistant', 'content': [{'text': 'да'}]}]}
@@ -337,16 +299,16 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         transport = httpx.MockTransport(lambda _: next(replies))
         with (
             patch.object(
-                llm.gateway, '_client', side_effect=lambda *_: (Client(transport=transport), 'http://gateway')
+                models.gateway, '_client', side_effect=lambda *_: (Client(transport=transport), 'http://gateway')
             ),
-            patch.object(llm.asyncio, 'sleep', AsyncMock()) as sleep,
+            patch.object(models.asyncio, 'sleep', AsyncMock()) as sleep,
         ):
-            result = await llm.chat('system', 'question', endpoint=(llm.GATEWAY, 'requested'))
-        self.assertEqual((result.value, sleep.await_count), ('да', 1))
+            result = await models.chat('system', 'question', endpoint=(models.GATEWAY, 'requested'))
+        self.assertEqual((result.text, sleep.await_count), ('да', 1))
 
 
 class DefaultModelsTests(unittest.TestCase):
-    def started(self, value=lambda: llm.second_judge(), **environment: str):
+    def started(self, value=lambda: models.second_judge(), **environment: str):
         """What the value is in a Lab started with only these LAB_* and OpenRouter settings."""
         with tempfile.TemporaryDirectory() as folder:
             places = {'LAB_DATA': folder, 'LAB_CERTS': folder, 'AGENT_LAB_GATEWAY_FILE': f'{folder}/none.json'}
@@ -367,7 +329,7 @@ class DefaultModelsTests(unittest.TestCase):
         )
 
     def test_the_main_key_goes_to_another_host_never_and_the_second_has_its_own(self) -> None:
-        second_key = lambda: llm.endpoints().second_key  # noqa: E731
+        second_key = lambda: models.endpoints().second_key  # noqa: E731
         main = {'LAB_MODEL_URL': 'http://a.test/v1', 'LAB_MODEL_KEY': 'sk-main', 'LAB_SECOND_MODEL': 'openai/gpt-5.2'}
         elsewhere = {**main, 'LAB_SECOND_URL': 'http://b.test/v1'}
         self.assertIsNone(self.started(second_key, **elsewhere))
@@ -375,39 +337,41 @@ class DefaultModelsTests(unittest.TestCase):
         self.assertEqual(self.started(second_key, **main), 'sk-main')  # the same address
 
     def test_openrouter_is_the_endpoint_without_another_and_its_key_goes_only_there(self) -> None:
-        main_key, second_key = lambda: llm.endpoints().main_key, lambda: llm.endpoints().second_key
-        self.assertEqual(self.started(lambda: llm.endpoints().main[0]), 'https://openrouter.ai/api/v1')
+        main_key, second_key = lambda: models.endpoints().main_key, lambda: models.endpoints().second_key
+        self.assertEqual(self.started(lambda: models.endpoints().main[0]), 'https://openrouter.ai/api/v1')
         self.assertEqual(self.started(main_key, OPENROUTER_API_KEY='sk-or'), 'sk-or')
         self.assertEqual(self.started(second_key, LAB_SECOND_MODEL='x', OPENROUTER_API_KEY='sk-or'), 'sk-or')
         own = {'LAB_MODEL_URL': 'http://models.bank.test/v1', 'OPENROUTER_API_KEY': 'sk-or'}
         self.assertIsNone(self.started(main_key, **own))  # OpenRouter's key never goes to another host
-        self.assertEqual(self.started(lambda: llm.describe()['problem']), llm.NO_KEY)
-        self.assertIsNone(self.started(lambda: llm.describe()['problem'], OPENROUTER_API_KEY='sk-or'))
+        self.assertEqual(self.started(lambda: models.describe()['problem']), models.NO_KEY)
+        self.assertIsNone(self.started(lambda: models.describe()['problem'], OPENROUTER_API_KEY='sk-or'))
 
     def test_a_variable_set_to_nothing_is_not_set(self) -> None:
         self.assertEqual(
-            self.started(lambda: llm.endpoints().main, LAB_MODEL_URL='', LAB_MODEL=' '),
-            (llm.OPENROUTER, llm.DEFAULT_MODEL),
+            self.started(lambda: models.endpoints().main, LAB_MODEL_URL='', LAB_MODEL=' '),
+            (models.OPENROUTER, models.DEFAULT_MODEL),
         )
 
 
 class DescribeTests(unittest.TestCase):
     def via(self, main: tuple, second: tuple | None = None) -> tuple:
         with (
-            patch.object(llm, 'endpoints', return_value=llm.Endpoints(main, second or main, None, None)),
-            patch.object(llm.gateway, 'chosen_models', return_value={}),
-            patch.object(llm.gateway, 'problem', return_value=None),
+            patch.object(models, 'endpoints', return_value=models.Endpoints(main, second or main, None, None)),
+            patch.object(models.gateway, 'chosen_models', return_value={}),
+            patch.object(models.gateway, 'problem', return_value=None),
         ):
-            described = llm.describe()
+            described = models.describe()
         return described['via'], described.get('secondVia')
 
     def test_the_settings_say_where_the_conversations_go(self) -> None:
-        self.assertEqual(self.via((llm.GATEWAY, 'glm')), ('шлюз банка', None))
-        openrouter = (llm.OPENROUTER, 'z-ai/glm-5.3'), (llm.OPENROUTER, 'openai/gpt-5.2')
+        self.assertEqual(self.via((models.GATEWAY, 'glm')), ('шлюз банка', None))
+        openrouter = (models.OPENROUTER, 'z-ai/glm-5.3'), (models.OPENROUTER, 'openai/gpt-5.2')
         self.assertEqual(self.via(*openrouter), ('OpenRouter', None))
-        self.assertEqual(self.via(('https://user:secret@llm.bank.test:8443/v1', 'glm')), ('llm.bank.test:8443', None))
-        elsewhere = ('https://llm.bank.test/v1', 'glm'), ('https://api.vendor.test/v1', 'gpt')
-        self.assertEqual(self.via(*elsewhere), ('llm.bank.test', 'api.vendor.test'))
+        self.assertEqual(
+            self.via(('https://user:secret@models.bank.test:8443/v1', 'glm')), ('models.bank.test:8443', None)
+        )
+        elsewhere = ('https://models.bank.test/v1', 'glm'), ('https://api.vendor.test/v1', 'gpt')
+        self.assertEqual(self.via(*elsewhere), ('models.bank.test', 'api.vendor.test'))
 
 
 class KeyTests(unittest.IsolatedAsyncioTestCase):
@@ -426,12 +390,12 @@ class KeyTests(unittest.IsolatedAsyncioTestCase):
             second_url='http://b.test/v1',
             second_model='second',
         )
-        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
-            found = llm.endpoints()
+        with patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            found = models.endpoints()
             for endpoint in (found.main, found.second, ('http://c.test/v1', 'other')):
-                await llm.chat('system', 'question', endpoint=endpoint)
+                await models.chat('system', 'question', endpoint=endpoint)
             with config.using(support.changed(settings, second_key='sk-second')):
-                await llm.chat('system', 'question', endpoint=found.second)
+                await models.chat('system', 'question', endpoint=found.second)
         self.assertEqual(
             seen, [('a.test', 'Bearer sk-main'), ('b.test', None), ('c.test', None), ('b.test', 'Bearer sk-second')]
         )
@@ -446,22 +410,22 @@ class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
             return json_response(ANSWER)
 
         support.lab(self, model_url=None, openrouter_key='sk-or')
-        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
-            await llm.chat('system', 'question')
+        with patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            await models.chat('system', 'question')
         url, key, body = seen[0]
         self.assertEqual((url, key), ('https://openrouter.ai/api/v1/chat/completions', 'Bearer sk-or'))
         self.assertEqual((body['model'], body['reasoning']), ('z-ai/glm-5.3', {'effort': 'low'}))
 
     async def test_without_its_key_no_conversation_is_sent_and_the_check_says_what_to_set(self):
-        endpoint = (llm.OPENROUTER, 'z-ai/glm-5.3')
+        endpoint = (models.OPENROUTER, 'z-ai/glm-5.3')
         support.lab(self, model_url=None)
         sent = AsyncMock(side_effect=AssertionError('a conversation was sent without a key'))
-        with patch.object(llm.httpx.AsyncClient, 'post', sent):
-            with self.assertRaises(llm.ModelError) as refused:
-                await llm.chat('system', 'question')
-            checked = await llm.check(endpoint)
-        self.assertEqual(str(refused.exception), llm.NO_KEY)
-        self.assertEqual(checked, {'ok': False, 'error': llm.NO_KEY})
+        with patch.object(models.httpx.AsyncClient, 'post', sent):
+            with self.assertRaises(models.ModelError) as refused:
+                await models.chat('system', 'question')
+            checked = await models.check(endpoint)
+        self.assertEqual(str(refused.exception), models.NO_KEY)
+        self.assertEqual(checked, {'ok': False, 'error': models.NO_KEY})
 
     async def test_another_endpoint_gets_no_reasoning_setting_it_may_not_know(self):
         seen = []
@@ -471,18 +435,18 @@ class OpenRouterTests(unittest.IsolatedAsyncioTestCase):
             return json_response(ANSWER)
 
         support.lab(self)
-        with patch.object(llm.httpx, 'AsyncClient', side_effect=client_for(handler)):
-            await llm.chat('system', 'question', endpoint=('http://models.bank.test/v1', 'glm'))
+        with patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)):
+            await models.chat('system', 'question', endpoint=('http://models.bank.test/v1', 'glm'))
         self.assertNotIn('reasoning', seen[0])
 
 
 class GlmReplyTests(unittest.TestCase):
     def test_text_after_the_json_object_is_ignored(self) -> None:
         reply = '{"rules": [{"ruleId": "r1"}]}\n\nПояснение: правило {pronouns} выполнено.'
-        self.assertEqual(llm.parse_json(reply), {'rules': [{'ruleId': 'r1'}]})
+        self.assertEqual(roles.base.parse_json(reply), {'rules': [{'ruleId': 'r1'}]})
 
     def test_a_null_title_reads_as_no_title(self) -> None:
-        from lab.judge_reply import JudgeReply
+        from lab.roles.judge import JudgeReply
 
         row = {'ruleId': 'r1', 'status': 'PASS', 'reason': 'Верно', 'agentQuote': 'Откройте', 'title': None}
         self.assertEqual(JudgeReply.model_validate({'rules': [row]}).rules[0].title, '')

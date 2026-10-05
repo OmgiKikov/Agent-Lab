@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import support
 from test_tone import POLICY
 
-from lab import api, cards, discover, judge, llm, simulate, store, tone
+from lab import api, cards, discover, judge, models, simulate, store, tone
 
 
 def judged(status='FAIL', model='model-a', down=()):
@@ -115,9 +115,9 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
     async def test_a_check_the_model_could_not_answer_keeps_the_previous_result_scenarios_and_history(self):
-        down = AsyncMock(side_effect=llm.ModelError('Модель недоступна: ConnectError'))
+        down = AsyncMock(side_effect=models.ModelError('Модель недоступна: ConnectError'))
         request = {'ruleIds': ['pronouns'], 'count': 1, 'revision': store.load(tone.DRAFT)['revision']}
-        with patch.object(llm, 'chat', down):
+        with patch.object(models, 'chat', down):
             await self.client.post('/api/tone-of-voice/check', json=request)
             await self.wait_job()
         self.assertEqual(
@@ -128,7 +128,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         previous = await self.check()
         deck = {'cards': [{'id': 'built-from-the-previous-check'}]}
         store.save(cards.DECK, deck)
-        with patch.object(llm, 'chat', down):
+        with patch.object(models, 'chat', down):
             await self.client.post('/api/tone-of-voice/check', json=request)
             await self.wait_job()
         self.assertEqual(
@@ -289,7 +289,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(store.load(cards.DECK))
         self.assertEqual(store.load(tone.RESULT), checked)
-        with patch.object(llm, 'chat', AsyncMock()) as model:
+        with patch.object(models, 'chat', AsyncMock()) as model:
             await self.client.post('/api/cards')
             await self.wait_job()
             model.assert_not_awaited()
@@ -313,21 +313,14 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         await self.check(['pronouns'])
+        scenario = {'name': 'Передача документов', 'situation': 'Клиент уточняет, как передать документы.'}
         with (
             patch.object(
-                llm,
-                'structured',
-                AsyncMock(
-                    return_value=llm.Answer(
-                        {
-                            'name': 'Передача документов',
-                            'situation': 'Клиент уточняет, как передать документы.',
-                        },
-                        'scenario-model',
-                    )
-                ),
+                models,
+                'chat',
+                AsyncMock(return_value=models.Reply(json.dumps(scenario, ensure_ascii=False), 'scenario-model')),
             ),
-            patch.object(cards.world, 'build', AsyncMock(return_value=None)),
+            patch.object(cards.world, 'templates', return_value=None),
         ):
             await self.client.post('/api/cards')
             await self.wait_job()
@@ -344,7 +337,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
 
         async def chat(system, payload, **kwargs):
             seen.append(json.loads(payload))
-            return llm.Answer(
+            return models.Reply(
                 json.dumps(
                     {
                         'customerGoal': 'Передать документы',
@@ -361,7 +354,10 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 'judge-model',
             )
 
-        with patch.object(llm, 'chat', side_effect=chat), patch.object(judge.knowledge, 'retrieved', return_value=[]):
+        with (
+            patch.object(models, 'chat', side_effect=chat),
+            patch.object(judge.knowledge, 'retrieved', return_value=[]),
+        ):
             await judge.evaluate({'criteria': item['criteria']}, item)
         self.assertEqual(len(seen), 2)
         self.assertTrue(all(note in data['expectations'][0]['text'] for data in seen))
@@ -419,7 +415,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         async def chat(system, payload, **kwargs):
             data = json.loads(payload)
             seen.append(data)
-            return llm.Answer(
+            return models.Reply(
                 json.dumps(
                     {
                         'rules': [
@@ -435,7 +431,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 'model-a',
             )
 
-        with patch.object(llm, 'chat', side_effect=chat):
+        with patch.object(models, 'chat', side_effect=chat):
             await self.client.post(
                 '/api/tone-of-voice/check',
                 json={
@@ -458,7 +454,9 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             'text': 'Допускается обращение на ты внутри прямой цитаты клиента.',
             'explanation': 'Уточняет исключение.',
         }
-        with patch.object(llm, 'chat', AsyncMock(return_value=llm.Answer(json.dumps(proposal), 'model-a'))) as model:
+        with patch.object(
+            models, 'chat', AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))
+        ) as model:
             response = await self.client.post('/api/tone-of-voice/advice', json={**request, 'note': '  '})
             self.assertEqual(response.status_code, 400)
             model.assert_not_awaited()
@@ -497,10 +495,10 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 {'ruleId': rule['id'], 'status': 'FAIL', 'reason': 'Сухо.', 'agentQuote': quote, 'title': 'Сухо'}
                 for rule in json.loads(messages)['expectations']
             ]
-            return llm.Answer(json.dumps({'rules': rows}), 'model-a')
+            return models.Reply(json.dumps({'rules': rows}), 'model-a')
 
         revision = store.load(tone.DRAFT)['revision']
-        with patch.object(llm, 'chat', model):
+        with patch.object(models, 'chat', model):
             await self.client.post(
                 '/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1, 'revision': revision}
             )
@@ -509,7 +507,9 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['results'][0]['rules'][0]['status'], 'FAIL')
         proposal = {'text': 'Выберите способ оплаты и нажмите «Далее».', 'explanation': 'Короче.'}
         request = {'finishedAt': result['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns', 'mode': 'rewrite'}
-        with patch.object(llm, 'chat', AsyncMock(return_value=llm.Answer(json.dumps(proposal), 'model-a'))) as advice:
+        with patch.object(
+            models, 'chat', AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))
+        ) as advice:
             response = await self.client.post('/api/tone-of-voice/advice', json=request)
         self.assertEqual(response.status_code, 200, response.text)
         shown = json.dumps(json.loads(advice.call_args.args[1])['conversation'], ensure_ascii=False)
@@ -518,7 +518,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stale_advice_and_review_do_not_touch_new_results(self):
         result = await self.check()
-        with patch.object(llm, 'chat', AsyncMock()) as model:
+        with patch.object(models, 'chat', AsyncMock()) as model:
             response = await self.client.post(
                 '/api/tone-of-voice/advice',
                 json={
@@ -555,8 +555,8 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             ('Пришлите, пожалуйста, документы до 15 октября.', 502),
             ('Пришлите, пожалуйста, документы до 12 октября.', 200),
         ):
-            answer = llm.Answer(json.dumps({'text': text, 'explanation': 'Вежливая формулировка.'}), 'model-a')
-            with patch.object(llm, 'chat', AsyncMock(return_value=answer)):
+            answer = models.Reply(json.dumps({'text': text, 'explanation': 'Вежливая формулировка.'}), 'model-a')
+            with patch.object(models, 'chat', AsyncMock(return_value=answer)):
                 response = await self.client.post('/api/tone-of-voice/advice', json=request)
             self.assertEqual(response.status_code, status, response.text)
         self.assertEqual(store.load(api.logs.FILE), [self.dialogue])
@@ -603,7 +603,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await asyncio.Event().wait()
 
-        with patch.object(llm, 'structured', side_effect=waiting):
+        with patch.object(models, 'chat', side_effect=waiting):
             request = asyncio.create_task(
                 self.client.post(
                     '/api/tone-of-voice/advice',
@@ -631,7 +631,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.load(tone.RESULT), result)
 
     async def test_history_reads_are_pure_and_snapshot_duplicate_rolls_back_live_write(self):
-        with patch.object(llm, 'chat', AsyncMock()) as model:
+        with patch.object(models, 'chat', AsyncMock()) as model:
             self.assertEqual(
                 (await self.client.get('/api/tone-of-voice/history')).json(),
                 {

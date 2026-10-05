@@ -375,10 +375,10 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         store.create_run(source)
         store.set_review(source['id'], 0, 'agree', 'r1', 'FAIL')
         before = store.run(source['id'])
-        down = simulate.llm.ModelError('Модель недоступна (ConnectError).')
+        down = simulate.models.ModelError('Модель недоступна (ConnectError).')
         with (
             patch.object(simulate.judge, 'evaluate', side_effect=down),
-            self.assertRaises(simulate.llm.ModelError) as caught,
+            self.assertRaises(simulate.models.ModelError) as caught,
         ):
             await simulate.rejudge(store.run(source['id']))
         self.assertIn('1\u00a0из\u00a01', str(caught.exception))
@@ -400,12 +400,12 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
         async def evaluate(scenario: dict, item: dict) -> None:
             if scenario['cardId'] == 'card-1':
-                raise simulate.llm.ModelError('Не удалось разобрать ответ модели.')
+                raise simulate.models.ModelError('Не удалось разобрать ответ модели.')
             item.update(status='FAIL', rules=[{'ruleId': 'r1', 'status': 'FAIL'}])
 
         with (
             patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
-            self.assertRaises(simulate.llm.ModelError) as caught,
+            self.assertRaises(simulate.models.ModelError) as caught,
         ):
             await simulate.rejudge(store.run(source['id']))
         self.assertIn('1\u00a0из\u00a02', str(caught.exception))
@@ -556,7 +556,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
         async def customer(scenario: dict, conversation: list[dict], details: str = '', persona: str | None = None):
             if scenario['id'] == 'customer-broke':
-                raise simulate.llm.ModelError('Модель недоступна')
+                raise simulate.models.ModelError('Модель недоступна')
             return f'{scenario["id"]} again'
 
         async def passed(scenario: dict, item: dict) -> None:
@@ -666,11 +666,11 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         scenario = card()
         store.save(simulate.cards.DECK, {'cards': [scenario]})
         with patch.object(
-            simulate.llm,
+            simulate.models,
             'chat',
             side_effect=[
-                simulate.llm.Answer(' "next question" ', 'actual-customer'),
-                simulate.llm.Answer(' "rewritten opening" ', 'actual-customer'),
+                simulate.models.Reply(' "next question" ', 'actual-customer'),
+                simulate.models.Reply(' "rewritten opening" ', 'actual-customer'),
             ],
         ) as chat:
             message = await simulate.customer_says(scenario, [{'role': 'agent', 'text': 'answer'}])

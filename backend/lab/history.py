@@ -24,17 +24,22 @@ def dataset_fingerprint(dialogues: list[dict]) -> str:
 
 
 def evaluation_fingerprint(result: dict) -> str:
-    """The models that checked the conversations of a result: its own records' main and second models. A second check
-    that failed checked nothing: its configured name, unlike the name a model answers with, would make one passing
-    outage read as «Изменились модели проверки»."""
+    """The models that checked the conversations of a result and the versions of the judge's instructions they had
+    (roles.Role.version): its own records' main and second models and versions. A second check that failed checked
+    nothing: its configured name, unlike the name a model answers with, would make one passing outage read as another
+    evaluation. A record from before the versions were kept has none: a check after it is compared with it as judged
+    by other instructions, which it may have been."""
     records = result['results']
-    seconds = [record['second'] for record in records if record.get('second')]
+    seconds = [
+        record['second'] for record in records if record.get('second') and record['second'].get('status') != 'ERROR'
+    ]
     return fingerprint(
         {
             'main': sorted({record['model'] for record in records if record.get('model')}),
             'fallbackMain': result['model'] if not any(record.get('model') for record in records) else None,
-            'second': sorted(
-                {second['model'] for second in seconds if second.get('model') and second.get('status') != 'ERROR'}
+            'second': sorted({second['model'] for second in seconds if second.get('model')}),
+            'instructions': sorted(
+                {record['judgeVersion'] for record in [*records, *seconds] if record.get('judgeVersion')}
             ),
         }
     )
@@ -58,7 +63,7 @@ def comparison(check: dict, previous: dict | None) -> dict:
     if check['criteriaFingerprint'] != previous['criteriaFingerprint']:
         return {**base, 'kind': 'incompatible', 'reason': 'Изменились критерии или то, из чего они собраны.'}
     if check['evaluationFingerprint'] != previous['evaluationFingerprint']:
-        return {**base, 'kind': 'incompatible', 'reason': 'Изменились модели проверки.'}
+        return {**base, 'kind': 'incompatible', 'reason': 'Изменились модели или инструкции проверки.'}
     if check['datasetFingerprint'] == previous['datasetFingerprint']:
         return {**base, 'kind': 'same-data', 'reason': 'Те же разговоры, критерии и модели. Это повторная оценка.'}
     return {

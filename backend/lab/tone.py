@@ -5,22 +5,14 @@ import hashlib
 import re
 import uuid
 
-from . import checks, discover, history, llm, logs, quotes, store, tone_history
+from . import checks, discover, history, logs, models, quotes, store, tone_history
 from .context import sources
 from .jobs import Progress
+from .roles import tone as role
 
 DRAFT = 'tone-of-voice-criteria.json'
 RESULT = checks.result(checks.TONE)  # tone-result.json: its own, beside the accuracy result (discover.RESULT)
 KIND = checks.TONE_OF_VOICE  # the kind and id of the communication rules among the sources, the purpose of a result
-PROMPT = """Extract observable tone-of-voice criteria from the supplied communication policy.
-Assess only how the agent communicates: politeness, form of address, clarity, empathy, and handling disagreement.
-Do not invent a policy or assess factual accuracy, tool use, payments or backend actions.
-Every criterion must cite an EXACT meaningful policy substring, preserving conditions and exceptions.
-Combine duties sharing the same source passage; do not repeat source quotes.
-Return {criteria:[{name,text,quote,condition,acceptable}]} in Russian, at most 20 criteria.
-name is a short readable label; text states the duty; condition says when it applies.
-acceptable keeps permitted alternatives. Preserve communication prohibitions, including privacy rules.
-If no observable communication duties can be grounded, return an empty criteria list."""
 
 RULE_NAMES = {
     'text_volume': 'Объём ответа',
@@ -150,25 +142,6 @@ def take(policy: dict, draft: dict | None) -> bool:
     return True
 
 
-def _criterion(row: dict, index: int, source: dict) -> dict:
-    fields = ('name', 'text', 'quote', 'condition', 'acceptable')
-    if not isinstance(row, dict) or any(not isinstance(row.get(key), str) for key in fields):
-        raise ValueError('criterion needs a name, duty, quote, condition and alternatives')
-    if not row['name'].strip() or not row['text'].strip() or not quotes.found(row['quote'], source['content']):
-        raise ValueError('criterion must be grounded in the supplied policy')
-    return {**row, 'id': f't1r{index}', 'sourceId': source['id'], 'observation': 'reply'}
-
-
-def _parse(value: dict, source: dict) -> list[dict]:
-    rows = value.get('criteria')
-    if not isinstance(rows, list) or not 1 <= len(rows) <= 20:
-        raise ValueError('Не удалось выделить критерии. Уточните проверяемые требования к общению.')
-    criteria = [_criterion(row, index, source) for index, row in enumerate(rows, 1)]
-    if len({quotes.normalized(row['quote']) for row in criteria}) != len(criteria):
-        raise ValueError('criteria must not repeat the same source quote')
-    return criteria
-
-
 async def prepare(progress: Progress) -> dict:
     source = current_policy()
     if not store.length(logs.FILE):
@@ -177,7 +150,8 @@ async def prepare(progress: Progress) -> dict:
     criteria = coded_criteria(source)
     model = None
     if not criteria:
-        answer = await llm.structured(PROMPT, {'policy': source['content']}, parse=lambda value: _parse(value, source))
+        with models.about('criteria:tone'):
+            answer = await role.criteria(source)
         criteria, model = answer.value, answer.model
     ensure_active()
     return {
@@ -301,6 +275,13 @@ async def _judge(dialogues: list[dict], topic: dict, progress: Progress) -> list
 
 
 async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
+    """A check of tone of voice: its calls to the models are about it in the journal (models.about)."""
+    check_id = uuid.uuid4().hex
+    with models.about(f'check:{check_id}'):
+        return await _assess(check_id, criteria, count, progress)
+
+
+async def _assess(check_id: str, criteria: list[dict], count: int, progress: Progress) -> dict:
     source, draft = current_policy(), store.load(DRAFT)
     dialogues = discover.sample(count)
     if not dialogues:
@@ -320,14 +301,14 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
     carry_decisions(results, criteria, dialogues)
     return {
         'purpose': KIND,
-        'checkId': uuid.uuid4().hex,
+        'checkId': check_id,
         'criteriaRevision': draft['revision'],
         'criteriaFingerprint': tone_history.criteria_fingerprint(criteria, source),
         'datasetFingerprint': history.dataset_fingerprint(dialogues),
         'startedAt': started,
         'finishedAt': store.now(),
         'rulesSince': draft['createdAt'],
-        'model': llm.models_used(results),
+        'model': models.models_used(results),
         'sampled': len(dialogues),
         'unassigned': 0,
         'droppedRules': 0,

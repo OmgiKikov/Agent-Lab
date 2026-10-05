@@ -16,9 +16,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import support
 
-from lab import config, llm, store
+from lab import config, models, roles, store
 from lab.app import create
-from lab.llm import gateway
+from lab.models import gateway
 
 Client = httpx.AsyncClient
 PASSWORD = 'Secret-1'
@@ -229,13 +229,17 @@ class SetupTests(GatewayCase):
         reason = self.reason()
         on_gateway = support.changed(self.settings, model_url=None, model='requested')
         with config.using(on_gateway), patch.object(gateway, 'chosen_models', return_value={}):
-            self.assertEqual(llm.endpoints().main, (llm.GATEWAY, 'requested'))
-            for call in (lambda: llm.chat('system', 'question'), lambda: llm.structured('system', {}, parse=dict)):
-                with self.assertRaises(llm.ModelError) as caught:
+            self.assertEqual(models.endpoints().main, (models.GATEWAY, 'requested'))
+            asked = (
+                lambda: models.chat('system', 'question'),
+                lambda: roles.ask(roles.Role('test', 'system', dict), {}),
+            )
+            for call in asked:
+                with self.assertRaises(models.ModelError) as caught:
                     asyncio.run(call())
                 self.assertEqual(str(caught.exception), reason)
-            self.assertEqual(asyncio.run(llm.check(llm.endpoints().main)), {'ok': False, 'error': reason})
-            self.assertEqual(llm.describe()['problem'], reason)
+            self.assertEqual(asyncio.run(models.check(models.endpoints().main)), {'ok': False, 'error': reason})
+            self.assertEqual(models.describe()['problem'], reason)
 
     def test_the_backend_starts_with_broken_certificates_and_stays_on_the_gateway(self) -> None:
         (self.certs / 'url.txt').write_text('')
@@ -247,8 +251,8 @@ class SetupTests(GatewayCase):
             }
         )
         with config.using(started), patch.object(gateway, 'chosen_models', return_value={}):
-            self.assertEqual(llm.endpoints().main[0], llm.GATEWAY)
-            self.assertIn('url.txt пустой', llm.describe()['problem'])
+            self.assertEqual(models.endpoints().main[0], models.GATEWAY)
+            self.assertIn('url.txt пустой', models.describe()['problem'])
 
     def test_starting_the_lab_on_the_gateway_opens_no_database(self) -> None:
         """Importing the Lab reads no agent's database (docs/backend.md: no hidden migration at import). A database
@@ -270,13 +274,13 @@ class SetupTests(GatewayCase):
         started = config.Settings.from_environment(environment)
         with config.using(started):
             create(started)
-            found = llm.endpoints()
-        self.assertEqual((found.main, found.second), ((llm.GATEWAY, 'auto'), (llm.GATEWAY, 'auto')))
+            found = models.endpoints()
+        self.assertEqual((found.main, found.second), ((models.GATEWAY, 'auto'), (models.GATEWAY, 'auto')))
         self.assertEqual(legacy.read_bytes(), before)
         legacy.unlink()
         with config.using(support.changed(started, data=data)):
             create(started)
-            llm.endpoints()
+            models.endpoints()
         self.assertFalse(legacy.exists())
 
 

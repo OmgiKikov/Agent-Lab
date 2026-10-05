@@ -121,7 +121,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         }
         store.save(api.discover.RESULT, previous)
         store.save(api.cards.DECK, {'cards': ['built from the previous audit']})
-        down = AsyncMock(side_effect=api.llm.ModelError('Модель недоступна: ConnectError'))
+        down = AsyncMock(side_effect=api.models.ModelError('Модель недоступна: ConnectError'))
         with patch.object(api.discover.judge, 'log_verdict', down):
             response = await self.client.post('/api/discover', json={'count': 5})
             self.assertEqual(response.status_code, 200, response.text)
@@ -166,12 +166,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         }
         plan = {'topics': [{'id': 't1', 'title': 'Вопросы', 'dialogueIds': ['d1'], 'rules': [paraphrased]}]}
 
-        async def structured(system, payload, parse, **kwargs):
-            return api.llm.Answer(parse(plan), 'model')
-
+        planned = api.models.Reply(json.dumps(plan, ensure_ascii=False), 'model')
         judge = AsyncMock(side_effect=AssertionError('no conversation is judged without a criterion'))
         with (
-            patch.object(api.discover.llm, 'structured', side_effect=structured),
+            patch.object(api.models, 'chat', AsyncMock(return_value=planned)),
             patch.object(api.discover.judge, 'log_verdict', judge),
         ):
             response = await self.client.post('/api/discover', json={'count': 5, 'replan': True})

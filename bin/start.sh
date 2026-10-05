@@ -27,7 +27,7 @@ if [ -n "${LAB_MODEL_URL:-}" ]; then
   echo "Модели: endpoint из LAB_MODEL_URL"
 else
   LAB_GATEWAY="$(cd backend && "$LAB_PYTHON" -c 'from lab import config
-from lab.llm import gateway
+from lab.models import gateway
 with config.using(config.Settings.from_environment()):
     print(gateway.problem() or ("ready" if gateway.configured() else "absent"))')" ||
     LAB_GATEWAY="сертификаты не проверились, ошибка выше"

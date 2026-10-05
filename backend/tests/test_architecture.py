@@ -42,9 +42,7 @@ LAYERS = {
     'lab.scenarios': 'flows',
     'lab.problems': 'flows',
     'lab.compare': 'flows',
-    'lab.judge': 'roles',
-    'lab.judge_reply': 'roles',
-    'lab.prompts': 'roles',
+    'lab.judge': 'flows',
     'lab.quotes': 'domain',
     'lab.history': 'domain',
     'lab.metric': 'domain',
@@ -55,35 +53,29 @@ LAYERS = {
     'lab.logs': 'storage',
     'lab.store': 'storage',
     'lab.registry': 'storage',
-    'lab.llm': 'models',
     'lab.context': 'agents',
 }
 # Imports that go up today, importer → imported.
 UPWARD = {
     ('lab.agents', 'lab.store'),  # agents → storage
     ('lab.agents.source', 'lab.store'),  # agents → storage
-    ('lab.agents.world', 'lab.llm'),  # agents → models
-    ('lab.agents.world', 'lab.prompts'),  # agents → roles
     ('lab.context.sources', 'lab.store'),  # agents → storage
-    ('lab.judge', 'lab.context.knowledge'),  # roles → agents
-    ('lab.judge', 'lab.logs'),  # roles → storage
     ('lab.severity', 'lab.jobs'),  # flows → api
     ('lab.simulate', 'lab.jobs'),  # flows → api
     ('lab.store', 'lab.accuracy_history'),  # storage → flows
     ('lab.tone', 'lab.jobs'),  # flows → api
 }
-# Modules that import each other in a circle today: store → accuracy_history → discover → judge → llm → gateway → store.
+# Modules that import each other in a circle today: store → accuracy_history → discover → roles → models → store.
 CIRCLES = {
     'lab.accuracy_history',
-    'lab.agents',
-    'lab.agents.source',
-    'lab.context.knowledge',
     'lab.context.sources',
     'lab.discover',
-    'lab.judge',
-    'lab.llm',
-    'lab.llm.gateway',
     'lab.logs',
+    'lab.models',
+    'lab.models.gateway',
+    'lab.roles.base',
+    'lab.roles.judge',
+    'lab.roles.planner',
     'lab.store',
 }
 
