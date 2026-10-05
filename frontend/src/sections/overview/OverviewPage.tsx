@@ -373,7 +373,7 @@ function RunBlock({ state }: { state: LabState }) {
   const counted = live ? undefined : finished.find((r) => r.metric?.measured);
   const run = counted ?? newest;
   const newer = counted && newest && counted.id !== newest.id ? newest : null;
-  const { list } = useCriteria(run?.check ?? null, run && !live ? run.id : null);
+  const criteria = useCriteria(run?.check ?? null, run && !live ? run.id : null);
   const m = run?.metric;
   const deck = state.cards?.cards.length ? state.cards : null;
   if (!run)
@@ -440,7 +440,7 @@ function RunBlock({ state }: { state: LabState }) {
         <div>
           <h3 className="text-read font-semibold text-fg">Главные проблемы прогона</h3>
           <div className="mt-1">
-            <ProblemList list={list} stage="sim" runId={run.id} limit={3} />
+            <ProblemList list={criteria.list} record={criteria} stage="sim" runId={run.id} limit={3} />
           </div>
           <Link
             to={stageLink("sim", run.id)}

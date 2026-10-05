@@ -10,6 +10,7 @@ import { runTitle, useRun } from "../../lab/runs";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { UploadButton } from "../../product/UploadLogs";
 import { CheckHeader } from "../checks/CheckHeader";
@@ -29,7 +30,8 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const wide = useWide();
   const { finished, run: simRun } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   const runId = stage === "sim" ? (simRun?.id ?? null) : null;
-  const { data: problems, list: criteria } = useCriteria(stage === "sim" ? (simRun?.check ?? null) : stage, runId);
+  const record = useCriteria(stage === "sim" ? (simRun?.check ?? null) : stage, runId);
+  const { data: problems, list: criteria } = record;
   const run = useRun(runId, state);
   const [query, setQuery] = useState("");
   const verdict = toVerdict(params.get("v"));
@@ -66,7 +68,10 @@ export function DialogsPage({ stage }: { stage: Stage }) {
     () => all.filter((r) => matchesRow(r, verdict, query, only, serious)),
     [all, verdict, query, only, serious],
   );
-  const key = params.get("d") ?? (wide ? (rows[0]?.key ?? null) : null);
+  // The list waits for what it is made of: the run's conversations, and the criteria when a filter is by them.
+  const waitRun = stage === "sim" && !!simRun && !run.data;
+  const waitRecord = (!!ruleId || verdict === "serious") && !problems && (record.loading || !!record.error);
+  const key = params.get("d") ?? (wide && !waitRun && !waitRecord ? (rows[0]?.key ?? null) : null);
   const selected = key ? all.find((r) => r.key === key) : undefined;
   const open = (k: string | null) =>
     set((n) => {
@@ -75,7 +80,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
       n.delete("dt");
     }, wide);
   const step = (d: 1 | -1) => {
-    if (!rows.length) return;
+    if (!rows.length || waitRun || waitRecord) return;
     const i = rows.findIndex((r) => r.key === key);
     open(rows[Math.max(0, Math.min(rows.length - 1, (i < 0 ? -1 : i) + d))].key);
   };
@@ -140,10 +145,25 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const showDetail = !!selected && (wide || !!params.get("d"));
   const empty =
     stage === "sim"
-      ? "В этом прогоне нет разговоров."
+      ? simRun
+        ? "В этом прогоне нет разговоров."
+        : "Прогонов ещё не было. Здесь будут разговоры синтетических клиентов с агентом."
       : !state.logs.total
         ? "Здесь будут разговоры выгрузки. Сначала загрузите диалоги."
         : "Разговоры появятся после проверки.";
+  const pending = waitRun ? (
+    run.error && !run.isFetching ? (
+      <LoadFailed title="Не удалось загрузить разговоры прогона" error={run.error} onRetry={() => void run.refetch()} />
+    ) : (
+      <Skeleton className="mt-2 h-64" />
+    )
+  ) : waitRecord ? (
+    record.error ? (
+      <LoadFailed title="Не удалось загрузить критерии" error={record.error} onRetry={record.retry} />
+    ) : (
+      <Skeleton className="mt-2 h-64" />
+    )
+  ) : null;
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -151,6 +171,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
         <Rows
           className={showDetail && !wide ? "hidden" : undefined}
           empty={empty}
+          pending={pending}
           all={all}
           rows={rows}
           verdict={verdict}
@@ -181,7 +202,8 @@ export function DialogsPage({ stage }: { stage: Stage }) {
             onBack={wide ? undefined : () => open(null)}
           />
         ) : (
-          wide && (
+          wide &&
+          !pending && (
             <EmptyState drop title={all.length ? "Выберите разговор" : "Разговоров нет"} className="justify-center">
               {all.length ? "Слева все разговоры. Листайте их клавишами J и K." : empty}
             </EmptyState>

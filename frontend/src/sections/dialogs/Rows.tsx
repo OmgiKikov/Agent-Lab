@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { ChevronDown, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Criterion } from "../../lab/criteria";
@@ -91,9 +91,13 @@ function Row({
   );
 }
 
-/** The conversations of one stage: which result, one criterion, a search; one row per conversation. */
+/**
+ * The conversations of one stage: which result, one criterion, a search; one row per conversation. `pending` stands
+ * in the list's place while what it is made of loads or after it failed: no counts then, and no «нет разговоров».
+ */
 export function Rows({
   empty,
+  pending,
   all,
   rows,
   verdict,
@@ -111,6 +115,7 @@ export function Rows({
   className,
 }: {
   empty: string;
+  pending?: ReactNode;
   all: DialogRow[];
   rows: DialogRow[];
   verdict: Verdict;
@@ -125,7 +130,7 @@ export function Rows({
   onOpen: (key: string) => void;
   criteria: Criterion[];
   personas: Persona[];
-  runMenu?: React.ReactNode;
+  runMenu?: ReactNode;
   className?: string;
 }) {
   const find = criteriaByRule(criteria);
@@ -153,14 +158,14 @@ export function Rows({
             trigger={
               <span className="inline-flex items-center gap-1.5 text-body font-semibold text-fg">
                 {current.label}
-                <span className="font-normal tabular-nums text-fg-3">{count(verdict)}</span>
+                {!pending && <span className="font-normal tabular-nums text-fg-3">{count(verdict)}</span>}
                 <ChevronDown aria-hidden className="size-4 text-fg-3" />
               </span>
             }
             items={verdicts.map((v) => ({
               key: v.value,
               label: v.label,
-              sub: `${count(v.value)}`,
+              sub: pending ? undefined : `${count(v.value)}`,
               on: v.value === verdict,
               run: () => onVerdict(v.value),
             }))}
@@ -185,23 +190,29 @@ export function Rows({
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-2 pb-2" role="list" aria-label="Разговоры">
-        {rows.map((r) => (
-          <Row
-            key={r.key}
-            r={r}
-            on={r.key === selected}
-            onOpen={() => onOpen(r.key)}
-            numbers={numbers(r)}
-            personas={personas}
-          />
-        ))}
-        {!rows.length && (
-          <p className="px-3 py-10 text-center text-small text-fg-3">
-            {all.length ? "В этом отборе разговоров нет." : empty}
-          </p>
+        {pending ? (
+          <div className="px-2">{pending}</div>
+        ) : (
+          <>
+            {rows.map((r) => (
+              <Row
+                key={r.key}
+                r={r}
+                on={r.key === selected}
+                onOpen={() => onOpen(r.key)}
+                numbers={numbers(r)}
+                personas={personas}
+              />
+            ))}
+            {!rows.length && (
+              <p className="px-3 py-10 text-center text-small text-fg-3">
+                {all.length ? "В этом отборе разговоров нет." : empty}
+              </p>
+            )}
+          </>
         )}
       </div>
-      {rows.length > 0 && (
+      {!pending && rows.length > 0 && (
         <div className="border-t border-line px-4 py-2 text-small text-fg-3">
           {rows.length}
           {"\u00a0"}из{"\u00a0"}

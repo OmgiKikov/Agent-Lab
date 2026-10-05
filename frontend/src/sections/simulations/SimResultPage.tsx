@@ -13,6 +13,7 @@ import type { LabRun, LabState, RunSummary } from "../../lab/types";
 import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
 import { ProblemList } from "../problems/ProblemList";
@@ -37,7 +38,8 @@ function SimResult() {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const { finished, run } = useSimRuns(state, params.get("run"));
-  const { data, list } = useCriteria(run?.check ?? null, run && !isRunning(run) ? run.id : null);
+  const criteria = useCriteria(run?.check ?? null, run && !isRunning(run) ? run.id : null);
+  const { data, list } = criteria;
   const header = <SimHeader runId={run?.id ?? null} />;
   if (offline && !state)
     return (
@@ -119,14 +121,14 @@ function SimResult() {
             <p className="mt-6 text-title font-semibold text-fg">Разговоры этого прогона ещё не оценены</p>
           )}
           <Matrix run={run} state={state} />
-          {data?.sim && !live && (
+          {!live && (data?.sim || criteria.loading || criteria.error) && (
             <section aria-label="Проблемы" className="mt-16">
               <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">
                 <h2 className="text-title font-semibold text-fg">Проблемы</h2>
-                <p className="text-read text-fg-3">{summarySentence(data, "sim")}</p>
+                {data?.sim && <p className="text-read text-fg-3">{summarySentence(data, "sim")}</p>}
               </div>
               <div className="mt-2">
-                <ProblemList list={list} stage="sim" runId={run.id} />
+                <ProblemList list={list} record={criteria} stage="sim" runId={run.id} />
               </div>
             </section>
           )}
@@ -245,9 +247,12 @@ function RunLine({
   );
 }
 
-/** The run's signature: scenarios down, types of customers across, each cell the verdict of that play. */
+/**
+ * The run's signature: scenarios down, types of customers across, each cell the verdict of that play. Until the run's
+ * conversations come, their shape; if they could not be loaded, that and «Повторить», never «no conversations».
+ */
 function Matrix({ run, state }: { run: LabRun; state: LabState }) {
-  const { data, isLoading } = useRun(run.id, state);
+  const { data, error, isFetching, refetch } = useRun(run.id, state);
   const items = data?.items ?? [];
   return (
     <section aria-label="Сценарии и типы клиентов" className="mt-16">
@@ -261,9 +266,18 @@ function Matrix({ run, state }: { run: LabRun; state: LabState }) {
           <ArrowRight aria-hidden className="size-4" />
         </Link>
       </div>
-      {isLoading ? (
-        <Skeleton className="mt-4 h-64" />
-      ) : data && items.length ? (
+      {!data ? (
+        error && !isFetching ? (
+          <LoadFailed
+            title="Не удалось загрузить разговоры прогона"
+            error={error}
+            onRetry={() => void refetch()}
+            className="mt-4"
+          />
+        ) : (
+          <Skeleton className="mt-4 h-64" />
+        )
+      ) : items.length ? (
         <RunMatrix
           run={data}
           items={items}

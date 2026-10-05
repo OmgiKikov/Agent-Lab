@@ -41,7 +41,8 @@ const link = "font-medium text-run hover:underline";
  * The line under a check's number: how its result stands to its previous check, which opens from the line; the export
  * of that check is in the link's tooltip. Nothing when there is nothing to compare with. With `serious` — once the
  * lines of serious errors stand above — the same comparison of the conversations with a serious error follows in the
- * next line, in the same words.
+ * next line, in the same words. When the service did not answer about the comparison, a quiet line says so, with the
+ * way to ask again: its «было → стало» here and beside the problems would otherwise just be missing.
  */
 export function CompareLine({
   check,
@@ -55,7 +56,22 @@ export function CompareLine({
   serious?: number;
   className?: string;
 }) {
+  const asked = useCompare(check);
   const sentence = compare && compareSentence(compare);
+  if (!compare && asked.isError)
+    return (
+      <p role="alert" className={cn("max-w-[72ch] text-read text-fg-3", className)}>
+        Не удалось загрузить сравнение с прошлой проверкой.{" "}
+        <button
+          type="button"
+          onClick={() => void asked.refetch()}
+          disabled={asked.isFetching}
+          className={cn(link, "disabled:opacity-40")}
+        >
+          Повторить
+        </button>
+      </p>
+    );
   if (!compare || !sentence) return null;
   const grave = serious ? seriousCompareText(compare, serious) : null;
   return (

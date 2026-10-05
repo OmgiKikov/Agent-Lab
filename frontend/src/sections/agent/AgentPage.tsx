@@ -12,6 +12,7 @@ import { codeSources } from "../../lab/tone";
 import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
 import { ConnectionForm } from "./Connection";
@@ -30,7 +31,8 @@ const readAt = () => {
 export function AgentPage() {
   const { state, offline, refresh } = useLabState();
   const toast = useToast();
-  const { list } = useCriteria("code");
+  const criteria = useCriteria("code");
+  const { list } = criteria;
   const [reading, setReading] = useState(false);
   const busy = !!state?.job.running || reading;
   const readCode = () => {
@@ -123,6 +125,10 @@ export function AgentPage() {
             {sources.length > 0 && (
               <>
                 <Label>Инструкции и инструменты</Label>
+                {/* How many criteria each file gave comes from the record of the check: said only once it came. */}
+                {criteria.error && (
+                  <LoadFailed title="Не удалось загрузить критерии" error={criteria.error} onRetry={criteria.retry} />
+                )}
                 <ul className="mt-2 divide-y divide-line">
                   {sources.map((s) => {
                     const mine = list.filter((c) => c.r.rule.sourceId === s.id);
@@ -142,8 +148,10 @@ export function AgentPage() {
                               {dir} · {thousands(s.chars)}
                             </span>
                           </span>
-                          <span className="text-right text-small text-fg-3">
-                            {mine.length ? (
+                          <div className="text-right text-small text-fg-3">
+                            {criteria.loading ? (
+                              <Skeleton className="ml-auto h-4 w-20" />
+                            ) : criteria.error ? null : mine.length ? (
                               <>
                                 {mine.length} {plural(mine.length, "критерий", "критерия", "критериев")}
                                 {broken ? (
@@ -157,7 +165,7 @@ export function AgentPage() {
                             ) : (
                               "критериев нет"
                             )}
-                          </span>
+                          </div>
                           <ArrowRight aria-hidden className="size-3.5 text-fg-4" />
                         </Link>
                       </li>
