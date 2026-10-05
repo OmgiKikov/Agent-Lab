@@ -134,6 +134,8 @@ function AgentTurn({
   onLit?: OnLit;
 }) {
   const { text, buttons } = visible(turn.text);
+  // An export writes the buttons into the text by their codes; a simulated agent sends them by their words.
+  const chips = [...buttons.map((code) => `кнопка${code ? `: ${code}` : ""}`), ...(turn.options ?? [])];
   const pieces = marks.length ? segments(text, marks) : [{ text }];
   const calls = turn.events ?? [];
   return (
@@ -175,15 +177,15 @@ function AgentTurn({
             ),
           )}
         </p>
-        {buttons.length > 0 && (
+        {chips.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {buttons.map((code, i) => (
+            {chips.map((chip, i) => (
               <span
                 key={i}
                 title="Кнопка, которую агент отправил в чат"
                 className="rounded-full border border-line-strong px-2.5 py-0.5 text-small text-fg-3"
               >
-                кнопка{code ? `: ${code}` : ""}
+                {chip}
               </span>
             ))}
           </div>

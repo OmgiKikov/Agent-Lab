@@ -273,6 +273,7 @@ export function useTurns(example?: Example): { turns?: Turn[]; loading: boolean;
   const turns = item?.conversation.map((m) => ({
     role: m.role,
     text: m.text,
+    options: m.options,
     events: m.events,
     ok: m.ok,
     status: m.status,

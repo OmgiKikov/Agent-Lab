@@ -227,10 +227,12 @@ export type ToneDraft = {
 
 /** A tool the agent called during its turn, as the service logged it. */
 export type ToolCall = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };
-/** One turn of a conversation: who spoke, the logged text, the tools called, and how the turn ended. */
+/** One turn of a conversation: who spoke, the logged text, the buttons sent, the tools called, and how the turn ended. */
 export type Turn = {
   role: "customer" | "agent";
   text: string;
+  /** The buttons a simulated agent sent with its reply, by their words; an export writes its own into the text. */
+  options?: string[];
   events?: ToolCall[];
   ok?: boolean;
   status?: string;
