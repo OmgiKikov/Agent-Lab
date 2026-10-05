@@ -111,12 +111,16 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
     );
   }, [asked, askedTypes, setParams]);
   const started = state?.job.running && state.job.kind === "run" ? state.job.progress.run : undefined;
+  // The run started here opens once it is named. One that ended before it was named (the agent did not answer) is
+  // followed no more: a run started later, from elsewhere, never takes this page away.
+  const ended = !!state && !state.job.running;
   useEffect(() => {
-    if (follow && started) {
+    if (!follow) return;
+    if (started) {
       setFollow(false);
       void navigate(runLink(started));
-    }
-  }, [follow, started, navigate]);
+    } else if (ended) setFollow(false);
+  }, [follow, started, ended, navigate]);
 
   const cards = state?.cards?.cards.length ?? 0;
   const busy = !!state?.job.running;

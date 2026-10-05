@@ -10,7 +10,16 @@ const cut = (value: string, limit = 300) => excerpt(value, limit) + (value.trim(
 /** Someone else's text cut short, on one line, its Markdown marks escaped (inlineText). */
 const short = (value: string, limit = 300) => inlineText(cut(value, limit));
 const quote = (value: string) => quoteText(excerpt(value));
-const date = (value: string) => new Date(value).toLocaleString("ru-RU", { dateStyle: "long", timeStyle: "short" });
+/** «5 октября 2026 г. в 07:12 GMT+3»: the brief travels by e-mail, so its time says its zone. */
+const date = (value: string) =>
+  new Date(value).toLocaleString("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
 /** A word that begins a sentence. */
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 

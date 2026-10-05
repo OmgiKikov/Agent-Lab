@@ -16,13 +16,26 @@ export const pct = (a: number, b: number) => {
   return a > 0 && a < b ? Math.min(99, Math.max(1, share)) : share;
 };
 
-export const when = (iso?: string | null) =>
-  iso
-    ? new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
-    : "";
+/** The year of a date when it is not this year's: «05.10» now, «05.10.2025» for a check of last year. */
+const yearOf = (date: Date) => (date.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" as const });
 
-export const day = (iso?: string | null) =>
-  iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) : "";
+export const when = (iso?: string | null) => {
+  if (!iso) return "";
+  const date = new Date(iso);
+  return date.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    ...yearOf(date),
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+export const day = (iso?: string | null) => {
+  if (!iso) return "";
+  const date = new Date(iso);
+  return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", ...yearOf(date) });
+};
 
 export const thousands = (chars: number) => `${(Math.round(chars / 100) / 10).toLocaleString("ru-RU")} тыс. знаков`;
 
@@ -30,6 +43,9 @@ export const thousands = (chars: number) => `${(Math.round(chars / 100) / 10).to
 export const time = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "";
 
-/** «28 сентября»: a date as people say it, for sentences. */
-export const longDay = (iso?: string | null) =>
-  iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }) : "";
+/** «28 сентября»: a date as people say it, for sentences; «28 сентября 2025 г.» when it is not this year's. */
+export const longDay = (iso?: string | null) => {
+  if (!iso) return "";
+  const date = new Date(iso);
+  return date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", ...yearOf(date) });
+};
