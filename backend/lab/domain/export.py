@@ -1,9 +1,11 @@
 """An export of conversations from the chat (a workbook or JSON lines) read into conversations, and the text of a
 conversation as the customer saw it, with the agent's own words in it.
 
-Excel exports contain CLIENT/AGENT turns and the real message count in the order column. Some exports
-repeat every exchange twice. Only that complete, count-confirmed export pattern is removed; a customer's
-actual repeated question is preserved. Parsing is pure so a cancelled import cannot commit from a thread.
+Excel exports contain CLIENT/AGENT turns, on lines of their own or all on one line, and an order column. Some exports
+repeat every exchange twice: only that complete pattern, confirmed by the order column's count, is removed, and a
+customer's actual repeated question is preserved. Otherwise the text is the conversation: the bank's export often
+counts other messages than its text holds, and a row it disagrees with is read as written, never refused or cut.
+Parsing is pure so a cancelled import cannot commit from a thread.
 """
 
 import io
@@ -20,8 +22,8 @@ LIMIT = 50_000_000  # an uploaded export
 INFLATED = 500_000_000  # the parts of a workbook, unpacked together
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
-# The export starts every turn on its own line; «HOST AGENT NOT FOUND» inside a message is the customer's words.
-MARKER = re.compile(r'^[ \t]*(CLIENT|AGENT)\b', re.M)
+# A turn starts at CLIENT or AGENT standing alone: at a line start, or mid-line in the bank's export.
+MARKER = re.compile(r'(?:^|(?<=\s))(CLIENT|AGENT)(?=\s|$)')
 # A broken workbook: openpyxl names a part the archive does not have (KeyError), zipfile meets a broken stream or a
 # feature it does not read.
 UNREADABLE = (BadZipFile, InvalidFileException, ParseError, KeyError, zlib.error, EOFError, NotImplementedError)
@@ -67,27 +69,24 @@ def turns(text: str) -> list[dict]:
     ]
 
 
-def _message_count(order: object) -> int:
-    """How many messages the order column lists. A refusal is the end of a sentence about one dialogue (from_excel)."""
+def _message_count(order: object) -> int | None:
+    """How many messages the order column lists; None when it lists none or cannot be read."""
     try:
         value = json.loads(str(order))
-    except (ValueError, TypeError) as error:
-        raise ValueError('не читается порядок сообщений') from error
-    if not isinstance(value, list) or not value:
-        raise ValueError('пустой порядок сообщений')
-    return len(value)
+    except (ValueError, TypeError):
+        return None
+    return len(value) if isinstance(value, list) and value else None
 
 
-def _export_messages(messages: list[dict], count: int) -> list[dict]:
-    if len(messages) == count:
-        return messages
+def _export_messages(messages: list[dict], count: int | None) -> list[dict]:
+    """The turns of the text, with the export's doubling removed where the count confirms it."""
     # Known duplicated-export layout: customer+agent, the same customer+agent, then the next exchange.
     # Count is essential: equality of adjacent exchanges alone cannot distinguish an export from a real repeat.
-    if count % 2 == 0 and len(messages) == 2 * count:
+    if count and count % 2 == 0 and len(messages) == 2 * count:
         blocks = [messages[index : index + 4] for index in range(0, len(messages), 4)]
         if all(block[:2] == block[2:] for block in blocks):
             return [message for block in blocks for message in block[:2]]
-    raise ValueError('текст не совпадает с порядком сообщений')
+    return messages
 
 
 def _check_parts(data: bytes) -> None:
@@ -133,13 +132,11 @@ def from_excel(data: bytes) -> list[dict]:
         for row in rows:
             if not any(value is not None for value in row):
                 continue
-            dialogue_id = _cell(row, column[ID])
-            try:
-                count = _message_count(_cell(row, column[ORDER]))
-                messages = _export_messages(turns(str(_cell(row, column[TEXT]) or '')), count)
-            except ValueError as error:
-                raise ValueError(f'В диалоге {dialogue_id} {error}.') from error
-            dialogues.append({'id': dialogue_id, 'messages': messages})
+            count = _message_count(_cell(row, column[ORDER]))
+            # A marker with nothing after it is no message: it never sinks the upload.
+            said = [turn for turn in turns(str(_cell(row, column[TEXT]) or '')) if turn['content']]
+            messages = _export_messages(said, count)
+            dialogues.append({'id': _cell(row, column[ID]), 'messages': messages})
         return dialogues
     finally:
         workbook.close()
