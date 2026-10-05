@@ -208,11 +208,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         store.save(api.discover.RESULT, {'results': ['old']})
         store.save(api.cards.DECK, {'cards': ['old']})
 
-        def collect(repo) -> list[dict]:
+        def collect(repo) -> tuple[list[dict], list[str]]:
             entered.set()
             release.wait(timeout=5)
             finished.set()
-            return [{'id': 'new'}]
+            return [{'id': 'new'}], []
 
         with patch.object(api.sources, 'collect', side_effect=collect):
             try:
@@ -479,11 +479,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         nothing, and a folder saved later is not said to be the one read."""
         source = {'id': 's1', 'kind': 'prompt', 'name': 'a.py:1', 'origin': 'a.py:1', 'sha256': 'x', 'content': 'p'}
         await self.client.post('/api/settings', json={'repo': '~/agent'})
-        with patch.object(api.sources, 'collect', return_value=[source]):
+        with patch.object(api.sources, 'collect', return_value=([source], ['src/c.py:1'])):
             await self.client.post('/api/sources')
             await self.wait_job()
         read = (await self.client.get('/api/state')).json()['sourcesRead']
         self.assertEqual(read['repo'], '~/agent')
+        self.assertEqual(read['overBudget'], ['src/c.py:1'])
         self.assertTrue(read['readAt'])
         await self.client.post('/api/settings', json={'repo': '~/elsewhere'})
         with patch.object(api.sources, 'collect', side_effect=RuntimeError('В папке нет кода агента.')):

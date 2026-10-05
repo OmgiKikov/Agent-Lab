@@ -13,6 +13,9 @@ from .. import store
 
 MIN_PROMPT = 600
 MAX_TOTAL = 60000  # characters of prompts handed to the planner
+# The agent's tests, by the names test runners look for: their strings are test data, not the agent's instructions.
+TEST_FILE = re.compile(r'test_\w*\.py|\w+_test\.py|tests?\.py|conftest\.py')
+TEST_FOLDER = re.compile(r'tests?|\w+_tests?')
 
 
 def _sha(text: str) -> str:
@@ -25,11 +28,23 @@ def _looks_like_prompt(text: str) -> bool:
     return len(text) >= MIN_PROMPT and cyrillic > 0.3 * len(text) and any(m in text for m in markers)
 
 
-def prompts(repo: Path) -> list[dict]:
+def code_files(repo: Path) -> list[Path]:
+    """The agent's Python files under src/, its tests left out. Only the path inside src/ counts: the folder the
+    repository lives in names nothing of the agent, and «latest.py» is no test."""
+    code = repo / 'src'
+    return [
+        path
+        for path in sorted(code.rglob('*.py'))
+        if not TEST_FILE.fullmatch(path.name)
+        and not any(TEST_FOLDER.fullmatch(part) for part in path.relative_to(code).parts[:-1])
+    ]
+
+
+def prompts(repo: Path) -> tuple[list[dict], list[str]]:
+    """The prompts handed to the planner, and where the ones over its budget stand (path:line): a person learns what
+    the criteria could not be collected from."""
     found, seen = [], set()
-    for path in sorted((repo / 'src').rglob('*.py')):
-        if 'test' in path.name or '_tests' in str(path):
-            continue
+    for path in code_files(repo):
         try:
             tree = ast.parse(path.read_text(encoding='utf-8'))
         except (SyntaxError, UnicodeDecodeError):
@@ -45,12 +60,14 @@ def prompts(repo: Path) -> list[dict]:
                 found.append({'kind': 'prompt', 'name': origin, 'origin': origin, 'sha256': digest, 'content': text})
     # The customer-facing answer prompt first, then the longest ones, within the planner's budget.
     found.sort(key=lambda s: ('ассистент' not in s['content'][:400], -len(s['content'])))
-    kept, total = [], 0
+    kept, left, total = [], [], 0
     for source in found:
         if total + len(source['content']) <= MAX_TOTAL:
             kept.append(source)
             total += len(source['content'])
-    return kept
+        else:
+            left.append(source['origin'])
+    return kept, left
 
 
 def tools(repo: Path) -> dict | None:
@@ -68,11 +85,7 @@ def tools(repo: Path) -> dict | None:
         path = repo / name
         if path.exists():
             env.update(re.findall(r'^(SBE_TOOL_NAME_\w+)\s*=\s*"?([^"\n]+)"?', path.read_text(encoding='utf-8'), re.M))
-    code = {
-        p: p.read_text(encoding='utf-8', errors='ignore')
-        for p in (repo / 'src').rglob('*.py')
-        if p != config and '_tests' not in str(p)
-    }
+    code = {p: p.read_text(encoding='utf-8', errors='ignore') for p in code_files(repo) if p != config}
     lines = []
     for field, alias in sorted(aliases.items(), key=lambda kv: kv[1]):
         users = sorted(str(p.relative_to(repo)) for p, text in code.items() if field in text)
@@ -90,8 +103,9 @@ def tools(repo: Path) -> dict | None:
 
 
 FILE = 'sources.json'
-# When the agent's code was read last, and from which folder (the setting as the person wrote it): written with the
-# sources, so «Агент» names the read that succeeded, not the one asked for.
+# When the agent's code was read last, from which folder (the setting as the person wrote it) and which prompts were
+# over the planner's budget (overBudget, path:line): written with the sources, so «Агент» names the read that
+# succeeded, not the one asked for.
 READ = 'sources-read.json'
 
 
@@ -100,11 +114,12 @@ def load() -> list[dict]:
     return store.load(FILE, []) or []
 
 
-def collect(repo: Path) -> list[dict]:
-    """Read the current repository; committing a collected snapshot belongs to the calling job."""
+def collect(repo: Path) -> tuple[list[dict], list[str]]:
+    """Read the current repository: the sources, and the prompts over the planner's budget (prompts). Committing a
+    collected snapshot belongs to the calling job."""
     if not (repo / 'src').is_dir():
         raise RuntimeError(f'В папке {repo} нет кода агента. Укажите папку с кодом в разделе «Агент».')
-    collected = prompts(repo)
+    collected, over_budget = prompts(repo)
     catalog = tools(repo)
     if catalog:
         collected.append(catalog)
@@ -112,4 +127,4 @@ def collect(repo: Path) -> list[dict]:
         raise RuntimeError(f'В папке {repo} нет ни инструкций агента, ни его инструментов.')
     for index, source in enumerate(collected, 1):
         source['id'] = f's{index}'
-    return collected
+    return collected, over_budget

@@ -62,7 +62,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
     async def read_code(self, source):
-        with patch.object(api.sources, 'collect', return_value=[source]):
+        with patch.object(api.sources, 'collect', return_value=([source], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
         self.assertIsNone(api.jobs.state['error'])

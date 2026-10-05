@@ -58,7 +58,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
-        with patch.object(api.sources, 'collect', return_value=[CODE]):
+        with patch.object(api.sources, 'collect', return_value=([CODE], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
         self.assertIsNone(api.jobs.state['error'])

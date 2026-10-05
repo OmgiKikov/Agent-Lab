@@ -346,10 +346,10 @@ async def check_models() -> dict:
 async def collect_sources() -> dict:
     async def work(progress: Progress) -> list[dict]:
         folder = agents.settings()['repo']
-        collected = await asyncio.to_thread(sources.collect, agents.repo())
+        collected, over_budget = await asyncio.to_thread(sources.collect, agents.repo())
         # The tone-of-voice policy is a person's document, not the agent's code: re-reading the code keeps it.
         policy = [source for source in sources.load() if source['kind'] == tone.KIND]
-        read = {'readAt': store.now(), 'repo': folder}
+        read = {'readAt': store.now(), 'repo': folder, 'overBudget': over_budget}
         store.replace_inputs(sources.FILE, [*collected, *policy], {sources.READ: read})
         return collected
 

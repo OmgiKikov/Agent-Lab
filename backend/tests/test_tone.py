@@ -202,7 +202,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         store.save(api.cards.DECK, {'check': 'code', 'cards': ['built from the code']})
         policy = api.sources.load()[-1]
         code = [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'new prompt'}]
-        with patch.object(api.sources, 'collect', return_value=code):
+        with patch.object(api.sources, 'collect', return_value=(code, [])):
             await self.client.post('/api/sources')
             await self.wait_job()
         self.assertIsNone(api.jobs.state['error'])
@@ -270,33 +270,30 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result['summary']['measured'], result['summary']['passed']), (1, 1))
 
     async def test_partial_unknown_is_not_a_successful_tone_check(self):
-        draft = await self.prepared()
-        rows = [
-            {
-                'ruleId': rule['id'],
-                'rule': rule['text'],
-                'status': status,
-                'reason': 'Проверка',
-                'agentQuote': '',
-                'title': '',
+        """A criterion the judge could not measure keeps the conversation out of the share, for both models: the judge
+        decides it (judge.verdict_of), the tone check counts what it decided."""
+        await self.prepared()
+
+        async def answered(system, payload, parse, attempts=2, endpoint=None):
+            reply = {
+                'rules': [
+                    {'ruleId': 'pronouns', 'status': 'PASS', 'reason': 'На вы', 'agentQuote': 'Уточните, пожалуйста'},
+                    {'ruleId': 'simple_language', 'status': 'UNKNOWN', 'reason': 'Не по чему судить'},
+                ]
             }
-            for rule, status in zip(draft['criteria'], ('PASS', 'UNKNOWN'), strict=True)
-        ]
-        value = {
-            'dialogueId': 'd1',
-            'topicId': 't1',
-            'status': 'PASS',
-            'rules': rows,
-            'opening': 'Вопрос',
-            'model': 'test',
-            'second': {'status': 'PASS', 'model': 'test2', 'rules': rows},
-        }
-        with patch.object(discover, 'judge_dialogue', AsyncMock(return_value=value)):
+            return llm.Answer(parse(reply), endpoint[1] if endpoint else 'main')
+
+        with (
+            patch.object(llm, 'structured', answered),
+            patch.object(llm, 'second_judge', return_value=('http://second.test/v1', 'second')),
+        ):
             await self.client.post(
                 '/api/tone-of-voice/check', json={'ruleIds': ['pronouns', 'simple_language'], 'count': 1}
             )
             await self.wait_job()
+        self.assertIsNone(api.jobs.state['error'])
         result = store.load(tone.RESULT)
+        self.assertEqual([row['status'] for row in result['results'][0]['rules']], ['PASS', 'UNKNOWN'])
         self.assertEqual(result['results'][0]['status'], 'UNMEASURED')
         self.assertEqual(result['results'][0]['second']['status'], 'UNMEASURED')
         self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (0, 1))

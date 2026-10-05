@@ -422,7 +422,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.severity_marks()['tone'], {pronouns: True, simple: False})
 
     async def test_an_accuracy_check_proposes_for_its_criteria_too(self):
-        with patch.object(api.sources, 'collect', return_value=[CODE]):
+        with patch.object(api.sources, 'collect', return_value=([CODE], [])):
             await self.client.post('/api/sources')
             await self.wait_job()
 

@@ -5,7 +5,7 @@ import hashlib
 import re
 import uuid
 
-from . import checks, discover, llm, quotes, store, tone_history
+from . import checks, discover, history, llm, logs, quotes, store, tone_history
 from .context import sources
 from .jobs import Progress
 
@@ -171,7 +171,7 @@ def _parse(value: dict, source: dict) -> list[dict]:
 
 async def prepare(progress: Progress) -> dict:
     source = current_policy()
-    if not discover.sample(1):
+    if not store.length(logs.FILE):
         raise ValueError('Сначала загрузите диалоги.')
     progress(message='Собираем критерии из правил общения')
     criteria = coded_criteria(source)
@@ -292,9 +292,6 @@ async def _judge(dialogues: list[dict], topic: dict, progress: Progress) -> list
     results: list[dict] = []
 
     def done(result: dict) -> None:
-        for value in (result, result.get('second')):
-            if value and value.get('status') == 'PASS' and any(row['status'] == 'UNKNOWN' for row in value['rules']):
-                value['status'] = 'UNMEASURED'
         results.append(result)
         progress(done=len(results), total=len(dialogues), message='Проверяем разговоры')
 
@@ -326,7 +323,7 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
         'checkId': uuid.uuid4().hex,
         'criteriaRevision': draft['revision'],
         'criteriaFingerprint': tone_history.criteria_fingerprint(criteria, source),
-        'datasetFingerprint': tone_history.fingerprint(sorted(dialogues, key=lambda dialogue: str(dialogue['id']))),
+        'datasetFingerprint': history.dataset_fingerprint(dialogues),
         'startedAt': started,
         'finishedAt': store.now(),
         'rulesSince': draft['createdAt'],
@@ -353,8 +350,7 @@ def commit(result: dict) -> None:
     if (
         result['criteriaRevision'] != draft.get('revision')
         or result['criteriaFingerprint'] != tone_history.criteria_fingerprint(criteria, source)
-        or result['datasetFingerprint']
-        != tone_history.fingerprint(sorted(dialogues, key=lambda dialogue: str(dialogue['id'])))
+        or result['datasetFingerprint'] != history.dataset_fingerprint(dialogues)
     ):
         raise ValueError('Материалы проверки изменились. Запустите проверку заново.')
     snapshot = tone_history.snapshot(result, dialogues, criteria, source)

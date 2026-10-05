@@ -45,8 +45,9 @@ class Script:
     """The string literals, template literals and JSX text of a TypeScript file, each with where it starts. Comments
     and regular expressions are skipped; code inside a template's ${…} is read as code, its strings as strings."""
 
-    # After these a slash starts a regular expression, not a division.
-    BEFORE_REGEX = frozenset('(,=:[!&|?{};+-*%<>~^')
+    # After these a slash starts a regular expression, not a division. Not after «<»: there it closes a JSX tag, and
+    # the texts after </p> on the same line would be read as a regular expression and never checked.
+    BEFORE_REGEX = frozenset('(,=:[!&|?{};+-*%>~^')
 
     def __init__(self, text: str) -> None:
         self.text, self.found = text, []

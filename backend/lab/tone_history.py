@@ -1,7 +1,7 @@
 """Immutable tone check evidence and conservative comparison metadata; reads never run models."""
 
 from . import logs, store
-from .history import comparison, evaluation_fingerprint, fingerprint
+from .history import comparison, dataset_fingerprint, evaluation_fingerprint, fingerprint
 
 
 def criteria_fingerprint(criteria: list[dict], source: dict) -> str:
@@ -14,10 +14,10 @@ def snapshot(result: dict, dialogues: list[dict], criteria: list[dict], source: 
         'finishedAt': result['finishedAt'],
         'criteriaRevision': result['criteriaRevision'],
         'criteriaFingerprint': result['criteriaFingerprint'],
-        'datasetFingerprint': fingerprint(sorted(dialogues, key=lambda dialogue: str(dialogue['id']))),
+        'datasetFingerprint': dataset_fingerprint(dialogues),
         'evaluationFingerprint': evaluation_fingerprint(result),
         'file': logs.meta().get('file'),
-        'total': len(logs.load()),
+        'total': store.length(logs.FILE),
         'sampled': result['sampled'],
         'summary': {key: result['summary'][key] for key in ('measured', 'passed', 'failed', 'unmeasured')},
         'model': result['model'],

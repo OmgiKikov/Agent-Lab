@@ -274,6 +274,20 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((await self.client.get('/api/problems?check=accuracy')).status_code, 422)
 
+    async def test_a_newer_run_the_model_checked_nothing_of_is_not_the_latest_result(self) -> None:
+        unchecked = played_run() | {
+            'id': 'run-2',
+            'startedAt': '2026-10-01T10:00:00+00:00',
+            'finishedAt': '2026-10-01T10:10:00+00:00',
+        }
+        unchecked['items'] = [dict(unchecked['items'][0], status='UNMEASURED', rules=[])]
+        store.create_run(unchecked)
+        latest = '/api/problems?check=code'
+        self.assertEqual((await self.client.get(latest)).json()['sim']['runId'], 'run-2')  # the only one there is
+        store.create_run(played_run())  # older, with a conversation checked: as «Обзор» shows it
+        self.assertEqual((await self.client.get(latest)).json()['sim']['runId'], 'run-1')
+        self.assertEqual((await self.client.get('/api/problems?run=run-2')).json()['sim']['runId'], 'run-2')
+
     async def test_run_summary_excludes_unmeasured_conversations_from_checked_count(self) -> None:
         record = played_run()
         record['items'].extend([{'status': 'PASS', 'cardId': 'pass'}, {'status': 'UNMEASURED', 'cardId': 'unknown'}])

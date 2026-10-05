@@ -13,6 +13,7 @@ from collections import Counter
 
 from . import agents, cards, checks, personas, quotes, store
 from .context import sources
+from .metric import metric
 
 COUNTED = {'FAIL': 'failed', 'PASS': 'passed', 'UNKNOWN': 'unknown'}
 WORSE = {'FAIL': 2, 'PASS': 1, 'UNKNOWN': 0}
@@ -26,15 +27,18 @@ def rule_key(quote: str) -> str:
 
 
 def chosen_run(check: str, run_id: str | None) -> dict | None:
-    """The run asked for, or the newest finished one of this check that has conversations."""
+    """The run asked for; else, as «Обзор» shows it, the newest finished run of this check with a conversation checked:
+    a newer run the model could check nothing of is no latest result. Without one, the newest finished run of this
+    check that has conversations."""
     if run_id:
         return store.run(run_id)
-    finished = (
+    finished = [
         r
         for r in store.runs()
         if r.get('finishedAt') and r.get('status') != 'running' and r.get('items') and checks.of_run(r) == check
-    )
-    return next(finished, None)
+    ]
+    checked = (r for r in finished if (r.get('metric') or metric(r['items']))['measured'])
+    return next(checked, finished[0] if finished else None)
 
 
 def second_of(
