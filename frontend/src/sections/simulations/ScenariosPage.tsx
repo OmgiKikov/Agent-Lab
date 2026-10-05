@@ -25,6 +25,7 @@ import {
 import type { Card, Persona } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Search } from "../../ui/Search";
 import { Dot, dotOf } from "./parts";
 import { ScenarioView, type RecordState } from "./ScenarioView";
@@ -147,7 +148,7 @@ export function ScenariosPage() {
   const wide = useWide();
   const deck = state?.cards ?? null;
   const { list } = useCriteria(deck?.check ?? null);
-  const { data: tests, isError, isFetching } = useScenarios(state);
+  const { data: tests, isError, isFetching, error, refetch } = useScenarios(state);
   const [query, setQuery] = useState("");
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
@@ -289,7 +290,19 @@ export function ScenariosPage() {
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-2 pb-4">
-            {filter !== "all" && !tests && <Skeleton className="mx-2 mt-2 h-40" />}
+            {/* A filter by the last results waits for them; when they could not be loaded, that and «Повторить». */}
+            {filter !== "all" &&
+              !tests &&
+              (isError && !isFetching ? (
+                <LoadFailed
+                  title="Не удалось загрузить итоги сценариев"
+                  error={error}
+                  onRetry={() => void refetch()}
+                  className="px-2"
+                />
+              ) : (
+                <Skeleton className="mx-2 mt-2 h-40" />
+              ))}
             {shown.length > 0 && (
               <ul aria-label="Сценарии">
                 {shown.map((c) => (
