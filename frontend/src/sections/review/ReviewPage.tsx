@@ -15,6 +15,7 @@ import { Duty } from "../../product/Duty";
 import { ExampleCard } from "../../product/ExampleCard";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
 import { CheckHeader } from "../checks/CheckHeader";
@@ -38,7 +39,10 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const { run } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   const runId = stage === "sim" ? (run?.id ?? null) : null;
   // A check's cases are of its result; a run's, of the run, counted by the criteria of its check.
-  const { data, isPlaceholderData } = useProblems(stage === "sim" ? (run?.check ?? null) : stage, runId);
+  const { data, isPlaceholderData, error, isFetching, refetch } = useProblems(
+    stage === "sim" ? (run?.check ?? null) : stage,
+    runId,
+  );
   const source = side(stage);
   const review = useReview();
   const ruleId = params.get("rule");
@@ -220,6 +224,14 @@ export function ReviewPage({ stage }: { stage: Stage }) {
             <EmptyState drop title="Здесь будут случаи из прогонов" className="py-24">
               Сыграйте сценарии в «Симуляциях», и модель оценит разговоры синтетических клиентов.
             </EmptyState>
+          ) : !data && error && !isFetching ? (
+            <LoadFailed
+              page
+              title="Не удалось загрузить случаи"
+              error={error}
+              onRetry={() => void refetch()}
+              className="py-24"
+            />
           ) : !data || frozen?.id !== id ? (
             <Skeleton className="mt-8 h-[480px]" />
           ) : !keys.length ? (

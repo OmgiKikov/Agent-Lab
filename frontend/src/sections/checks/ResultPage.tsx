@@ -14,6 +14,7 @@ import { Trust } from "../../product/Trust";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { ProblemList } from "../problems/ProblemList";
 import { AssessSheet } from "./AssessSheet";
 import { CheckHeader } from "./CheckHeader";
@@ -35,7 +36,7 @@ export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  const { data, list } = useCriteria(check);
+  const { data, list, error, retry } = useCriteria(check);
   const result = resultOf(state, check);
   const compare = useComparison(check);
   const [assess, setAssess] = useState(false);
@@ -106,6 +107,7 @@ export function ResultPage({ check }: { check: Check }) {
   if (offline && !state) return page(<ServiceDown />);
   if (state && !result) return page(check === "tone" ? <ToneStart /> : <AccuracyStart />);
   const log = data?.log;
+  if (error) return page(<LoadFailed page title="Не удалось загрузить итог проверки" error={error} onRetry={retry} />);
   if (!state || !data || !log)
     return page(
       <div className="space-y-6 px-4 pt-10 lg:px-10">

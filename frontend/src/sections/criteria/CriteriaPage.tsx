@@ -14,6 +14,7 @@ import { codeSources, TONE_ID } from "../../lab/tone";
 import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Segmented } from "../../ui/Segmented";
 import { CheckHeader } from "../checks/CheckHeader";
@@ -42,7 +43,7 @@ export function CriteriaPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const wide = useWide();
-  const { data, list } = useCriteria(check);
+  const { data, list, error, retry } = useCriteria(check);
   const tone = check === "tone";
   const [reextract, setReextract] = useState(false);
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
@@ -73,7 +74,8 @@ export function CriteriaPage({ check }: { check: Check }) {
     sources.find((s) => list.some((c) => c.r.rule.sourceId === s.id))?.id ??
     null;
   const source = sources.find((s) => s.id === fileId) ?? null;
-  const { data: text, isLoading } = useSource(view === "code" ? fileId : null);
+  // Only a source the service lists is asked for: one an address names that is gone is said so, not waited for.
+  const text = useSource(view === "code" ? (source?.id ?? null) : null);
   const items = useMemo(() => list.filter((c) => c.r.rule.sourceId === fileId), [list, fileId]);
   const shownRaw = params.get("x") as Shown | null;
   const shown: Shown =
@@ -142,6 +144,13 @@ export function CriteriaPage({ check }: { check: Check }) {
       <div className="flex h-full flex-col">
         {header}
         <ServiceDown />
+      </div>
+    );
+  if (!data && error)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <LoadFailed page title="Не удалось загрузить критерии" error={error} onRetry={retry} />
       </div>
     );
   if (!state || !data)
@@ -320,22 +329,49 @@ export function CriteriaPage({ check }: { check: Check }) {
                   </span>
                 </div>
               )}
-              {isLoading || !text ? (
+              {!source ? (
+                <EmptyState
+                  drop
+                  title="Источника нет"
+                  className="flex-1 justify-center"
+                  action={
+                    <Button
+                      onClick={() =>
+                        set((n) => {
+                          n.set("view", "list");
+                          n.delete("f");
+                        })
+                      }
+                    >
+                      Критерии списком
+                    </Button>
+                  }
+                >
+                  {tone
+                    ? "Текста правил общения нет среди сохранённых. Критерии из него есть в списке."
+                    : "Этого файла нет в прочитанном коде агента. Критерии есть в списке."}
+                </EmptyState>
+              ) : text.data ? (
+                <CodeView
+                  label={tone ? "Текст правил общения с критериями" : "Код агента с критериями"}
+                  source={source}
+                  content={text.data.content}
+                  items={items}
+                  side={side}
+                  selected={chosen?.r.id ?? null}
+                  onSelect={select}
+                />
+              ) : text.error && !text.isFetching ? (
+                <LoadFailed
+                  title={tone ? "Не удалось загрузить текст правил общения" : "Не удалось загрузить файл кода"}
+                  error={text.error}
+                  onRetry={() => void text.refetch()}
+                  className="px-6"
+                />
+              ) : (
                 <div className="p-6">
                   <Skeleton className="h-[420px]" />
                 </div>
-              ) : (
-                source && (
-                  <CodeView
-                    label={tone ? "Текст правил общения с критериями" : "Код агента с критериями"}
-                    source={source}
-                    content={text.content}
-                    items={items}
-                    side={side}
-                    selected={chosen?.r.id ?? null}
-                    onSelect={select}
-                  />
-                )
               )}
             </div>
           </>

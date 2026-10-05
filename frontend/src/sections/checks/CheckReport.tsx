@@ -1,6 +1,9 @@
 import type { Check } from "../../app/links";
 import { useCriteria } from "../../lab/criteria";
 import { useLabState } from "../../lab/LabProvider";
+import { EmptyState, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
+import { Sheet } from "../../ui/Sheet";
 import { ReportSheet } from "../problems/ReportSheet";
 import { BriefSheet, useToneBrief } from "../tone/BriefSheet";
 
@@ -11,9 +14,28 @@ function ToneReport({ open, onClose }: Props) {
   return <BriefSheet open={open} onClose={onClose} brief={useToneBrief(state)} />;
 }
 
+/**
+ * The protocol of accuracy, once its record is here. Asked for before that, the sheet opens all the same: with the
+ * shape of the report while the record loads, or saying it could not load it, with «Повторить».
+ */
 function AccuracyReport({ open, onClose }: Props) {
-  const { data, list } = useCriteria("code");
-  return data && (data.log || data.sim) ? <ReportSheet open={open} onClose={onClose} data={data} list={list} /> : null;
+  const { data, list, loading, error, retry } = useCriteria("code");
+  if (data && (data.log || data.sim)) return <ReportSheet open={open} onClose={onClose} data={data} list={list} />;
+  return (
+    <Sheet open={open} onClose={onClose} width="lg" title="Отчёт">
+      <div className="px-5 py-6 sm:px-8">
+        {error ? (
+          <LoadFailed title="Не удалось загрузить отчёт" error={error} onRetry={retry} />
+        ) : loading ? (
+          <Skeleton className="mx-auto h-[480px] max-w-3xl" />
+        ) : (
+          <EmptyState drop title="Здесь будет отчёт для письма">
+            Он появится после проверки точности.
+          </EmptyState>
+        )}
+      </div>
+    </Sheet>
+  );
 }
 
 /**

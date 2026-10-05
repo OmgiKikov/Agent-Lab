@@ -30,6 +30,7 @@ import { Trust } from "../../product/Trust";
 import { buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Label } from "../../ui/Label";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { CheckReport } from "../checks/CheckReport";
 import { CompareLine, PreviousCheck } from "../checks/Compare";
 import { Needs, needsOf, type Need } from "../checks/Start";
@@ -291,7 +292,7 @@ function BlockHead({ to, title, sub }: { to: string; title: string; sub: ReactNo
  */
 function CheckBlock({ check, state }: { check: Check; state: LabState }) {
   const result = resultOf(state, check);
-  const { data, list } = useCriteria(result ? check : null);
+  const { data, list, error, retry } = useCriteria(result ? check : null);
   const { data: answer } = useCompare(check);
   const compare = comparisonOf(answer, result);
   const log = data?.log;
@@ -355,6 +356,8 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
             <ArrowRight aria-hidden className="size-4" />
           </Link>
         </>
+      ) : error ? (
+        <LoadFailed title="Не удалось загрузить итог проверки" error={error} onRetry={retry} className="mt-6" />
       ) : (
         <Skeleton className="mt-8 h-72" />
       )}
@@ -502,10 +505,23 @@ function StepList({ label, steps }: { label: string; steps: Step[] }) {
   );
 }
 
-/** What to do in one check: the person's answers on what it found, then the hand-off of its problems. */
+/**
+ * What to do in one check: the person's answers on what it found, then the hand-off of its problems. Until its record
+ * comes, the shape of the steps; when it could not be loaded, that and «Повторить», not an empty place.
+ */
 function CheckSteps({ check, onReport }: { check: Check; onReport: () => void }) {
-  const { data, list } = useCriteria(check);
-  if (!data?.log) return null;
+  const { data, list, loading, error, retry } = useCriteria(check);
+  if (!data?.log)
+    return error || loading ? (
+      <div>
+        <Label>{CHECK_NAME[check]}</Label>
+        {error ? (
+          <LoadFailed title="Не удалось загрузить проблемы" error={error} onRetry={retry} />
+        ) : (
+          <Skeleton className="mt-3 h-24" />
+        )}
+      </div>
+    ) : null;
   const disputed = verdictQueue(data, "disputed", null, "log").length;
   // The errors the model found and nobody answered yet, and how many conversations they are in: «28 ошибок» next to
   // «22 разговора с ошибкой» needs its own unit.

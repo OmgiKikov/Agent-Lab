@@ -29,6 +29,7 @@ import { SourceSheet } from "../../product/SourceSheet";
 import { shortOrigin } from "../../product/text";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { useSimRuns } from "../simulations/stage";
 import { Handoff } from "./Handoff";
@@ -52,7 +53,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const { run: simRun } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   // A check's problem is of that check; a run's, of the check whose scenarios it played.
   const check = stage === "sim" ? (simRun?.check ?? null) : stage;
-  const { data, list } = useCriteria(check, stage === "sim" ? (simRun?.id ?? null) : null);
+  const { data, list, error, retry } = useCriteria(check, stage === "sim" ? (simRun?.id ?? null) : null);
   const here = side(stage);
   const review = useReview();
   const [lit, setLit] = useState(false);
@@ -128,6 +129,13 @@ export function ProblemPage({ stage }: { stage: Stage }) {
       <div className="flex h-full flex-col">
         {header}
         <ServiceDown />
+      </div>
+    );
+  if (!data && error)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <LoadFailed page title="Не удалось загрузить проблему" error={error} onRetry={retry} />
       </div>
     );
   // Without any run the simulation has no problems to wait for.
