@@ -125,7 +125,16 @@ export type Pattern = {
   titles: string[];
   examples: PatternExample[];
 };
-export type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };
+/** local: the agent runs on the local stand, the only one that gives its trace to a replay. */
+export type Target = {
+  id: string;
+  name: string;
+  kind: string;
+  note: string;
+  where: string;
+  ready: boolean;
+  local: boolean;
+};
 export type Persona = { id: string; name: string; note: string };
 export type Settings = { prodUrl: string; epk: string[]; repo: string };
 export type Source = { id: string; kind: string; origin: string; chars: number; rules: number; sha256?: string | null };

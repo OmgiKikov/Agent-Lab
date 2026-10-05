@@ -38,7 +38,7 @@ export const GROUPS: { label?: string; items: NavItem[] }[] = [
     label: "Испытания",
     items: [
       { to: SECTIONS.simulations, label: "Симуляции", icon: FlaskConical },
-      { to: SECTIONS.replay, label: "Повтор логов", icon: Repeat },
+      { to: SECTIONS.replay, label: "Повтор разговоров", icon: Repeat },
     ],
   },
 ];

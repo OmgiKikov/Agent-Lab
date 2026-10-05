@@ -91,7 +91,8 @@ def configs() -> dict[str, dict]:
 def public(key: str, config: dict) -> dict:
     """What the page shows about an agent: the host or the repository, never the full internal address.
     Ready: its address is set, or its folder has what starts it from its code (START). Whether it answers is what
-    «Проверить связь» tells."""
+    «Проверить связь» tells. Local: it runs on the local stand (HttpAgent.mocked; the code one always does), the only
+    one that gives its trace to a replay."""
     where = urlsplit(config.get('url') or '').hostname or ''
     ready = bool(config.get('url'))
     if config['kind'] == 'code':
@@ -104,6 +105,7 @@ def public(key: str, config: dict) -> dict:
         'note': config.get('note', ''),
         'where': where,
         'ready': ready,
+        'local': config['kind'] == 'code' or config.get('profile') == 'local',
     }
 
 

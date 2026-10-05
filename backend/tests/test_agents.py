@@ -44,6 +44,13 @@ class ReadinessTests(unittest.TestCase):
         self.assertTrue(agents.public('prod', config | {'url': 'https://ift.example/agent'})['ready'])
 
 
+class LocalTests(unittest.TestCase):
+    def test_only_the_bank_stand_is_not_local(self):
+        with patch.object(agents, 'settings', return_value={'prodUrl': '', 'epk': [], 'repo': '~/agent'}):
+            local = {key: agents.public(key, config)['local'] for key, config in agents.configs().items()}
+        self.assertEqual(local, {'prod': False, 'local-http': True, 'local-code': True})
+
+
 class NamesTests(unittest.TestCase):
     def test_the_ways_to_reach_the_agent_have_the_names_of_the_agent_section(self):
         """«Сыграть» said «Агент на ИФТ / Локальный агент / Агент из исходников» for what «Агент» calls «Тестовый

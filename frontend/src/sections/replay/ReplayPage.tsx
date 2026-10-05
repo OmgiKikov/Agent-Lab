@@ -18,11 +18,11 @@ const FIELD =
   "mt-1 block rounded-control border border-line bg-canvas px-3 py-2 text-body text-fg outline-none focus-visible:ring-2 focus-visible:ring-run";
 
 /** Only an agent on this computer gives its trace (backend/lab/replay.py, NOT_LOCAL): the bank's stand is left out. */
-const localTargets = (targets: Target[]) => targets.filter((t) => t.id !== "prod");
+const localTargets = (targets: Target[]) => targets.filter((t) => t.local);
 const defaultTarget = (targets: Target[]) => (targets.find((t) => t.kind === "code") ?? targets[0])?.id ?? "";
 
 /**
- * «Повтор логов»: conversations of the export play again through the local agent, a step for every customer message.
+ * «Повтор разговоров»: conversations of the export play again through the local agent, a step for every customer message.
  * Each step shows production's reply beside the new one, what the agent looked up and the verdicts on the new reply.
  */
 export function ReplayPage() {
@@ -31,7 +31,7 @@ export function ReplayPage() {
   const result = replay.data && "id" in replay.data ? replay.data : null;
   const header = (
     <Header
-      title="Повтор логов"
+      title="Повтор разговоров"
       sub="Разговоры из выгрузки проходят через агента заново"
       below={<SectionJob kinds={["replay"]} />}
     />

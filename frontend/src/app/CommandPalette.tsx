@@ -157,7 +157,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "s-replay",
         group: "Разделы",
-        label: "Повтор логов",
+        label: "Повтор разговоров",
         sub: "Разговоры выгрузки заново через агента на этом компьютере",
         icon: Repeat,
         run: go(SECTIONS.replay),

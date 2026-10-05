@@ -109,6 +109,7 @@ export function StepView({ step }: { step: ReplayStep }) {
         <Reply title="Ответ в проде" text={step.prodReply} />
         <Reply title="Ответ сейчас" text={step.reply?.text ?? step.error ?? null} status={step.reply?.status} />
       </div>
+      {step.reply && step.error && <p className="text-small text-fg-3">{step.error}</p>}
       {step.trace && <Trace trace={step.trace} />}
       {step.rules && <Verdicts rules={step.rules} />}
     </section>
