@@ -214,6 +214,26 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(store.load(tone.DRAFT))
         self.assertIsNone(store.load(tone.RESULT))
 
+    async def test_criteria_collected_again_keep_the_clarifications_people_confirmed(self):
+        """«Собрать заново» from the same rules: a criterion with the same quote keeps its confirmed clarifications;
+        rules that changed start without them."""
+        draft = await self.prepared()
+        note = '«Вы» с прописной буквы — тоже ошибка.'
+        response = await self.client.post(
+            '/api/tone-of-voice/clarification',
+            json={'revision': draft['revision'], 'ruleId': 'pronouns', 'text': note},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        await self.client.post('/api/tone-of-voice/criteria')
+        await self.wait_job()
+        again = {rule['id']: rule for rule in store.load(tone.DRAFT)['criteria']}
+        self.assertEqual(again['pronouns']['clarifications'], [note])
+        self.assertNotIn('clarifications', again['simple_language'])
+        await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция'})
+        await self.client.post('/api/tone-of-voice/criteria')
+        await self.wait_job()
+        self.assertFalse(any(rule.get('clarifications') for rule in store.load(tone.DRAFT)['criteria']))
+
     async def test_check_uses_existing_judge_and_saves_tone_scope(self):
         draft = await self.prepared()
         rows = [

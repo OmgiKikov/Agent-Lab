@@ -1,8 +1,10 @@
 """The bank's gateway read from certs/. openssl makes the bundles here, in a temporary folder: no key is in Git."""
 
 import asyncio
+import json
 import os
 import shutil
+import sqlite3
 import ssl
 import subprocess
 import sys
@@ -257,6 +259,37 @@ class SetupTests(GatewayCase):
         self.assertEqual(done.returncode, 0, done.stderr[-600:])
         self.assertEqual(done.stdout.splitlines()[0], 'gateway')
         self.assertIn('url.txt пустой', done.stdout)
+
+    def test_starting_the_lab_on_the_gateway_opens_no_database(self) -> None:
+        """Importing the Lab reads no agent's database (docs/backend.md: no hidden migration at import). A database
+        from before agents stays as it was until the start adopts it, so its backup is the file as it was; a fresh
+        folder gets no empty database; the second judge comes only from LAB_SECOND_MODEL."""
+        data = self.certs.parent / 'data'
+        data.mkdir()
+        legacy = data / 'lab.sqlite3'
+        connection = sqlite3.connect(legacy)
+        connection.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        result = {'finishedAt': 'then', 'topics': [], 'results': [{'dialogueId': 'd1', 'status': 'PASS', 'rules': []}]}
+        connection.execute("INSERT INTO documents VALUES ('discover.json', ?)", (json.dumps(result),))
+        connection.execute('INSERT INTO documents VALUES (\'models.json\', \'{"model": "glm-old"}\')')
+        connection.commit()
+        connection.close()
+        before = legacy.read_bytes()
+        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'AGENT_LAB', 'PI_'))}
+        environment.update(LAB_DATA=str(data), LAB_CERTS=str(self.certs), AGENT_LAB_GATEWAY_FILE=str(gateway.FILE))
+        script = 'import lab.app\nfrom lab import llm\nprint(llm.MAIN)\nprint(llm.SECOND)'
+        done = subprocess.run(
+            [sys.executable, '-c', script], env=environment, capture_output=True, text=True, timeout=60, check=False
+        )
+        self.assertEqual(done.returncode, 0, done.stderr[-800:])
+        self.assertEqual(done.stdout.splitlines(), ["('gateway', 'auto')", "('gateway', 'auto')"])
+        self.assertEqual(legacy.read_bytes(), before)
+        legacy.unlink()
+        done = subprocess.run(
+            [sys.executable, '-c', script], env=environment, capture_output=True, text=True, timeout=60, check=False
+        )
+        self.assertEqual(done.returncode, 0, done.stderr[-800:])
+        self.assertFalse(legacy.exists())
 
 
 class LegacyBundleTests(GatewayCase):

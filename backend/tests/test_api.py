@@ -151,6 +151,57 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.load(api.discover.RESULT), previous)
         self.assertEqual(store.load(api.cards.DECK), {'cards': ['built from the previous audit']})
 
+    async def test_criteria_extracted_anew_without_one_grounded_keep_the_previous_result(self) -> None:
+        """«Извлечь критерии заново» where the model cited words the agent's code does not have: no criterion stands,
+        so no conversation can be checked. The check fails, and «0 из 0» never replaces the result, its scenarios and
+        the history."""
+        dialogue = {
+            'id': 'd1',
+            'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
+        }
+        store.save(api.logs.FILE, [dialogue])
+        store.save(
+            api.sources.FILE,
+            [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'Отвечай клиенту по делу и вежливо.'}],
+        )
+        previous = {'finishedAt': '2026-10-01T10:00:00+00:00', 'topics': [{'id': 't1', 'rules': []}], 'results': []}
+        store.save(api.discover.RESULT, previous)
+        store.save(api.cards.DECK, {'check': 'code', 'cards': ['built from the previous criteria']})
+        paraphrased = {
+            'id': 't1r1',
+            'name': 'По делу',
+            'text': 'Отвечает по делу',
+            'sourceId': 's1',
+            'quote': 'Говори с клиентом только о его вопросе',
+            'condition': 'всегда',
+            'acceptable': '',
+            'observation': 'reply',
+        }
+        plan = {'topics': [{'id': 't1', 'title': 'Вопросы', 'dialogueIds': ['d1'], 'rules': [paraphrased]}]}
+
+        async def structured(system, payload, parse, **kwargs):
+            return api.llm.Answer(parse(plan), 'model')
+
+        judge = AsyncMock(side_effect=AssertionError('no conversation is judged without a criterion'))
+        with (
+            patch.object(api.discover.llm, 'structured', side_effect=structured),
+            patch.object(api.discover.judge, 'log_verdict', judge),
+        ):
+            response = await self.client.post('/api/discover', json={'count': 5, 'replan': True})
+            self.assertEqual(response.status_code, 200, response.text)
+            for _ in range(100):
+                if not api.jobs.state['running']:
+                    break
+                await asyncio.sleep(0.002)
+        self.assertEqual(
+            api.jobs.state['error'],
+            'Ни один критерий не подтвердился дословной цитатой из кода агента. Прежний итог сохранён. '
+            'Извлеките критерии ещё раз.',
+        )
+        self.assertEqual(store.load(api.discover.RESULT), previous)
+        self.assertEqual(store.load(api.cards.DECK), {'check': 'code', 'cards': ['built from the previous criteria']})
+        self.assertEqual(store.code_checks(), [])
+
     async def test_stopped_source_worker_cannot_publish_or_invalidate_previous_analysis(self) -> None:
         entered, release, finished = threading.Event(), threading.Event(), threading.Event()
         store.save(api.sources.FILE, [{'id': 'old'}])

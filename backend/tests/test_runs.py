@@ -366,17 +366,52 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result['items'][0]['error'])
         self.assertIsNone(result['items'][0]['review'])
 
-    async def test_failed_rejudge_does_not_show_old_successful_rules(self) -> None:
+    async def test_a_rejudge_the_model_did_not_answer_leaves_the_verdicts_and_the_answers(self) -> None:
+        """An outage is not a verdict: «Оценить заново» while the model is down fails, and the run keeps its verdicts
+        and the answers people gave on them (docs/backend.md: a failed pass leaves the run as it was)."""
         source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
         item = simulate.new_item(card(), 'default', 1)
-        item.update(status='PASS', conversation=[{'role': 'agent', 'text': 'answer'}], rules=[{'status': 'PASS'}])
+        row = {'ruleId': 'r1', 'status': 'FAIL', 'reason': 'нет срока', 'agentQuote': 'answer'}
+        item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], rules=[row], ended=True)
         source.update(items=[item], status='done')
         store.create_run(source)
-        with patch.object(simulate.judge, 'evaluate', side_effect=simulate.llm.ModelError('model unavailable')):
-            result = await simulate.rejudge(store.run(source['id']))
-        self.assertEqual(result['items'][0]['status'], 'UNMEASURED')
-        self.assertEqual(result['items'][0]['rules'], [])
-        self.assertIsNone(result['metric']['accuracy'])
+        store.set_review(source['id'], 0, 'agree', 'r1', 'FAIL')
+        before = store.run(source['id'])
+        down = simulate.llm.ModelError('Модель недоступна (ConnectError).')
+        with (
+            patch.object(simulate.judge, 'evaluate', side_effect=down),
+            self.assertRaises(simulate.llm.ModelError) as caught,
+        ):
+            await simulate.rejudge(store.run(source['id']))
+        self.assertIn('1\u00a0из\u00a01', str(caught.exception))
+        self.assertIn('Прогон остался прежним', str(caught.exception))
+        self.assertIn('Модель недоступна (ConnectError).', str(caught.exception))
+        self.assertEqual(store.run(source['id']), before)
+        self.assertEqual(store.run(source['id'])['items'][0]['rules'][0]['review'], 'agree')
+
+    async def test_a_rejudge_with_one_conversation_unanswered_writes_none_of_the_new_verdicts(self) -> None:
+        source = simulate.new_run('test', {'name': 'Test'}, '', 1, ['default'])
+        items = []
+        for index in range(2):
+            item = simulate.new_item(card(f'card-{index}'), 'default', 1)
+            item.update(status='PASS', conversation=[{'role': 'agent', 'text': 'answer'}], rules=[], ended=True)
+            items.append(item)
+        source.update(items=items, status='done')
+        store.create_run(source)
+        before = store.run(source['id'])
+
+        async def evaluate(scenario: dict, item: dict) -> None:
+            if scenario['cardId'] == 'card-1':
+                raise simulate.llm.ModelError('Не удалось разобрать ответ модели.')
+            item.update(status='FAIL', rules=[{'ruleId': 'r1', 'status': 'FAIL'}])
+
+        with (
+            patch.object(simulate.judge, 'evaluate', side_effect=evaluate),
+            self.assertRaises(simulate.llm.ModelError) as caught,
+        ):
+            await simulate.rejudge(store.run(source['id']))
+        self.assertIn('1\u00a0из\u00a02', str(caught.exception))
+        self.assertEqual(store.run(source['id']), before)
 
     async def test_rejudge_keeps_frozen_criteria_after_inputs_replace_and_deck_changes(self) -> None:
         frozen = card()

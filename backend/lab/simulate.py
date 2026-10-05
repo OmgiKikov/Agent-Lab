@@ -233,7 +233,9 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
     """Rejudge the recorded conversations that ran to their end against the criteria frozen when they were played.
 
     The new verdicts replace the old ones together, after the whole pass: a stopped or failed pass leaves the run as
-    it was, never half re-judged under a final status."""
+    it was, never half re-judged under a final status. A pass in which the model gave no verdict on some conversation
+    failed: an outage is not a verdict, and writing one would take the verdicts that stood and the answers people gave
+    on them (store._patch_item)."""
     items = [(index, item) for index, item in enumerate(record['items']) if ended(item)]
     if not items:
         raise RuntimeError('В прогоне нет записанных ответов агента: ни один разговор не дошёл до конца.')
@@ -248,7 +250,7 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
                     'Сыграйте текущие сценарии заново.'
                 )
             item['criteria'] = deepcopy(card['criteria'])
-    done = 0
+    done, failed = 0, Counter()
 
     async def one(item: dict) -> None:
         nonlocal done
@@ -256,12 +258,18 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
             await judge.evaluate(item, item)
             item['error'] = None
         except llm.ModelError as error:
-            item.update(status='UNMEASURED', error=str(error), rules=[], second=None)
+            failed[str(error)] += 1
         done += 1
         progress(done=done, total=len(items), message='Оцениваем разговоры заново')
 
     async with asyncio.TaskGroup() as group:
         for _, item in items:
             group.create_task(one(item))
+    if failed:
+        reason = failed.most_common(1)[0][0]
+        raise llm.ModelError(
+            f'Модель не оценила разговоры прогона: {failed.total()}\u00a0из\u00a0{len(items)}. '
+            f'Прогон остался прежним. {reason}'
+        )
     verdicts = {index: {key: item[key] for key in JUDGED if key in item} for index, item in items}
     return store.update_items(record['id'], verdicts, rejudgedAt=store.now(), model=llm.models_used(record['items']))

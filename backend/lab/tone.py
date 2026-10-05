@@ -184,9 +184,26 @@ async def prepare(progress: Progress) -> dict:
         'revision': uuid.uuid4().hex,
         'createdAt': store.now(),
         'sourceSha256': source['sha256'],
-        'criteria': criteria,
+        'criteria': kept_clarifications(criteria, store.load(DRAFT), source),
         'model': model,
     }
+
+
+def kept_clarifications(criteria: list[dict], previous: dict | None, source: dict) -> list[dict]:
+    """The clarifications people confirmed stay with a criterion collected again from the same rules when its quote is
+    the same: the exception a person described still applies to the same words of the rules. Criteria of other rules
+    start without them."""
+    if not isinstance(previous, dict) or previous.get('sourceSha256') != source['sha256']:
+        return criteria
+    confirmed = {
+        quotes.normalized(rule['quote']): list(rule['clarifications'])
+        for rule in previous.get('criteria') or []
+        if rule.get('clarifications')
+    }
+    return [
+        rule | {'clarifications': confirmed[key]} if (key := quotes.normalized(rule['quote'])) in confirmed else rule
+        for rule in criteria
+    ]
 
 
 def ensure_active() -> None:

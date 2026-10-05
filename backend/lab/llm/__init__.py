@@ -1,7 +1,8 @@
 """Models for the synthetic customer and the judges.
 
 Two backends, chosen at start:
-- the bank's model gateway (gateway.py) when its certificates are in certs/: the work computer;
+- the bank's model gateway (gateway.py) when its certificates are in certs/: the work computer; LAB_MODEL names its
+  model, else the newest GLM of its catalog; a second judge only with LAB_SECOND_MODEL;
 - an OpenAI-compatible endpoint otherwise: the Pi bridges to OpenRouter started by bin/start.sh.
   LAB_MODEL_URL / LAB_MODEL_KEY / LAB_MODEL; a second judge of another vendor only with LAB_SECOND_MODEL
   (+ LAB_SECOND_URL / LAB_SECOND_KEY). It re-checks every verdict; its actual model is recorded in that result. Without
@@ -30,9 +31,11 @@ PI = 'http://127.0.0.1:11436/v1'  # the Pi bridges bin/start.sh starts without t
 PI_SECOND = 'http://127.0.0.1:11437/v1'
 
 if not os.environ.get('LAB_MODEL_URL') and gateway.configured():
-    # 'auto': the newest GLM in the gateway's catalog.
-    MAIN: Endpoint = (GATEWAY, os.environ.get('LAB_MODEL') or gateway.chosen_models().get('model') or 'auto')
-    SECOND: Endpoint = (GATEWAY, os.environ.get('LAB_SECOND_MODEL') or gateway.chosen_models().get('second') or 'auto')
+    # 'auto': the newest GLM in the gateway's catalog, chosen once per agent at its first call (gateway.auto_models).
+    # Nothing is read from the agents' databases here: importing the Lab never opens or sets up a database.
+    MAIN: Endpoint = (GATEWAY, os.environ.get('LAB_MODEL') or 'auto')
+    # A second judge only when named, as on the other path: the gateway's catalog never adds one by itself.
+    SECOND: Endpoint = (GATEWAY, os.environ['LAB_SECOND_MODEL']) if os.environ.get('LAB_SECOND_MODEL') else MAIN
 else:
     MAIN = (os.environ.get('LAB_MODEL_URL', PI).rstrip('/'), os.environ.get('LAB_MODEL', 'z-ai/glm-5.3'))
     # One model by default, as on the work computer; a second vendor only when named. It goes where the main one goes

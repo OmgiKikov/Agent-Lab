@@ -21,6 +21,8 @@ TASK = 'Проверить ответы чат-бота эквайринга С�
 TONE = checks.TONE_OF_VOICE  # tone.KIND: the kind of the communication rules among the sources
 OBSERVATIONS = ('reply', 'tool', 'state')
 UNANSWERED = 'Модель проверки не ответила ни по одному разговору.'
+# Every criterion the planner wrote cited words the agent's code does not have: there is nothing to check by.
+UNGROUNDED = 'Ни один критерий не подтвердился дословной цитатой из кода агента.'
 
 
 def sample(count: int) -> list[dict]:
@@ -188,10 +190,21 @@ async def judge_each(todo: list[tuple[dict, dict]], done: Callable[[dict], None]
 def ensure_answered(results: list[dict], previous: dict | None) -> None:
     """An outage is not a result: when the model answered on no conversation, the check fails, and its previous result
     (previous, the check's own), the scenarios built from it and the history stay. When only some failed, it is a
-    result: those conversations are «не удалось проверить»."""
+    result: those conversations are «не удалось проверить». A check that judged no conversation at all is no result
+    either: «0 из 0» would replace one that stood."""
+    kept = ' Прежний итог сохранён.' if previous else ''
+    if not results:
+        raise RuntimeError(f'Ни один разговор не попал в тему с критериями.{kept}')
     if all(result['status'] == 'UNMEASURED' for result in results) and any(result.get('error') for result in results):
-        kept = ' Прежний итог сохранён.' if previous else ''
         raise RuntimeError(f'{UNANSWERED}{kept} Проверьте модель в разделе «Настройки».')
+
+
+def ensure_grounded(topics: list[dict], previous: dict | None) -> None:
+    """Criteria extracted anew, none of them grounded in the agent's code: the check fails before a model is asked
+    about any conversation, and the previous result, its criteria and scenarios stay."""
+    if not any(topic['rules'] for topic in topics):
+        kept = ' Прежний итог сохранён.' if previous else ''
+        raise RuntimeError(f'{UNGROUNDED}{kept} Извлеките критерии ещё раз.')
 
 
 def carry_reviews(previous: dict, results: list[dict]) -> None:
@@ -293,6 +306,7 @@ async def run(count: int = 60, progress: Callable[..., None] = lambda **_: None,
     else:
         progress(stage='plan', done=0, total=len(dialogues), message='Извлекаем критерии из кода агента')
         topics, dropped = await plan_topics(srcs, dialogues)
+        ensure_grounded(topics, result_before)
         rules_since = started
 
     topic_of = {}
