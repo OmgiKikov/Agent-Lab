@@ -1,5 +1,6 @@
 import { conversationsLink } from "../app/links";
 import { CHECK_NAME } from "./checks";
+import { inlineText, quoteText } from "./problemReport";
 import type { Decision, Example } from "./problems";
 import type { Check, Criterion, LabRun, LabState, Rule, Status } from "./types";
 
@@ -147,15 +148,16 @@ export function exampleFor(row: DialogRow, rule: Rule): Example {
 /** The dialogue as text for a ticket: who said what, then the judge's verdicts. */
 export function transcript(row: DialogRow, turns: { role: string; text: string }[]): string {
   const where = row.source === "log" ? ["Диалоги", row.check && CHECK_NAME[row.check]] : ["Симуляция"];
-  const lines = [`# ${row.title}`, "", [...where, row.topic].filter(Boolean).join(" · "), ""];
-  for (const t of turns) lines.push(`${t.role === "customer" ? "Клиент" : "Агент"}: ${t.text}`, "");
+  // The customer's and the agent's words stay words (inlineText, quoteText): never a heading, a list or a link.
+  const lines = [`# ${inlineText(row.title)}`, "", inlineText([...where, row.topic].filter(Boolean).join(" · ")), ""];
+  for (const t of turns) lines.push(`${t.role === "customer" ? "Клиент" : "Агент"}:`, quoteText(t.text), "");
   const judged = row.rules.filter((r) => r.status === "FAIL" || r.status === "PASS");
   if (judged.length) {
     lines.push("## Проверка по критериям", "");
     for (const r of judged)
       lines.push(
-        `- ${r.status === "FAIL" ? "✗ ошибка" : "✓ без ошибки"}: ${r.rule}`,
-        `  ${r.reason}${r.agentQuote ? ` «${r.agentQuote}»` : ""}`,
+        `- ${r.status === "FAIL" ? "✗ ошибка" : "✓ без ошибки"}: ${inlineText(r.rule)}`,
+        `  ${inlineText(r.reason)}${r.agentQuote ? ` «${inlineText(r.agentQuote)}»` : ""}`,
       );
   }
   return lines.join("\n");
