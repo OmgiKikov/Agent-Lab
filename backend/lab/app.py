@@ -14,8 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from starlette.convertors import Convertor, register_url_convertor
 from starlette.types import Scope
 
-from . import api, config, registry, store
+from . import api, config, storage
 from .jobs import PerAgent
+from .storage import registry
 
 LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 DEFAULT_PORTS = {'http': 80, 'https': 443}
@@ -53,11 +54,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         registry.adopt_legacy()
         registry.recover_lost()
         agents = registry.listed()
-        if not agents and store.default_database().exists():
-            store.recover_runs()  # before any agent: the default database, never created here
+        if not agents and storage.db.default_database().exists():
+            storage.runs.recover()  # before any agent: the default database, never created here
         for agent in agents:
             with registry.using(agent['id']):
-                store.recover_runs()
+                storage.runs.recover()
         try:
             yield
         finally:

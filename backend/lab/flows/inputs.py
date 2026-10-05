@@ -13,7 +13,7 @@ import asyncio
 import hashlib
 from collections.abc import Collection
 
-from .. import store
+from .. import storage
 from ..agents import sources as agent_sources
 from ..domain import accuracy, checks, export, tone
 from . import connection
@@ -28,28 +28,26 @@ TONE_DRAFT = 'tone-of-voice-criteria.json'  # the criteria of tone of voice, col
 
 def sources() -> list[dict]:
     """The sources read last: the agent's prompts and tools, and the rules of communication."""
-    return store.load(SOURCES, []) or []
+    return storage.documents.load(SOURCES, []) or []
 
 
 def drop_deck(changed: Collection[str]) -> None:
     """The scenarios go with the result or the criteria of the check they were built from (changed); a deck that names
     no check goes with any. Written in the caller's transaction."""
-    deck = store.load(checks.DECK)
+    deck = storage.documents.load(checks.DECK)
     if changed and (deck is None or deck.get('check') in (None, *changed)):
-        store.save(checks.DECK, None)
+        storage.documents.save(checks.DECK, None)
 
 
 def replace_export(dialogues: list[dict], name: str | None = None) -> int:
     """The new export with its file name, and what it resets. A saved check never names the previous file."""
-    with store.transaction():
-        result = store.load(checks.result(checks.CODE))
+    with storage.transaction():
+        result = storage.documents.load(checks.result(checks.CODE))
         if result and result.get('topics'):
             # Точность's criteria wait for its next check, which sorts the new conversations into the same topics;
             # without a result, the criteria kept already stay.
-            store.save(checks.CODE_CRITERIA, accuracy.criteria_of(result))
-        store.save(store.EXPORT, dialogues)
-        if name:
-            store.save(store.EXPORT_META, {'file': name, 'updatedAt': store.now()})
+            storage.documents.save(checks.CODE_CRITERIA, accuracy.criteria_of(result))
+        storage.dialogues.replace(dialogues, name)
         _clear(checks.RESULTS)
     return len(dialogues)
 
@@ -64,16 +62,16 @@ async def upload_export(name: str, data: bytes) -> dict:
 def replace_sources(items: list[dict], read: dict | None = None) -> None:
     """New sources, and what the ones that changed reset. read: when and from where the agent's code was read, written
     in the same transaction, so it never names the previous read."""
-    with store.transaction():
+    with storage.transaction():
         before = sources()
         changed = [check for check, part in _SOURCES_OF.items() if _content(part(before)) != _content(part(items))]
         if checks.CODE in changed:
-            store.save(checks.CODE_CRITERIA, None)
-        store.save(SOURCES, items)
+            storage.documents.save(checks.CODE_CRITERIA, None)
+        storage.documents.save(SOURCES, items)
         if read is not None:
-            store.save(SOURCES_READ, read)
+            storage.documents.save(SOURCES_READ, read)
         if checks.TONE in changed:
-            store.save(TONE_DRAFT, None)
+            storage.documents.save(TONE_DRAFT, None)
         _clear(changed)
 
 
@@ -83,7 +81,7 @@ async def read_code() -> list[dict]:
     folder = connection.settings()['repo']
     collected, over_budget = await asyncio.to_thread(agent_sources.collect, connection.repo())
     policy = [source for source in sources() if source['kind'] == tone.KIND]
-    replace_sources([*collected, *policy], {'readAt': store.now(), 'repo': folder, 'overBudget': over_budget})
+    replace_sources([*collected, *policy], {'readAt': storage.now(), 'repo': folder, 'overBudget': over_budget})
     return collected
 
 
@@ -97,7 +95,7 @@ def _clear(changed: Collection[str]) -> None:
     """The results of the checks whose inputs changed, and a deck built from them. The names stay, set to nothing: a
     repeated legacy import must not resurrect results cleared on purpose."""
     for check in changed:
-        store.save(checks.result(check), None)
+        storage.documents.save(checks.result(check), None)
     drop_deck(changed)
 
 

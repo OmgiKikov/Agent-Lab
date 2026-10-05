@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, patch
 import support
 from test_tone import POLICY
 
-from lab import models, store
+from lab import api, models, storage
+from lab.flows import answers as answering
 from lab.flows import conversations, simulation, tone
 from lab.flows import scenarios as cards
 
@@ -74,7 +75,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.fail('background job did not finish')
 
     async def start_check(self, judge, rule_ids=None, count=1):
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         with patch.object(conversations, 'judge_dialogue', side_effect=judge):
             response = await self.client.post(
                 '/api/tone-of-voice/check',
@@ -90,7 +91,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
     async def check(self, rule_ids=None, model='model-a', count=1, down=(), status='FAIL'):
         await self.start_check(judged(status, model, down), rule_ids, count)
         self.assertIsNone(self.jobs.state['error'])
-        return store.load(tone.RESULT)
+        return api.results_of.current('tone')  # with the answers people gave on it, as the screens see it
 
     async def answer(self, result, rule_id, decision, dialogue_id='d1'):
         """A person's answer on the result and the verdict they see, as every screen sends it."""
@@ -119,7 +120,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_check_the_model_could_not_answer_keeps_the_previous_result_scenarios_and_history(self):
         down = AsyncMock(side_effect=models.ModelError('Модель недоступна: ConnectError'))
-        request = {'ruleIds': ['pronouns'], 'count': 1, 'revision': store.load(tone.DRAFT)['revision']}
+        request = {'ruleIds': ['pronouns'], 'count': 1, 'revision': storage.documents.load(tone.DRAFT)['revision']}
         with patch.object(models, 'chat', down):
             await self.client.post('/api/tone-of-voice/check', json=request)
             await self.wait_job()
@@ -127,10 +128,10 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             self.jobs.state['error'],
             'Модель проверки не ответила ни по одному разговору. Проверьте модель в разделе «Настройки».',
         )
-        self.assertIsNone(store.load(tone.RESULT))
+        self.assertIsNone(storage.documents.load(tone.RESULT))
         previous = await self.check()
         deck = {'cards': [{'id': 'built-from-the-previous-check'}]}
-        store.save(cards.DECK, deck)
+        storage.documents.save(cards.DECK, deck)
         with patch.object(models, 'chat', down):
             await self.client.post('/api/tone-of-voice/check', json=request)
             await self.wait_job()
@@ -139,15 +140,15 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён. '
             'Проверьте модель в разделе «Настройки».',
         )
-        self.assertEqual(store.load(tone.RESULT), previous)
-        self.assertEqual(store.load(cards.DECK), deck)
-        self.assertEqual(len(store.tone_checks()), 1)
+        self.assertEqual(storage.documents.load(tone.RESULT), previous)
+        self.assertEqual(storage.documents.load(cards.DECK), deck)
+        self.assertEqual(len(storage.history.lines('tone')), 1)
 
     async def test_a_check_the_model_answered_in_part_is_published_with_the_rest_not_checked(self):
         await self.upload(self.dialogue, self.other)
         result = await self.check(count=2, down={'d2'})
         self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (1, 1))
-        self.assertEqual(len(store.tone_checks()), 1)
+        self.assertEqual(len(storage.history.lines('tone')), 1)
 
     async def test_an_answer_survives_a_check_that_could_not_decide_its_conversation(self):
         await self.upload(self.dialogue, self.other)
@@ -157,13 +158,13 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.answers(partial)['pronouns'], ('UNKNOWN', None))
         again = await self.check(count=2)
         self.assertEqual(self.answers(again), {'pronouns': ('FAIL', 'agree'), 'simple_language': ('FAIL', None)})
-        self.assertEqual(store.tone_reviews(again['checkId'])[0]['decision'], 'agree')
+        self.assertEqual(storage.reviews.listed('log', again['checkId'])[0]['decision'], 'agree')
         # Another verdict is another question; the same verdict again brings the answer back.
         changed = await self.check(count=2, status='PASS')
         self.assertEqual(self.answers(changed)['pronouns'], ('PASS', None))
         self.assertEqual(self.answers(await self.check(count=2))['pronouns'], ('FAIL', 'agree'))
         # A withdrawn answer is the latest word: an older check does not bring it back.
-        latest = store.load(tone.RESULT)
+        latest = storage.documents.load(tone.RESULT)
         await self.answer(latest, 'pronouns', None)
         await self.check(count=2, down={'d1'})
         self.assertEqual(self.answers(await self.check(count=2))['pronouns'], ('FAIL', None))
@@ -172,9 +173,9 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         first = await self.check()
         # A result from before the history of checks: its answers live only in the result itself.
         legacy = {key: value for key, value in first.items() if key != 'checkId'}
-        store.save(tone.RESULT, legacy)
+        storage.documents.save(tone.RESULT, legacy)
         await self.answer(legacy, 'pronouns', 'agree')
-        self.assertEqual(store.tone_reviews(first['checkId']), [])
+        self.assertEqual(storage.reviews.listed('log', first['checkId']), [])
         self.assertEqual(self.answers(await self.check())['pronouns'], ('FAIL', 'agree'))
 
     async def test_clarifying_one_criterion_keeps_the_answers_on_the_others(self):
@@ -184,7 +185,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post(
             '/api/tone-of-voice/clarification',
             json={
-                'revision': store.load(tone.DRAFT)['revision'],
+                'revision': storage.documents.load(tone.DRAFT)['revision'],
                 'ruleId': 'pronouns',
                 'text': 'Обращение на ты допустимо только в прямой цитате клиента.',
             },
@@ -204,7 +205,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_snapshots_survive_new_inputs_and_do_not_change_with_live_reviews(self):
         result = await self.check()
-        original = store.tone_check(result['checkId'])
+        original = storage.history.get('tone', result['checkId'])
         snapshot = (await self.client.get(f'/api/tone-of-voice/history/{result["checkId"]}')).json()
         self.assertEqual(snapshot['dialogues'], [self.dialogue])
         self.assertEqual(snapshot['policy'], {'name': 'ToV.docx', 'content': POLICY.strip()})
@@ -220,10 +221,10 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(store.load(tone.RESULT)['results'][0]['rules'][0]['review'], 'disagree')
+        self.assertEqual(api.results_of.current('tone')['results'][0]['rules'][0]['review'], 'disagree')
         await self.client.post('/api/logs?name=second.jsonl', content=json.dumps({**self.dialogue, 'id': 'd2'}))
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция.'})
-        self.assertIsNone(store.load(tone.DRAFT))
+        self.assertIsNone(storage.documents.load(tone.DRAFT))
         archived = (await self.client.get(f'/api/tone-of-voice/history/{result["checkId"]}')).json()
         self.assertEqual(archived['dialogues'], snapshot['dialogues'])
         self.assertEqual(archived['policy'], snapshot['policy'])
@@ -231,7 +232,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(archived['result']['results'][0]['rules'][0]['review'], 'disagree')
         self.assertEqual(archived['result']['results'][0]['rules'][0]['status'], 'FAIL')
         self.assertEqual(archived['reviews'][0]['decision'], 'disagree')
-        self.assertEqual(store.tone_check(result['checkId']), original)
+        self.assertEqual(storage.history.get('tone', result['checkId']), original)
         self.assertEqual(
             (await self.client.get('/api/tone-of-voice/history')).json()['checks'][0]['file'], 'first.jsonl'
         )
@@ -241,9 +242,9 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         review = {'source': 'log', 'dialogueId': 'd1', 'ruleId': 'pronouns', 'decision': 'agree'}
         await self.client.post('/api/review', json={**review, 'finishedAt': first['finishedAt']})
         second = await self.check()
-        original = store.tone_check(second['checkId'])
-        self.assertEqual(original['result']['results'][0]['rules'][0]['review'], 'agree')
-        self.assertEqual(store.tone_reviews(second['checkId'])[0]['decision'], 'agree')
+        original = storage.history.get('tone', second['checkId'])
+        self.assertNotIn('review', original['result']['results'][0]['rules'][0])  # the record keeps verdicts only
+        self.assertEqual(storage.reviews.listed('log', second['checkId'])[0]['decision'], 'agree')
         cleared = {**review, 'finishedAt': second['finishedAt'], 'decision': None}
         response = await self.client.post('/api/review', json=cleared)
         self.assertEqual(response.status_code, 200)
@@ -253,34 +254,34 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         archived = (await self.client.get(f'/api/tone-of-voice/history/{second["checkId"]}')).json()
         self.assertIsNone(archived['result']['results'][0]['rules'][0]['review'])
         self.assertIsNone(archived['reviews'][0]['decision'])
-        self.assertEqual(store.tone_check(second['checkId']), original)
-        self.assertEqual(store.tone_reviews(first['checkId'])[0]['decision'], 'agree')
+        self.assertEqual(storage.history.get('tone', second['checkId']), original)
+        self.assertEqual(storage.reviews.listed('log', first['checkId'])[0]['decision'], 'agree')
 
-    async def test_annotation_failure_rolls_back_live_review_in_same_transaction(self):
+    async def test_an_answer_that_fails_to_be_written_leaves_nothing_behind(self):
         result = await self.check()
         with (
-            patch.object(store, '_save_tone_review', side_effect=sqlite3.OperationalError('write failed')),
+            patch.object(storage.reviews, 'add', side_effect=sqlite3.OperationalError('write failed')),
             self.assertRaises(sqlite3.OperationalError),
         ):
-            store.set_log_review(tone.RESULT, 'd1', 'pronouns', 'agree', result['finishedAt'])
-        self.assertEqual(store.load(tone.RESULT), result)
-        self.assertEqual(store.tone_reviews(result['checkId']), [])
+            answering.on_log('tone', 'd1', 'pronouns', 'agree', result['finishedAt'])
+        self.assertEqual(api.results_of.current('tone'), result)
+        self.assertEqual(storage.reviews.listed('log', result['checkId']), [])
 
     async def test_new_check_invalidates_deck_and_retains_frozen_runs_and_previous_check(self):
         first = await self.check()
-        previous = store.tone_check(first['checkId'])
-        run = store.create_run({'id': 'played-before', 'status': 'completed', 'items': []})
-        store.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'stale-scenario'}]})
+        previous = storage.history.get('tone', first['checkId'])
+        run = storage.runs.create({'id': 'played-before', 'status': 'completed', 'items': []})
+        storage.documents.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'stale-scenario'}]})
         await self.check()
-        self.assertIsNone(store.load(cards.DECK))
-        self.assertEqual(store.run(run['id']), run)
-        self.assertEqual(store.tone_check(first['checkId']), previous)
-        self.assertEqual(len(store.tone_checks()), 2)
+        self.assertIsNone(storage.documents.load(cards.DECK))
+        self.assertEqual(storage.runs.get(run['id']), run)
+        self.assertEqual(storage.history.get('tone', first['checkId']), previous)
+        self.assertEqual(len(storage.history.lines('tone')), 2)
 
     async def test_new_rubric_clears_cards_and_blocks_rebuilding_until_logs_are_rechecked(self):
         checked = await self.check()
-        draft = store.load(tone.DRAFT)
-        store.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'stale-scenario'}]})
+        draft = storage.documents.load(tone.DRAFT)
+        storage.documents.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'stale-scenario'}]})
         response = await self.client.post(
             '/api/tone-of-voice/clarification',
             json={
@@ -290,21 +291,21 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(store.load(cards.DECK))
-        self.assertEqual(store.load(tone.RESULT), checked)
+        self.assertIsNone(storage.documents.load(cards.DECK))
+        self.assertEqual(storage.documents.load(tone.RESULT), checked)
         with patch.object(models, 'chat', AsyncMock()) as model:
             await self.client.post('/api/cards')
             await self.wait_job()
             model.assert_not_awaited()
         self.assertIn('проверьте разговоры заново', self.jobs.state['error'])
-        store.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'also-stale'}]})
+        storage.documents.save(cards.DECK, {'check': 'tone', 'cards': [{'id': 'also-stale'}]})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
-        self.assertIsNone(store.load(cards.DECK))
-        self.assertEqual(store.load(tone.RESULT), checked)
+        self.assertIsNone(storage.documents.load(cards.DECK))
+        self.assertEqual(storage.documents.load(tone.RESULT), checked)
 
     async def test_clarified_log_criterion_reaches_cards_and_both_simulation_judges(self):
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         original_rule = draft['criteria'][0]
         note = 'Обращение на ты допустимо только в прямой цитате клиента.'
         await self.client.post(
@@ -328,7 +329,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/cards')
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
-        card = store.load(cards.DECK)['cards'][0]
+        card = storage.documents.load(cards.DECK)['cards'][0]
         self.assertEqual(card['criteria'][0]['quote'], original_rule['quote'])
         self.assertEqual(card['criteria'][0]['clarifications'], [note])
         self.assertIn(note, card['criteria'][0]['text'])
@@ -366,28 +367,28 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(note in data['expectations'][0]['text'] for data in seen))
         self.assertTrue(all(data['expectations'][0]['quote'] == original_rule['quote'] for data in seen))
         self.assertEqual((item['status'], item['second']['status']), ('PASS', 'PASS'))
-        self.assertEqual(store.load(tone.DRAFT)['criteria'][0]['text'], original_rule['text'])
+        self.assertEqual(storage.documents.load(tone.DRAFT)['criteria'][0]['text'], original_rule['text'])
 
     async def test_comparison_requires_same_criteria_and_models_and_ignores_selection_order(self):
         first = await self.check()
         second = await self.check(['simple_language', 'pronouns'])
         self.assertEqual(first['criteriaFingerprint'], second['criteriaFingerprint'])
-        entry = store.tone_checks()[0]
+        entry = storage.history.lines('tone')[0]
         self.assertEqual(entry['comparison']['kind'], 'same-data')
         self.assertEqual(entry['comparison']['previousId'], first['checkId'])
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         await self.client.post('/api/logs?name=second.jsonl', content=json.dumps({**self.dialogue, 'id': 'd2'}))
-        self.assertEqual(store.load(tone.DRAFT), draft)
+        self.assertEqual(storage.documents.load(tone.DRAFT), draft)
         await self.check()
-        self.assertEqual(store.tone_checks()[0]['comparison']['kind'], 'new-data')
+        self.assertEqual(storage.history.lines('tone')[0]['comparison']['kind'], 'new-data')
         await self.check(model='model-b')
-        self.assertEqual(store.tone_checks()[0]['comparison']['kind'], 'incompatible')
+        self.assertEqual(storage.history.lines('tone')[0]['comparison']['kind'], 'incompatible')
         await self.check(['pronouns'], model='model-b')
-        self.assertEqual(store.tone_checks()[0]['comparison']['kind'], 'incompatible')
+        self.assertEqual(storage.history.lines('tone')[0]['comparison']['kind'], 'incompatible')
 
     async def test_clarification_is_explicit_versioned_and_reaches_the_actual_judge(self):
         previous = await self.check()
-        original = store.load(tone.DRAFT)
+        original = storage.documents.load(tone.DRAFT)
         note = 'Обращение на ты допустимо только в прямой цитате клиента.'
         response = await self.client.post(
             '/api/tone-of-voice/clarification',
@@ -400,7 +401,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         draft = response.json()
         self.assertNotEqual(draft['revision'], original['revision'])
-        self.assertEqual(store.load(tone.RESULT), previous)
+        self.assertEqual(storage.documents.load(tone.RESULT), previous)
         self.assertEqual(draft['criteria'][0]['quote'], original['criteria'][0]['quote'])
         self.assertEqual(draft['criteria'][0]['text'], original['criteria'][0]['text'])
         self.assertEqual(tone.current_policy()['content'], POLICY.strip())
@@ -447,11 +448,11 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.jobs.state['error'])
         self.assertEqual(len(seen), 2)
         self.assertTrue(all(note in data['expectations'][0]['text'] for data in seen))
-        self.assertEqual(store.tone_checks()[0]['comparison']['kind'], 'incompatible')
+        self.assertEqual(storage.history.lines('tone')[0]['comparison']['kind'], 'incompatible')
 
     async def test_advice_is_grounded_optional_and_does_not_apply_changes(self):
         result = await self.check()
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         request = {'finishedAt': result['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns', 'mode': 'clarify'}
         proposal = {
             'text': 'Допускается обращение на ты внутри прямой цитаты клиента.',
@@ -476,8 +477,8 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(evidence['conversation'], self.dialogue['messages'])
             self.assertEqual(evidence['targetExcerpt'], self.dialogue['messages'][1]['content'])
             self.assertEqual(evidence['criterion']['quote'], draft['criteria'][0]['quote'])
-        self.assertEqual(store.load(tone.DRAFT), draft)
-        self.assertEqual(store.load(tone.RESULT), result)
+        self.assertEqual(storage.documents.load(tone.DRAFT), draft)
+        self.assertEqual(storage.documents.load(tone.RESULT), result)
 
     async def test_advice_reads_a_reply_as_the_judge_saw_it(self):
         """A reply with an export control code: the error the judge found by the agent's words gets its suggestion,
@@ -500,13 +501,13 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             ]
             return models.Reply(json.dumps({'rules': rows}), 'model-a')
 
-        revision = store.load(tone.DRAFT)['revision']
+        revision = storage.documents.load(tone.DRAFT)['revision']
         with patch.object(models, 'chat', model):
             await self.client.post(
                 '/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1, 'revision': revision}
             )
             await self.wait_job()
-        result = store.load(tone.RESULT)
+        result = storage.documents.load(tone.RESULT)
         self.assertEqual(result['results'][0]['rules'][0]['status'], 'FAIL')
         proposal = {'text': 'Выберите способ оплаты и нажмите «Далее».', 'explanation': 'Короче.'}
         request = {'finishedAt': result['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns', 'mode': 'rewrite'}
@@ -544,7 +545,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(response.status_code, 409)
             model.assert_not_awaited()
-        self.assertEqual(store.load(tone.RESULT), result)
+        self.assertEqual(storage.documents.load(tone.RESULT), result)
 
     async def test_rewrite_preserves_numeric_facts_and_remains_only_a_suggestion(self):
         result = await self.check()
@@ -562,22 +563,22 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(models, 'chat', AsyncMock(return_value=answer)):
                 response = await self.client.post('/api/tone-of-voice/advice', json=request)
             self.assertEqual(response.status_code, status, response.text)
-        self.assertEqual(store.load(store.EXPORT), [self.dialogue])
-        self.assertEqual(store.load(tone.RESULT), result)
+        self.assertEqual(storage.dialogues.read(), [self.dialogue])
+        self.assertEqual(storage.documents.load(tone.RESULT), result)
 
     async def test_late_result_cannot_publish_after_a_draft_revision_change(self):
         previous = await self.check()
 
         async def superseded(*args):
-            store.update(tone.DRAFT, lambda draft: draft.update(revision='new-revision'))
+            storage.documents.save(tone.DRAFT, {**storage.documents.load(tone.DRAFT), 'revision': 'new-revision'})
             return previous['results']
 
         with patch.object(tone, 'judge', side_effect=superseded):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await self.wait_job()
         self.assertIn('Материалы проверки изменились', self.jobs.state['error'])
-        self.assertEqual(store.load(tone.RESULT), previous)
-        self.assertEqual(len(store.tone_checks()), 1)
+        self.assertEqual(storage.documents.load(tone.RESULT), previous)
+        self.assertEqual(len(storage.history.lines('tone')), 1)
 
     async def test_cancelled_check_cannot_publish_even_if_dependency_swallows_cancellation(self):
         previous = await self.check()
@@ -595,8 +596,8 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await entered.wait()
             await self.client.post('/api/job/stop')
         self.assertEqual(self.jobs.state['error'], 'Остановлено')
-        self.assertEqual(store.load(tone.RESULT), previous)
-        self.assertEqual(len(store.tone_checks()), 1)
+        self.assertEqual(storage.documents.load(tone.RESULT), previous)
+        self.assertEqual(len(storage.history.lines('tone')), 1)
 
     async def test_cancelled_advice_releases_owner_without_returning_suggestion(self):
         result = await self.check()
@@ -622,7 +623,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             blocked = await self.client.post(
                 '/api/tone-of-voice/clarification',
                 json={
-                    'revision': store.load(tone.DRAFT)['revision'],
+                    'revision': storage.documents.load(tone.DRAFT)['revision'],
                     'ruleId': 'pronouns',
                     'text': 'Пояснение человека',
                 },
@@ -631,7 +632,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/job/stop')
             response = await request
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(store.load(tone.RESULT), result)
+        self.assertEqual(storage.documents.load(tone.RESULT), result)
 
     async def test_history_reads_are_pure_and_snapshot_duplicate_rolls_back_live_write(self):
         with patch.object(models, 'chat', AsyncMock()) as model:
@@ -645,8 +646,8 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.client.get('/api/tone-of-voice/history/missing')).status_code, 404)
             model.assert_not_awaited()
         result = await self.check()
-        snapshot = store.tone_check(result['checkId'])
+        snapshot = storage.history.get('tone', result['checkId'])
         snapshot['result']['finishedAt'] = 'replacement'
         with self.assertRaises(sqlite3.IntegrityError):
             tone.publish(snapshot['result'], snapshot)
-        self.assertEqual(store.load(tone.RESULT), result)
+        self.assertEqual(storage.documents.load(tone.RESULT), result)

@@ -4,14 +4,14 @@ tone of voice) take the same sample of the export and judge each conversation of
 import asyncio
 from collections.abc import Callable
 
-from .. import config, models, store
+from .. import config, models, storage
 from ..domain import export, sampling, verdicts
 from ..roles import judge
 
 
 def sample(count: int) -> list[dict]:
     """The same conversations for the same export, in whatever order its rows come (domain.sampling)."""
-    return store.dialogues(sampling.sampled(store.dialogue_ids(), count))
+    return storage.dialogues.read(sampling.sampled(storage.dialogues.ids(), count))
 
 
 async def judge_dialogue(dialogue: dict, topic: dict) -> dict:

@@ -12,12 +12,13 @@ from test_checks import CODE, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, models, registry, store
+from lab import api, models, storage
 from lab.domain import checks
 from lab.domain.problems import rule_key
 from lab.flows import accuracy, conversations, severity, tone
 from lab.jobs import PerAgent
 from lab.roles import severity as proposals
+from lab.storage import registry
 
 
 def talk(dialogue_id: str) -> dict:
@@ -125,7 +126,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
 
     async def check_tone(self, failing, inapplicable=None, count=5, propose=None):
         """A check of tone of voice; with `propose` (the model's fake) the screens ask it to propose severity after."""
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         request = {'ruleIds': ['pronouns', 'simple_language'], 'count': count, 'revision': draft['revision']}
         if propose:
             request['propose'] = True
@@ -139,7 +140,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.jobs.state['error'])
 
     def key(self, rule_id):
-        criterion = next(c for c in store.load(tone.DRAFT)['criteria'] if c['id'] == rule_id)
+        criterion = next(c for c in storage.documents.load(tone.DRAFT)['criteria'] if c['id'] == rule_id)
         return rule_key(criterion['quote'])
 
     async def mark(self, rule_id, serious=True, agent=None, check='tone'):
@@ -222,13 +223,13 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         await self.mark('pronouns')
         await self.upload('d4')
         self.assertEqual((await self.get('/api/state'))['severity']['tone'], [pronouns])
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         clarified = await self.post(
             '/api/tone-of-voice/clarification',
             {'revision': draft['revision'], 'ruleId': 'pronouns', 'text': 'Обращение «Вы» с прописной — тоже ошибка.'},
         )
         self.assertEqual(clarified.status_code, 200, clarified.text)
-        self.assertNotEqual(store.load(tone.DRAFT)['revision'], draft['revision'])
+        self.assertNotEqual(storage.documents.load(tone.DRAFT)['revision'], draft['revision'])
         await self.check_tone({'d4': {'pronouns'}})
         found = await self.get('/api/problems?check=tone')
         self.assertEqual(found['problems'], [pronouns])
@@ -245,7 +246,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             response = await self.post('/api/tone-of-voice/copy', {'agent': source}, target)
             self.assertEqual(response.status_code, 200, response.text)
             with registry.using(target):
-                self.assertEqual(store.severity_marks()['tone'], {pronouns: True})
+                self.assertEqual(storage.severity.marks()['tone'], {pronouns: True})
             await self.jobs.close()
 
     async def test_rules_taken_from_another_agent_bring_its_proposals(self):
@@ -255,13 +256,13 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             await self.prepare(source)
             simple = self.key('simple_language')
             with registry.using(source):
-                store.propose_severity('tone', {simple: {'serious': True, 'reason': 'Мешает понять ответ.'}}, 'm')
+                storage.severity.propose('tone', {simple: {'serious': True, 'reason': 'Мешает понять ответ.'}}, 'm')
             response = await self.post('/api/tone-of-voice/copy', {'agent': source}, target)
             self.assertEqual(response.status_code, 200, response.text)
             with registry.using(target):
-                self.assertEqual(store.severity()['tone'], [simple])
+                self.assertEqual(storage.severity.serious()['tone'], [simple])
                 self.assertEqual(
-                    store.severity_proposed()['tone']['proposals'],
+                    storage.severity.proposed()['tone']['proposals'],
                     {simple: {'serious': True, 'reason': 'Мешает понять ответ.'}},
                 )
             await self.jobs.close()
@@ -279,7 +280,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertTrue(response.json()['unchanged'])
             with registry.using(target):
-                self.assertEqual(store.severity()['tone'], [pronouns])  # the marks belong to criteria
+                self.assertEqual(storage.severity.serious()['tone'], [pronouns])  # the marks belong to criteria
             await self.jobs.close()
 
     async def test_the_same_rules_with_other_marks_are_not_the_same(self):
@@ -294,7 +295,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertFalse(response.json()['unchanged'])
             with registry.using(target):
-                self.assertEqual(store.severity()['tone'], [pronouns])
+                self.assertEqual(storage.severity.serious()['tone'], [pronouns])
             again = await self.post('/api/tone-of-voice/copy', {'agent': source}, target)
             self.assertTrue(again.json()['unchanged'])
             await self.jobs.close()
@@ -323,7 +324,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             asked.set()
             await asyncio.Event().wait()
 
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         request = {
             'ruleIds': ['pronouns', 'simple_language'],
             'count': 5,
@@ -341,8 +342,8 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(stopped.status_code, 200, stopped.text)
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])  # not «Остановлено»: the check stands
-        self.assertEqual(store.load(tone.RESULT)['summary']['failed'], 1)
-        self.assertEqual(len(store.tone_checks()), 1)
+        self.assertEqual(storage.documents.load(tone.RESULT)['summary']['failed'], 1)
+        self.assertEqual(len(storage.history.lines('tone')), 1)
 
     async def test_a_check_not_asked_to_propose_asks_no_model(self):
         await self.check_tone({'d1': {'pronouns'}})
@@ -389,7 +390,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_model_that_does_not_answer_leaves_the_check_and_says_why(self):
         down = proposing(fail=models.ModelError('Модель недоступна: ConnectError'))
         await self.check_tone({'d1': {'pronouns'}}, propose=down)  # the check itself stands, without an error
-        self.assertIsNotNone(store.load(checks.result('tone')))
+        self.assertIsNotNone(storage.documents.load(checks.result('tone')))
         found = await self.get('/api/problems?check=tone')
         self.assertEqual(
             found['severity'], {'criteria': 2, 'proposed': 0, 'decided': 0, 'error': 'Модель недоступна: ConnectError'}
@@ -437,13 +438,13 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
     async def test_marks_of_an_older_service_are_a_person_s_decisions(self):
         await self.check_tone({'d1': {'pronouns'}})
         pronouns, simple = self.key('pronouns'), self.key('simple_language')
-        store.save('severity.json', {'tone': [pronouns], 'code': []})
+        storage.documents.save('severity.json', {'tone': [pronouns], 'code': []})
         found = await self.get('/api/problems?check=tone')
         rule = next(rule for rule in found['rules'] if rule['id'] == pronouns)
         self.assertEqual((rule['serious'], rule['severity']['by']), (True, 'person'))
         self.assertEqual((await self.get('/api/state'))['severity'], {'tone': [pronouns], 'code': []})
         await self.mark('simple_language', serious=False)
-        self.assertEqual(store.severity_marks()['tone'], {pronouns: True, simple: False})
+        self.assertEqual(storage.severity.marks()['tone'], {pronouns: True, simple: False})
 
     async def test_an_accuracy_check_proposes_for_its_criteria_too(self):
         with patch.object(api.inputs.agent_sources, 'collect', return_value=([CODE], [])):
@@ -481,7 +482,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
             'conversation': [{'role': 'customer', 'text': 'Привет'}],
             'rules': [{'ruleId': 'x1', 'status': 'FAIL', 'reason': 'Без имени', 'agentQuote': 'Здравствуйте'}],
         }
-        store.create_run(
+        storage.runs.create(
             {
                 'id': 'run-tone',
                 'check': 'tone',
@@ -491,7 +492,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
                 'items': [item],
             }
         )
-        store.severity_failed('tone', 'Модель недоступна: ConnectError')  # a later «Предложить снова» failed
+        storage.severity.failed('tone', 'Модель недоступна: ConnectError')  # a later «Предложить снова» failed
         found = await self.get('/api/problems?check=tone')
         self.assertEqual(len(found['rules']), 3)  # a criterion only the run has is listed, but nobody proposes for it
         self.assertEqual(found['severity'], {'criteria': 2, 'proposed': 2, 'decided': 0, 'error': None})

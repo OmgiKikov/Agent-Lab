@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lab import store
+from lab import storage
 from lab.agents import knowledge, sources
 
 
@@ -39,7 +39,7 @@ class ContextTests(unittest.TestCase):
             path.parent.mkdir()
             prompt = 'Ты ассистент банка. Используй правила ответа клиенту. ' * 30
             path.write_text('PROMPT = ' + repr(prompt))
-            with patch.object(store, 'save') as save:
+            with patch.object(storage.documents, 'save') as save:
                 collected, over_budget = sources.collect(repo)
             self.assertEqual(over_budget, [])
             self.assertEqual(collected[0]['content'], prompt.strip())

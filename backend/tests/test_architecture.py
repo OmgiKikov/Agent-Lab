@@ -30,9 +30,6 @@ LAYERS = {
     'lab.api': 'api',
     'lab.jobs': 'api',
     'lab.config': 'config',
-    # Until they move into their package.
-    'lab.store': 'storage',
-    'lab.registry': 'storage',
 }
 # Imports that go up the layers, importer → imported: none. A new one fails the test; it is fixed, not listed.
 UPWARD: set[tuple[str, str]] = set()

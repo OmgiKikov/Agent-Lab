@@ -11,9 +11,10 @@ import support
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, jobs, registry, store
+from lab import api, jobs, storage
 from lab.domain import tone as tone_rules
 from lab.flows import accuracy, conversations, inputs, tone
+from lab.storage import registry
 
 CODE = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'Называй срок рассмотрения заявки.'}
 CLARIFICATION = '«Вы» с прописной буквы — тоже ошибка.'
@@ -82,11 +83,11 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job(agent)
         with registry.using(agent):
             self.assertIsNone(self.jobs.state['error'])
-            return store.load(tone.RESULT)
+            return storage.documents.load(tone.RESULT)
 
     def draft(self, agent):
         with registry.using(agent):
-            return store.load(tone.DRAFT)
+            return storage.documents.load(tone.DRAFT)
 
     def sources_of(self, agent):
         with registry.using(agent):
@@ -94,9 +95,9 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_new_agent_takes_the_rules_and_their_criteria_with_the_clarifications(self):
         with registry.using(self.target):
-            store.save(inputs.SOURCES, [CODE])
+            storage.documents.save(inputs.SOURCES, [CODE])
         before = self.draft(self.source)
-        with patch.object(store, 'now', return_value=COPIED_AT):
+        with patch.object(storage, 'now', return_value=COPIED_AT):
             response = await self.copy(self.target)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {'ok': True, 'unchanged': False})
@@ -122,15 +123,15 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         await self.prepare(self.target, OTHER_POLICY, 'Старые правила.md')
         old = await self.check(self.target)
         with registry.using(self.target):
-            store.save(accuracy.RESULT, {'finishedAt': '2026-10-01T09:00:00+00:00', 'results': []})
-            store.save(api.scenarios.DECK, {'check': 'tone', 'cards': ['from the old rules']})
+            storage.documents.save(accuracy.RESULT, {'finishedAt': '2026-10-01T09:00:00+00:00', 'results': []})
+            storage.documents.save(api.scenarios.DECK, {'check': 'tone', 'cards': ['from the old rules']})
         response = await self.copy(self.target)
         self.assertEqual(response.json(), {'ok': True, 'unchanged': False})
         with registry.using(self.target):
-            self.assertIsNone(store.load(tone.RESULT))
-            self.assertIsNone(store.load(api.scenarios.DECK))
-            self.assertEqual([check['id'] for check in store.tone_checks()], [old['checkId']])
-            self.assertEqual(store.load(accuracy.RESULT)['finishedAt'], '2026-10-01T09:00:00+00:00')
+            self.assertIsNone(storage.documents.load(tone.RESULT))
+            self.assertIsNone(storage.documents.load(api.scenarios.DECK))
+            self.assertEqual([check['id'] for check in storage.history.lines('tone')], [old['checkId']])
+            self.assertEqual(storage.documents.load(accuracy.RESULT)['finishedAt'], '2026-10-01T09:00:00+00:00')
             self.assertEqual(tone.current_policy()['content'], POLICY.strip())
         self.assertEqual(self.draft(self.target)['criteria'], self.draft(self.source)['criteria'])
 
@@ -144,7 +145,9 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(copied['criteria'], self.draft(self.source)['criteria'])
         self.assertNotEqual(copied['revision'], result['criteriaRevision'])
         with registry.using(self.target):
-            self.assertEqual(store.load(tone.RESULT), result)  # the rules did not change: only their criteria did
+            self.assertEqual(
+                storage.documents.load(tone.RESULT), result
+            )  # the rules did not change: only their criteria did
             self.assertEqual(tone.current_policy()['name'], 'Правила общения')
 
     async def test_rules_already_the_same_are_left_as_they_are(self):
@@ -157,7 +160,7 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {'ok': True, 'unchanged': True})
         self.assertEqual(self.draft(self.target), draft)
         with registry.using(self.target):
-            self.assertEqual(store.load(tone.RESULT), result)
+            self.assertEqual(storage.documents.load(tone.RESULT), result)
 
     async def test_later_changes_in_either_agent_never_reach_the_other(self):
         await self.copy(self.target)
@@ -227,11 +230,11 @@ class AgentRulesTests(unittest.IsolatedAsyncioTestCase):
         policy = tone_rules.policy('ToV.docx', POLICY)
         for agent in (ruled, drafted):
             with registry.using(agent):
-                store.save(inputs.SOURCES, [CODE, policy])
+                storage.documents.save(inputs.SOURCES, [CODE, policy])
         with registry.using(ruled):
             criteria = tone_rules.coded_criteria(policy)
             tone.save_draft(
-                {'revision': 'r1', 'createdAt': store.now(), 'sourceSha256': policy['sha256'], 'criteria': criteria}
+                {'revision': 'r1', 'createdAt': storage.now(), 'sourceSha256': policy['sha256'], 'criteria': criteria}
             )
         listed = (await self.client.get('/api/agents')).json()
         self.assertEqual(
@@ -247,7 +250,7 @@ class AgentRulesTests(unittest.IsolatedAsyncioTestCase):
         broken = registry.create('Сломанный')['id']
         registry.create('Агент кредитов')
         with registry.using(broken):
-            store.save(inputs.SOURCES, {'not': 'a list'})
+            storage.documents.save(inputs.SOURCES, {'not': 'a list'})
         response = await self.client.get('/api/agents')
         self.assertEqual(response.status_code, 200)
         self.assertEqual([agent['rules'] for agent in response.json()], [None, None])

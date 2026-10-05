@@ -12,7 +12,7 @@ from test_checks import CODE, CODE_RESULT, CODE_TOPIC
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, store
+from lab import api, storage
 from lab.domain import comparison, sampling, statistics
 from lab.domain.problems import rule_key
 from lab.flows import accuracy, conversations, tone
@@ -33,7 +33,7 @@ def talk(dialogue_id: str) -> dict:
 class WasIsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         support.serve(self)
-        self.db = store.default_database()
+        self.db = storage.db.default_database()
         await self.upload('d1', name='Сентябрь.jsonl')
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
         await self.client.post('/api/tone-of-voice/criteria')
@@ -59,7 +59,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.jobs.state['error'])
 
     async def check_tone(self, status='FAIL', count=5):
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         request = {'ruleIds': ['pronouns', 'simple_language'], 'count': count, 'revision': draft['revision']}
         with patch.object(conversations, 'judge_dialogue', side_effect=judged(status)):
             response = await self.client.post('/api/tone-of-voice/check', json=request)
@@ -86,7 +86,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
-        return store.load(CODE_RESULT)
+        return storage.documents.load(CODE_RESULT)
 
     async def get(self, path):
         response = await self.client.get(path)
@@ -101,7 +101,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved[0]['file'], 'Сентябрь.jsonl')
         self.assertEqual(saved[0]['summary'], {'measured': 1, 'passed': 0, 'failed': 1, 'unmeasured': 0})
         await self.upload('d2', 'd3', name='Октябрь.jsonl')
-        self.assertIsNone(store.load(CODE_RESULT))
+        self.assertIsNone(storage.documents.load(CODE_RESULT))
         detail = await self.get(f'/api/history/code/{result["checkId"]}')
         self.assertEqual(detail['result']['checkId'], result['checkId'])
         self.assertEqual([d['id'] for d in detail['dialogues']], ['d1'])
@@ -114,16 +114,16 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
     async def test_criteria_of_accuracy_survive_a_new_export_until_the_code_of_the_agent_changes(self):
         first = await self.assess_code()
         await self.upload('d2', 'd3', name='Октябрь.jsonl')
-        kept = store.load(CRITERIA)
+        kept = storage.documents.load(CRITERIA)
         self.assertEqual([t['title'] for t in kept['topics']], ['Терминалы'])
         self.assertEqual(kept['topics'][0]['dialogueIds'], [])
         second = await self.assess_code()
         self.plan.assert_not_awaited()  # the new conversations are sorted into the same topics
         self.assertEqual(second['topics'][0]['rules'], first['topics'][0]['rules'])
-        self.assertEqual(store.code_checks()[0]['comparison']['kind'], 'new-data')
+        self.assertEqual(storage.history.lines('code')[0]['comparison']['kind'], 'new-data')
         # Changed code: its criteria go with it, and the next check extracts them anew.
         await self.read_code({**CODE, 'content': 'Называй срок доставки терминала и его модель.'})
-        self.assertIsNone(store.load(CRITERIA))
+        self.assertIsNone(storage.documents.load(CRITERIA))
         await self.assess_code()
         self.plan.assert_awaited()
 
@@ -153,7 +153,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         criteria = {row['id']: row for row in compared['criteria']}
-        rules = {rule['id']: rule for rule in store.load(tone.RESULT)['topics'][0]['rules']}
+        rules = {rule['id']: rule for rule in storage.documents.load(tone.RESULT)['topics'][0]['rules']}
         pronouns = criteria[rule_key(rules['pronouns']['quote'])]
         self.assertEqual(pronouns['before'], {'failed': 1, 'measured': 1})
         self.assertEqual(pronouns['now'], {'failed': 0, 'measured': 2})
@@ -190,17 +190,17 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         result = await self.assess_code()
         legacy = {key: value for key, value in result.items() if key not in ('checkId', 'datasetFingerprint')}
         with sqlite3.connect(self.db) as connection:
-            connection.execute('DELETE FROM code_checks')
+            connection.execute("DELETE FROM history WHERE kind = 'code'")
             connection.execute('UPDATE documents SET value = ? WHERE name = ?', (json.dumps(legacy), CODE_RESULT))
             connection.execute('PRAGMA user_version = 4')
-        saved = store.code_checks()
+        saved = storage.history.lines('code')
         self.assertEqual(len(saved), 1)
         self.assertEqual(saved[0]['comparison']['kind'], 'first')
-        self.assertEqual(store.load(CODE_RESULT)['checkId'], saved[0]['id'])
-        self.assertEqual([d['id'] for d in store.code_check(saved[0]['id'])['dialogues']], ['d1'])
+        self.assertEqual(storage.documents.load(CODE_RESULT)['checkId'], saved[0]['id'])
+        self.assertEqual([d['id'] for d in storage.history.get('code', saved[0]['id'])['dialogues']], ['d1'])
         # The next export no longer erases it.
         await self.upload('d2', name='Октябрь.jsonl')
-        self.assertEqual([c['id'] for c in store.code_checks()], [saved[0]['id']])
+        self.assertEqual([c['id'] for c in storage.history.lines('code')], [saved[0]['id']])
 
     async def test_the_history_says_what_the_result_says_about_the_difference(self):
         """A line of the history compared with the one before it carries the same verdict as «было → стало» on the

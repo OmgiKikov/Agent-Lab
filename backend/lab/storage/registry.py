@@ -2,7 +2,7 @@
 results and a person's answers never mix with another agent's. The registry itself is data/agents.sqlite3.
 
 A request works inside one agent (api.py sets it from the X-Agent header); `using` does the same for code outside a
-request. Without an agent, store keeps its own default database (tests, the legacy import).
+request. Without an agent, storage keeps its own default database (tests, the legacy import).
 """
 
 import re
@@ -11,7 +11,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import config, store
+from .. import config
+from . import db
 
 try:
     import fcntl
@@ -72,7 +73,7 @@ def db_of(agent_id: str) -> Path:
 @contextmanager
 def _connection() -> Iterator[sqlite3.Connection]:
     path = _registry()
-    store.private_folder(path.parent)
+    db.private_folder(path.parent)
     connection = sqlite3.connect(path, timeout=10)
     try:
         path.chmod(0o600)
@@ -134,37 +135,42 @@ def create(name: str, description: str = '', agent_id: str | None = None) -> dic
             chosen, number = f'{base}-{number}', number + 1
         connection.execute(
             'INSERT INTO agents (id, name, description, created_at) VALUES (?, ?, ?, ?)',
-            (chosen, name, description, store.now()),
+            (chosen, name, description, db.now()),
         )
-    store.private_folder(db_of(chosen).parent)
+    db.private_folder(db_of(chosen).parent)
     return get(chosen) or {}
 
 
 @contextmanager
 def using(agent_id: str) -> Iterator[None]:
-    """Run inside one agent: store reads and writes its database."""
-    token = store.AGENT.set(db_of(agent_id))
+    """Run inside one agent: storage reads and writes its database."""
+    token = db.AGENT.set(db_of(agent_id))
     try:
         yield
     finally:
-        store.AGENT.reset(token)
+        db.AGENT.reset(token)
 
 
 # The agent that lived alone before agents existed.
 FIRST = {'id': 'acquiring', 'name': 'Агент эквайринга', 'description': 'СберБизнес · чат поддержки'}
 
 
+# What an agent's database holds besides empty tables; an older database has only some of these tables.
+_DATA = ('documents', 'dialogues', 'runs', 'history')
+
+
 def _has_data(path: Path) -> bool:
-    """A database worth adopting: it holds documents or runs, not just empty tables."""
+    """A database worth adopting: it holds documents, conversations, runs or saved checks, not just empty tables."""
     connection = sqlite3.connect(path)
     try:
-        documents = connection.execute('SELECT count(*) FROM documents').fetchone()[0]
-        runs = connection.execute('SELECT count(*) FROM runs').fetchone()[0]
-    except sqlite3.OperationalError:
+        tables = {name for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        return any(
+            connection.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone() for table in _DATA if table in tables
+        )
+    except sqlite3.DatabaseError:
         return False
     finally:
         connection.close()
-    return documents + runs > 0
 
 
 def adopt_legacy() -> None:
@@ -172,12 +178,12 @@ def adopt_legacy() -> None:
     an adopted database already on disk stays (the registry was lost: it is registered again), and the old file is
     renamed to lab.sqlite3.before-agents, or to a dated name if that backup exists. An empty database is not adopted.
     A copy finished on disk precedes the registry entry, so an interrupted start simply repeats the adoption."""
-    old = store.default_database()
+    old = db.default_database()
     if listed() or not old.exists() or not _has_data(old):
         return
     target = db_of(FIRST['id'])
     if not target.exists():
-        store.private_folder(target.parent)
+        db.private_folder(target.parent)
         partial = target.with_name(target.name + '.partial')
         source, copy = sqlite3.connect(old), sqlite3.connect(partial)
         try:
@@ -190,7 +196,7 @@ def adopt_legacy() -> None:
     create(FIRST['name'], FIRST['description'], agent_id=FIRST['id'])
     backup = old.name + '.before-agents'
     if old.with_name(backup).exists():
-        backup += '-' + re.sub(r'[^0-9]', '', store.now())[:14]
+        backup += '-' + re.sub(r'[^0-9]', '', db.now())[:14]
     for suffix in ('', '-wal', '-shm'):
         path = old.with_name(old.name + suffix)
         if path.exists():
@@ -221,11 +227,11 @@ def recover_lost() -> list[str]:
 def only_process() -> Iterator[None]:
     """One Lab process per data folder. Uvicorn starts the application before it takes its port, so a second start
     (bin/start.sh run twice, a development server beside it) would mark the runs the first one is playing as stopped
-    (store.recover_runs) and adopt the old database twice before failing on the port. The lock goes with the process."""
+    (runs.recover) and adopt the old database twice before failing on the port. The lock goes with the process."""
     if fcntl is None:
         yield
         return
-    store.private_folder(_root())
+    db.private_folder(_root())
     with open(_root() / 'lab.lock', 'a') as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)

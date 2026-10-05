@@ -1,20 +1,19 @@
 """Agent Lab HTTP commands. Long work has one owner per agent (app.state.jobs); computation precedes persistence."""
 
 import asyncio
-import hashlib
-import json
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from . import agents, models, registry, store
+from . import agents, models, storage
 from .agents import knowledge
 from .domain import checks, export, personas, policy_files, results
 from .flows import (
     Progress,
     accuracy,
     advice,
+    answers,
     connection,
     inputs,
     scenarios,
@@ -24,6 +23,7 @@ from .flows import (
 )
 from .flows import checks as results_of
 from .jobs import BusyError, PerAgent, Work
+from .storage import registry
 
 router = APIRouter()
 
@@ -136,8 +136,8 @@ class ReviewCommand(BaseModel):
     before: Literal['agree', 'disagree'] | None = None
 
     def seen(self) -> object:
-        """The answer the person saw on the case, or store.UNSEEN when the request does not say."""
-        return self.before if 'before' in self.model_fields_set else store.UNSEEN
+        """The answer the person saw on the case, or answers.UNSEEN when the request does not say."""
+        return self.before if 'before' in self.model_fields_set else answers.UNSEEN
 
 
 class CardsCommand(BaseModel):
@@ -154,19 +154,6 @@ def start(jobs: PerAgent, kind: str, work: Work) -> dict:
 class AgentCommand(BaseModel):
     name: str = Field(max_length=80)
     description: str = Field(default='', max_length=200)
-
-
-def reviews_stamp(found: dict[str, dict | None]) -> str:
-    """What changes with every answer on the checks' results, given in this tab, another one or another browser: the
-    screens ask for the problems again by it, so a case answered elsewhere is never offered again as unanswered."""
-    answers = sorted(
-        (check, str(result.get('dialogueId')), str(row.get('ruleId')), row['review'])
-        for check, value in found.items()
-        for result in (value or {}).get('results') or []
-        for row in result.get('rules') or []
-        if row.get('review') in ('agree', 'disagree')
-    )
-    return hashlib.sha1(json.dumps(answers, ensure_ascii=False).encode()).hexdigest()[:12]
 
 
 @router.get('/api/agents')
@@ -219,7 +206,7 @@ def state(jobs: Jobs) -> dict:
     The task is read first, as it stands: it runs on while this answer is put together in a worker thread, and a task
     said to be finished has its data in the same answer (a live state would say «done» beside the data it replaced)."""
     job = dict(jobs.state)
-    found = {check: store.load(checks.result(check)) for check in checks.RESULTS}
+    found = {check: results_of.current(check) for check in checks.RESULTS}
     for result in filter(None, found.values()):
         if not result.get('summary'):  # every result stores its summary; an older one may not
             result['summary'] = results.summarize(result['results'], result['topics'])
@@ -230,17 +217,19 @@ def state(jobs: Jobs) -> dict:
         'models': models.describe(),
         'settings': connection.settings(),
         'sources': source_summary(found[checks.CODE]),
-        'sourcesRead': store.load(inputs.SOURCES_READ),
-        'logs': {'total': store.dialogue_count(), **store.export_meta()},
+        'sourcesRead': storage.documents.load(inputs.SOURCES_READ),
+        'logs': {'total': storage.dialogues.count(), **storage.dialogues.meta()},
         'checks': found,
-        'reviewsStamp': reviews_stamp(found),
-        'toneOfVoice': store.load(tone.DRAFT),
-        'severity': store.severity(),
-        'severityStamp': store.severity_stamp(),
-        'cards': store.load(scenarios.DECK),
+        # What changes with every answer given, here or in another tab or browser, on a result or a run: the screens
+        # ask for the problems again by it, so a case answered elsewhere is never offered again as unanswered.
+        'reviewsStamp': storage.reviews.stamp(),
+        'toneOfVoice': storage.documents.load(tone.DRAFT),
+        'severity': storage.severity.serious(),
+        'severityStamp': storage.severity.stamp(),
+        'cards': storage.documents.load(scenarios.DECK),
         'runs': [
             {key: summary.get(key) for key in RUN_FIELDS} | {'targetName': agents.run_name(summary)}
-            for summary in store.run_summaries()
+            for summary in storage.runs.summaries()
         ],
         'targets': [agents.public(key, way) for key, way in connection.ways().items()],
         'personas': personas.public(),
@@ -329,7 +318,7 @@ def problems_view(check: Literal['tone', 'code'] = checks.TONE, run: str | None 
     are the problems. A run is measured by its own check's criteria, so its check is taken; without either, tone of
     voice (older links)."""
     if run:
-        record = store.run(run)
+        record = storage.runs.get(run)
         if record is None:
             raise HTTPException(404, 'Прогон не найден')
         check = checks.of_run(record)
@@ -341,7 +330,7 @@ def mark_severity(payload: SeverityCommand) -> dict:
     """A person decides whether a criterion's errors are serious or minor
     (docs/superpowers/specs/2026-10-04-severity-design.md): serious ones come first and are counted apart. The decision
     wins over the model's proposal and changes neither what is checked nor how."""
-    return {'severity': store.set_severity(payload.check, payload.rule, payload.serious)}
+    return {'severity': storage.severity.decide(payload.check, payload.rule, payload.serious)}
 
 
 @router.post('/api/severity/propose')
@@ -412,7 +401,7 @@ def article_view(article_id: str) -> dict:
 
 @router.get('/api/runs/{run_id}')
 def run_detail(run_id: str) -> dict:
-    record = store.run(run_id)
+    record = storage.runs.get(run_id)
     if record is None:
         raise HTTPException(404, 'Прогон не найден')
     return record
@@ -502,9 +491,9 @@ async def check_tone(jobs: Jobs, payload: ToneCheckCommand) -> dict:
 
 @router.get('/api/tone-of-voice/history')
 def tone_history() -> dict:
-    result = store.load(tone.RESULT) or {}
+    result = storage.documents.load(tone.RESULT) or {}
     return {
-        'checks': store.tone_checks(),
+        'checks': storage.history.lines(checks.TONE),
         'hasLegacyResult': result.get('purpose') == checks.TONE_OF_VOICE and not result.get('checkId'),
     }
 
@@ -561,7 +550,7 @@ async def start_run(jobs: Jobs, payload: RunCommand) -> dict:
 
 @router.post('/api/runs/{run_id}/rejudge')
 async def rejudge(jobs: Jobs, run_id: str) -> dict:
-    record = store.run(run_id)
+    record = storage.runs.get(run_id)
     if record is None:
         raise HTTPException(404, 'Прогон не найден')
     return start(jobs, 'rejudge', lambda progress: simulation.rejudge(record, progress))
@@ -573,7 +562,7 @@ async def review(jobs: Jobs, payload: ReviewCommand) -> dict:
         if not payload.dialogueId or not payload.ruleId:
             raise HTTPException(422, 'Нужны dialogueId и ruleId')
         try:
-            check = results_of.answered_check(payload.check, payload.finishedAt, payload.dialogueId, payload.ruleId)
+            check = answers.check_of(payload.check, payload.finishedAt, payload.dialogueId, payload.ruleId)
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
         except LookupError as error:
@@ -583,8 +572,8 @@ async def review(jobs: Jobs, payload: ReviewCommand) -> dict:
                 409, f'Ответ не сохранится, пока идёт проверка «{checks.NAMES[check]}». Ответьте после неё.'
             )
         try:
-            store.set_log_review(
-                checks.result(check),
+            answers.on_log(
+                check,
                 payload.dialogueId,
                 payload.ruleId,
                 payload.decision,
@@ -593,14 +582,14 @@ async def review(jobs: Jobs, payload: ReviewCommand) -> dict:
                 payload.seen(),
             )
         except KeyError as error:
-            raise HTTPException(404, results_of.NOT_CHECKED) from error
+            raise HTTPException(404, answers.NOT_CHECKED) from error
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
         return {'ok': True}
     if payload.index is None:
         raise HTTPException(422, 'Нужны run и index')
     try:
-        record = store.set_review(
+        record = answers.on_run(
             payload.run, payload.index, payload.decision, payload.ruleId or None, payload.status, payload.seen()
         )
     except (KeyError, IndexError) as error:

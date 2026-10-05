@@ -3,17 +3,19 @@
 The planner extracts the criteria once and they are frozen: the next check reuses them and keeps every known
 conversation in its topic, so two checks are measured by the same criteria; «Новые правила» (replan) extracts them
 again. A new export keeps them too (checks.CODE_CRITERIA): its conversations are sorted into the same topics by the
-router, and the two checks compare. A finished check is published with its record in the history, in one transaction.
+router, and the two checks compare. A finished check is published with its record in the history, in one transaction;
+the answers people gave on verdicts that did not change are carried to it as rows of their own (storage.reviews).
 """
 
 import uuid
 from collections import Counter
 
-from .. import models, store
-from ..domain import accuracy, checks, results
+from .. import models, storage
+from ..domain import accuracy, answers, checks, results
 from ..domain.comparison import dataset_fingerprint
 from ..roles import planner
 from . import Progress, conversations, inputs, severity
+from .checks import current
 
 RESULT = checks.result(checks.CODE)  # discover.json: the accuracy result; tone of voice keeps its own
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
@@ -69,8 +71,8 @@ async def assess(count: int = 60, progress: Progress = lambda **_: None, replan:
 
 async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -> dict:
     # The criteria come from the previous result, else from the ones a new export kept (checks.CODE_CRITERIA).
-    result_before = store.load(RESULT) or {}
-    previous = result_before or store.load(checks.CODE_CRITERIA) or {}
+    result_before = current(checks.CODE) or {}
+    previous = result_before or storage.documents.load(checks.CODE_CRITERIA) or {}
     # The rules of communication have their own check (flows/tone.py); the criteria here come from the agent's code.
     srcs = [source for source in inputs.sources() if source['kind'] != checks.TONE_OF_VOICE]
     if not srcs:
@@ -78,7 +80,7 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
     dialogues = conversations.sample(count)
     if not dialogues:
         raise RuntimeError('Нет разговоров для проверки. Сначала загрузите диалоги.')
-    started = store.now()
+    started = storage.now()
     if previous.get('topics') and not replan:
         progress(stage='plan', done=0, total=len(dialogues), message='Распределяем разговоры по темам')
         topics = await keep_topics(previous, dialogues)
@@ -114,7 +116,7 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
         'checkId': check_id,
         'datasetFingerprint': dataset_fingerprint([dialogue for dialogue, _ in todo]),
         'startedAt': started,
-        'finishedAt': store.now(),
+        'finishedAt': storage.now(),
         'model': models.models_used(judged),
         'rulesSince': rules_since,
         'sources': [
@@ -144,20 +146,25 @@ def commit(result: dict, *, new_criteria: bool) -> None:
     dialogues = [dialogue for dialogue in conversations.sample(result['sampled']) if str(dialogue['id']) in judged]
     if dataset_fingerprint(dialogues) != result['datasetFingerprint']:
         raise ValueError('Разговоры изменились во время проверки. Запустите проверку заново.')
-    with store.transaction():
-        previous = next(iter(store.code_checks()), None)
-        export = store.export_meta()
-        record = accuracy.saved(result, dialogues, export.get('file'), store.dialogue_count(), previous)
+    with storage.transaction():
+        previous = storage.history.latest(checks.CODE)
+        export = storage.dialogues.meta()
+        record = accuracy.saved(result, dialogues, export.get('file'), storage.dialogues.count(), previous)
         publish(result, record, new_criteria=new_criteria)
 
 
 def publish(result: dict, record: dict | None = None, *, new_criteria: bool) -> None:
-    """The result of Точность and its record in the history (domain.accuracy.saved), in one transaction. Criteria
-    extracted anew no longer match the scenarios built from the old ones, so those go with it; a deck from tone of voice
-    stays."""
-    with store.transaction():
+    """The result of Точность and its record in the history (domain.accuracy.saved), in one transaction; the answers
+    carried into it are rows under its saved check, the result and the record keep the verdicts. Criteria extracted
+    anew no longer match the scenarios built from the old ones, so those go with it; a deck from tone of voice stays."""
+    kept, carried = answers.taken_from_result(result)
+    with storage.transaction():
         if record is not None:
-            store.save_code_check(record)
-        store.save(RESULT, result)
+            storage.history.save(checks.CODE, {**record, 'result': kept})
+        storage.documents.save(RESULT, kept)
+        at = kept.get('finishedAt')
+        storage.reviews.give(
+            answers.LOG, answers.record_of(checks.CODE, kept), carried, author=storage.reviews.LAB, at=at
+        )
         if new_criteria:
             inputs.drop_deck([checks.CODE])

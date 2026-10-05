@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from . import store
+from . import storage
 from .flows import Progress, error_text
 
 Work = Callable[[Progress], Awaitable[Any]]
@@ -26,7 +26,7 @@ class Jobs:
         if self.state['running']:
             raise BusyError('Сейчас идёт другая задача. Дождитесь её или остановите.')
         self.state.update(
-            kind=kind, running=True, error=None, progress={'message': 'Запускаем…'}, startedAt=store.now()
+            kind=kind, running=True, error=None, progress={'message': 'Запускаем…'}, startedAt=storage.now()
         )
 
         def progress(**values: Any) -> None:
@@ -85,14 +85,14 @@ class Jobs:
 
 
 class PerAgent:
-    """One owner of long work per agent (the database the request works in, store.AGENT): agents are checked in
+    """One owner of long work per agent (the database the request works in, storage.db.AGENT): agents are checked in
     parallel, and each screen sees only its own agent's work. Same interface as Jobs."""
 
     def __init__(self) -> None:
         self._owners: dict[str, Jobs] = {}
 
     def _jobs(self) -> Jobs:
-        return self._owners.setdefault(str(store.AGENT.get() or ''), Jobs())
+        return self._owners.setdefault(str(storage.db.AGENT.get() or ''), Jobs())
 
     @property
     def state(self) -> dict:

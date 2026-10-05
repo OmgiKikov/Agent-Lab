@@ -3,18 +3,20 @@ conversations by those criteria, with the same judge as Точность's.
 
 Criteria have a revision: a new one (collected again, clarified, taken from another agent) drops the scenarios built
 from tone of voice, while the check made by the previous one stays reviewable in the history. A finished check is
-published with its record in the history in one transaction; the answers people gave on its verdicts start the
-answers on that record.
+published with its record in the history in one transaction; the answers people gave on verdicts that did not change
+are carried to it as rows of their own (storage.reviews).
 """
 
 import asyncio
 import uuid
 
-from .. import models, registry, store
-from ..domain import checks, quotes, results, tone
+from .. import models, storage
+from ..domain import answers, checks, quotes, results, tone
 from ..domain.comparison import dataset_fingerprint
 from ..roles import tone as role
+from ..storage import registry
 from . import Progress, conversations, inputs, severity
+from .checks import current
 
 DRAFT = inputs.TONE_DRAFT  # the criteria of the current rules, with their revision
 RESULT = checks.result(checks.TONE)  # tone-result.json: its own, beside the accuracy result
@@ -38,7 +40,7 @@ def rules() -> tuple[dict, dict | None] | None:
     found = next((item for item in items if isinstance(item, dict) and item.get('kind') == tone.KIND), None)
     if found is None or not isinstance(found.get('content'), str):
         return None
-    draft = store.load(DRAFT)
+    draft = storage.documents.load(DRAFT)
     if not isinstance(draft, dict) or not isinstance(draft.get('criteria'), list):
         return found, None
     return found, draft if draft.get('sourceSha256') == found.get('sha256') else None
@@ -62,9 +64,9 @@ def rules_line() -> dict | None:
 def save_draft(draft: dict) -> None:
     """New criteria: a new revision drops the scenarios built from tone of voice, while the check made by the previous
     one stays reviewable."""
-    with store.transaction():
-        previous = store.load(DRAFT) or {}
-        store.save(DRAFT, draft)
+    with storage.transaction():
+        previous = storage.documents.load(DRAFT) or {}
+        storage.documents.save(DRAFT, draft)
         if previous.get('revision') != draft['revision']:
             inputs.drop_deck([checks.TONE])
 
@@ -79,7 +81,7 @@ async def collect_criteria(progress: Progress) -> dict:
 async def prepare(progress: Progress) -> dict:
     """New criteria from the current rules, not saved yet: from their code when they define it, else from the model."""
     source = current_policy()
-    if not store.dialogue_count():
+    if not storage.dialogues.count():
         raise ValueError('Сначала загрузите диалоги.')
     progress(message='Собираем критерии из правил общения')
     criteria = tone.coded_criteria(source)
@@ -91,9 +93,9 @@ async def prepare(progress: Progress) -> dict:
     ensure_active()
     return {
         'revision': uuid.uuid4().hex,
-        'createdAt': store.now(),
+        'createdAt': storage.now(),
         'sourceSha256': source['sha256'],
-        'criteria': tone.kept_clarifications(criteria, store.load(DRAFT), source),
+        'criteria': tone.kept_clarifications(criteria, storage.documents.load(DRAFT), source),
         'model': model,
     }
 
@@ -113,7 +115,7 @@ def take(policy: dict, draft: dict | None) -> bool:
         inputs.replace_sources([*(item for item in inputs.sources() if item['kind'] != tone.KIND), policy])
     if draft is not None:
         copied = {key: value for key, value in draft.items() if key != 'updatedAt'}
-        save_draft(copied | {'revision': uuid.uuid4().hex, 'createdAt': store.now()})
+        save_draft(copied | {'revision': uuid.uuid4().hex, 'createdAt': storage.now()})
     return True
 
 
@@ -124,12 +126,12 @@ def copied_from(agent_id: str) -> tuple[dict, tuple[dict, dict | None], dict[str
     source = registry.get(agent_id)
     if source is None:
         raise LookupError('Агент не найден')
-    if registry.db_of(source['id']) == store.database():
+    if registry.db_of(source['id']) == storage.db.database():
         raise ValueError('Правила можно взять только у другого агента.')
     with registry.using(source['id']):
         found = rules()
-        marks = store.severity_marks()[checks.TONE]
-        proposed = store.severity_proposed()[checks.TONE]
+        marks = storage.severity.marks()[checks.TONE]
+        proposed = storage.severity.proposed()[checks.TONE]
     if found is None:
         raise ValueError(f'У агента «{source["name"]}» нет правил общения.')
     return source, found, marks, proposed
@@ -140,9 +142,9 @@ def copy(found: tuple[dict, dict | None], marks: dict[str, bool], proposed: dict
     to the criteria (problems.rule_key): a person's decisions and the model's proposals come with criteria, never with
     rules alone, and other ones on the same criteria are a change. `unchanged` when this agent had all of it already."""
     changed = take(*found)
-    own = (store.severity_marks()[checks.TONE], store.severity_proposed()[checks.TONE]['proposals'])
+    own = (storage.severity.marks()[checks.TONE], storage.severity.proposed()[checks.TONE]['proposals'])
     if found[1] is not None and own != (marks, proposed['proposals']):
-        store.take_severity(checks.TONE, marks, proposed)
+        storage.severity.take(checks.TONE, marks, proposed)
         changed = True
     return {'ok': True, 'unchanged': not changed}
 
@@ -155,7 +157,7 @@ def ensure_active() -> None:
 
 
 def selection(rule_ids: list[str], revision: str | None = None) -> list[dict]:
-    draft = store.load(DRAFT)
+    draft = storage.documents.load(DRAFT)
     if not draft or draft['sourceSha256'] != current_policy()['sha256']:
         raise ValueError('Сначала соберите критерии по текущим правилам общения.')
     if revision is not None and revision != draft['revision']:
@@ -172,7 +174,7 @@ def clarified(revision: str, rule_id: str, text: str) -> dict:
     if not 10 <= len(text) <= 2000:
         raise ValueError('В уточнении должно быть от 10 до 2000 символов.')
     selection([rule_id], revision)
-    draft = store.load(DRAFT)
+    draft = storage.documents.load(DRAFT)
     rule = next(rule for rule in draft['criteria'] if rule['id'] == rule_id)
     entries = rule.setdefault('clarifications', [])
     if text in entries:
@@ -180,7 +182,7 @@ def clarified(revision: str, rule_id: str, text: str) -> dict:
     if len(entries) >= 20:
         raise ValueError('Сохранено уже 20 уточнений. Соберите критерии заново из обновлённых правил.')
     entries.append(text)
-    draft.update(revision=uuid.uuid4().hex, updatedAt=store.now())
+    draft.update(revision=uuid.uuid4().hex, updatedAt=storage.now())
     return draft
 
 
@@ -202,12 +204,12 @@ def carry_decisions(judged: list[dict], criteria: list[dict], dialogues: list[di
     seen = {rule['id']: tone.for_judging(rule) for rule in criteria}
     saved: dict[str, tuple[dict, dict, dict]] = {}
     latest: dict[tuple[str, str], tuple[str | None, str | None, str | None]] = {}
-    for check_id, dialogue_id, rule_id, decision in store.tone_decisions():
+    for check_id, dialogue_id, rule_id, decision in storage.reviews.on_saved_checks(checks.TONE):
         key = (dialogue_id, rule_id)
         if key in latest or key not in rows:
             continue
         if check_id not in saved:
-            saved[check_id] = tone.judged(store.tone_check(check_id) or {})
+            saved[check_id] = tone.judged(storage.history.get(checks.TONE, check_id) or {})
         talks, read, said = saved[check_id]
         if talks.get(dialogue_id) == shown.get(dialogue_id) and read.get(rule_id) == seen.get(rule_id):
             latest[key] = (*said.get(key, (None, None)), decision)
@@ -248,16 +250,16 @@ async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
 
 
 async def _assess(check_id: str, criteria: list[dict], count: int, progress: Progress) -> dict:
-    source, draft = current_policy(), store.load(DRAFT)
+    source, draft = current_policy(), storage.documents.load(DRAFT)
     dialogues = conversations.sample(count)
     if not dialogues:
         raise ValueError('Сначала загрузите диалоги.')
-    started = store.now()
+    started = storage.now()
     topic = {'id': 't1', 'title': checks.TONE_TOPIC, 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
     progress(done=0, total=len(dialogues), message='Проверяем разговоры')
     judged = await judge(dialogues, {**topic, 'rules': [tone.for_judging(rule) for rule in criteria]}, progress)
     ensure_active()
-    previous = store.load(RESULT) or {}
+    previous = current(checks.TONE) or {}
     results.ensure_answered(judged, previous)
     # The live result carries its own answers with the same criteria, as before: a result saved before the history of
     # checks keeps them only in itself. The history then adds what a check in between lost or what another criterion's
@@ -272,7 +274,7 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
         'criteriaFingerprint': tone.criteria_fingerprint(criteria, source),
         'datasetFingerprint': dataset_fingerprint(dialogues),
         'startedAt': started,
-        'finishedAt': store.now(),
+        'finishedAt': storage.now(),
         'rulesSince': draft['createdAt'],
         'model': models.models_used(judged),
         'sampled': len(dialogues),
@@ -293,7 +295,7 @@ def commit(result: dict) -> None:
     the current ones."""
     ensure_active()
     source = current_policy()
-    draft = store.load(DRAFT) or {}
+    draft = storage.documents.load(DRAFT) or {}
     dialogues = conversations.sample(result['sampled'])
     criteria = result['topics'][0]['rules']
     if (
@@ -302,27 +304,20 @@ def commit(result: dict) -> None:
         or result['datasetFingerprint'] != dataset_fingerprint(dialogues)
     ):
         raise ValueError('Материалы проверки изменились. Запустите проверку заново.')
-    with store.transaction():
-        previous = next(iter(store.tone_checks()), None)
-        export = {'file': store.export_meta().get('file'), 'total': store.dialogue_count()}
+    with storage.transaction():
+        previous = storage.history.latest(checks.TONE)
+        export = {'file': storage.dialogues.meta().get('file'), 'total': storage.dialogues.count()}
         publish(result, tone.snapshot(result, dialogues, criteria, source, export, previous))
 
 
 def publish(result: dict, record: dict) -> None:
     """The result of tone of voice and its immutable record in the history (domain.tone.snapshot), in one transaction;
-    the scenarios built from the previous result go. The answers carried into it start the answers on the record, which
-    never change it."""
-    with store.transaction():
-        store.save_tone_check(record)
-        store.save(RESULT, result)
+    the scenarios built from the previous result go. The answers carried into it are rows under its saved check (the
+    answers on that record start with them), the result and the record keep the verdicts."""
+    kept, carried = answers.taken_from_result(result)
+    with storage.transaction():
+        storage.history.save(checks.TONE, {**record, 'result': kept})
+        storage.documents.save(RESULT, kept)
         inputs.drop_deck([checks.TONE])
-        for judged in result['results']:
-            for row in judged.get('rules', []):
-                if row.get('review') in ('agree', 'disagree'):
-                    store.save_tone_review(
-                        record['check']['id'],
-                        str(judged['dialogueId']),
-                        row['ruleId'],
-                        row['review'],
-                        record['check']['finishedAt'],
-                    )
+        at = record['check']['finishedAt']
+        storage.reviews.give(answers.LOG, record['check']['id'], carried, author=storage.reviews.LAB, at=at)

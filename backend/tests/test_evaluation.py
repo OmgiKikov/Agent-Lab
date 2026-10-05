@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import support
 
-from lab import config, models, roles, store
+from lab import config, models, roles, storage
 from lab.domain import export, quotes, verdicts
 from lab.domain.accuracy import ground
 from lab.domain.metric import metric
@@ -449,10 +449,10 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(accuracy.inputs, 'sources', return_value=[{'id': 's1', 'kind': 'prompt', 'content': 'text'}]),
             patch.object(accuracy.conversations, 'sample', return_value=[dialogue]),
-            patch.object(store, 'load', return_value={}),
+            patch.object(storage.documents, 'load', return_value={}),
             patch.object(accuracy, 'plan_topics', AsyncMock(return_value=([topic], 0))),
             patch.object(accuracy.conversations, 'judge_dialogue', AsyncMock(return_value=result)),
-            patch.object(store, 'save') as save,
+            patch.object(storage.documents, 'save') as save,
         ):
             analysis = await accuracy.assess()
         self.assertEqual(analysis['results'][0]['dialogueId'], 'stable')
@@ -472,7 +472,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(accuracy.inputs, 'sources', return_value=[code, policy]),
             patch.object(accuracy.conversations, 'sample', return_value=[dialogue]),
-            patch.object(store, 'load', return_value=None),
+            patch.object(storage.documents, 'load', return_value=None),
             patch.object(accuracy, 'plan_topics', plan),
             patch.object(accuracy.conversations, 'judge_dialogue', AsyncMock(return_value=result)),
         ):
@@ -485,19 +485,19 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь к клиенту на вы.'}
         with (
             patch.object(accuracy.inputs, 'sources', return_value=[policy]),
-            patch.object(store, 'load', return_value=None),
+            patch.object(storage.documents, 'load', return_value=None),
             self.assertRaises(RuntimeError) as refused,
         ):
             await accuracy.assess()
         self.assertEqual(str(refused.exception), 'Код агента ещё не прочитан. Прочитайте его в разделе «Агент».')
 
     async def test_card_generation_does_not_commit(self):
+        storage.dialogues.replace([{'id': 'd'}])
         with (
-            patch.object(store, 'load', return_value={'topics': [], 'results': []}),
-            patch.object(store, 'dialogues', return_value=[{'id': 'd'}]),
+            patch.object(storage.documents, 'load', return_value={'topics': [], 'results': []}),
             patch.object(cards.scenarios, 'pick', return_value=[({}, 'd', 'Coverage')]),
             patch.object(cards, 'build_card', AsyncMock(return_value={'id': 'card', 'model': 'actual-main'})),
-            patch.object(store, 'save') as save,
+            patch.object(storage.documents, 'save') as save,
         ):
             result = await cards.built('code')
         self.assertEqual(result, [{'id': 'card', 'model': 'actual-main'}])

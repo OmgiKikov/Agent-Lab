@@ -20,7 +20,7 @@ from pathlib import Path
 
 import httpx
 
-from .. import config, store
+from .. import config, storage
 from ..config import ROOT
 from .completion import Completion, usage
 from .errors import MalformedAnswer, ModelError, refused
@@ -341,7 +341,7 @@ async def catalog(timeout: httpx.Timeout | float = 30) -> list[str]:
 
 
 def chosen_models() -> dict:
-    return store.load(MODELS, {}) or {}
+    return storage.documents.load(MODELS, {}) or {}
 
 
 def _version(name: str) -> tuple[int, ...]:
@@ -362,7 +362,7 @@ async def auto_models(timeout: httpx.Timeout | float = 30) -> dict:
     ranked = sorted(full or glm, key=lambda name: (_version(name), name), reverse=True)
     main = ranked[0] if ranked else (names[0] if names else None)
     models = {'model': main, 'second': main}
-    store.save(MODELS, models)
+    storage.documents.save(MODELS, models)
     return models
 
 

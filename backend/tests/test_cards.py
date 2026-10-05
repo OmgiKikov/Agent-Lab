@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import support
 
-from lab import api, models, store
+from lab import api, models, storage
 from lab.domain import checks
 from lab.domain import scenarios as picking
 from lab.flows import scenarios as cards
@@ -96,22 +96,20 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(picks[0][3], ['c1', 'c2'])  # the card still reproduces every criterion failed there
 
     async def test_empty_generation_is_an_explicit_error(self):
-        store.save(checks.result(checks.CODE), {'topics': [], 'results': []})
+        storage.documents.save(checks.result(checks.CODE), {'topics': [], 'results': []})
         with self.assertRaisesRegex(RuntimeError, 'Нет разговоров'):
             await cards.built(checks.CODE)
 
     async def test_generation_failure_keeps_saved_deck_and_is_visible(self):
         jobs = Jobs()
-        with (
-            patch.object(store, 'dialogues', return_value=[dialogue()]),
-            patch.object(cards, 'build_card', AsyncMock(side_effect=models.ModelError('model unavailable'))),
-        ):
+        storage.dialogues.replace([dialogue()])
+        with patch.object(cards, 'build_card', AsyncMock(side_effect=models.ModelError('model unavailable'))):
             previous = {'cards': [{'id': 'previous'}]}
-            store.save(checks.DECK, previous)
-            store.save('discover.json', analysis())
+            storage.documents.save(checks.DECK, previous)
+            storage.documents.save('discover.json', analysis())
             await api.start_cards(jobs, api.CardsCommand(check='code'))
             await jobs._task
-            self.assertEqual(store.load(checks.DECK), previous)
+            self.assertEqual(storage.documents.load(checks.DECK), previous)
             self.assertIn('model unavailable', jobs.state['error'])
             self.assertFalse(jobs.state['running'])
 
@@ -128,9 +126,9 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         topic = {'title': 'Тариф'}
         picks = [(topic, 'fail', 'Coverage'), (topic, 'kept', 'Coverage')]
         reported = []
-        store.save(checks.result(checks.CODE), {'topics': [], 'results': []})
+        storage.documents.save(checks.result(checks.CODE), {'topics': [], 'results': []})
+        storage.dialogues.replace([{'id': 'fail'}, {'id': 'kept'}])
         with (
-            patch.object(store, 'dialogues', return_value=[{'id': 'fail'}, {'id': 'kept'}]),
             patch.object(picking, 'pick', return_value=picks),
             patch.object(cards, 'build_card', build),
         ):
@@ -191,9 +189,9 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             {'topicId': 't', 'dialogueId': 'p', 'status': 'PASS', 'rules': [{'ruleId': 'reply', 'status': 'PASS'}]},
         ]
         named = scenario('Тариф', 'Клиент узнаёт тариф.')
-        store.save(checks.result(checks.CODE), audit)
+        storage.documents.save(checks.result(checks.CODE), audit)
+        storage.dialogues.replace([dialogue(), dict(dialogue(), id='p')])
         with (
-            patch.object(store, 'dialogues', return_value=[dialogue(), dict(dialogue(), id='p')]),
             patch.object(models, 'chat', AsyncMock(return_value=named)),
             patch.object(cards.world, 'templates', return_value=None),
             patch.object(cards.inputs, 'sources', return_value=[]),

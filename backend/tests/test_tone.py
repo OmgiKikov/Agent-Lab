@@ -7,7 +7,7 @@ from zipfile import ZipFile
 
 import support
 
-from lab import api, config, models, store
+from lab import api, config, models, storage
 from lab.domain import policy_files, quotes
 from lab.domain import tone as tone_rules
 from lab.flows import accuracy, conversations, inputs, tone
@@ -151,37 +151,39 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
-        return store.load(tone.DRAFT)
+        return storage.documents.load(tone.DRAFT)
 
     async def test_file_preview_does_not_change_inputs_or_existing_results(self):
-        store.save(accuracy.RESULT, {'results': ['old']})
+        storage.documents.save(accuracy.RESULT, {'results': ['old']})
         response = await self.client.post(
             '/api/tone-of-voice/read-file?name=rules.docx', content=docx('Обращайтесь на вы и отвечайте вежливо.')
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn('отвечайте вежливо', response.json()['text'])
-        self.assertEqual(store.load(accuracy.RESULT), {'results': ['old']})
-        self.assertEqual(store.load(store.EXPORT), [self.dialogue])
+        self.assertEqual(storage.documents.load(accuracy.RESULT), {'results': ['old']})
+        self.assertEqual(storage.dialogues.read(), [self.dialogue])
 
     async def test_policy_keeps_existing_code_sources_and_creates_reviewable_criteria(self):
         code = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'original prompt'}
-        store.save(api.inputs.SOURCES, [code])
+        storage.documents.save(api.inputs.SOURCES, [code])
         draft = await self.prepared()
         self.assertEqual(len(draft['criteria']), 2)
         self.assertEqual(inputs.sources()[0], code)
-        self.assertIsNone(store.load(tone.RESULT))
+        self.assertIsNone(storage.documents.load(tone.RESULT))
         state = (await self.client.get('/api/state')).json()
         self.assertEqual(state['toneOfVoice']['revision'], draft['revision'])
 
     async def test_rereading_agent_code_keeps_the_policy_its_criteria_and_result(self):
-        store.save(api.inputs.SOURCES, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'old prompt'}])
+        storage.documents.save(
+            api.inputs.SOURCES, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'old prompt'}]
+        )
         draft = await self.prepared()
         response = await self.client.post(
             '/api/tone-of-voice/clarification',
             json={'revision': draft['revision'], 'ruleId': 'pronouns', 'text': '«Вы» с прописной буквы — тоже ошибка.'},
         )
         self.assertEqual(response.status_code, 200, response.text)
-        draft = store.load(tone.DRAFT)
+        draft = storage.documents.load(tone.DRAFT)
         rows = [
             {'ruleId': rule['id'], 'rule': rule['text'], 'status': 'PASS', 'reason': '', 'agentQuote': '', 'title': ''}
             for rule in draft['criteria']
@@ -190,8 +192,8 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(conversations, 'judge_dialogue', AsyncMock(return_value=value)):
             await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
             await self.wait_job()
-        result = store.load(tone.RESULT)
-        store.save(api.scenarios.DECK, {'check': 'code', 'cards': ['built from the code']})
+        result = storage.documents.load(tone.RESULT)
+        storage.documents.save(api.scenarios.DECK, {'check': 'code', 'cards': ['built from the code']})
         policy = inputs.sources()[-1]
         code = [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'new prompt'}]
         with patch.object(api.inputs.agent_sources, 'collect', return_value=(code, [])):
@@ -199,12 +201,12 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
         self.assertEqual(inputs.sources(), [*code, policy])
-        self.assertEqual(store.load(tone.DRAFT), draft)
-        self.assertEqual(store.load(tone.RESULT), result)
-        self.assertIsNone(store.load(api.scenarios.DECK))
+        self.assertEqual(storage.documents.load(tone.DRAFT), draft)
+        self.assertEqual(storage.documents.load(tone.RESULT), result)
+        self.assertIsNone(storage.documents.load(api.scenarios.DECK))
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция'})
-        self.assertIsNone(store.load(tone.DRAFT))
-        self.assertIsNone(store.load(tone.RESULT))
+        self.assertIsNone(storage.documents.load(tone.DRAFT))
+        self.assertIsNone(storage.documents.load(tone.RESULT))
 
     async def test_criteria_collected_again_keep_the_clarifications_people_confirmed(self):
         """«Собрать заново» from the same rules: a criterion with the same quote keeps its confirmed clarifications;
@@ -218,13 +220,13 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
-        again = {rule['id']: rule for rule in store.load(tone.DRAFT)['criteria']}
+        again = {rule['id']: rule for rule in storage.documents.load(tone.DRAFT)['criteria']}
         self.assertEqual(again['pronouns']['clarifications'], [note])
         self.assertNotIn('clarifications', again['simple_language'])
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция'})
         await self.client.post('/api/tone-of-voice/criteria')
         await self.wait_job()
-        self.assertFalse(any(rule.get('clarifications') for rule in store.load(tone.DRAFT)['criteria']))
+        self.assertFalse(any(rule.get('clarifications') for rule in storage.documents.load(tone.DRAFT)['criteria']))
 
     async def test_check_uses_existing_judge_and_saves_tone_scope(self):
         draft = await self.prepared()
@@ -256,7 +258,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
         judge.assert_awaited_once()
-        result = store.load(tone.RESULT)
+        result = storage.documents.load(tone.RESULT)
         self.assertEqual(result['purpose'], 'tone-of-voice')
         self.assertEqual(result['criteriaRevision'], draft['revision'])
         self.assertEqual((result['summary']['measured'], result['summary']['passed']), (1, 1))
@@ -284,7 +286,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             )
             await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
-        result = store.load(tone.RESULT)
+        result = storage.documents.load(tone.RESULT)
         self.assertEqual([row['status'] for row in result['results'][0]['rules']], ['PASS', 'UNKNOWN'])
         self.assertEqual(result['results'][0]['status'], 'UNMEASURED')
         self.assertEqual(result['results'][0]['second']['status'], 'UNMEASURED')
@@ -295,13 +297,13 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['invented'], 'count': 1})
         self.assertEqual(response.status_code, 400)
         await self.client.post('/api/logs?name=other.jsonl', content=json.dumps(self.dialogue))
-        self.assertEqual(store.load(tone.DRAFT), draft)
+        self.assertEqual(storage.documents.load(tone.DRAFT), draft)
         response = await self.client.post(
             '/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1, 'revision': 'stale'}
         )
         self.assertEqual(response.status_code, 400)
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY + '\nНовая редакция'})
-        self.assertIsNone(store.load(tone.DRAFT))
+        self.assertIsNone(storage.documents.load(tone.DRAFT))
         response = await self.client.post('/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1})
         self.assertEqual(response.status_code, 400)
 
@@ -330,5 +332,5 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
             await self.client.post('/api/tone-of-voice/criteria')
             await entered.wait()
             await self.client.post('/api/job/stop')
-        self.assertIsNone(store.load(tone.DRAFT))
+        self.assertIsNone(storage.documents.load(tone.DRAFT))
         self.assertEqual(self.jobs.state['error'], 'Остановлено')

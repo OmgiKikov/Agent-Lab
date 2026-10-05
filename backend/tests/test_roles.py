@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import support
 
-from lab import models, roles, store
+from lab import models, roles, storage
 from lab.roles import advice, customer, judge, planner, scenario, severity, tone, world
 
 Client = httpx.AsyncClient
@@ -48,7 +48,7 @@ class RoleCase(unittest.IsolatedAsyncioTestCase):
         with client, models.about('check:test'):
             answer = await call()
         self.assertEqual(len(requests), 2)
-        lines = store.calls('check:test')
+        lines = storage.calls.listed('check:test')
         self.assertEqual([line['outcome'] for line in lines], ['unusable', 'answered'])
         self.assertEqual({(line['role'], line['version']) for line in lines}, {(role.name, role.version)})
         self.assertEqual(
@@ -164,7 +164,7 @@ class EachRoleTests(RoleCase):
         )
         self.assertIn('Твоя манера общения (она важнее правил о длине и стиле ниже): торопится', system)
         self.assertNotIn('response_format', requests[0])
-        roles_asked = [(line['role'], line['version']) for line in store.calls('run:test')]
+        roles_asked = [(line['role'], line['version']) for line in storage.calls.listed('run:test')]
         self.assertEqual(
             roles_asked,
             [(customer.CUSTOMER.name, customer.CUSTOMER.version), (customer.OPENING.name, customer.OPENING.version)],
@@ -196,7 +196,7 @@ class AskTests(RoleCase):
             answer = await roles.ask(roles.Role('test', 'system', dict), {}, model=('http://provider/v1', 'alias'))
         self.assertEqual(len(calls), 2)
         self.assertEqual(answer, roles.Answer({'ready': True}, 'actual-model'))
-        self.assertEqual([line['outcome'] for line in store.calls()], ['unusable', 'answered'])
+        self.assertEqual([line['outcome'] for line in storage.calls.listed()], ['unusable', 'answered'])
 
     async def test_an_unfinished_code_fence_is_asked_again(self):
         replies = [models.Reply('```json', 'bad'), models.Reply('{"ready":true}', 'good')]
@@ -220,7 +220,7 @@ class AskTests(RoleCase):
         self.assertEqual(told, roles.base.UNUSABLE)
         self.assertIn('rules.0.status', caught.exception.detail)
         self.assertIn('rules.0.status', '\n'.join(logged.output))
-        lines = store.calls()
+        lines = storage.calls.listed()
         self.assertEqual([line['outcome'] for line in lines], ['unusable', 'unusable'])
         self.assertTrue(all(secret not in json.dumps(line, ensure_ascii=False) for line in lines))
         self.assertNotIn(secret, '\n'.join(logged.output))

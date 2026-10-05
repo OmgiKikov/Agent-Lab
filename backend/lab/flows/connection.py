@@ -4,7 +4,7 @@ as, the folder of its code; and the ways to reach it by those settings (agents.c
 import uuid
 from pathlib import Path
 
-from .. import agents, store
+from .. import agents, storage
 
 SETTINGS = 'settings.json'
 CHECK_QUESTION = 'Какой процент эквайринга?'  # what «Проверить связь» asks the agent
@@ -12,12 +12,12 @@ UNKNOWN_WAY = 'Неизвестный способ подключения аге
 
 
 def settings() -> dict:
-    return agents.settings(store.load(SETTINGS, {}) or {})
+    return agents.settings(storage.documents.load(SETTINGS, {}) or {})
 
 
 def save_settings(values: dict) -> dict:
     """The person's changes to the settings; a typo in the agent's address is refused (ValueError)."""
-    store.save(SETTINGS, agents.changed(settings(), values))
+    storage.documents.save(SETTINGS, agents.changed(settings(), values))
     return settings()
 
 
@@ -36,8 +36,8 @@ def connect(key: str) -> agents.HttpAgent:
     connection = ways().get(key)
     if not connection:
         raise agents.AgentError(f'Неизвестный способ подключения агента: {key}.')
-    folder = store.database().parent
-    store.private_folder(folder)
+    folder = storage.db.database().parent
+    storage.db.private_folder(folder)
     return agents.create(connection | {'log': folder / agents.code.LOG})
 
 

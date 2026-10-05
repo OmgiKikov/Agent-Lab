@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, patch
 
 import support
 
-from lab import store
+from lab import storage
 from lab.domain.metric import metric
-from lab.flows import inputs, simulation
+from lab.flows import answers, inputs, simulation
 from lab.jobs import Jobs
 
 
@@ -67,8 +67,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         ):
             task = asyncio.create_task(simulation.run('test'))
             await entered.wait()
-            run_id = store.runs()[0]['id']
-            store.set_review(run_id, 0, 'disagree')
+            run_id = storage.runs.listed()[0]['id']
+            answers.on_run(run_id, 0, 'disagree')
             release.set()
             result = await task
         self.assertEqual(result['status'], 'done')
@@ -100,11 +100,11 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.agent, 'say', side_effect=say),
             patch.object(simulation, 'customer_says', side_effect=customer),
             patch.object(simulation, 'evaluate', side_effect=evaluate),
-            patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes,
+            patch.object(storage.runs, '_save', wraps=storage.runs._save) as writes,
         ):
             task = asyncio.create_task(simulation.run('test', progress=lambda **values: reported.append(values)))
             await entered.wait()
-            live = store.runs()[0]
+            live = storage.runs.listed()[0]
             release.set()
             result = await task
         # The live view reads the record: a finished conversation is there while another one still plays.
@@ -122,7 +122,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         item = simulation.new_item(card(), 'default', 1)
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], review=None)
         source.update(items=[item], status='done')
-        stale = store.create_run(source)
+        stale = storage.runs.create(source)
         entered, release = asyncio.Event(), asyncio.Event()
 
         async def evaluate(scenario: dict, item: dict) -> None:
@@ -133,7 +133,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(simulation, 'evaluate', side_effect=evaluate):
             task = asyncio.create_task(simulation.rejudge(stale))
             await entered.wait()
-            store.set_review(source['id'], 0, 'disagree')
+            answers.on_run(source['id'], 0, 'disagree')
             release.set()
             result = await task
         self.assertEqual(result['items'][0]['status'], 'FAIL')
@@ -187,7 +187,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-        result = store.runs()[0]
+        result = storage.runs.listed()[0]
         self.assertEqual(result['status'], 'stopped')
         self.assertEqual(result['items'][0]['status'], 'UNMEASURED')
         self.assertEqual(result['items'][0]['stage'], '')
@@ -208,12 +208,12 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         ):
             task = asyncio.create_task(simulation.run('test'))
             await playing.wait()
-            with patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes:
+            with patch.object(storage.runs, '_save', wraps=storage.runs._save) as writes:
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
         self.assertEqual(writes.call_count, 1)
-        result = store.runs()[0]
+        result = storage.runs.listed()[0]
         self.assertEqual((result['status'], result['error']), ('stopped', 'Прогон остановлен'))
         self.assertTrue(result['finishedAt'])
         self.assertEqual(
@@ -259,7 +259,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((result['status'], result['error']), expected)
                 self.assertEqual(result['items'][1]['error'], 'Нет связи с агентом (ConnectError).')
                 # The list of runs (/api/state) has the reason without reading the conversations.
-                listed = next(summary for summary in store.run_summaries() if summary['id'] == result['id'])
+                listed = next(summary for summary in storage.runs.summaries() if summary['id'] == result['id'])
                 self.assertEqual((listed['status'], listed['error']), expected)
 
     async def test_close_failure_is_a_finished_failed_run(self) -> None:
@@ -306,7 +306,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.agent.closed)
             release.set()
             await stopping
-        result = store.runs()[0]
+        result = storage.runs.listed()[0]
         self.assertFalse(jobs.state['running'])
         self.assertEqual(result['status'], 'stopped')
         self.assertTrue(result['finishedAt'])
@@ -339,7 +339,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(*stopping)
         self.assertFalse(jobs.state['running'])
         self.assertTrue(self.agent.closed)
-        result = store.runs()[0]
+        result = storage.runs.listed()[0]
         self.assertEqual(result['status'], 'stopped')
         self.assertTrue(result['finishedAt'])
 
@@ -353,13 +353,13 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             review='disagree',
         )
         source.update(items=[item], status='done')
-        store.create_run(source)
+        storage.runs.create(source)
 
         async def evaluate(scenario: dict, item: dict) -> None:
             item.update(status='PASS', rules=[{'status': 'PASS'}])
 
         with patch.object(simulation, 'evaluate', side_effect=evaluate) as judge:
-            result = await simulation.rejudge(store.run(source['id']))
+            result = await simulation.rejudge(storage.runs.get(source['id']))
         judge.assert_awaited_once()
         self.assertEqual(result['items'][0]['status'], 'PASS')
         self.assertIsNone(result['items'][0]['error'])
@@ -373,20 +373,20 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         row = {'ruleId': 'r1', 'status': 'FAIL', 'reason': 'нет срока', 'agentQuote': 'answer'}
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], rules=[row], ended=True)
         source.update(items=[item], status='done')
-        store.create_run(source)
-        store.set_review(source['id'], 0, 'agree', 'r1', 'FAIL')
-        before = store.run(source['id'])
+        storage.runs.create(source)
+        answers.on_run(source['id'], 0, 'agree', 'r1', 'FAIL')
+        before = storage.runs.get(source['id'])
         down = simulation.models.ModelError('Модель недоступна (ConnectError).')
         with (
             patch.object(simulation, 'evaluate', side_effect=down),
             self.assertRaises(simulation.models.ModelError) as caught,
         ):
-            await simulation.rejudge(store.run(source['id']))
+            await simulation.rejudge(storage.runs.get(source['id']))
         self.assertIn('1\u00a0из\u00a01', str(caught.exception))
         self.assertIn('Прогон остался прежним', str(caught.exception))
         self.assertIn('Модель недоступна (ConnectError).', str(caught.exception))
-        self.assertEqual(store.run(source['id']), before)
-        self.assertEqual(store.run(source['id'])['items'][0]['rules'][0]['review'], 'agree')
+        self.assertEqual(storage.runs.get(source['id']), before)
+        self.assertEqual(storage.runs.get(source['id'])['items'][0]['rules'][0]['review'], 'agree')
 
     async def test_a_rejudge_with_one_conversation_unanswered_writes_none_of_the_new_verdicts(self) -> None:
         source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
@@ -396,8 +396,8 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             item.update(status='PASS', conversation=[{'role': 'agent', 'text': 'answer'}], rules=[], ended=True)
             items.append(item)
         source.update(items=items, status='done')
-        store.create_run(source)
-        before = store.run(source['id'])
+        storage.runs.create(source)
+        before = storage.runs.get(source['id'])
 
         async def evaluate(scenario: dict, item: dict) -> None:
             if scenario['cardId'] == 'card-1':
@@ -408,9 +408,9 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             patch.object(simulation, 'evaluate', side_effect=evaluate),
             self.assertRaises(simulation.models.ModelError) as caught,
         ):
-            await simulation.rejudge(store.run(source['id']))
+            await simulation.rejudge(storage.runs.get(source['id']))
         self.assertIn('1\u00a0из\u00a02', str(caught.exception))
-        self.assertEqual(store.run(source['id']), before)
+        self.assertEqual(storage.runs.get(source['id']), before)
 
     async def test_rejudge_keeps_frozen_criteria_after_inputs_replace_and_deck_changes(self) -> None:
         frozen = card()
@@ -420,7 +420,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         frozen['criteria'][0]['text'] = 'Edited later'
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], review='agree')
         source.update(items=[item], status='done')
-        store.create_run(source)
+        storage.runs.create(source)
         inputs.replace_export([])
         observed = []
 
@@ -432,7 +432,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             patch.object(simulation.scenarios, 'deck', return_value=[]),
             patch.object(simulation, 'evaluate', side_effect=evaluate),
         ):
-            result = await simulation.rejudge(store.run(source['id']))
+            result = await simulation.rejudge(storage.runs.get(source['id']))
         self.assertEqual(observed, [{'id': 'original', 'text': 'Original rule'}])
         self.assertEqual(result['items'][0]['status'], 'PASS')
         self.assertIsNone(result['items'][0]['review'])
@@ -444,7 +444,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         del item['criteria']
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}])
         source.update(items=[item], status='done')
-        store.create_run(source)
+        storage.runs.create(source)
         original = card()
         original['criteria'] = [{'id': 'old', 'text': 'Old rule'}]
 
@@ -456,7 +456,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             patch.object(simulation.scenarios, 'deck', return_value=[original]),
             patch.object(simulation, 'evaluate', side_effect=evaluate),
         ):
-            result = await simulation.rejudge(store.run(source['id']))
+            result = await simulation.rejudge(storage.runs.get(source['id']))
         self.assertEqual(result['items'][0]['criteria'], original['criteria'])
 
     async def test_legacy_rejudge_without_original_criteria_fails_without_false_completion(self) -> None:
@@ -465,23 +465,23 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         del item['criteria']
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}])
         source.update(items=[item], status='done')
-        store.create_run(source)
+        storage.runs.create(source)
         with (
             patch.object(simulation.scenarios, 'deck', return_value=[]),
             patch.object(simulation, 'evaluate') as judge,
             self.assertRaisesRegex(RuntimeError, 'не сохранены критерии'),
         ):
-            await simulation.rejudge(store.run(source['id']))
+            await simulation.rejudge(storage.runs.get(source['id']))
         judge.assert_not_awaited()
-        self.assertNotIn('rejudgedAt', store.run(source['id']))
+        self.assertNotIn('rejudgedAt', storage.runs.get(source['id']))
 
     async def test_rejudge_without_agent_answers_fails_without_false_completion(self) -> None:
         source = simulation.new_run('test', {'name': 'Test'}, '', 1, ['default'])
         source.update(items=[simulation.new_item(card(), 'default', 1)], status='stopped')
-        store.create_run(source)
+        storage.runs.create(source)
         with self.assertRaisesRegex(RuntimeError, 'нет записанных ответов'):
-            await simulation.rejudge(store.run(source['id']))
-        self.assertNotIn('rejudgedAt', store.run(source['id']))
+            await simulation.rejudge(storage.runs.get(source['id']))
+        self.assertNotIn('rejudgedAt', storage.runs.get(source['id']))
 
     def played(self, count: int = 3) -> str:
         """A finished run whose conversations all passed under an older model."""
@@ -496,7 +496,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
                 rules=[{'ruleId': 'r', 'status': 'PASS'}],
             )
         source.update(items=items, status='done', model='old-model')
-        store.create_run(source)
+        storage.runs.create(source)
         return source['id']
 
     async def test_stopped_rejudge_leaves_the_run_as_it_was(self) -> None:
@@ -511,11 +511,11 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
 
         jobs = Jobs()
         with patch.object(simulation, 'evaluate', side_effect=evaluate):
-            jobs.start('rejudge', lambda progress: simulation.rejudge(store.run(run_id), progress))
+            jobs.start('rejudge', lambda progress: simulation.rejudge(storage.runs.get(run_id), progress))
             await first.wait()
             await asyncio.sleep(0)
             await jobs.stop()
-        result = store.run(run_id)
+        result = storage.runs.get(run_id)
         self.assertEqual([(item['status'], item['model']) for item in result['items']], [('PASS', 'old-model')] * 3)
         self.assertEqual((result['status'], result['model'], result['metric']['failed']), ('done', 'old-model', 0))
         self.assertNotIn('rejudgedAt', result)
@@ -533,17 +533,17 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             patch.object(simulation, 'evaluate', side_effect=crashes),
             self.assertRaisesRegex(ExceptionGroup, 'unhandled errors'),
         ):
-            await simulation.rejudge(store.run(run_id))
-        self.assertEqual([item['status'] for item in store.run(run_id)['items']], ['PASS'] * 3)
+            await simulation.rejudge(storage.runs.get(run_id))
+        self.assertEqual([item['status'] for item in storage.runs.get(run_id)['items']], ['PASS'] * 3)
 
         async def fails(scenario: dict, item: dict) -> None:
             item.update(status='FAIL', model='new-model', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
 
         with (
             patch.object(simulation, 'evaluate', side_effect=fails),
-            patch.object(store, '_mutate_run', wraps=store._mutate_run) as writes,
+            patch.object(storage.runs, '_save', wraps=storage.runs._save) as writes,
         ):
-            result = await simulation.rejudge(store.run(run_id))
+            result = await simulation.rejudge(storage.runs.get(run_id))
         self.assertEqual(writes.call_count, 1)
         self.assertEqual([item['status'] for item in result['items']], ['FAIL'] * 3)
         self.assertEqual((result['model'], result['metric']['failed']), ('new-model', 3))
@@ -602,14 +602,14 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-        stopped = store.runs()[0]
+        stopped = storage.runs.listed()[0]
         with (
             patch.object(simulation, 'evaluate') as judge,
             self.assertRaisesRegex(RuntimeError, 'нет записанных ответов'),
         ):
             await simulation.rejudge(stopped)
         judge.assert_not_awaited()
-        item = store.run(stopped['id'])['items'][0]
+        item = storage.runs.get(stopped['id'])['items'][0]
         self.assertEqual((item['status'], item['error']), ('UNMEASURED', 'Прогон остановлен'))
 
     async def test_rejudge_of_an_older_record_keeps_a_conversation_that_ended_on_the_customer(self) -> None:
@@ -629,20 +629,20 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         source.update(items=[whole, broken], status='done')
-        store.create_run(source)
+        storage.runs.create(source)
 
         async def failed(scenario: dict, item: dict) -> None:
             item.update(status='FAIL', rules=[{'ruleId': 'r', 'status': 'FAIL'}])
 
         with patch.object(simulation, 'evaluate', side_effect=failed):
-            result = await simulation.rejudge(store.run(source['id']))
+            result = await simulation.rejudge(storage.runs.get(source['id']))
         self.assertEqual(result['items'][0]['status'], 'FAIL')
         self.assertEqual(
             (result['items'][1]['status'], result['items'][1]['error']), ('UNMEASURED', 'Агент ответил HTTP 500')
         )
 
     async def test_a_run_remembers_the_check_its_deck_was_built_from(self) -> None:
-        store.save(simulation.scenarios.DECK, {'check': 'tone', 'cards': [card()]})
+        storage.documents.save(simulation.scenarios.DECK, {'check': 'tone', 'cards': [card()]})
 
         async def evaluate(scenario: dict, item: dict) -> None:
             item.update(status='PASS', rules=[])
@@ -650,25 +650,25 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(simulation, 'evaluate', side_effect=evaluate):
             result = await simulation.run('test')
         self.assertEqual(result['check'], 'tone')
-        self.assertEqual(store.run_summaries()[0]['check'], 'tone')
+        self.assertEqual(storage.runs.summaries()[0]['check'], 'tone')
 
     def test_a_run_from_before_runs_remembered_their_check_has_the_check_of_its_criteria(self) -> None:
         def played(run_id: str, criterion: dict, topic: str = 'Терминалы') -> None:
             item = simulation.new_item(dict(card(), topic=topic, criteria=[criterion]), 'default', 1)
-            store.create_run({'id': run_id, 'startedAt': run_id, 'status': 'done', 'items': [item]})
+            storage.runs.create({'id': run_id, 'startedAt': run_id, 'status': 'done', 'items': [item]})
 
         played('1', {'id': 'pronouns', 'text': 'На вы', 'sourceId': 'tone-of-voice'})
         played('2', {'id': 'pronouns', 'text': 'На вы'}, topic='Tone of voice')  # a card kept no source of its criteria
         played('3', {'id': 't1r1', 'text': 'Называет срок', 'sourceId': 's1'})
-        summaries = store.run_summaries()
+        summaries = storage.runs.summaries()
         self.assertEqual(
             [(summary['id'], summary['check']) for summary in summaries], [('3', 'code'), ('2', 'tone'), ('1', 'tone')]
         )
-        self.assertEqual(store.run('2')['check'], 'tone')
+        self.assertEqual(storage.runs.get('2')['check'], 'tone')
 
     async def test_customer_messages_and_cached_openings_consume_labelled_model_answers(self) -> None:
         scenario = card()
-        store.save(simulation.scenarios.DECK, {'cards': [scenario]})
+        storage.documents.save(simulation.scenarios.DECK, {'cards': [scenario]})
         with patch.object(
             simulation.models,
             'chat',
@@ -679,7 +679,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         ) as chat:
             message = await simulation.customer_says(scenario, [{'role': 'agent', 'text': 'answer'}])
             await simulation.prepare_openings([scenario], ['impatient'], lambda **values: None)
-            cached = store.load(simulation.scenarios.DECK)['cards']
+            cached = storage.documents.load(simulation.scenarios.DECK)['cards']
             await simulation.prepare_openings(cached, ['impatient'], lambda **values: None)
         self.assertEqual(message, 'next question')
         self.assertEqual(cached[0]['openings']['impatient'], 'rewritten opening')

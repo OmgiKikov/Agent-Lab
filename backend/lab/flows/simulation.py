@@ -13,7 +13,7 @@ from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
 
-from .. import agents, models, store
+from .. import agents, models, storage
 from ..agents import knowledge, world
 from ..domain import checks, personas
 from ..domain import world as scenario_world
@@ -111,7 +111,7 @@ def new_run(key: str, config: dict, label: str, repeats: int, persona_ids: list[
         'version': '…',
         'label': label,
         'customer': config.get('customer', ''),
-        'startedAt': store.now(),
+        'startedAt': storage.now(),
         'finishedAt': None,
         'model': models.main_model(),
         'status': 'running',
@@ -160,13 +160,13 @@ async def run(
     record['items'] = [new_item(card, persona, attempt) for card, persona, attempt in plan]
     # The run is measured by the criteria of the check its deck was built from, and remembers it.
     record['check'] = scenarios.check() or checks.of_run(record)
-    store.create_run(record)
+    storage.runs.create(record)
 
     def changed(index: int) -> None:
         """A conversation's turns stay in memory, in the job's progress; it is written once, when it ends with a
         verdict or an error. A write rereads and rewrites the whole run, on the event loop that stop also needs."""
         if record['items'][index]['status'] != 'RUNNING':
-            store.update_item(record['id'], index, record['items'][index])
+            storage.runs.update_item(record['id'], index, record['items'][index])
         done = sum(item['status'] != 'RUNNING' for item in record['items'])
         progress(run=record['id'], done=done, total=len(plan), message=f'Играем сценарии · {record["targetName"]}')
 
@@ -177,7 +177,7 @@ async def run(
             await prepare_openings(chosen, persona_ids, progress)
             async with agents.session(connection.connect(key)) as agent:
                 record['version'] = agent.version
-                store.update_run(record['id'], version=agent.version)
+                storage.runs.update(record['id'], version=agent.version)
                 gate = asyncio.Semaphore(PARALLEL)
 
                 async def one(card: dict, index: int) -> None:
@@ -202,15 +202,15 @@ async def run(
                 if item['status'] == 'RUNNING':
                     item.update(status='UNMEASURED', stage='', error=record['error'])
                     cut[index] = item
-            store.update_items(
+            storage.runs.update_items(
                 record['id'],
                 cut,
                 status=record['status'],
                 error=record['error'],
-                finishedAt=store.now(),
+                finishedAt=storage.now(),
                 model=models.models_used(record['items']),
             )
-    return store.run(record['id'])
+    return storage.runs.get(record['id'])
 
 
 def ended(item: dict) -> bool:
@@ -239,7 +239,7 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
     The new verdicts replace the old ones together, after the whole pass: a stopped or failed pass leaves the run as
     it was, never half re-judged under a final status. A pass in which the model gave no verdict on some conversation
     failed: an outage is not a verdict, and writing one would take the verdicts that stood and the answers people gave
-    on them (store._patch_item)."""
+    on them (storage.runs.update_items)."""
     items = [(index, item) for index, item in enumerate(record['items']) if ended(item)]
     if not items:
         raise RuntimeError('В прогоне нет записанных ответов агента: ни один разговор не дошёл до конца.')
@@ -277,7 +277,9 @@ async def rejudge(record: dict, progress: Progress = lambda **_: None) -> dict:
             f'Прогон остался прежним. {reason}'
         )
     verdicts = {index: {key: item[key] for key in JUDGED if key in item} for index, item in items}
-    return store.update_items(record['id'], verdicts, rejudgedAt=store.now(), model=models.models_used(record['items']))
+    return storage.runs.update_items(
+        record['id'], verdicts, rejudgedAt=storage.now(), model=models.models_used(record['items'])
+    )
 
 
 async def evidence(card: dict, conversation: list[dict]) -> judge.Evidence:

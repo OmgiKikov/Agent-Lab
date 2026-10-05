@@ -10,8 +10,9 @@ from unittest.mock import patch
 
 import support
 
-from lab import api, config, jobs, migrate, registry, store
+from lab import api, config, jobs, migrate, storage
 from lab.app import create, lifespan
+from lab.storage import registry
 
 
 class RegistryTests(unittest.TestCase):
@@ -38,13 +39,13 @@ class RegistryTests(unittest.TestCase):
         first = registry.create('Первый', '')['id']
         second = registry.create('Второй', '')['id']
         with registry.using(first):
-            store.save('logs.json', [{'id': '1'}])
+            storage.dialogues.replace([{'id': '1'}])
         with registry.using(second):
-            self.assertIsNone(store.load('logs.json'))
+            self.assertEqual(storage.dialogues.read(), [])
         with registry.using(first):
-            self.assertEqual(store.load('logs.json'), [{'id': '1'}])
+            self.assertEqual(storage.dialogues.read(), [{'id': '1'}])
         self.assertTrue((self.root / 'agents' / first / 'lab.sqlite3').exists())
-        self.assertIsNone(store.load('logs.json'))
+        self.assertEqual(storage.dialogues.read(), [])
 
 
 class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
@@ -88,7 +89,7 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
 
         async def work(progress) -> None:
             await release.wait()
-            store.save('marker.json', {'agent': 'first'})
+            storage.documents.save('marker.json', {'agent': 'first'})
 
         with registry.using(self.first):
             self.jobs.start('discover', work)
@@ -100,20 +101,20 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
                 if not self.jobs.state['running']:
                     break
         with registry.using(self.first):
-            self.assertEqual(store.load('marker.json'), {'agent': 'first'})
+            self.assertEqual(storage.documents.load('marker.json'), {'agent': 'first'})
         with registry.using(self.second):
-            self.assertIsNone(store.load('marker.json'))
-        self.assertIsNone(store.load('marker.json'))
+            self.assertIsNone(storage.documents.load('marker.json'))
+        self.assertIsNone(storage.documents.load('marker.json'))
 
     async def test_agents_are_listed_with_the_result_of_each_check_and_created_by_name(self) -> None:
         with registry.using(self.first):
             summary = {'checked': 100, 'measured': 92, 'failed': 78, 'passed': 14, 'unmeasured': 8}
-            store.save(
+            storage.documents.save(
                 'tone-result.json',
                 {'purpose': 'tone-of-voice', 'finishedAt': '2026-10-02T20:41:53+00:00', 'summary': summary},
             )
             summary = {'checked': 60, 'measured': 50, 'failed': 5, 'passed': 45, 'unmeasured': 10}
-            store.save('discover.json', {'finishedAt': '2026-10-01T09:00:00+00:00', 'summary': summary})
+            storage.documents.save('discover.json', {'finishedAt': '2026-10-01T09:00:00+00:00', 'summary': summary})
         response = await self.client.post('/api/agents', json={'name': 'Кредитный агент', 'description': 'Кредиты'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['id'], 'kreditnyy-agent')
@@ -132,7 +133,7 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_agent_connection_check_works_inside_the_agent(self) -> None:
         with registry.using(self.first):
-            store.save('settings.json', {'prodUrl': 'http://agent.example/chat'})
+            storage.documents.save('settings.json', {'prodUrl': 'http://agent.example/chat'})
         seen = {}
         original = api.connection.ways
 
@@ -146,7 +147,9 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_broken_result_of_one_agent_does_not_hide_the_others(self) -> None:
         with registry.using(self.first):
-            store.save('discover.json', {'finishedAt': '2026-10-02T20:41:53+00:00', 'summary': {'checked': 3}})
+            storage.documents.save(
+                'discover.json', {'finishedAt': '2026-10-02T20:41:53+00:00', 'summary': {'checked': 3}}
+            )
         response = await self.client.get('/api/agents')
         self.assertEqual(response.status_code, 200)
         self.assertEqual([a['results'] for a in response.json()], [{'tone': None, 'code': None}] * 2)
@@ -158,21 +161,21 @@ class AdoptionTests(unittest.TestCase):
         self.root = self.settings.data
 
     def test_the_existing_database_becomes_the_first_agent_once(self) -> None:
-        store.save('logs.json', [{'id': 'd1'}])
+        storage.dialogues.replace([{'id': 'd1'}])
         registry.adopt_legacy()
         self.assertEqual(
             [(a['id'], a['name'], a['description']) for a in registry.listed()],
             [('acquiring', 'Агент эквайринга', 'СберБизнес · чат поддержки')],
         )
         with registry.using('acquiring'):
-            self.assertEqual(store.load('logs.json'), [{'id': 'd1'}])
+            self.assertEqual(storage.dialogues.read(), [{'id': 'd1'}])
         self.assertFalse((self.root / 'lab.sqlite3').exists())
         self.assertTrue((self.root / 'lab.sqlite3.before-agents').exists())
         registry.adopt_legacy()
         self.assertEqual(len(registry.listed()), 1)
 
     def test_starting_after_the_adoption_leaves_no_empty_database_behind(self) -> None:
-        store.save('logs.json', [{'id': 'd1'}])
+        storage.dialogues.replace([{'id': 'd1'}])
 
         async def start() -> None:
             async with lifespan(create(self.settings)):
@@ -183,16 +186,16 @@ class AdoptionTests(unittest.TestCase):
         self.assertFalse((self.root / 'lab.sqlite3').exists())
 
     def test_adoption_never_overwrites_an_adopted_database_or_its_backup(self) -> None:
-        store.save('logs.json', [{'id': 'real'}])
+        storage.dialogues.replace([{'id': 'real'}])
         registry.adopt_legacy()
         (self.root / 'agents.sqlite3').unlink()  # the registry lost
-        store.save('logs.json', [{'id': 'stray'}])
+        storage.dialogues.replace([{'id': 'stray'}])
         registry.adopt_legacy()
         with registry.using('acquiring'):
-            self.assertEqual(store.load('logs.json'), [{'id': 'real'}])
+            self.assertEqual(storage.dialogues.read(), [{'id': 'real'}])
         with sqlite3.connect(self.root / 'lab.sqlite3.before-agents') as backup:
-            row = backup.execute("SELECT value FROM documents WHERE name = 'logs.json'").fetchone()
-        self.assertEqual(json.loads(row[0]), [{'id': 'real'}])
+            rows = backup.execute('SELECT value FROM dialogues').fetchall()
+        self.assertEqual([json.loads(value) for (value,) in rows], [{'id': 'real'}])
         self.assertEqual([a['id'] for a in registry.listed()], ['acquiring'])
 
     def test_an_empty_database_is_not_adopted(self) -> None:
@@ -225,7 +228,7 @@ class AdoptionTests(unittest.TestCase):
             created = registry.create(name, agent_id=agent_id)['id']
             if name != 'Пустой':
                 with registry.using(created):
-                    store.save('logs.json', [{'id': 'd1'}])
+                    storage.dialogues.replace([{'id': 'd1'}])
         (self.root / 'agents.sqlite3').unlink()
 
         async def start() -> None:
@@ -238,10 +241,10 @@ class AdoptionTests(unittest.TestCase):
             [('acquiring', 'Агент эквайринга'), ('agent-kreditov', 'agent-kreditov')],
         )
         with registry.using('agent-kreditov'):
-            self.assertEqual(store.load('logs.json'), [{'id': 'd1'}])
+            self.assertEqual(storage.dialogues.read(), [{'id': 'd1'}])
 
     def test_a_second_lab_on_the_same_data_recovers_nothing_and_says_why(self) -> None:
-        store.save('logs.json', [{'id': 'd1'}])
+        storage.dialogues.replace([{'id': 'd1'}])
 
         async def start() -> None:
             async with lifespan(create(self.settings)):
@@ -249,7 +252,7 @@ class AdoptionTests(unittest.TestCase):
 
         with (
             registry.only_process(),
-            patch.object(store, 'recover_runs') as recover,
+            patch.object(storage.runs, 'recover') as recover,
             self.assertRaises(RuntimeError) as refused,
         ):
             asyncio.run(start())
@@ -298,11 +301,11 @@ class LegacyImportTests(unittest.TestCase):
 
     def logs_of(self, agent_id: str) -> list:
         with registry.using(agent_id):
-            return store.dialogues()
+            return storage.dialogues.read()
 
     def test_without_agents_the_import_waits_in_the_database_the_next_start_adopts(self) -> None:
         self.assertEqual(self.run_import()['agent'], None)
-        self.assertEqual(len(store.dialogues()), 1)
+        self.assertEqual(len(storage.dialogues.read()), 1)
         registry.adopt_legacy()
         self.assertEqual(len(self.logs_of('acquiring')), 1)
 
@@ -310,7 +313,7 @@ class LegacyImportTests(unittest.TestCase):
         only = registry.create('Агент эквайринга')['id']
         self.assertEqual(self.run_import()['agent'], only)
         self.assertEqual(len(self.logs_of(only)), 1)
-        self.assertFalse(store.default_database().exists())
+        self.assertFalse(storage.db.default_database().exists())
 
     def test_with_several_agents_the_import_is_told_which(self) -> None:
         first = registry.create('Первый')['id']
@@ -322,4 +325,4 @@ class LegacyImportTests(unittest.TestCase):
                 self.assertIn('--agent', said)
         self.assertEqual(self.run_import('--agent', second)['agent'], second)
         self.assertEqual((len(self.logs_of(first)), len(self.logs_of(second))), (0, 1))
-        self.assertFalse(store.default_database().exists())
+        self.assertFalse(storage.db.default_database().exists())

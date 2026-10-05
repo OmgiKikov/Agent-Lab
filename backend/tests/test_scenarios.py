@@ -5,7 +5,7 @@ import unittest
 
 import support
 
-from lab import store
+from lab import storage
 from lab.domain import checks
 
 FROM_LOG, COVERAGE = 'Ошибка из лога', 'Покрытие темы'
@@ -55,7 +55,7 @@ def played(card_id: str, persona: str, status: str, failed: tuple[str, ...] = ()
 
 def run(run_id: str, started: str, items: list[dict], check: str = checks.CODE, label: str = '') -> None:
     record = {'id': run_id, 'label': label, 'startedAt': started, 'status': 'done', 'check': check, 'items': items}
-    store.create_run(record)
+    storage.runs.create(record)
 
 
 class ScenariosTests(unittest.IsolatedAsyncioTestCase):
@@ -68,7 +68,7 @@ class ScenariosTests(unittest.IsolatedAsyncioTestCase):
         return response.json()
 
     async def test_a_scenario_shows_the_error_it_reproduces_and_its_result_in_each_run_of_its_check(self) -> None:
-        store.save(
+        storage.documents.save(
             checks.result(checks.CODE),
             {
                 'results': [
@@ -78,7 +78,9 @@ class ScenariosTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         deck = [scenario('error', 'd1', reproduces=['t1r1']), scenario('control', 'd2', COVERAGE, reproduces=[])]
-        store.save(checks.DECK, {'check': checks.CODE, 'createdAt': '2026-10-01T09:00:00+00:00', 'cards': deck})
+        storage.documents.save(
+            checks.DECK, {'check': checks.CODE, 'createdAt': '2026-10-01T09:00:00+00:00', 'cards': deck}
+        )
         older = [
             played('error', 'default', 'FAIL', failed=('t1r1', 't1r2')),
             played('control', 'default', 'UNMEASURED'),
@@ -121,7 +123,7 @@ class ScenariosTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(entry['run'], entry['status']) for entry in control['history']], [('older', 'UNMEASURED')])
 
     async def test_an_older_deck_reproduces_what_its_source_conversation_failed_in_the_current_result(self) -> None:
-        store.save(
+        storage.documents.save(
             checks.result(checks.TONE),
             {'results': [logged('d1', 'FAIL', [row('t1r1', 'PASS', 'Завтра.'), row('t1r2', 'FAIL', 'Всё.')])]},
         )
@@ -131,7 +133,7 @@ class ScenariosTests(unittest.IsolatedAsyncioTestCase):
             scenario('control', 'd1', COVERAGE),  # a control reproduces no error, whatever its conversation has now
             scenario('kept', 'd1', reproduces=['t1r1']),  # the agent's words come only from a row that has the error
         ]
-        store.save(checks.DECK, {'check': checks.TONE, 'cards': deck})
+        storage.documents.save(checks.DECK, {'check': checks.TONE, 'cards': deck})
         found = {card['id']: card for card in (await self.scenarios())['cards']}
         self.assertEqual(
             found['old']['reproduces'],

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import support
 
-from lab import store
+from lab import storage
 from lab.agents import code
 from lab.flows import connection
 
@@ -62,7 +62,7 @@ class CodeAgentTests(unittest.IsolatedAsyncioTestCase):
         database = self.root / 'agents' / 'first' / 'lab.sqlite3'
 
         async def connect() -> code.CodeAgent:
-            store.AGENT.set(database)  # inside its own task, as a job inside its agent
+            storage.db.AGENT.set(database)  # inside its own task, as a job inside its agent
             connection.save_settings({'repo': str(self.root / 'repo')})
             agent = connection.connect('local-code')
             await agent.open()

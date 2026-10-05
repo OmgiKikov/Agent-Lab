@@ -1,11 +1,11 @@
 """Serious and minor errors (docs/superpowers/specs/2026-10-04-severity-design.md). After a check, when the screens ask
 for it, the model proposes for each criterion of the check's result whether an error by it is serious, with a reason a
 person can weigh; a person confirms or changes it. A person's decision always wins: the model is never asked about a
-criterion a person decided, and its proposals live apart from the decisions (store.severity)."""
+criterion a person decided, and its proposals live apart from the decisions (storage.severity)."""
 
 import asyncio
 
-from .. import models, store
+from .. import models, storage
 from ..domain import checks, problems
 from ..roles import severity as role
 from . import Progress
@@ -18,7 +18,7 @@ PROPOSING = 'Отмечаем серьёзные ошибки'
 
 def criteria(check: str) -> dict[str, dict]:
     """The criteria of the check's current result by their key (problems.rule_key), as the screens group them."""
-    return _criteria(store.load(checks.result(check)) or {})
+    return _criteria(storage.documents.load(checks.result(check)) or {})
 
 
 def _criteria(analysis: dict) -> dict[str, dict]:
@@ -33,10 +33,10 @@ async def propose(check: str, progress: Progress | None = None, again: bool = Fa
     """Ask the model about the criteria of the check's result it has no proposal for (every one `again`), never about
     one a person decided. Each answered part is saved at once; a failure is saved as the reason and returned, never
     raised: the check it follows stands."""
-    analysis = store.load(checks.result(check)) or {}
+    analysis = storage.documents.load(checks.result(check)) or {}
     found = _criteria(analysis)
-    marks = store.severity_marks()[check]
-    proposals = store.severity_proposed()[check]['proposals']
+    marks = storage.severity.marks()[check]
+    proposals = storage.severity.proposed()[check]['proposals']
     todo = [key for key in found if key not in marks and (again or key not in proposals)]
     if not todo:
         return None
@@ -50,9 +50,9 @@ async def propose(check: str, progress: Progress | None = None, again: bool = Fa
             try:
                 answer = await role.propose(check, [role.shown(found[key], id_) for id_, key in ids.items()])
             except models.ModelError as error:
-                store.severity_failed(check, str(error))
+                storage.severity.failed(check, str(error))
                 return str(error)
-            store.propose_severity(check, {key: answer.value[id_] for id_, key in ids.items()}, answer.model)
+            storage.severity.propose(check, {key: answer.value[id_] for id_, key in ids.items()}, answer.model)
     return None
 
 
@@ -76,9 +76,9 @@ async def propose_again(check: str, progress: Progress, *, again: bool = False) 
     error = await propose(check, progress, again=again)
     if error:
         raise models.ModelError(error)
-    return {'severity': store.severity()}
+    return {'severity': storage.severity.serious()}
 
 
 def confirm(check: str) -> dict:
     """«Подтвердить все»: a person takes the model's proposals for the criteria of the check's result as their own."""
-    return {'severity': store.confirm_severity(check, list(criteria(check)))}
+    return {'severity': storage.severity.confirm(check, list(criteria(check)))}

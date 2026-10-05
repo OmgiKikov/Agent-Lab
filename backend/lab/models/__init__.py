@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import SecretStr, ValidationError
 
-from .. import config, store
+from .. import config, storage
 from . import gateway, openai_compatible
 from .completion import Completion
 from .errors import MalformedAnswer, ModelError, refused
@@ -167,7 +167,7 @@ async def chat(
     attempt = timeouts = 0
     while True:
         attempt += 1
-        started, clock = store.now(), time.monotonic()
+        started, clock = storage.now(), time.monotonic()
         try:
             done = await _ask(base, model, system, messages, json_mode, limits)
             if not done.text.strip():
@@ -253,7 +253,7 @@ async def _journal(
         'detail': str(error) if error else None,
     }
     try:
-        return await asyncio.to_thread(store.journal, line)
+        return await asyncio.to_thread(storage.calls.add, line)
     except sqlite3.Error as failure:
         log.warning('Вызов модели не записан в журнал: %s', failure)
         return None
@@ -265,7 +265,7 @@ async def unusable(reply: Reply, error: Exception) -> None:
     if reply.call is None:
         return
     try:
-        await asyncio.to_thread(store.journal_outcome, reply.call, UNUSABLE, detail(error))
+        await asyncio.to_thread(storage.calls.outcome, reply.call, UNUSABLE, detail(error))
     except sqlite3.Error as failure:
         log.warning('Вызов модели не записан в журнал: %s', failure)
 

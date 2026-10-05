@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import support
 
-from lab import config, models, roles, store
+from lab import config, models, roles, storage
 from lab.app import create
 from lab.models import gateway
 
@@ -365,5 +365,5 @@ class AutoModelTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_without_a_full_glm_the_newest_light_one_and_without_glm_the_first_model(self) -> None:
         self.assertEqual(await self.chosen(['glm-4.5-air', 'glm-4.10-flash', 'qwen']), 'glm-4.10-flash')
-        store.save(gateway.MODELS, {})
+        storage.documents.save(gateway.MODELS, {})
         self.assertEqual(await self.chosen(['qwen', 'gpt-oss']), 'qwen')

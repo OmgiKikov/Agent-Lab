@@ -1,7 +1,7 @@
 """A suggestion on an error tone of voice found, at a person's request: grounded in the evidence of the current
 result, never changing the rules, the quote or the verdict (roles.advice)."""
 
-from .. import models, store
+from .. import models, storage
 from ..domain import export, quotes, verdicts
 from ..domain.tone import KIND
 from ..roles import advice
@@ -11,8 +11,8 @@ from . import tone
 def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
     """The evidence of an error of the current result the person saw (finished_at); a ValueError when the result, the
     criteria or the rules changed since, or the error has no quote of the agent's words."""
-    analysis = store.load(tone.RESULT) or {}
-    draft = store.load(tone.DRAFT) or {}
+    analysis = storage.documents.load(tone.RESULT) or {}
+    draft = storage.documents.load(tone.DRAFT) or {}
     if analysis.get('purpose') != KIND or analysis.get('finishedAt') != finished_at:
         raise ValueError('Итог проверки изменился. Обновите страницу.')
     if analysis.get('criteriaRevision') != draft.get('revision'):
@@ -24,7 +24,7 @@ def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
     )
     result = next((item for item in analysis['results'] if str(item['dialogueId']) == dialogue_id), None)
     verdict = next((row for row in (result or {}).get('rules', []) if row['ruleId'] == rule_id), None)
-    dialogue = store.dialogue(dialogue_id)
+    dialogue = storage.dialogues.get(dialogue_id)
     if rule is None or verdict is None or dialogue is None:
         raise ValueError('В текущем итоге нет этого разговора или критерия.')
     if verdict['status'] != 'FAIL':

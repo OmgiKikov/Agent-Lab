@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import support
 
-from lab import config, models, roles, store
+from lab import config, models, roles, storage
 from lab.flows import simulation
 
 Client = httpx.AsyncClient
@@ -203,7 +203,7 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         with models.about('run:r1'):
             await self.ask(status(429, **{'Retry-After': '1'}), answered())
             await self.ask(broken(httpx.ConnectError), status(400))
-        lines = store.calls('run:r1')
+        lines = storage.calls.listed('run:r1')
         self.assertEqual(
             [(line['outcome'], line['status'], line['model'], line['via']) for line in lines],
             [
@@ -215,7 +215,7 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(lines[1]['answeredBy'], 'm')
         self.assertTrue(all(line['ms'] >= 0 and line['at'] for line in lines))
-        self.assertEqual(store.calls('elsewhere'), [])
+        self.assertEqual(storage.calls.listed('elsewhere'), [])
 
     async def test_a_long_retry_after_is_cut_and_three_tries_are_the_most(self):
         busy = status(429, **{'Retry-After': '3600'})

@@ -8,7 +8,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import support
 from openpyxl import Workbook
 
-from lab import store
+from lab import storage
 from lab.domain import export as logs
 
 
@@ -118,7 +118,7 @@ class LogImportTests(unittest.TestCase):
         }
         invalid = dict(valid, id='two', messages=[{'role': 'assistant', 'content': None}])
         data = ('\n'.join(json.dumps(row) for row in (valid, invalid))).encode()
-        with patch.object(store, 'save') as save, self.assertRaises(ValueError):
+        with patch.object(storage.documents, 'save') as save, self.assertRaises(ValueError):
             logs.prepare('logs.jsonl', data)
         save.assert_not_called()
 
@@ -154,9 +154,9 @@ class LogImportTests(unittest.TestCase):
             'id': 'one',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
-        store.save(store.EXPORT, [dialogue])
-        self.assertEqual(store.dialogue('one'), dialogue)
-        self.assertIsNone(store.dialogue('missing'))
+        storage.dialogues.replace([dialogue])
+        self.assertEqual(storage.dialogues.get('one'), dialogue)
+        self.assertIsNone(storage.dialogues.get('missing'))
 
     def test_an_export_says_how_many_conversations_a_check_cannot_read(self):
         talk = [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}]
