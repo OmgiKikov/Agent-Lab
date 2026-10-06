@@ -56,22 +56,29 @@ def criteria_fingerprint(result: dict) -> str:
     )
 
 
-def saved(result: dict, dialogues: list[dict], file: str | None, total: int, previous: dict | None) -> dict:
-    """The record of a finished check in the history: the line of the list and the evidence behind it."""
+def saved(result: dict, dialogues: list[dict], export: dict, previous: dict | None) -> dict:
+    """The record of a finished check in the history: the line of the list and the evidence behind it. export: the
+    export it was made of, as a result keeps it (storage.exports.line): its file and how many conversations it had."""
     check = {
         'id': result['checkId'],
         'finishedAt': result['finishedAt'],
         'criteriaFingerprint': criteria_fingerprint(result),
         'datasetFingerprint': dataset_fingerprint(dialogues),
         'evaluationFingerprint': evaluation_fingerprint(result),
-        'file': file,
-        'total': total,
+        'file': export.get('file'),
+        'total': export.get('total') or 0,
+        'export': named(export),
         'sampled': result['sampled'],
         'summary': {key: result['summary'][key] for key in ('measured', 'passed', 'failed', 'unmeasured')},
         'model': result['model'],
     }
     check['comparison'] = comparison(check, previous)
     return {'check': check, 'result': result, 'dialogues': dialogues}
+
+
+def named(export: dict) -> dict | None:
+    """The export in a saved check's line: its id and its name then. A check of an export never named has none."""
+    return {'id': export['id'], 'name': export.get('name')} if export.get('id') else None
 
 
 def criteria_of(result: dict) -> dict:

@@ -6,6 +6,7 @@ inserted to this schema the same way (legacy.py).
 Schema 7: the export's conversations are rows (dialogues), the saved checks of both checks one table (history), and
 the answers people gave on verdicts rows of their own (reviews): a result, a saved check and a run keep verdicts only.
 Schema 8: long work is kept as it goes (tasks, steps), never only in memory.
+Schema 9: an agent has exports, each upload one (exports); a conversation is a row by its export and id (dialogues).
 """
 
 import json
@@ -21,15 +22,26 @@ from ..domain.metric import metric
 
 # The database's user_version once these tables are in place. Raise it with every change here: a database is set up
 # again only when its user_version differs.
-SCHEMA = 8
+SCHEMA = 9
 EXPORT = 'logs.json'  # where a database before schema 7 kept the export's conversations, as one document
-EXPORT_META = 'logs-meta.json'  # the name of the export's file and when it was uploaded
+EXPORT_META = 'logs-meta.json'  # schema 7–8: the record of the one export, its file and when it was uploaded
 PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or the Lab (storage.reviews)
+
+# The conversations of every export in its order (position), each by its export and id: one is read without the
+# others, and the same conversation may be in two exports. An older database has another dialogues table: it gets this
+# one, and its order, in _exports.
+DIALOGUES = (
+    'CREATE TABLE IF NOT EXISTS dialogues (export TEXT NOT NULL, position INTEGER NOT NULL, id TEXT NOT NULL, '
+    'value TEXT NOT NULL, PRIMARY KEY (export, id))'
+)
+DIALOGUES_ORDER = 'CREATE INDEX IF NOT EXISTS dialogues_in_order ON dialogues (export, position)'
 
 TABLES = (
     'CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)',
-    # The export's conversations in its order (position), each by its id: one is read without the others.
-    'CREATE TABLE IF NOT EXISTS dialogues (position INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, value TEXT NOT NULL)',
+    # The exports of conversations, each upload one (storage/exports.py): the list is the newest first (rowid).
+    'CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, name TEXT NOT NULL, file TEXT, '
+    'uploaded_at TEXT NOT NULL, total INTEGER NOT NULL, skipped INTEGER NOT NULL DEFAULT 0)',
+    DIALOGUES,
     # summary: the run without its conversations, written with it, for the list of runs.
     'CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL, summary TEXT)',
     # The saved checks of both checks (kind: tone or code): summary is the line of the list, value the whole record.
@@ -79,6 +91,7 @@ def set_up(connection: sqlite3.Connection, path: Path) -> None:
 def upgrade(connection: sqlite3.Connection) -> None:
     """What an older database, or an older Lab's files just imported, keeps in an older shape, in this one. A step does
     nothing to what has this shape already."""
+    _exports(connection)
     _separate_checks(connection)
     _export_to_rows(connection)
     _one_history(connection)
@@ -88,6 +101,68 @@ def upgrade(connection: sqlite3.Connection) -> None:
     connection.execute('DROP TRIGGER IF EXISTS length_on_insert')
     connection.execute('DROP TRIGGER IF EXISTS length_on_update')
     connection.execute('DROP TABLE IF EXISTS lengths')
+
+
+def _exports(connection: sqlite3.Connection) -> None:
+    """Schema 9: the one export of an older database becomes the first of its exports, named by its file and uploaded
+    when it was. The current results were made of it (a new export cleared them then), and so were their saved checks.
+    An export still a document (logs.json, before schema 7) is _export_to_rows's."""
+    columns = {column[1] for column in connection.execute('PRAGMA table_info(dialogues)')}
+    if 'export' not in columns:
+        connection.execute('ALTER TABLE dialogues RENAME TO dialogues_before_exports')
+        connection.execute(DIALOGUES)
+        rows = connection.execute('SELECT position, id, value FROM dialogues_before_exports ORDER BY position').fetchall()
+        meta = _document(connection, EXPORT_META)
+        if rows or (meta is not None and _document(connection, EXPORT) is None):
+            _new_export(connection, meta or {}, rows)
+        connection.execute('DROP TABLE dialogues_before_exports')
+    connection.execute(DIALOGUES_ORDER)
+
+
+def _new_export(connection: sqlite3.Connection, meta: dict, rows: list[tuple]) -> None:
+    """An export of these rows (position, id, value) with the file and the time of the older record of the export
+    (meta), which goes; the current results, and the saved checks they are, made of it."""
+    export_id = uuid.uuid4().hex[:12]
+    connection.executemany(
+        'INSERT OR REPLACE INTO dialogues (export, position, id, value) VALUES (?, ?, ?, ?)',
+        ((export_id, position, dialogue_id, value) for position, dialogue_id, value in rows),
+    )
+    total = connection.execute('SELECT count(*) FROM dialogues WHERE export = ?', (export_id,)).fetchone()[0]
+    file = meta.get('file')
+    name = _name_of(file)
+    at = meta.get('updatedAt') or datetime.now(UTC).isoformat(timespec='milliseconds')
+    connection.execute(
+        'INSERT INTO exports (id, name, file, uploaded_at, total, skipped) VALUES (?, ?, ?, ?, ?, 0)',
+        (export_id, name, file, at, total),
+    )
+    made = {'id': export_id, 'name': name, 'file': file, 'total': total}
+    for document in checks.RESULTS.values():
+        result = _document(connection, document)
+        if isinstance(result, dict) and not result.get('export'):
+            _put(connection, document, {**result, 'export': made})
+            if result.get('checkId'):
+                _mark_saved(connection, result['checkId'], {'id': export_id, 'name': name})
+    connection.execute('DELETE FROM documents WHERE name = ?', (EXPORT_META,))
+
+
+def _mark_saved(connection: sqlite3.Connection, check_id: str, export: dict) -> None:
+    """The saved check of a result names the export it was made of, in its line and in its record."""
+    row = connection.execute('SELECT summary, value FROM history WHERE id = ?', (check_id,)).fetchone()
+    if row is None:
+        return
+    summary, value = json.loads(row[0]), json.loads(row[1])
+    value['check'] = {**(value.get('check') or {}), 'export': export}
+    connection.execute(
+        'UPDATE history SET summary = ?, value = ? WHERE id = ?',
+        (_dump({**summary, 'export': export}), _dump(value), check_id),
+    )
+
+
+def _name_of(file: str | None) -> str:
+    """The name of an export by its file, as storage.exports names one (its rules may move on; this step's stay)."""
+    stem = (file or '').replace('\\', '/').rsplit('/', 1)[-1]
+    stem = stem.rsplit('.', 1)[0] if '.' in stem else stem
+    return stem.strip() or 'Выгрузка'
 
 
 def _separate_checks(connection: sqlite3.Connection) -> None:
@@ -108,23 +183,15 @@ def _separate_checks(connection: sqlite3.Connection) -> None:
 
 
 def _export_to_rows(connection: sqlite3.Connection) -> None:
-    """The export's conversations, one document before schema 7, become rows in their order, and the document goes. An
-    export uploaded before the name of its file was kept gets a record without the name: the legacy import never takes
-    it for no export at all."""
+    """The export's conversations, one document before schema 7 (or in an older Lab's files just imported), become an
+    export of rows in their order, with the record of its file when there is one, and the document goes."""
     row = connection.execute('SELECT value FROM documents WHERE name = ?', (EXPORT,)).fetchone()
     if row is None:
         return
-    connection.execute('DELETE FROM dialogues')
-    connection.executemany(
-        'INSERT OR REPLACE INTO dialogues (position, id, value) VALUES (?, ?, ?)',
-        (
-            (position, str(dialogue['id']), _dump(dialogue))
-            for position, dialogue in enumerate(json.loads(row[0]) or [], 1)
-        ),
-    )
+    dialogues = json.loads(row[0]) or []
+    rows = [(position, str(dialogue['id']), _dump(dialogue)) for position, dialogue in enumerate(dialogues, 1)]
+    _new_export(connection, _document(connection, EXPORT_META) or {}, rows)
     connection.execute('DELETE FROM documents WHERE name = ?', (EXPORT,))
-    if _document(connection, EXPORT_META) is None:
-        _put(connection, EXPORT_META, {'file': None, 'updatedAt': None})
 
 
 def _one_history(connection: sqlite3.Connection) -> None:
@@ -201,11 +268,16 @@ def _accuracy_history(connection: sqlite3.Connection) -> None:
     if any(result.get(key) is None for key in _RECORDED):
         return
     judged = {str(item['dialogueId']) for item in result['results']}
-    uploaded = [json.loads(value) for (value,) in connection.execute('SELECT value FROM dialogues ORDER BY position')]
+    export = result.get('export') or {}
+    uploaded = [
+        json.loads(value)
+        for (value,) in connection.execute(
+            'SELECT value FROM dialogues WHERE export = ? ORDER BY position', (export.get('id'),)
+        )
+    ]
     dialogues = [dialogue for dialogue in uploaded if str(dialogue['id']) in judged]
     result = {**result, 'checkId': uuid.uuid4().hex, 'datasetFingerprint': dataset_fingerprint(dialogues)}
-    meta = _document(connection, EXPORT_META) or {}
-    record = accuracy.saved(result, dialogues, meta.get('file'), len(uploaded), None)
+    record = accuracy.saved(result, dialogues, {**export, 'total': len(uploaded)}, None)
     kept, _ = answers.taken_from_result(record['result'])
     connection.execute(
         'INSERT INTO history (id, kind, summary, value) VALUES (?, ?, ?, ?)',

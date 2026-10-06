@@ -89,7 +89,7 @@ class StoreTests(unittest.TestCase):
         )
         self.assertIsNone(storage.runs.get('run-1'))
         self.assertEqual(migrate(legacy), {'documents': 2, 'runs': 1, 'recomputedVerdicts': 0, 'resetReviews': 0})
-        self.assertEqual(storage.dialogues.read()[0]['id'], 'dialogue-1')
+        self.assertEqual(storage.exports.read(storage.exports.newest()['id'])[0]['id'], 'dialogue-1')
         self.assertEqual(storage.runs.get('run-1')['items'][0]['review'], 'disagree')
         answers.on_run('run-1', 0, 'agree')
         self.assertEqual(migrate(legacy), {'documents': 0, 'runs': 0, 'recomputedVerdicts': 0, 'resetReviews': 0})
@@ -133,7 +133,7 @@ class StoreTests(unittest.TestCase):
         self.assertIsNone(result['items'][0].get('review'))
         self.assertEqual(report['resetReviews'], 1)
         self.assertIsNone(result['metric']['accuracy'])
-        self.assertEqual(storage.dialogues.read()[0]['id'], '7')
+        self.assertEqual(storage.exports.read(storage.exports.newest()['id'])[0]['id'], '7')
         analysis = storage.documents.load('discover.json')
         self.assertEqual(analysis['results'][0]['status'], 'UNMEASURED')
         self.assertEqual(analysis['summary']['unmeasured'], 1)
@@ -200,24 +200,22 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(all('items' not in summary for summary in storage.runs.summaries()))
 
     def test_the_export_of_an_older_database_becomes_rows_counted_without_reading_them(self) -> None:
-        """Before schema 7 the export was one document: it becomes a row per conversation in its order, the document
-        goes, and the export keeps a record of it (without the name of its file, which was not kept then), so that a
-        legacy import never takes it for no export at all."""
+        """Before schema 7 the export was one document: it becomes an export of a row per conversation in its order
+        (without the name of its file, which was not kept then), and the document goes. A legacy import never brings
+        an export into a database that has one."""
         talks = [{'id': '2', 'messages': []}, {'id': '1', 'messages': []}]
         with sqlite3.connect(storage.db.default_database()) as connection:
             connection.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
             connection.execute('INSERT INTO documents VALUES (?, ?)', ('logs.json', json.dumps(talks)))
         connection.close()
-        self.assertEqual(storage.dialogues.count(), 2)
-        self.assertEqual(storage.dialogues.ids(), ['2', '1'])
-        self.assertEqual(storage.dialogues.read(['1']), [talks[1]])
+        [export] = storage.exports.listed()
+        self.assertEqual((export['total'], export['file'], export['name']), (2, None, 'Выгрузка'))
+        self.assertEqual(storage.exports.ids(export['id']), ['2', '1'])
+        self.assertEqual(storage.exports.read(export['id'], ['1']), [talks[1]])
         self.assertIsNone(storage.documents.load('logs.json'))
-        self.assertEqual(storage.dialogues.meta(), {'file': None, 'updatedAt': None})
-        inputs.replace_export([{'id': str(number), 'messages': []} for number in range(4)], 'Октябрь.xlsx')
-        self.assertEqual(storage.dialogues.count(), 4)
-        self.assertEqual(storage.dialogues.meta()['file'], 'Октябрь.xlsx')
+        storage.exports.add([{'id': str(number), 'messages': []} for number in range(4)], 'Октябрь.xlsx')
         legacy_import.insert({'logs.json': []}, [])
-        self.assertEqual(storage.dialogues.count(), 4)
+        self.assertEqual([e['total'] for e in storage.exports.listed()], [4, 2])
 
     def test_changed_primary_judgment_clears_old_confirmation(self) -> None:
         source = record()
@@ -311,7 +309,9 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(
             legacy_import.insert({'logs-meta.json': meta, 'logs.json': [talk]}, []), {'documents': 2, 'runs': 0}
         )
-        self.assertEqual((storage.dialogues.read(), storage.dialogues.meta()), ([talk], meta))
+        [export] = storage.exports.listed()
+        self.assertEqual((export['file'], export['uploadedAt']), (meta['file'], meta['updatedAt']))
+        self.assertEqual(storage.exports.read(export['id']), [talk])
 
     def test_repeated_import_cannot_restore_invalidated_audit_or_scenarios(self) -> None:
         legacy = self.path / 'legacy'
@@ -329,10 +329,12 @@ class StoreTests(unittest.TestCase):
             'id': '7',
             'messages': [{'role': 'user', 'content': 'question'}, {'role': 'assistant', 'content': 'new answer'}],
         }
-        inputs.replace_export([new_log])
+        # The export the audit was made of removed takes the audit and the scenarios built from it away.
+        inputs.remove_export(storage.exports.newest()['id'])
+        inputs.add_export([new_log], 'Октябрь.xlsx')
         report = migrate(legacy)
         self.assertEqual(report['documents'], 0)
-        self.assertEqual(storage.dialogues.read(), [new_log])
+        self.assertEqual(storage.exports.read(storage.exports.newest()['id']), [new_log])
         self.assertIsNone(storage.documents.load('discover.json'))
         self.assertIsNone(storage.documents.load('cards.json'))
 

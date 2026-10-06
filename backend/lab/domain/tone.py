@@ -9,7 +9,7 @@ functions: nothing is read or stored.
 import hashlib
 import re
 
-from . import quotes
+from . import accuracy, quotes
 from .checks import TONE_OF_VOICE as KIND
 from .comparison import comparison, dataset_fingerprint, evaluation_fingerprint, fingerprint
 
@@ -142,8 +142,8 @@ def snapshot(
     result: dict, dialogues: list[dict], criteria: list[dict], source: dict, export: dict, previous: dict | None
 ) -> dict:
     """The record of a finished check in the history: its line, how it stands to the check saved before it, and the
-    evidence behind it: the conversations, the criteria and the rules they came from. export: the file the
-    conversations came from and how many it had."""
+    evidence behind it: the conversations, the criteria and the rules they came from. export: the export the
+    conversations came from, as a result keeps it (storage.exports.line): its file and how many it had."""
     check = {
         'id': result['checkId'],
         'finishedAt': result['finishedAt'],
@@ -151,8 +151,9 @@ def snapshot(
         'criteriaFingerprint': result['criteriaFingerprint'],
         'datasetFingerprint': dataset_fingerprint(dialogues),
         'evaluationFingerprint': evaluation_fingerprint(result),
-        'file': export['file'],
-        'total': export['total'],
+        'file': export.get('file'),
+        'total': export.get('total') or 0,
+        'export': accuracy.named(export),
         'sampled': result['sampled'],
         'summary': {key: result['summary'][key] for key in ('measured', 'passed', 'failed', 'unmeasured')},
         'model': result['model'],

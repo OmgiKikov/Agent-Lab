@@ -1,7 +1,7 @@
 """What the Lab keeps, in one SQLite database per agent (registry.py), by what is kept:
 
 - documents: the inputs, drafts, settings, the deck and the current result of each check, each one JSON document;
-- dialogues: the export's conversations, one row each;
+- exports, dialogues: the exports of real conversations, each upload one, and their conversations, one row each;
 - runs: the runs of scenarios, each with its conversations and verdicts;
 - history: the saved checks of both checks;
 - reviews: the answers people gave on verdicts, one row each, a journal;
@@ -14,14 +14,14 @@ flows/, which holds a transaction (transaction) around the writes one change mak
 database becomes them: schema.py.
 """
 
-from . import calls, db, dialogues, documents, history, registry, reviews, runs, severity, tasks
+from . import calls, db, documents, exports, history, registry, reviews, runs, severity, tasks
 from .db import now, transaction
 
 __all__ = [
     'calls',
     'db',
-    'dialogues',
     'documents',
+    'exports',
     'history',
     'now',
     'registry',
