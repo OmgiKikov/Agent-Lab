@@ -16,6 +16,7 @@ import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import {
   conversationsLink,
+  liveLink,
   reviewLink,
   scenariosLink,
   SECTIONS,
@@ -31,6 +32,7 @@ import { useCriteria } from "../../lab/criteria";
 import { exportOf, exportWords } from "../../lab/exports";
 import { longDay, count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
+import { replayOnResult } from "../../lab/replays";
 import { isRunning } from "../../lab/runs";
 import { seriousOf } from "../../lab/severity";
 import { codeSources } from "../../lab/tone";
@@ -307,6 +309,23 @@ function StartCards({ state }: { state: LabState }) {
   );
 }
 
+/**
+ * The live agent on the same customers, in one line under the check's number, once it was checked on this result:
+ * «Живой агент на тех же клиентах: в записях 26 из 30 → сейчас 12 из 30».
+ */
+function LiveLine({ check, state }: { check: Check; state: LabState }) {
+  const live = replayOnResult(state, check);
+  if (!live?.summary.pairs) return null;
+  const { before, now } = live.summary;
+  return (
+    <Link to={liveLink(check, { id: live.id })} className="mt-4 block text-read text-fg-2 hover:text-fg">
+      Живой агент на тех же клиентах: в записях {before.failed} из {before.measured} → сейчас{" "}
+      <span className={now.failed ? "font-semibold text-bad" : "font-semibold"}>{now.failed}</span> из {now.measured}
+      <ArrowRight aria-hidden className="ml-1 inline size-4 align-[-2px] text-fg-3" />
+    </Link>
+  );
+}
+
 /** The head of a block: its name, the way into its section, and one line of what it is. */
 function BlockHead({ to, title, sub }: { to: string; title: string; sub: ReactNode }) {
   return (
@@ -388,6 +407,7 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
             compact
             className="mt-4"
           />
+          <LiveLine check={check} state={state} />
           <h3 className="mt-12 text-read font-semibold text-fg">Главные проблемы</h3>
           <div className="mt-1">
             <ProblemList list={list} stage={check} limit={3} />

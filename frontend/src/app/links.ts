@@ -80,5 +80,9 @@ export const assessLink = (exportId?: string | null) =>
 export const exportLink = (id: string, dialogueId?: string | null) =>
   `${SECTIONS.exports}/${enc(id)}${query({ d: dialogueId })}`;
 
+/** The live agent on the customers of a check's result: one of its checks (`id`), one pair open (`d`), a filter (`v`). */
+export const liveLink = (check: Check, extra: Record<string, string | null | undefined> = {}) =>
+  `${ROOT[check]}/live${query(extra)}`;
+
 /** The saved checks of a check, one of them open when given. */
 export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${query({ id })}`;

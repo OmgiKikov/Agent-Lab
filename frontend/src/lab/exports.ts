@@ -54,7 +54,7 @@ const PAUSED: Record<Check, string> = { tone: "tone-check", code: "discover" };
  */
 export function defaultExport(state: LabState | null, check: Check): string | null {
   const here = (id?: string | null) => !!id && !!state?.exports.some((e) => e.id === id && e.total > 0);
-  const stopped = (state?.paused?.[PAUSED[check]]?.input as { exportId?: string } | undefined)?.exportId;
+  const stopped = state?.paused?.[PAUSED[check]]?.input?.exportId;
   if (here(stopped)) return stopped!;
   const own = resultOf(state, check)?.export?.id;
   if (here(own)) return own!;

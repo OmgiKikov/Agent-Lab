@@ -33,7 +33,7 @@ export function useAssessExport(asked?: string | null) {
 
 /** A stopped check of Точность on this export; one stopped before exports were kept was of the newest. */
 const stoppedOn = (state: LabState | null, exportId: string | null) => {
-  const input = state?.paused?.discover?.input as { count?: number; replan?: boolean; exportId?: string } | undefined;
+  const input = state?.paused?.discover?.input;
   return input && (input.exportId ?? state?.exports[0]?.id) === exportId ? input : undefined;
 };
 

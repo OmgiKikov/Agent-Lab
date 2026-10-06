@@ -37,6 +37,7 @@ import {
   conversationsLink,
   criterionLink,
   historyLink,
+  liveLink,
   problemLink,
   reviewLink,
   runLink,
@@ -215,6 +216,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           sub: "Проблемы проверки на одном листе, чтобы скопировать или скачать",
           icon: FileText,
           run: go(`${stageRoot(c)}?report=1`),
+        },
+        {
+          id: `a-${c}-live`,
+          group: "Действия",
+          label: `Проверить живого агента · ${CHECK_NAME[c]}`,
+          sub: "Те же клиенты, что в записях: как агент отвечает им сейчас",
+          icon: Play,
+          run: go(liveLink(c, { start: "1" })),
         },
       ]),
       {

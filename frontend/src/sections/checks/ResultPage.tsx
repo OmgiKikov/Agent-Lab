@@ -15,6 +15,9 @@ import { Trust } from "../../product/Trust";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
+import { replayOnResult } from "../../lab/replays";
+import type { ReplaySummary } from "../../lab/types";
+import { AgentNow } from "../live/AgentNow";
 import { ProblemList } from "../problems/ProblemList";
 import { AssessSheet } from "./AssessSheet";
 import { CheckHeader } from "./CheckHeader";
@@ -23,6 +26,30 @@ import { CheckReport } from "./CheckReport";
 import { AccuracyStart, ToneStart } from "./Start";
 
 const PART = { bad: "fail", ok: "pass", none: "none" } as const;
+
+/**
+ * What stands beside each problem's count: what it had in the previous check (`was`), and what the live agent had on
+ * the same customers (`live`, lab/replays replayOnResult) — «живой агент: 3 из 28», among those where it was decided.
+ */
+function besideOf(was: ((id: string) => ReactNode) | undefined, live: ReplaySummary | null) {
+  const now = new Map((live?.summary.criteria ?? []).map((c) => [c.id, c.now]));
+  if (!was && !now.size) return undefined;
+  return (id: string) => {
+    const before = was?.(id);
+    const counts = now.get(id);
+    if (!before && !counts) return null;
+    return (
+      <>
+        {before}
+        {counts && counts.measured > 0 && (
+          <span className="block">
+            живой агент: {counts.failed} из {counts.measured}
+          </span>
+        )}
+      </>
+    );
+  };
+}
 
 /**
  * «Итог» of a check: the real conversations of the export as this check judged them — one number, the conversations
@@ -168,13 +195,14 @@ export function ResultPage({ check }: { check: Check }) {
           className="mt-5"
         />
       )}
+      <AgentNow check={check} />
       <section aria-label="Проблемы" className="mt-16">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">
           <h2 className="text-title font-semibold text-fg">Проблемы</h2>
           <p className="text-read text-fg-3">{summarySentence(data, "log")}</p>
         </div>
         <div className="mt-2">
-          <ProblemList list={list} stage={check} was={wasOf(compare)} />
+          <ProblemList list={list} stage={check} was={besideOf(wasOf(compare), replayOnResult(state, check))} />
         </div>
         <NoLongerFound
           check={check}

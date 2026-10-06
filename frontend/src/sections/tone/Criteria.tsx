@@ -34,7 +34,7 @@ export const toneDeck = (state: LabState) => state.cards?.check === "tone" && !!
  */
 function pausedCheck(state: LabState, exportId: string | null) {
   const job = state.paused?.["tone-check"];
-  const input = job?.input as { ruleIds?: string[]; count?: number; revision?: string; exportId?: string } | undefined;
+  const input = job?.input;
   if (!job || !input?.ruleIds || !input.count || input.revision !== state.toneOfVoice?.revision) return null;
   if ((input.exportId ?? state.exports[0]?.id) !== exportId) return null;
   return { ruleIds: input.ruleIds, count: input.count, kept: job.kept ?? 0 };

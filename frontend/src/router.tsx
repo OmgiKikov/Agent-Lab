@@ -20,6 +20,7 @@ import { RunListPage } from "./sections/simulations/RunList";
 import { ScenariosPage } from "./sections/simulations/ScenariosPage";
 import { SimResultPage } from "./sections/simulations/SimResultPage";
 import { CheckPage } from "./sections/tone/CheckPage";
+import { LivePage } from "./sections/live/LivePage";
 import { HistoryPage } from "./sections/checks/History";
 import { ServiceDown } from "./ui/EmptyState";
 
@@ -172,6 +173,7 @@ const productRoutes = [
       { path: "tone/criteria", element: <CriteriaPage key="tone" check="tone" /> },
       { path: "tone/history", element: <HistoryPage key="tone" check="tone" /> },
       { path: "tone/problems/:id", element: <ProblemPage key="tone" stage="tone" /> },
+      { path: "tone/live", element: <LivePage key="tone" check="tone" /> },
       // Accuracy: the same conversations checked against the criteria read from the agent's code.
       { path: "accuracy", element: <ResultPage key="code" check="code" /> },
       { path: "accuracy/conversations", element: <DialogsPage key="code" stage="code" /> },
@@ -179,6 +181,7 @@ const productRoutes = [
       { path: "accuracy/criteria", element: <CriteriaPage key="code" check="code" /> },
       { path: "accuracy/history", element: <HistoryPage key="code" check="code" /> },
       { path: "accuracy/problems/:id", element: <ProblemPage key="code" stage="code" /> },
+      { path: "accuracy/live", element: <LivePage key="code" check="code" /> },
       // The simulations: synthetic customers play scenarios built from one check's errors; its criteria judge them.
       { path: "simulations", element: <SimResultPage /> },
       { path: "simulations/runs", element: <RunListPage /> },

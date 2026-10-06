@@ -1,6 +1,6 @@
 import { PROPOSING, proposalCheck } from "../lab/severity";
 import type { Job } from "../lab/types";
-import { criterionLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
+import { criterionLink, liveLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
 
 /**
  * A task of the service: how it is called and the section where its result lives. `quiet`: the window that started it
@@ -21,6 +21,8 @@ export const JOBS: Record<string, { label: string; to: string; quiet?: boolean }
   rejudge: { label: "Повторная оценка прогона", to: SECTIONS.simulations },
   // «Отметить автоматически» (lab/severity): to the criteria of the check it proposes for (jobOf), else «Обзор».
   severity: { label: PROPOSING, to: SECTIONS.overview },
+  // The live agent on the same customers: to the check it was started for (jobOf).
+  replay: { label: "Проверка живого агента", to: SECTIONS.overview },
 };
 
 /**
@@ -30,5 +32,8 @@ export const JOBS: Record<string, { label: string; to: string; quiet?: boolean }
 export function jobOf(job: Job) {
   if (!job.kind) return undefined;
   const check = job.kind === "severity" ? proposalCheck(job) : null;
-  return check ? { ...JOBS.severity, to: criterionLink(check) } : JOBS[job.kind];
+  if (check) return { ...JOBS.severity, to: criterionLink(check) };
+  const live = job.kind === "replay" ? job.input?.check : null;
+  if (live) return { ...JOBS.replay, to: liveLink(live) };
+  return JOBS[job.kind];
 }

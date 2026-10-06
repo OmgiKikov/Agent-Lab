@@ -25,6 +25,7 @@ import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
+import { LiveHistory } from "../live/LiveHistory";
 import { CheckHeader } from "./CheckHeader";
 
 const statusText = (status: Status) =>
@@ -528,6 +529,7 @@ export function HistoryPage({ check }: { check: Check }) {
                 ))}
               </div>
             </div>
+            <LiveHistory check={check} />
           </div>
         )}
       </div>

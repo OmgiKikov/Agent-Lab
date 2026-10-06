@@ -13,9 +13,18 @@ import { queueOf } from "../../lab/verdicts";
 /** The tasks a check's pages follow under their head: the check itself, and for tone of voice the criteria it collects. */
 const TASKS: Record<Check, string[]> = { tone: ["tone-check", "tone-criteria"], code: ["discover"] };
 
-/** With them, the proposal of which errors are serious (lab/severity) of this check: its task says its check. */
-const tasksOf = (check: Check, job: Job | undefined) =>
-  proposalCheck(job) === check ? [...TASKS[check], "severity"] : TASKS[check];
+/** The check of the live agent of this check: its task says its check. */
+const replayOf = (job: Job | undefined) => (job?.kind === "replay" ? job.input?.check : null);
+
+/**
+ * With them, the proposal of which errors are serious (lab/severity) and the check of the live agent of this check:
+ * each task says its check.
+ */
+const tasksOf = (check: Check, job: Job | undefined) => [
+  ...TASKS[check],
+  ...(proposalCheck(job) === check ? ["severity"] : []),
+  ...(replayOf(job) === check ? ["replay"] : []),
+];
 
 /** The tabs of a check with their counts: every conversation its result judged, the cases where two checks disagree. */
 function CheckTabs({ check }: { check: Check }) {

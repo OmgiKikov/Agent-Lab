@@ -190,8 +190,20 @@ export type Job = {
   kept?: number;
   /** Starting the same work again continues the task with what it kept (backend/lab/api/work.py, continuable). */
   continuable?: boolean;
-  /** What the task was started with: a check of tone of voice, its criteria and how many conversations. */
-  input?: { ruleIds?: string[]; count?: number; revision?: string; propose?: boolean };
+  /**
+   * What the task was started with: a check's criteria, how many conversations and of which export; a check of the
+   * live agent, the check it meets the customers of and the agent's way of being reached.
+   */
+  input?: {
+    ruleIds?: string[];
+    count?: number;
+    revision?: string;
+    propose?: boolean;
+    replan?: boolean;
+    exportId?: string;
+    check?: Check;
+    target?: string;
+  };
 };
 /**
  * A check's result with people's answers taken in, counted by the service from the result's rows with the answers on
@@ -238,6 +250,69 @@ export type ExportLine = {
 /** The export a result was made of, as it was then: its name may have changed since, or it may be gone. */
 export type ExportRef = { id: string; name: string; file?: string | null; total?: number };
 
+/** What a pair of the same customer says, before (the recording) and now (the live agent). */
+export type Change = "fixed" | "broken" | "failing" | "passing" | "unmeasured" | "running";
+
+/** The pairs of a check of the live agent (backend: domain/replay.py, summarize). */
+export type ReplaySummaryCounts = {
+  pairs: number;
+  fixed: number;
+  broken: number;
+  failing: number;
+  passing: number;
+  unmeasured: number;
+  running: number;
+  before: { failed: number; measured: number };
+  now: { failed: number; measured: number };
+  /** The recordings and the played conversations were judged by the same models and instructions. */
+  comparable: boolean;
+  verdict: "few" | "beyond-chance" | "within-chance" | "same" | null;
+  direction: "fewer" | "more" | "same" | null;
+  /** Each criterion by its key (the problem's id): conversations with an error by it before and now. */
+  criteria: {
+    id: string;
+    name: string;
+    before: { failed: number; measured: number };
+    now: { failed: number; measured: number };
+  }[];
+};
+
+/** A check of the live agent on the customers of a check's result, without its conversations (/api/state). */
+export type ReplaySummary = {
+  id: string;
+  check: Check;
+  status: "running" | "done" | "failed" | "stopped";
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  target: string;
+  targetName: string;
+  /** The agent's version as the stand said it; «…» until the agent was reached. */
+  version: string;
+  basis: { checkId: string; finishedAt: string | null; export: ExportRef };
+  summary: ReplaySummaryCounts;
+  size: number;
+  done: number;
+  revision: number;
+};
+
+/** One customer met again: the recording with its verdict, the conversation played now with its verdict. */
+export type ReplayItem = {
+  dialogueId: string;
+  topicId: string;
+  opening: string;
+  recorded: { role: "user" | "assistant"; content: string }[];
+  before: { status: Status; rules: Rule[] };
+  status: Status | "RUNNING";
+  stage?: string;
+  conversation: Turn[];
+  rules: Rule[];
+  error?: string | null;
+};
+
+/** A check of the live agent with its conversations (GET /api/replays/{id}). */
+export type Replay = ReplaySummary & { topics: Topic[]; items: ReplayItem[] };
+
 export type LabState = {
   toneOfVoice?: ToneDraft | null;
   job: Job;
@@ -278,6 +353,8 @@ export type LabState = {
   reviewsStamp?: string;
   cards: null | Deck;
   runs: RunSummary[];
+  /** The checks of the live agent on the same customers, the newest first; older services have none. */
+  replays?: ReplaySummary[];
   targets: Target[];
   personas: Persona[];
 };
