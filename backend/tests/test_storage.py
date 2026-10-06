@@ -209,7 +209,7 @@ class StoreTests(unittest.TestCase):
             connection.execute('INSERT INTO documents VALUES (?, ?)', ('logs.json', json.dumps(talks)))
         connection.close()
         [export] = storage.exports.listed()
-        self.assertEqual((export['total'], export['file'], export['name']), (2, None, 'Выгрузка'))
+        self.assertEqual((export['total'], export['file'], export['name']), (2, None, 'Первая'))
         self.assertEqual(storage.exports.ids(export['id']), ['2', '1'])
         self.assertEqual(storage.exports.read(export['id'], ['1']), [talks[1]])
         self.assertIsNone(storage.documents.load('logs.json'))

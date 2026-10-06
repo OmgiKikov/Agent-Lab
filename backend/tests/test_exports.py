@@ -111,6 +111,26 @@ class SchemaNineTests(unittest.TestCase):
         self.assertEqual(storage.history.get('tone', 'c1')['check']['export'], named)
         self.assertFalse(storage.documents.exists('logs-meta.json'))
 
+    def test_an_export_whose_file_was_not_kept_is_the_first_dated_by_its_result(self) -> None:
+        """An older export kept no name of its file nor when it came: it is the agent's first, uploaded no later than
+        the check that is still its result began."""
+        path = storage.db.default_database()
+        storage.db.private_folder(path.parent)
+        old = sqlite3.connect(path)
+        old.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        old.execute(
+            'CREATE TABLE dialogues (position INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, value TEXT NOT NULL)'
+        )
+        old.execute('INSERT INTO dialogues VALUES (1, ?, ?)', ('d1', json.dumps(talk('d1'))))
+        result = {'checkId': 'c1', 'startedAt': '2026-10-02T10:00:00.000+00:00', 'results': [], 'topics': []}
+        old.execute('INSERT INTO documents VALUES (?, ?)', ('logs-meta.json', json.dumps({'file': None})))
+        old.execute('INSERT INTO documents VALUES (?, ?)', ('tone-result.json', json.dumps(result)))
+        old.execute('PRAGMA user_version = 8')
+        old.commit()
+        old.close()
+        [export] = storage.exports.listed()
+        self.assertEqual((export['name'], export['uploadedAt']), ('Первая', result['startedAt']))
+
     def test_a_database_without_an_export_gets_none(self) -> None:
         self.assertEqual(storage.exports.listed(), [])
 

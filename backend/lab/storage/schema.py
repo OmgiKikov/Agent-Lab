@@ -132,7 +132,10 @@ def _new_export(connection: sqlite3.Connection, meta: dict, rows: list[tuple]) -
     total = connection.execute('SELECT count(*) FROM dialogues WHERE export = ?', (export_id,)).fetchone()[0]
     file = meta.get('file')
     name = _name_of(file)
-    at = meta.get('updatedAt') or datetime.now(UTC).isoformat(timespec='milliseconds')
+    results = [_document(connection, document) for document in checks.RESULTS.values()]
+    # Not known when it was uploaded: no later than the first check of it that is still its result.
+    started = sorted(r['startedAt'] for r in results if isinstance(r, dict) and isinstance(r.get('startedAt'), str))
+    at = meta.get('updatedAt') or next(iter(started), None) or datetime.now(UTC).isoformat(timespec='milliseconds')
     connection.execute(
         'INSERT INTO exports (id, name, file, uploaded_at, total, skipped) VALUES (?, ?, ?, ?, ?, 0)',
         (export_id, name, file, at, total),
@@ -161,10 +164,11 @@ def _mark_saved(connection: sqlite3.Connection, check_id: str, export: dict) -> 
 
 
 def _name_of(file: str | None) -> str:
-    """The name of an export by its file, as storage.exports names one (its rules may move on; this step's stay)."""
+    """The name of the one export of an older database: its file's, as storage.exports names one (whose rules may move
+    on; this step's stay). An export whose file was not kept is the agent's first one."""
     stem = (file or '').replace('\\', '/').rsplit('/', 1)[-1]
     stem = stem.rsplit('.', 1)[0] if '.' in stem else stem
-    return stem.strip() or 'Выгрузка'
+    return stem.strip() or 'Первая'
 
 
 def _separate_checks(connection: sqlite3.Connection) -> None:
