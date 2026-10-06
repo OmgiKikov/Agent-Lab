@@ -16,7 +16,7 @@ RESULT = 'replay.json'
 # What the state polled every 1.5 s says of the latest replay: read instead of the whole RESULT.
 REPLAY_SUMMARY = 'replay-summary.json'
 FAMILIES = ('tone', 'code', 'rag')
-NOT_LOCAL = 'Повтор работает с агентом, который отдаёт трейс: на этом компьютере или сервисом повтора на стенде.'
+NOT_TRACED = 'Повтор работает с агентом, который отдаёт трейс: на этом компьютере или сервисом повтора на стенде.'
 NO_TRACE = 'Агент не отдаёт трейс. Обновите aigw-local: нужен replay/recorder.py.'
 STEP_WITHOUT_TRACE = 'Агент не отдал трейс этого шага.'
 NO_DIALOGUES = 'Нет разговоров для повтора. Сначала загрузите выгрузку.'
@@ -38,14 +38,14 @@ async def run(
         raise RuntimeError(NO_DIALOGUES)
     agent = create(target)
     if not agent.traced:
-        raise RuntimeError(NOT_LOCAL)
-    progress(done=0, total=0, message='Собираем критерии')
-    criteria = await criteria_by_dialogue(dialogues)
-    started = store.now()
-    plans = [(dialogue, steps(dialogue)) for dialogue in dialogues]
-    replaying = _Replaying(sum(len(planned) for _, planned in plans), progress)
-    gate = asyncio.Semaphore(PARALLEL)
+        raise RuntimeError(NOT_TRACED)
     async with session(agent):
+        progress(done=0, total=0, message='Собираем критерии')
+        criteria = await criteria_by_dialogue(dialogues)
+        started = store.now()
+        plans = [(dialogue, steps(dialogue)) for dialogue in dialogues]
+        replaying = _Replaying(sum(len(planned) for _, planned in plans), progress)
+        gate = asyncio.Semaphore(PARALLEL)
 
         async def one(dialogue: dict, planned: list[dict]) -> dict:
             async with gate:

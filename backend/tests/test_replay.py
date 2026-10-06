@@ -140,6 +140,13 @@ class FakeAgent:
         }
 
 
+class UnreadyAgent(FakeAgent):
+    """A replay service that is not ready: it refuses to open."""
+
+    async def open(self) -> None:
+        raise AgentError('Сервис повтора не готов.')
+
+
 async def passing_judge(rules: list[dict], step: dict, endpoint=None) -> Verdict:
     rows = [
         {'ruleId': r['id'], 'rule': r['text'], 'status': 'PASS', 'reason': 'ok', 'agentQuote': 'x', 'title': ''}
@@ -260,6 +267,18 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
             [(step['status'], step.get('error')) for step in steps],
             [('PASS', None), ('UNMEASURED', replay.STEP_WITHOUT_TRACE), ('UNMEASURED', replay.STEP_WITHOUT_TRACE)],
         )
+
+    async def test_a_stand_not_ready_fails_before_the_criteria_are_collected(self) -> None:
+        messages: list[str] = []
+        with self.assertRaises(AgentError):
+            await replay.run(
+                'stand',
+                5,
+                lambda **fields: messages.append(fields['message']),
+                create=lambda _key: UnreadyAgent(),
+                verdict=passing_judge,
+            )
+        self.assertNotIn('Собираем критерии', messages)
 
     async def test_remote_agent_is_refused(self) -> None:
         agent = FakeAgent()

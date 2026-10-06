@@ -236,7 +236,7 @@ export type Turn = {
   seconds?: number;
 };
 
-/** What the agent did inside one replayed step (aigw-local local/agent_lab_trace.py, the replay service). */
+/** What the agent did inside one replayed step (aigw-local replay/recorder.py). */
 export type RagPassage = {
   article: string | number | null;
   passage: number | null;

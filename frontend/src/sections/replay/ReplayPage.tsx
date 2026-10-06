@@ -134,10 +134,11 @@ function StartForm() {
 
 function Result({ result }: { result: ReplayResult }) {
   const [open, setOpen] = useState<string | null>(null);
+  const versionName = result.stand?.prompts ? "промпты" : "версия агента";
   return (
     <div className="space-y-6">
       <p className="text-small text-fg-3">
-        Повтор {longDay(result.finishedAt)} в {time(result.finishedAt)} · версия агента {result.version || "—"}
+        Повтор {longDay(result.finishedAt)} в {time(result.finishedAt)} · {versionName} {result.version || "—"}
         {result.stand?.idpCache &&
           ` · кэш базы знаний: ${result.stand.idpCache.warmed} из ${result.stand.idpCache.total}`}
       </p>

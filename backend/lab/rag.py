@@ -1,6 +1,6 @@
 """The knowledge-base (RAG) criteria of a replayed step and what the judge sees of the agent's trace
-(spec 2026-10-05-voice360-replay-design.md). The trace comes from the local agent:
-aigw-local local/agent_lab_trace.py."""
+(spec 2026-10-05-voice360-replay-design.md). The trace comes from the agent's recorder:
+aigw-local replay/recorder.py."""
 
 CHAIN_OUTPUT = 2000  # an internal step's answer as the judge sees it; the prompts stay out
 NOT_CALLED = 'На этом шаге агент не обращался к базе знаний.'

@@ -239,7 +239,7 @@ async def _mock_cursor(client: httpx.AsyncClient) -> int | None:
 
 
 async def agent_trace(client: httpx.AsyncClient, agent_url: str, trace_id: str) -> dict | None:
-    """What the local agent recorded inside itself for this turn (aigw-local local/agent_lab_trace.py)."""
+    """What the local agent recorded inside itself for this turn (aigw-local replay/recorder.py)."""
     parts = urlsplit(agent_url)
     try:
         response = await client.get(f'{parts.scheme}://{parts.netloc}{TRACE_PATH}{trace_id}', timeout=5)
