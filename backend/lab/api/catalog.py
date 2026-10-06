@@ -27,4 +27,4 @@ def catalog_view() -> dict:
     found = catalog.current()
     if not found or not found.get('categories'):
         raise HTTPException(404, 'Каталог бизнес-сценариев ещё не собран')
-    return {key: value for key, value in found.items() if key != 'episodes'}
+    return {key: value for key, value in found.items() if key not in ('episodes', 'proposed')}

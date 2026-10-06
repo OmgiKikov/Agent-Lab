@@ -15,6 +15,7 @@ import hashlib
 import json
 import random
 from collections import Counter
+from collections.abc import Collection
 
 NONE = 'none'  # an acquiring episode the router placed in no scenario of the catalog
 NONE_TITLE = 'Не попал в каталог'
@@ -223,3 +224,36 @@ def allocate(groups: dict[str, list[str]], size: int) -> tuple[list[tuple[str, s
         'seed': SEED,
     }
     return chosen, manifest
+
+
+def replacements(
+    groups: dict[str, list[str]], sampled: dict[str, str], lost: Collection[str], taken: Collection[str]
+) -> list[tuple[str, str]]:
+    """For each sampled episode left without a card (lost: the model failed it, or it was excluded), another episode of
+    its scenario, drawn at random from those not taken by any set: the scenario keeps its number of cards. (episode,
+    scenario); fewer when a scenario has no episode left."""
+    found = []
+    for key in sorted({sampled[i] for i in lost}):
+        need = sum(1 for i in lost if sampled[i] == key)
+        rest = [i for i in groups.get(key, []) if i not in taken]
+        chosen = random.Random(f'{SEED}:{key}:reserve').sample(rest, min(need, len(rest)))
+        found.extend((dialogue_id, key) for dialogue_id in sorted(chosen))
+    return found
+
+
+def weighted(groups: dict[str, list[str]], carded: dict[str, str]) -> tuple[dict[str, float], dict]:
+    """The weight of each card of the representative set (carded: the episodes that got a card, by scenario): N_h / n_h,
+    n_h the cards its scenario actually has. A scenario left without a card makes the sample incomplete, and then no
+    card gets a weight: the others would stand for the whole export without it. (weights, what the manifest tells)."""
+    counts = Counter(carded.values())
+    missing = [{'scenarioId': key, 'population': len(ids)} for key, ids in groups.items() if not counts[key]]
+    population = sum(len(ids) for ids in groups.values())
+    covered = population - sum(item['population'] for item in missing)
+    told = {
+        'complete': not missing,
+        'missing': missing,
+        'coverage': round(covered / population, 4) if population else None,
+    }
+    if missing:
+        return {}, told
+    return {dialogue_id: round(len(groups[key]) / counts[key], 3) for dialogue_id, key in carded.items()}, told

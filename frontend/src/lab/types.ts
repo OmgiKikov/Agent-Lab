@@ -25,8 +25,12 @@ export type Metric = {
   human?: { reviewed: number; agree: number };
   personas?: Record<string, { accuracy: number | null; passed: number; measured: number }>;
   /** Scenario sets (representative, regression, stress), each measured on its own; the representative one also
-   * weighted by how many conversations of the export each of its cards stands for. */
-  sets?: Record<string, { accuracy: number | null; passed: number; measured: number; weighted?: number | null }>;
+   * weighted by how many conversations of the export each of its cards stands for, unless a scenario of its sample has
+   * no card (incomplete). */
+  sets?: Record<
+    string,
+    { accuracy: number | null; passed: number; measured: number; weighted?: number | null; incomplete?: boolean }
+  >;
 };
 /** A call of the agent's tool as the service recorded it. */
 export type ToolEvent = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };

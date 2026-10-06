@@ -157,6 +157,24 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kept['hypotheses'], [{'trigger': 'handoff_offer', 'response': 'попросишь оператора'}])
         self.assertEqual(dropped['hypotheses'], 2)
 
+    def test_a_quote_keeps_its_negation_word_starts_and_masks(self):
+        found = cards._found
+        # A quote that leaves out the negation before it says the opposite of what the customer wrote.
+        self.assertFalse(found('знаю номер терминала', 'Не знаю номер терминала', 'user'))
+        self.assertTrue(found('не знаю номер', 'Не знаю номер терминала', 'user'))
+        self.assertFalse(found('мер терминала', 'Не знаю номер терминала', 'user'))
+        self.assertTrue(found('да', 'Да, спасибо', 'user'))
+        # A customer's mask is a word of their message: a mask-only reply is a quote, a made-up mask is not.
+        self.assertTrue(found('########', '########', 'user'))
+        self.assertFalse(found('Номер терминала ########', 'Номер терминала не знаю', 'user'))
+        self.assertFalse(found('терминал ****', 'терминал ####', 'user'))
+        # Spacing around punctuation and line breaks are the copy's, not the words.
+        self.assertTrue(found('ИНН: ##########', 'ИНН:##########', 'user'))
+        self.assertTrue(found('не работает терминал', 'не работает\nтерминал', 'user'))
+        # The agent's # and * are as often its Markdown.
+        self.assertTrue(found('Важно: перезагрузите терминал', '**Важно:** перезагрузите терминал', 'assistant'))
+        self.assertTrue(found('Номер обращения', '### Номер обращения #####', 'assistant'))
+
     def test_world_identity_is_fixed_per_card_and_varies_between_cards(self):
         self.assertEqual(world.identity('a'), world.identity('a'))
         many = [world.identity(str(i)) for i in range(60)]

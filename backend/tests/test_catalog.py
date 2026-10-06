@@ -1,3 +1,4 @@
+import asyncio
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -5,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import support
 
 from lab import models, storage
-from lab.domain import catalog, checks
+from lab.domain import catalog, checks, metric
 from lab.flows import catalog as catalog_flow
 from lab.flows import scenarios as deck_flow
 from lab.roles import Answer
@@ -277,3 +278,142 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(card['weight'] for card in deck['cards']), 3)
         self.assertEqual(deck['sets']['representative']['strata'], 2)
         self.assertEqual(catalog.scenarios_of(categories)[catalog.NONE]['title'], 'Не попал в каталог')
+
+    async def test_a_stopped_build_keeps_its_readings_proposal_and_placements_and_the_next_one_goes_on(self):
+        storage.dialogues.replace([talk(f'd{i}') for i in range(1, 4)])
+        reading = Answer({'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
+        stuck = asyncio.Event()
+
+        async def read(dialogue):
+            if dialogue['id'] == 'd3':
+                stuck.set()
+                await asyncio.Event().wait()  # never answers: the build is stopped here
+            return reading
+
+        with patch.object(catalog_role, 'episode', read):
+            building = asyncio.create_task(catalog_flow.build())
+            await stuck.wait()
+            await asyncio.sleep(0)
+            building.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await building
+        self.assertEqual(sorted(catalog_flow.current()['episodes']), ['d1', 'd2'])
+
+        placed = asyncio.Event()
+
+        async def place(scenarios, items):
+            if placed.is_set():
+                await asyncio.Event().wait()  # the second batch never comes back
+            placed.set()
+            return Answer([(i['id'], 'c1s1') for i in items], 'm')
+
+        proposed = Answer(catalog.taxonomy(PROPOSED), 'm')
+        with (
+            patch.object(catalog_role, 'episode', AsyncMock(return_value=reading)) as episode,
+            patch.object(catalog_role, 'propose', AsyncMock(return_value=proposed)),
+            patch.object(catalog_role, 'place', place),
+            patch.object(catalog_flow, 'BATCH', 2),
+        ):
+            building = asyncio.create_task(catalog_flow.build())
+            await placed.wait()
+            await asyncio.sleep(0)
+            building.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await building
+        self.assertEqual(episode.await_count, 1)  # only d3 was left to read
+        saved = catalog_flow.current()
+        self.assertNotIn('categories', saved)  # no catalog in use yet: the proposal waits beside it
+        self.assertEqual(len(saved['proposed']['placements']), 2)
+
+        with (
+            patch.object(catalog_role, 'episode', AsyncMock(return_value=reading)) as episode,
+            patch.object(catalog_role, 'propose', AsyncMock(side_effect=AssertionError('proposed again'))),
+            patch.object(catalog_role, 'place', AsyncMock(return_value=Answer([('e1', 'c1s1')], 'm'))) as again,
+        ):
+            found = await catalog_flow.build()
+        self.assertEqual((episode.await_count, again.await_count), (0, 1))
+        self.assertEqual(found['totals']['placed'], 3)
+        self.assertNotIn('proposed', found)
+
+    def test_a_card_stands_for_its_scenario_by_the_cards_it_actually_has(self):
+        groups = {'big': [f'b{i}' for i in range(90)], 'small': [f's{i}' for i in range(10)]}
+        # 9 + 1 sampled and 8 of the big scenario's cards lost: the one left stands for all 90, not for 10.
+        weights, told = catalog.weighted(groups, {'b0': 'big', 's0': 'small'})
+        self.assertEqual(weights, {'b0': 90.0, 's0': 10.0})
+        self.assertTrue(told['complete'])
+        # A scenario without a card: the others would stand for the whole export, so nobody gets a weight.
+        weights, told = catalog.weighted(groups, {'b0': 'big'})
+        self.assertEqual(weights, {})
+        self.assertEqual(
+            (told['complete'], told['missing'], told['coverage']),
+            (False, [{'scenarioId': 'small', 'population': 10}], 0.9),
+        )
+
+    def test_a_lost_sampled_episode_is_replaced_from_its_own_scenario(self):
+        groups = {'a': ['a1', 'a2', 'a3'], 'b': ['b1']}
+        sampled = {'a1': 'a', 'b1': 'b'}
+        found = catalog.replacements(groups, sampled, ['a1', 'b1'], {'a1', 'a2', 'b1'})
+        self.assertEqual(found, [('a3', 'a')])  # b has no episode left
+        self.assertEqual(found, catalog.replacements(groups, sampled, ['a1', 'b1'], {'a1', 'a2', 'b1'}))
+
+    def deck_of(self, *episodes: tuple[str, str]) -> dict:
+        """The check, the conversations and the catalog of a deck: (conversation, scenario) pairs."""
+        rule = {'id': 'r', 'text': 'x', 'quote': 'y', 'observation': 'reply'}
+        topic = {'id': 't1', 'title': 'Тариф', 'rules': [rule]}
+        storage.documents.save(checks.result(checks.CODE), {'topics': [topic], 'results': []})
+        storage.dialogues.replace([talk(dialogue_id) for dialogue_id, _ in episodes])
+        read = {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}
+        found = {i: dict(read, scenarioId=key) for i, key in episodes}
+        return {'revision': 'r1', 'categories': catalog.taxonomy(PROPOSED), 'episodes': found}
+
+    def building(self, found: dict, failing: set[str], tries: list[str] | None = None, eligible: bool = True):
+        async def build_card(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None):
+            if tries is not None:
+                tries.append(dialogue['id'])
+            if dialogue['id'] in failing:
+                raise models.ModelError('429')
+            card = {'id': dialogue['id'], 'eligible': eligible, 'sets': list(sets), 'sourceDialogueId': dialogue['id']}
+            return card if eligible else dict(card, reason='нет задачи')
+
+        patches = (
+            patch.object(deck_flow.catalog, 'build', AsyncMock(return_value=found)),
+            patch.object(deck_flow, 'build_card', build_card),
+            patch.object(deck_flow.scenarios, 'REPRESENTATIVE', 2),
+        )
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    async def test_a_sampled_card_the_model_fails_is_tried_again_then_replaced_and_kept_in_the_manifest(self):
+        found = self.deck_of(('a', 'c1s1'), ('b', 'c1s1'), ('c', 'c2s1'))
+        lost = next(i for i, key, _ in catalog.allocate(catalog.strata(found['episodes']), 2)[0] if key == 'c1s1')
+        other = ({'a', 'b'} - {lost}).pop()
+        tries = []
+        self.building(found, {lost}, tries)
+        deck = await deck_flow.built(checks.CODE)
+        self.assertEqual(tries.count(lost), deck_flow.ROUNDS)
+        representative = deck['sets']['representative']
+        self.assertEqual(representative['failed'], [{'dialogueId': lost, 'error': '429'}])
+        self.assertEqual(representative['replacements'], [other])
+        self.assertTrue(representative['complete'])
+        self.assertEqual({card['sourceDialogueId']: card['weight'] for card in deck['cards']}, {other: 2.0, 'c': 1.0})
+
+    async def test_a_scenario_left_without_a_card_makes_the_sample_incomplete_and_unweighted(self):
+        self.building(self.deck_of(('a', 'c1s1'), ('c', 'c2s1')), {'a'})
+        deck = await deck_flow.built(checks.CODE)
+        representative = deck['sets']['representative']
+        self.assertEqual((representative['complete'], representative['coverage']), (False, 0.5))
+        self.assertEqual(representative['missing'], [{'scenarioId': 'c1s1', 'population': 1}])
+        self.assertEqual([(card['sourceDialogueId'], card['weight']) for card in deck['cards']], [('c', None)])
+        items = [{'cardId': 'c', 'status': 'PASS', 'sets': ['representative'], 'weight': None}]
+        sets = metric.metric(items)['sets']
+        self.assertTrue(sets['representative']['incomplete'])
+        self.assertNotIn('weighted', sets['representative'])
+
+    async def test_a_deck_with_no_eligible_card_keeps_the_saved_one(self):
+        self.building(self.deck_of(('a', 'c1s1'), ('c', 'c2s1')), set(), eligible=False)
+        previous = {'cards': [{'id': 'previous'}]}
+        storage.documents.save(checks.DECK, previous)
+        with self.assertRaisesRegex(models.ModelError, 'нет задачи для сценария'):
+            await deck_flow.build(checks.CODE, lambda **_: None)
+        self.assertEqual(storage.documents.load(checks.DECK), previous)

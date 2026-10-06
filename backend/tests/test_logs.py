@@ -88,7 +88,8 @@ class LogImportTests(unittest.TestCase):
         other = 'CLIENT Дайте инструкцию\nAGENT Откройте настройки.\n'
         dialogue = logs.prepare('export.xlsx', excel(PAIR * 2 + other + other, '[1, 2, 3, 4]'))[0]
         self.assertEqual([m['content'] for m in dialogue['messages']][::2], ['Не знаю номер', 'Дайте инструкцию'])
-        self.assertEqual(dialogue['meta']['import'], {'status': 'collapsed', 'textMessages': 8, 'kept': [0, 1, 4, 5]})
+        expected = {'status': 'collapsed', 'textMessages': 8, 'layout': 'lines', 'kept': [0, 1, 4, 5]}
+        self.assertEqual(dialogue['meta']['import'], expected)
 
     def test_ambiguous_conversation_is_quarantined_and_the_rest_imported(self):
         other = 'CLIENT Дайте инструкцию\nAGENT Откройте настройки\n'
@@ -148,6 +149,21 @@ class LogImportTests(unittest.TestCase):
                 ('user', 'Нет такого раздела'),
             ],
         )
+
+    def test_inline_turns_with_line_breaks_between_or_inside_them_are_read_turn_by_turn(self):
+        # Two exchanges each written inline on its own line: line starts alone would give two messages, not four.
+        text = 'CLIENT Привет AGENT Здравствуйте\nCLIENT Какой тариф AGENT 1 процент'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3, 4]'))
+        self.assertEqual(
+            [(m['role'], m['content']) for m in dialogues[0]['messages']],
+            [('user', 'Привет'), ('assistant', 'Здравствуйте'), ('user', 'Какой тариф'), ('assistant', '1 процент')],
+        )
+        self.assertEqual(dialogues[0]['meta']['import']['layout'], 'inline')
+        # The order column still decides: a marker word inside a message on its own line stays in that message.
+        text = 'CLIENT Терминал пишет HOST AGENT NOT FOUND\nAGENT Перезагрузите\nCLIENT Спасибо'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3]'))
+        self.assertEqual(dialogues[0]['messages'][0]['content'], 'Терминал пишет HOST AGENT NOT FOUND')
+        self.assertEqual(dialogues[0]['meta']['import']['layout'], 'lines')
 
     def test_zero_is_a_real_id_and_final_customer_turn_is_preserved(self):
         text = PAIR + 'CLIENT Ещё один вопрос'

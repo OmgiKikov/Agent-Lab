@@ -6,11 +6,16 @@ frozen: a build places the new episodes into the scenarios found before, and a r
 again, a new revision, and places every episode anew. An episode the model cannot read is left out with its reason and
 never stops the others; when more than MISSED of them are left unread or unplaced (a busy model refuses many in a row),
 the build stops instead of counting the catalog on part of the export, and the next one goes on from there.
+
+A build keeps its paid work as it goes: the readings every CHECKPOINT of them, the scenarios as soon as they are
+proposed (beside the catalog in use, which stays whole until the new one is placed) and the placements after every
+batch, also when the build is stopped. The next build goes on with them instead of asking the model again.
 """
 
 import asyncio
 import uuid
 from collections import Counter
+from collections.abc import Callable
 
 from .. import models, storage
 from ..domain import catalog, checks
@@ -26,6 +31,7 @@ MISSED = 0.05
 # in it, a rare task falls to none and its share is told; the router places every episode. One answer about the
 # tasks of the whole export took a model over four minutes.
 SAMPLE = 300
+CHECKPOINT = 20  # readings between two saves of a build in progress: a stopped build loses at most these
 
 
 def current() -> dict | None:
@@ -44,12 +50,19 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
     if not dialogues:
         raise RuntimeError('Нет разговоров: сначала загрузите выгрузку.')
     previous = current() or {}
-    episodes = await _episodes(dialogues, previous.get('episodes') or {}, progress)
-    # The readings are kept before the scenarios are proposed: a proposal that fails does not cost them.
-    storage.documents.save(CATALOG, {**previous, 'episodes': episodes})
+    episodes = await _episodes(dialogues, previous.get('episodes') or {}, progress, _keep_readings)
     _enough(episodes, 'error', 'не прочитала')
     categories, model = previous.get('categories'), previous.get('model')
-    if rebuild or not categories:
+    # Scenarios proposed by a build that stopped before placing every episode: they are placed, not proposed again.
+    proposal = None if rebuild else previous.get('proposed')
+    if proposal:
+        categories, model = proposal['categories'], proposal['model']
+        placements = proposal.get('placements') or {}
+        for dialogue_id, episode in episodes.items():
+            episode.pop('scenarioId', None)
+            if dialogue_id in placements:
+                episode['scenarioId'] = placements[dialogue_id]
+    elif rebuild or not categories:
         progress(stage='catalog', done=0, total=1, message='Выделяем бизнес-сценарии')
         tasks = catalog.distinct_tasks(catalog.sample(episodes, SAMPLE))
         if not tasks:
@@ -58,9 +71,22 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
         categories, model = answer.value, answer.model
         for episode in episodes.values():
             episode.pop('scenarioId', None)
+        proposal = {'categories': categories, 'model': model}
+        storage.documents.save(CATALOG, {**(current() or {}), 'proposed': proposal})
     else:
         categories = catalog.bare(categories)
-    await _place(categories, episodes, dialogues, progress)
+
+    def keep_placements() -> None:
+        """The placements so far: of the proposed scenarios beside the catalog in use, or of its own in it."""
+        saved = current() or {}
+        if proposal:
+            placed = {i: e['scenarioId'] for i, e in episodes.items() if e.get('scenarioId')}
+            saved['proposed'] = {**proposal, 'placements': placed}
+        else:
+            saved['episodes'] = episodes
+        storage.documents.save(CATALOG, saved)
+
+    await _place(categories, episodes, dialogues, progress, keep_placements)
     document = {
         'revision': catalog.revision(categories),
         'builtAt': storage.now(),
@@ -71,6 +97,11 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
     storage.documents.save(CATALOG, document)
     _enough({i: e for i, e in episodes.items() if e.get('acquiring')}, 'unplaced', 'не разложила по сценариям')
     return document
+
+
+def _keep_readings(episodes: dict[str, dict]) -> None:
+    """The readings so far, in the catalog in use: a reading is the same whatever scenarios it is placed in."""
+    storage.documents.save(CATALOG, {**(current() or {}), 'episodes': episodes})
 
 
 def _enough(episodes: dict[str, dict], key: str, what: str) -> None:
@@ -85,9 +116,12 @@ def _enough(episodes: dict[str, dict], key: str, what: str) -> None:
         )
 
 
-async def _episodes(dialogues: dict[str, dict], known: dict[str, dict], progress: Progress) -> dict[str, dict]:
+async def _episodes(
+    dialogues: dict[str, dict], known: dict[str, dict], progress: Progress, keep: Callable[[dict], None]
+) -> dict[str, dict]:
     """Every conversation's episode: the known reading when the conversation and the reader's version are the same,
-    else read now. Order of the export."""
+    else read now. Order of the export. keep is given the readings so far every CHECKPOINT readings and when the
+    reading ends, stopped or not; a conversation not read yet keeps its known reading there."""
     version = catalog_role.EPISODE.version
     episodes, todo = {}, []
     for dialogue_id, dialogue in dialogues.items():
@@ -109,20 +143,33 @@ async def _episodes(dialogues: dict[str, dict], known: dict[str, dict], progress
         except models.ModelError as error:
             episodes[dialogue_id] = {**stamp, 'acquiring': False, 'error': str(error)}
         done += 1
+        if done % CHECKPOINT == 0:
+            keep(so_far())
         progress(stage='episodes', done=done, total=len(todo), message=f'Читаем разговоры: {done} из {len(todo)}')
+
+    def so_far() -> dict[str, dict]:
+        return {i: episodes.get(i) or known[i] for i in dialogues if i in episodes or i in known}
 
     if todo:
         progress(stage='episodes', done=0, total=len(todo), message=f'Читаем разговоры: 0 из {len(todo)}')
-        async with asyncio.TaskGroup() as tasks:
-            for dialogue_id in todo:
-                tasks.create_task(one(dialogue_id))
+        try:
+            async with asyncio.TaskGroup() as tasks:
+                for dialogue_id in todo:
+                    tasks.create_task(one(dialogue_id))
+        finally:
+            keep(so_far())
     return {dialogue_id: episodes[dialogue_id] for dialogue_id in dialogues}
 
 
 async def _place(
-    categories: list[dict], episodes: dict[str, dict], dialogues: dict[str, dict], progress: Progress
+    categories: list[dict],
+    episodes: dict[str, dict],
+    dialogues: dict[str, dict],
+    progress: Progress,
+    keep: Callable[[], None],
 ) -> None:
-    """Every acquiring episode not placed yet, placed in batches; one the router fails is left for the next build."""
+    """Every acquiring episode not placed yet, placed in batches; one the router fails is left for the next build. keep
+    saves the placements after every batch and when the placing ends, stopped or not."""
     scenarios = [
         {'id': s['id'], 'category': c['title'], 'title': s['title'], 'description': s['description']}
         for c in categories
@@ -154,11 +201,15 @@ async def _place(
             answer = None
         for key, scenario_id in answer.value if answer else []:
             episodes[short[key]].setdefault('scenarioId', scenario_id)
+        keep()
         done += len(batch)
         progress(stage='place', done=done, total=len(todo), message=f'Раскладываем по сценариям: {done} из {len(todo)}')
 
     if batches:
         progress(stage='place', done=0, total=len(todo), message=f'Раскладываем по сценариям: 0 из {len(todo)}')
-        async with asyncio.TaskGroup() as tasks:
-            for batch in batches:
-                tasks.create_task(one(batch))
+        try:
+            async with asyncio.TaskGroup() as tasks:
+                for batch in batches:
+                    tasks.create_task(one(batch))
+        finally:
+            keep()

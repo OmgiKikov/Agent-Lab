@@ -23,6 +23,7 @@ DECK = checks.DECK  # {check, createdAt, model, cards, sets, catalogRevision}
 # What the task says while it builds; the count of the built and the failed ones is the task's own (done of total).
 BUILDING = 'Собираем сценарии'
 TOPIC_BATCH = 25  # conversations sorted into topics per request: one request for 60 already fails
+ROUNDS = 2  # tries of a card the model fails (each try already asks the model again on 429 and 5xx)
 
 
 def deck() -> list[dict]:
@@ -110,7 +111,9 @@ async def build_card(
 
 async def built(check: str, progress: Progress = lambda **_: None) -> dict:
     """The cards of the three sets ({cards, sets, catalogRevision}): the conversations with the check's errors, a
-    sample of the catalog's episodes stratified by scenario, and rare ones."""
+    sample of the catalog's episodes stratified by scenario, and rare ones. A card the model fails is built again
+    (ROUNDS in all) and then kept in its sets' manifests as failed. A sampled episode left without a card is replaced by
+    another of its scenario; when one cannot be, the representative set is incomplete and its cards get no weight."""
     analysis = storage.documents.load(checks.result(check))
     if not analysis:
         raise RuntimeError(f'У проверки «{checks.NAMES[check]}» ещё нет итога. Сначала проверьте разговоры.')
@@ -123,14 +126,110 @@ async def built(check: str, progress: Progress = lambda **_: None) -> dict:
     found = await catalog.build(progress)
     episodes = found.get('episodes') or {}
     scenario_of = business.scenarios_of(found['categories'])
+    groups = business.strata(episodes)
+    chosen, sampled, manifests = _chosen(analysis, episodes, groups)
+    manifest = manifests['representative']
+    deck = _Building(check, analysis, episodes, scenario_of, chosen, progress)
+    await deck.make(list(chosen))
+    lost = [dialogue_id for dialogue_id in sampled if not deck.carded(dialogue_id)]
+    extra = business.replacements(groups, sampled, lost, set(chosen))
+    for dialogue_id, key in extra:
+        chosen[dialogue_id] = (['representative'], [])
+        sampled[dialogue_id] = key
+    if extra:
+        await deck.make([dialogue_id for dialogue_id, _ in extra])
+    weights, coverage = business.weighted(groups, {i: key for i, key in sampled.items() if deck.carded(i)})
+    manifest.update(coverage, replacements=[dialogue_id for dialogue_id, _ in extra])
+    built_cards = [deck.made[dialogue_id] for dialogue_id in chosen if dialogue_id in deck.made]
+    if not any(card.get('eligible', True) for card in built_cards):
+        # Nothing to test: the deck saved before stays.
+        error = next(iter(deck.failed.values()), {}).get('error')
+        raise models.ModelError(error or 'Ни одна карточка не собрана: ни в одном разговоре нет задачи для сценария.')
+    lost_builds = [dict(item, sets=chosen[i][0]) for i, item in deck.failed.items()]
+    return scenarios.deck(built_cards, manifests, weights, lost_builds) | {'catalogRevision': found['revision']}
+
+
+class _Building:
+    """The cards of a deck being built: made, by conversation, its card or why it has none (eligible: false); failed,
+    by conversation, what the model failed with on its last try."""
+
+    def __init__(
+        self,
+        check: str,
+        analysis: dict,
+        episodes: dict[str, dict],
+        scenario_of: dict[str, dict],
+        chosen: dict[str, tuple[list[str], list[str]]],
+        progress: Progress,
+    ) -> None:
+        self.check, self.analysis, self.episodes, self.scenario_of = check, analysis, episodes, scenario_of
+        self.chosen, self.progress = chosen, progress
+        self.general = scenarios.general_rules(analysis)
+        self.made: dict[str, dict] = {}
+        self.failed: dict[str, dict] = {}
+
+    def carded(self, dialogue_id: str) -> bool:
+        return dialogue_id in self.made and self.made[dialogue_id].get('eligible', True)
+
+    async def make(self, ids: list[str]) -> None:
+        """The cards of these conversations; one the model fails is tried again, ROUNDS in all."""
+        dialogues = {str(d['id']): d for d in storage.dialogues.read(ids)}
+        self._told('Распределяем разговоры по темам проверки')
+        with models.about(f'deck:{self.check}'):
+            topic_of = await _topics(self.analysis, list(dialogues.values()))
+        plan = {}
+        for dialogue_id in ids:
+            if dialogue_id in dialogues and (topic_of.get(dialogue_id) or {}).get('rules'):
+                plan[dialogue_id] = topic_of[dialogue_id]
+            else:
+                self.made[dialogue_id] = {
+                    'eligible': False,
+                    'sets': self.chosen[dialogue_id][0],
+                    'sourceDialogueId': dialogue_id,
+                    'reason': 'не отнесён к теме с критериями',
+                }
+        self._told(BUILDING)
+        for _ in range(ROUNDS):
+            todo = [dialogue_id for dialogue_id in plan if dialogue_id not in self.made]
+            if not todo:
+                break
+            with models.about(f'deck:{self.check}'):
+                async with asyncio.TaskGroup() as tasks:
+                    for dialogue_id in todo:
+                        tasks.create_task(self._one(dialogues[dialogue_id], plan[dialogue_id]))
+
+    async def _one(self, dialogue: dict, topic: dict) -> None:
+        dialogue_id = str(dialogue['id'])
+        sets, reproduces = self.chosen[dialogue_id]
+        episode = self.episodes.get(dialogue_id) or {}
+        scenario = self.scenario_of.get(episode.get('scenarioId') or '')
+        start = episode.get('start') if episode.get('acquiring') else None
+        try:
+            self.made[dialogue_id] = await build_card(topic, dialogue, sets, self.general, reproduces, scenario, start)
+            self.failed.pop(dialogue_id, None)
+        except models.ModelError as error:
+            self.failed[dialogue_id] = {'topic': topic['title'], 'dialogueId': dialogue_id, 'error': str(error)}
+        missing = f'. Не удалось собрать: {len(self.failed)}' if self.failed else ''
+        self._told(f'{BUILDING}{missing}', failed=list(self.failed.values()))
+
+    def _told(self, message: str, **more: object) -> None:
+        done = len(self.made) + len(self.failed)
+        self.progress(stage='cards', done=done, total=len(self.chosen), message=message, **more)
+
+
+def _chosen(
+    analysis: dict, episodes: dict[str, dict], groups: dict[str, list[str]]
+) -> tuple[dict[str, tuple[list[str], list[str]]], dict[str, str], dict]:
+    """The conversations of the three sets: each with its sets and the criteria it reproduces; the representative
+    sample's scenario of each sampled one; the sets' manifests."""
     chosen: dict[str, tuple[list[str], list[str]]] = {}
     for _, dialogue_id, _, reproduces in scenarios.pick(analysis, set(episodes)):
         chosen.setdefault(dialogue_id, ([], []))[0].append('regression')
         chosen[dialogue_id][1].extend(reproduces)
-    sample, manifest = business.allocate(business.strata(episodes), scenarios.REPRESENTATIVE)
+    sample, manifest = business.allocate(groups, scenarios.REPRESENTATIVE)
     manifests = {'representative': manifest}
-    weights = {dialogue_id: weight for dialogue_id, _, weight in sample}
-    for dialogue_id, _, _ in sample:
+    sampled = {dialogue_id: key for dialogue_id, key, _ in sample}
+    for dialogue_id in sampled:
         chosen.setdefault(dialogue_id, ([], []))[0].append('representative')
     acquiring = [i for i, e in episodes.items() if e.get('acquiring')]
     rare, manifests['stress'] = scenarios.stress(storage.dialogues.read(acquiring), set(chosen))
@@ -138,49 +237,7 @@ async def built(check: str, progress: Progress = lambda **_: None) -> dict:
         chosen.setdefault(str(dialogue['id']), ([], []))[0].append('stress')
     if not chosen:
         raise RuntimeError('Нет разговоров, из которых можно собрать сценарии.')
-    dialogues = {str(d['id']): d for d in storage.dialogues.read(list(chosen))}
-    progress(stage='cards', done=0, total=len(chosen), message='Распределяем разговоры по темам проверки')
-    with models.about(f'deck:{check}'):
-        topic_of = await _topics(analysis, list(dialogues.values()))
-    plan = [(i, topic_of[i]) for i in chosen if i in dialogues and (topic_of.get(i) or {}).get('rules')]
-    unsorted = [
-        {'eligible': False, 'sets': sets, 'sourceDialogueId': i, 'reason': 'не отнесён к теме с критериями'}
-        for i, (sets, _) in chosen.items()
-        if not (topic_of.get(i) or {}).get('rules')
-    ]
-    general = scenarios.general_rules(analysis)
-    built_cards: dict[int, dict] = {}
-    failed: list[dict] = []
-
-    async def one(index: int, dialogue_id: str, topic: dict) -> None:
-        sets, reproduces = chosen[dialogue_id]
-        episode = episodes.get(dialogue_id) or {}
-        scenario = scenario_of.get(episode.get('scenarioId') or '')
-        start = episode.get('start') if episode.get('acquiring') else None
-        try:
-            built_cards[index] = await build_card(
-                topic, dialogues[dialogue_id], sets, general, reproduces, scenario, start
-            )
-        except models.ModelError as error:
-            failed.append({'topic': topic['title'], 'dialogueId': dialogue_id, 'error': str(error)})
-        missing = f'. Не удалось собрать: {len(failed)}' if failed else ''
-        progress(
-            stage='cards',
-            done=len(built_cards) + len(failed),
-            total=len(plan),
-            message=f'{BUILDING}{missing}',
-            failed=list(failed),
-        )
-
-    progress(stage='cards', done=0, total=len(plan), message=BUILDING)
-    with models.about(f'deck:{check}'):
-        async with asyncio.TaskGroup() as tasks:
-            for index, (dialogue_id, topic) in enumerate(plan):
-                tasks.create_task(one(index, dialogue_id, topic))
-    if not built_cards:
-        raise models.ModelError(failed[0]['error'] if failed else 'Ни одна карточка не собрана.')
-    ordered = [built_cards[index] for index in sorted(built_cards)]
-    return scenarios.deck(ordered + unsorted, manifests, weights) | {'catalogRevision': found['revision']}
+    return chosen, sampled, manifests
 
 
 async def _topics(analysis: dict, dialogues: list[dict]) -> dict[str, dict]:

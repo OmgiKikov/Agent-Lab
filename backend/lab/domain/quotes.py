@@ -17,6 +17,10 @@ _APOSTROPHES = re.compile('[\u2018\u2019\u02bc\u2032]')  # typographic apostroph
 NEGATIONS = frozenset({'не', 'ни', 'нельзя'})
 # Letters and digits in every part of a verdict's quote stitched with «…»: about two words of the agent's own.
 STITCHED_PART = 15
+# The export's masks as letters, so a masked value is a word of the message: # hides digits, * hides text.
+_MASKS = str.maketrans({'#': 'ǂ', '*': 'ǁ'})
+# Spacing around punctuation: a copy may write «ИНН: 7701» for «ИНН:7701», or break a line there.
+_PUNCTUATION_SPACE = re.compile(r'\s*([^\w\s])\s*')
 
 
 def normalized(text: str) -> str:
@@ -78,6 +82,18 @@ def found(quote: str, text: str) -> bool:
             return False
         cursor = start + len(part)
     return True
+
+
+def spoken(quote: str, text: str, *, masks: bool = False) -> bool:
+    """A quote of one chat message, as a card cites it: the whole quote stands in the message where a word starts and
+    not right after a negation it leaves out, markup, case, typography and spacing around punctuation aside. A short
+    reply («да», «нет») is a quote. masks: the export's masks (# for digits, * for hidden text) are words of the
+    message, not markup: a customer's «########» is their reply, and a quote that shows a mask stands only where the
+    message has one."""
+    if masks:
+        quote, text = quote.translate(_MASKS), text.translate(_MASKS)
+    whole = _PUNCTUATION_SPACE.sub(r'\1', _comparable(quote))
+    return _letters(whole) >= 2 and _at(whole, _PUNCTUATION_SPACE.sub(r'\1', _comparable(text)), 0) >= 0
 
 
 def cited(quote: str, text: str) -> bool:

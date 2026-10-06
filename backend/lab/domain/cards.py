@@ -105,11 +105,10 @@ def chat(dialogue: dict) -> dict:
     return {'channel': meta.get('channel'), 'otherAgentsInChat': bool(set(agents) - {'ACQUIRING_AGENT'})}
 
 
-def _found(quote: object, text: str) -> bool:
-    if not isinstance(quote, str):
-        return False
-    needle = re.sub(r'\s+', '', quotes.normalized(quote))
-    return sum(ch.isalnum() for ch in needle) >= 2 and needle in re.sub(r'\s+', '', quotes.normalized(text))
+def _found(quote: object, text: str, role: str) -> bool:
+    """The quote stands in the message (quotes.spoken); a customer's masks are their words, an agent's # and * are
+    as often its Markdown."""
+    return isinstance(quote, str) and quotes.spoken(quote, text, masks=role == 'user')
 
 
 def _holds_value(quote: str) -> bool:
@@ -128,7 +127,7 @@ def grounded(value: dict, messages: list[dict]) -> tuple[dict, Counter]:
     def said(n: object, quote: object, role: str) -> bool:
         if not isinstance(n, int) or not 1 <= n <= len(messages):
             return False
-        return messages[n - 1]['role'] == role and _found(quote, messages[n - 1]['content'])
+        return messages[n - 1]['role'] == role and _found(quote, messages[n - 1]['content'], role)
 
     kept, dropped = {}, Counter()
 

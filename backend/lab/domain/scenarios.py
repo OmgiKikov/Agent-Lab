@@ -187,9 +187,10 @@ def card(
     return found
 
 
-def deck(built: list[dict], manifests: dict, weights: dict[str, float]) -> dict:
-    """Eligible cards and each set's manifest: its cards, and the sampled episodes that had no acquiring task. A card of
-    the representative set carries its weight (catalog.allocate)."""
+def deck(built: list[dict], manifests: dict, weights: dict[str, float], failed: Sequence[dict] = ()) -> dict:
+    """Eligible cards and each set's manifest: its cards, the chosen conversations excluded (no task for a scenario, no
+    topic with criteria) and those the model failed ({dialogueId, topic, error, sets}). A card of the representative
+    set carries its weight (catalog.weighted), none when that set is incomplete."""
     cards = [card for card in built if card.get('eligible', True)]
     for key, label in SETS.items():
         manifest = manifests.setdefault(key, {})
@@ -199,6 +200,9 @@ def deck(built: list[dict], manifests: dict, weights: dict[str, float]) -> dict:
             {'dialogueId': card['sourceDialogueId'], 'reason': card['reason']}
             for card in built
             if not card.get('eligible', True) and key in (card.get('sets') or [])
+        ]
+        manifest['failed'] = [
+            {'dialogueId': item['dialogueId'], 'error': item['error']} for item in failed if key in item['sets']
         ]
     for card in cards:
         if 'representative' in (card.get('sets') or []):

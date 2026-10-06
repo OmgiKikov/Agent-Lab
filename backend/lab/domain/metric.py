@@ -65,11 +65,15 @@ def metric(items: list[dict]) -> dict:
             by_set.setdefault(key, []).append(item)
     if by_set:
         value['sets'] = {key: _accuracy([i['status'] for i in found]) for key, found in by_set.items()}
-        sampled = [i for i in by_set.get('representative', []) if i.get('weight')]
-        if sampled and len(sampled) == len(by_set['representative']):
+        representative = by_set.get('representative', [])
+        sampled = [i for i in representative if i.get('weight')]
+        if sampled and len(sampled) == len(representative):
             measured_weight = sum(i['weight'] for i in sampled if i['status'] in DECIDED)
             passed_weight = sum(i['weight'] for i in sampled if i['status'] == 'PASS')
             value['sets']['representative']['weighted'] = (
                 round(100 * passed_weight / measured_weight) if measured_weight else None
             )
+        elif representative:
+            # A scenario of the sample has no card (deck: catalog.weighted): the rest would not stand for the export.
+            value['sets']['representative']['incomplete'] = True
     return value

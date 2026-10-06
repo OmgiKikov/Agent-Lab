@@ -127,14 +127,16 @@ function SimResult() {
           ) : (
             <p className="mt-6 text-title font-semibold text-fg">Разговоры этого прогона ещё не оценены</p>
           )}
-          {!live && m?.sets && Object.keys(m.sets).length > 1 && (
+          {!live && m?.sets && Object.keys(m.sets).length > 0 && (
             <p className="mt-3 max-w-[68ch] text-read text-fg-2">
-              Наборы считаются отдельно:{" "}
+              {Object.keys(m.sets).length > 1 ? "Наборы считаются отдельно: " : ""}
               {Object.entries(m.sets)
                 .map(([key, s]) => `${SET_NAMES[key] ?? key}: ошибка в ${s.measured - s.passed} из ${s.measured}`)
                 .join(" · ")}
               {m.sets.representative?.weighted != null &&
                 `. С поправкой на частоту сценариев без ошибок ${m.sets.representative.weighted}%`}
+              {m.sets.representative?.incomplete &&
+                ". Поправку на частоту сценариев не считаем: у части сценариев выборки нет карточки"}
             </p>
           )}
           <Matrix run={run} state={state} />

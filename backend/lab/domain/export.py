@@ -82,10 +82,7 @@ def conversation(dialogue: dict) -> list[dict]:
     ]
 
 
-def turns(text: str) -> list[dict]:
-    marks = list(MARKER.finditer(text))
-    if len(marks) < 2:  # turns are not on lines of their own
-        marks = list(INLINE.finditer(text))
+def _split(text: str, marks: list[re.Match]) -> list[dict]:
     return [
         {
             'role': 'user' if mark.group(1) == 'CLIENT' else 'assistant',
@@ -93,6 +90,31 @@ def turns(text: str) -> list[dict]:
         }
         for i, mark in enumerate(marks)
     ]
+
+
+def layouts(text: str) -> list[tuple[str, list[dict]]]:
+    """The ways the exported text can be read into turns, the likelier first: turns on lines of their own, then turns
+    written inline. A text can mix them (inline exchanges with line breaks between them or inside a message), so both
+    are tried and the order column decides (_read_turns)."""
+    lines, inline = list(MARKER.finditer(text)), list(INLINE.finditer(text))
+    found = [('lines', _split(text, lines))] if len(lines) >= 2 else []
+    if len(inline) > len(lines) or not found:
+        found.append(('inline', _split(text, inline)))
+    return found
+
+
+def _read_turns(text: str, count: int) -> tuple[str, list[dict], list[dict], list[int]]:
+    """The layout that reads the text into the order column's count of messages: (layout, exported turns, real
+    messages, their positions). Quarantined with the likelier layout's reason when none does."""
+    first: Quarantined | None = None
+    for layout, found in layouts(text):
+        try:
+            messages, kept = _export_messages(found, count)
+        except Quarantined as error:
+            first = first or error
+            continue
+        return layout, found, messages, kept
+    raise first or Quarantined('в тексте нет реплик')
 
 
 class Quarantined(ValueError):
@@ -264,14 +286,17 @@ def from_excel(data: bytes) -> tuple[list[dict], list[dict]]:
             dialogue_id = _cell(row, column[ID])
             try:
                 count = _message_count(_cell(row, column[ORDER]))
-                text_messages = turns(str(_cell(row, column[TEXT]) or ''))
-                messages, kept = _export_messages(text_messages, count)
+                layout, text_messages, messages, kept = _read_turns(str(_cell(row, column[TEXT]) or ''), count)
             except Quarantined as error:
                 quarantined.append({'id': str(dialogue_id), 'row': number, 'reason': str(error)})
                 continue
             meta = _meta(row, column, number)
             exact = len(text_messages) == count
-            meta['import'] = {'status': 'exact' if exact else 'collapsed', 'textMessages': len(text_messages)}
+            meta['import'] = {
+                'status': 'exact' if exact else 'collapsed',
+                'textMessages': len(text_messages),
+                'layout': layout,
+            }
             if not exact:
                 meta['import']['kept'] = kept
             dialogues.append({'id': dialogue_id, 'messages': messages, 'meta': meta})
