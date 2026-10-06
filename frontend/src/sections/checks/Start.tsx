@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Check as CheckMark } from "lucide-react";
 import { Mark } from "../../app/Mark";
 import { SECTIONS, toneCheckLink, type Check } from "../../app/links";
@@ -149,7 +149,9 @@ export function ToneStart() {
 export function AccuracyStart() {
   const { state } = useLabState();
   const previous = usePrevious("code");
-  const { exportId, line, setExport } = useAssessExport();
+  // From an export's page (?export=) the check is offered on that export, here as in its window.
+  const [params] = useSearchParams();
+  const { exportId, line, setExport } = useAssessExport(params.get("export"));
   const { sizes, size, setSize, resumes } = useSampleSize(exportId);
   const { start, starting } = useAssess();
   const job = state?.job;

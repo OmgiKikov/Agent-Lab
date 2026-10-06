@@ -6,10 +6,10 @@ from . import problems, statistics
 
 
 def line(record: dict | None) -> dict | None:
-    """A saved check in a line: which it is, when, of which export, and its counts."""
+    """A saved check in a line: which it is, when, of which export (its file, and its name then), and its counts."""
     if record is None:
         return None
-    return {key: record.get(key) for key in ('id', 'finishedAt', 'file', 'summary')}
+    return {key: record.get(key) for key in ('id', 'finishedAt', 'file', 'export', 'summary')}
 
 
 def criteria(analysis: dict, sources: list[dict]) -> dict[str, dict]:

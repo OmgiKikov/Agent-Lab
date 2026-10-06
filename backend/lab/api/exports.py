@@ -2,9 +2,10 @@
 export's conversations."""
 
 import asyncio
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, StringConstraints
 
 from .. import storage
 from ..domain import export
@@ -15,8 +16,12 @@ from .base import Jobs, uploaded
 router = APIRouter()
 
 
+# A name is what is left of it without the spaces around: one of spaces only names nothing.
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+
+
 class RenameCommand(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
+    name: Name
 
 
 async def receive(jobs: Jobs, request: Request, name: str, title: str | None) -> dict:
@@ -38,7 +43,9 @@ def exports_list() -> dict:
 
 
 @router.post('/api/exports')
-async def upload_export(jobs: Jobs, request: Request, name: str, title: str | None = None) -> dict:
+async def upload_export(
+    jobs: Jobs, request: Request, name: str, title: Annotated[str | None, Query(max_length=120)] = None
+) -> dict:
     return await receive(jobs, request, name, title)
 
 

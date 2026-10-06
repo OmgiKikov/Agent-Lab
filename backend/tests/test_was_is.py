@@ -170,6 +170,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         waiting = await self.get('/api/compare?check=tone')
         self.assertEqual((waiting['kind'], waiting['current']), ('none', None))
         self.assertEqual(waiting['previous']['file'], 'Октябрь.jsonl')
+        self.assertEqual(waiting['previous']['export']['name'], 'Октябрь')
 
     async def test_checks_with_other_criteria_are_not_compared(self):
         await self.assess_code()

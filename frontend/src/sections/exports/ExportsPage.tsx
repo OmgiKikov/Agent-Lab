@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { Header } from "../../app/Header";
@@ -47,11 +48,23 @@ function ExportRow({ item }: { item: ExportWithChecks }) {
  */
 export function ExportsPage() {
   const { state, offline } = useLabState();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const { data, error, refetch, isLoading } = useExports(state);
-  // ⌘K «Загрузить выгрузку» opens the window at once.
-  const asked = params.get("upload") === "1";
-  const upload = <UploadExport startOpen={asked} />;
+  // ⌘K «Загрузить выгрузку» opens the window at once, and only once: the address forgets it (Back and a reload do
+  // not open it again), and the window is the page's, whichever of its two places the button is in.
+  const [uploading, setUploading] = useState(params.get("upload") === "1");
+  useEffect(() => {
+    if (params.get("upload"))
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("upload");
+          return next;
+        },
+        { replace: true },
+      );
+  }, [params, setParams]);
+  const upload = <UploadExport open={uploading} onOpen={setUploading} />;
   const empty = !!state && !state.exports.length;
   return (
     <div className="flex h-full flex-col">

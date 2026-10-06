@@ -95,8 +95,10 @@ def upgrade(connection: sqlite3.Connection) -> None:
     nothing to what has this shape already."""
     _exports(connection)
     _separate_checks(connection)
-    _export_to_rows(connection)
+    # The saved checks are in one table before an export is made of the old document: the one the current result is
+    # gets the export's name (_mark_saved).
     _one_history(connection)
+    _export_to_rows(connection)
     _accuracy_history(connection)
     _answers_to_rows(connection)
     # The number of uploaded dialogues was kept beside them before they were rows.

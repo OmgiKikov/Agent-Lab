@@ -85,7 +85,8 @@ export function DeleteExport({ item, open, onClose }: { item: ExportWithChecks; 
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const current = CHECKS.filter((check) => item.checks[check]?.current);
+  // The current results made of it, as the service decides what goes with it (inputs.remove_export).
+  const current = CHECKS.filter((check) => state?.checks[check]?.export?.id === item.id);
   const deck = state?.cards?.cards.length && current.includes(state.cards.check);
   const running = !!state?.job.running;
   const remove = async () => {

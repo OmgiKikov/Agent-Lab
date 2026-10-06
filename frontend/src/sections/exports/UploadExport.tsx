@@ -29,23 +29,28 @@ export function uploadedText(line: ExportLine) {
 /**
  * «Загрузить выгрузку»: the chat's Excel (sheet «Данные») or a prepared .jsonl, under the name it will have in the list
  * and in the results (the file's unless a person writes another). An upload adds an export beside the others and
- * changes nothing checked. `startOpen`: the window is open from the start (⌘K «Загрузить выгрузку»).
+ * changes nothing checked. `open`/`onOpen`: the window is the page's when it says so (⌘K «Загрузить выгрузку» opens
+ * it from the page, and the button may stand in two places of it); else the button's own.
  */
 export function UploadExport({
   variant = "primary",
   label = "Загрузить выгрузку",
-  startOpen = false,
+  open: shown,
+  onOpen,
   onUploaded,
 }: {
   variant?: "primary" | "outline";
   label?: string;
-  startOpen?: boolean;
+  open?: boolean;
+  onOpen?: (open: boolean) => void;
   onUploaded?: (line: ExportLine) => void;
 }) {
   const { state, refresh } = useLabState();
   const toast = useToast();
   const input = useRef<HTMLInputElement>(null);
-  const [open, setOpen] = useState(startOpen);
+  const [own, setOwn] = useState(false);
+  const open = shown ?? own;
+  const setOpen = (value: boolean) => (onOpen ? onOpen(value) : setOwn(value));
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [named, setNamed] = useState(false);

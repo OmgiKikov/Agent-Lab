@@ -18,6 +18,7 @@ import {
   type CompareRow,
 } from "../../lab/compare";
 import { nameFromText } from "../../lab/criteria";
+import { exportOf, exportWords } from "../../lab/exports";
 import { longDay } from "../../lab/format";
 import { shareText } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
@@ -103,14 +104,17 @@ export function CompareLine({
 
 /** «Прошлая проверка: 20 из 53 (38%) · «Выгрузка чата сентябрь 2026.xlsx» · 3 октября» — no current result yet. */
 export function PreviousCheck({ check, line, className }: { check: Check; line: CheckLine; className?: string }) {
+  const { state } = useLabState();
   const { summary } = line;
+  // Named as the history names it: the export by its name now (or then, «удалена»), the file of an older check.
+  const madeOf = line.export ? exportWords(exportOf(state, line.export)) : line.file ? `«${line.file}»` : null;
   return (
     <p className={cn("break-words text-read text-fg-2", className)}>
       <Link to={historyLink(check, line.id)} className={link}>
         Прошлая проверка
       </Link>
       : {summary.measured ? shareText(summary) : "ни один разговор не удалось проверить"}
-      {line.file ? ` · «${line.file}»` : ""} · {longDay(line.finishedAt)}
+      {madeOf ? ` · ${madeOf}` : ""} · {longDay(line.finishedAt)}
     </p>
   );
 }

@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { exportLink } from "../app/links";
@@ -19,6 +20,8 @@ export function ExportPicker({
   disabled?: boolean;
 }) {
   const { state } = useLabState();
+  // Its own group of radios: two pickers on one page (a check's start and its window) never switch each other.
+  const group = useId();
   const exports = state?.exports ?? [];
   return (
     <div>
@@ -43,7 +46,7 @@ export function ExportPicker({
                 >
                   <input
                     type="radio"
-                    name="export"
+                    name={group}
                     checked={on}
                     disabled={off}
                     onChange={() => onChange(e.id)}

@@ -160,6 +160,43 @@ class SchemaNineTests(unittest.TestCase):
         first = inputs.add_export([talk('a')], 'a.xlsx')
         self.assertEqual(conversations.same_material(first['id'], 5)['export'], ['a.xlsx', first['uploadedAt'], 1])
 
+    def test_a_database_before_schema_7_names_the_export_of_its_saved_check(self) -> None:
+        """Before schema 7 the export was a document and each check had a table of saved checks: the saved check that is
+        the current result names the export it was made of too."""
+        path = storage.db.default_database()
+        storage.db.private_folder(path.parent)
+        old = sqlite3.connect(path)
+        old.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        old.execute('CREATE TABLE tone_checks (id TEXT PRIMARY KEY, summary TEXT NOT NULL, value TEXT NOT NULL)')
+        result = {'checkId': 'c1', 'purpose': 'tone-of-voice', 'results': [], 'topics': []}
+        line = {'id': 'c1', 'finishedAt': '2026-09-20T10:00:00+00:00', 'file': 'Август.xlsx', 'total': 1}
+        old.execute('INSERT INTO documents VALUES (?, ?)', ('logs.json', json.dumps([talk('d1')])))
+        old.execute('INSERT INTO documents VALUES (?, ?)', ('logs-meta.json', json.dumps({'file': 'Август.xlsx'})))
+        old.execute('INSERT INTO documents VALUES (?, ?)', ('tone-result.json', json.dumps(result)))
+        old.execute('INSERT INTO tone_checks VALUES (?, ?, ?)', ('c1', json.dumps(line), json.dumps({'check': line})))
+        old.execute('PRAGMA user_version = 6')
+        old.commit()
+        old.close()
+        [export] = storage.exports.listed()
+        self.assertEqual(storage.history.lines('tone')[0]['export'], {'id': export['id'], 'name': 'Август'})
+
+    def test_a_legacy_import_brings_no_result_into_a_database_with_exports(self) -> None:
+        """The legacy files' results were made of their export: into a database that has exports of its own, neither
+        that export nor its results come (they would name no export here)."""
+        from lab.storage import legacy
+
+        storage.exports.add([talk('d1')], 'Сентябрь.xlsx')
+        found = {
+            'logs.json': [talk('old')],
+            'logs-meta.json': {'file': 'Старое.xlsx'},
+            'tone-result.json': {'purpose': 'tone-of-voice', 'results': [], 'topics': []},
+            'discover.json': {'topics': [], 'results': []},
+        }
+        legacy.insert(found, [])
+        self.assertEqual([e['name'] for e in storage.exports.listed()], ['Сентябрь'])
+        for name in ('tone-result.json', 'discover.json', 'logs-meta.json'):
+            self.assertFalse(storage.documents.exists(name), name)
+
     def test_a_database_without_an_export_gets_none(self) -> None:
         self.assertEqual(storage.exports.listed(), [])
 
@@ -293,6 +330,14 @@ class ExportsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get('/api/exports/nope/conversations')).status_code, 404)
         missing = await self.client.get(f'/api/exports/{export["id"]}/conversations/nope')
         self.assertEqual(missing.status_code, 404)
+
+    async def test_a_name_must_say_something(self) -> None:
+        export = await self.upload(talk('a'))
+        blank = await self.client.post(f'/api/exports/{export["id"]}/rename', json={'name': '   '})
+        self.assertEqual(blank.status_code, 422)
+        self.assertEqual(storage.exports.get(export['id'])['name'], 'x')
+        long = await self.client.post('/api/exports?name=y.jsonl&title=' + 'я' * 121, content=b'')
+        self.assertEqual(long.status_code, 422)
 
     async def test_an_unreadable_file_is_refused(self) -> None:
         response = await self.client.post('/api/exports?name=broken.xlsx', content=b'not a workbook')

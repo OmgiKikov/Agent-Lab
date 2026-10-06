@@ -44,10 +44,20 @@ export function exportOf(state: LabState | null, ref: ExportRef | null | undefin
 export const exportWords = (made: ReturnType<typeof exportOf>) =>
   made ? `выгрузка «${made.name}»${made.gone ? " (удалена)" : ""}` : null;
 
-/** The export a check starts on unless one is asked for: its current result's while it is here, else the newest. */
+/** The task of a check whose stop the same start continues (backend: api/work.py, paused). */
+const PAUSED: Record<Check, string> = { tone: "tone-check", code: "discover" };
+
+/**
+ * The export a check starts on unless one is asked for: the one a stopped check of it was made of, while the same start
+ * continues it (choosing another would start anew and drop what it kept); else its current result's; else the
+ * newest. An export must still be here and have a conversation.
+ */
 export function defaultExport(state: LabState | null, check: Check): string | null {
+  const here = (id?: string | null) => !!id && !!state?.exports.some((e) => e.id === id && e.total > 0);
+  const stopped = (state?.paused?.[PAUSED[check]]?.input as { exportId?: string } | undefined)?.exportId;
+  if (here(stopped)) return stopped!;
   const own = resultOf(state, check)?.export?.id;
-  if (own && state?.exports.some((e) => e.id === own)) return own;
+  if (here(own)) return own!;
   return state?.exports.find((e) => e.total > 0)?.id ?? null;
 }
 
