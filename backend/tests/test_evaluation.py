@@ -487,7 +487,7 @@ class StepVerdictTests(unittest.IsolatedAsyncioTestCase):
         _, payload = await self.judged('вернуть платёж покупателю')
         self.assertEqual(payload['history'][1], {'role': 'AGENT', 'text': 'Чем помочь?\n[Кнопки: TRANSFER_INTO_CHAT]'})
 
-    async def test_the_match_with_production_is_not_in_the_steps_status(self) -> None:
+    async def judged_with_a_failed_match(self) -> judge.Verdict:
         answer = {
             'rules': [
                 verdict('rag:query', 'PASS', 'вернуть платёж покупателю'),
@@ -495,8 +495,19 @@ class StepVerdictTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
         with patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))):
-            result = await judge.step_verdict([RAG_RULE, match.CRITERION], REPLAYED_STEP)
+            return await judge.step_verdict([RAG_RULE, match.CRITERION], REPLAYED_STEP)
+
+    async def test_the_match_with_production_is_not_in_the_steps_status(self) -> None:
+        result = await self.judged_with_a_failed_match()
         self.assertEqual(result.status, 'PASS')
+
+    async def test_the_failed_match_with_production_stays_in_the_rows(self) -> None:
+        result = await self.judged_with_a_failed_match()
+        self.assertEqual({row['ruleId']: row['status'] for row in result.rows}[match.CRITERION['id']], 'FAIL')
+
+    def test_step_status_leaves_the_match_with_production_out(self) -> None:
+        rows = [verdict('rag:query', 'PASS'), verdict(match.CRITERION['id'], 'FAIL')]
+        self.assertEqual(judge.step_status(rows), 'PASS')
 
     async def test_rag_quote_from_the_query_stays_pass(self) -> None:
         result, _ = await self.judged('вернуть платёж покупателю')

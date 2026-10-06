@@ -65,6 +65,12 @@ class MetricTests(unittest.TestCase):
             {'tone': (1, 0), 'code': (0, 0), 'rag': (1, 1)},
         )
 
+    def test_the_match_with_production_changes_no_familys_counts(self) -> None:
+        rules = [row('rag:1', 'PASS'), row('tone:1', 'PASS')]
+        without = replay.metric([{'steps': [{'rules': rules}]}])
+        with_failed_match = replay.metric([{'steps': [{'rules': [*rules, row(match.CRITERION['id'], 'FAIL')]}]}])
+        self.assertEqual(with_failed_match, without)
+
 
 class CriteriaTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -78,7 +84,7 @@ class CriteriaTests(unittest.IsolatedAsyncioTestCase):
         rules = replay.of_family('code', [{'id': 'r1', 'text': 't'}])
         self.assertEqual((rules[0]['id'], rules[0]['family']), ('code:r1', 'code'))
 
-    async def test_without_checks_only_rag_criteria(self) -> None:
+    async def test_without_checks_only_rag_criteria_and_the_match(self) -> None:
         found = await replay.criteria_by_dialogue([DIALOGUE])
         self.assertEqual(found['d-1'], [*rag.CRITERIA, match.CRITERION])
 

@@ -128,7 +128,8 @@ def of_family(family: str, rules: list[dict]) -> list[dict]:
 
 
 async def criteria_by_dialogue(dialogues: list[dict]) -> dict[str, list[dict]]:
-    """Every dialogue's criteria: tone of voice, its accuracy topic's rules, the knowledge-base ones."""
+    """Every dialogue's criteria: tone of voice, its accuracy topic's rules, the knowledge-base ones and the match with
+    production."""
     tone_rules = _tone_rules()
     accuracy = store.load(discover.RESULT) or {}
     topics = await discover.keep_topics(accuracy, dialogues) if accuracy.get('topics') else []
@@ -217,7 +218,7 @@ async def _play_step(agent: agents.HttpAgent, conversation_id: str, step: dict, 
 async def _judge_step(rules: list[dict], step: dict, verdict: StepJudge) -> None:
     asked, skipped = _split(rules, step)
     if not asked:
-        step.update(rules=skipped, status=judge.verdict_of(match.counted(skipped)), error=None)
+        step.update(rules=skipped, status=judge.step_status(skipped), error=None)
         return
     try:
         result, second = await _both_judges(asked, step, verdict)
@@ -225,7 +226,7 @@ async def _judge_step(rules: list[dict], step: dict, verdict: StepJudge) -> None
         step.update(rules=judge.checked([], asked, '') + skipped, status='UNMEASURED', error=str(error))
         return
     rows = result.rows + skipped
-    step.update(rules=rows, status=judge.verdict_of(match.counted(rows)), model=result.model, second=second, error=None)
+    step.update(rules=rows, status=judge.step_status(rows), model=result.model, second=second, error=None)
 
 
 def _split(rules: list[dict], step: dict) -> tuple[list[dict], list[dict]]:

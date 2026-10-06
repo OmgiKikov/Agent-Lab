@@ -35,6 +35,11 @@ def verdict_of(rows: list[dict]) -> str:
     return 'UNMEASURED'
 
 
+def step_status(rows: list[dict]) -> str:
+    """A replayed step's status: its rows but the match with production (match.py)."""
+    return verdict_of(match.counted(rows))
+
+
 def _parse_reply(value: dict, rules: list[dict], *, customer_goal: bool = False) -> JudgeReply:
     """Shape belongs to JudgeReply; criterion coverage and applicability belong to this module."""
     reply = JudgeReply.model_validate(value)
@@ -203,7 +208,7 @@ async def step_verdict(rules: list[dict], step: dict, endpoint: llm.Endpoint | N
         knowledge_available=rag.called(trace),
         rag_text=rag.evidence(trace),
     )
-    return Verdict(rows, verdict_of(match.counted(rows)), answer.model)
+    return Verdict(rows, step_status(rows), answer.model)
 
 
 async def second_opinion(verdict: Callable[..., Awaitable[Verdict]], *args) -> dict | None:
