@@ -1,5 +1,6 @@
-"""Replay of exported conversations through the local agent: a step for every customer message, the history taken from
-the logs, the agent's trace on every step, a verdict on the new reply (spec 2026-10-05-voice360-replay-design.md)."""
+"""Replay of exported conversations through an agent that gives its trace (the local one, the replay service on the
+stand): a step for every customer message, the history taken from the logs, the agent's trace on every step, a verdict
+on the new reply (spec 2026-10-05-voice360-replay-design.md)."""
 
 import asyncio
 import uuid
@@ -15,8 +16,8 @@ RESULT = 'replay.json'
 # What the state polled every 1.5 s says of the latest replay: read instead of the whole RESULT.
 REPLAY_SUMMARY = 'replay-summary.json'
 FAMILIES = ('tone', 'code', 'rag')
-NOT_LOCAL = 'Повтор работает только с локальным агентом: только он отдаёт трейс. Выберите запуск из кода.'
-NO_TRACE = 'Агент не отдаёт трейс. Обновите aigw-local: нужен local/agent_lab_trace.py.'
+NOT_LOCAL = 'Повтор работает с агентом, который отдаёт трейс: на этом компьютере или сервисом повтора на стенде.'
+NO_TRACE = 'Агент не отдаёт трейс. Обновите aigw-local: нужен replay/recorder.py.'
 STEP_WITHOUT_TRACE = 'Агент не отдал трейс этого шага.'
 NO_DIALOGUES = 'Нет разговоров для повтора. Сначала загрузите выгрузку.'
 
@@ -28,15 +29,15 @@ async def run(
     count: int,
     progress: Progress,
     *,
-    create: Callable[[str], agents.HttpAgent] = agents.create,
+    create: Callable[[str], agents.Agent] = agents.create,
     verdict: StepJudge = judge.step_verdict,
 ) -> dict:
-    """Replay a sample of the exported conversations through the local agent, judge every step and keep the result."""
+    """Replay a sample of the exported conversations through the agent, judge every step and keep the result."""
     dialogues = discover.sample(count)
     if not dialogues:
         raise RuntimeError(NO_DIALOGUES)
     agent = create(target)
-    if not agent.mocked:
+    if not agent.traced:
         raise RuntimeError(NOT_LOCAL)
     progress(done=0, total=0, message='Собираем критерии')
     criteria = await criteria_by_dialogue(dialogues)
@@ -62,6 +63,7 @@ async def run(
         'id': uuid.uuid4().hex,
         'target': target,
         'version': agent.version,
+        'stand': getattr(agent, 'stand', None),
         'startedAt': started,
         'finishedAt': store.now(),
         'model': llm.models_used([step for d in played for step in d['steps']]),
@@ -182,7 +184,7 @@ def _first(failed: BaseException) -> BaseException:
 
 
 async def _replay_dialogue(
-    agent: agents.HttpAgent,
+    agent: agents.Agent,
     dialogue: dict,
     planned: list[dict],
     rules: list[dict],
@@ -197,7 +199,7 @@ async def _replay_dialogue(
     return {'dialogueId': str(dialogue['id']), 'status': dialogue_status(planned), 'steps': planned}
 
 
-async def _play_step(agent: agents.HttpAgent, conversation_id: str, step: dict, replaying: _Replaying) -> bool:
+async def _play_step(agent: agents.Agent, conversation_id: str, step: dict, replaying: _Replaying) -> bool:
     try:
         reply = await agent.say(conversation_id, step['customer'], history=step['history'])
     except AgentError as error:

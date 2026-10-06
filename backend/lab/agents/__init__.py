@@ -10,15 +10,24 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .. import store
+from ..settings import replay_url
 from .http import AGENT_PATH, BAD_ADDRESS, AgentError, HttpAgent, address_valid
+from .replay_service import ReplayServiceAgent
 from .session import session
 from .source import START, CodeAgent
 
 SETTINGS = 'settings.json'
 DEFAULT_REPO = '~/Desktop/aigw-local'
-# The three ways to reach the agent, in words without a developer's slang: the same in «Агент», «Сыграть», the runs and
+REPLAY_SERVICE = 'replay-service'
+Agent = HttpAgent | ReplayServiceAgent
+# The ways to reach the agent, in words without a developer's slang: the same in «Агент», «Сыграть», the runs and
 # the reports. A run keeps the name it was played under (targetName); it is shown under the current one (run_name).
-NAMES = {'prod': 'Тестовый стенд банка', 'local-http': 'На этом компьютере', 'local-code': 'Запуск из кода'}
+NAMES = {
+    'prod': 'Тестовый стенд банка',
+    'local-http': 'На этом компьютере',
+    'local-code': 'Запуск из кода',
+    REPLAY_SERVICE: 'Сервис повтора на стенде',
+}
 # The test client in the local stand's fixtures: the synthetic customer gives these details when asked.
 STAND_CUSTOMER = (
     'Твоя организация: ООО «Ромашка», ИНН 7701234567. Торговая точка «Ромашка, Тверская», '
@@ -88,11 +97,28 @@ def configs() -> dict[str, dict]:
     }
 
 
+def replay_config() -> dict:
+    return {
+        'name': NAMES[REPLAY_SERVICE],
+        'kind': 'replay',
+        'profile': 'replay',
+        'url': replay_url(),
+        'note': 'Агент эквайринга на стенде. Во внешние системы не пишет, трейс отдаёт на каждом шаге.',
+    }
+
+
+def replay_targets() -> list[dict]:
+    """The ways a replay reaches the agent: set up and giving their trace. The replay service is only here: it replays
+    recorded conversations and does not talk."""
+    shown = [public(key, config) for key, config in {**configs(), REPLAY_SERVICE: replay_config()}.items()]
+    return [target for target in shown if target['ready'] and (target['local'] or target['kind'] == 'replay')]
+
+
 def public(key: str, config: dict) -> dict:
     """What the page shows about an agent: the host or the repository, never the full internal address.
     Ready: its address is set, or its folder has what starts it from its code (START). Whether it answers is what
-    «Проверить связь» tells. Local: it runs on the local stand (HttpAgent.mocked; the code one always does), the only
-    one that gives its trace to a replay."""
+    «Проверить связь» tells. Local: it runs on the local stand (HttpAgent.mocked; the code one always does), so it gives
+    its trace to a replay; the replay service does too (replay_targets)."""
     where = urlsplit(config.get('url') or '').hostname or ''
     ready = bool(config.get('url'))
     if config['kind'] == 'code':
@@ -115,7 +141,9 @@ def run_name(run: dict) -> str:
     return NAMES.get(str(run.get('target') or ''), run.get('targetName') or '')
 
 
-def create(key: str) -> HttpAgent:
+def create(key: str) -> Agent:
+    if key == REPLAY_SERVICE:
+        return ReplayServiceAgent(replay_config())
     config = configs().get(key)
     if not config:
         raise AgentError(f'Неизвестный способ подключения агента: {key}.')
@@ -124,13 +152,17 @@ def create(key: str) -> HttpAgent:
 
 __all__ = [
     'NAMES',
+    'REPLAY_SERVICE',
     'STAND_CUSTOMER',
+    'Agent',
     'AgentError',
     'CodeAgent',
     'HttpAgent',
+    'ReplayServiceAgent',
     'configs',
     'create',
     'public',
+    'replay_targets',
     'repo',
     'run_name',
     'session',

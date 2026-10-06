@@ -152,6 +152,11 @@ class HttpAgent:
         """The bank's systems behind this agent are the stand's mocks, so a scenario's test data can be applied."""
         return self.profile == 'local'
 
+    @property
+    def traced(self) -> bool:
+        """It gives the trace of a replayed turn: the local agent with its trace harness does."""
+        return self.mocked
+
     def request(self, conversation_id: str, text: str, history: list[dict] | None = None) -> tuple[dict, dict]:
         if self.profile == 'prod':
             return prod_request(conversation_id, text, self.epk)

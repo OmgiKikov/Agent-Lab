@@ -20,3 +20,9 @@ CERTS = _path('LAB_CERTS', ROOT / 'certs')
 MOCK_URL = os.environ.get('AGENT_LAB_MOCK_URL', 'http://127.0.0.1:8090')
 AGENT_TIMEOUT = float(os.environ.get('LAB_AGENT_TIMEOUT', '180'))
 FRONTEND = _path('LAB_FRONTEND', ROOT / 'frontend/dist')
+
+
+def replay_url() -> str:
+    """The replay service on the stand (aigw-local replay/), its origin: http://host:port. Read at every call, so a
+    changed address is picked up without a restart."""
+    return os.environ.get('LAB_REPLAY_URL', '').strip()

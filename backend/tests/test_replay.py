@@ -108,12 +108,14 @@ TRACE = {'traceId': 't', 'chains': [], 'rag': [{'query': 'q', 'passages': [], 'a
 class FakeAgent:
     """A local agent that answers every message, or fails on the ones it is told to."""
 
-    mocked = True
+    traced = True
     version = 'v1'
 
-    def __init__(self, failing: tuple[str, ...] = (), trace: dict | None = TRACE, traced: int | None = None) -> None:
-        """traced: how many first turns come with the trace; None — every one."""
-        self.failing, self.trace, self.traced, self.heard = failing, trace, traced, []
+    def __init__(
+        self, failing: tuple[str, ...] = (), trace: dict | None = TRACE, traced_turns: int | None = None
+    ) -> None:
+        """traced_turns: how many first turns come with the trace; None — every one."""
+        self.failing, self.trace, self.traced_turns, self.heard = failing, trace, traced_turns, []
 
     async def open(self) -> None:
         pass
@@ -134,7 +136,7 @@ class FakeAgent:
             'options': [],
             'seconds': 0.1,
             'events': [],
-            'trace': self.trace if self.traced is None or len(self.heard) <= self.traced else None,
+            'trace': self.trace if self.traced_turns is None or len(self.heard) <= self.traced_turns else None,
         }
 
 
@@ -183,6 +185,12 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
     async def test_summary_reads_only_its_own_document(self) -> None:
         store.save(replay.REPLAY_SUMMARY, {'id': 'r-1', 'finishedAt': '2026-10-05T10:00:00.000+00:00'})
         self.assertEqual(replay.summary(), {'id': 'r-1', 'finishedAt': '2026-10-05T10:00:00.000+00:00'})
+
+    async def test_the_result_keeps_what_the_stand_said_about_itself(self) -> None:
+        agent = FakeAgent()
+        agent.stand = {'prompts': {'version': '0.0.1'}, 'idpCache': {'total': 2, 'warmed': 1, 'failed': ['tariff']}}
+        result = await self.play(agent)
+        self.assertEqual(result['stand'], agent.stand)
 
     async def test_agent_failure_leaves_the_step_unmeasured(self) -> None:
         result = await self.play(FakeAgent(failing=('через QR',)))
@@ -246,7 +254,7 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
             await self.play(FakeAgent(trace=None))
 
     async def test_a_later_step_without_trace_is_unmeasured_and_the_replay_goes_on(self) -> None:
-        result = await self.play(FakeAgent(traced=1))
+        result = await self.play(FakeAgent(traced_turns=1))
         steps = result['dialogues'][0]['steps']
         self.assertEqual(
             [(step['status'], step.get('error')) for step in steps],
@@ -255,6 +263,6 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_remote_agent_is_refused(self) -> None:
         agent = FakeAgent()
-        agent.mocked = False
-        with self.assertRaisesRegex(RuntimeError, 'локальн'):
+        agent.traced = False
+        with self.assertRaisesRegex(RuntimeError, 'трейс'):
             await self.play(agent)

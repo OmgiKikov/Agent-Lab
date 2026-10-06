@@ -288,6 +288,7 @@ def state() -> dict:
         ],
         'replay': replay.summary(),
         'targets': [agents.public(key, config) for key, config in agents.configs().items()],
+        'replayTargets': agents.replay_targets(),
         'personas': personas.public(),
     }
 
@@ -693,7 +694,7 @@ async def start_run(payload: RunCommand) -> dict:
 
 @app.post('/api/replay')
 async def start_replay(payload: ReplayCommand) -> dict:
-    if payload.target not in agents.configs():
+    if payload.target not in {*agents.configs(), agents.REPLAY_SERVICE}:
         raise HTTPException(400, UNKNOWN_WAY)
     return start('replay', lambda progress: replay.run(payload.target, payload.count, progress))
 
