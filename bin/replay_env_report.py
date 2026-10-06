@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 LAB = Path(__file__).resolve().parents[1]
-AGENT_BRANCH = 'feat/agent-lab-trace'
+AGENT_BRANCH = 'feat/replay-service'
 LAB_BRANCH = 'feat/voice360-replay-traces'
 SECRET = re.compile(r'PASS|SECRET|TOKEN|LOGIN|CREDENTIAL|API_KEY|(?<!_)KEY$|_KEY$')
 PATHLIKE = re.compile(r'(FILEPATH|CERT_PATH)$')
@@ -178,7 +178,14 @@ def virtualenv(venv: Path, packages: tuple[str, ...]) -> list[str]:
 
 
 def trace_harness(agent: Path) -> list[str]:
-    files = ['local/run-app.sh', 'local/agent_lab_app.py', 'local/agent_lab_trace.py', 'local/stubs/aef_tracing']
+    files = [
+        'local/run-app.sh',
+        'local/agent_lab_app.py',
+        'replay/recorder.py',
+        'replay/app.py',
+        'replay/run.sh',
+        'local/stubs/aef_tracing',
+    ]
     lines = [f'{name}: {"есть" if (agent / name).exists() else "НЕТ"}' for name in files]
     app = agent / 'local' / 'agent_lab_app.py'
     if app.exists():
@@ -233,7 +240,7 @@ def lab_setup() -> list[str]:
     url = certs / 'url.txt'
     if url.exists():
         lines.append(f'шлюз моделей: {mask_url(url.read_text(encoding="utf-8").strip())}')
-    for key in ('LAB_MODEL_URL', 'LAB_MODEL', 'LAB_SECOND_MODEL', 'LAB_SECOND_URL', 'LAB_DATA', 'LAB_PORT'):
+    for key in ('LAB_MODEL_URL', 'LAB_MODEL', 'LAB_SECOND_MODEL', 'LAB_SECOND_URL', 'LAB_DATA', 'LAB_PORT', 'LAB_REPLAY_URL'):
         if key in os.environ:
             lines.append(f'{key}={shown(key, os.environ[key])}')
     agents = LAB / 'data' / 'agents'
