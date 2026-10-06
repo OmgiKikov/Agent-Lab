@@ -58,7 +58,7 @@ export function StageResult({
             <span aria-hidden>{shownChecked}</span>
           </p>
           <p className={cn("text-fg-2", size === "hero" ? "mt-3 text-lead" : "mt-2 text-read")}>
-            {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
+            {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} с ошибкой
             агента
             <span className="text-fg-3">
               {"\u00a0·\u00a0"}

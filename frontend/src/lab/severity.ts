@@ -108,7 +108,7 @@ export function whoseText(st: Standing, who: Who = "you"): string {
     return st.proposed
       ? `Серьёзных критериев нет. Так считает ${MODEL[who]}, ${checked}.`
       : `Серьёзных критериев нет. Так решили ${person}.`;
-  const head = `Серьёзные критерии — ${st.serious}\u00a0из\u00a0${st.criteria}.`;
+  const head = `Серьёзных критериев ${st.serious}\u00a0из\u00a0${st.criteria}.`;
   const them = st.serious === 1 ? "Его" : "Их";
   if (!st.yours) return `${head} ${them} отметила ${MODEL[who]}, ${checked}.`;
   return `${head} ${them} отметили ${person}.${st.proposed ? ` Всего ${checked}.` : ""}`;
@@ -160,7 +160,7 @@ export function seriousOf(data: Problems | null | undefined): Serious | null {
  * проверить в 16 разговорах из 53.», or «Этот критерий не удалось проверить ни в одном разговоре.» A share of all
  * conversations says little when the criteria seldom applied, and this says how seldom.
  */
-function whereText(s: Serious): string | null {
+export function whereText(s: Serious): string | null {
   if (s.checked >= s.measured) return null;
   const these = s.marked === 1 ? "Этот критерий" : "Эти критерии";
   if (!s.checked) return `${these} не удалось проверить ни в одном разговоре.`;

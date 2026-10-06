@@ -126,10 +126,32 @@ export function compareSentence(compare: Compare): { head: string; rest: string 
   if (compare.kind === "same-data")
     return {
       head: "Повторная оценка тех же разговоров",
-      rest: `: ${counts}.${both && !same ? " Разница — разброс оценки, а не агента." : ""}`,
+      rest: `: ${counts}.${both && !same ? " Разница показывает только разброс оценки." : ""}`,
     };
   const said = verdict && verdict !== "same" ? ` ${VERDICT[verdict]}` : "";
   return { head: "Прошлая проверка", rest: `, ${longDay(previous.finishedAt)}: ${counts}.${said}` };
+}
+
+/**
+ * The row «Прошлая проверка» under a check's number (checks/Compare, CompareLine): the counts side by side, and under
+ * them when the previous check was and what may be read into the difference; or «Не сравниваем» and the service's
+ * reason. Null when there is nothing to compare with.
+ */
+export function compareParts(compare: Compare): { value: string; note: string } | null {
+  if (compare.kind === "incompatible") return { value: "Не сравниваем", note: compare.reason };
+  const { overall, previous } = compare;
+  if ((compare.kind !== "new-data" && compare.kind !== "same-data") || !overall || !previous) return null;
+  const { before, now, verdict, direction } = overall;
+  const same = direction === "same";
+  const both = !!before.measured && !!now.measured;
+  const value = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
+  if (compare.kind === "same-data")
+    return {
+      value,
+      note: `Повторная оценка тех же разговоров.${both && !same ? " Разница показывает только разброс оценки." : ""}`,
+    };
+  const said = verdict && verdict !== "same" ? ` ${VERDICT[verdict]}` : "";
+  return { value, note: `Проверка ${longDay(previous.finishedAt)}.${said}` };
 }
 
 /**
@@ -149,7 +171,7 @@ export function seriousCompareText(compare: Compare, marked = 2): string | null 
   const both = !!before.measured && !!now.measured;
   const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
   if (compare.kind === "same-data")
-    return `С серьёзными ошибками: ${counts}.${both && !same ? " Разница — разброс оценки, а не агента." : ""}`;
+    return `С серьёзными ошибками: ${counts}.${both && !same ? " Разница показывает только разброс оценки." : ""}`;
   const criteria = marked === 1 ? "Серьёзный критерий" : "Серьёзные критерии";
   const said =
     verdict === "few" && checked && Math.min(checked.before, checked.now) < FEW
