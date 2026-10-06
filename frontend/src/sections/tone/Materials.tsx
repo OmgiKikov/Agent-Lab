@@ -1,18 +1,31 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Check, FileText, Upload } from "lucide-react";
+import { ArrowRight, FileText } from "lucide-react";
 import { api, upload } from "../../lab/api";
-import { count, plural } from "../../lab/format";
+import { plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useSource } from "../../lab/problems";
 import { rememberName, rememberText, savedName, savedText, TONE_ID, toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
-import { exportFileError, ReplaceExport, replacesResult } from "../../product/UploadLogs";
+import { ExportPicker } from "../../product/ExportPicker";
 import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
 import { clarificationsOf, clarifiedText, toneDeck } from "./Criteria";
 import { TakeRules } from "./TakeRules";
 
-export function Materials({ state, onNext }: { state: LabState; onNext: () => void }) {
+/**
+ * The first step: which export to take the conversations from, and the rules of communication the criteria come from.
+ */
+export function Materials({
+  state,
+  exportId,
+  onExport,
+  onNext,
+}: {
+  state: LabState;
+  exportId: string | null;
+  onExport: (id: string) => void;
+  onNext: () => void;
+}) {
   const { refresh } = useLabState();
   const hasSource = state.sources.some((s) => s.id === TONE_ID);
   const source = useSource(hasSource ? TONE_ID : null);
@@ -20,9 +33,8 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
   const [name, setName] = useState(savedName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<{ file?: File; next?: boolean } | null>(null);
+  const [pending, setPending] = useState(false);
   const edited = useRef(!!text);
-  const logInput = useRef<HTMLInputElement>(null);
   const policyInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (source.data && !edited.current) {
@@ -58,11 +70,6 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       setBusy(false);
     }
   };
-  const sendLogs = (file: File) =>
-    run(async () => {
-      await upload("/api/logs", file);
-      await refresh();
-    });
   const readPolicy = (file: File) =>
     run(async () => {
       if (file.size > 2_000_000) throw new Error("Файл больше 2 МБ. Вставьте правила текстом.");
@@ -86,51 +93,24 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
   const deck = toneDeck(state);
   const clarified = clarificationsOf(state.toneOfVoice);
   const next = () => {
-    if (!unchanged && (toneResult(state) || clarified || deck)) setPending({ next: true });
+    if (!unchanged && (toneResult(state) || clarified || deck)) setPending(true);
     else prepare();
   };
   const disabled = busy || state.job.running;
   return (
     <section aria-labelledby="materials-title">
       <h2 id="materials-title" className="text-title font-semibold text-fg">
-        Добавьте диалоги и правила общения
+        Выгрузка и правила общения
       </h2>
-      <p className="mt-2 text-read text-fg-3">Из правил соберём критерии и проверим по ним ответы агента.</p>
+      <p className="mt-2 text-read text-fg-3">
+        Из правил соберём критерии и проверим по ним ответы агента в разговорах выбранной выгрузки.
+      </p>
       <div className="mt-8 grid gap-8 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <div>
-          <h3 className="text-read font-semibold text-fg">Диалоги</h3>
-          <p className="mt-1 text-body text-fg-3">Выгрузка чата в Excel (.xlsx) или JSONL.</p>
-          <input
-            ref={logInput}
-            type="file"
-            accept=".xlsx,.jsonl"
-            className="hidden"
-            aria-label="Файл выгрузки"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (!f) return;
-              const wrong = exportFileError(f);
-              if (wrong) setError(wrong);
-              else if (replacesResult(state)) setPending({ file: f });
-              else sendLogs(f);
-            }}
-          />
-          <div className="mt-4 rounded-sheet bg-inset p-5">
-            {state.logs.total ? (
-              <>
-                <p className="flex items-center gap-2 text-read font-medium text-fg">
-                  <Check aria-hidden className="size-4 text-ok" />
-                  {count(state.logs.total, "разговор", "разговора", "разговоров")}
-                </p>
-                <p className="mt-1 break-words text-body text-fg-3">{state.logs.file ?? "Загруженная выгрузка"}</p>
-              </>
-            ) : (
-              <p className="text-read text-fg-2">Диалоги ещё не загружены</p>
-            )}
-            <Button className="mt-4" icon={Upload} disabled={disabled} onClick={() => logInput.current?.click()}>
-              {state.logs.total ? "Загрузить новую выгрузку" : "Загрузить диалоги"}
-            </Button>
+          <h3 className="text-read font-semibold text-fg">Выгрузка</h3>
+          <p className="mt-1 text-body text-fg-3">Из какой выгрузки взять разговоры.</p>
+          <div className="mt-4">
+            <ExportPicker value={exportId} onChange={onExport} disabled={disabled} />
           </div>
         </div>
         <div>
@@ -193,35 +173,26 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
           size="lg"
           icon={ArrowRight}
           loading={busy}
-          disabled={disabled || !state.logs.total || text.trim().length < 20 || (hasSource && !source.data)}
+          disabled={disabled || !exportId || text.trim().length < 20 || (hasSource && !source.data)}
           onClick={next}
         >
           {reusable ? "К критериям" : "Собрать критерии"}
         </Button>
-        {!state.logs.total && <p className="mt-2 text-body text-fg-3">Сначала загрузите диалоги.</p>}
+        {!exportId && <p className="mt-2 text-body text-fg-3">Сначала загрузите выгрузку.</p>}
       </div>
-      <ReplaceExport
-        open={!!pending?.file}
-        onCancel={() => setPending(null)}
-        onConfirm={() => {
-          const file = pending?.file;
-          setPending(null);
-          if (file) sendLogs(file);
-        }}
-      />
       <Modal
-        open={!!pending?.next}
-        onClose={() => setPending(null)}
+        open={pending}
+        onClose={() => setPending(false)}
         title="Собрать критерии по новым правилам?"
         footer={
           <>
-            <Button variant="ghost" onClick={() => setPending(null)}>
+            <Button variant="ghost" onClick={() => setPending(false)}>
               Отмена
             </Button>
             <Button
               variant="primary"
               onClick={() => {
-                setPending(null);
+                setPending(false);
                 prepare();
               }}
             >

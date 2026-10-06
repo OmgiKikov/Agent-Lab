@@ -6,6 +6,8 @@ import { useLabState } from "./lab/LabProvider";
 import { Shell } from "./app/Shell";
 import { ScreenError } from "./app/ScreenError";
 import { OverviewPage } from "./sections/overview/OverviewPage";
+import { ExportPage } from "./sections/exports/ExportPage";
+import { ExportsPage } from "./sections/exports/ExportsPage";
 import { SummaryPage } from "./sections/summary/SummaryPage";
 import { ResultPage } from "./sections/checks/ResultPage";
 import { ProblemPage } from "./sections/problems/ProblemPage";
@@ -157,6 +159,9 @@ const productRoutes = [
     children: [
       { index: true, element: <Navigate to="/overview" replace /> },
       { path: "overview", element: <OverviewPage /> },
+      // The exports of conversations the checks are made of, each upload one, and one export with its conversations.
+      { path: "exports", element: <ExportsPage /> },
+      { path: "exports/:exportId", element: <ExportPage /> },
       // One page of the agent for someone who does not use the product: numbers, answers, the ticked problems.
       { path: "summary", element: <SummaryPage /> },
       // Tone of voice: the customers' real conversations checked against a person's rules of communication.

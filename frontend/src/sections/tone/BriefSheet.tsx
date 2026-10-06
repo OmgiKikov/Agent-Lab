@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import { shareBase } from "../../app/agent";
 import { useCriteria, type Criterion } from "../../lab/criteria";
+import { exportOf } from "../../lab/exports";
 import { copyReport, download, reportFile, useReportAgent } from "../../lab/problemReport";
 import { useProblems } from "../../lab/problems";
 import { toneResult } from "../../lab/tone";
@@ -28,7 +29,8 @@ export function useToneBrief(state: LabState | null): string {
   const result = toneResult(state);
   if (!state || !result || !data || !agent.name || data.log?.finishedAt !== result.finishedAt) return "";
   const report = { ...data, rules: ownCriteria(result, list).map((c) => c.r) };
-  return toneBrief(report, result, shareBase(), { filename: state.logs.file ?? undefined, agent: agent.name });
+  const made = exportOf(state, result.export);
+  return toneBrief(report, result, shareBase(), { filename: made?.name ?? undefined, agent: agent.name });
 }
 
 /**

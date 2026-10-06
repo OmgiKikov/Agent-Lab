@@ -4,6 +4,7 @@ import { ArrowRight, FileText, History, RotateCcw } from "lucide-react";
 import { conversationsLink, historyLink, reviewLink, toneCheckLink } from "../../app/links";
 import { useResult } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
+import { exportOf } from "../../lab/exports";
 import { count } from "../../lab/format";
 import { useProblems } from "../../lab/problems";
 import { toneResult } from "../../lab/tone";
@@ -32,6 +33,7 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
   if (!result) return null;
   const { summary } = result;
   const measured = summary.measured;
+  const made = exportOf(state, result.export);
   const problems = queueOf(ownCriteria(result, list), "log");
   const selectedFinding = problems.find((c) => c.r.id === selected) ?? problems[0];
   const current = data?.log?.finishedAt === result.finishedAt;
@@ -52,7 +54,13 @@ export function Result({ state, onAgain }: { state: LabState; onAgain: () => voi
           <p className="mt-2 text-body text-fg-3">
             В выборке {result.sampled}
             {"\u00a0"}из{"\u00a0"}
-            {count(state.logs.total, "разговора", "разговоров", "разговоров")} ·{" "}
+            {count(
+              made?.line?.total ?? result.export?.total ?? result.sampled,
+              "разговора",
+              "разговоров",
+              "разговоров",
+            )}
+            {made ? ` выгрузки «${made.name}»${made.gone ? " (удалена)" : ""}` : ""} ·{" "}
             {count(result.topics.flatMap((t) => t.rules).length, "критерий", "критерия", "критериев")}
           </p>
         </div>

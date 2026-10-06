@@ -6,6 +6,7 @@ import {
   ClipboardCheck,
   LayoutDashboard,
   CornerDownLeft,
+  FileSpreadsheet,
   FileText,
   FlaskConical,
   Hammer,
@@ -24,7 +25,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { BY_CRITERIA, CHECK_NAME, CHECKS, checkOfOld, resultOf } from "../lab/checks";
+import { BY_CRITERIA, CHECK_NAME, CHECKS, resultOf } from "../lab/checks";
 import { duty } from "../lab/criteria";
 import { count, day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
@@ -98,6 +99,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         sub: "Одна страница об агенте для PDF или письма",
         icon: Presentation,
         run: go(SECTIONS.summary),
+      },
+      {
+        id: "s-exports",
+        group: "Разделы",
+        label: "Выгрузки",
+        sub: "Выгрузки чата, из которых проверки берут разговоры",
+        icon: FileSpreadsheet,
+        run: go(SECTIONS.exports),
       },
       ...CHECKS.flatMap((c): Entry[] => [
         { id: `s-${c}`, group: "Разделы", label: CHECK_NAME[c], sub: ABOUT[c], icon: ICON[c], run: go(stageRoot(c)) },
@@ -211,10 +220,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "a-upload",
         group: "Действия",
-        label: "Загрузить диалоги",
-        sub: "Выгрузка чата, общая для обеих проверок",
+        label: "Загрузить выгрузку",
+        sub: "Новая выгрузка чата рядом с прежними, проверенное не меняется",
         icon: Upload,
-        run: go(conversationsLink(checkOfOld(state))),
+        run: go(`${SECTIONS.exports}?upload=1`),
       },
       {
         id: "a-cards",

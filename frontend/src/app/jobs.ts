@@ -2,10 +2,14 @@ import { PROPOSING, proposalCheck } from "../lab/severity";
 import type { Job } from "../lab/types";
 import { criterionLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
 
-/** A task of the service: how it is called and the section where its result lives. */
-export const JOBS: Record<string, { label: string; to: string }> = {
+/**
+ * A task of the service: how it is called and the section where its result lives. `quiet`: the window that started it
+ * says how it went, so its end is not told again.
+ */
+export const JOBS: Record<string, { label: string; to: string; quiet?: boolean }> = {
   "tone-policy": { label: "Правила общения", to: toneCheckLink("materials") },
-  logs: { label: "Загрузка диалогов", to: toneCheckLink("materials") },
+  logs: { label: "Загрузка выгрузки", to: SECTIONS.exports, quiet: true },
+  exports: { label: "Удаление выгрузки", to: SECTIONS.exports, quiet: true },
   "tone-criteria": { label: "Критерии tone of voice", to: toneCheckLink("criteria") },
   "tone-check": { label: "Проверка tone of voice", to: toneCheckLink("result") },
   "tone-advice": { label: "Предложение по находке", to: toneCheckLink("result") },

@@ -3,6 +3,7 @@ import { useLabState } from "./LabProvider";
 import { useToast } from "../ui/toast";
 import { api } from "./api";
 import { JOB_OF } from "./checks";
+import { exportsStamp } from "./exports";
 import type { Check, LabRun, LabState, Turn } from "./types";
 
 /** The service's record of rules and problems (backend/lab/flows/checks.py, problems; spec, section 8). */
@@ -127,7 +128,7 @@ export function problemsStamp(state: LabState | null): string {
   const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}:${r.revision ?? ""}`).join(",");
   const sources = state.sources.map((s) => `${s.id}:${s.sha256 ?? ""}`).join(",");
   const results = `${state.checks.tone?.finishedAt ?? ""}|${state.checks.code?.finishedAt ?? ""}`;
-  return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}|${severityStamp(state)}|${state.reviewsStamp ?? ""}`;
+  return `${exportsStamp(state)}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}|${severityStamp(state)}|${state.reviewsStamp ?? ""}`;
 }
 
 /** Every example of the record with the check it belongs to (Example.check). */
@@ -264,7 +265,14 @@ export function useTurns(example?: Example): { turns?: Turn[]; loading: boolean;
   const { state } = useLabState();
   const check = example?.check;
   const log = useQuery({
-    queryKey: ["dialogue", example?.dialogueId, check, state?.logs.updatedAt],
+    // A conversation is read from the export of the check's result: another result, another export.
+    queryKey: [
+      "dialogue",
+      example?.dialogueId,
+      check,
+      check ? state?.checks[check]?.export?.id : null,
+      exportsStamp(state),
+    ],
     queryFn: () =>
       api<LogDialogue>(`/api/logs/${encodeURIComponent(example!.dialogueId!)}${check ? `?check=${check}` : ""}`),
     enabled: example?.source === "log",

@@ -4,11 +4,14 @@ import { cn } from "@/lib/utils";
 import { SECTIONS } from "../../app/links";
 import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
+import { defaultExport } from "../../lab/exports";
 import { count, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { previousOf } from "../../lab/compare";
 import { checkedIn } from "../../lab/problemReport";
 import { codeSources } from "../../lab/tone";
+import type { LabState } from "../../lab/types";
+import { ExportPicker } from "../../product/ExportPicker";
 import { Button, buttonClass } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
@@ -18,16 +21,32 @@ import { useComparison } from "./Compare";
 
 const SIZES = [100, 200, 300];
 
-/**
- * How many conversations of the export the accuracy check takes: 100, 200 or all up to 300; a stopped check's number,
- * which the same start continues, else the last check's, while it fits. The service takes 5 to 300
- * (backend/lab/api/checks.py, DiscoverCommand). `resumes`: the size chosen continues the stopped check.
- */
-export function useSampleSize() {
+/** The export the accuracy check starts on: the one asked for while it is here, else its result's, else the newest. */
+export function useAssessExport(asked?: string | null) {
   const { state } = useLabState();
-  const total = state?.logs.total ?? 0;
+  const [picked, setPicked] = useState<string | null>(null);
+  const here = (id?: string | null) => !!id && !!state?.exports.some((e) => e.id === id && e.total > 0);
+  const id = here(picked) ? picked : here(asked) ? asked! : defaultExport(state, "code");
+  const line = state?.exports.find((e) => e.id === id) ?? null;
+  return { exportId: id, line, setExport: setPicked };
+}
+
+/** A stopped check of Точность on this export; one stopped before exports were kept was of the newest. */
+const stoppedOn = (state: LabState | null, exportId: string | null) => {
+  const input = state?.paused?.discover?.input as { count?: number; replan?: boolean; exportId?: string } | undefined;
+  return input && (input.exportId ?? state?.exports[0]?.id) === exportId ? input : undefined;
+};
+
+/**
+ * How many conversations of the export the accuracy check takes: 100, 200 or all up to 300; a stopped check's number
+ * on the same export, which the same start continues, else the last check's, while it fits. The service takes 5 to
+ * 300 (backend/lab/api/checks.py, DiscoverCommand). `resumes`: the size chosen continues the stopped check.
+ */
+export function useSampleSize(exportId: string | null) {
+  const { state } = useLabState();
+  const total = state?.exports.find((e) => e.id === exportId)?.total ?? 0;
   const sizes = [...new Set([...SIZES.filter((n) => n < total), Math.min(total, 300)])].filter((n) => n > 0);
-  const paused = state?.paused?.discover?.input as { count?: number; replan?: boolean } | undefined;
+  const paused = stoppedOn(state, exportId);
   const stopped = paused?.count;
   const previous = stopped ?? state?.checks.code?.sampled;
   const [picked, setPicked] = useState<number | null>(null);
@@ -83,9 +102,9 @@ export function useAssess(onStarted?: () => void) {
   const { refresh } = useLabState();
   const toast = useToast();
   const [starting, setStarting] = useState(false);
-  const start = (size: number, replan: boolean) => {
+  const start = (size: number, replan: boolean, exportId: string | null) => {
     setStarting(true);
-    api("/api/discover", { count: Math.max(5, size), replan, propose: true })
+    api("/api/discover", { count: Math.max(5, size), replan, propose: true, exportId })
       .then(() => {
         refresh();
         onStarted?.();
@@ -104,15 +123,26 @@ export function useAssess(onStarted?: () => void) {
  * no criteria to keep — no result, and no previous check whose criteria a new export kept — the check extracts them:
  * the sheet says so, not «те же, что в прошлый раз».
  */
-export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function AssessSheet({
+  open,
+  onClose,
+  exportId: asked,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** The export asked for (?export= of the address): from an export's page. */
+  exportId?: string | null;
+}) {
   const { state } = useLabState();
   const { data } = useCriteria("code");
-  const previous = previousOf(useComparison("code"), state?.logs.updatedAt);
-  const fresh = !!state && !state.checks.code && !previous?.newExport;
-  const { sizes, size, setSize, resumes } = useSampleSize();
+  const previous = previousOf(useComparison("code"));
+  // Without a result, criteria are kept only when the export of the last check was removed (checks.CODE_CRITERIA).
+  const fresh = !!state && !state.checks.code && !previous;
+  const { exportId, line, setExport } = useAssessExport(asked);
+  const { sizes, size, setSize, resumes } = useSampleSize(exportId);
   const { start, starting } = useAssess(onClose);
   const criteria = data ? checkedIn(data, "log").length : 0;
-  const total = state?.logs.total ?? 0;
+  const total = line?.total ?? 0;
   const deck = state?.cards?.check === "code" && !!state.cards.cards.length;
   // The service checks only with the code read (backend/lab/flows/accuracy.py): without it, every start would fail.
   const code = codeSources(state).length > 0;
@@ -121,7 +151,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
     : !code
       ? "Сначала прочитайте код агента"
       : !total
-        ? "Сначала загрузите разговоры"
+        ? "Сначала выберите выгрузку"
         : undefined;
   return (
     <Sheet
@@ -133,7 +163,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
       <div className="space-y-6 px-5 py-5">
         {code ? (
           <p className="text-read text-fg-2">
-            В выгрузке {count(total, "разговор", "разговора", "разговоров")}.{" "}
+            {line ? `В выгрузке «${line.name}» ${count(total, "разговор", "разговора", "разговоров")}. ` : ""}
             {fresh
               ? "Модель извлечёт критерии из кода агента и проверит по ним разговоры."
               : criteria
@@ -150,6 +180,14 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
             </Link>
           </div>
         )}
+        {code && (
+          <div>
+            <Label>Выгрузка</Label>
+            <div className="mt-2">
+              <ExportPicker value={exportId} onChange={setExport} disabled={starting} />
+            </div>
+          </div>
+        )}
         <SizePicker sizes={sizes} size={size} onSize={setSize} />
         <Resumes when={resumes} />
         <div className="flex flex-wrap items-center gap-3">
@@ -158,7 +196,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
             loading={starting}
             disabled={!!why || !size}
             title={why}
-            onClick={() => start(size, false)}
+            onClick={() => start(size, false, exportId)}
           >
             Оценить {size} {plural(size, "разговор", "разговора", "разговоров")}
           </Button>
@@ -174,7 +212,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
             className="mt-3"
             variant="ghost"
             disabled={!!why || !size || starting}
-            onClick={() => start(size, true)}
+            onClick={() => start(size, true, exportId)}
           >
             Извлечь критерии заново
           </Button>

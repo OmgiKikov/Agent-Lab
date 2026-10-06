@@ -2,7 +2,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Menu } from "../ui/Menu";
-import { isActive, SETUP, WORK, type NavItem } from "./Sidebar";
+import { isActive, MORE_WORK, SETUP, WORK, type NavItem } from "./Sidebar";
 
 function MobileItem({ item }: { item: NavItem }) {
   const { pathname } = useLocation();
@@ -25,11 +25,14 @@ function MobileItem({ item }: { item: NavItem }) {
   );
 }
 
-/** A phone keeps the work in sight: «Обзор · Tone · Точность · Симуляции»; the agent, settings and all agents under «Ещё». */
+/**
+ * A phone keeps the work in sight: «Обзор · Tone · Точность · Симуляции»; the exports, the agent, settings and all
+ * agents under «Ещё».
+ */
 export function BottomNav() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const more = SETUP.some((item) => isActive(item, pathname));
+  const more = [...MORE_WORK, ...SETUP].some((item) => isActive(item, pathname));
   return (
     <nav
       aria-label="Разделы"
@@ -53,7 +56,7 @@ export function BottomNav() {
           </span>
         }
         items={[
-          ...SETUP.map((i) => ({
+          ...[...MORE_WORK, ...SETUP].map((i) => ({
             key: i.to,
             label: i.label,
             on: isActive(i, pathname),

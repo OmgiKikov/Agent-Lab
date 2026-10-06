@@ -34,12 +34,9 @@ export async function api<T>(path: string, body?: unknown, agent: string | null 
   return read<T>(await fetch(API + path, init));
 }
 
-export async function upload<T>(path: string, file: File): Promise<T> {
-  return read<T>(
-    await fetch(`${API}${path}?name=${encodeURIComponent(file.name)}`, {
-      method: "POST",
-      body: file,
-      headers: AGENT_HEADER,
-    }),
-  );
+/** A file sent as the body, its name in the address with what else the address carries (`extra`, empty ones left out). */
+export async function upload<T>(path: string, file: File, extra: Record<string, string> = {}): Promise<T> {
+  const query = new URLSearchParams({ name: file.name });
+  for (const [key, value] of Object.entries(extra)) if (value) query.set(key, value);
+  return read<T>(await fetch(`${API}${path}?${query}`, { method: "POST", body: file, headers: AGENT_HEADER }));
 }

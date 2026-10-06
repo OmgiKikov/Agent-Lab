@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { resultOf } from "./checks";
+import { exportsStamp } from "./exports";
 import { longDay, plural } from "./format";
 import { FEW, shareText, shiftText, type Counts, type Summary } from "./history";
 import { useLabState } from "./LabProvider";
@@ -15,7 +16,13 @@ export type Verdict = "few" | "beyond-chance" | "within-chance" | "same";
 export type Direction = "fewer" | "more" | "same";
 
 /** A saved check in a line: which it is, when, of which export, its counts. */
-export type CheckLine = { id: string; finishedAt: string; file: string | null; summary: Summary };
+export type CheckLine = {
+  id: string;
+  finishedAt: string;
+  file: string | null;
+  export?: { id: string; name: string } | null;
+  summary: Summary;
+};
 
 /** One criterion of both checks, by the key of the problems (problems.rule_key); a side that lacked it is null. */
 export type CompareRow = {
@@ -57,14 +64,14 @@ export type Compare = {
 
 /**
  * The comparison of a check's current result with its previous saved check. It reads saved records only, and is asked
- * again when that check's result, the export or its serious criteria change.
+ * again when that check's result, the exports or its serious criteria change.
  */
 export function useCompare(check: Check | null) {
   const { state } = useLabState();
   const result = check ? resultOf(state, check) : null;
   const marks = check ? (state?.severity?.[check] ?? []).join(",") : "";
   return useQuery({
-    queryKey: ["compare", check, result?.checkId ?? result?.finishedAt ?? null, state?.logs.updatedAt ?? null, marks],
+    queryKey: ["compare", check, result?.checkId ?? result?.finishedAt ?? null, exportsStamp(state), marks],
     queryFn: () => api<Compare>(`/api/compare?check=${check}`),
     enabled: !!state && !!check,
     staleTime: Infinity,
@@ -82,17 +89,12 @@ export function comparisonOf(compare: Compare | undefined, result: ResultHead | 
 }
 
 /**
- * The last saved check of a check without a current result (`none`), and whether the export was loaded after it: then
- * the new export is not checked yet. Otherwise the result went with the check's own criteria (new rules of
- * communication, changed code of the agent) on the same export.
+ * The last saved check of a check without a current result (`none`): the result went with its export (removed) or
+ * with the check's own criteria (new rules of communication, changed code of the agent). An upload never takes it.
  */
-export function previousOf(
-  compare: Compare | null,
-  uploadedAt?: string | null,
-): { line: CheckLine; newExport: boolean } | null {
+export function previousOf(compare: Compare | null): { line: CheckLine } | null {
   if (compare?.kind !== "none" || !compare.previous) return null;
-  const newExport = !!uploadedAt && Date.parse(uploadedAt) > Date.parse(compare.previous.finishedAt);
-  return { line: compare.previous, newExport };
+  return { line: compare.previous };
 }
 
 /** What a person may read into a difference, as the result says it; the history says the same (comparisonText). */

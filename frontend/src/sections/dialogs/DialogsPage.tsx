@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import { side, type Stage } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { resultOf, useResult } from "../../lab/checks";
+import { exportsTotal } from "../../lab/exports";
 import { useCriteria } from "../../lab/criteria";
 import { logKey, logRows, simKey, simRows } from "../../lab/dialogs";
 import { count, longDay, plural } from "../../lab/format";
@@ -14,7 +15,6 @@ import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
-import { UploadButton } from "../../product/UploadLogs";
 import { CheckHeader } from "../checks/CheckHeader";
 import { NoSuchRun, SimHeader, useSimRuns } from "../simulations/stage";
 import { Dialog } from "./Dialog";
@@ -106,12 +106,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   };
   useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
 
-  const header =
-    stage === "sim" ? (
-      <SimHeader runId={runId} actions={false} />
-    ) : (
-      <CheckHeader check={stage} actions={<UploadButton variant="outline" check={stage} />} />
-    );
+  const header = stage === "sim" ? <SimHeader runId={runId} actions={false} /> : <CheckHeader check={stage} />;
   if (offline && !state)
     return (
       <div className="flex h-full flex-col">
@@ -175,8 +170,8 @@ export function DialogsPage({ stage }: { stage: Stage }) {
       ? simRun
         ? "В этом прогоне нет разговоров."
         : "Прогонов ещё не было. Здесь будут разговоры синтетических клиентов с агентом."
-      : !state.logs.total
-        ? "Здесь будут разговоры выгрузки. Сначала загрузите диалоги."
+      : !exportsTotal(state)
+        ? "Здесь будут разговоры выгрузки. Сначала загрузите её в «Выгрузках»."
         : "Разговоры появятся после проверки.";
   const loading = stage === "sim" ? run : shown;
   const pending = waitRun ? (

@@ -7,7 +7,6 @@ import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { toneResult } from "../../lab/tone";
 import type { LabState, ToneDraft } from "../../lab/types";
-import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Modal } from "../../ui/Modal";
@@ -29,24 +28,39 @@ export const clarifiedText = (n: number, of = "У критериев") =>
 export const toneDeck = (state: LabState) => state.cards?.check === "tone" && !!state.cards.cards.length;
 
 /**
- * A check of these criteria that was stopped and can go on (the service keeps what it judged), also when other tasks
- * ran since: its criteria, how many conversations, and how many it judged, to offer the same start again.
+ * A check of these criteria on this export that was stopped and can go on (the service keeps what it judged), also
+ * when other tasks ran since: its criteria, how many conversations, and how many it judged, to offer the same start
+ * again. A check stopped before exports were kept names none: it was of the export that is the newest now.
  */
-function pausedCheck(state: LabState) {
+function pausedCheck(state: LabState, exportId: string | null) {
   const job = state.paused?.["tone-check"];
-  const input = job?.input;
+  const input = job?.input as { ruleIds?: string[]; count?: number; revision?: string; exportId?: string } | undefined;
   if (!job || !input?.ruleIds || !input.count || input.revision !== state.toneOfVoice?.revision) return null;
+  if ((input.exportId ?? state.exports[0]?.id) !== exportId) return null;
   return { ruleIds: input.ruleIds, count: input.count, kept: job.kept ?? 0 };
 }
 
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((id) => b.includes(id));
 
-export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack: () => void; onStarted: () => void }) {
+export function Criteria({
+  state,
+  exportId,
+  onBack,
+  onStarted,
+}: {
+  state: LabState;
+  exportId: string | null;
+  onBack: () => void;
+  onStarted: () => void;
+}) {
   const { refresh } = useLabState();
   const toast = useToast();
   const draft = state.toneOfVoice;
   const result = toneResult(state);
-  const paused = pausedCheck(state);
+  const paused = pausedCheck(state, exportId);
+  // The conversations of the export chosen on the first step: what a check can take.
+  const chosen = state.exports.find((e) => e.id === exportId) ?? null;
+  const available = chosen?.total ?? 0;
   const [choice, setChoice] = useState<{ revision: string; ids: string[] } | null>(null);
   // While the first criteria are still being collected there is neither a draft nor a choice: nothing is chosen yet.
   // A stopped check that can go on is offered as it was: its criteria and its size.
@@ -70,10 +84,10 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
   const running = state.job.running;
   const generating = running && state.job.kind === "tone-criteria";
   const serviceError = state.job.kind === "tone-criteria" ? state.job.error : null;
-  const total = Math.min(size, state.logs.total);
+  const total = Math.min(size, available);
   // The same start as the stopped check: it goes on from where it stopped, judging only the rest.
   const resumes = !!paused && total === paused.count && sameSet(ids, paused.ruleIds);
-  const sizes = [...new Set([100, 200, 300].map((n) => Math.min(n, state.logs.total)))];
+  const sizes = [...new Set([100, 200, 300].map((n) => Math.min(n, available)))];
   const toggle = (id: string) =>
     draft &&
     setChoice({ revision: draft.revision, ids: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] });
@@ -87,7 +101,13 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
     setError(null);
     try {
       // After the check the automatic check proposes which errors are serious (lab/severity).
-      await api("/api/tone-of-voice/check", { ruleIds: ids, count: total, revision: draft?.revision, propose: true });
+      await api("/api/tone-of-voice/check", {
+        ruleIds: ids,
+        count: total,
+        revision: draft?.revision,
+        propose: true,
+        exportId,
+      });
       await refresh();
       onStarted();
     } catch (e) {
@@ -121,13 +141,13 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
         </div>
       ) : draft ? (
         <>
-          {!state.logs.total && (
+          {!available && (
             // Criteria taken from another agent can be here before this agent's conversations are.
             <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-sheet bg-inset p-5">
               <p className="min-w-0 flex-1 basis-64 text-read text-fg-2">
-                Чтобы запустить проверку, загрузите диалоги этого агента.
+                Чтобы запустить проверку, выберите или загрузите выгрузку на первом шаге.
               </p>
-              <UploadButton variant="outline" />
+              <Button onClick={onBack}>К выгрузке</Button>
             </div>
           )}
           <p className="mt-5 text-body text-fg-3">
@@ -176,7 +196,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
               </li>
             ))}
           </ul>
-          {state.logs.total > 100 && (
+          {available > 100 && (
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <label htmlFor="tone-count" className="text-read font-medium text-fg">
                 Сколько разговоров проверить
@@ -190,13 +210,13 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
               >
                 {sizes.map((n) => (
                   <option key={n} value={n}>
-                    {state.logs.total === n ? `Все, ${n}` : n}
+                    {available === n ? `Все, ${n}` : n}
                   </option>
                 ))}
               </select>
             </div>
           )}
-          {!!state.logs.total &&
+          {!!available &&
             (resumes ? (
               <p className="mt-2 text-body text-fg-3">
                 Проверка остановлена, проверенное сохранено: уже {paused?.kept ?? 0}
@@ -207,7 +227,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
               <p className="mt-2 text-body text-fg-3">
                 Проверим {total}
                 {"\u00a0"}из{"\u00a0"}
-                {count(state.logs.total, "разговора", "разговоров", "разговоров")} по{" "}
+                {count(available, "разговора", "разговоров", "разговоров")} выгрузки «{chosen?.name}» по{" "}
                 {count(ids.length, "критерию", "критериям", "критериям")}. Подключать агента не нужно.
               </p>
             ))}
@@ -225,7 +245,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
       )}
       <div className="sticky bottom-0 z-10 -mx-4 mt-7 flex flex-wrap items-center gap-3 border-t border-line bg-canvas/95 px-4 py-4 backdrop-blur">
         <Button icon={ArrowLeft} onClick={onBack} disabled={running}>
-          К материалам
+          К выгрузке и правилам
         </Button>
         {draft && !generating && (
           <Button
@@ -244,8 +264,8 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
           <Button
             variant="ghost"
             icon={RotateCcw}
-            disabled={running || !state.logs.total}
-            title={state.logs.total ? undefined : "Сначала загрузите диалоги"}
+            disabled={running || !available}
+            title={available ? undefined : "Сначала выберите выгрузку"}
             onClick={draft ? () => setAsking(true) : regenerate}
           >
             {draft ? "Собрать заново" : "Собрать критерии"}

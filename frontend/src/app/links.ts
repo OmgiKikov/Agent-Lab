@@ -12,6 +12,8 @@ export type Stage = Check | "sim";
 
 export const SECTIONS = {
   overview: "/overview",
+  /** The exports of conversations the checks are made of: each upload is one. */
+  exports: "/exports",
   /** «Сводка для руководителя»: a page of the agent, from «Обзор» and ⌘K, not a section of the navigation. */
   summary: "/summary",
   tone: "/tone",
@@ -66,8 +68,17 @@ export const criterionLink = (
   extra: Record<string, string | null | undefined> = {},
 ) => `${ROOT[check]}/criteria${query({ c: ruleId, ...extra })}`;
 
-/** The tone-of-voice check step by step; without a step it opens where the work stands. */
-export const toneCheckLink = (step?: CheckStep) => `${SECTIONS.tone}/check${query({ step })}`;
+/** The tone-of-voice check step by step; without a step it opens where the work stands; on an export when one is named. */
+export const toneCheckLink = (step?: CheckStep, exportId?: string | null) =>
+  `${SECTIONS.tone}/check${query({ step, export: exportId })}`;
+
+/** The start of a check of Точность (its window), on an export when one is named. */
+export const assessLink = (exportId?: string | null) =>
+  `${SECTIONS.accuracy}${query({ assess: "1", export: exportId })}`;
+
+/** An export with its conversations, one of them open when given (`d`). */
+export const exportLink = (id: string, dialogueId?: string | null) =>
+  `${SECTIONS.exports}/${enc(id)}${query({ d: dialogueId })}`;
 
 /** The saved checks of a check, one of them open when given. */
 export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${query({ id })}`;

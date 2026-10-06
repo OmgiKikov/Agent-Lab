@@ -73,7 +73,7 @@ export function JobNotices() {
           : `${label}: остановлено`,
       );
     else if (job.error) toast.error(`${label}: не удалось. ${job.error}`);
-    else if (!info || here.current !== info.to.split("?")[0])
+    else if (!info?.quiet && (!info || here.current !== info.to.split("?")[0]))
       toast.notify(
         `${label}: готово`,
         info

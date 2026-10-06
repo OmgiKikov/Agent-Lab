@@ -3,13 +3,16 @@ import { Link } from "react-router-dom";
 import { ArrowRight, Check as CheckMark } from "lucide-react";
 import { Mark } from "../../app/Mark";
 import { SECTIONS, toneCheckLink, type Check } from "../../app/links";
+import { exportsTotal } from "../../lab/exports";
 import { count, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { codeSources, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
-import { UploadButton } from "../../product/UploadLogs";
+import { ExportPicker } from "../../product/ExportPicker";
 import { Button, buttonClass } from "../../ui/Button";
-import { Resumes, SizePicker, useAssess, useSampleSize } from "./AssessSheet";
+import { Label } from "../../ui/Label";
+import { UploadExport } from "../exports/UploadExport";
+import { Resumes, SizePicker, useAssess, useAssessExport, useSampleSize } from "./AssessSheet";
 import { previousOf } from "../../lab/compare";
 import { PreviousCheck, useComparison } from "./Compare";
 
@@ -17,11 +20,11 @@ export type Need = { label: string; value: string | null; later: string };
 
 /** What a check needs before it can be done: what is already here, or where it is added. */
 export function needsOf(check: Check, state: LabState | null): Need[] {
-  const total = state?.logs.total ?? 0;
+  const exports = (state?.exports ?? []).filter((e) => e.total > 0).length;
   const dialogs = {
-    label: "Разговоры",
-    value: total ? count(total, "разговор", "разговора", "разговоров") : null,
-    later: check === "tone" ? "загрузите на первом шаге" : "загрузите выгрузку чата",
+    label: "Выгрузка",
+    value: exportsTotal(state) ? count(exports, "выгрузка", "выгрузки", "выгрузок") : null,
+    later: "загрузите в «Выгрузках»",
   };
   if (check === "tone") {
     const policy = state?.sources.find((s) => s.id === TONE_ID);
@@ -92,15 +95,14 @@ function Empty({
 
 const primary = buttonClass({ variant: "primary", size: "lg" });
 
-/** The last saved check of a check without a current result, and whether a new export came after it. */
+/** The last saved check of a check without a current result. */
 function usePrevious(check: Check) {
-  const { state } = useLabState();
-  return previousOf(useComparison(check), state?.logs.updatedAt);
+  return previousOf(useComparison(check));
 }
 
 /**
- * Tone of voice before its result: the check under way, a new export not checked yet beside the previous check, the
- * check begun, or how to begin it.
+ * Tone of voice before its result: the check under way, the check begun, or how to begin it; the previous check when
+ * there was one (its result went with its export or with the criteria).
  */
 export function ToneStart() {
   const { state } = useLabState();
@@ -120,22 +122,6 @@ export function ToneStart() {
         Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть, итог сохранится.
       </Empty>
     );
-  if (previous?.newExport)
-    return (
-      <Empty
-        title="Новая выгрузка ещё не проверена"
-        needs={needsOf("tone", state)}
-        action={
-          <Link to={toneCheckLink()} className={primary}>
-            Проверить новую выгрузку
-            <ArrowRight aria-hidden className="size-4" />
-          </Link>
-        }
-      >
-        <PreviousCheck check="tone" line={previous.line} />
-        <p className="mt-2">Чтобы сравнить итог с прошлой проверкой, проверьте новые разговоры по тем же критериям.</p>
-      </Empty>
-    );
   const begun = !!state?.toneOfVoice || (!!job?.running && job.kind === "tone-criteria");
   return (
     <Empty
@@ -148,8 +134,8 @@ export function ToneStart() {
         </Link>
       }
     >
-      Загрузите выгрузку чата и правила общения. Из правил соберём критерии и проверим по ним настоящие разговоры.
-      Подключать агента не нужно.
+      Выберите выгрузку чата и добавьте правила общения. Из правил соберём критерии и проверим по ним настоящие
+      разговоры. Подключать агента не нужно.
       {previous && <PreviousCheck check="tone" line={previous.line} className="mt-3" />}
     </Empty>
   );
@@ -157,13 +143,14 @@ export function ToneStart() {
 
 /**
  * Accuracy before its result: the criteria come word for word from the agent's prompts and tools, so without its code
- * there is nothing to check by («Нужен код агента»); with the code, one button checks the conversations — after a new
- * export, beside the previous check.
+ * there is nothing to check by («Нужен код агента»); with the code, the export to check and one button — beside the
+ * previous check when there was one.
  */
 export function AccuracyStart() {
   const { state } = useLabState();
   const previous = usePrevious("code");
-  const { sizes, size, setSize, resumes } = useSampleSize();
+  const { exportId, line, setExport } = useAssessExport();
+  const { sizes, size, setSize, resumes } = useSampleSize(exportId);
   const { start, starting } = useAssess();
   const job = state?.job;
   if (job?.running && job.kind === "discover")
@@ -190,50 +177,43 @@ export function AccuracyStart() {
         прочитайте код.
       </Empty>
     );
-  const total = state?.logs.total ?? 0;
-  if (!total)
+  if (!exportsTotal(state))
     return (
-      <Empty title="Нужна выгрузка чата" needs={needsOf("code", state)} action={<UploadButton check="code" />}>
+      <Empty title="Нужна выгрузка чата" needs={needsOf("code", state)} action={<UploadExport />}>
         Код агента прочитан. Точность проверяют на настоящих разговорах клиентов из выгрузки.
       </Empty>
     );
   const busy = !!job?.running;
   return (
     <Empty
-      title={previous?.newExport ? "Новая выгрузка ещё не проверена" : "Здесь появится итог точности"}
+      title="Здесь появится итог точности"
       needs={needsOf("code", state)}
       action={
         <div className="space-y-6">
+          <div>
+            <Label>Выгрузка</Label>
+            <div className="mt-2">
+              <ExportPicker value={exportId} onChange={setExport} disabled={starting} />
+            </div>
+          </div>
           <SizePicker sizes={sizes} size={size} onSize={setSize} />
           <Resumes when={resumes} />
           <Button
             variant="primary"
             size="lg"
             loading={starting}
-            disabled={busy || !size}
+            disabled={busy || !size || !line}
             title={busy ? "Сейчас идёт другая задача" : undefined}
-            onClick={() => start(size, false)}
+            onClick={() => start(size, false, exportId)}
           >
             Оценить {size} {plural(size, "разговор", "разговора", "разговоров")}
           </Button>
         </div>
       }
     >
-      {previous?.newExport ? (
-        <>
-          <PreviousCheck check="code" line={previous.line} />
-          <p className="mt-2">
-            Модель проверит новые разговоры по критериям из кода агента. Если критерии те же, итог сравнится с прошлой
-            проверкой. Сам агент не запускается, итог tone of voice не изменится.
-          </p>
-        </>
-      ) : (
-        <>
-          Модель извлечёт критерии из кода агента и проверит по ним разговоры. Сам агент не запускается, итог tone of
-          voice не изменится.
-          {previous && <PreviousCheck check="code" line={previous.line} className="mt-3" />}
-        </>
-      )}
+      Модель проверит разговоры выгрузки по критериям из кода агента. Сам агент не запускается, итог tone of voice не
+      изменится.
+      {previous && <PreviousCheck check="code" line={previous.line} className="mt-3" />}
     </Empty>
   );
 }

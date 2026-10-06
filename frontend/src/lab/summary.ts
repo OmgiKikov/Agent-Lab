@@ -16,8 +16,8 @@ import type { Check } from "./types";
  */
 export type Summary = {
   agent: string;
-  /** The export the checks read, and the days they were made, as a person says them. */
-  file: string | null;
+  /** The exports the checks read (one when both read the same), and the days they were made, as a person says them. */
+  exports: string[];
   days: string[];
   checks: SummaryCheck[];
   /** When the summary was put together: people's answers may be added after it. */
@@ -172,11 +172,20 @@ const wholeReply = (reply: string, quote: string) => {
  * paragraphs and a quote: the only Markdown the reports write. The words of the customer, the agent and the criteria
  * stay words (inlineText, quoteText): never a link, a heading or a quote of their own.
  */
+/** «Выгрузка «Сентябрь»», or «Выгрузки «Сентябрь» и «Октябрь»» when the checks read two; null for none. */
+export function exportsText(names: string[], quote: (name: string) => string = (name) => name): string | null {
+  if (!names.length) return null;
+  const quoted = names.map((name) => `«${quote(name)}»`);
+  return names.length === 1
+    ? `Выгрузка ${quoted[0]}`
+    : `Выгрузки ${quoted.slice(0, -1).join(", ")} и ${quoted[quoted.length - 1]}`;
+}
+
 export function summaryMarkdown(s: Summary): string {
   const lines = [
     `# Сводка для руководителя: ${inlineText(s.agent)}`,
     "",
-    stop([s.file ? `Выгрузка «${inlineText(s.file)}»` : null, daysText(s.days)].filter(Boolean).join(" · ")),
+    stop([exportsText(s.exports, inlineText), daysText(s.days)].filter(Boolean).join(" · ")),
   ];
   for (const c of s.checks) {
     lines.push(

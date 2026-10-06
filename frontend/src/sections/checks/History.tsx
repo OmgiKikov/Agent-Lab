@@ -16,6 +16,7 @@ import {
   type SavedCheck,
   type ToneSnapshot,
 } from "../../lab/history";
+import { exportOf, exportWords } from "../../lab/exports";
 import { useLabState } from "../../lab/LabProvider";
 import type { LogDialogue } from "../../lab/problems";
 import type { Discover, Rule, Status } from "../../lab/types";
@@ -36,9 +37,16 @@ const selectClass =
 
 /** What each history keeps, said above its list. */
 const KEEPS: Record<Check, string> = {
-  tone: "Каждая завершённая проверка сохраняется со своими разговорами, критериями и правилами общения. Ваши ответы остаются и после новой выгрузки.",
-  code: "Каждая завершённая проверка сохраняется со своими разговорами, критериями из кода агента и итогом. Новая выгрузка её не стирает.",
+  tone: "Каждая завершённая проверка сохраняется со своими разговорами, критериями и правилами общения. Ваши ответы остаются с ней, даже если выгрузку потом удалят.",
+  code: "Каждая завершённая проверка сохраняется со своими разговорами, критериями из кода агента и итогом. Удаление выгрузки её не стирает.",
 };
+
+/** The export a saved check was made of: by its name now, or then if it was removed; the file of an older check. */
+function useMadeOf(check: SavedCheck) {
+  const { state } = useLabState();
+  if (!check.export) return check.file || "Загруженные разговоры";
+  return exportWords(exportOf(state, check.export)) ?? "";
+}
 
 type SavedCriterion = {
   id: string;
@@ -204,6 +212,7 @@ function SnapshotBody({ saved, previous }: { saved: Saved; previous?: SavedCheck
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<string | null>(null);
   const { check, result } = saved;
+  const madeOf = useMadeOf(check);
   const filtered = result.results.filter(
     (item) =>
       filter === "all" || (filter === "none" ? !["PASS", "FAIL"].includes(item.status) : item.status === filter),
@@ -229,7 +238,7 @@ function SnapshotBody({ saved, previous }: { saved: Saved; previous?: SavedCheck
           unchecked={check.summary.unmeasured}
         />
         <p className="mt-4 break-words text-body text-fg-3">
-          {check.file || "Загруженные разговоры"} · выборка {check.sampled} из {check.total} ·{" "}
+          {madeOf} · выборка {check.sampled} из {check.total} ·{" "}
           {count(saved.criteria.length, "критерий", "критерия", "критериев")}
         </p>
         <p className="mt-4 text-body text-fg-3">{comparisonText(check, previous)}</p>
@@ -419,6 +428,7 @@ function CheckRow({
 }) {
   const { failed, measured, unmeasured } = check.summary;
   const share = errorShare(check);
+  const madeOf = useMadeOf(check);
   return (
     <button
       type="button"
@@ -440,7 +450,7 @@ function CheckRow({
           {current && <span className="ml-2 text-small text-fg-3">текущий итог</span>}
         </p>
         <p className="mt-1 break-words text-small text-fg-3">
-          {finished(check.finishedAt)} · {check.file || "Загруженные разговоры"}
+          {finished(check.finishedAt)} · {madeOf}
           {unmeasured ? ` · не удалось проверить ${unmeasured} из ${check.sampled}` : ""}
         </p>
         <p className="mt-2 text-small text-fg-3">{comparisonText(check, previous)}</p>

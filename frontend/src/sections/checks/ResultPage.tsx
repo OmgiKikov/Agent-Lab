@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { FileText, RotateCcw } from "lucide-react";
-import { conversationsLink, toneCheckLink, type Check } from "../../app/links";
+import { conversationsLink, exportLink, toneCheckLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
+import { exportOf, exportsTotal } from "../../lab/exports";
 import { longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
@@ -11,7 +12,6 @@ import { seriousOf } from "../../lab/severity";
 import { SeverityStatus } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
-import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
@@ -45,12 +45,14 @@ export function ResultPage({ check }: { check: Check }) {
     if (params.get("assess") === "1" && check === "code") setAssess(true);
     if (params.get("report") === "1") setReport(true);
   }, [params, check]);
-  const drop = (key: string) => {
-    if (params.get(key))
+  // One change of the address for all the keys: two in a row would each start from the same address, and the second
+  // would bring back what the first took away (?assess=1 opened the window again).
+  const drop = (...keys: string[]) => {
+    if (keys.some((key) => params.get(key)))
       setParams(
         (prev) => {
           const n = new URLSearchParams(prev);
-          n.delete(key);
+          for (const key of keys) n.delete(key);
           return n;
         },
         { replace: true },
@@ -61,16 +63,11 @@ export function ResultPage({ check }: { check: Check }) {
     <CheckHeader
       check={check}
       actions={
-        <>
-          <span className="hidden sm:contents">
-            <UploadButton variant="outline" check={check} />
-          </span>
-          {result && (
-            <Button variant="primary" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)}>
-              <span className="hidden sm:inline">Отчёт для письма</span>
-            </Button>
-          )}
-        </>
+        result && (
+          <Button variant="primary" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)}>
+            <span className="hidden sm:inline">Отчёт для письма</span>
+          </Button>
+        )
       }
     />
   );
@@ -78,10 +75,11 @@ export function ResultPage({ check }: { check: Check }) {
     <>
       {check === "code" && (
         <AssessSheet
+          exportId={params.get("export")}
           open={assess}
           onClose={() => {
             setAssess(false);
-            drop("assess");
+            drop("assess", "export");
           }}
         />
       )}
@@ -117,16 +115,32 @@ export function ResultPage({ check }: { check: Check }) {
     );
 
   const busy = !!state.job.running;
+  const made = exportOf(state, result?.export);
   return page(
     <div className="max-w-[1040px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-read text-fg-3">
         <span>
-          {state.logs.file ? `«${state.logs.file}» · ` : ""}проверено {longDay(log.finishedAt)}
+          {made &&
+            (made.gone ? (
+              <>выгрузка «{made.name}» (удалена) · </>
+            ) : (
+              <>
+                <Link to={exportLink(made.id)} className="underline-offset-2 hover:text-fg hover:underline">
+                  выгрузка «{made.name}»
+                </Link>
+                {" · "}
+              </>
+            ))}
+          проверено {longDay(log.finishedAt)}
         </span>
         <button
           type="button"
-          onClick={() => (check === "tone" ? navigate(toneCheckLink("criteria")) : setAssess(true))}
-          disabled={!state.logs.total || busy}
+          onClick={() =>
+            check === "tone"
+              ? navigate(toneCheckLink("criteria", made && !made.gone ? made.id : null))
+              : setAssess(true)
+          }
+          disabled={!exportsTotal(state) || busy}
           title={
             check === "tone"
               ? "Проверить снова по шагам, с теми же или уточнёнными критериями"

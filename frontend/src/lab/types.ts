@@ -157,6 +157,8 @@ export type Discover = {
   model: string;
   finishedAt: string;
   rulesSince?: string;
+  /** The export the conversations came from; a result of an older service names none. */
+  export?: ExportRef;
   /** What the criteria were collected from: the agent's code for accuracy, with how many criteria each gave. */
   sources?: Source[];
   topics: Topic[];
@@ -223,6 +225,19 @@ export type ResultBrief = ResultHead & { conversations: number; answers: Answers
 /** What a result and its brief share: everything but the verdicts on the conversations. */
 export type ResultHead = Omit<Discover, "results">;
 
+/** An export of real conversations: every upload is one (backend: storage/exports.py). */
+export type ExportLine = {
+  id: string;
+  name: string;
+  file: string | null;
+  uploadedAt: string;
+  total: number;
+  /** Conversations of the file a check cannot read (the agent writes first, or never answers): left out. */
+  skipped: number;
+};
+/** The export a result was made of, as it was then: its name may have changed since, or it may be gone. */
+export type ExportRef = { id: string; name: string; file?: string | null; total?: number };
+
 export type LabState = {
   toneOfVoice?: ToneDraft | null;
   job: Job;
@@ -241,7 +256,8 @@ export type LabState = {
    * (sources.MAX_TOTAL); older records have no such field.
    */
   sourcesRead?: { readAt: string; repo: string; overBudget?: string[] } | null;
-  logs: { total: number; file?: string | null; updatedAt?: string | null };
+  /** The exports of conversations, the newest first: a check is made of the one chosen for it (backend: storage/exports.py). */
+  exports: ExportLine[];
   /** The result of each check in brief, or null: tone of voice and accuracy never replace each other. */
   checks: Record<Check, ResultBrief | null>;
   /**

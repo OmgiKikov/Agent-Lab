@@ -2,6 +2,7 @@ import { useSearchParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SECTIONS } from "../../app/links";
+import { defaultExport } from "../../lab/exports";
 import { useLabState } from "../../lab/LabProvider";
 import { CHECK_STEPS, nextStep, toneResult, type CheckStep } from "../../lab/tone";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -12,7 +13,8 @@ import { Result } from "./Result";
 
 /**
  * Tone of voice step by step: the export and the rules of communication, the criteria collected from them, the check,
- * its result. Without a step in the address it opens where the work stands.
+ * its result. Without a step in the address it opens where the work stands. The export chosen on the first step rides
+ * in the address (?export=) to the start of the check; without one, the current result's, else the newest.
  */
 export function CheckPage() {
   const { state, offline, refresh } = useLabState();
@@ -31,7 +33,11 @@ export function CheckPage() {
           : asked;
   // A step the page moves to by itself replaces the one it left: «Назад» from the result goes to the criteria, not to a
   // finished check that would move forward again.
-  const go = (next: CheckStep, replace = false) => setParams({ step: next }, { replace });
+  const chosen = params.get("export");
+  const exportId = chosen && state?.exports.some((e) => e.id === chosen) ? chosen : defaultExport(state, "tone");
+  const go = (next: CheckStep, replace = false) =>
+    setParams({ step: next, ...(exportId ? { export: exportId } : {}) }, { replace });
+  const pick = (id: string) => setParams({ step, export: id }, { replace: true });
   const at = CHECK_STEPS.findIndex((s) => s.id === step);
   const header = <Header title="Пошаговая проверка" crumbs={[{ label: "Tone of voice", to: SECTIONS.tone }]} />;
   if (offline && !state)
@@ -92,9 +98,16 @@ export function CheckPage() {
                 </button>
               </p>
             )}
-            {step === "materials" && <Materials state={state} onNext={() => go("criteria")} />}
+            {step === "materials" && (
+              <Materials state={state} exportId={exportId} onExport={pick} onNext={() => go("criteria")} />
+            )}
             {step === "criteria" && (
-              <Criteria state={state} onBack={() => go("materials")} onStarted={() => go("checking")} />
+              <Criteria
+                state={state}
+                exportId={exportId}
+                onBack={() => go("materials")}
+                onStarted={() => go("checking")}
+              />
             )}
             {step === "checking" && (
               <Checking

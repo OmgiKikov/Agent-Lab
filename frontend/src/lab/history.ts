@@ -36,6 +36,8 @@ export type SavedCheck = {
   datasetFingerprint: string;
   file: string | null;
   total: number;
+  /** The export the check was made of, by its name then; a check saved before exports were kept names none. */
+  export?: { id: string; name: string } | null;
   sampled: number;
   summary: Summary;
   model: string;

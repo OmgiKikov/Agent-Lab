@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Copy, FileDown, RotateCcw } from "lucide-react";
-import { CHECK_NAME } from "../../lab/checks";
+import { CHECK_NAME, resultOf } from "../../lab/checks";
+import { exportOf } from "../../lab/exports";
 import type { Criterion } from "../../lab/criteria";
 import { day, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
@@ -112,7 +113,8 @@ export function ReportSheet({
 }) {
   const toast = useToast();
   // The export the conversations come from: named as the tone-of-voice report names it.
-  const file = useLabState().state?.logs.file ?? undefined;
+  const { state } = useLabState();
+  const file = exportOf(state, data.check ? resultOf(state, data.check)?.export : null)?.name ?? undefined;
   const agent = useReportAgent();
   const sides = (
     [

@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Bot,
+  FileSpreadsheet,
   FlaskConical,
   LayoutGrid,
   MessageSquareQuote,
@@ -17,15 +18,21 @@ import { useShell } from "./ShellContext";
 import { TaskCard } from "./TaskCard";
 import { SECTIONS } from "./links";
 
-export type NavItem = { to: string; label: string; mobileLabel?: string; icon: LucideIcon };
+/** `more`: on a phone the place is under «Ещё», so the row at the bottom keeps the checks in sight. */
+export type NavItem = { to: string; label: string; mobileLabel?: string; icon: LucideIcon; more?: boolean };
 
 /**
- * The work in its order: the overview; what is checked in the real conversations of the export, each check its own
- * section; the trials with synthetic customers. Group labels are quiet text, not links. No counts: «Диалоги 8» read
- * as eight conversations; a running task shows in its own card.
+ * The work in its order: the overview and the exports the checks are made of; what is checked in the real
+ * conversations, each check its own section; the trials with synthetic customers. Group labels are quiet text, not
+ * links. No counts: «Диалоги 8» read as eight conversations; a running task shows in its own card.
  */
 export const GROUPS: { label?: string; items: NavItem[] }[] = [
-  { items: [{ to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid }] },
+  {
+    items: [
+      { to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid },
+      { to: SECTIONS.exports, label: "Выгрузки", icon: FileSpreadsheet, more: true },
+    ],
+  },
   {
     label: "Проверки разговоров",
     items: [
@@ -36,8 +43,9 @@ export const GROUPS: { label?: string; items: NavItem[] }[] = [
   { label: "Испытания", items: [{ to: SECTIONS.simulations, label: "Симуляции", icon: FlaskConical }] },
 ];
 
-/** The places of the work in one row, as the bottom of a phone shows them. */
-export const WORK: NavItem[] = GROUPS.flatMap((g) => g.items);
+/** The places of the work in one row, as the bottom of a phone shows them; the rest of them are under «Ещё». */
+export const WORK: NavItem[] = GROUPS.flatMap((g) => g.items).filter((item) => !item.more);
+export const MORE_WORK: NavItem[] = GROUPS.flatMap((g) => g.items).filter((item) => item.more);
 
 /** The agent and settings stay below the day-to-day work: they are the developer's. */
 export const SETUP: NavItem[] = [

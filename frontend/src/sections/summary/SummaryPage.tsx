@@ -25,6 +25,7 @@ import {
   problemAnswers,
   readChosen,
   rechecked,
+  exportsText,
   SUMMARY_WHAT,
   summaryMarkdown,
   writeChosen,
@@ -34,6 +35,7 @@ import {
   type SummaryExample,
   type SummaryProblem,
 } from "../../lab/summary";
+import { exportOf, exportsStamp } from "../../lab/exports";
 import { seriousOf, severityLines, standingOf, type Serious, type Standing } from "../../lab/severity";
 import type { Check } from "../../lab/types";
 import { SeriousTag } from "../../product/Severity";
@@ -134,7 +136,13 @@ export function SummaryPage() {
   // The conversations of the ticked examples, as «Весь разговор» reads them (lab/problems, useTurns): one cache.
   const dialogues = useQueries({
     queries: examples.map((e) => ({
-      queryKey: ["dialogue", e.dialogueId, e.check, state?.logs.updatedAt],
+      queryKey: [
+        "dialogue",
+        e.dialogueId,
+        e.check,
+        e.check ? state?.checks[e.check]?.export?.id : null,
+        exportsStamp(state),
+      ],
       queryFn: () =>
         api<LogDialogue>(`/api/logs/${encodeURIComponent(e.dialogueId ?? "")}${e.check ? `?check=${e.check}` : ""}`),
       staleTime: Infinity,
@@ -153,7 +161,7 @@ export function SummaryPage() {
     ? {
         // Told only once the name is at hand (`ready`): the page waits for it, never shows another.
         agent: agent.name ?? "",
-        file: state.logs.file ?? null,
+        exports: [...new Set(checks.flatMap((c) => exportOf(state, resultOf(state, c)!.export)?.name ?? []))],
         days: [...new Set(checks.map((c) => fullDay(resultOf(state, c)!.finishedAt)))],
         madeAt: new Date().toISOString(),
         checks: checks.map((check): SummaryCheck => {
@@ -269,7 +277,7 @@ export function SummaryPage() {
         <Skeleton className="h-10 w-72 max-w-full" />
       )}
       <p className="mt-2 break-words text-read text-fg-2">
-        {summary.file ? `Выгрузка «${summary.file}» · ` : ""}
+        {exportsText(summary.exports) ? `${exportsText(summary.exports)} · ` : ""}
         {daysText(summary.days)}
       </p>
 

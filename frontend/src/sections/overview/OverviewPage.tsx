@@ -1,6 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, Bot, ClipboardCheck, FileText, Hammer, Play, Presentation, type LucideIcon } from "lucide-react";
+import {
+  ArrowRight,
+  Bot,
+  Check as CheckMark,
+  ClipboardCheck,
+  FileSpreadsheet,
+  FileText,
+  Hammer,
+  Play,
+  Presentation,
+  type LucideIcon,
+} from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import {
@@ -17,6 +28,7 @@ import { useAgent } from "../../lab/agents";
 import { BY_CRITERIA, CHECK_NAME, CHECKS, checkOfOld, resultOf } from "../../lab/checks";
 import { comparisonOf, previousOf, useCompare, type Compare } from "../../lab/compare";
 import { useCriteria } from "../../lab/criteria";
+import { exportOf, exportWords } from "../../lab/exports";
 import { longDay, count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { isRunning } from "../../lab/runs";
@@ -34,6 +46,7 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { CheckReport } from "../checks/CheckReport";
 import { CompareLine, PreviousCheck } from "../checks/Compare";
 import { Needs, needsOf, type Need } from "../checks/Start";
+import { UploadExport } from "../exports/UploadExport";
 import { ProblemList } from "../problems/ProblemList";
 import { useSimRuns } from "../simulations/stage";
 
@@ -48,10 +61,7 @@ const WHAT: Record<Check, string> = {
 /** Where a check without a result stands, and its one way forward. */
 type Begin = { status?: string; needs: Need[]; action?: { label: string; to: string } };
 
-/** A new export not checked yet, when the check has saved checks before it: the same way forward, named so. */
-const FRESH = "Новая выгрузка ещё не проверена";
-
-function beginOf(check: Check, state: LabState, fresh = false): Begin {
+function beginOf(check: Check, state: LabState): Begin {
   const job = state.job;
   if (check === "tone") {
     if (job.running && job.kind === "tone-check")
@@ -59,12 +69,6 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
         status: "Проверяем разговоры",
         needs: needsOf("tone", state),
         action: { label: "Открыть проверку", to: toneCheckLink("checking") },
-      };
-    if (fresh)
-      return {
-        status: FRESH,
-        needs: needsOf("tone", state),
-        action: { label: "Проверить новую выгрузку", to: toneCheckLink() },
       };
     const begun = !!state.toneOfVoice || (job.running && job.kind === "tone-criteria");
     return {
@@ -87,12 +91,6 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
       needs: needsOf("code", state),
       action: { label: "Прочитать код", to: SECTIONS.agent },
     };
-  if (fresh)
-    return {
-      status: FRESH,
-      needs: needsOf("code", state),
-      action: { label: "Проверить новую выгрузку", to: SECTIONS.accuracy },
-    };
   return { needs: needsOf("code", state), action: { label: "Оценить разговоры", to: SECTIONS.accuracy } };
 }
 
@@ -100,7 +98,7 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
  * «Обзор»: how the agent is doing. Each check of the real conversations says its own number, how it stands to its own
  * previous check, and its main problems; the last run of the simulation says its own, with the check it was counted
  * by; never added up or compared with each other. Then what to do, check by check. Before anything is checked: where
- * to begin; after a new export, each check's previous check until it is checked again.
+ * to begin, the export first; a check whose result went with its export, its previous check until it is checked again.
  */
 export function OverviewPage() {
   const { state, offline } = useLabState();
@@ -186,11 +184,14 @@ export function OverviewPage() {
           <h2 className="mt-1 text-page font-semibold text-fg">{first ? "С чего начать" : "Как работает агент"}</h2>
           <p className="mt-3 max-w-[66ch] text-lead text-fg-2">
             {first
-              ? "Две проверки оценивают настоящие разговоры клиентов из выгрузки чата, у каждой свои критерии. Из найденных ошибок потом собирают сценарии для синтетических клиентов."
+              ? "Сначала загрузите выгрузку чата. Две проверки оценивают её настоящие разговоры с клиентами, у каждой свои критерии. Из найденных ошибок потом собирают сценарии для синтетических клиентов."
               : "У каждой проверки и у симуляций свои критерии и свой счёт, их числа не складываются. Каждая проверка сравнивает себя только со своей прошлой."}
           </p>
           {first ? (
-            <StartCards state={state} />
+            <>
+              <ExportStep state={state} />
+              <StartCards state={state} />
+            </>
           ) : (
             <>
               <section aria-labelledby="overview-checks" className="mt-12">
@@ -221,11 +222,51 @@ export function OverviewPage() {
  */
 const connected = (state: LabState) => state.targets.some((t) => t.ready && t.id !== "local-http");
 
+/**
+ * The first step of the first visit: the export of the chat the checks are made of, uploaded here; once there is one,
+ * what it is and the way to all of them.
+ */
+function ExportStep({ state }: { state: LabState }) {
+  const newest = state.exports.find((e) => e.total > 0);
+  return (
+    <div className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-4 rounded-block border border-line p-5">
+      <span
+        className={`grid size-10 flex-shrink-0 place-items-center rounded-control ${newest ? "bg-ok/10 text-ok" : "bg-inset text-fg-3"}`}
+      >
+        {newest ? (
+          <CheckMark aria-label="есть" className="size-5" />
+        ) : (
+          <FileSpreadsheet aria-hidden className="size-5" strokeWidth={1.6} />
+        )}
+      </span>
+      <div className="min-w-0 flex-1 basis-64">
+        <h3 className="text-count font-semibold text-fg">
+          {newest ? "Выгрузка загружена" : "Загрузите выгрузку чата"}
+        </h3>
+        <p className="mt-1 text-body text-fg-2">
+          {newest
+            ? `«${newest.name}» · ${count(newest.total, "разговор", "разговора", "разговоров")}. Дальше выберите проверку.`
+            : "Excel-выгрузка (лист «Данные») или .jsonl. Из неё проверки берут настоящие разговоры клиентов с агентом."}
+        </p>
+      </div>
+      {newest ? (
+        <Link to={SECTIONS.exports} className={buttonClass()}>
+          Все выгрузки
+        </Link>
+      ) : (
+        <UploadExport />
+      )}
+    </div>
+  );
+}
+
 /** The first visit: the three ways in, each with what it needs and what is already here. */
 function StartCards({ state }: { state: LabState }) {
   const ready = connected(state);
+  // Before an export the upload above is the one main action; then tone of voice is.
+  const exported = state.exports.some((e) => e.total > 0);
   const cards: { title: string; what: string; begin: Begin; primary?: boolean }[] = [
-    { title: CHECK_NAME.tone, what: WHAT.tone, begin: beginOf("tone", state), primary: true },
+    { title: CHECK_NAME.tone, what: WHAT.tone, begin: beginOf("tone", state), primary: exported },
     { title: CHECK_NAME.code, what: WHAT.code, begin: beginOf("code", state) },
     {
       title: "Симуляции",
@@ -242,7 +283,7 @@ function StartCards({ state }: { state: LabState }) {
     },
   ];
   return (
-    <ul className="mt-10 grid gap-4 md:grid-cols-3">
+    <ul className="mt-4 grid gap-4 md:grid-cols-3">
       {cards.map((c) => (
         <li key={c.title} className="flex flex-col rounded-block border border-line p-5">
           <h3 className="text-count font-semibold text-fg">{c.title}</h3>
@@ -297,8 +338,8 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
   const compare = comparisonOf(answer, result);
   const log = data?.log;
   if (!result) {
-    const previous = previousOf(compare, state.logs.updatedAt);
-    const begin = beginOf(check, state, !!previous?.newExport);
+    const previous = previousOf(compare);
+    const begin = beginOf(check, state);
     return (
       <section aria-label={CHECK_NAME[check]}>
         <BlockHead
@@ -325,7 +366,9 @@ function CheckBlock({ check, state }: { check: Check; state: LabState }) {
       <BlockHead
         to={stageRoot(check)}
         title={CHECK_NAME[check]}
-        sub={`${state.logs.file ? `«${state.logs.file}» · ` : ""}проверено ${longDay(result.finishedAt)}`}
+        sub={[exportWords(exportOf(state, result.export)), `проверено ${longDay(result.finishedAt)}`]
+          .filter(Boolean)
+          .join(" · ")}
       />
       {data && log ? (
         <>
