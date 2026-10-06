@@ -1,10 +1,11 @@
 """Scenarios: the customers of real conversations as tests, chosen into three sets. Pure functions.
 
-A scenario (a card) is the customer of one logged acquiring episode (domain/cards.py), the business scenario of the
-catalog it belongs to (domain/catalog.py), its frozen criteria (the grounded rules of its topic, observable in the
-agent's replies or its system calls) and its test data for the mocked bank's systems. A card from an error names the
-criteria the agent failed in that conversation (reproduces): the scenario is a test of that error. Its result in every
-run of the deck's check stands beside the others; nothing here says whether the agent got better or worse.
+A scenario (a card) is the customer of one logged episode of the agent's domain (domain/cards.py), the business
+scenario of the catalog it belongs to (domain/catalog.py), its frozen criteria (the grounded rules of its topic,
+observable in the agent's replies or its system calls) and its test data for the mocked bank's systems. A card from an
+error names the criteria the agent failed in that conversation (reproduces): the scenario is a test of that error.
+Its result in every run of the deck's check stands beside the others; nothing here says whether the agent got better
+or worse.
 
 Sets are never averaged together:
 - representative: a sample stratified by the catalog's scenarios, at least one card each; a card stands for N_h/n_h;
@@ -30,15 +31,6 @@ SEED = 20261002  # the same stress sample for the same export
 # Why a card exists, by its first set: an error the check found in a real conversation, a sampled episode, a rare one.
 FROM_LOG = 'Ошибка из лога'
 SETS = {'regression': FROM_LOG, 'representative': 'Представительный набор', 'stress': 'Стрессовый набор'}
-RARE: dict[str, Callable[[dict], bool]] = {
-    'Четыре и больше реплик клиента': lambda d: sum(m['role'] == 'user' for m in d.get('messages') or []) >= 4,
-    'Агент эквайринга вернул 202-1 или 202-7': lambda d: bool(
-        {'202_1', '202_7'} & set((d.get('meta') or {}).get('acquiringStatuses') or [])
-    ),
-    'В чате были другие агенты, кроме общего ассистента': lambda d: bool(
-        set((d.get('meta') or {}).get('agents') or []) - {'ACQUIRING_AGENT', 'AGENT_GIGACHAT'}
-    ),
-}
 # Applies to every scenario: instructions must come from the knowledge base, not be invented.
 FOLLOWS_KNOWLEDGE = {
     'id': 'g-knowledge',
@@ -102,10 +94,13 @@ def pick(analysis: dict, known: Collection[str]) -> list[tuple[dict, str, str, l
     return picked[:LIMIT]
 
 
-def stress(dialogues: list[dict], taken: set[str], size: int = STRESS) -> tuple[list[dict], dict]:
-    """Rare combinations of the export's service columns, in turn per condition; their share is reported, not used."""
+def stress(
+    dialogues: list[dict], taken: set[str], rare: dict[str, Callable[[dict], bool]], size: int = STRESS
+) -> tuple[list[dict], dict]:
+    """Rare combinations of the export's service columns (rare: the conditions of the agent's profile,
+    profile.rare), in turn per condition; their share is reported, not used."""
     rng = random.Random(SEED)
-    found = {name: [d for d in dialogues if test(d)] for name, test in RARE.items()}
+    found = {name: [d for d in dialogues if test(d)] for name, test in rare.items()}
     queues = {name: rng.sample(items, len(items)) for name, items in found.items()}
     chosen, why = [], {}
     while len(chosen) < size and any(queues.values()):

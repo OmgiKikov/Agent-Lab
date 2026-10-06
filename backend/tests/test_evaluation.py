@@ -496,6 +496,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(storage.documents, 'load', return_value={'topics': [], 'results': []}),
             patch.object(cards.catalog, 'build', AsyncMock(return_value=support.catalog_of(['d']))),
+            patch.object(cards.profile, 'current', return_value=support.agent()),
             patch.object(cards, '_topics', AsyncMock(return_value={'d': {'title': 'Тариф', 'rules': [{'id': 'r'}]}})),
             patch.object(cards, 'build_card', AsyncMock(return_value={'id': 'card', 'model': 'actual-main'})),
             patch.object(storage.documents, 'save') as save,

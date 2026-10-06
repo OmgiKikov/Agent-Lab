@@ -1,7 +1,8 @@
 """The catalog of business scenarios (domain/catalog.py): every conversation of the export read into an episode, the
 categories and scenarios proposed from all their tasks, and every episode placed in one scenario.
 
-An episode is read once: a conversation already read by the same version of the reader keeps its reading. The catalog is
+An episode is read once: a conversation already read by the same version of the reader, told the same profile of the
+agent (flows/profile.py: its domain), keeps its reading. The catalog is
 frozen: a build places the new episodes into the scenarios found before, and a rebuild (rebuild=True) proposes them
 again, a new revision, and places every episode anew. An episode the model cannot read is left out with its reason and
 never stops the others; when more than MISSED of them are left unread or unplaced (a busy model refuses many in a row),
@@ -19,16 +20,17 @@ from collections.abc import Callable
 
 from .. import models, storage
 from ..domain import catalog, checks
+from ..domain import profile as profile_domain
 from ..roles import catalog as catalog_role
-from . import Progress
+from . import Progress, profile
 
 CATALOG = checks.CATALOG
 BATCH = 40  # episodes the router places in one answer
 # The share of conversations the model may leave unread or unplaced: above it a catalog would miss them, so the build
 # stops and says so; what was read and placed is kept, and the next build goes on from there.
 MISSED = 0.05
-# Acquiring episodes the catalog role reads at most, a random sample of them: the scenarios of a frequent task are found
-# in it, a rare task falls to none and its share is told; the router places every episode. One answer about the
+# Episodes of the domain the catalog role reads at most, a random sample of them: the scenarios of a frequent task are
+# found in it, a rare task falls to none and its share is told; the router places every episode. One answer about the
 # tasks of the whole export took a model over four minutes.
 SAMPLE = 300
 CHECKPOINT = 20  # readings between two saves of a build in progress: a stopped build loses at most these
@@ -40,7 +42,7 @@ def current() -> dict | None:
 
 async def build(progress: Progress = lambda **_: None, *, rebuild: bool = False) -> dict:
     """The catalog of the export, saved: the episodes read, the scenarios proposed (once, or again on rebuild) and
-    every acquiring episode placed."""
+    every episode in the agent's domain placed."""
     with models.about(f'catalog:{uuid.uuid4().hex}'):
         return await _build(progress, rebuild)
 
@@ -50,7 +52,8 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
     if not dialogues:
         raise RuntimeError('Нет разговоров: сначала загрузите выгрузку.')
     previous = current() or {}
-    episodes = await _episodes(dialogues, previous.get('episodes') or {}, progress, _keep_readings)
+    agent = profile.current()
+    episodes = await _episodes(dialogues, previous.get('episodes') or {}, progress, _keep_readings, agent)
     _enough(episodes, 'error', 'не прочитала')
     categories, model = previous.get('categories'), previous.get('model')
     # Scenarios proposed by a build that stopped before placing every episode: they are placed, not proposed again.
@@ -66,8 +69,8 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
         progress(stage='catalog', done=0, total=1, message='Выделяем бизнес-сценарии')
         tasks = catalog.distinct_tasks(catalog.sample(episodes, SAMPLE))
         if not tasks:
-            raise RuntimeError('Ни в одном разговоре нет задачи по эквайрингу.')
-        answer = await catalog_role.propose(tasks)
+            raise RuntimeError('Ни в одном разговоре нет задачи из домена агента.')
+        answer = await catalog_role.propose(tasks, profile_domain.for_models(agent))
         categories, model = answer.value, answer.model
         for episode in episodes.values():
             episode.pop('scenarioId', None)
@@ -95,7 +98,7 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
         'episodes': episodes,
     }
     storage.documents.save(CATALOG, document)
-    _enough({i: e for i, e in episodes.items() if e.get('acquiring')}, 'unplaced', 'не разложила по сценариям')
+    _enough({i: e for i, e in episodes.items() if catalog.in_domain(e)}, 'unplaced', 'не разложила по сценариям')
     return document
 
 
@@ -117,16 +120,25 @@ def _enough(episodes: dict[str, dict], key: str, what: str) -> None:
 
 
 async def _episodes(
-    dialogues: dict[str, dict], known: dict[str, dict], progress: Progress, keep: Callable[[dict], None]
+    dialogues: dict[str, dict],
+    known: dict[str, dict],
+    progress: Progress,
+    keep: Callable[[dict], None],
+    agent: dict,
 ) -> dict[str, dict]:
-    """Every conversation's episode: the known reading when the conversation and the reader's version are the same,
-    else read now. Order of the export. keep is given the readings so far every CHECKPOINT readings and when the
-    reading ends, stopped or not; a conversation not read yet keeps its known reading there."""
-    version = catalog_role.EPISODE.version
+    """Every conversation's episode: the known reading when the conversation, the reader's version and the agent's
+    profile (agent) are the same, else read now. Order of the export. keep is given the readings so far every
+    CHECKPOINT readings and when the reading ends, stopped or not; a conversation not read yet keeps its known reading
+    there."""
+    version, told = catalog_role.EPISODE.version, profile_domain.revision(agent)
     episodes, todo = {}, []
     for dialogue_id, dialogue in dialogues.items():
         found = known.get(dialogue_id) or {}
-        same = found.get('fingerprint') == catalog.fingerprint(dialogue) and found.get('version') == version
+        same = (
+            found.get('fingerprint') == catalog.fingerprint(dialogue)
+            and found.get('version') == version
+            and found.get('profile') == told
+        )
         if same and not found.get('error'):  # an episode the model could not read is read again
             episodes[dialogue_id] = found
         else:
@@ -136,12 +148,12 @@ async def _episodes(
     async def one(dialogue_id: str) -> None:
         nonlocal done
         dialogue = dialogues[dialogue_id]
-        stamp = {'fingerprint': catalog.fingerprint(dialogue), 'version': version}
+        stamp = {'fingerprint': catalog.fingerprint(dialogue), 'version': version, 'profile': told}
         try:
-            answer = await catalog_role.episode(dialogue)
+            answer = await catalog_role.episode(dialogue, profile_domain.for_models(agent))
             episodes[dialogue_id] = {**stamp, **answer.value}
         except models.ModelError as error:
-            episodes[dialogue_id] = {**stamp, 'acquiring': False, 'error': str(error)}
+            episodes[dialogue_id] = {**stamp, 'inDomain': False, 'error': str(error)}
         done += 1
         if done % CHECKPOINT == 0:
             keep(so_far())
@@ -168,8 +180,8 @@ async def _place(
     progress: Progress,
     keep: Callable[[], None],
 ) -> None:
-    """Every acquiring episode not placed yet, placed in batches; one the router fails is left for the next build. keep
-    saves the placements after every batch and when the placing ends, stopped or not."""
+    """Every episode in the domain not placed yet, placed in batches; one the router fails is left for the next build.
+    keep saves the placements after every batch and when the placing ends, stopped or not."""
     scenarios = [
         {'id': s['id'], 'category': c['title'], 'title': s['title'], 'description': s['description']}
         for c in categories
@@ -179,7 +191,7 @@ async def _place(
     for episode in episodes.values():
         if episode.get('scenarioId') not in known:
             episode.pop('scenarioId', None)
-    todo = [i for i, e in episodes.items() if e.get('acquiring') and not e.get('scenarioId')]
+    todo = [i for i, e in episodes.items() if catalog.in_domain(e) and not e.get('scenarioId')]
     batches = [todo[start : start + BATCH] for start in range(0, len(todo), BATCH)]
     done = 0
 

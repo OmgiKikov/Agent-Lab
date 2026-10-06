@@ -8,7 +8,7 @@ count admits exactly one. A customer's actual repeated question survives wheneve
 A conversation the count cannot settle is quarantined with its reason; the rest of the file is imported.
 
 Each conversation keeps the export's service columns (`meta`): the date, channel, entry point, the agents that
-took part, the acquiring agent's status codes and the operator flag. Customer identifiers are kept only as a
+took part, each status code with the agents it names, and the operator flag. Customer identifiers are kept only as a
 pseudonymous key for grouping. Parsing is pure so a cancelled import cannot commit from a thread.
 """
 
@@ -28,7 +28,6 @@ LIMIT = 50_000_000  # an uploaded export
 INFLATED = 500_000_000  # the parts of a workbook, unpacked together
 SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
-ACQUIRING = 'agent-ckr-pa-acquiring'  # the agent under test, as the status columns name it
 # Service columns read into meta: column → key. Customer ids are hashed into clientKey, never stored as is.
 COLUMNS = {
     'Дата': 'date',
@@ -230,10 +229,10 @@ def _meta(row: tuple, column: dict[str, int], number: int) -> dict:
             meta[key] = None if value is None else str(value).strip().lower() == 'true'
         else:
             meta[key] = None if value is None else str(value).strip()
-    statuses = [
-        name.removeprefix('Статус код ') for name in STATUS_COLUMNS if any(ACQUIRING in v for v in _listed(cell(name)))
-    ]
-    meta['acquiringStatuses'] = statuses
+    # Each status code with the agents the export lists under it: which agent is under test is the profile's.
+    meta['statuses'] = {
+        name.removeprefix('Статус код '): _listed(cell(name)) for name in STATUS_COLUMNS if _listed(cell(name))
+    }
     client = next((str(cell(name)) for name in CLIENT_COLUMNS if cell(name) not in (None, '')), None)
     meta['clientKey'] = hashlib.sha256(client.encode()).hexdigest()[:12] if client else None
     return meta

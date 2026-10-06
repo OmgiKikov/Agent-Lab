@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 import support
 
-from lab import models
-from lab.domain import cards, metric, scenarios, world
+from lab import models, storage
+from lab.domain import cards, metric, profile, scenarios, world
 from lab.flows import scenarios as deck_flow
 from lab.flows import simulation
 
@@ -69,15 +69,20 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((card['checks']['dropped']['facts'], card['checks']['dropped']['observations']), (1, 1))
         self.assertNotIn('1,8%', card['situation'])
         self.assertIn('раздела нет', card['situation'])
-        terminal = {'value': 'knows', 'basis': 'log', 'status': 'masked_in_source'}
+        terminal = {'label': 'номер терминала', 'value': 'knows', 'basis': 'log', 'status': 'masked_in_source'}
         self.assertEqual(card['identifiers']['terminal'], terminal)
         # The log never settles the INN: no knowledge is drawn at random, the simulator's assumption says so.
         self.assertEqual(
             card['identifiers']['organization'],
-            {'value': 'looks_up', 'basis': 'assumption', 'status': 'not_established'},
+            {
+                'label': 'ИНН и реквизиты организации',
+                'value': 'looks_up',
+                'basis': 'assumption',
+                'status': 'not_established',
+            },
         )
         self.assertIn('ИНН и реквизиты организации: из настоящего разговора не известно', card['situation'])
-        self.assertEqual((card['episode']['scope'], card['origin']), ('acquiring_only', 'Представительный набор'))
+        self.assertEqual((card['episode']['scope'], card['origin']), ('agent_only', 'Представительный набор'))
         self.assertEqual(card['criteria'][1]['observation'], 'tool')
         self.assertEqual(card['scenario'], scenario)
 
@@ -103,15 +108,39 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((card['opening'], card['episode']['start']), ('Заказать терминал', 3))
         self.assertEqual(card['checks']['dropped']['episode'], 1)  # the extractor put it elsewhere
 
-    async def test_a_conversation_without_an_acquiring_task_gives_no_card(self):
-        chat = {'id': 'g', 'messages': [{'role': 'user', 'content': 'Привет'}, {'role': 'assistant', 'content': 'Да'}]}
-        answer = models.Reply(json.dumps({'eligible': False, 'ineligibleReason': 'только приветствие'}), 'm')
-        with patch.object(models, 'chat', AsyncMock(return_value=answer)):
-            card = await deck_flow.build_card(topic(), chat, ['representative'])
-        self.assertEqual(
-            card,
-            {'eligible': False, 'sets': ['representative'], 'sourceDialogueId': 'g', 'reason': 'только приветствие'},
+    async def test_the_reader_decides_the_domain_and_the_extractors_doubt_stays_on_the_card(self):
+        chat = {
+            'id': 'g',
+            'messages': [{'role': 'user', 'content': 'Оплатил по QR'}, {'role': 'assistant', 'content': 'Да'}],
+        }
+        storage.dialogues.replace([chat])
+        # A conversation the episode reader put outside the agent's domain gets no card and asks no model.
+        episodes = {'g': {'inDomain': False, 'reason': 'платит как покупатель'}}
+        building = deck_flow._Building(
+            'code', {'topics': []}, episodes, {}, {'g': (['regression'], [])}, lambda **_: None, support.agent()
         )
+        with (
+            patch.object(deck_flow, '_topics', AsyncMock(return_value={'g': topic()})),
+            patch.object(deck_flow, 'build_card', AsyncMock()) as build,
+        ):
+            await building.make(['g'])
+        build.assert_not_awaited()
+        self.assertEqual(building.made['g']['reason'], 'вне домена агента: платит как покупатель')
+        # In the domain by the reader, the card is built; the extractor's doubt is kept beside it for review.
+        reply = {
+            'domainDoubt': 'клиент платит как покупатель',
+            'name': 'Оплата',
+            'goal': 'Оплатить',
+            'episode': {'start': 1},
+        }
+        answer = models.Reply(json.dumps(reply, ensure_ascii=False), 'm')
+        with (
+            patch.object(models, 'chat', AsyncMock(return_value=answer)),
+            patch.object(deck_flow.world, 'templates', return_value=None),
+            patch.object(deck_flow.inputs, 'sources', return_value=[]),
+        ):
+            card = await deck_flow.build_card(topic(), chat, ['representative'], start=1, end=2, agent=support.agent())
+        self.assertEqual(card['checks']['domainDoubt'], 'клиент платит как покупатель')
 
     def test_filled_opening_may_change_only_the_masked_runs(self):
         self.assertEqual(cards._filled('Терминал ####', 'Терминал 1234'), 'Терминал 1234')
@@ -156,8 +185,11 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
                 {'trigger': 'handoff_offer', 'response': 'попросишь оператора'},
             ],
         }
-        kept, dropped = cards.grounded(value, messages)
-        self.assertEqual((kept['organization'], kept['terminal']), ({'status': 'not_established'},) * 2)
+        kept, dropped = cards.grounded(value, messages, agent=support.agent())
+        self.assertEqual(
+            kept['identifiers'],
+            {'terminal': {'status': 'not_established'}} | {'organization': {'status': 'not_established'}},
+        )
         self.assertEqual(dropped['identifiers'], 2)
         self.assertEqual([r['trigger'] for r in kept['reactions']], ['instruction'])
         self.assertNotIn('hypotheses', kept)  # a reaction the log never showed is no part of the customer
@@ -200,7 +232,14 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
 
     def test_masked_numbered_steps_and_requests_fit_their_triggers(self):
         self.assertTrue(cards._fits('instruction', '#. Повторите операцию. #. Если ошибка повторится, смените карту.'))
-        self.assertTrue(cards._fits('identifier_request', 'Предоставьте, пожалуйста, номер терминала.'))
+        self.assertTrue(
+            cards._fits('identifier_request', 'Предоставьте, пожалуйста, номер терминала.', support.agent())
+        )
+        # The words of the profile's identifiers: «ИНН» is asked for only by an agent whose customers give one.
+        self.assertTrue(cards._fits('identifier_request', 'Укажите ИНН?', support.agent()))
+        self.assertFalse(
+            cards._fits('identifier_request', 'Укажите ИНН?', {'identifiers': [{'key': 'card', 'label': 'карта'}]})
+        )
         self.assertFalse(cards._fits('handoff_offer', '#. Перейдите в раздел «Эквайринг». #. Нажмите «Добавить».'))
         self.assertTrue(cards._fits('resolved', 'Любой текст'))
         self.assertTrue(cards._fits('instruction', '1) Снимите крышку. 2) Протрите контакты.'))
@@ -222,23 +261,39 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
                 {'text': 'не видит раздела тарифов', 'n': 5, 'quote': 'Не вижу такого раздела'},
             ],
         }
-        kept, dropped = cards.grounded(value, messages, end=3)
+        kept, dropped = cards.grounded(value, messages, end=3, agent=support.agent())
         self.assertEqual([x['n'] for x in kept['circumstances']], [1])
         self.assertEqual((dropped['circumstances'], dropped['afterEpisode']), (1, 1))
-        self.assertEqual((kept['terminal'], kept['organization']), ({'status': 'not_established'},) * 2)
+        self.assertEqual(set(kept['identifiers']), {'terminal', 'organization'})
         reply = {'name': 'Чек', 'goal': 'Починить печать чека', 'episode': {'start': 1}, **value}
-        card = cards.customer(reply, {'id': 'd', 'messages': messages}, start=1, end=3)
+        card = cards.customer(reply, {'id': 'd', 'messages': messages}, support.agent(), start=1, end=3)
         self.assertEqual((card['episode']['end'], card['style']['messages']), (3, 2))  # the tariff question is not it
         self.assertEqual(cards.episode_texts(card, {'id': 'd', 'messages': messages})[1][-1], messages[2]['content'])
 
-    def test_stress_set_takes_rare_conditions_and_reports_their_share(self):
+    def test_stress_set_takes_the_rare_conditions_of_the_agents_profile_and_reports_their_share(self):
         long = {'id': 'long', 'messages': [{'role': 'user', 'content': 'x'}] * 4}
-        refused = {'id': 'refused', 'messages': [], 'meta': {'acquiringStatuses': ['200', '202_7']}}
+        statuses = {'202_7': ['agent-ckr-pa-acquiring'], '200': ['agent-other']}
+        refused = {'id': 'refused', 'messages': [], 'meta': {'statuses': statuses}}
+        mortgage = {
+            'id': 'mortgage',
+            'messages': [],
+            'meta': {'agents': ['MORTGAGE_AGENT'], 'statuses': {'202_7': ['agent-mortgage']}},
+        }
         common = {'id': 'common', 'messages': [{'role': 'user', 'content': 'x'}]}
-        chosen, manifest = scenarios.stress([long, refused, common], {'long'})
-        self.assertEqual([d['id'] for d in chosen], ['refused'])
+        talks = [long, refused, mortgage, common]
+        acquiring = support.agent()
+        acquiring['export']['longTurns'] = 4
+        chosen, manifest = scenarios.stress(talks, {'long'}, profile.rare(acquiring, talks))
+        self.assertEqual({d['id'] for d in chosen}, {'refused', 'mortgage'})  # another agent took the mortgage chat
         self.assertIsNone(manifest['weight'])
-        self.assertEqual(manifest['conditions']['Четыре и больше реплик клиента'], '1 из 3')
+        self.assertEqual(manifest['conditions']['4 и больше реплик клиента'], '1 из 4')
+        # The same export for a mortgage agent: its own failure status counts, and it is no other agent to itself.
+        export = {'agentCode': 'MORTGAGE_AGENT', 'statusMarker': 'agent-mortgage', 'stressStatuses': ['202_7']}
+        rare = profile.rare(profile.checked({'domain': 'Ипотека', 'export': export | {'longTurns': 4}}), talks)
+        self.assertEqual([name for name, test in rare.items() if test(mortgage)], ['Агент вернул 202-7'])
+        self.assertFalse(any(test(refused) for test in rare.values()))
+        # An export read before statuses were kept by agent has those of the agent it was made for.
+        self.assertEqual(profile.statuses({'acquiringStatuses': ['202_7']}, 'agent-mortgage'), {'202_7'})
 
     def test_sets_reach_the_run_and_are_measured_apart_the_representative_one_also_weighted(self):
         card = {'id': 'c', 'name': 'n', 'topic': 't', 'origin': 'o', 'situation': 's', 'criteria': []}

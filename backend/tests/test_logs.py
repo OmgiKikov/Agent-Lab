@@ -116,7 +116,8 @@ class LogImportTests(unittest.TestCase):
         workbook.save(stream)
         meta = logs.prepare('export.xlsx', stream.getvalue())[0]['meta']
         self.assertEqual(
-            (meta['channel'], meta['agents'], meta['acquiringStatuses']), ('WEB', ['ACQUIRING_AGENT'], ['202_5'])
+            (meta['channel'], meta['agents'], meta['statuses']),
+            ('WEB', ['ACQUIRING_AGENT'], {'202_5': ['agent-ckr-pa-acquiring-COMMON']}),
         )
         self.assertNotIn('42', json.dumps(meta))
 

@@ -53,43 +53,43 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
 
     def test_an_episode_starts_at_a_customer_message_and_names_a_task(self):
         dialogue = talk('d')
-        read = {'acquiring': True, 'start': 1, 'end': 2, 'task': 'починить QR.', 'object': 'QR'}
+        read = {'inDomain': True, 'start': 1, 'end': 2, 'task': 'починить QR.', 'object': 'QR'}
         self.assertEqual(
             catalog.checked_episode(read, dialogue),
-            {'acquiring': True, 'start': 1, 'end': 2, 'task': 'починить QR', 'object': 'QR'},
+            {'inDomain': True, 'start': 1, 'end': 2, 'task': 'починить QR', 'object': 'QR'},
         )
         for wrong in (
-            {'acquiring': True, 'start': 2, 'end': 2, 'task': 'x'},
-            {'acquiring': True, 'start': 1, 'end': 2, 'task': ' '},
-            {'acquiring': True, 'start': 1, 'task': 'x'},  # where the task ends is part of the reading
-            {'acquiring': True, 'start': 1, 'end': 3, 'task': 'x'},
+            {'inDomain': True, 'start': 2, 'end': 2, 'task': 'x'},
+            {'inDomain': True, 'start': 1, 'end': 2, 'task': ' '},
+            {'inDomain': True, 'start': 1, 'task': 'x'},  # where the task ends is part of the reading
+            {'inDomain': True, 'start': 1, 'end': 3, 'task': 'x'},
         ):
             with self.subTest(wrong=wrong), self.assertRaises(ValueError):
                 catalog.checked_episode(wrong, dialogue)
         self.assertEqual(
-            catalog.checked_episode({'acquiring': False, 'reason': 'приветствие', 'task': None}, dialogue),
-            {'acquiring': False, 'reason': 'приветствие'},
+            catalog.checked_episode({'inDomain': False, 'reason': 'приветствие', 'task': None}, dialogue),
+            {'inDomain': False, 'reason': 'приветствие'},
         )
         # A model that leaves acquiring out: an answer with a task is an acquiring episode, one without is asked again.
         read = {'start': 1, 'end': 1, 'task': 'починить QR', 'object': None}
-        self.assertTrue(catalog.checked_episode(read, dialogue)['acquiring'])
+        self.assertTrue(catalog.checked_episode(read, dialogue)['inDomain'])
         with self.assertRaises(ValueError):
             catalog.checked_episode({'start': 1, 'task': None}, dialogue)
 
     def test_the_catalog_is_proposed_from_a_sample_of_acquiring_episodes_the_same_every_time(self):
-        episodes = {f'd{i}': {'acquiring': i % 4 != 0, 'task': f'задача {i}', 'object': 'x'} for i in range(40)}
+        episodes = {f'd{i}': {'inDomain': i % 4 != 0, 'task': f'задача {i}', 'object': 'x'} for i in range(40)}
         chosen = catalog.sample(episodes, 10)
         self.assertEqual(len(chosen), 10)
-        self.assertTrue(all(e['acquiring'] for e in chosen.values()))
+        self.assertTrue(all(e['inDomain'] for e in chosen.values()))
         self.assertEqual(chosen, catalog.sample(episodes, 10))
         self.assertEqual(len(catalog.sample(episodes, 100)), 30)
 
     def test_the_catalog_role_reads_each_task_once_with_its_count(self):
         episodes = {
-            'a': {'acquiring': True, 'task': 'Починить QR', 'object': 'QR'},
-            'b': {'acquiring': True, 'task': 'починить QR', 'object': 'qr'},
-            'c': {'acquiring': True, 'task': 'узнать ставку', 'object': 'тариф'},
-            'd': {'acquiring': False, 'reason': 'приветствие'},
+            'a': {'inDomain': True, 'task': 'Починить QR', 'object': 'QR'},
+            'b': {'inDomain': True, 'task': 'починить QR', 'object': 'qr'},
+            'c': {'inDomain': True, 'task': 'узнать ставку', 'object': 'тариф'},
+            'd': {'inDomain': False, 'reason': 'приветствие'},
         }
         self.assertEqual(
             catalog.distinct_tasks(episodes),
@@ -113,11 +113,11 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         categories = catalog.taxonomy(PROPOSED)
         dialogues = {i: talk(i, f'Сообщение {i}') for i in ('a', 'b', 'c', 'd', 'e')}
         episodes = {
-            'a': {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR', 'scenarioId': 'c1s1'},
-            'b': {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR', 'scenarioId': 'c1s1'},
-            'c': {'acquiring': True, 'start': 1, 'task': 'узнать ставку', 'object': 'тариф', 'scenarioId': 'c2s1'},
-            'd': {'acquiring': True, 'start': 1, 'task': 'зарплата', 'object': 'проект', 'scenarioId': catalog.NONE},
-            'e': {'acquiring': False, 'reason': 'приветствие'},
+            'a': {'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR', 'scenarioId': 'c1s1'},
+            'b': {'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR', 'scenarioId': 'c1s1'},
+            'c': {'inDomain': True, 'start': 1, 'task': 'узнать ставку', 'object': 'тариф', 'scenarioId': 'c2s1'},
+            'd': {'inDomain': True, 'start': 1, 'task': 'зарплата', 'object': 'проект', 'scenarioId': catalog.NONE},
+            'e': {'inDomain': False, 'reason': 'приветствие'},
         }
         found = catalog.counted(categories, episodes, dialogues)
         qr = found['categories'][0]
@@ -128,8 +128,8 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             found['totals'],
             {
                 'dialogues': 5,
-                'acquiring': 4,
-                'notAcquiring': 1,
+                'inDomain': 4,
+                'outOfDomain': 1,
                 'unread': 0,
                 'placed': 3,
                 'unplaced': 1,
@@ -141,11 +141,11 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         storage.dialogues.replace([talk('a'), talk('b', 'Какая ставка?'), talk('g', 'Привет')])
         tasks = {'a': ('починить QR', 'QR'), 'b': ('узнать ставку', 'тариф')}
 
-        async def episode(dialogue):
+        async def episode(dialogue, agent):
             if dialogue['id'] in tasks:
                 task, thing = tasks[dialogue['id']]
-                return Answer({'acquiring': True, 'start': 1, 'task': task, 'object': thing}, 'm')
-            return Answer({'acquiring': False, 'reason': 'приветствие'}, 'm')
+                return Answer({'inDomain': True, 'start': 1, 'task': task, 'object': thing}, 'm')
+            return Answer({'inDomain': False, 'reason': 'приветствие'}, 'm')
 
         async def place(scenarios, items):
             names = {s['title']: s['id'] for s in scenarios}
@@ -163,7 +163,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             first = await catalog_flow.build()
             self.assertEqual(read.await_count, 3)
             self.assertEqual(first['episodes']['a']['scenarioId'], 'c1s1')
-            self.assertEqual(first['totals']['notAcquiring'], 1)
+            self.assertEqual(first['totals']['outOfDomain'], 1)
             storage.dialogues.replace([talk('a'), talk('b', 'Какая ставка?'), talk('n', 'QR не работает')])
             tasks['n'] = ('починить QR', 'QR')
             second = await catalog_flow.build()
@@ -176,7 +176,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_catalog_is_never_proposed_from_part_of_the_export_and_the_next_build_goes_on(self):
         storage.dialogues.replace([talk(f'd{i}') for i in range(20)])
-        reading = Answer({'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
+        reading = Answer({'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
         busy = [models.ModelError('Модель ответила ошибкой (HTTP 429).')] * 2
         propose = AsyncMock(return_value=Answer(catalog.taxonomy(PROPOSED), 'm'))
 
@@ -201,7 +201,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_one_conversation_the_model_cannot_read_among_many_is_left_out(self):
         storage.dialogues.replace([talk(f'd{i}') for i in range(30)])
-        reading = Answer({'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
+        reading = Answer({'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
 
         async def place(scenarios, items):
             return Answer([(i['id'], 'c1s1') for i in items], 'm')
@@ -225,7 +225,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             sizes.append(len(items))
             return Answer([(i['id'], 'c1s1') for i in items], 'm')
 
-        reading = Answer({'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
+        reading = Answer({'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
         with (
             patch.object(catalog_role, 'episode', AsyncMock(return_value=reading)),
             patch.object(catalog_role, 'propose', AsyncMock(return_value=Answer(catalog.taxonomy(PROPOSED), 'm'))),
@@ -256,13 +256,15 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         storage.dialogues.replace([talk('a'), talk('b'), talk('c', 'Какая ставка?')])
         categories = catalog.taxonomy(PROPOSED)
         episodes = {
-            'a': {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR', 'scenarioId': 'c1s1'},
-            'b': {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR', 'scenarioId': 'c1s1'},
-            'c': {'acquiring': True, 'start': 1, 'task': 'узнать ставку', 'object': 'тариф', 'scenarioId': 'c2s1'},
+            'a': {'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR', 'scenarioId': 'c1s1'},
+            'b': {'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR', 'scenarioId': 'c1s1'},
+            'c': {'inDomain': True, 'start': 1, 'task': 'узнать ставку', 'object': 'тариф', 'scenarioId': 'c2s1'},
         }
         found = {'revision': 'r1', 'categories': categories, 'episodes': episodes}
 
-        async def build_card(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None):
+        async def build_card(
+            topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None, agent=None
+        ):
             return {
                 'id': dialogue['id'],
                 'eligible': True,
@@ -286,10 +288,10 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_stopped_build_keeps_its_readings_proposal_and_placements_and_the_next_one_goes_on(self):
         storage.dialogues.replace([talk(f'd{i}') for i in range(1, 4)])
-        reading = Answer({'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
+        reading = Answer({'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
         stuck = asyncio.Event()
 
-        async def read(dialogue):
+        async def read(dialogue, agent):
             if dialogue['id'] == 'd3':
                 stuck.set()
                 await asyncio.Event().wait()  # never answers: the build is stopped here
@@ -367,12 +369,14 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         topic = {'id': 't1', 'title': 'Тариф', 'rules': [rule]}
         storage.documents.save(checks.result(checks.CODE), {'topics': [topic], 'results': []})
         storage.dialogues.replace([talk(dialogue_id) for dialogue_id, _ in episodes])
-        read = {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}
+        read = {'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}
         found = {i: dict(read, scenarioId=key) for i, key in episodes}
         return {'revision': 'r1', 'categories': catalog.taxonomy(PROPOSED), 'episodes': found}
 
     def building(self, found: dict, failing: set[str], tries: list[str] | None = None, eligible: bool = True):
-        async def build_card(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None):
+        async def build_card(
+            topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None, agent=None
+        ):
             if tries is not None:
                 tries.append(dialogue['id'])
             if dialogue['id'] in failing:
