@@ -42,7 +42,9 @@ CRITERIA = [
         'Ответ опирается на найденное',
         'reply',
         CALLED,
-        'Каждое утверждение ответа агента о шагах, разделах, сроках, суммах и условиях есть в найденных фрагментах.',
+        'Каждое утверждение ответа агента о шагах, разделах, сроках, суммах и условиях есть в найденных фрагментах '
+        'или в данных систем банка (trace.systems).',
+        'Данные клиента из систем банка: номера терминалов, статусы, договоры.',
     ),
     _criterion(
         'answers',
@@ -90,11 +92,11 @@ def for_judge(trace: dict | None) -> dict:
             for chain in trace.get('chains') or []
         ],
         'rag': [
-            {key: call.get(key) for key in ('query', 'filter', 'passages', 'answer', 'reason')}
+            {key: call.get(key) for key in ('source', 'status', 'query', 'filter', 'passages', 'answer', 'reason')}
             for call in trace.get('rag') or []
         ],
         'systems': [
-            {'tool': call.get('tool'), 'arguments': call.get('arguments')} for call in trace.get('systems') or []
+            {key: call.get(key) for key in ('tool', 'arguments', 'response')} for call in trace.get('systems') or []
         ],
     }
 

@@ -28,10 +28,12 @@ TRACE = {
             ],
             'answer': 'Оформите возврат в разделе «Операции».',
             'reason': None,
-            'status': 200,
+            'source': 'idp',
+            'status': 'ok',
+            'request': {'message': {}},
         }
     ],
-    'systems': [{'tool': 'getLkkTariff', 'arguments': {}, 'status': 200}],
+    'systems': [{'tool': 'getLkkTariff', 'arguments': {}, 'status': 'stubbed', 'response': {'tariff': '2%'}}],
 }
 
 
@@ -53,7 +55,7 @@ class RagTests(unittest.TestCase):
         shown = rag.for_judge(TRACE)
         self.assertEqual(shown['chains'], [{'name': 'Цепочка IDP', 'output': '{"output": "как вернуть платёж"}'}])
         self.assertNotIn('systemPrompt', shown['rag'][0])
-        self.assertEqual(shown['systems'], [{'tool': 'getLkkTariff', 'arguments': {}}])
+        self.assertEqual(shown['systems'], [{'tool': 'getLkkTariff', 'arguments': {}, 'response': {'tariff': '2%'}}])
 
     def test_tools_are_the_system_names(self) -> None:
         self.assertEqual(rag.tools(TRACE), 'getLkkTariff')
@@ -61,3 +63,19 @@ class RagTests(unittest.TestCase):
     def test_skipped_criterion_is_not_applicable(self) -> None:
         row = rag.skipped(rag.CRITERIA[0])
         self.assertEqual((row['ruleId'], row['status']), ('rag:query', 'NOT_APPLICABLE'))
+
+
+class StandTraceTests(unittest.TestCase):
+    def test_the_judge_sees_where_an_answer_came_from_and_whether_the_call_ended(self) -> None:
+        call = rag.for_judge(TRACE)['rag'][0]
+        self.assertEqual((call['source'], call['status']), ('idp', 'ok'))
+
+    def test_the_judge_does_not_get_the_request_with_its_prompts(self) -> None:
+        self.assertNotIn('request', rag.for_judge(TRACE)['rag'][0])
+
+    def test_the_judge_sees_the_bank_systems_data(self) -> None:
+        self.assertEqual(rag.for_judge(TRACE)['systems'][0]['response'], {'tariff': '2%'})
+
+    def test_an_answer_from_the_cache_is_a_knowledge_base_call(self) -> None:
+        cached = {'rag': [{'source': 'cache', 'query': 'q', 'passages': [], 'answer': 'a'}]}
+        self.assertTrue(rag.called(cached))
