@@ -161,7 +161,7 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn('отвечайте вежливо', response.json()['text'])
         self.assertEqual(storage.documents.load(accuracy.RESULT), {'results': ['old']})
-        self.assertEqual(storage.dialogues.read(), [self.dialogue])
+        self.assertEqual(support.exported(), [self.dialogue])
 
     async def test_policy_keeps_existing_code_sources_and_creates_reviewable_criteria(self):
         code = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'original prompt'}
@@ -262,6 +262,40 @@ class ToneFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['purpose'], 'tone-of-voice')
         self.assertEqual(result['criteriaRevision'], draft['revision'])
         self.assertEqual((result['summary']['measured'], result['summary']['passed']), (1, 1))
+
+    async def test_a_check_is_made_of_the_chosen_export(self):
+        """A check takes the export chosen for it, not the newest one, and its result and saved check name it."""
+        chosen = storage.exports.newest()
+        other = {'id': 'd9', 'messages': [{'role': 'user', 'content': 'Другой'}, {'role': 'assistant', 'content': 'О'}]}
+        await self.client.post('/api/logs?name=other.jsonl', content=json.dumps(other))
+        draft = await self.prepared()
+        rows = [
+            {'ruleId': r['id'], 'rule': r['text'], 'status': 'PASS', 'reason': '', 'agentQuote': '', 'title': ''}
+            for r in draft['criteria']
+        ]
+
+        async def verdict(dialogue, topic):
+            return {'dialogueId': dialogue['id'], 'topicId': 't1', 'status': 'PASS', 'rules': rows, 'model': 'test'}
+
+        with patch.object(conversations, 'judge_dialogue', AsyncMock(side_effect=verdict)) as judge:
+            response = await self.client.post(
+                '/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 5, 'exportId': chosen['id']}
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            await self.wait_job()
+        self.assertIsNone(self.jobs.state['error'])
+        self.assertEqual([call.args[0]['id'] for call in judge.await_args_list], ['d1'])
+        result = storage.documents.load(tone.RESULT)
+        self.assertEqual(result['export']['id'], chosen['id'])
+        self.assertEqual(storage.history.lines('tone')[0]['export'], {'id': chosen['id'], 'name': 'fixture'})
+
+    async def test_a_check_of_a_removed_export_is_refused(self):
+        await self.prepared()
+        response = await self.client.post(
+            '/api/tone-of-voice/check', json={'ruleIds': ['pronouns'], 'count': 1, 'exportId': 'nope'}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Выгрузка удалена', response.json()['detail'])
 
     async def test_partial_unknown_is_not_a_successful_tone_check(self):
         """A criterion the judge could not measure keeps the conversation out of the share, for both models: the judge

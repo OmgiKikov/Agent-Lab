@@ -296,18 +296,17 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state['sources'][0]['sha256'], source['sha256'])
 
     async def test_new_export_does_not_reuse_old_verdicts_for_the_same_dialogue_id(self) -> None:
+        """The same id in a new export is another conversation: the verdicts of a result made of another export are
+        never shown with it."""
         dialogue = {
             'id': 'd1',
             'messages': [{'role': 'user', 'content': 'Новый вопрос'}, {'role': 'assistant', 'content': 'Новый ответ'}],
         }
         response = await self.client.post('/api/logs?name=new.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200, response.text)
-        state = (await self.client.get('/api/state')).json()
-        self.assertEqual(state['checks'], {'tone': None, 'code': None})
         detail = (await self.client.get('/api/logs/d1')).json()
         self.assertIsNone(detail['evaluation'])
         self.assertEqual(detail['messages'][1]['content'], 'Новый ответ')
-        self.assertIsNone((await self.client.get('/api/problems?check=code')).json()['log'])
 
     async def test_problems_and_source_routes(self) -> None:
         response = await self.client.get('/api/problems?check=code')
@@ -385,11 +384,12 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post('/api/review', json=dict(body, ruleId='nope'))).status_code, 404)
 
     async def test_upload_remembers_the_export(self) -> None:
+        storage.documents.save(accuracy.RESULT, None)  # the fixture's result is not one the state can count
         dialogue = {'id': 'x', 'messages': [{'role': 'user', 'content': 'q'}, {'role': 'assistant', 'content': 'a'}]}
         await self.client.post('/api/logs?name=export.jsonl', content=json.dumps(dialogue))
-        logs = (await self.client.get('/api/state')).json()['logs']
-        self.assertEqual((logs['total'], logs['file']), (1, 'export.jsonl'))
-        self.assertTrue(logs['updatedAt'])
+        [export] = (await self.client.get('/api/state')).json()['exports']
+        self.assertEqual((export['total'], export['file'], export['name']), (1, 'export.jsonl', 'export'))
+        self.assertTrue(export['uploadedAt'])
 
 
 class RuleReviewStoreTests(unittest.TestCase):

@@ -117,7 +117,9 @@ def read(export_id: str, named: Collection[str] | None = None) -> list[dict]:
             part = wanted[start : start + _CHUNK]
             marks = ', '.join('?' for _ in part)
             query = f'SELECT id, value FROM dialogues WHERE export = ? AND id IN ({marks})'
-            found.update((dialogue_id, json.loads(value)) for dialogue_id, value in connection.execute(query, (export_id, *part)))
+            found.update(
+                (dialogue_id, json.loads(value)) for dialogue_id, value in connection.execute(query, (export_id, *part))
+            )
     return [found[dialogue_id] for dialogue_id in wanted if dialogue_id in found]
 
 

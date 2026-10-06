@@ -6,7 +6,7 @@ conversation with its evaluation. Reads stored records only: no model is called.
 from .. import agents, storage
 from ..domain import answers, checks, metric, results, statistics, was_is
 from ..domain import problems as problem_book
-from . import inputs
+from . import conversations, inputs
 
 
 def current(check: str) -> dict | None:
@@ -208,17 +208,23 @@ def line(check: str) -> dict | None:
 
 
 def conversation(dialogue_id: str, check: str | None = None) -> dict | None:
-    """A logged conversation with its evaluation in the result of the check asked for; without one, in tone of voice's
-    result, then in Точность's. None when the export has no such conversation."""
-    dialogue = storage.dialogues.get(dialogue_id)
-    if dialogue is None:
-        return None
-    evaluation = None
-    for key in [check] if check else checks.RESULTS:
+    """A conversation with its evaluation in the result of the check asked for; without one, in tone of voice's result,
+    then in Точность's: read from the export the result was made of. One that result did not judge comes without an
+    evaluation, from the export of the check asked for, else of the other check, else the newest export. None when
+    there is no such conversation."""
+    asked = [check] if check else list(checks.RESULTS)
+    for key in asked:
         analysis = current(key) or {}
         evaluation = next(
             (result for result in analysis.get('results', []) if str(result['dialogueId']) == dialogue_id), None
         )
-        if evaluation:
-            break
-    return {**dialogue, 'evaluation': evaluation}
+        dialogue = storage.exports.conversation(conversations.export_of(analysis), dialogue_id)
+        if evaluation and dialogue:
+            return {**dialogue, 'evaluation': evaluation}
+    newest = storage.exports.newest()
+    places = [conversations.export_of(current(key)) for key in dict.fromkeys([*asked, *checks.RESULTS])]
+    for export_id in [*places, newest and newest['id']]:
+        dialogue = storage.exports.conversation(export_id, dialogue_id)
+        if dialogue:
+            return {**dialogue, 'evaluation': None}
+    return None

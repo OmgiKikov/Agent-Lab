@@ -81,8 +81,8 @@ async def collect_criteria(progress: Progress) -> dict:
 async def prepare(progress: Progress) -> dict:
     """New criteria from the current rules, not saved yet: from their code when they define it, else from the model."""
     source = current_policy()
-    if not storage.dialogues.count():
-        raise ValueError('Сначала загрузите диалоги.')
+    if not storage.exports.uploaded():
+        raise ValueError('Сначала загрузите выгрузку.')
     progress(message='Собираем критерии из правил общения')
     criteria = tone.coded_criteria(source)
     model = None
@@ -235,25 +235,28 @@ async def judge(dialogues: list[dict], topic: dict, progress: Progress, kept: di
 
 def fingerprint(given: dict) -> str:
     """The same check of tone of voice (work.KINDS): the same criteria, the ones chosen of the revision that is
-    current (criteria collected again or clarified since make other work), on the same material
+    current (criteria collected again or clarified since make other work), on the same material of the same export
     (conversations.same_material)."""
     return same_work(
         check=checks.TONE,
         revision=given['revision'],
         current=(storage.documents.load(DRAFT) or {}).get('revision'),
         rules=sorted(given['ruleIds']),
-        **conversations.same_material(given['count']),
+        **conversations.same_material(given.get('exportId'), given['count']),
     )
 
 
-async def check(criteria: list[dict], count: int, progress: Progress, *, propose: bool = False) -> dict | None:
-    """A check of tone of voice by these criteria (selection), published with its record in the history; then, when
+async def check(
+    criteria: list[dict], count: int, progress: Progress, *, propose: bool = False, export_id: str | None = None
+) -> dict | None:
+    """A check of tone of voice by these criteria (selection) of the export chosen (export_id; the newest without one),
+    published with its record in the history; then, when
     the screens ask, the model proposes which of its errors are serious. A task taken up after a restart that finds its
     check published goes on to the proposals (conversations.published_once). The result published here, None when it
     was published before."""
 
     async def made(check_id: str) -> dict:
-        result = await assess(criteria, count, progress, check_id)
+        result = await assess(criteria, count, progress, check_id, export_id)
         commit(result)
         return result
 
@@ -263,18 +266,25 @@ async def check(criteria: list[dict], count: int, progress: Progress, *, propose
     return result
 
 
-async def assess(criteria: list[dict], count: int, progress: Progress, check_id: str | None = None) -> dict:
+async def assess(
+    criteria: list[dict],
+    count: int,
+    progress: Progress,
+    check_id: str | None = None,
+    export_id: str | None = None,
+) -> dict:
     """A check of tone of voice: its calls to the models are about it in the journal (models.about)."""
     check_id = check_id or uuid.uuid4().hex
     with models.about(f'check:{check_id}'):
-        return await _assess(check_id, criteria, count, progress)
+        return await _assess(check_id, criteria, count, progress, export_id)
 
 
-async def _assess(check_id: str, criteria: list[dict], count: int, progress: Progress) -> dict:
+async def _assess(check_id: str, criteria: list[dict], count: int, progress: Progress, export_id: str | None) -> dict:
     source, draft = current_policy(), storage.documents.load(DRAFT)
-    dialogues = conversations.sample(count)
+    export = conversations.chosen(export_id)
+    dialogues = conversations.sample(export['id'], count)
     if not dialogues:
-        raise ValueError('Сначала загрузите диалоги.')
+        raise ValueError('В выгрузке нет разговоров.')
     started = storage.now()
     topic = {'id': 't1', 'title': checks.TONE_TOPIC, 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
     kept = storage.tasks.steps()
@@ -295,6 +305,7 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
         'criteriaRevision': draft['revision'],
         'criteriaFingerprint': tone.criteria_fingerprint(criteria, source),
         'datasetFingerprint': dataset_fingerprint(dialogues),
+        'export': storage.exports.line(export),
         'startedAt': started,
         'finishedAt': storage.now(),
         'rulesSince': draft['createdAt'],
@@ -314,22 +325,23 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
 
 def commit(result: dict) -> None:
     """Publish a finished check with its record in the history (publish). The materials it was made of must still be
-    the current ones."""
+    the current ones, and its export still here."""
     ensure_active()
     source = current_policy()
     draft = storage.documents.load(DRAFT) or {}
-    dialogues = conversations.sample(result['sampled'])
+    export = storage.exports.get(conversations.export_of(result))
+    dialogues = conversations.sample(export['id'], result['sampled']) if export else []
     criteria = result['topics'][0]['rules']
     if (
-        result['criteriaRevision'] != draft.get('revision')
+        export is None
+        or result['criteriaRevision'] != draft.get('revision')
         or result['criteriaFingerprint'] != tone.criteria_fingerprint(criteria, source)
         or result['datasetFingerprint'] != dataset_fingerprint(dialogues)
     ):
         raise ValueError('Материалы проверки изменились. Запустите проверку заново.')
     with storage.transaction():
         previous = storage.history.latest(checks.TONE)
-        export = {'file': storage.dialogues.meta().get('file'), 'total': storage.dialogues.count()}
-        publish(result, tone.snapshot(result, dialogues, criteria, source, export, previous))
+        publish(result, tone.snapshot(result, dialogues, criteria, source, storage.exports.line(export), previous))
 
 
 def publish(result: dict, record: dict) -> None:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 
 from .. import storage
-from ..flows import accuracy, inputs, scenarios, severity, simulation, tone
+from ..flows import accuracy, conversations, inputs, scenarios, severity, simulation, tone
 from ..jobs import BusyError, PerAgent, Work, view
 
 
@@ -23,14 +23,18 @@ class Kind:
 KINDS: dict[str, Kind] = {
     'tone-check': Kind(
         lambda given: lambda progress: tone.check(
-            tone.selection(given['ruleIds'], given['revision']), given['count'], progress, propose=given['propose']
+            tone.selection(given['ruleIds'], given['revision']),
+            given['count'],
+            progress,
+            propose=given['propose'],
+            export_id=given.get('exportId'),
         ),
         tone.fingerprint,
     ),
     'tone-criteria': Kind(lambda given: tone.collect_criteria),
     'discover': Kind(
         lambda given: lambda progress: accuracy.check(
-            given['count'], progress, replan=given['replan'], propose=given['propose']
+            given['count'], progress, replan=given['replan'], propose=given['propose'], export_id=given.get('exportId')
         ),
         accuracy.fingerprint,
     ),
@@ -51,6 +55,15 @@ KINDS: dict[str, Kind] = {
 }
 # What a Lab taking up the tasks a process before it left running needs (jobs.recover).
 RESUME: dict[str, Callable[[dict], Work]] = {name: kind.work for name, kind in KINDS.items()}
+
+
+def export_of(export_id: str | None) -> str:
+    """The export a check is started on, named in its input so a task taken up after a restart takes the same one:
+    the one asked for, else the newest; 400 when it is gone or there is none."""
+    try:
+        return conversations.chosen(export_id)['id']
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
 
 
 def start(jobs: PerAgent, kind: str, given: dict, task_id: str | None = None) -> dict:

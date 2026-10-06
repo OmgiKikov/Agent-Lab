@@ -22,12 +22,14 @@ class DiscoverCommand(BaseModel):
     replan: bool = False
     # After the check the model proposes which errors are serious (severity.propose); the screens ask for it.
     propose: bool = False
+    # The export the conversations come from; the newest without one.
+    exportId: str | None = None
 
 
 @router.post('/api/discover')
 async def start_discover(jobs: Jobs, payload: DiscoverCommand | None = Body(default=None)) -> dict:
     payload = payload or DiscoverCommand()
-    return work.start(jobs, 'discover', payload.model_dump())
+    return work.start(jobs, 'discover', payload.model_dump() | {'exportId': work.export_of(payload.exportId)})
 
 
 @router.get('/api/checks/{check}')

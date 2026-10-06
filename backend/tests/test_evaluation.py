@@ -444,6 +444,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             'id': 'stable',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
+        storage.exports.add([dialogue], None)  # the export a check is made of; its sample is the patched one
         topic = {'id': 't1', 'title': 'Возврат', 'dialogueIds': ['stable'], 'rules': [criterion()]}
         result = {'dialogueId': 'stable', 'topicId': 't1', 'status': 'UNMEASURED', 'rules': [], 'opening': 'Вопрос'}
         with (
@@ -464,6 +465,7 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             'id': 'stable',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
+        storage.exports.add([dialogue], None)  # the export a check is made of; its sample is the patched one
         code = {'id': 's1', 'kind': 'prompt', 'content': 'text'}
         policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь к клиенту на вы.'}
         topic = {'id': 't1', 'title': 'Возврат', 'dialogueIds': ['stable'], 'rules': [criterion()]}
@@ -492,9 +494,9 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(refused.exception), 'Код агента ещё не прочитан. Прочитайте его в разделе «Агент».')
 
     async def test_card_generation_does_not_commit(self):
-        storage.dialogues.replace([{'id': 'd'}])
+        export = storage.exports.add([{'id': 'd'}], None)
         with (
-            patch.object(storage.documents, 'load', return_value={'topics': [], 'results': []}),
+            patch.object(storage.documents, 'load', return_value={'topics': [], 'results': [], 'export': export}),
             patch.object(cards.scenarios, 'pick', return_value=[({}, 'd', 'Coverage')]),
             patch.object(cards, 'build_card', AsyncMock(return_value={'id': 'card', 'model': 'actual-main'})),
             patch.object(storage.documents, 'save') as save,

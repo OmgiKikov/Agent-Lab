@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from lab import app, config
+from lab import app, config, storage
 from lab.jobs import Jobs, PerAgent
 from lab.storage import tasks
 
@@ -50,6 +50,12 @@ def serve(test: unittest.IsolatedAsyncioTestCase, jobs: Jobs | PerAgent | None =
     test.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=test.app), base_url='http://test')
     test.addAsyncCleanup(test.client.aclose)
     test.addAsyncCleanup(test.jobs.close)
+
+
+def exported() -> list[dict]:
+    """The conversations of the newest export, [] without one: what a test of one export reads."""
+    newest = storage.exports.newest()
+    return storage.exports.read(newest['id']) if newest else []
 
 
 @contextmanager

@@ -40,13 +40,13 @@ class RegistryTests(unittest.TestCase):
         first = registry.create('Первый', '')['id']
         second = registry.create('Второй', '')['id']
         with registry.using(first):
-            storage.dialogues.replace([{'id': '1'}])
+            storage.exports.add([{'id': '1'}], None)
         with registry.using(second):
-            self.assertEqual(storage.dialogues.read(), [])
+            self.assertEqual(support.exported(), [])
         with registry.using(first):
-            self.assertEqual(storage.dialogues.read(), [{'id': '1'}])
+            self.assertEqual(support.exported(), [{'id': '1'}])
         self.assertTrue((self.root / 'agents' / first / 'lab.sqlite3').exists())
-        self.assertEqual(storage.dialogues.read(), [])
+        self.assertEqual(support.exported(), [])
 
 
 class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
@@ -66,7 +66,7 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         first = (await self.client.get('/api/state', headers={'X-Agent': self.first})).json()
         second = (await self.client.get('/api/state', headers={'X-Agent': self.second})).json()
-        self.assertEqual((first['logs']['total'], second['logs']['total']), (1, 0))
+        self.assertEqual(([e['total'] for e in first['exports']], second['exports']), ([1], []))
         self.assertEqual((await self.client.get('/api/state', headers={'X-Agent': 'nobody'})).status_code, 404)
 
     async def test_each_agent_has_its_own_job(self) -> None:
@@ -109,7 +109,7 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_deleted_agent_leaves_the_list_and_its_data_is_moved_aside(self) -> None:
         with registry.using(self.first):
-            storage.dialogues.replace([{'id': '1'}])
+            storage.exports.add([{'id': '1'}], None)
         response = await self.client.post('/api/agents/delete', json={'id': self.first})
         self.assertEqual(response.status_code, 200)
         self.assertEqual([a['id'] for a in (await self.client.get('/api/agents')).json()], [self.second])
@@ -192,21 +192,21 @@ class AdoptionTests(unittest.TestCase):
         self.root = self.settings.data
 
     def test_the_existing_database_becomes_the_first_agent_once(self) -> None:
-        storage.dialogues.replace([{'id': 'd1'}])
+        storage.exports.add([{'id': 'd1'}], None)
         registry.adopt_legacy()
         self.assertEqual(
             [(a['id'], a['name'], a['description']) for a in registry.listed()],
             [('acquiring', 'Агент эквайринга', 'СберБизнес · чат поддержки')],
         )
         with registry.using('acquiring'):
-            self.assertEqual(storage.dialogues.read(), [{'id': 'd1'}])
+            self.assertEqual(support.exported(), [{'id': 'd1'}])
         self.assertFalse((self.root / 'lab.sqlite3').exists())
         self.assertTrue((self.root / 'lab.sqlite3.before-agents').exists())
         registry.adopt_legacy()
         self.assertEqual(len(registry.listed()), 1)
 
     def test_starting_after_the_adoption_leaves_no_empty_database_behind(self) -> None:
-        storage.dialogues.replace([{'id': 'd1'}])
+        storage.exports.add([{'id': 'd1'}], None)
 
         async def start() -> None:
             async with lifespan(create(self.settings)):
@@ -217,13 +217,13 @@ class AdoptionTests(unittest.TestCase):
         self.assertFalse((self.root / 'lab.sqlite3').exists())
 
     def test_adoption_never_overwrites_an_adopted_database_or_its_backup(self) -> None:
-        storage.dialogues.replace([{'id': 'real'}])
+        storage.exports.add([{'id': 'real'}], None)
         registry.adopt_legacy()
         (self.root / 'agents.sqlite3').unlink()  # the registry lost
-        storage.dialogues.replace([{'id': 'stray'}])
+        storage.exports.add([{'id': 'stray'}], None)
         registry.adopt_legacy()
         with registry.using('acquiring'):
-            self.assertEqual(storage.dialogues.read(), [{'id': 'real'}])
+            self.assertEqual(support.exported(), [{'id': 'real'}])
         with sqlite3.connect(self.root / 'lab.sqlite3.before-agents') as backup:
             rows = backup.execute('SELECT value FROM dialogues').fetchall()
         self.assertEqual([json.loads(value) for (value,) in rows], [{'id': 'real'}])
@@ -259,7 +259,7 @@ class AdoptionTests(unittest.TestCase):
             created = registry.create(name, agent_id=agent_id)['id']
             if name != 'Пустой':
                 with registry.using(created):
-                    storage.dialogues.replace([{'id': 'd1'}])
+                    storage.exports.add([{'id': 'd1'}], None)
         (self.root / 'agents.sqlite3').unlink()
 
         async def start() -> None:
@@ -272,10 +272,10 @@ class AdoptionTests(unittest.TestCase):
             [('acquiring', 'Агент эквайринга'), ('agent-kreditov', 'agent-kreditov')],
         )
         with registry.using('agent-kreditov'):
-            self.assertEqual(storage.dialogues.read(), [{'id': 'd1'}])
+            self.assertEqual(support.exported(), [{'id': 'd1'}])
 
     def test_a_second_lab_on_the_same_data_recovers_nothing_and_says_why(self) -> None:
-        storage.dialogues.replace([{'id': 'd1'}])
+        storage.exports.add([{'id': 'd1'}], None)
 
         async def start() -> None:
             async with lifespan(create(self.settings)):
@@ -332,11 +332,11 @@ class LegacyImportTests(unittest.TestCase):
 
     def logs_of(self, agent_id: str) -> list:
         with registry.using(agent_id):
-            return storage.dialogues.read()
+            return support.exported()
 
     def test_without_agents_the_import_waits_in_the_database_the_next_start_adopts(self) -> None:
         self.assertEqual(self.run_import()['agent'], None)
-        self.assertEqual(len(storage.dialogues.read()), 1)
+        self.assertEqual(len(support.exported()), 1)
         registry.adopt_legacy()
         self.assertEqual(len(self.logs_of('acquiring')), 1)
 

@@ -5,7 +5,7 @@ from .. import models, storage
 from ..domain import export, quotes, verdicts
 from ..domain.tone import KIND
 from ..roles import advice
-from . import tone
+from . import conversations, tone
 
 
 def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
@@ -24,7 +24,7 @@ def context(finished_at: str, dialogue_id: str, rule_id: str) -> dict:
     )
     result = next((item for item in analysis['results'] if str(item['dialogueId']) == dialogue_id), None)
     verdict = next((row for row in (result or {}).get('rules', []) if row['ruleId'] == rule_id), None)
-    dialogue = storage.dialogues.get(dialogue_id)
+    dialogue = storage.exports.conversation(conversations.export_of(analysis), dialogue_id)
     if rule is None or verdict is None or dialogue is None:
         raise ValueError('В текущем итоге нет этого разговора или критерия.')
     if verdict['status'] != 'FAIL':

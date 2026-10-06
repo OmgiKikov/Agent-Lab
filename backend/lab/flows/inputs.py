@@ -1,12 +1,12 @@
-"""The Lab's inputs, and what a new one resets: the export of conversations, the agent's code (its prompts and tools)
+"""The Lab's inputs and what a new one resets: the exports of conversations, the agent's code (its prompts and tools)
 and the rules of communication.
 
-Replacing an input clears, in the same transaction, only what was derived from it. A new export clears the results of
-both checks and the deck; their saved checks stay in their histories, and the criteria of both wait for the next check
-(tone of voice's in their draft, Точность's in checks.CODE_CRITERIA). Changed rules of communication clear tone of
-voice's criteria, its result and a deck built from it; changed code of the agent clears Точность's result, its kept
-criteria and a deck built from it; code read again unchanged clears nothing, wherever its prompts now stand in their
-files. Runs and the answers people gave stay.
+An export is added beside the others and resets nothing: a check is made of the export chosen for it. An export
+removed takes with it, in the same transaction, the current result made of it (its saved check keeps the conversations
+it judged) and the scenarios built from that result; Точность keeps its criteria for its next check
+(checks.CODE_CRITERIA). Changed rules of communication clear tone of voice's criteria, its result and a deck built from
+it; changed code of the agent clears Точность's result, its kept criteria and a deck built from it; code read again
+unchanged clears nothing, wherever its prompts now stand in their files. Runs and the answers people gave stay.
 """
 
 import asyncio
@@ -16,7 +16,7 @@ from collections.abc import Collection
 from .. import storage
 from ..agents import sources as agent_sources
 from ..domain import accuracy, checks, export, tone
-from . import connection
+from . import connection, conversations
 
 SOURCES = 'sources.json'  # the agent's prompts and tools, and the rules of communication beside them
 # When the agent's code was read last, from which folder (the setting as the person wrote it) and which prompts were
@@ -39,24 +39,33 @@ def drop_deck(changed: Collection[str]) -> None:
         storage.documents.save(checks.DECK, None)
 
 
-def replace_export(dialogues: list[dict], name: str | None = None) -> int:
-    """The new export with its file name, and what it resets. A saved check never names the previous file."""
+def add_export(dialogues: list[dict], file: str | None, name: str | None = None, skipped: int = 0) -> dict:
+    """A new export beside the others, under its name (the file's by default): nothing checked changes."""
+    return storage.exports.add(dialogues, file, name, skipped)
+
+
+async def upload_export(file: str, data: bytes, name: str | None = None) -> dict:
+    """An uploaded file read in a worker thread and added whole as an export: its line, with how many conversations of
+    the file a check cannot read (the agent wrote first, or never answered), which are left out (skipped)."""
+    dialogues, skipped = await asyncio.to_thread(export.read_export, file, data)
+    return add_export(dialogues, file, name, skipped)
+
+
+def remove_export(export_id: str) -> dict:
+    """An export and its conversations go, with the current result made of it and the scenarios built from that result;
+    Точность keeps the criteria of its result for its next check. The export as it was; LookupError when it is gone."""
     with storage.transaction():
-        result = storage.documents.load(checks.result(checks.CODE))
-        if result and result.get('topics'):
-            # Точность's criteria wait for its next check, which sorts the new conversations into the same topics;
-            # without a result, the criteria kept already stay.
-            storage.documents.save(checks.CODE_CRITERIA, accuracy.criteria_of(result))
-        storage.dialogues.replace(dialogues, name)
-        _clear(checks.RESULTS)
-    return len(dialogues)
-
-
-async def upload_export(name: str, data: bytes) -> dict:
-    """An uploaded export read in a worker thread and committed whole: how many conversations it has, and how many it
-    had that a check cannot read (the agent wrote first, or never answered), which are left out."""
-    dialogues, skipped = await asyncio.to_thread(export.read_export, name, data)
-    return {'total': replace_export(dialogues, name), 'skipped': skipped}
+        removed = storage.exports.get(export_id)
+        if removed is None:
+            raise LookupError('Выгрузки уже нет.')
+        made = {check: storage.documents.load(checks.result(check)) for check in checks.RESULTS}
+        cleared = [check for check, result in made.items() if result and conversations.export_of(result) == export_id]
+        code = made[checks.CODE]
+        if checks.CODE in cleared and code.get('topics'):
+            storage.documents.save(checks.CODE_CRITERIA, accuracy.criteria_of(code))
+        storage.exports.remove(export_id)
+        _clear(cleared)
+    return removed
 
 
 def replace_sources(items: list[dict], read: dict | None = None) -> None:

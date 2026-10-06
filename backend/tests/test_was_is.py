@@ -93,14 +93,16 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    async def test_a_check_of_accuracy_is_saved_in_its_history_and_a_new_export_no_longer_erases_it(self):
+    async def test_a_check_of_accuracy_is_saved_in_its_history_and_a_new_export_keeps_it(self):
         result = await self.assess_code()
         saved = (await self.get('/api/history/code'))['checks']
         self.assertEqual([check['id'] for check in saved], [result['checkId']])
         self.assertEqual(saved[0]['comparison']['kind'], 'first')
-        self.assertEqual(saved[0]['file'], 'Сентябрь.jsonl')
+        self.assertEqual((saved[0]['file'], saved[0]['export']['name']), ('Сентябрь.jsonl', 'Сентябрь'))
         self.assertEqual(saved[0]['summary'], {'measured': 1, 'passed': 0, 'failed': 1, 'unmeasured': 0})
         await self.upload('d2', 'd3', name='Октябрь.jsonl')
+        self.assertEqual(storage.documents.load(CODE_RESULT)['checkId'], result['checkId'])
+        inputs.remove_export(result['export']['id'])
         self.assertIsNone(storage.documents.load(CODE_RESULT))
         detail = await self.get(f'/api/history/code/{result["checkId"]}')
         self.assertEqual(detail['result']['checkId'], result['checkId'])
@@ -114,13 +116,19 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
     async def test_criteria_of_accuracy_survive_a_new_export_until_the_code_of_the_agent_changes(self):
         first = await self.assess_code()
         await self.upload('d2', 'd3', name='Октябрь.jsonl')
+        second = await self.assess_code()  # of the newest export
+        self.plan.assert_not_awaited()  # the new conversations are sorted into the same topics
+        self.assertEqual(second['topics'][0]['rules'], first['topics'][0]['rules'])
+        self.assertEqual(second['export']['name'], 'Октябрь')
+        self.assertEqual(storage.history.lines('code')[0]['comparison']['kind'], 'new-data')
+        # The export of the result removed: the criteria wait for the next check.
+        inputs.remove_export(second['export']['id'])
         kept = storage.documents.load(CRITERIA)
         self.assertEqual([t['title'] for t in kept['topics']], ['Терминалы'])
         self.assertEqual(kept['topics'][0]['dialogueIds'], [])
-        second = await self.assess_code()
-        self.plan.assert_not_awaited()  # the new conversations are sorted into the same topics
-        self.assertEqual(second['topics'][0]['rules'], first['topics'][0]['rules'])
-        self.assertEqual(storage.history.lines('code')[0]['comparison']['kind'], 'new-data')
+        third = await self.assess_code()
+        self.plan.assert_not_awaited()
+        self.assertEqual(third['topics'][0]['rules'], first['topics'][0]['rules'])
         # Changed code: its criteria go with it, and the next check extracts them anew.
         await self.read_code({**CODE, 'content': 'Называй срок доставки терминала и его модель.'})
         self.assertIsNone(storage.documents.load(CRITERIA))
@@ -135,11 +143,9 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first['kind'], 'first')
         self.assertNotIn('criteria', first)
         await self.upload('d2', 'd3', name='Октябрь.jsonl')
-        waiting = await self.get('/api/compare?check=tone')
-        self.assertEqual((waiting['kind'], waiting['current']), ('none', None))
-        self.assertEqual(waiting['previous']['summary']['failed'], 1)
-        self.assertEqual(waiting['previous']['file'], 'Сентябрь.jsonl')
-        await self.check_tone(status='PASS')
+        kept = await self.get('/api/compare?check=tone')
+        self.assertEqual((kept['kind'], kept['current']['file']), ('first', 'Сентябрь.jsonl'))
+        await self.check_tone(status='PASS')  # of the newest export
         compared = await self.get('/api/compare?check=tone')
         self.assertEqual(compared['kind'], 'new-data')
         self.assertEqual(compared['current']['file'], 'Октябрь.jsonl')
@@ -159,6 +165,11 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pronouns['now'], {'failed': 0, 'measured': 2})
         self.assertEqual((pronouns['verdict'], pronouns['direction']), ('few', 'fewer'))
         self.assertTrue(pronouns['name'])
+        # The export of the result removed: no current result, the last saved check named.
+        inputs.remove_export(storage.exports.newest()['id'])
+        waiting = await self.get('/api/compare?check=tone')
+        self.assertEqual((waiting['kind'], waiting['current']), ('none', None))
+        self.assertEqual(waiting['previous']['file'], 'Октябрь.jsonl')
 
     async def test_checks_with_other_criteria_are_not_compared(self):
         await self.assess_code()
@@ -170,8 +181,8 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('criteria', compared)
 
     async def test_answers_on_accuracy_given_after_its_check_stay_with_its_saved_check(self):
-        """A new export takes the live result of Точность away; a person's answers on it stay with its saved check, as
-        tone of voice's do."""
+        """Removing its export takes the live result of Точность away; a person's answers on it stay with its saved
+        check, as tone of voice's do."""
         result = await self.assess_code()
         rule_id = result['results'][0]['rules'][0]['ruleId']
         body = {'source': 'log', 'check': 'code', 'dialogueId': 'd1', 'ruleId': rule_id, 'decision': 'disagree'}
@@ -179,7 +190,7 @@ class WasIsTests(unittest.IsolatedAsyncioTestCase):
             '/api/review', json=body | {'finishedAt': result['finishedAt'], 'status': 'FAIL'}
         )
         self.assertEqual(response.status_code, 200, response.text)
-        await self.upload('d2', name='Октябрь.jsonl')
+        inputs.remove_export(result['export']['id'])
         detail = await self.get(f'/api/history/code/{result["checkId"]}')
         self.assertEqual(detail['result']['results'][0]['rules'][0]['review'], 'disagree')
         self.assertEqual(

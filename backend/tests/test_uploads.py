@@ -109,4 +109,4 @@ class UploadBodyTests(unittest.IsolatedAsyncioTestCase):
                 response = await self.client.post(path, content=endless())
                 self.assertEqual(response.status_code, 413, response.text)
                 self.assertLessEqual(pulled, 11)
-        self.assertEqual((storage.dialogues.read(), storage.dialogues.uploaded()), ([], False))
+        self.assertEqual((support.exported(), storage.exports.listed()), ([], []))

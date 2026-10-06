@@ -10,8 +10,9 @@ TONE, CODE = 'tone', 'code'
 RESULTS = {TONE: 'tone-result.json', CODE: 'discover.json'}
 NAMES = {TONE: 'Tone of voice', CODE: 'Точность'}
 DECK = 'cards.json'  # the scenarios, built from the errors of one check: {check, createdAt, model, cards}
-# The criteria of Точность waiting for its next check after a new export: its topics and their criteria without the
-# conversations of the old export (flows.inputs.replace_export, accuracy.criteria_of); changed code clears them.
+# The criteria of Точность waiting for its next check after the export of its result was removed: its topics and their
+# criteria without the conversations of that export (flows.inputs.remove_export, accuracy.criteria_of); changed code
+# clears them.
 CODE_CRITERIA = 'accuracy-criteria.json'
 # Serious and minor errors, per check, by the criterion's key (problems.rule_key): a person's decisions
 # {tone: {key: true|false}, code: {…}} (an older record listed only the serious keys), and apart from them the model's

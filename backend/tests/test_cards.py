@@ -102,11 +102,11 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_generation_failure_keeps_saved_deck_and_is_visible(self):
         jobs = Jobs()
-        storage.dialogues.replace([dialogue()])
+        export = storage.exports.add([dialogue()], None)
         with patch.object(cards, 'build_card', AsyncMock(side_effect=models.ModelError('model unavailable'))):
             previous = {'cards': [{'id': 'previous'}]}
             storage.documents.save(checks.DECK, previous)
-            storage.documents.save('discover.json', analysis())
+            storage.documents.save('discover.json', analysis() | {'export': export})
             await api.scenarios.start_cards(jobs, api.scenarios.CardsCommand(check='code'))
             await jobs._task
             self.assertEqual(storage.documents.load(checks.DECK), previous)
@@ -126,8 +126,8 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         topic = {'title': 'Тариф'}
         picks = [(topic, 'fail', 'Coverage'), (topic, 'kept', 'Coverage')]
         reported = []
-        storage.documents.save(checks.result(checks.CODE), {'topics': [], 'results': []})
-        storage.dialogues.replace([{'id': 'fail'}, {'id': 'kept'}])
+        export = storage.exports.add([{'id': 'fail'}, {'id': 'kept'}], None)
+        storage.documents.save(checks.result(checks.CODE), {'topics': [], 'results': [], 'export': export})
         with (
             patch.object(picking, 'pick', return_value=picks),
             patch.object(cards, 'build_card', build),
@@ -189,8 +189,8 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             {'topicId': 't', 'dialogueId': 'p', 'status': 'PASS', 'rules': [{'ruleId': 'reply', 'status': 'PASS'}]},
         ]
         named = scenario('Тариф', 'Клиент узнаёт тариф.')
-        storage.documents.save(checks.result(checks.CODE), audit)
-        storage.dialogues.replace([dialogue(), dict(dialogue(), id='p')])
+        export = storage.exports.add([dialogue(), dict(dialogue(), id='p')], None)
+        storage.documents.save(checks.result(checks.CODE), audit | {'export': export})
         with (
             patch.object(models, 'chat', AsyncMock(return_value=named)),
             patch.object(cards.world, 'templates', return_value=None),

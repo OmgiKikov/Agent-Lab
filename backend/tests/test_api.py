@@ -29,11 +29,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         }
         response = await self.client.post('/api/logs?name=sample.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'total': 1, 'skipped': 0})
+        export = response.json()
+        self.assertEqual((export['name'], export['total'], export['skipped']), ('sample', 1, 0))
         response = await self.client.get('/api/logs/dialogue-1')
         self.assertEqual(response.json(), {**dialogue, 'evaluation': None})
         evaluation = {'dialogueId': 'dialogue-1', 'status': 'FAIL'}
-        storage.documents.save(accuracy.RESULT, {'results': [evaluation]})
+        storage.documents.save(accuracy.RESULT, {'results': [evaluation], 'export': export})
         response = await self.client.get('/api/logs/dialogue-1')
         self.assertEqual(response.json()['evaluation'], evaluation)
         self.assertEqual((await self.client.get('/api/logs/missing')).status_code, 404)
@@ -54,12 +55,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await self.client.get('/api/articles/нет-такой')).status_code, 404)
 
     async def test_failed_upload_keeps_inputs_and_derived_documents(self) -> None:
-        storage.dialogues.replace([{'id': 'old'}])
+        storage.exports.add([{'id': 'old'}], None)
         storage.documents.save(accuracy.RESULT, {'results': ['old']})
         storage.documents.save(checks.DECK, {'cards': ['old']})
         response = await self.client.post('/api/logs?name=broken.xlsx', content=b'not a workbook')
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(storage.dialogues.read(), [{'id': 'old'}])
+        self.assertEqual(support.exported(), [{'id': 'old'}])
         self.assertEqual(storage.documents.load(accuracy.RESULT), {'results': ['old']})
         self.assertEqual(storage.documents.load(checks.DECK), {'cards': ['old']})
 
@@ -72,7 +73,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             'Нужна выгрузка чата, по одному разговору в строке.',
         )
 
-    async def test_successful_upload_invalidates_old_audit_and_scenarios(self) -> None:
+    async def test_an_upload_keeps_the_audit_and_its_scenarios(self) -> None:
         storage.documents.save(accuracy.RESULT, {'results': ['old']})
         storage.documents.save(checks.DECK, {'cards': ['old']})
         dialogue = {
@@ -81,15 +82,17 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         }
         response = await self.client.post('/api/logs?name=sample.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(storage.documents.load(accuracy.RESULT))
-        self.assertIsNone(storage.documents.load(checks.DECK))
+        self.assertEqual(storage.documents.load(accuracy.RESULT), {'results': ['old']})
+        self.assertEqual(storage.documents.load(checks.DECK), {'cards': ['old']})
 
     async def test_criteria_extracted_anew_drop_the_cards_built_from_the_old_ones(self) -> None:
+        export = storage.exports.add([], None)
         for replan, kept in ((False, True), (True, False)):
             with self.subTest(replan=replan):
                 # What a check of no conversation returns (discover.run), with its own id for its saved check.
                 audit = {
                     'checkId': uuid.uuid4().hex,
+                    'export': export,
                     'datasetFingerprint': comparison.dataset_fingerprint([]),
                     'finishedAt': storage.now(),
                     'model': None,
@@ -115,7 +118,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             'id': 'd1',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
-        storage.dialogues.replace([dialogue])
+        storage.exports.add([dialogue], None)
         storage.documents.save(
             inputs.SOURCES, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'Отвечай по делу.'}]
         )
@@ -152,7 +155,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             'id': 'd1',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
-        storage.dialogues.replace([dialogue])
+        storage.exports.add([dialogue], None)
         storage.documents.save(
             inputs.SOURCES,
             [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'Отвечай клиенту по делу и вежливо.'}],
@@ -416,16 +419,18 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_state_counts_the_dialogues_without_parsing_them(self) -> None:
         messages = [{'role': 'user', 'content': 'dialogue-text'}, {'role': 'assistant', 'content': 'answer'}]
-        inputs.replace_export([{'id': str(number), 'messages': messages} for number in range(3)])
+        inputs.add_export([{'id': str(number), 'messages': messages} for number in range(3)], None)
         state, parsed = await self.state_parsing()
-        self.assertEqual(state['logs']['total'], 3)
+        self.assertEqual(state['exports'][0]['total'], 3)
         self.assertFalse([text for text in parsed if 'dialogue-text' in text])
         response = await self.client.post(
             '/api/logs?name=one.jsonl', content=json.dumps({'id': 'x', 'messages': messages})
         )
         self.assertEqual(response.status_code, 200)
         state, _ = await self.state_parsing()
-        self.assertEqual((state['logs']['total'], state['logs']['file']), (1, 'one.jsonl'))
+        self.assertEqual(
+            [(export['total'], export['file']) for export in state['exports']], [(1, 'one.jsonl'), (3, None)]
+        )
 
     async def test_state_reads_the_log_assessment_once_and_reuses_its_summary(self) -> None:
         summary = {'checked': 1, 'measured': 1, 'failed': 1, 'passed': 0, 'unmeasured': 0, 'patterns': []}

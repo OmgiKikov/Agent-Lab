@@ -165,9 +165,9 @@ class LogImportTests(unittest.TestCase):
             'id': 'one',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
-        storage.dialogues.replace([dialogue])
-        self.assertEqual(storage.dialogues.get('one'), dialogue)
-        self.assertIsNone(storage.dialogues.get('missing'))
+        export = storage.exports.add([dialogue], None)
+        self.assertEqual(storage.exports.conversation(export['id'], 'one'), dialogue)
+        self.assertIsNone(storage.exports.conversation(export['id'], 'missing'))
 
     def test_an_export_says_how_many_conversations_a_check_cannot_read(self):
         talk = [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}]

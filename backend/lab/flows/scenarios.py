@@ -13,7 +13,7 @@ from ..agents import world
 from ..domain import checks, scenarios
 from ..roles import scenario as scenario_role
 from ..roles import world as world_role
-from . import Progress, connection, inputs, tone
+from . import Progress, connection, conversations, inputs, tone
 
 DECK = checks.DECK  # {check, createdAt, model, cards}
 # What the task says while it builds; the count of the built and the failed ones is the task's own (done of total).
@@ -91,11 +91,13 @@ async def built(check: str, progress: Progress = lambda **_: None) -> list[dict]
             raise RuntimeError(
                 'Критерии tone of voice изменились. Сначала проверьте разговоры заново, потом соберите сценарии.'
             )
-    # Only the picked conversations of the export are read: a card needs its own one.
-    picks = scenarios.pick(analysis, set(storage.dialogues.ids()))
+    # Only the picked conversations of the export the result was made of are read: a card needs its own one.
+    export_id = conversations.export_of(analysis)
+    picks = scenarios.pick(analysis, set(storage.exports.ids(export_id)) if export_id else set())
     if not picks:
         raise RuntimeError('Нет разговоров, из которых можно собрать сценарии.')
-    dialogues = {str(dialogue['id']): dialogue for dialogue in storage.dialogues.read([pick[1] for pick in picks])}
+    found = storage.exports.read(export_id, [pick[1] for pick in picks])
+    dialogues = {str(dialogue['id']): dialogue for dialogue in found}
     general = scenarios.general_rules(analysis)
     cards: dict[int, dict] = {}
     failed: list[dict] = []

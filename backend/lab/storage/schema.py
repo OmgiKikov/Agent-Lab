@@ -111,7 +111,9 @@ def _exports(connection: sqlite3.Connection) -> None:
     if 'export' not in columns:
         connection.execute('ALTER TABLE dialogues RENAME TO dialogues_before_exports')
         connection.execute(DIALOGUES)
-        rows = connection.execute('SELECT position, id, value FROM dialogues_before_exports ORDER BY position').fetchall()
+        rows = connection.execute(
+            'SELECT position, id, value FROM dialogues_before_exports ORDER BY position'
+        ).fetchall()
         meta = _document(connection, EXPORT_META)
         if rows or (meta is not None and _document(connection, EXPORT) is None):
             _new_export(connection, meta or {}, rows)

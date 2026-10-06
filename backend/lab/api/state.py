@@ -54,7 +54,8 @@ def state() -> dict:
         'settings': connection.settings(),
         'sources': source_summary(found[checks.CODE]),
         'sourcesRead': storage.documents.load(inputs.SOURCES_READ),
-        'logs': {'total': storage.dialogues.count(), **storage.dialogues.meta()},
+        # The exports of conversations, the newest first; a check is made of the one chosen for it.
+        'exports': storage.exports.listed(),
         'checks': found,
         # What changes with every answer given, here or in another tab or browser, on a result or a run: the screens
         # fetch the results and the problems again by it, so a case answered elsewhere is never offered again.

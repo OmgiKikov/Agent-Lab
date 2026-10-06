@@ -8,6 +8,8 @@ import unittest
 import support
 
 from lab import storage
+from lab.domain import checks
+from lab.flows import conversations, inputs
 
 
 def talk(dialogue_id: str, text: str = 'Вопрос') -> dict:
@@ -25,7 +27,9 @@ class ExportsTests(unittest.TestCase):
         first = storage.exports.add([talk('a'), talk('b')], 'Сентябрь.xlsx', skipped=2)
         second = storage.exports.add([talk('c')], 'export-16-09.jsonl', 'Октябрь')
         self.assertEqual([e['id'] for e in storage.exports.listed()], [second['id'], first['id']])
-        self.assertEqual((first['name'], first['file'], first['total'], first['skipped']), ('Сентябрь', 'Сентябрь.xlsx', 2, 2))
+        self.assertEqual(
+            (first['name'], first['file'], first['total'], first['skipped']), ('Сентябрь', 'Сентябрь.xlsx', 2, 2)
+        )
         self.assertEqual(second['name'], 'Октябрь')
         self.assertEqual(storage.exports.ids(first['id']), ['a', 'b'])
         self.assertEqual(storage.exports.read(first['id'], ['b']), [talk('b')])
@@ -79,7 +83,9 @@ class SchemaNineTests(unittest.TestCase):
             'CREATE TABLE history (id TEXT PRIMARY KEY, kind TEXT NOT NULL, summary TEXT NOT NULL, value TEXT NOT NULL)'
         )
         for position, dialogue_id in enumerate(['d1', 'd2'], 1):
-            old.execute('INSERT INTO dialogues VALUES (?, ?, ?)', (position, dialogue_id, json.dumps(talk(dialogue_id))))
+            old.execute(
+                'INSERT INTO dialogues VALUES (?, ?, ?)', (position, dialogue_id, json.dumps(talk(dialogue_id)))
+            )
         meta = {'file': 'Сентябрь.xlsx', 'updatedAt': '2026-10-02T10:00:00.000+00:00'}
         result = {'checkId': 'c1', 'purpose': 'tone-of-voice', 'results': [], 'topics': []}
         for name, value in (('logs-meta.json', meta), ('tone-result.json', result)):
@@ -107,6 +113,67 @@ class SchemaNineTests(unittest.TestCase):
 
     def test_a_database_without_an_export_gets_none(self) -> None:
         self.assertEqual(storage.exports.listed(), [])
+
+
+class ExportFlowTests(unittest.TestCase):
+    """What an export changes: an upload nothing, a removal the result made of it."""
+
+    def setUp(self) -> None:
+        support.lab(self)
+
+    def test_an_upload_clears_nothing(self) -> None:
+        storage.documents.save('tone-result.json', {'purpose': 'tone-of-voice', 'results': []})
+        storage.documents.save('discover.json', {'topics': [], 'results': []})
+        storage.documents.save('cards.json', {'check': 'tone', 'cards': [{'id': 'card-1'}]})
+        inputs.add_export([talk('a')], 'Октябрь.xlsx')
+        for name in ('tone-result.json', 'discover.json', 'cards.json'):
+            self.assertIsNotNone(storage.documents.load(name), name)
+
+    def test_removing_the_export_of_a_result_sends_it_to_the_history(self) -> None:
+        kept = inputs.add_export([talk('a')], 'Сентябрь.xlsx')
+        gone = inputs.add_export([talk('b')], 'Октябрь.xlsx')
+        storage.documents.save('tone-result.json', {'purpose': 'tone-of-voice', 'results': [], 'export': gone})
+        storage.documents.save('discover.json', {'topics': [], 'results': [], 'export': kept})
+        storage.documents.save('cards.json', {'check': 'tone', 'cards': [{'id': 'card-1'}]})
+        self.assertEqual(inputs.remove_export(gone['id'])['id'], gone['id'])
+        self.assertIsNone(storage.documents.load('tone-result.json'))
+        self.assertIsNone(storage.documents.load('cards.json'))
+        self.assertIsNotNone(storage.documents.load('discover.json'))
+        self.assertEqual([e['id'] for e in storage.exports.listed()], [kept['id']])
+        with self.assertRaisesRegex(LookupError, 'Выгрузки уже нет'):
+            inputs.remove_export(gone['id'])
+
+    def test_removing_the_export_of_accuracy_keeps_its_criteria(self) -> None:
+        gone = inputs.add_export([talk('a')], 'Сентябрь.xlsx')
+        topics = [{'id': 't', 'title': 'Тема', 'rules': [{'id': 'r'}], 'dialogueIds': ['a']}]
+        storage.documents.save('discover.json', {'topics': topics, 'results': [], 'export': gone})
+        inputs.remove_export(gone['id'])
+        self.assertIsNone(storage.documents.load('discover.json'))
+        self.assertEqual(storage.documents.load(checks.CODE_CRITERIA)['topics'][0]['dialogueIds'], [])
+
+    def test_a_check_takes_its_sample_from_the_chosen_export(self) -> None:
+        first = inputs.add_export([talk('a'), talk('b')], 'a.xlsx')
+        second = inputs.add_export([talk('c')], 'b.xlsx')
+        self.assertEqual({d['id'] for d in conversations.sample(first['id'], 5)}, {'a', 'b'})
+        self.assertEqual(conversations.chosen(None)['id'], second['id'])
+        self.assertEqual(conversations.chosen(first['id'])['id'], first['id'])
+        with self.assertRaisesRegex(ValueError, 'Выгрузка удалена'):
+            conversations.chosen('nope')
+
+    def test_without_an_export_there_is_nothing_to_choose(self) -> None:
+        with self.assertRaisesRegex(ValueError, 'Сначала загрузите выгрузку'):
+            conversations.chosen(None)
+
+    def test_the_same_work_is_the_same_export(self) -> None:
+        first = inputs.add_export([talk('a')], 'a.xlsx')
+        second = inputs.add_export([talk('a')], 'a.xlsx')
+        self.assertNotEqual(conversations.same_material(first['id'], 5), conversations.same_material(second['id'], 5))
+        self.assertEqual(conversations.same_material(None, 5), conversations.same_material(second['id'], 5))
+
+    def test_a_result_that_names_no_export_is_of_none(self) -> None:
+        inputs.add_export([talk('a')], 'a.xlsx')
+        self.assertIsNone(conversations.export_of({'results': []}))
+        self.assertEqual(conversations.export_of({'export': {'id': 'other'}}), 'other')
 
 
 if __name__ == '__main__':

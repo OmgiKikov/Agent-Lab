@@ -564,7 +564,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(models, 'chat', AsyncMock(return_value=answer)):
                 response = await self.client.post('/api/tone-of-voice/advice', json=request)
             self.assertEqual(response.status_code, status, response.text)
-        self.assertEqual(storage.dialogues.read(), [self.dialogue])
+        self.assertEqual(support.exported(), [self.dialogue])
         self.assertEqual(storage.documents.load(tone.RESULT), result)
 
     async def test_late_result_cannot_publish_after_a_draft_revision_change(self):

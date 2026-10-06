@@ -424,7 +424,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         item.update(status='FAIL', conversation=[{'role': 'agent', 'text': 'answer'}], review='agree')
         source.update(items=[item], status='done')
         storage.runs.create(source)
-        inputs.replace_export([])
+        inputs.add_export([], None)
         observed = []
 
         async def evaluate(scenario: dict, item: dict) -> None:

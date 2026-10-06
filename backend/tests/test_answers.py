@@ -231,8 +231,9 @@ class OlderDatabaseTests(unittest.TestCase):
     def test_an_older_database_keeps_what_its_screens_showed_with_answers_as_rows(self) -> None:
         self.schema_6()
         # The export: rows in its order, its file still named.
-        self.assertEqual(storage.dialogues.ids(), ['d1', 'd2'])
-        self.assertEqual(storage.dialogues.meta()['file'], 'Сентябрь.xlsx')
+        [export] = storage.exports.listed()
+        self.assertEqual(storage.exports.ids(export['id']), ['d1', 'd2'])
+        self.assertEqual(export['file'], 'Сентябрь.xlsx')
         self.assertIsNone(storage.documents.load('logs.json'))
         # The saved checks: one table, their records keep the verdicts only.
         self.assertEqual([line['id'] for line in storage.history.lines('tone')], ['t1'])

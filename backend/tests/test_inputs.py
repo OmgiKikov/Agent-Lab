@@ -64,7 +64,7 @@ class InputsTests(unittest.TestCase):
             for n in itertools.count()
         )
         events = {
-            'new export': lambda: inputs.replace_export([{'id': 'd2'}]),
+            'new export': lambda: inputs.add_export([{'id': 'd2'}], None),
             'communication rules changed': lambda: inputs.replace_sources(
                 [code, policy | {'content': 'Обращайтесь на ты.', 'sha256': 'p2'}]
             ),
@@ -84,7 +84,7 @@ class InputsTests(unittest.TestCase):
             'new accuracy result with the same criteria': lambda: accuracy.publish({'topics': []}, new_criteria=False),
         }
         kept = {  # deck built from: tone, code, no check named
-            'new export': ('D', 'D', 'D'),
+            'new export': ('DTCK', 'DTCK', 'DTCK'),
             'communication rules changed': ('C', 'CK', 'C'),
             'code changed': ('DTK', 'DT', 'DT'),
             'code read again unchanged': ('DTCK', 'DTCK', 'DTCK'),
@@ -108,24 +108,35 @@ class InputsTests(unittest.TestCase):
                     left = ''.join(key for key, name in names.items() if storage.documents.load(name) is not None)
                     self.assertEqual(left, expected)
 
-    def test_the_export_and_its_file_name_are_one_write(self) -> None:
-        """A failure between two writes would leave the new export under the previous file's name, and the history of
-        the next check would name the wrong file: nothing of a replacement that failed is written."""
+    def test_an_export_and_its_conversations_are_one_write(self) -> None:
+        """A failure between two writes would leave conversations of no export, or an export of none: nothing of an
+        upload that failed is written."""
         talk = {'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}]}
-        self.assertEqual(inputs.replace_export([{'id': 'old', **talk}], 'Сентябрь.xlsx'), 1)
-        storage.documents.save('discover.json', {'results': ['stays']})
-        real = storage.documents.put
+        kept = inputs.add_export([{'id': 'old', **talk}], 'Сентябрь.xlsx')
+        real = storage.db.now
 
-        def put(connection: sqlite3.Connection, name: str, value: object) -> None:
-            if name == storage.dialogues.META:
-                raise sqlite3.OperationalError('disk I/O error')
-            real(connection, name, value)
+        def now() -> str:
+            raise sqlite3.OperationalError('disk I/O error')
 
-        with patch.object(storage.documents, 'put', side_effect=put), self.assertRaises(sqlite3.OperationalError):
-            inputs.replace_export([{'id': 'new', **talk}], 'Октябрь.xlsx')
-        self.assertEqual(storage.dialogues.ids(), ['old'])
-        self.assertEqual(storage.dialogues.meta()['file'], 'Сентябрь.xlsx')
-        self.assertEqual(storage.documents.load('discover.json'), {'results': ['stays']})
+        with patch.object(storage.db, 'now', side_effect=now), self.assertRaises(sqlite3.OperationalError):
+            inputs.add_export([{'id': 'new', **talk}], 'Октябрь.xlsx')
+        self.assertEqual([e['id'] for e in storage.exports.listed()], [kept['id']])
+        with storage.db.connect() as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM dialogues').fetchone()[0], 1)
+        self.assertTrue(real())
+
+    def test_removing_the_export_of_both_results(self) -> None:
+        """What removing an export resets: the results made of it and a deck built from them; Точность's criteria
+        wait for its next check."""
+        export = inputs.add_export([{'id': 'd1'}], None)
+        topics = [{'id': 't1', 'title': 'Тема', 'rules': [], 'dialogueIds': ['d1']}]
+        storage.documents.save('tone-result.json', {'purpose': 'tone-of-voice', 'results': [], 'export': export})
+        storage.documents.save('discover.json', {'topics': topics, 'results': [], 'export': export})
+        storage.documents.save('cards.json', {'check': 'code', 'cards': [{'id': 'card-1'}]})
+        inputs.remove_export(export['id'])
+        for name in ('tone-result.json', 'discover.json', 'cards.json'):
+            self.assertIsNone(storage.documents.load(name), name)
+        self.assertEqual(storage.documents.load('accuracy-criteria.json')['topics'][0]['dialogueIds'], [])
 
 
 if __name__ == '__main__':

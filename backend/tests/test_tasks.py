@@ -12,7 +12,7 @@ from test_tone_followthrough import judged
 
 from lab import models, storage
 from lab.api import work
-from lab.flows import conversations, tone
+from lab.flows import conversations, inputs, tone
 from lab.jobs import INTERRUPTED, LOST, STALLED, STOPPED, Jobs
 from lab.storage import tasks
 
@@ -250,10 +250,57 @@ class DurableToneCheckTests(unittest.IsolatedAsyncioTestCase):
         self.judged.append(dialogue['id'])
         return await self.verdict(dialogue, topic)
 
-    async def start(self, rule_ids=('pronouns', 'simple_language')):
-        response = await self.client.post('/api/tone-of-voice/check', json={'ruleIds': list(rule_ids), 'count': 4})
+    async def start(self, rule_ids=('pronouns', 'simple_language'), export_id=None):
+        given = {'ruleIds': list(rule_ids), 'count': 4, **({'exportId': export_id} if export_id else {})}
+        response = await self.client.post('/api/tone-of-voice/check', json=given)
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
+
+    async def stopped(self) -> dict:
+        """A check of the four conversations stopped after two: the export it was made of."""
+        export = storage.exports.newest()
+        with patch.object(conversations, 'judge_dialogue', side_effect=self.judge):
+            await self.start()
+            await self.two.wait()
+            await self.client.post('/api/job/stop')
+        self.release.set()
+        return export
+
+    async def test_a_check_of_its_export_continues_after_another_export_came(self):
+        export = await self.stopped()
+        inputs.add_export([{'id': 'x', 'messages': []}], 'новая.jsonl')
+        with patch.object(conversations, 'judge_dialogue', side_effect=self.judge):
+            again = await self.start(export_id=export['id'])
+            self.assertEqual((again['continued'], again['kept']), (True, 2))
+            await until(lambda: not self.jobs.state['running'])
+        self.assertEqual(storage.documents.load(tone.RESULT)['export']['id'], export['id'])
+
+    async def test_a_check_of_another_export_is_other_work(self):
+        await self.stopped()
+        other = inputs.add_export(
+            [{'id': 'x', 'messages': [{'role': 'user', 'content': 'В'}, {'role': 'assistant', 'content': 'О'}]}], 'b'
+        )
+        with patch.object(conversations, 'judge_dialogue', side_effect=judged('PASS')):
+            again = await self.start(export_id=other['id'])
+            self.assertEqual(again['continued'], False)
+            await until(lambda: not self.jobs.state['running'])
+
+    async def test_a_paused_check_of_a_removed_export_is_not_offered(self):
+        export = await self.stopped()
+        self.assertIn('tone-check', (await self.client.get('/api/state')).json()['paused'])
+        inputs.remove_export(export['id'])
+        self.assertNotIn('tone-check', (await self.client.get('/api/state')).json()['paused'])
+
+    async def test_a_check_stopped_before_exports_continues(self):
+        """A task kept before exports has no exportId in its input: it is the newest export's, the one it was made
+        of, and the same start continues it."""
+        export = await self.stopped()
+        task = tasks.latest('tone-check')
+        given = {key: value for key, value in task['input'].items() if key != 'exportId'}
+        with storage.transaction(), storage.db.connect() as connection:
+            connection.execute('UPDATE tasks SET input = ? WHERE id = ?', (json.dumps(given), task['id']))
+        self.assertTrue(work.continuable(tasks.get(task['id'])))
+        self.assertEqual(export['id'], storage.exports.newest()['id'])
 
     async def test_a_deploy_in_the_middle_pays_only_for_the_rest(self):
         with patch.object(conversations, 'judge_dialogue', side_effect=self.judge):

@@ -2,9 +2,10 @@
 
 The planner extracts the criteria once and they are frozen: the next check reuses them and keeps every known
 conversation in its topic, so two checks are measured by the same criteria; «Новые правила» (replan) extracts them
-again. A new export keeps them too (checks.CODE_CRITERIA): its conversations are sorted into the same topics by the
-router, and the two checks compare. A finished check is published with its record in the history, in one transaction;
-the answers people gave on verdicts that did not change are carried to it as rows of their own (storage.reviews).
+again. A check of another export keeps them too: its conversations are sorted into the same topics by the router, and
+the two checks compare; so does the next check after the export of the result was removed (checks.CODE_CRITERIA). A
+finished check is published with its record in the history, in one transaction; the answers people gave on verdicts
+that did not change are carried to it as rows of their own (storage.reviews).
 """
 
 import uuid
@@ -22,14 +23,17 @@ TOPICS = 'topics'  # the step the planned topics are kept under
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
 
 
-async def check(count: int, progress: Progress, *, replan: bool = False, propose: bool = False) -> dict | None:
-    """A check of Точность, published with its record in the history; then, when the screens ask, the model proposes
+async def check(
+    count: int, progress: Progress, *, replan: bool = False, propose: bool = False, export_id: str | None = None
+) -> dict | None:
+    """A check of Точность of the export chosen (export_id; the newest without one), published with its record in the
+    history; then, when the screens ask, the model proposes
     which of its errors are serious (severity.proposed_after). A task taken up after a restart that finds its check
     published goes on to the proposals (conversations.published_once). The result published here, None when it was
     published before."""
 
     async def made(check_id: str) -> dict:
-        result = await assess(count, progress, replan, check_id)
+        result = await assess(count, progress, replan, check_id, export_id)
         commit(result, new_criteria=replan)
         return result
 
@@ -41,7 +45,7 @@ async def check(count: int, progress: Progress, *, replan: bool = False, propose
 
 def fingerprint(given: dict) -> str:
     """The same check of Точность (work.KINDS): from the same criteria (the result they are kept from, or extracted
-    anew from the same code) on the same material (conversations.same_material)."""
+    anew from the same code) on the same material of the same export (conversations.same_material)."""
     before = current(checks.CODE) or storage.documents.load(checks.CODE_CRITERIA) or {}
     code = sorted(source.get('sha256') or '' for source in inputs.sources() if source['kind'] != checks.TONE_OF_VOICE)
     return same_work(
@@ -49,7 +53,7 @@ def fingerprint(given: dict) -> str:
         replan=bool(given.get('replan')),
         criteria=before.get('checkId') or before.get('startedAt'),
         code=code,
-        **conversations.same_material(given['count']),
+        **conversations.same_material(given.get('exportId'), given['count']),
     )
 
 
@@ -84,26 +88,31 @@ async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
 
 
 async def assess(
-    count: int = 60, progress: Progress = lambda **_: None, replan: bool = False, check_id: str | None = None
+    count: int = 60,
+    progress: Progress = lambda **_: None,
+    replan: bool = False,
+    check_id: str | None = None,
+    export_id: str | None = None,
 ) -> dict:
     """The result of a check of Точность, not published yet (commit). Its calls to the models are about it in the
     journal (models.about)."""
     check_id = check_id or uuid.uuid4().hex
     with models.about(f'check:{check_id}'):
-        return await _assess(check_id, count, progress, replan)
+        return await _assess(check_id, count, progress, replan, export_id)
 
 
-async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -> dict:
-    # The criteria come from the previous result, else from the ones a new export kept (checks.CODE_CRITERIA).
+async def _assess(check_id: str, count: int, progress: Progress, replan: bool, export_id: str | None) -> dict:
+    # The criteria come from the previous result, else from the ones kept when its export went (checks.CODE_CRITERIA).
     result_before = current(checks.CODE) or {}
     previous = result_before or storage.documents.load(checks.CODE_CRITERIA) or {}
     # The rules of communication have their own check (flows/tone.py); the criteria here come from the agent's code.
     srcs = [source for source in inputs.sources() if source['kind'] != checks.TONE_OF_VOICE]
     if not srcs:
         raise RuntimeError('Код агента ещё не прочитан. Прочитайте его в разделе «Агент».')
-    dialogues = conversations.sample(count)
+    export = conversations.chosen(export_id)
+    dialogues = conversations.sample(export['id'], count)
     if not dialogues:
-        raise RuntimeError('Нет разговоров для проверки. Сначала загрузите диалоги.')
+        raise RuntimeError('В выгрузке нет разговоров.')
     kept = storage.tasks.steps()
     planned = kept.get(TOPICS)
     if planned is None:
@@ -139,6 +148,7 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
         # The check's own id and the conversations it judged: its record in the history (commit).
         'checkId': check_id,
         'datasetFingerprint': dataset_fingerprint([dialogue for dialogue, _ in todo]),
+        'export': storage.exports.line(export),
         'startedAt': started,
         'finishedAt': storage.now(),
         'model': models.models_used(judged),
@@ -183,16 +193,17 @@ async def plan(
 
 
 def commit(result: dict, *, new_criteria: bool) -> None:
-    """Publish a finished check of Точность together with its record in the history. Its conversations are the
-    export's sample it was made of; an export replaced meanwhile makes the check stale."""
+    """Publish a finished check of Точность together with its record in the history. Its conversations are the sample
+    of the export it was made of; an export removed meanwhile makes the check stale."""
     judged = {str(item['dialogueId']) for item in result['results']}
-    dialogues = [dialogue for dialogue in conversations.sample(result['sampled']) if str(dialogue['id']) in judged]
-    if dataset_fingerprint(dialogues) != result['datasetFingerprint']:
+    export = storage.exports.get(conversations.export_of(result))
+    picked = conversations.sample(export['id'], result['sampled']) if export else []
+    dialogues = [dialogue for dialogue in picked if str(dialogue['id']) in judged]
+    if export is None or dataset_fingerprint(dialogues) != result['datasetFingerprint']:
         raise ValueError('Разговоры изменились во время проверки. Запустите проверку заново.')
     with storage.transaction():
         previous = storage.history.latest(checks.CODE)
-        export = storage.dialogues.meta()
-        record = accuracy.saved(result, dialogues, export.get('file'), storage.dialogues.count(), previous)
+        record = accuracy.saved(result, dialogues, storage.exports.line(export), previous)
         publish(result, record, new_criteria=new_criteria)
 
 

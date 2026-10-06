@@ -34,6 +34,8 @@ class ToneCheckCommand(BaseModel):
     revision: str | None = None
     # After the check the model proposes which errors are serious (severity.propose); the screens ask for it.
     propose: bool = False
+    # The export the conversations come from; the newest without one.
+    exportId: str | None = None
 
 
 class ToneAdviceCommand(BaseModel):
@@ -108,7 +110,13 @@ async def check_tone(jobs: Jobs, payload: ToneCheckCommand) -> dict:
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     revision = storage.documents.load(tone.DRAFT)['revision']
-    given = {'ruleIds': payload.ruleIds, 'revision': revision, 'count': payload.count, 'propose': payload.propose}
+    given = {
+        'ruleIds': payload.ruleIds,
+        'revision': revision,
+        'count': payload.count,
+        'propose': payload.propose,
+        'exportId': work.export_of(payload.exportId),
+    }
     return work.start(jobs, 'tone-check', given)
 
 
