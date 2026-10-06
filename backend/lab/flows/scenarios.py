@@ -79,13 +79,15 @@ async def build_card(
     reproduces: Sequence[str] = (),
     scenario: dict | None = None,
     start: int | None = None,
+    end: int | None = None,
 ) -> dict:
     """The card of one conversation: its customer from the whole chat, every item found in the log (roles.card,
     domain.cards), its frozen criteria, and the world of its test data when the stand's fixtures are there
     (roles.world); without them, or when the model gives no usable world, the scenario is played against the stand's
     default answers. A conversation without an acquiring task gives {eligible: false, reason}. start: where the
-    catalog's reading put the episode (the card describes the episode its scenario was given for)."""
-    answer = await card_role.card(topic['title'], dialogue, start)
+    catalog's reading put the episode (the card describes the episode its scenario was given for); end: where that
+    episode ends, the customer turning to another task."""
+    answer = await card_role.card(topic['title'], dialogue, start, end)
     if answer.value.get('eligible') is False:
         return {
             'eligible': False,
@@ -93,7 +95,7 @@ async def build_card(
             'sourceDialogueId': str(dialogue['id']),
             'reason': str(answer.value.get('ineligibleReason') or ''),
         }
-    customer = cards.customer(answer.value, dialogue, start)
+    customer = cards.customer(answer.value, dialogue, start, end)
     raw, written = cards.episode_texts(customer, dialogue)
     prompts = '\n'.join(source['content'] for source in inputs.sources())
     criteria = scenarios.criteria(topic, general, prompts)
@@ -203,9 +205,11 @@ class _Building:
         sets, reproduces = self.chosen[dialogue_id]
         episode = self.episodes.get(dialogue_id) or {}
         scenario = self.scenario_of.get(episode.get('scenarioId') or '')
-        start = episode.get('start') if episode.get('acquiring') else None
+        start, end = (episode.get('start'), episode.get('end')) if episode.get('acquiring') else (None, None)
         try:
-            self.made[dialogue_id] = await build_card(topic, dialogue, sets, self.general, reproduces, scenario, start)
+            self.made[dialogue_id] = await build_card(
+                topic, dialogue, sets, self.general, reproduces, scenario, start, end
+            )
             self.failed.pop(dialogue_id, None)
         except models.ModelError as error:
             self.failed[dialogue_id] = {'topic': topic['title'], 'dialogueId': dialogue_id, 'error': str(error)}

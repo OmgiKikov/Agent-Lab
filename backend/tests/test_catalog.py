@@ -53,11 +53,17 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
 
     def test_an_episode_starts_at_a_customer_message_and_names_a_task(self):
         dialogue = talk('d')
+        read = {'acquiring': True, 'start': 1, 'end': 2, 'task': 'починить QR.', 'object': 'QR'}
         self.assertEqual(
-            catalog.checked_episode({'acquiring': True, 'start': 1, 'task': 'починить QR.', 'object': 'QR'}, dialogue),
-            {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'},
+            catalog.checked_episode(read, dialogue),
+            {'acquiring': True, 'start': 1, 'end': 2, 'task': 'починить QR', 'object': 'QR'},
         )
-        for wrong in ({'acquiring': True, 'start': 2, 'task': 'x'}, {'acquiring': True, 'start': 1, 'task': ' '}):
+        for wrong in (
+            {'acquiring': True, 'start': 2, 'end': 2, 'task': 'x'},
+            {'acquiring': True, 'start': 1, 'end': 2, 'task': ' '},
+            {'acquiring': True, 'start': 1, 'task': 'x'},  # where the task ends is part of the reading
+            {'acquiring': True, 'start': 1, 'end': 3, 'task': 'x'},
+        ):
             with self.subTest(wrong=wrong), self.assertRaises(ValueError):
                 catalog.checked_episode(wrong, dialogue)
         self.assertEqual(
@@ -65,9 +71,8 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             {'acquiring': False, 'reason': 'приветствие'},
         )
         # A model that leaves acquiring out: an answer with a task is an acquiring episode, one without is asked again.
-        self.assertTrue(
-            catalog.checked_episode({'start': 1, 'task': 'починить QR', 'object': None}, dialogue)['acquiring']
-        )
+        read = {'start': 1, 'end': 1, 'task': 'починить QR', 'object': None}
+        self.assertTrue(catalog.checked_episode(read, dialogue)['acquiring'])
         with self.assertRaises(ValueError):
             catalog.checked_episode({'start': 1, 'task': None}, dialogue)
 
@@ -257,7 +262,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         }
         found = {'revision': 'r1', 'categories': categories, 'episodes': episodes}
 
-        async def build_card(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None):
+        async def build_card(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None):
             return {
                 'id': dialogue['id'],
                 'eligible': True,
@@ -367,7 +372,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         return {'revision': 'r1', 'categories': catalog.taxonomy(PROPOSED), 'episodes': found}
 
     def building(self, found: dict, failing: set[str], tries: list[str] | None = None, eligible: bool = True):
-        async def build_card(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None):
+        async def build_card(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None):
             if tries is not None:
                 tries.append(dialogue['id'])
             if dialogue['id'] in failing:

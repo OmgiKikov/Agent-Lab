@@ -101,7 +101,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failed_card_does_not_cancel_the_others_and_is_reported(self):
         failed, release = asyncio.Event(), asyncio.Event()
 
-        async def build(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None):
+        async def build(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None):
             if dialogue['id'] == 'fail':
                 failed.set()
                 raise models.ModelError('model unavailable')

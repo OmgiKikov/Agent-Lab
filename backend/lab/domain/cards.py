@@ -35,7 +35,6 @@ SAID = {
 }
 ENTRY = {'after_greeting': 'после приветствия', 'after_other_topic': 'после другого вопроса'}
 IDENTIFIERS = ('terminal', 'organization')
-VARIANTS = ('knows', 'looks_up', 'unknown')  # what the customer can say about an identifier the log never settled
 GREETING = re.compile(r'^\W*(здравствуй|добр|привет|доброе)', re.I)
 POLITE = re.compile(r'пожалуйста|спасибо|подскажите|будьте добры', re.I)
 MASK = re.compile(r'[#*]+')
@@ -66,7 +65,6 @@ TRIGGER_NEEDS = {
     'handoff_offer': (re.compile(r'оператор|специалист|поддержк|горяч\w* лини|позвон|отделени|менеджер', re.I),),
     'instruction': (STEPS,),
 }
-PAST = re.compile(r'\b(раньше|ранее|как (уже )?(делал|было)|в прошлый|в прошлом|обычно)\b', re.I)
 TRANSITION = re.compile(r'`\s*`\s*`\s*transition-code\s*([\w-]*)\s*`\s*`\s*`\.?')
 
 
@@ -121,11 +119,14 @@ def _fits(trigger: str, agent_text: str) -> bool:
     return all(pattern.search(agent_text) for pattern in TRIGGER_NEEDS.get(trigger, ()))
 
 
-def grounded(value: dict, messages: list[dict]) -> tuple[dict, Counter]:
-    """Only items whose quotes stand in the cited message of the right speaker; the rest is counted, not kept."""
+def grounded(value: dict, messages: list[dict], end: int | None = None) -> tuple[dict, Counter]:
+    """Only items whose quotes stand in the cited message of the right speaker, within the episode when its end is
+    known (end: after it the customer turns to another task); the rest is counted, not kept, and those that cite a
+    message after the episode also apart (afterEpisode)."""
+    last = min(end or len(messages), len(messages))
 
     def said(n: object, quote: object, role: str) -> bool:
-        if not isinstance(n, int) or not 1 <= n <= len(messages):
+        if not isinstance(n, int) or not 1 <= n <= last:
             return False
         return messages[n - 1]['role'] == role and _found(quote, messages[n - 1]['content'], role)
 
@@ -156,20 +157,7 @@ def grounded(value: dict, messages: list[dict]) -> tuple[dict, Counter]:
         items = [x for x in value.get(field) or [] if isinstance(x, dict)]
         kept[field] = [x for x in items if valid(x)]
         dropped[field] = len(items) - len(kept[field])
-    # A guess only where nothing was observed, about how the customer answers: no past, no numbers.
-    observed = {x['trigger'] for x in kept['reactions']}
-    offered = [x for x in value.get('hypotheses') or [] if isinstance(x, dict)]
-    hypotheses = [
-        x
-        for x in offered
-        if text(x, 'trigger', 'response')
-        and x['trigger'] in TRIGGERS
-        and x['trigger'] not in observed
-        and not PAST.search(x['response'])
-        and not re.search(r'\d', x['response'])
-    ]
-    dropped['hypotheses'] = len(offered) - len(hypotheses)
-    kept['hypotheses'] = [{'trigger': x.get('trigger'), 'response': x['response']} for x in hypotheses[:2]]
+        dropped['afterEpisode'] += sum(1 for x in items if isinstance(x.get('n'), int) and x['n'] > last)
     kept['notEstablished'] = [str(x) for x in value.get('notEstablished') or [] if str(x).strip()]
     given = value.get('identifiers') if isinstance(value.get('identifiers'), dict) else {}
     for name in IDENTIFIERS:
@@ -202,17 +190,18 @@ def _digits(opening: str, seed: str) -> str:
     return re.sub(r'#+', lambda m: ''.join(rng.choice('123456789') for _ in range(max(4, len(m.group())))), opening)
 
 
-def identifiers(kept: dict, seed: str) -> dict:
-    """What the customer can say about each identifier: from the log where it shows, else a variant of this card
-    (not calibrated: how often customers know their terminal number is not estimated yet)."""
-    rng = random.Random(f'{SEED}:{seed}')
+def identifiers(kept: dict) -> dict:
+    """What the customer can say about each identifier: from the log where it shows. Where the log never settles it,
+    the simulator assumes the customer will look it up when asked (basis: assumption): no knowledge is made up either
+    way, and the card keeps that the log did not establish it."""
     result = {}
     for name in IDENTIFIERS:
         status = kept[name]['status']
         if status == 'not_established':
-            result[name] = {'value': rng.choice(VARIANTS), 'basis': 'variant'}
+            result[name] = {'value': 'looks_up', 'basis': 'assumption', 'status': status}
         else:
-            result[name] = {'value': 'unknown' if status == 'does_not_know' else 'knows', 'basis': 'log'}
+            value = 'unknown' if status == 'does_not_know' else 'knows'
+            result[name] = {'value': value, 'basis': 'log', 'status': status}
     return result
 
 
@@ -283,7 +272,13 @@ def brief(card: dict) -> str:
         )
     words = {'knows': 'знаешь', 'looks_up': 'наизусть не помнишь, можешь посмотреть', 'unknown': 'не знаешь'}
     names = {'terminal': 'Номер терминала', 'organization': 'ИНН и реквизиты организации'}
-    lines.append('\n'.join(f'{names[k]}: {words[v["value"]]}.' for k, v in card['identifiers'].items()))
+    assumed = 'из настоящего разговора не известно, знаешь ли ты это; если попросят, скажи, что посмотришь'
+    lines.append(
+        '\n'.join(
+            f'{names[k]}: {assumed if v.get("basis") == "assumption" else words[v["value"]]}.'
+            for k, v in card['identifiers'].items()
+        )
+    )
     if card['observations']:
         lines.append(
             'Что получается, когда пробуешь (говори об этом, только если дошло до этого действия):\n'
@@ -292,11 +287,6 @@ def brief(card: dict) -> str:
     reactions = [f'- если {TRIGGERS.get(x["trigger"], x["trigger"])}: {x["response"]}' for x in card['reactions']]
     if reactions:
         lines.append('Как ты реагировал в настоящем разговоре (только если случится то же):\n' + '\n'.join(reactions))
-    guesses = [f'- если {TRIGGERS.get(x["trigger"], x["trigger"])}: {x["response"]}' for x in card['hypotheses']]
-    if guesses:
-        lines.append(
-            'Возможно, но не проверено (новых фактов и результатов к этому не добавляй):\n' + '\n'.join(guesses)
-        )
     lines.append(_manner(card['style'], card.get('samples') or []))
     return '\n'.join(lines)
 
@@ -306,15 +296,16 @@ def starts(messages: list[dict], start: object) -> bool:
     return isinstance(start, int) and 1 <= start <= len(messages) and messages[start - 1]['role'] == 'user'
 
 
-def customer(value: dict, dialogue: dict, start: int | None = None) -> dict:
+def customer(value: dict, dialogue: dict, start: int | None = None, end: int | None = None) -> dict:
     """The customer part of a card from the extractor's answer (readable, eligible): the items the code found in the
     log, the episode's opening with its masks filled, the manner counted from the customer's own messages, and the
     brief the simulator reads (situation). start: where the catalog's reading put the episode; the card then describes
-    the episode its business scenario was given for, whatever the extractor said."""
+    the episode its business scenario was given for, whatever the extractor said. end: where that episode ends (the
+    customer turns to another task): nothing after it is the card's evidence or manner."""
     messages, source = dialogue['messages'], str(dialogue['id'])
     meta = dialogue.get('meta') or {}
     agents = meta.get('agents') or []
-    kept, dropped = grounded(value, messages)
+    kept, dropped = grounded(value, messages, end)
     said = value['episode']['start']
     if starts(messages, start):
         dropped['episode'] = int(said != start)
@@ -332,7 +323,8 @@ def customer(value: dict, dialogue: dict, start: int | None = None) -> dict:
             fact['said'] = 'opening'
         elif fact.get('said') == 'opening':
             fact['said'] = 'later'
-    texts = [m['content'] for m in messages[start - 1 :] if m['role'] == 'user']
+    end = end if isinstance(end, int) and start <= end <= len(messages) else len(messages)
+    texts = [m['content'] for m in messages[start - 1 : end] if m['role'] == 'user']
     quoted = {x['quote'] for x in kept['reactions']}
     samples = [t for t in texts[1:] if not MASK.search(t) and len(t) <= 160 and t not in quoted][:2]
     filled = _filled(texts[0], value.get('openingFilled'))
@@ -343,13 +335,14 @@ def customer(value: dict, dialogue: dict, start: int | None = None) -> dict:
         'object': str(value.get('object') or '').strip().rstrip('.'),
         'episode': {
             'start': start,
+            'end': end,
             'entry': (value.get('episode') or {}).get('entry'),
             'scope': 'acquiring_only' if agents == ['ACQUIRING_AGENT'] else 'mixed' if agents else None,
             'channel': meta.get('channel'),
             'row': meta.get('row'),
         },
-        **{k: kept[k] for k in ('circumstances', 'facts', 'notEstablished', 'observations', 'reactions', 'hypotheses')},
-        'identifiers': identifiers(kept, source),
+        **{k: kept[k] for k in ('circumstances', 'facts', 'notEstablished', 'observations', 'reactions')},
+        'identifiers': identifiers(kept),
         'style': style(texts),
         'samples': samples,
         'opening': opening,
@@ -365,7 +358,8 @@ def customer(value: dict, dialogue: dict, start: int | None = None) -> dict:
 def episode_texts(card: dict, dialogue: dict) -> tuple[str, list[str]]:
     """The episode's first customer message as the log has it, and the customer's messages as the world reads them:
     the filled opening, then the rest of the episode."""
-    messages = dialogue['messages'][card['episode']['start'] - 1 :]
+    episode = card['episode']
+    messages = dialogue['messages'][episode['start'] - 1 : episode.get('end') or len(dialogue['messages'])]
     texts = [m['content'] for m in messages if m['role'] == 'user']
     return texts[0], [card['opening'], *texts[1:]]
 

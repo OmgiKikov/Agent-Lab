@@ -131,8 +131,8 @@ class EachRoleTests(RoleCase):
         answer = await self.asked(
             catalog.EPISODE,
             lambda: catalog.episode(talk),
-            {'acquiring': True, 'start': 2, 'task': 'починить QR', 'object': 'QR'},
-            {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'},
+            {'acquiring': True, 'start': 2, 'end': 1, 'task': 'починить QR', 'object': 'QR'},
+            {'acquiring': True, 'start': 1, 'end': 1, 'task': 'починить QR', 'object': 'QR'},
         )
         self.assertEqual(answer.value['task'], 'починить QR')
 

@@ -10,11 +10,13 @@ from .base import Answer, Role, ask, instructions
 CARD = Role('card', instructions('card'), dict[str, Any])
 
 
-async def card(topic: str, dialogue: dict, start: int | None = None) -> Answer[dict]:
+async def card(topic: str, dialogue: dict, start: int | None = None, end: int | None = None) -> Answer[dict]:
     """The extractor's card of the conversation's customer, or one that says the conversation has no acquiring task
-    (eligible: false, ineligibleReason). start: the customer's event where the acquiring episode starts, when the
-    catalog has read it."""
+    (eligible: false, ineligibleReason). start, end: the events where the acquiring episode starts and ends, when the
+    catalog has read them."""
     payload = {'topic': topic, 'chat': cards.chat(dialogue), 'events': cards.events(dialogue)}
     if start is not None:
         payload['episodeStart'] = start
+    if end is not None:
+        payload['episodeEnd'] = end
     return await ask(CARD, payload, accept=cards.readable)

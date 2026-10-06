@@ -69,8 +69,14 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((card['checks']['dropped']['facts'], card['checks']['dropped']['observations']), (1, 1))
         self.assertNotIn('1,8%', card['situation'])
         self.assertIn('раздела нет', card['situation'])
-        self.assertEqual(card['identifiers']['terminal'], {'value': 'knows', 'basis': 'log'})
-        self.assertEqual(card['identifiers']['organization']['basis'], 'variant')
+        terminal = {'value': 'knows', 'basis': 'log', 'status': 'masked_in_source'}
+        self.assertEqual(card['identifiers']['terminal'], terminal)
+        # The log never settles the INN: no knowledge is drawn at random, the simulator's assumption says so.
+        self.assertEqual(
+            card['identifiers']['organization'],
+            {'value': 'looks_up', 'basis': 'assumption', 'status': 'not_established'},
+        )
+        self.assertIn('ИНН и реквизиты организации: из настоящего разговора не известно', card['situation'])
         self.assertEqual((card['episode']['scope'], card['origin']), ('acquiring_only', 'Представительный набор'))
         self.assertEqual(card['criteria'][1]['observation'], 'tool')
         self.assertEqual(card['scenario'], scenario)
@@ -128,7 +134,7 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         # A short filled number is an amount or a count, not an identifier the world must contain.
         self.assertIsNone(cards.uses({'terminals': [{'terminalId': '99999999'}]}, 'Терминал ####', 'Терминал 1234'))
 
-    def test_doubtful_identifiers_triggers_and_guesses_are_dropped(self):
+    def test_doubtful_identifiers_and_triggers_are_dropped_and_guesses_never_kept(self):
         messages = [
             {'role': 'user', 'content': 'Вопрос по мерчанту Ромашка Тверская'},
             {'role': 'assistant', 'content': 'Перейдите в раздел «Эквайринг» и нажмите «Тарифы»'},
@@ -154,8 +160,7 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((kept['organization'], kept['terminal']), ({'status': 'not_established'},) * 2)
         self.assertEqual(dropped['identifiers'], 2)
         self.assertEqual([r['trigger'] for r in kept['reactions']], ['instruction'])
-        self.assertEqual(kept['hypotheses'], [{'trigger': 'handoff_offer', 'response': 'попросишь оператора'}])
-        self.assertEqual(dropped['hypotheses'], 2)
+        self.assertNotIn('hypotheses', kept)  # a reaction the log never showed is no part of the customer
 
     def test_a_quote_keeps_its_negation_word_starts_and_masks(self):
         found = cards._found
@@ -202,20 +207,29 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(cards._fits('instruction', 'Ваш номер обращения #####. Ожидайте ответа.'))
         self.assertFalse(cards._fits('instruction', 'Списано 12.05. Ожидайте зачисления'))
 
-    def test_guesses_about_the_future_keep_words_that_only_contain_a_past_marker(self):
-        messages = [{'role': 'user', 'content': 'Не печатает чек'}]
+    def test_evidence_after_the_episode_is_another_task_and_is_dropped(self):
+        messages = [
+            {'role': 'user', 'content': 'Не печатает чек на терминале'},
+            {'role': 'assistant', 'content': 'Перезагрузите терминал'},
+            {'role': 'user', 'content': 'Помогло. А как поменять тариф?'},
+            {'role': 'assistant', 'content': 'Откройте раздел «Тарифы»'},
+            {'role': 'user', 'content': 'Не вижу такого раздела'},
+        ]
         value = {
             'identifiers': {'terminal': 'знает', 'organization': ['knows']},
-            'hypotheses': [
-                {'trigger': 'instruction', 'response': 'попросишь обычное объяснение без терминов'},
-                {'trigger': 'identifier_request', 'response': 'заранее уточнишь, какие данные нужны'},
-                {'trigger': 'handoff_offer', 'response': 'попросишь оператора, как обычно'},
+            'circumstances': [
+                {'text': 'терминал не печатает чек', 'n': 1, 'quote': 'Не печатает чек'},
+                {'text': 'не видит раздела тарифов', 'n': 5, 'quote': 'Не вижу такого раздела'},
             ],
         }
-        kept, dropped = cards.grounded(value, messages)
-        self.assertEqual([h['trigger'] for h in kept['hypotheses']], ['instruction', 'identifier_request'])
-        self.assertEqual(dropped['hypotheses'], 1)
+        kept, dropped = cards.grounded(value, messages, end=3)
+        self.assertEqual([x['n'] for x in kept['circumstances']], [1])
+        self.assertEqual((dropped['circumstances'], dropped['afterEpisode']), (1, 1))
         self.assertEqual((kept['terminal'], kept['organization']), ({'status': 'not_established'},) * 2)
+        reply = {'name': 'Чек', 'goal': 'Починить печать чека', 'episode': {'start': 1}, **value}
+        card = cards.customer(reply, {'id': 'd', 'messages': messages}, start=1, end=3)
+        self.assertEqual((card['episode']['end'], card['style']['messages']), (3, 2))  # the tariff question is not it
+        self.assertEqual(cards.episode_texts(card, {'id': 'd', 'messages': messages})[1][-1], messages[2]['content'])
 
     def test_stress_set_takes_rare_conditions_and_reports_their_share(self):
         long = {'id': 'long', 'messages': [{'role': 'user', 'content': 'x'}] * 4}

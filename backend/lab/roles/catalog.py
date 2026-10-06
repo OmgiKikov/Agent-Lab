@@ -23,6 +23,7 @@ class Episode(BaseModel):
     acquiring: bool | None = None
     reason: str | None = None
     start: int | None = None
+    end: int | None = None
     task: str | None = None
     object: str | None = None
 
@@ -68,7 +69,7 @@ ROUTER = Role('catalog.router', instructions('catalog.router'), Placement)
 
 
 async def episode(dialogue: dict) -> Answer[dict]:
-    """The acquiring task of one conversation, read from the whole chat: {acquiring, start, task, object} or
+    """The acquiring task of one conversation, read from the whole chat: {acquiring, start, end, task, object} or
     {acquiring: false, reason}."""
     payload = {'events': catalog.events(dialogue)}
     return await ask(EPISODE, payload, accept=lambda reply: catalog.checked_episode(reply.model_dump(), dialogue))

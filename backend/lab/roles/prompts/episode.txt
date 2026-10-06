@@ -4,4 +4,5 @@ task: what the customer wants to get done, 3-10 words, an infinitive phrase from
 object: what the task is about, in 1-3 words (e.g. «QR-код», «терминал», «пинпад», «договор эквайринга», «тариф», «выручка», «возврат покупателю», «отчёт»).
 acquiring is false when the customer has no acquiring task: a greeting only, paying as a buyer, salary projects, other bank products; reason says why in a few words. An acquiring task is the merchant's side of card and QR payments: terminals and pinpads, QR and SBP payment acceptance, cash registers working with acquiring, settlements and revenue crediting, tariffs and fees, refunds to buyers, equipment requests, acquiring contracts and reports. When in doubt, acquiring is true: the chat reached the acquiring agent.
 If the customer brings several acquiring tasks, name the first one.
-Use Russian. Return {acquiring, reason, start, task, object}.
+end: the last event n of that first task: the event right before the customer turns to another task or topic, or the chat's last event when they never do.
+Use Russian. Return {acquiring, reason, start, end, task, object}.

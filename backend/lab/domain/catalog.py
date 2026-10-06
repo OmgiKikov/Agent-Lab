@@ -40,8 +40,9 @@ def events(dialogue: dict) -> list[dict]:
 
 
 def checked_episode(value: dict, dialogue: dict) -> dict:
-    """The reader's answer, if it can be used: an acquiring episode starts at a customer's message and names a task.
-    An answer that leaves acquiring out is read by its task. A ValueError asks the model again."""
+    """The reader's answer, if it can be used: an acquiring episode starts at a customer's message, ends at a later
+    message (where the customer turns to another task, or the chat's last one) and names a task. An answer that leaves
+    acquiring out is read by its task. A ValueError asks the model again."""
     if value.get('acquiring') is None and not str(value.get('task') or '').strip():
         raise ValueError('episode needs acquiring')
     if value.get('acquiring') is False:
@@ -49,10 +50,13 @@ def checked_episode(value: dict, dialogue: dict) -> dict:
     messages, start = dialogue['messages'], value.get('start')
     if not isinstance(start, int) or not 1 <= start <= len(messages) or messages[start - 1]['role'] != 'user':
         raise ValueError('episode start must be a customer message')
+    end = value.get('end')
+    if not isinstance(end, int) or not start <= end <= len(messages):
+        raise ValueError('episode end must be a message from its start on')
     task, thing = str(value.get('task') or '').strip(), str(value.get('object') or '').strip()
     if not task:
         raise ValueError('episode needs a task')
-    return {'acquiring': True, 'start': start, 'task': task.rstrip('.'), 'object': thing.rstrip('.')}
+    return {'acquiring': True, 'start': start, 'end': end, 'task': task.rstrip('.'), 'object': thing.rstrip('.')}
 
 
 def sample(episodes: dict[str, dict], size: int) -> dict[str, dict]:
