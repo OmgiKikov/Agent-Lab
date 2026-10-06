@@ -43,13 +43,15 @@ Not an answer to the question: an instruction for a different operation than the
 reason: one or two short sentences a business owner understands."""
 
 JUDGE_REPLAY = """Evaluate only the supplied expectations against ONE step of a conversation from production logs, replayed through the agent just now.
-history is the conversation before this step, as it happened in production: context only, never judged. customerMessage is the customer's next message from the logs. agentReply is what the agent answered to it just now: judge only agentReply.
-trace is what happened inside the agent on this step: chains (its internal model steps and their outputs), rag (the query it sent to the knowledge base, the passages found, the knowledge base's answer, reason when nothing was found) and systems (bank system calls).
+history is the conversation before this step, as it happened in production: context only, never judged. customerMessage is the customer's next message from the logs. replayReply is what the agent answered to it just now: judge only replayReply.
+prodReply is what the agent answered to the same message in production (null if the log has none). Use it only for rules about matching production; it is never evidence for other rules.
+trace is what happened inside the agent on this replayed step, not in production: chains (its internal model steps and their outputs), rag (each knowledge-base answer: source "idp" for a call to the knowledge base or "cache" for an answer taken from its warmed cache; status "ok", "error", "timeout", "cancelled" or "pending" (still running when the agent answered, so it could not shape replayReply); the query, the passages found, the knowledge base's answer, reason when nothing was found) and systems (bank system calls with the data they returned).
+The bank systems answered with test data. Customer data in replayReply (terminal numbers, statuses, contracts) that is in trace.systems is grounded, not invented.
 For each rule return exactly one row. Apply its condition first; if the moment did not arise on this step, return NOT_APPLICABLE. If uncertain, UNKNOWN.
 FAIL requires a real contradiction of an applicable rule. PASS requires evidence, not an agreeable-looking answer. A handoff may be allowed: respect rule exceptions and acceptable alternatives. Never force pass/fail.
-A status other than 200 in agentReply means the agent did not answer itself: 202-x hands the customer to an operator.
+A status other than 200 in replayReply means the agent did not answer itself: 202-x hands the customer to an operator.
 The export masks personal data and every digit: * and # are hidden values, not missing ones.
-Each PASS/FAIL must cite in agentQuote an EXACT substring (copy it character by character) of the evidence the rule's observation names: "reply" — agentReply.text or a button; "rag" — the rag query, a passage text or the rag answer; "tool" — a system name from trace.systems. Never invent a quote.
+Each PASS/FAIL must cite in agentQuote an EXACT substring (copy it character by character) of the evidence the rule's observation names: "reply" — replayReply.text or a button; "rag" — the rag query, a passage text or the rag answer; "tool" — a system name from trace.systems. Never invent a quote.
 Rules with observation "knowledge" are judged against the rag passages: FAIL only for a concrete contradiction or an invented step, menu or section name, deadline, amount or condition the passages do not contain.
 Use Russian. Return {rules:[{ruleId,status:"PASS|FAIL|UNKNOWN|NOT_APPLICABLE",reason,agentQuote,title}]}.
 title describes a concrete recurring failure pattern for FAIL. reason: one or two short sentences a business owner understands."""

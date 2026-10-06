@@ -174,7 +174,8 @@ async def run_verdict(card: dict, conversation: list[dict], endpoint: llm.Endpoi
 
 
 async def step_verdict(rules: list[dict], step: dict, endpoint: llm.Endpoint | None = None) -> Verdict:
-    """One step of a replayed conversation (replay.py): the agent's new reply and its trace against the rules."""
+    """One step of a replayed conversation (replay.py): the agent's new reply and its trace against the rules, with
+    production's reply for the match with it (match.py)."""
     reply, trace = step['reply'], step.get('trace')
     shown_history = [
         {'role': 'CUSTOMER', 'text': m['text']}
@@ -186,7 +187,8 @@ async def step_verdict(rules: list[dict], step: dict, endpoint: llm.Endpoint | N
         'expectations': rules,
         'history': shown_history,
         'customerMessage': step['customer'],
-        'agentReply': {'text': reply['text'], 'status': reply['status'], 'buttons': reply.get('options') or []},
+        'replayReply': {'text': reply['text'], 'status': reply['status'], 'buttons': reply.get('options') or []},
+        'prodReply': step.get('prodReply'),
         'trace': rag.for_judge(trace),
     }
     answer = await llm.structured(

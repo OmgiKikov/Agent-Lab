@@ -472,7 +472,16 @@ class StepVerdictTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_payload_shows_the_step_and_its_trace(self) -> None:
         _, payload = await self.judged('вернуть платёж покупателю')
-        self.assertEqual(list(payload), ['expectations', 'history', 'customerMessage', 'agentReply', 'trace'])
+        self.assertEqual(
+            list(payload), ['expectations', 'history', 'customerMessage', 'replayReply', 'prodReply', 'trace']
+        )
+
+    async def test_payload_carries_productions_reply(self) -> None:
+        answer = {'rules': [verdict('rag:query', 'PASS', 'вернуть платёж покупателю')]}
+        model = AsyncMock(return_value=completion(answer))
+        with patch.object(llm, 'chat', model):
+            await judge.step_verdict([RAG_RULE], {**REPLAYED_STEP, 'prodReply': 'Возврат — в разделе «Операции».'})
+        self.assertEqual(json.loads(model.call_args.args[1])['prodReply'], 'Возврат — в разделе «Операции».')
 
     async def test_history_shows_the_agent_as_the_customer_saw_it(self) -> None:
         _, payload = await self.judged('вернуть платёж покупателю')
