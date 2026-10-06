@@ -15,7 +15,7 @@ from ..domain import answers, checks, quotes, results, tone
 from ..domain.comparison import dataset_fingerprint
 from ..roles import tone as role
 from ..storage import registry
-from . import Progress, conversations, inputs, severity
+from . import Progress, conversations, inputs, same_work, severity
 from .checks import current
 
 DRAFT = inputs.TONE_DRAFT  # the criteria of the current rules, with their revision
@@ -219,32 +219,53 @@ def carry_decisions(judged: list[dict], criteria: list[dict], dialogues: list[di
             row['review'] = decision
 
 
-async def judge(dialogues: list[dict], topic: dict, progress: Progress) -> list[dict]:
-    """Every conversation by the topic's criteria, in the order of the sample, the count moving as each is judged."""
+async def judge(dialogues: list[dict], topic: dict, progress: Progress, kept: dict | None = None) -> list[dict]:
+    """Every conversation by the topic's criteria, in the order of the sample, the count moving as each is judged; a
+    task continued counts the verdicts it kept (its steps) from the start (conversations.judge_each)."""
     found: list[dict] = []
 
     def done(result: dict) -> None:
         found.append(result)
         progress(done=len(found), total=len(dialogues), message='Проверяем разговоры')
 
-    await conversations.judge_each([(dialogue, topic) for dialogue in dialogues], done)
+    await conversations.judge_each([(dialogue, topic) for dialogue in dialogues], done, kept)
     order = {str(dialogue['id']): index for index, dialogue in enumerate(dialogues)}
     return sorted(found, key=lambda result: order[str(result['dialogueId'])])
 
 
-async def check(criteria: list[dict], count: int, progress: Progress, *, propose: bool = False) -> dict:
+def fingerprint(given: dict) -> str:
+    """The same check of tone of voice (work.KINDS): the same criteria, the ones chosen of the revision that is
+    current (criteria collected again or clarified since make other work), on the same material
+    (conversations.same_material)."""
+    return same_work(
+        check=checks.TONE,
+        revision=given['revision'],
+        current=(storage.documents.load(DRAFT) or {}).get('revision'),
+        rules=sorted(given['ruleIds']),
+        **conversations.same_material(given['count']),
+    )
+
+
+async def check(criteria: list[dict], count: int, progress: Progress, *, propose: bool = False) -> dict | None:
     """A check of tone of voice by these criteria (selection), published with its record in the history; then, when
-    the screens ask, the model proposes which of its errors are serious."""
-    result = await assess(criteria, count, progress)
-    commit(result)
+    the screens ask, the model proposes which of its errors are serious. A task taken up after a restart that finds its
+    check published goes on to the proposals (conversations.published_once). The result published here, None when it
+    was published before."""
+
+    async def made(check_id: str) -> dict:
+        result = await assess(criteria, count, progress, check_id)
+        commit(result)
+        return result
+
+    result = await conversations.published_once(checks.TONE, made)
     if propose:
         await severity.proposed_after(checks.TONE, progress)
     return result
 
 
-async def assess(criteria: list[dict], count: int, progress: Progress) -> dict:
+async def assess(criteria: list[dict], count: int, progress: Progress, check_id: str | None = None) -> dict:
     """A check of tone of voice: its calls to the models are about it in the journal (models.about)."""
-    check_id = uuid.uuid4().hex
+    check_id = check_id or uuid.uuid4().hex
     with models.about(f'check:{check_id}'):
         return await _assess(check_id, criteria, count, progress)
 
@@ -256,8 +277,9 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
         raise ValueError('Сначала загрузите диалоги.')
     started = storage.now()
     topic = {'id': 't1', 'title': checks.TONE_TOPIC, 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
-    progress(done=0, total=len(dialogues), message='Проверяем разговоры')
-    judged = await judge(dialogues, {**topic, 'rules': [tone.for_judging(rule) for rule in criteria]}, progress)
+    kept = storage.tasks.steps()
+    progress(done=conversations.judged_before(dialogues, kept), total=len(dialogues), message='Проверяем разговоры')
+    judged = await judge(dialogues, {**topic, 'rules': [tone.for_judging(rule) for rule in criteria]}, progress, kept)
     ensure_active()
     previous = current(checks.TONE) or {}
     results.ensure_answered(judged, previous)

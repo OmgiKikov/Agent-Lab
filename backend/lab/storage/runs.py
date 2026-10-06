@@ -9,7 +9,7 @@ from typing import Any
 
 from ..domain import answers, checks
 from ..domain.metric import metric
-from . import db, reviews
+from . import db, reviews, tasks
 
 # What only this module writes: a caller patches a run's own fields and its conversations, never these.
 _OWN = {'id', 'items', 'metric', 'revision', 'updatedAt'}
@@ -98,13 +98,15 @@ def update_items(run_id: str, patches: dict[int, dict], **fields: Any) -> dict:
 
 
 def recover() -> int:
-    """On the start of the process, the runs the one before it left running are stopped: their worker is gone."""
+    """On the start of the process, the runs the one before it left running with no task to continue them are stopped:
+    their worker is gone. A run whose task the process took up again (jobs.recover) goes on: the task has its id."""
     recovered = 0
     error = 'Прогон остановился вместе с сервисом.'
+    continued = {task['id'] for task in tasks.running()}
     with db.transaction(), db.connect() as connection:
         for (raw,) in connection.execute('SELECT value FROM runs').fetchall():
             record = json.loads(raw)
-            if record.get('status') != 'running':
+            if record.get('status') != 'running' or record['id'] in continued:
                 continue
             record.update(status='stopped', error=error, finishedAt=db.now())
             for item in record['items']:

@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 
 from .. import storage
 from ..flows import severity
-from .base import Jobs, start
+from . import work
+from .base import Jobs
 
 router = APIRouter()
 
@@ -44,9 +45,7 @@ def mark_severity(payload: SeverityCommand) -> dict:
 @router.post('/api/severity/propose')
 async def propose_severity(jobs: Jobs, payload: SeverityProposeCommand) -> dict:
     """«Предложить»: the model proposes which errors of the check's criteria are serious."""
-    return start(
-        jobs, 'severity', lambda progress: severity.propose_again(payload.check, progress, again=payload.again)
-    )
+    return work.start(jobs, 'severity', {'check': payload.check, 'again': payload.again})
 
 
 @router.post('/api/severity/confirm')

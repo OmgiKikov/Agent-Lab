@@ -14,21 +14,43 @@ from .. import models, storage
 from ..domain import accuracy, answers, checks, results
 from ..domain.comparison import dataset_fingerprint
 from ..roles import planner
-from . import Progress, conversations, inputs, severity
+from . import Progress, conversations, inputs, same_work, severity
 from .checks import current
 
 RESULT = checks.result(checks.CODE)  # discover.json: the accuracy result; tone of voice keeps its own
+TOPICS = 'topics'  # the step the planned topics are kept under
 TASK = 'Проверить ответы чат-бота эквайринга СберБизнеса на реальных обращениях клиентов'
 
 
-async def check(count: int, progress: Progress, *, replan: bool = False, propose: bool = False) -> dict:
+async def check(count: int, progress: Progress, *, replan: bool = False, propose: bool = False) -> dict | None:
     """A check of Точность, published with its record in the history; then, when the screens ask, the model proposes
-    which of its errors are serious (severity.proposed_after)."""
-    result = await assess(count, progress, replan)
-    commit(result, new_criteria=replan)
+    which of its errors are serious (severity.proposed_after). A task taken up after a restart that finds its check
+    published goes on to the proposals (conversations.published_once). The result published here, None when it was
+    published before."""
+
+    async def made(check_id: str) -> dict:
+        result = await assess(count, progress, replan, check_id)
+        commit(result, new_criteria=replan)
+        return result
+
+    result = await conversations.published_once(checks.CODE, made)
     if propose:
         await severity.proposed_after(checks.CODE, progress)
     return result
+
+
+def fingerprint(given: dict) -> str:
+    """The same check of Точность (work.KINDS): from the same criteria (the result they are kept from, or extracted
+    anew from the same code) on the same material (conversations.same_material)."""
+    before = current(checks.CODE) or storage.documents.load(checks.CODE_CRITERIA) or {}
+    code = sorted(source.get('sha256') or '' for source in inputs.sources() if source['kind'] != checks.TONE_OF_VOICE)
+    return same_work(
+        check=checks.CODE,
+        replan=bool(given.get('replan')),
+        criteria=before.get('checkId') or before.get('startedAt'),
+        code=code,
+        **conversations.same_material(given['count']),
+    )
 
 
 async def plan_topics(srcs: list[dict], dialogues: list[dict]) -> tuple[list[dict], int]:
@@ -61,10 +83,12 @@ async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
     return topics
 
 
-async def assess(count: int = 60, progress: Progress = lambda **_: None, replan: bool = False) -> dict:
+async def assess(
+    count: int = 60, progress: Progress = lambda **_: None, replan: bool = False, check_id: str | None = None
+) -> dict:
     """The result of a check of Точность, not published yet (commit). Its calls to the models are about it in the
     journal (models.about)."""
-    check_id = uuid.uuid4().hex
+    check_id = check_id or uuid.uuid4().hex
     with models.about(f'check:{check_id}'):
         return await _assess(check_id, count, progress, replan)
 
@@ -80,31 +104,31 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
     dialogues = conversations.sample(count)
     if not dialogues:
         raise RuntimeError('Нет разговоров для проверки. Сначала загрузите диалоги.')
-    started = storage.now()
-    if previous.get('topics') and not replan:
-        progress(stage='plan', done=0, total=len(dialogues), message='Распределяем разговоры по темам')
-        topics = await keep_topics(previous, dialogues)
-        dropped = previous.get('droppedRules', 0)
-        rules_since = previous.get('rulesSince') or previous.get('startedAt')
-    else:
-        progress(stage='plan', done=0, total=len(dialogues), message='Извлекаем критерии из кода агента')
-        topics, dropped = await plan_topics(srcs, dialogues)
-        accuracy.ensure_grounded(topics, result_before)
-        rules_since = started
+    kept = storage.tasks.steps()
+    planned = kept.get(TOPICS)
+    if planned is None:
+        planned = storage.tasks.keep(TOPICS, await plan(previous, result_before, srcs, dialogues, progress, replan))
+    topics, dropped, rules_since, started = (
+        planned['topics'],
+        planned['dropped'],
+        planned['rulesSince'],
+        planned['startedAt'],
+    )
 
     topic_of = {}
     for topic in topics:
         for dialogue_id in topic['dialogueIds']:
             topic_of.setdefault(dialogue_id, topic)
     todo = [(d, topic_of[str(d['id'])]) for d in dialogues if str(d['id']) in topic_of]
-    progress(stage='judge', done=0, total=len(todo), message='Проверяем разговоры')
+    before = conversations.judged_before([dialogue for dialogue, _ in todo], kept)
+    progress(stage='judge', done=before, total=len(todo), message='Проверяем разговоры')
     judged = []
 
     def done(result: dict) -> None:
         judged.append(result)
         progress(stage='judge', done=len(judged), total=len(todo), message='Проверяем разговоры')
 
-    await conversations.judge_each(todo, done)
+    await conversations.judge_each(todo, done, kept)
     results.ensure_answered(judged, result_before)
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     judged.sort(key=lambda r: order.get(str(r['dialogueId']), 0))
@@ -137,6 +161,25 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
         'results': judged,
         'summary': results.summarize(judged, topics, len(dialogues)),
     }
+
+
+async def plan(
+    previous: dict, result_before: dict, srcs: list[dict], dialogues: list[dict], progress: Progress, replan: bool
+) -> dict:
+    """The topics of the check with their criteria and the conversations of each: the frozen ones, or extracted anew.
+    Kept as a step of the task (TOPICS): a task continued judges by the topics it planned, never planned again."""
+    started = storage.now()
+    if previous.get('topics') and not replan:
+        progress(stage='plan', done=0, total=len(dialogues), message='Распределяем разговоры по темам')
+        topics = await keep_topics(previous, dialogues)
+        dropped = previous.get('droppedRules', 0)
+        rules_since = previous.get('rulesSince') or previous.get('startedAt')
+    else:
+        progress(stage='plan', done=0, total=len(dialogues), message='Извлекаем критерии из кода агента')
+        topics, dropped = await plan_topics(srcs, dialogues)
+        accuracy.ensure_grounded(topics, result_before)
+        rules_since = started
+    return {'topics': topics, 'dropped': dropped, 'rulesSince': rules_since, 'startedAt': started}
 
 
 def commit(result: dict, *, new_criteria: bool) -> None:

@@ -19,14 +19,17 @@ import { useComparison } from "./Compare";
 const SIZES = [100, 200, 300];
 
 /**
- * How many conversations of the export the accuracy check takes: 100, 200 or all up to 300; the last check's number
- * while it fits. The service takes 5 to 300 (backend/lab/api/checks.py, DiscoverCommand).
+ * How many conversations of the export the accuracy check takes: 100, 200 or all up to 300; a stopped check's number,
+ * which the same start continues, else the last check's, while it fits. The service takes 5 to 300
+ * (backend/lab/api/checks.py, DiscoverCommand). `resumes`: the size chosen continues the stopped check.
  */
 export function useSampleSize() {
   const { state } = useLabState();
   const total = state?.logs.total ?? 0;
   const sizes = [...new Set([...SIZES.filter((n) => n < total), Math.min(total, 300)])].filter((n) => n > 0);
-  const previous = state?.checks.code?.sampled;
+  const paused = state?.paused?.discover?.input as { count?: number; replan?: boolean } | undefined;
+  const stopped = paused?.count;
+  const previous = stopped ?? state?.checks.code?.sampled;
   const [picked, setPicked] = useState<number | null>(null);
   const size =
     picked && sizes.includes(picked)
@@ -36,7 +39,21 @@ export function useSampleSize() {
         : sizes.includes(100)
           ? 100
           : (sizes[sizes.length - 1] ?? 0);
-  return { sizes, size, setSize: setPicked };
+  // The same start continues it: this size, and the same button (with the criteria extracted anew, or not).
+  const resumes = stopped && size === stopped ? { replan: !!paused?.replan } : null;
+  return { sizes, size, setSize: setPicked, resumes };
+}
+
+/** The stopped check the same start continues: said where its size is chosen, with the button that continues it. */
+export function Resumes({ when }: { when: { replan: boolean } | null }) {
+  if (!when) return null;
+  return (
+    <p className="text-body text-fg-3">
+      {when.replan
+        ? "Прошлое извлечение критериев остановлено, проверенное сохранено: «Извлечь критерии заново» с тем же размером продолжит с этого места."
+        : "Прошлая проверка остановлена, проверенное сохранено: с тем же размером продолжим с этого места."}
+    </p>
+  );
 }
 
 /** The choice of how many conversations to take, when there is one. */
@@ -92,7 +109,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
   const { data } = useCriteria("code");
   const previous = previousOf(useComparison("code"), state?.logs.updatedAt);
   const fresh = !!state && !state.checks.code && !previous?.newExport;
-  const { sizes, size, setSize } = useSampleSize();
+  const { sizes, size, setSize, resumes } = useSampleSize();
   const { start, starting } = useAssess(onClose);
   const criteria = data ? checkedIn(data, "log").length : 0;
   const total = state?.logs.total ?? 0;
@@ -134,6 +151,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
           </div>
         )}
         <SizePicker sizes={sizes} size={size} onSize={setSize} />
+        <Resumes when={resumes} />
         <div className="flex flex-wrap items-center gap-3">
           <Button
             variant="primary"

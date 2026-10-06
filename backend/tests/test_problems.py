@@ -1,6 +1,5 @@
 import json
 import unittest
-from unittest.mock import patch
 
 import support
 
@@ -370,7 +369,7 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.runs.get('run-1')['items'][0]['rules'][0]['review'], 'agree')
 
     async def test_log_answers_wait_for_a_running_audit(self) -> None:
-        with patch.dict(self.jobs.state, {'running': True, 'kind': 'discover'}):
+        with support.running('discover'):
             body = {'source': 'log', 'dialogueId': 'd1', 'ruleId': 't1r1', 'decision': 'agree'}
             response = await self.client.post('/api/review', json=body)
         self.assertEqual(response.status_code, 409)

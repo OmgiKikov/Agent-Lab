@@ -2,11 +2,16 @@ import asyncio
 import threading
 import unittest
 
+import support
+
 from lab.flows import error_text as message
 from lab.jobs import STOPPED, BusyError, Jobs
 
 
 class JobsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        support.lab(self)
+
     async def test_upload_reserves_same_owner_as_background_commands(self) -> None:
         jobs = Jobs()
         entered, release = asyncio.Event(), asyncio.Event()

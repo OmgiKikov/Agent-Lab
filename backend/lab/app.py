@@ -15,6 +15,7 @@ from starlette.convertors import Convertor, register_url_convertor
 from starlette.types import Scope
 
 from . import api, config, storage
+from .api import work
 from .jobs import PerAgent
 from .storage import registry
 
@@ -49,20 +50,28 @@ def create(settings: config.Settings | None = None) -> FastAPI:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """A second Lab on the same data starts nothing and recovers nothing (registry.only_process)."""
+    """A second Lab on the same data starts nothing and recovers nothing (registry.only_process). Closing, the Lab
+    leaves its long work running, for the next process to continue (jobs.Jobs.close)."""
     with config.using(app.state.settings), registry.only_process():
         registry.adopt_legacy()
         registry.recover_lost()
         agents = registry.listed()
         if not agents and storage.db.default_database().exists():
-            storage.runs.recover()  # before any agent: the default database, never created here
+            recover(app)  # before any agent: the default database, never created here
         for agent in agents:
             with registry.using(agent['id']):
-                storage.runs.recover()
+                recover(app)
         try:
             yield
         finally:
             await app.state.jobs.close()
+
+
+def recover(app: FastAPI) -> None:
+    """The long work the process before this one left running, taken up again where it stopped (jobs.recover); the runs
+    it left running with no task to continue them are stopped (storage.runs.recover)."""
+    app.state.jobs.recover(work.RESUME)
+    storage.runs.recover()
 
 
 async def in_context(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
