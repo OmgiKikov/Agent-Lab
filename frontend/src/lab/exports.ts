@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api, upload } from "./api";
 import { resultOf } from "./checks";
 import type { Summary } from "./history";
@@ -58,12 +58,23 @@ export const renameExport = (id: string, name: string) => api<ExportLine>(`${pat
 
 export const deleteExport = (id: string) => api<{ removed: ExportLine; cleared: Check[] }>(`${path(id)}/delete`, {});
 
-/** The first `limit` conversations of an export, in its order; the page shown stays while the next one comes. */
-export function useExportRows(id: string, limit: number) {
-  return useQuery({
-    queryKey: ["export-rows", id, limit],
-    queryFn: () => api<{ total: number; items: ExportRow[] }>(`${path(id)}/conversations?offset=0&limit=${limit}`),
-    placeholderData: (previous) => previous,
+/** Conversations of an export shown at a time. */
+export const EXPORT_PAGE = 50;
+
+/**
+ * An export's conversations in its order, a page at a time: each next page asks from where the loaded ones end, so
+ * the list goes to the last of them whatever its size.
+ */
+export function useExportRows(id: string) {
+  return useInfiniteQuery({
+    queryKey: ["export-rows", id],
+    queryFn: ({ pageParam }) =>
+      api<{ total: number; items: ExportRow[] }>(`${path(id)}/conversations?offset=${pageParam}&limit=${EXPORT_PAGE}`),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, page) => n + page.items.length, 0);
+      return last.items.length && loaded < last.total ? loaded : undefined;
+    },
   });
 }
 

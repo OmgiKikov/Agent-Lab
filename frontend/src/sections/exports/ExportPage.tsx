@@ -18,13 +18,14 @@ import { CheckLine } from "./CheckLine";
 import { DeleteExport, RenameExport } from "./ExportDialogs";
 import { skippedText } from "./ExportsPage";
 
-const PAGE = 50;
-
 /** Where a check of this export starts: tone of voice where its work stands, Точность's window of its start. */
-const startLink = (check: Check, id: string) => (check === "tone" ? toneCheckLink(undefined, id) : assessLink(id));
+// Tone of voice opens on the step that starts a check of this export: its criteria once they are collected, else its
+// materials; without a step it would open where the work stands, the result of another export among them.
+const startLink = (check: Check, id: string, toneReady: boolean) =>
+  check === "tone" ? toneCheckLink(toneReady ? "criteria" : "materials", id) : assessLink(id);
 
 /** A check made of the export: its line, leading to the result or the saved check, and the start of it on this export. */
-function CheckOfExport({ check, item }: { check: Check; item: ExportWithChecks }) {
+function CheckOfExport({ check, item, toneReady }: { check: Check; item: ExportWithChecks; toneReady: boolean }) {
   const line = item.checks[check];
   const to = line ? (line.current ? stageRoot(check) : historyLink(check, line.id)) : null;
   return (
@@ -39,7 +40,7 @@ function CheckOfExport({ check, item }: { check: Check; item: ExportWithChecks }
       ) : (
         <CheckLine check={check} line={line} className="min-w-0 flex-1" />
       )}
-      <Link to={startLink(check, item.id)} className={buttonClass({ size: "sm" })}>
+      <Link to={startLink(check, item.id, toneReady)} className={buttonClass({ size: "sm" })}>
         {line ? "Проверить снова" : "Проверить"}
       </Link>
     </li>
@@ -86,11 +87,12 @@ export function ExportPage() {
   const { exportId = "" } = useParams();
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
-  const [limit, setLimit] = useState(PAGE);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { data: all } = useExports(state);
-  const rows = useExportRows(exportId, limit);
+  const rows = useExportRows(exportId);
+  const loaded = rows.data?.pages.flatMap((page) => page.items) ?? [];
+  const total = rows.data?.pages[0]?.total ?? 0;
   const line = state?.exports.find((e) => e.id === exportId) ?? null;
   const item = all?.find((e) => e.id === exportId) ?? null;
   const open = (dialogueId: string | null) =>
@@ -173,7 +175,7 @@ export function ExportPage() {
                 {item ? (
                   <ul className="mt-2 divide-y divide-line border-y border-line">
                     {CHECKS.map((check) => (
-                      <CheckOfExport key={check} check={check} item={item} />
+                      <CheckOfExport key={check} check={check} item={item} toneReady={!!state?.toneOfVoice} />
                     ))}
                   </ul>
                 ) : (
@@ -202,7 +204,7 @@ export function ExportPage() {
                 ) : (
                   <>
                     <ul className="mt-4 divide-y divide-line border-y border-line">
-                      {rows.data.items.map((row) => (
+                      {loaded.map((row) => (
                         <li key={row.id}>
                           <button
                             type="button"
@@ -223,13 +225,13 @@ export function ExportPage() {
                         </li>
                       ))}
                     </ul>
-                    {rows.data.total > rows.data.items.length && (
+                    {rows.hasNextPage && (
                       <div className="mt-4 flex items-center gap-3">
-                        <Button loading={rows.isFetching} onClick={() => setLimit((n) => n + PAGE)}>
+                        <Button loading={rows.isFetchingNextPage} onClick={() => void rows.fetchNextPage()}>
                           Показать ещё
                         </Button>
                         <span className="text-small text-fg-3">
-                          {rows.data.items.length} из {rows.data.total}
+                          {loaded.length} из {total}
                         </span>
                       </div>
                     )}
