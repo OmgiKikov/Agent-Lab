@@ -96,7 +96,8 @@ Lab (conductor-playground)                      Стенд: acquiring-replay (1 
 **`POST /replay/turn`.** Тело — родной запрос агента в формате aigw-rest-service, который Lab уже собирает
 (`agents/http.py`, `local_request`): `content.phrases[]`, `trigger_phrase_id`, `conversation_id`,
 `sender=GIGAASSISTANT`. Заголовки `x-trace-id`, `x-client-id`, `x-session-id` и `x-request-time` сервис ставит сам.
-Агент вызывается внутри процесса тем же обработчиком, что и боевой эндпоинт `agent-ckr-pa-acquiring`.
+Агент вызывается внутри процесса: `httpx.ASGITransport` в его приложение `app_main` на путь
+`/api/v1/ai/agents/agent-ckr-pa-acquiring`. Lifespan агента (Postgres, scheduler, Elastic) при этом не запускается.
 
 Ответ `200`:
 
@@ -117,8 +118,8 @@ Lab (conductor-playground)                      Стенд: acquiring-replay (1 
 }
 ```
 
-- `rag[].source`: `idp` или `cache`. Ответ из кэша IDP — тоже обращение к базе знаний. `request` и `passages` при
-  этом берутся из записи кэша.
+- `rag[].source`: `idp` или `cache`. Ответ из кэша IDP — тоже обращение к базе знаний. У записи из кэша `request`
+  пустой, `passages` — один фрагмент с текстом документа из кэша, `answer` — готовый ответ из кэша.
 - `rag[].status`: `ok`, `error`, `timeout` или `cancelled`. Последний — фоновая задача IDP, отменённая после ответа
   агента (`router.py:238-248`).
 - `seq` — общий порядок событий по трём спискам внутри запроса.
@@ -134,19 +135,25 @@ Lab (conductor-playground)                      Стенд: acquiring-replay (1 
 {"ready": true,
  "prompts": {"version": "<MLS_CLIENT_PROMPTS_VERSION>", "hashes": {"agent_doc_type_prompt.json": "<sha256>"}},
  "idpCache": {"total": 12, "warmed": 12, "failed": []},
- "isolation": ["db:memory", "sbe:stub", "elastic:off", "excel:off", "aef:off", "scheduler:off"]}
+ "isolation": ["db:memory", "sbe:stub", "elastic:off", "excel:off", "aef:off", "scheduler:off"],
+ "problems": []}
 ```
 
-Пока идёт прогрев кэша, `ready=false`.
+`problems` — почему сервис не готов, словами. Пока идёт прогрев кэша, `ready=false`.
 
-Всё состояние сервиса ограничено запросом (трейс в contextvar) или `conversation_id` (board). Одной реплики с одним
+Всё состояние сервиса ограничено запросом или `conversation_id` (board). Трейс собирается по `x-trace-id`, который
+сервис сам ставит запросу, и забирается из памяти сразу после ответа агента. Одной реплики с одним
 воркером хватает для 4 диалогов параллельно, как шлёт Lab.
 
 ### 2.4 Lab
 
-- **Target `replay-service`** (`agents/__init__.py`). URL берётся из `LAB_REPLAY_URL`. Готов, когда `GET /health`
-  вернул `ready: true`. Для этого target `replay.py` не отказывает с `NOT_LOCAL`. Захардкоженные `x-client-id` и
-  EPK для него не шлются.
+- **Target `replay-service`** (`agents/replay_service.py`). URL берётся из `LAB_REPLAY_URL`.
+  - Виден только на странице «Повтор разговоров» (`/api/state → replayTargets`), а не среди способов подключения
+    агента: разговаривать с ним нельзя.
+  - Перед стартом повтора Lab спрашивает `GET /health`. При `ready: false` повтор не стартует, а `problems`
+    показываются как ошибка задачи.
+  - Для этого target `replay.py` не отказывает с `NOT_LOCAL`. Захардкоженные `x-client-id` и EPK для него не
+    шлются: заголовки ставит сервис.
 - **Шаг повтора** (`_play_step`): один вызов `POST /replay/turn`.
   - `reply` разбирается из `agent.body` тем же кодом, что сейчас.
   - `trace` берётся из ответа.
@@ -164,13 +171,15 @@ Lab (conductor-playground)                      Стенд: acquiring-replay (1 
 
   - `agentReply` переименован в `replayReply`, чтобы Judge не путал два ответа. Промпт `JUDGE_REPLAY` говорит, что
     трейс относится к ответу повтора.
-  - `rag.for_judge` отдаёт `rag[].request`, `source`, `status` и `systems[].response`.
-  - `rag.called()` учитывает `source: "cache"`.
-  - `rag.evidence()` включает ответы SBE.
-- **Критерий `replay:match`** — «Ответ на повторе по смыслу совпадает с ответом в проде». Статусы `MATCH` или
-  `DIFFERENT`, с причиной.
-  - В метрику RAG не входит.
-  - Показывается у шага рядом с двумя ответами.
+  - `rag.for_judge` добавляет к вызовам базы знаний `source` и `status`, к системам банка — `response`. Полный
+    `request` в Judge не уходит: в нём промпты, а Judge их не получает и сейчас. `request` хранится в трейсе и виден
+    в UI.
+  - `rag.called()` уже считает записи из кэша: они лежат в `rag`.
+  - Критерий `rag:grounded` разрешает опираться на данные систем банка из `trace.systems`.
+- **Критерий `replay:match`** — «Ответ на повторе по смыслу совпадает с ответом в проде». Статусы `PASS`
+  («совпадает») и `FAIL` («отличается»), с причиной. Если в логе нет ответа прода, критерий `NOT_APPLICABLE`.
+  - Не входит ни в метрику, ни в статус шага, ни в статус второй модели.
+  - Показывается у шага под двумя ответами.
   
   По нему видно, объясняет ли трейс повтора ответ прода. RAG-критерии оценивают только ответ повтора по его трейсу.
   Продовый ответ по ним не оценивается.
@@ -196,8 +205,7 @@ Lab (conductor-playground)                      Стенд: acquiring-replay (1 
   ```
   LOCAL=True
   MLS_CLIENT_ENABLED=True
-  MLS_CLIENT_PROMPTS_VERSION=        # версия промптов прода, её даёт команда эквайринга
-  IDP_OWN_GENERATION_ENABLED=False
+  MLS_CLIENT_PROMPTS_VERSION="0.0.1"   # как в local_env; подтвердить у команды эквайринга
   IDP_CACHE_ENABLED=True
   EXCEL_LOGS=False
   AEF_ENABLED=False
@@ -206,7 +214,7 @@ Lab (conductor-playground)                      Стенд: acquiring-replay (1 
   Без `MLS_CLIENT_PROMPTS_VERSION` сервис не становится готовым. Хосты GigaChat, IDP и MLS указываются как в
   `local_env`. Сертификаты монтируются файлами, логины и пароли берутся из
   секретов стенда.
-- **`replay/run.sh`.** Запуск без контейнера, на ноутбуке; заменяет `setup-work-stand.sh`. Если в `.env` хосты
+- **`replay/run.sh`.** Запуск без контейнера, на ноутбуке. `setup-work-stand.sh` остаётся для target `local-http`. Если в `.env` хосты
   GigaChat и IDP указывают на `local/mocks/server.py`, сервис работает без сети банка.
 - **Что нужно от тех, кто будет деплоить** (скорее всего OpenShift):
   - одна реплика;
@@ -233,17 +241,18 @@ Lab (conductor-playground)                      Стенд: acquiring-replay (1 
 **Lab, `backend/tests/`.** Используем Fake-сервис повтора в памяти: он возвращает заданные `{agent, trace}` по тексту
 клиента. `mock.patch` не нужен.
 
-- `test_agents.py`: target `replay-service` готов только при `ready: true`.
+- `test_replay_service.py`: сервис не готов (`ready: false`) — повтор не стартует, ошибка называет `problems`; ответ
+  `/replay/turn` разбирается в `reply` и `trace`; 503 — ошибка агента.
 - `test_replay.py`:
   - повтор на `replay-service` не отказывает с `NOT_LOCAL`;
   - 503 даёт `UNMEASURED`;
   - в результате есть `prompts.version`.
 - `test_rag.py`:
   - `source: "cache"` считается обращением к базе знаний;
-  - ответ SBE входит в evidence.
+  - ответ SBE уходит в Judge в `systems[].response`.
 - Тесты Judge:
   - в пакете есть `prodReply` и `replayReply`;
-  - `replay:match` не входит в метрику RAG.
+  - `replay:match` не входит ни в метрику, ни в статус шага.
 
 ## 6. Не делаем
 
