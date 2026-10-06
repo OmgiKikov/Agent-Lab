@@ -248,15 +248,16 @@ def fingerprint(given: dict) -> str:
 
 async def check(criteria: list[dict], count: int, progress: Progress, *, propose: bool = False) -> dict | None:
     """A check of tone of voice by these criteria (selection), published with its record in the history; then, when
-    the screens ask, the model proposes which of its errors are serious. Made by a task, the check takes the task's id
-    as its own: a task taken up after a restart that finds its check published goes on to the proposals, and never
-    publishes it twice. The result published here, None when it was published before."""
-    check_id = storage.tasks.current_id() or uuid.uuid4().hex
-    result = None
-    if storage.history.get(checks.TONE, check_id) is None:
+    the screens ask, the model proposes which of its errors are serious. A task taken up after a restart that finds its
+    check published goes on to the proposals (conversations.published_once). The result published here, None when it
+    was published before."""
+
+    async def made(check_id: str) -> dict:
         result = await assess(criteria, count, progress, check_id)
         commit(result)
-    storage.tasks.keep('published', check_id)  # a finished part of the task
+        return result
+
+    result = await conversations.published_once(checks.TONE, made)
     if propose:
         await severity.proposed_after(checks.TONE, progress)
     return result

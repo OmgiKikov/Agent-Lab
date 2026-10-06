@@ -29,14 +29,14 @@ export const clarifiedText = (n: number, of = "У критериев") =>
 export const toneDeck = (state: LabState) => state.cards?.check === "tone" && !!state.cards.cards.length;
 
 /**
- * A check of these criteria that was stopped and can go on (the service keeps what it judged): its criteria and how
- * many conversations, to offer the same start again.
+ * A check of these criteria that was stopped and can go on (the service keeps what it judged), also when other tasks
+ * ran since: its criteria, how many conversations, and how many it judged, to offer the same start again.
  */
 function pausedCheck(state: LabState) {
-  const job = state.job;
-  const input = job.input;
-  if (job.kind !== "tone-check" || job.running || !job.continuable || !input?.ruleIds || !input.count) return null;
-  return input.revision === state.toneOfVoice?.revision ? { ruleIds: input.ruleIds, count: input.count } : null;
+  const job = state.paused?.["tone-check"];
+  const input = job?.input;
+  if (!job || !input?.ruleIds || !input.count || input.revision !== state.toneOfVoice?.revision) return null;
+  return { ruleIds: input.ruleIds, count: input.count, kept: job.kept ?? 0 };
 }
 
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((id) => b.includes(id));
@@ -199,7 +199,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
           {!!state.logs.total &&
             (resumes ? (
               <p className="mt-2 text-body text-fg-3">
-                Проверка остановлена, проверенное сохранено: уже {state.job.kept ?? 0}
+                Проверка остановлена, проверенное сохранено: уже {paused?.kept ?? 0}
                 {"\u00a0"}из{"\u00a0"}
                 {total}. Продолжим с этого места, остальные разговоры проверим по тем же критериям.
               </p>

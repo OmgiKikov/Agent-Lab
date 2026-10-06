@@ -2,11 +2,24 @@
 tone of voice) take the same sample of the export and judge each conversation of it by the criteria of its topic."""
 
 import asyncio
-from collections.abc import Callable
+import uuid
+from collections.abc import Awaitable, Callable
 
 from .. import config, models, storage
 from ..domain import export, sampling, verdicts
 from ..roles import judge
+
+
+async def published_once(check: str, made: Callable[[str], Awaitable[dict]]) -> dict | None:
+    """A check made and published once (made: its result, published, from its id). Made by a task, the check takes
+    the task's id as its own: a task taken up after a restart that finds its check in the history does not make it
+    again, and never publishes it twice. The result made here, None when it was published before."""
+    check_id = storage.tasks.current_id() or uuid.uuid4().hex
+    result = None
+    if storage.history.get(check, check_id) is None:
+        result = await made(check_id)
+    storage.tasks.keep('published', check_id)  # a finished part of the task
+    return result
 
 
 def sample(count: int) -> list[dict]:

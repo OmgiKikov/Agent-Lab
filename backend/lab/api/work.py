@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from .. import storage
 from ..flows import accuracy, inputs, scenarios, severity, simulation, tone
-from ..jobs import BusyError, PerAgent, Work
+from ..jobs import BusyError, PerAgent, Work, view
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,17 @@ def continuable(task: dict | None) -> bool:
         return kind.same(task['input']) == task['fingerprint']
     except (KeyError, ValueError):  # the materials it was made of are gone
         return False
+
+
+def paused() -> dict[str, dict]:
+    """The stopped or failed work of each kind that the same start would continue now (continuable), as the screens
+    read a task: a screen offers to go on with it whatever other task ran after it."""
+    found = {}
+    for name, kind in KINDS.items():
+        task = storage.tasks.latest(name) if kind.same else None
+        if continuable(task):
+            found[name] = view(task)
+    return found
 
 
 def _run(run_id: str) -> dict:

@@ -226,6 +226,11 @@ export type ResultHead = Omit<Discover, "results">;
 export type LabState = {
   toneOfVoice?: ToneDraft | null;
   job: Job;
+  /**
+   * The stopped work of each kind that the same start continues, whatever task ran after it (backend/lab/api/work.py,
+   * paused): «tone-check», «discover».
+   */
+  paused?: Partial<Record<string, Job>>;
   model: string;
   models: Models;
   settings: Settings;

@@ -245,8 +245,8 @@ class PerAgent:
     def state(self) -> dict:
         return self._jobs().state
 
-    def start(self, kind: str, work: Work, **kept: Any) -> dict:
-        return self._jobs().start(kind, work, **kept)
+    def start(self, kind: str, work: Work, **options: Any) -> dict:
+        return self._jobs().start(kind, work, **options)
 
     async def perform(self, kind: str, work: Work) -> Any:
         return await self._jobs().perform(kind, work)

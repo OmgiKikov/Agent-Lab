@@ -316,6 +316,18 @@ class DurableToneCheckTests(unittest.IsolatedAsyncioTestCase):
             await until(lambda: not self.jobs.state['running'])
         self.assertEqual(len(self.judged), 2 + 4)
 
+    async def test_a_stopped_check_stays_offered_after_other_work_ran(self):
+        with patch.object(conversations, 'judge_dialogue', side_effect=self.judge):
+            await self.start()
+            await self.two.wait()
+            await self.client.post('/api/job/stop')
+        with support.running('sources'):
+            pass  # other work of the agent, after the stop
+        state = (await self.client.get('/api/state')).json()
+        self.assertEqual(state['job']['kind'], 'sources')
+        paused = state['paused']['tone-check']
+        self.assertEqual((paused['kept'], paused['input']['count']), (2, 4))
+
     async def test_criteria_clarified_after_the_stop_make_other_work(self):
         with patch.object(conversations, 'judge_dialogue', side_effect=self.judge):
             await self.start()

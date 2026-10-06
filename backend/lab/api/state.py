@@ -47,6 +47,8 @@ def state() -> dict:
     found = {check: results_of.head(check) for check in checks.RESULTS}
     return {
         'job': job,
+        # The stopped work of each kind that the same start continues (work.paused): its screen offers to go on.
+        'paused': work.paused(),
         'model': models.main_model(),
         'models': models.describe(),
         'settings': connection.settings(),
