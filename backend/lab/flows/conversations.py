@@ -51,7 +51,7 @@ def same_material(export_id: str | None, count: int) -> dict:
     conversations: the screens ask it at every look."""
     export = chosen(export_id)
     return {
-        'export': [export['file'], export['uploadedAt'], export['total']],
+        'export': [export['file'], storage.exports.stamp(export['id']), export['total']],
         'count': count,
         'judges': [models.endpoints().main, models.second_judge()],
     }

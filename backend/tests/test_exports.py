@@ -131,6 +131,35 @@ class SchemaNineTests(unittest.TestCase):
         [export] = storage.exports.listed()
         self.assertEqual((export['name'], export['uploadedAt']), ('Первая', result['startedAt']))
 
+    def test_a_check_stopped_before_exports_is_still_the_same_work(self) -> None:
+        """A stopped check's fingerprint was made of [file, updatedAt, count] of the one export (None for what was not
+        kept): the export that database becomes is the same material, so the same start continues the check."""
+        for meta in ({'file': None, 'updatedAt': None}, {'file': 'a.xlsx', 'updatedAt': '2026-10-01T10:00:00+00:00'}):
+            with self.subTest(meta=meta):
+                support.lab(self)
+                path = storage.db.default_database()
+                storage.db.private_folder(path.parent)
+                old = sqlite3.connect(path)
+                old.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+                old.execute(
+                    'CREATE TABLE dialogues (position INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, '
+                    'value TEXT NOT NULL)'
+                )
+                for position, dialogue_id in enumerate(['d1', 'd2'], 1):
+                    old.execute(
+                        'INSERT INTO dialogues VALUES (?, ?, ?)', (position, dialogue_id, json.dumps(talk(dialogue_id)))
+                    )
+                old.execute('INSERT INTO documents VALUES (?, ?)', ('logs-meta.json', json.dumps(meta)))
+                old.execute('PRAGMA user_version = 8')
+                old.commit()
+                old.close()
+                material = conversations.same_material(None, 5)['export']
+                self.assertEqual(material, [meta['file'], meta['updatedAt'], 2])
+
+    def test_a_new_export_is_its_own_material(self) -> None:
+        first = inputs.add_export([talk('a')], 'a.xlsx')
+        self.assertEqual(conversations.same_material(first['id'], 5)['export'], ['a.xlsx', first['uploadedAt'], 1])
+
     def test_a_database_without_an_export_gets_none(self) -> None:
         self.assertEqual(storage.exports.listed(), [])
 

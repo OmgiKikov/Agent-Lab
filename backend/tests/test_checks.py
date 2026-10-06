@@ -13,6 +13,7 @@ from lab import models, storage
 from lab.flows import accuracy, answers, conversations, inputs, tone
 from lab.flows import checks as results_of
 from lab.flows import scenarios as cards
+from lab.roles.base import Answer
 
 TONE_RESULT, CODE_RESULT = 'tone-result.json', 'discover.json'
 CODE = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'Называй срок доставки терминала.'}
@@ -135,6 +136,44 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         row = next(row for row in shown['results'][0]['rules'] if row['ruleId'] == 'pronouns')
         self.assertEqual(row['review'], 'agree')
         self.assertNotIn('review', storage.documents.load(TONE_RESULT)['results'][0]['rules'][0])
+
+    async def upload_another_d1(self):
+        """A new export that gives the id d1 to another conversation."""
+        other = {
+            'id': 'd1',
+            'messages': [
+                {'role': 'user', 'content': 'Совсем другой вопрос о тарифе'},
+                {'role': 'assistant', 'content': 'Другой ответ'},
+            ],
+        }
+        response = await self.client.post('/api/logs?name=other.jsonl', content=json.dumps(other))
+        self.assertEqual(response.status_code, 200, response.text)
+
+    async def test_a_tone_answer_never_moves_to_another_conversation_with_the_same_id(self):
+        await self.check_tone(status='PASS')
+        result = storage.documents.load(TONE_RESULT)
+        answered = await self.answer(result['finishedAt'], 'pronouns', decision='disagree', status='PASS')
+        self.assertEqual(answered.status_code, 200, answered.text)
+        await self.upload_another_d1()
+        self.assertIsNone(await self.check_tone(status='PASS'))  # of the newest export
+        shown = (await self.client.get('/api/checks/tone')).json()
+        self.assertEqual(shown['export']['name'], 'other')
+        self.assertEqual([row.get('review') for row in shown['results'][0]['rules']], [None])
+
+    async def test_an_accuracy_answer_and_topic_never_move_to_another_conversation_with_the_same_id(self):
+        self.assertIsNone(await self.assess_code(status='PASS'))
+        result = storage.documents.load(CODE_RESULT)
+        answered = await self.answer(result['finishedAt'], 't1r1', decision='disagree', status='PASS', check='code')
+        self.assertEqual(answered.status_code, 200, answered.text)
+        await self.upload_another_d1()
+        # The other d1 is a new conversation: the router places it, here in the same topic.
+        place = AsyncMock(return_value=Answer([('d1', 't1')], 'router'))
+        with patch.object(accuracy.planner, 'place', place):
+            self.assertIsNone(await self.assess_code(status='PASS'))
+        place.assert_awaited_once()
+        shown = (await self.client.get('/api/checks/code')).json()
+        self.assertEqual(shown['export']['name'], 'other')
+        self.assertEqual([row.get('review') for row in shown['results'][0]['rules']], [None])
 
     async def test_the_state_lists_each_run_with_its_check(self):
         item = {'cardId': 'c1', 'status': 'PASS', 'topic': 'Tone of voice', 'criteria': [], 'conversation': []}

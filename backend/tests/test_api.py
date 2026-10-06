@@ -118,12 +118,13 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             'id': 'd1',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
-        storage.exports.add([dialogue], None)
+        export = storage.exports.add([dialogue], None)
         storage.documents.save(
             inputs.SOURCES, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'Отвечай по делу.'}]
         )
         rule = {'id': 't1r1', 'text': 'Отвечает по делу', 'quote': 'Отвечай по делу', 'sourceId': 's1'}
         previous = {
+            'export': storage.exports.line(export),
             'finishedAt': '2026-10-01T10:00:00+00:00',
             'topics': [{'id': 't1', 'title': 'Вопросы', 'dialogueIds': ['d1'], 'rules': [rule]}],
             'results': [{'dialogueId': 'd1', 'topicId': 't1', 'status': 'PASS', 'rules': [], 'opening': 'Вопрос'}],

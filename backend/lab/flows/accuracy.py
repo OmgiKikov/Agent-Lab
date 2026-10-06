@@ -72,9 +72,20 @@ async def plan_topics(srcs: list[dict], dialogues: list[dict]) -> tuple[list[dic
     return topics, dropped
 
 
+def same_conversations(previous: dict, dialogues: list[dict]) -> set[str]:
+    """The ids of these conversations that are the very ones the previous result judged: the same id in another export
+    is another conversation, unless its text is the same."""
+    judged = {str(r['dialogueId']) for r in previous.get('results') or []}
+    ids = [str(d['id']) for d in dialogues if str(d['id']) in judged]
+    made_of = conversations.export_of(previous)
+    then = {str(d['id']): d for d in storage.exports.read(made_of, ids)} if ids and made_of else {}
+    return {str(d['id']) for d in dialogues if then.get(str(d['id'])) == d}
+
+
 async def keep_topics(previous: dict, dialogues: list[dict]) -> list[dict]:
     """The frozen topics: a known conversation keeps its topic, new ones are sorted into the existing topics."""
-    known = {str(r['dialogueId']): r['topicId'] for r in previous.get('results') or []}
+    same = same_conversations(previous, dialogues)
+    known = {str(r['dialogueId']): r['topicId'] for r in previous.get('results') or [] if str(r['dialogueId']) in same}
     new = [d for d in dialogues if str(d['id']) not in known]
     topics = [dict(t, dialogueIds=[]) for t in previous['topics']]
     if new:
@@ -141,7 +152,8 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool, e
     results.ensure_answered(judged, result_before)
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     judged.sort(key=lambda r: order.get(str(r['dialogueId']), 0))
-    if previous.get('topics') and not replan:
+    # Only within the export the previous result was made of: the same id in another export is another conversation.
+    if previous.get('topics') and not replan and conversations.export_of(previous) == export['id']:
         results.carry_reviews(previous, judged)
     rule_count = Counter(rule.get('sourceId') for topic in topics for rule in topic['rules'])
     return {

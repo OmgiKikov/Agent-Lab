@@ -38,9 +38,11 @@ DIALOGUES_ORDER = 'CREATE INDEX IF NOT EXISTS dialogues_in_order ON dialogues (e
 
 TABLES = (
     'CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)',
-    # The exports of conversations, each upload one (storage/exports.py): the list is the newest first (rowid).
+    # The exports of conversations, each upload one (storage/exports.py): the list is the newest first (rowid). stamp:
+    # when it came as a stopped check's fingerprint knows it (storage.exports.stamp), NULL for the one export of an
+    # older database that kept no time.
     'CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, name TEXT NOT NULL, file TEXT, '
-    'uploaded_at TEXT NOT NULL, total INTEGER NOT NULL, skipped INTEGER NOT NULL DEFAULT 0)',
+    'uploaded_at TEXT NOT NULL, total INTEGER NOT NULL, skipped INTEGER NOT NULL DEFAULT 0, stamp TEXT)',
     DIALOGUES,
     # summary: the run without its conversations, written with it, for the list of runs.
     'CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL, summary TEXT)',
@@ -136,9 +138,10 @@ def _new_export(connection: sqlite3.Connection, meta: dict, rows: list[tuple]) -
     # Not known when it was uploaded: no later than the first check of it that is still its result.
     started = sorted(r['startedAt'] for r in results if isinstance(r, dict) and isinstance(r.get('startedAt'), str))
     at = meta.get('updatedAt') or next(iter(started), None) or datetime.now(UTC).isoformat(timespec='milliseconds')
+    # A check stopped before this step knew the export by [file, updatedAt, count]: the stamp keeps its updatedAt.
     connection.execute(
-        'INSERT INTO exports (id, name, file, uploaded_at, total, skipped) VALUES (?, ?, ?, ?, ?, 0)',
-        (export_id, name, file, at, total),
+        'INSERT INTO exports (id, name, file, uploaded_at, total, skipped, stamp) VALUES (?, ?, ?, ?, ?, 0, ?)',
+        (export_id, name, file, at, total, meta.get('updatedAt')),
     )
     made = {'id': export_id, 'name': name, 'file': file, 'total': total}
     for document in checks.RESULTS.values():

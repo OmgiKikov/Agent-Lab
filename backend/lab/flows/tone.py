@@ -296,7 +296,9 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
     # The live result carries its own answers with the same criteria, as before: a result saved before the history of
     # checks keeps them only in itself. The history then adds what a check in between lost or what another criterion's
     # clarification would have dropped.
-    if previous.get('criteriaRevision') == draft['revision']:
+    # Only within the export the previous result was made of: the same id in another export is another conversation
+    # (carry_decisions carries a decision there when the agent's words are the same).
+    if previous.get('criteriaRevision') == draft['revision'] and conversations.export_of(previous) == export['id']:
         results.carry_reviews(previous, judged)
     carry_decisions(judged, criteria, dialogues)
     return {

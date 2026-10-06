@@ -44,9 +44,10 @@ def add(dialogues: list[dict], file: str | None, name: str | None = None, skippe
             ((export_id, position, str(d['id']), db.dump(d)) for position, d in enumerate(dialogues, 1)),
         )
         total = connection.execute('SELECT count(*) FROM dialogues WHERE export = ?', (export_id,)).fetchone()[0]
+        at = db.now()
         connection.execute(
-            f'INSERT INTO exports ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)',
-            (export_id, (name or '').strip() or name_of(file), file, db.now(), total, skipped),
+            f'INSERT INTO exports ({_COLUMNS}, stamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (export_id, (name or '').strip() or name_of(file), file, at, total, skipped, at),
         )
         row = connection.execute(f'SELECT {_COLUMNS} FROM exports WHERE id = ?', (export_id,)).fetchone()
     return _line(row)
@@ -70,6 +71,15 @@ def newest() -> dict | None:
     with db.connect() as connection:
         row = connection.execute(f'SELECT {_COLUMNS} FROM exports ORDER BY rowid DESC LIMIT 1').fetchone()
     return _line(row) if row else None
+
+
+def stamp(export_id: str) -> str | None:
+    """When the export came, as the fingerprint of a check of it says it: the time of its upload; for the one export
+    of an older database, the time that database kept (None when it kept none), so a check stopped before is the same
+    work after."""
+    with db.connect() as connection:
+        row = connection.execute('SELECT stamp FROM exports WHERE id = ?', (export_id,)).fetchone()
+    return row[0] if row else None
 
 
 def uploaded() -> bool:
