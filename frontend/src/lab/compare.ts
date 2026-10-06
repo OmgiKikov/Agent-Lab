@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { resultOf } from "./checks";
 import { longDay, plural } from "./format";
-import { FEW, notComparedText, shareText, shiftText, type Counts, type Summary } from "./history";
+import { FEW, shareText, shiftText, type Counts, type Summary } from "./history";
 import { useLabState } from "./LabProvider";
 import type { Check, ResultHead } from "./types";
 
@@ -109,14 +109,10 @@ const sideText = (counts: Counts) => (counts.measured ? shareText(counts) : "н�
  * The line under a check's number, in two parts: its first words (`head`, the way to the previous check) and the
  * rest. «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). Мало разговоров, чтобы судить.» The
  * export of the previous check is not in the line: its link says it. A re-evaluation of the same conversations says
- * the difference is the evaluation's; other criteria or models — that the checks are not compared, without numbers.
- * Nothing before the first comparison, nor without a current result.
+ * the difference is the evaluation's. Nothing before the first comparison, without a current result, or when the
+ * checks are not comparable: that they are not compared is nothing to act on, and the history says why.
  */
 export function compareSentence(compare: Compare): { head: string; rest: string } | null {
-  if (compare.kind === "incompatible") {
-    const text = notComparedText(compare.reason);
-    return { head: text.slice(0, text.indexOf(":")), rest: text.slice(text.indexOf(":")) };
-  }
   const { overall, previous } = compare;
   if ((compare.kind !== "new-data" && compare.kind !== "same-data") || !overall || !previous) return null;
   const { before, now, verdict, direction } = overall;
@@ -134,11 +130,10 @@ export function compareSentence(compare: Compare): { head: string; rest: string 
 
 /**
  * The row «Прошлая проверка» under a check's number (checks/Compare, CompareLine): the counts side by side, and under
- * them when the previous check was and what may be read into the difference; or «Не сравниваем» and the service's
- * reason. Null when there is nothing to compare with.
+ * them when the previous check was and what may be read into the difference. Null when there is nothing to compare
+ * with, checks that are not comparable included.
  */
 export function compareParts(compare: Compare): { value: string; note: string } | null {
-  if (compare.kind === "incompatible") return { value: "Не сравниваем", note: compare.reason };
   const { overall, previous } = compare;
   if ((compare.kind !== "new-data" && compare.kind !== "same-data") || !overall || !previous) return null;
   const { before, now, verdict, direction } = overall;

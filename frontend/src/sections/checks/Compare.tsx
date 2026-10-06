@@ -42,8 +42,9 @@ const link = "font-medium text-run hover:underline";
  * How the result stands to its previous check, under its number (product/Checklist): a fact to know, not a step to
  * do. Compared: «Прошлая проверка: 22 из 53 (42%) → сейчас 4 из 12 (33%)», when it was and what may be read into the
  * difference, and «Открыть» that check (its export in the tooltip). With `serious` — once some criteria are serious —
- * the same comparison of the conversations with a serious error follows. Not compared: why, with no action. Nothing
- * when there is nothing to compare with. When the service did not answer, the row says so, with «Повторить».
+ * the same comparison of the conversations with a serious error follows. Nothing when there is nothing to compare
+ * with, nor when the checks are not comparable: a row saying so would leave nothing to do, and the history of the
+ * checks says why. When the service did not answer, the row says so, with «Повторить».
  */
 export function CompareLine({
   check,
@@ -75,14 +76,6 @@ export function CompareLine({
     );
   const parts = compare && compareParts(compare);
   if (!compare || !parts) return null;
-  if (compare.kind === "incompatible")
-    return (
-      <Step
-        state="info"
-        title="С прошлой проверкой не сравниваем"
-        text={`${parts.note} Сравнивать можно только проверки с теми же критериями и моделями.`}
-      />
-    );
   const grave = serious ? seriousCompareText(compare, serious) : null;
   return (
     <Step
