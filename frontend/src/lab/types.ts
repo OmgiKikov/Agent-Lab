@@ -125,7 +125,7 @@ export type Pattern = {
   titles: string[];
   examples: PatternExample[];
 };
-/** local: the agent runs on the local stand, the only one that gives its trace to a replay. */
+/** local: the agent runs on the local stand, so it gives its trace to a replay; the replay service does too (kind replay). */
 export type Target = {
   id: string;
   name: string;
@@ -208,6 +208,8 @@ export type LabState = {
   cards: null | Deck;
   runs: RunSummary[];
   targets: Target[];
+  /** The ways a replay reaches the agent (backend agents.replay_targets). Older services have no such field. */
+  replayTargets?: Target[];
   personas: Persona[];
   /** The latest replay of exported conversations, enough to know it changed. Older services have no such field. */
   replay?: { id: string; finishedAt: string } | null;
@@ -234,7 +236,7 @@ export type Turn = {
   seconds?: number;
 };
 
-/** What the local agent did inside one replayed step (aigw-local local/agent_lab_trace.py). */
+/** What the agent did inside one replayed step (aigw-local local/agent_lab_trace.py, the replay service). */
 export type RagPassage = {
   article: string | number | null;
   passage: number | null;
@@ -243,19 +245,25 @@ export type RagPassage = {
   reranker: number | null;
 };
 export type RagCall = {
+  seq?: number;
+  /** idp: a call to the knowledge base; cache: an answer from its warmed cache, no call made. Older traces have none. */
+  source?: "idp" | "cache";
+  /** ok, error, timeout, cancelled, pending; an HTTP status in older traces. */
+  status: string | number;
+  /** The request to IDP as sent; none for a cached answer. */
+  request?: unknown;
   query: string;
   filter: string | null;
   systemPrompt: string;
   passages: RagPassage[];
   answer: string;
   reason: string | null;
-  status: number;
 };
 export type AgentTrace = {
   traceId: string;
-  chains: { name: string; output: string | null; seconds?: number; error?: string }[];
+  chains: { seq?: number; name: string; output: string | null; seconds?: number; error?: string }[];
   rag: RagCall[];
-  systems: { tool: string; arguments: unknown; status: number }[];
+  systems: { seq?: number; tool: string; arguments: unknown; status: number | string; response?: unknown }[];
 };
 export type ReplayStep = {
   index: number;
@@ -276,6 +284,11 @@ export type ReplayResult = {
   id: string;
   target: string;
   version: string;
+  /** What the replay service said of itself before the replay; none for an agent on this computer. */
+  stand?: {
+    prompts?: { version: string };
+    idpCache?: { total: number; warmed: number; failed: string[] };
+  } | null;
   startedAt: string;
   finishedAt: string;
   model: string;

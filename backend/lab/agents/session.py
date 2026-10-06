@@ -5,10 +5,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from .http import HttpAgent
+from .replay_service import ReplayServiceAgent
 
 
 @asynccontextmanager
-async def session(agent: HttpAgent) -> AsyncIterator[HttpAgent]:
+async def session(agent: HttpAgent | ReplayServiceAgent) -> AsyncIterator[HttpAgent | ReplayServiceAgent]:
     cancellation: asyncio.CancelledError | None = None
     try:
         await agent.open()

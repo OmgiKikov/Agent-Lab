@@ -21,15 +21,13 @@ const FIELD =
 
 const LINK = "rounded-sm text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3";
 
-/**
- * Only an agent on this computer gives its trace (backend/lab/replay.py, NOT_LOCAL): the bank's stand is left out, and
- * so is an agent not set up yet, which cannot answer.
- */
-const replayTargets = (targets: Target[]) => targets.filter((t) => t.local && t.ready);
-const defaultTarget = (targets: Target[]) => (targets.find((t) => t.kind === "code") ?? targets[0])?.id ?? "";
+/** The replay service on the stand first: it replays the agent as production runs it. */
+const defaultTarget = (targets: Target[]) =>
+  (targets.find((t) => t.kind === "replay") ?? targets.find((t) => t.kind === "code") ?? targets[0])?.id ?? "";
 
 /**
- * «Повтор разговоров»: conversations of the export play again through the local agent, a step for every customer message.
+ * «Повтор разговоров»: conversations of the export play again through an agent that gives its trace: the replay service
+ * on the stand or the local agent, a step for every customer message.
  * Each step shows production's reply beside the new one, what the agent looked up and the verdicts on the new reply.
  */
 export function ReplayPage() {
@@ -63,9 +61,7 @@ export function ReplayPage() {
           ) : state?.replay ? (
             <Skeleton className="h-36" />
           ) : (
-            <EmptyState title="Здесь будут повторённые разговоры">
-              Выберите агента на этом компьютере и запустите повтор.
-            </EmptyState>
+            <EmptyState title="Здесь будут повторённые разговоры">Выберите агента и запустите повтор.</EmptyState>
           )}
         </div>
       </div>
@@ -76,7 +72,7 @@ export function ReplayPage() {
 function StartForm() {
   const { state, refresh } = useLabState();
   const toast = useToast();
-  const targets = replayTargets(state?.targets ?? []);
+  const targets = state?.replayTargets ?? [];
   const [picked, setPicked] = useState<string | null>(null);
   const [dialogues, setDialogues] = useState(10);
   const target = targets.some((t) => t.id === picked) ? (picked ?? "") : defaultTarget(targets);
@@ -105,10 +101,11 @@ function StartForm() {
         </label>
       ) : (
         <p className="w-full text-body text-fg-2">
-          Агент на этом компьютере не настроен.{" "}
+          Нет агента, который отдаёт трейс. Задайте адрес сервиса повтора в LAB_REPLAY_URL или{" "}
           <Link to={SECTIONS.agent} className={LINK}>
-            Настроить
+            настройте агента на этом компьютере
           </Link>
+          .
         </p>
       )}
       <label className="text-small text-fg-3">
@@ -141,6 +138,8 @@ function Result({ result }: { result: ReplayResult }) {
     <div className="space-y-6">
       <p className="text-small text-fg-3">
         Повтор {longDay(result.finishedAt)} в {time(result.finishedAt)} · версия агента {result.version || "—"}
+        {result.stand?.idpCache &&
+          ` · кэш базы знаний: ${result.stand.idpCache.warmed} из ${result.stand.idpCache.total}`}
       </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {FAMILIES.map((family) => (
