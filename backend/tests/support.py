@@ -47,3 +47,15 @@ def serve(test: unittest.IsolatedAsyncioTestCase, jobs: Jobs | PerAgent | None =
     test.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=test.app), base_url='http://test')
     test.addAsyncCleanup(test.client.aclose)
     test.addAsyncCleanup(test.jobs.close)
+
+
+def catalog_of(dialogue_ids: list[str]) -> dict:
+    """A catalog of business scenarios with one scenario that holds every conversation named: a deck built in a test
+    asks no model for it (flows.catalog.build)."""
+    scenario = {'id': 'c1s1', 'title': 'Узнать тариф', 'description': ''}
+    episode = {'acquiring': True, 'start': 1, 'task': 'узнать тариф', 'object': 'тариф', 'scenarioId': 'c1s1'}
+    return {
+        'revision': 'test',
+        'categories': [{'id': 'c1', 'title': 'Тарифы', 'description': '', 'scenarios': [scenario]}],
+        'episodes': {str(dialogue_id): dict(episode) for dialogue_id in dialogue_ids},
+    }

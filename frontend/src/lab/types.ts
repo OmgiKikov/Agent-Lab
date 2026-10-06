@@ -24,6 +24,9 @@ export type Metric = {
   repeats?: { scenarios: number; stable: number; attempts: number };
   human?: { reviewed: number; agree: number };
   personas?: Record<string, { accuracy: number | null; passed: number; measured: number }>;
+  /** Scenario sets (representative, regression, stress), each measured on its own; the representative one also
+   * weighted by how many conversations of the export each of its cards stands for. */
+  sets?: Record<string, { accuracy: number | null; passed: number; measured: number; weighted?: number | null }>;
 };
 /** A call of the agent's tool as the service recorded it. */
 export type ToolEvent = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };
@@ -107,6 +110,12 @@ export type Card = {
   sourceDialogueId: string;
   world?: World | null;
   openings?: Record<string, string>;
+  /** The sets the card is in: representative, regression, stress. */
+  sets?: string[];
+  /** How many conversations of the export a card of the representative set stands for. */
+  weight?: number | null;
+  /** The business scenario of the catalog the card's conversation is in. */
+  scenario?: { id: string; title: string; categoryId: string; category: string } | null;
 };
 export type LogResult = {
   error?: string | null;

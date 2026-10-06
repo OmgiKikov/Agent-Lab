@@ -87,6 +87,17 @@ def normalize(raw: dict, shapes: dict) -> dict:
     }
 
 
+def identity(seed: str) -> dict:
+    """The client's numbers, chosen here so worlds differ: the model copies the templates' client otherwise.
+    How many terminals customers have is not calibrated yet: one, two or three, the same for the same seed."""
+    rng = random.Random(f'world:{seed}')
+    count = rng.choices((1, 2, 3), weights=(5, 3, 2))[0]
+    return {
+        'inn': str(rng.randint(1, 9)) + ''.join(str(rng.randint(0, 9)) for _ in range(9)),
+        'terminalIds': [str(rng.randint(10_000_000, 99_999_999)) for _ in range(count)],
+    }
+
+
 def overrides(world: dict | None, shapes: dict | None) -> dict:
     """Full per-request SBE answers: identity tools from the world's client + the scenario's own data."""
     if not world or shapes is None:
@@ -137,12 +148,31 @@ def overrides(world: dict | None, shapes: dict | None) -> dict:
     return tools
 
 
-def customer_profile(world: dict | None) -> str:
+def customer_profile(world: dict | None, known: dict | None = None) -> str:
+    """The client's view of the world: the organization and its terminals as far as this customer knows them.
+    known (the card's identifiers): per identifier knows | looks_up | unknown; without it the customer knows all."""
     if not world:
         return ''
     org = world['organization']
-    terminals = ', '.join(f'{t["nameForClient"]} (номер {t["terminalId"]})' for t in world['terminals'])
+
+    def what(name: str) -> str:
+        return ((known or {}).get(name) or {}).get('value', 'knows')
+
+    inn = {
+        'knows': f', ИНН {org["inn"]}',
+        'looks_up': f', ИНН наизусть не помнишь; если попросят, посмотришь: {org["inn"]}',
+        'unknown': ', ИНН не знаешь',
+    }[what('organization')]
+    numbers = what('terminal')
+    terminals = ', '.join(
+        t['nameForClient'] + (f' (номер {t["terminalId"]})' if numbers != 'unknown' else '') for t in world['terminals']
+    )
+    note = {
+        'knows': '',
+        'looks_up': ' Номера терминалов наизусть не помнишь: если попросят, сначала скажи, что посмотришь.',
+        'unknown': ' Номеров терминалов не знаешь.',
+    }[numbers]
     return (
-        f'Твоя организация: {org["name"]}, ИНН {org["inn"]}. Торговая точка «{org["merchantName"]}», '
-        f'{org["address"]}. Терминалы: {terminals}.'
+        f'Твоя организация: {org["name"]}{inn}. Торговая точка «{org["merchantName"]}», '
+        f'{org["address"]}. Терминалы: {terminals}.{note}'
     )

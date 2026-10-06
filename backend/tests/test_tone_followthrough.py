@@ -318,7 +318,13 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         await self.check(['pronouns'])
-        scenario = {'name': 'Передача документов', 'situation': 'Клиент уточняет, как передать документы.'}
+        scenario = {
+            'eligible': True,
+            'name': 'Передача документов',
+            'goal': 'Уточнить, как передать документы',
+            'episode': {'start': 1, 'entry': 'first_message'},
+        }
+        found = support.catalog_of(storage.dialogues.ids())
         with (
             patch.object(
                 models,
@@ -326,6 +332,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                 AsyncMock(return_value=models.Reply(json.dumps(scenario, ensure_ascii=False), 'scenario-model')),
             ),
             patch.object(cards.world, 'templates', return_value=None),
+            patch.object(cards.catalog, 'build', AsyncMock(return_value=found)),
         ):
             await self.client.post('/api/cards')
             await self.wait_job()

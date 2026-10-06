@@ -59,7 +59,7 @@ function Reproduced({
   if (card.origin !== FROM_LOG)
     return (
       <p className="mt-2 max-w-[66ch] text-read text-fg-2">
-        Контроль: {controlLine(record.sourceStatus)}. Сценарий проверяет ту же ситуацию с синтетическими клиентами.
+        {card.origin}: {controlLine(record.sourceStatus)}. Сценарий проверяет ту же ситуацию с синтетическими клиентами.
       </p>
     );
   if (!record.reproduces.length)
@@ -298,6 +298,7 @@ export function ScenarioView({
       )}
       <div className="max-w-4xl px-4 pb-16 pt-5 lg:px-10 lg:pt-7">
         <p className="text-small text-fg-3">
+          {card.scenario ? `${card.scenario.category} · ${card.scenario.title} · ` : ""}
           {topic ? `${topic} · ` : ""}
           <span className="text-fg-2">{originWord(card.origin, FROM_LOG)}</span>
           {check ? ` · ${BY_CRITERIA[check]}` : ""}

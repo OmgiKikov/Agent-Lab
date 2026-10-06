@@ -9,7 +9,10 @@ nothing of the Lab, so storage can use it too.
 TONE, CODE = 'tone', 'code'
 RESULTS = {TONE: 'tone-result.json', CODE: 'discover.json'}
 NAMES = {TONE: 'Tone of voice', CODE: 'Точность'}
-DECK = 'cards.json'  # the scenarios, built from the errors of one check: {check, createdAt, model, cards}
+DECK = 'cards.json'  # the scenarios of one check: {check, createdAt, model, cards, sets, catalogRevision}
+# The catalog of business scenarios (domain/catalog.py): {revision, builtAt, model, categories, totals, episodes}.
+# Built from the export alone: neither check's result nor criteria change it.
+CATALOG = 'catalog.json'
 # The criteria of Точность waiting for its next check after a new export: its topics and their criteria without the
 # conversations of the old export (flows.inputs.replace_export, accuracy.criteria_of); changed code clears them.
 CODE_CRITERIA = 'accuracy-criteria.json'

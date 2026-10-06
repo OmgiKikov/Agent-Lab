@@ -12,9 +12,10 @@ META = schema.EXPORT_META
 _CHUNK = 500
 
 
-def replace(dialogues: list[dict], name: str | None = None) -> None:
-    """The new export in place of the previous one, with the name of its file and the time: written together, so the
-    meta never names the previous file. In the caller's transaction, if it holds one."""
+def replace(dialogues: list[dict], name: str | None = None, report: dict | None = None) -> None:
+    """The new export in place of the previous one, with the name of its file, the time and how its rows were read
+    (report): written together, so the meta never names the previous file. In the caller's transaction, if it holds
+    one."""
     with db.connect() as connection:
         db.begin(connection)
         connection.execute('DELETE FROM dialogues')
@@ -22,7 +23,7 @@ def replace(dialogues: list[dict], name: str | None = None) -> None:
             'INSERT OR REPLACE INTO dialogues (position, id, value) VALUES (?, ?, ?)',
             ((position, str(dialogue['id']), db.dump(dialogue)) for position, dialogue in enumerate(dialogues, 1)),
         )
-        documents.put(connection, META, {'file': name, 'updatedAt': db.now()})
+        documents.put(connection, META, {'file': name, 'updatedAt': db.now(), **({'import': report} if report else {})})
 
 
 def ids() -> list[str]:

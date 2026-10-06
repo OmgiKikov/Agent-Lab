@@ -53,11 +53,13 @@ class LogImportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Файл .xlsx повреждён'):
             logs.prepare('broken.xlsx', b'this is not an Excel archive')
 
-    def test_a_short_excel_row_is_named_instead_of_failing_the_server(self):
+    def test_a_short_excel_row_is_quarantined_instead_of_failing_the_server(self):
         data = undeclared([['d1', PAIR, '[1, 2]'], ['d2']])
-        with self.assertRaisesRegex(ValueError, '^В диалоге d2 не читается порядок сообщений'):
-            logs.prepare('export.xlsx', data)
-        self.assertEqual(len(logs.prepare('export.xlsx', undeclared([['d1', PAIR, '[1, 2]']]))), 1)
+        dialogues, _, quarantined = logs.read_export('export.xlsx', data)
+        self.assertEqual([d['id'] for d in dialogues], ['d1'])
+        self.assertEqual(quarantined, [{'id': 'd2', 'row': 3, 'reason': 'не читается порядок сообщений'}])
+        with self.assertRaisesRegex(ValueError, '^Ни один разговор не прочитан: не читается порядок сообщений'):
+            logs.prepare('export.xlsx', undeclared([['d2']]))
 
     def test_an_archive_without_the_parts_of_a_workbook_is_a_validation_error(self):
         archive = io.BytesIO()
@@ -82,10 +84,40 @@ class LogImportTests(unittest.TestCase):
         self.assertEqual(len(messages), 6)
         self.assertEqual(messages[-2]['content'], 'Дайте инструкцию')
 
-    def test_ambiguous_partial_duplication_is_rejected_instead_of_truncated(self):
+    def test_partial_duplication_settled_by_the_count_is_collapsed(self):
+        other = 'CLIENT Дайте инструкцию\nAGENT Откройте настройки.\n'
+        dialogue = logs.prepare('export.xlsx', excel(PAIR * 2 + other + other, '[1, 2, 3, 4]'))[0]
+        self.assertEqual([m['content'] for m in dialogue['messages']][::2], ['Не знаю номер', 'Дайте инструкцию'])
+        self.assertEqual(dialogue['meta']['import'], {'status': 'collapsed', 'textMessages': 8, 'kept': [0, 1, 4, 5]})
+
+    def test_ambiguous_conversation_is_quarantined_and_the_rest_imported(self):
         other = 'CLIENT Дайте инструкцию\nAGENT Откройте настройки\n'
-        with self.assertRaises(ValueError):
-            logs.prepare('export.xlsx', excel(PAIR * 2 + other, '[1, 2, 3, 4]'))
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = logs.SHEET
+        sheet.append([logs.ID, logs.TEXT, logs.ORDER])
+        sheet.append(['d1', PAIR * 2 + other * 2, '[1, 2, 3, 4, 5, 6]'])
+        sheet.append(['d2', PAIR, '[1, 2]'])
+        stream = io.BytesIO()
+        workbook.save(stream)
+        dialogues, _, quarantined = logs.read_export('export.xlsx', stream.getvalue())
+        self.assertEqual([d['id'] for d in dialogues], ['d2'])
+        self.assertEqual(quarantined[0]['id'], 'd1')
+        self.assertIn('несколько прочтений', quarantined[0]['reason'])
+
+    def test_service_columns_are_kept_and_customer_ids_only_as_a_pseudonym(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = logs.SHEET
+        sheet.append([logs.ID, logs.TEXT, logs.ORDER, 'Канал', 'agentCode', 'Статус код 202_5', 'epkId'])
+        sheet.append(['d', PAIR, '[1, 2]', "['WEB']", "['ACQUIRING_AGENT']", "['agent-ckr-pa-acquiring-COMMON']", '42'])
+        stream = io.BytesIO()
+        workbook.save(stream)
+        meta = logs.prepare('export.xlsx', stream.getvalue())[0]['meta']
+        self.assertEqual(
+            (meta['channel'], meta['agents'], meta['acquiringStatuses']), ('WEB', ['ACQUIRING_AGENT'], ['202_5'])
+        )
+        self.assertNotIn('42', json.dumps(meta))
 
     def test_missing_or_invalid_order_never_guesses(self):
         for order in (None, 'not JSON', '{}', '[]'):
@@ -102,6 +134,18 @@ class LogImportTests(unittest.TestCase):
             [
                 {'role': 'user', 'content': 'Терминал пишет HOST AGENT NOT FOUND, что делать?'},
                 {'role': 'assistant', 'content': 'Перезагрузите терминал'},
+            ],
+        )
+
+    def test_a_conversation_written_on_one_line_is_read_turn_by_turn(self):
+        text = 'CLIENT Как поменять MCC код AGENT Откройте раздел «Эквайринг» CLIENT Нет такого раздела'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3]'))
+        self.assertEqual(
+            [(m['role'], m['content']) for m in dialogues[0]['messages']],
+            [
+                ('user', 'Как поменять MCC код'),
+                ('assistant', 'Откройте раздел «Эквайринг»'),
+                ('user', 'Нет такого раздела'),
             ],
         )
 
@@ -166,8 +210,8 @@ class LogImportTests(unittest.TestCase):
             {'id': 'no-answer', 'messages': talk[:1]},
         ]
         data = '\n'.join(json.dumps(row, ensure_ascii=False) for row in rows).encode()
-        dialogues, skipped = logs.read_export('export.jsonl', data)
-        self.assertEqual(([d['id'] for d in dialogues], skipped), (['usable'], 2))
+        dialogues, skipped, quarantined = logs.read_export('export.jsonl', data)
+        self.assertEqual(([d['id'] for d in dialogues], skipped, quarantined), (['usable'], 2, []))
 
 
 class SeenTextTests(unittest.TestCase):

@@ -44,6 +44,6 @@ export function RunWord({ run, className }: { run: LabRun; className?: string })
   );
 }
 
-/** «из ошибки в настоящем разговоре» or «контроль»: why the scenario exists, in the words of its list. */
+/** Why the scenario exists: «из ошибки в настоящем разговоре», or the name of its set («представительный набор»). */
 export const originWord = (origin: string, fromLog: string) =>
-  origin === fromLog ? "из ошибки в настоящем разговоре" : "контроль";
+  origin === fromLog ? "из ошибки в настоящем разговоре" : origin.toLowerCase();

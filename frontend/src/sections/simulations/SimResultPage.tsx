@@ -127,6 +127,16 @@ function SimResult() {
           ) : (
             <p className="mt-6 text-title font-semibold text-fg">Разговоры этого прогона ещё не оценены</p>
           )}
+          {!live && m?.sets && Object.keys(m.sets).length > 1 && (
+            <p className="mt-3 max-w-[68ch] text-read text-fg-2">
+              Наборы считаются отдельно:{" "}
+              {Object.entries(m.sets)
+                .map(([key, s]) => `${SET_NAMES[key] ?? key}: ошибка в ${s.measured - s.passed} из ${s.measured}`)
+                .join(" · ")}
+              {m.sets.representative?.weighted != null &&
+                `. С поправкой на частоту сценариев без ошибок ${m.sets.representative.weighted}%`}
+            </p>
+          )}
           <Matrix run={run} state={state} />
           {!live && (data?.sim || criteria.loading || criteria.error) && (
             <section aria-label="Проблемы" className="mt-16">
@@ -144,6 +154,12 @@ function SimResult() {
     </div>
   );
 }
+
+const SET_NAMES: Record<string, string> = {
+  representative: "представительный",
+  regression: "из ошибок",
+  stress: "стрессовый",
+};
 
 /** A run that is still playing: how many conversations are done, filling in as the agent answers. */
 function Live({ run, state }: { run: LabRun; state: LabState }) {

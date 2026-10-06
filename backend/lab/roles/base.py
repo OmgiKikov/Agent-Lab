@@ -110,22 +110,25 @@ async def ask(
     model: models.Endpoint | None = None,
     fields: Mapping[str, str] | None = None,
     attempts: int = 2,
+    timeout: float | None = None,
 ) -> Answer[Any]:
     """The role's answer to the payload, by the main model or the one named. A role that answers in words gets the
     payload as it is and answers once (the model is still asked again where another try may pass, models.chat). Any
     other gets it as JSON: its answer is read into the role's type and passed to the caller's rule (accept: the value
     the caller takes from it, or a ValueError), and asked once more when malformed or not accepted; then it is
-    UNUSABLE, the reason in the journal and the server log."""
+    UNUSABLE, the reason in the journal and the server log. timeout: seconds a slow role may think, else the models'
+    default."""
     system = role.instructions.format(**fields) if fields else role.instructions
     call = models.Call(role.name, role.version)
+    limits = {'timeout': timeout} if timeout else {}
     if role.reply is str:
-        reply = await models.chat(system, payload, endpoint=model, call=call)
+        reply = await models.chat(system, payload, endpoint=model, call=call, **limits)
         return Answer(accept(reply.text) if accept else reply.text, reply.model)
     request = json.dumps(payload, ensure_ascii=False)
     last: Exception | None = None
     for _ in range(attempts):
         try:
-            reply = await models.chat(system + JSON_ONLY, request, json_mode=True, endpoint=model, call=call)
+            reply = await models.chat(system + JSON_ONLY, request, json_mode=True, endpoint=model, call=call, **limits)
         except models.MalformedAnswer as error:
             last = error
             continue

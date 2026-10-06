@@ -69,7 +69,11 @@ async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, ch
     conversation = item['conversation']
     shapes = world.templates(connection.repo()) if agent.mocked else None
     test_data = scenario_world.overrides(card.get('world'), shapes) if agent.mocked else {}
-    details = scenario_world.customer_profile(card.get('world')) if test_data else record.get('customer', '')
+    details = (
+        scenario_world.customer_profile(card.get('world'), card.get('identifiers'))
+        if test_data
+        else record.get('customer', '')
+    )
     # Whether the conversation ran to its end: only such a conversation may be judged again (ended).
     item.update(world=bool(test_data), ended=False)
     persona = item.get('persona') or personas.DEFAULT
@@ -131,6 +135,9 @@ def new_item(card: dict, persona: str, attempt: int) -> dict:
         'topic': card['topic'],
         'attempt': attempt,
         'origin': card['origin'],
+        'sets': list(card.get('sets') or []),
+        'weight': card.get('weight'),
+        'scenario': card.get('scenario'),
         'situation': card['situation'],
         'criteria': deepcopy(card['criteria']),
         'status': 'RUNNING',

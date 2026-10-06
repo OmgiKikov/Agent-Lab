@@ -33,40 +33,30 @@ def dialogue():
     }
 
 
-def scenario(name: str, situation: str) -> models.Reply:
-    """What the model answers as the scenario role."""
-    return models.Reply(json.dumps({'name': name, 'situation': situation}, ensure_ascii=False), 'actual-model')
+def scenario(name: str, goal: str) -> models.Reply:
+    """What the model answers as the card role: the customer of the conversation's episode."""
+    value = {'eligible': True, 'name': name, 'goal': goal, 'episode': {'start': 1, 'entry': 'first_message'}}
+    return models.Reply(json.dumps(value, ensure_ascii=False), 'actual-model')
+
+
+def catalog_of(*ids: str):
+    """The catalog flow answering with one scenario that holds these conversations."""
+    return patch.object(cards.catalog, 'build', AsyncMock(return_value=support.catalog_of(list(ids))))
 
 
 class CardsTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         support.lab(self)
 
-    async def test_unmeasured_logs_supply_scenarios_without_becoming_passes(self):
+    async def test_a_conversation_without_an_error_is_no_scenario_from_an_error(self):
         audit = analysis()
-        picks = picking.pick(audit, {'d'})
-        self.assertEqual(len(picks), 1)
-        self.assertEqual(picks[0][2], 'Покрытие темы')
+        self.assertEqual(picking.pick(audit, {'d'}), [])
         self.assertEqual(audit['results'][0]['status'], 'UNMEASURED')
 
-    async def test_a_control_is_a_conversation_checked_without_an_error_before_one_never_checked(self):
-        audit = analysis()
-        audit['topics'][0]['rules'] = audit['topics'][0]['rules'][:1]
-        audit['results'] = [
-            {'topicId': 't', 'dialogueId': 'unchecked', 'status': 'UNMEASURED'},
-            {'topicId': 't', 'dialogueId': 'clean', 'status': 'PASS'},
-        ]
-        talks = [dict(dialogue(), id=dialogue_id) for dialogue_id in ('unchecked', 'clean')]
-        picks = picking.pick(audit, {d['id'] for d in talks})
-        self.assertEqual(
-            [(d, origin) for _, d, origin, _ in picks],
-            [('clean', picking.COVERAGE), ('unchecked', picking.COVERAGE)],
-        )
-
     async def test_a_tone_check_gives_a_scenario_per_criterion_the_agent_failed_not_four_at_most(self):
-        """Tone of voice has one topic: picking two errors and two controls per topic capped its deck at four. Every
-        criterion the agent failed gets its own conversation first (the most frequent first, each conversation once),
-        then a control, then the second conversation of every criterion, then the second control."""
+        """Tone of voice has one topic: picking two errors per topic capped its deck. Every criterion the agent failed
+        gets its own conversation first (the most frequent first, each conversation once), then the second
+        conversation of every criterion."""
         rules = [{'id': f'c{n}', 'text': f'Критерий {n}', 'quote': str(n), 'observation': 'reply'} for n in range(1, 5)]
         failed = {'d1': ['c1', 'c2'], 'd2': ['c1'], 'd3': ['c3'], 'd4': ['c3'], 'd5': ['c4']}
 
@@ -83,15 +73,7 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         picks = picking.pick(audit, {d['id'] for d in talks})
         self.assertEqual(
             [(dialogue, origin) for _, dialogue, origin, _ in picks],
-            [
-                ('d1', picking.FROM_LOG),
-                ('d3', picking.FROM_LOG),
-                ('d5', picking.FROM_LOG),
-                ('d6', picking.COVERAGE),
-                ('d2', picking.FROM_LOG),
-                ('d4', picking.FROM_LOG),
-                ('d7', picking.COVERAGE),
-            ],
+            [(d, picking.FROM_LOG) for d in ('d1', 'd3', 'd5', 'd2', 'd4')],
         )
         self.assertEqual(picks[0][3], ['c1', 'c2'])  # the card still reproduces every criterion failed there
 
@@ -103,7 +85,10 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
     async def test_generation_failure_keeps_saved_deck_and_is_visible(self):
         jobs = Jobs()
         storage.dialogues.replace([dialogue()])
-        with patch.object(cards, 'build_card', AsyncMock(side_effect=models.ModelError('model unavailable'))):
+        with (
+            patch.object(cards, 'build_card', AsyncMock(side_effect=models.ModelError('model unavailable'))),
+            catalog_of('d'),
+        ):
             previous = {'cards': [{'id': 'previous'}]}
             storage.documents.save(checks.DECK, previous)
             storage.documents.save('discover.json', analysis())
@@ -116,28 +101,23 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failed_card_does_not_cancel_the_others_and_is_reported(self):
         failed, release = asyncio.Event(), asyncio.Event()
 
-        async def build(topic, dialogue, origin, general, reproduces=()):
+        async def build(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None):
             if dialogue['id'] == 'fail':
                 failed.set()
                 raise models.ModelError('model unavailable')
             await release.wait()  # still being built when the other card fails
-            return {'id': dialogue['id']}
+            return {'id': dialogue['id'], 'sets': list(sets), 'sourceDialogueId': dialogue['id']}
 
-        topic = {'title': 'Тариф'}
-        picks = [(topic, 'fail', 'Coverage'), (topic, 'kept', 'Coverage')]
         reported = []
-        storage.documents.save(checks.result(checks.CODE), {'topics': [], 'results': []})
-        storage.dialogues.replace([{'id': 'fail'}, {'id': 'kept'}])
-        with (
-            patch.object(picking, 'pick', return_value=picks),
-            patch.object(cards, 'build_card', build),
-        ):
+        storage.documents.save(checks.result(checks.CODE), analysis())
+        storage.dialogues.replace([dict(dialogue(), id='fail'), dict(dialogue(), id='kept')])
+        with patch.object(cards, 'build_card', build), catalog_of('fail', 'kept'):
             building = asyncio.create_task(cards.built(checks.CODE, lambda **values: reported.append(values)))
             await failed.wait()
             await asyncio.sleep(0)
             release.set()
             deck = await building
-        self.assertEqual(deck, [{'id': 'kept'}])
+        self.assertEqual([card['id'] for card in deck['cards']], ['kept'])
         self.assertEqual(reported[-1]['done'], 2)
         self.assertEqual(
             reported[-1]['failed'], [{'topic': 'Тариф', 'dialogueId': 'fail', 'error': 'model unavailable'}]
@@ -160,13 +140,13 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_generated_card_keeps_actual_model_outside_scenario_id(self):
         topic = analysis()['topics'][0]
-        named = scenario('Тариф', 'Клиент узнаёт тариф')
+        named = scenario('Тариф', 'Узнать тариф')
         with (
             patch.object(models, 'chat', AsyncMock(return_value=named)),
             patch.object(cards.world, 'templates', return_value=None),
             patch.object(cards.inputs, 'sources', return_value=[]),
         ):
-            result = await cards.build_card(topic, dialogue(), 'Покрытие темы')
+            result = await cards.build_card(topic, dialogue(), ['representative'])
         self.assertEqual(result['model'], 'actual-model')
         self.assertEqual(result['sourceDialogueId'], 'd')
         self.assertEqual(result['criteria'][1]['observation'], 'tool')
@@ -188,21 +168,23 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             {'topicId': 't', 'dialogueId': 'd', 'status': 'FAIL', 'rules': failed},
             {'topicId': 't', 'dialogueId': 'p', 'status': 'PASS', 'rules': [{'ruleId': 'reply', 'status': 'PASS'}]},
         ]
-        named = scenario('Тариф', 'Клиент узнаёт тариф.')
+        named = scenario('Тариф', 'Узнать тариф.')
         storage.documents.save(checks.result(checks.CODE), audit)
         storage.dialogues.replace([dialogue(), dict(dialogue(), id='p')])
         with (
+            catalog_of('d', 'p'),
             patch.object(models, 'chat', AsyncMock(return_value=named)),
             patch.object(cards.world, 'templates', return_value=None),
             patch.object(cards.inputs, 'sources', return_value=[]),
         ):
-            deck = await cards.built(checks.CODE)
+            deck = (await cards.built(checks.CODE))['cards']
         self.assertEqual(
             [(card['origin'], card['sourceDialogueId'], card['reproduces']) for card in deck],
-            [('Ошибка из лога', 'd', ['reply']), ('Покрытие темы', 'p', [])],
+            [('Ошибка из лога', 'd', ['reply']), ('Представительный набор', 'p', [])],
         )
-        # The id is still the hash of the card's content, what it reproduces included; the model stays outside.
+        # The id is still the hash of the card's content, what it reproduces included; the model and the weight of
+        # the sample stay outside.
         for card in deck:
-            content = {key: value for key, value in card.items() if key not in ('id', 'model')}
+            content = {key: value for key, value in card.items() if key not in ('id', 'model', 'weight')}
             digest = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
             self.assertEqual(card['id'], digest[:12])

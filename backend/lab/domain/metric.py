@@ -5,6 +5,8 @@ Accuracy = conversations where the agent met every applicable criterion / measur
 Trust: agreement of the second judge, stability of a scenario across its repeats, and a person's decisions on verdicts,
 kept apart from them and counted when the run is read (answers.human).
 With several customer types, accuracy per type shows where the agent breaks on how people write.
+Scenario sets (representative, regression, stress) each get their own accuracy; the representative one also weighted
+by how many conversations of the export each card stands for, its estimate for the export.
 """
 
 from .personas import DEFAULT
@@ -56,4 +58,18 @@ def metric(items: list[dict]) -> dict:
         by_persona.setdefault(item.get('persona') or DEFAULT, []).append(item['status'])
     if len(by_persona) > 1:
         value['personas'] = {key: _accuracy(statuses) for key, statuses in by_persona.items()}
+    # Scenario sets answer different questions and are never averaged: each gets its own number.
+    by_set: dict[str, list[dict]] = {}
+    for item in done:
+        for key in item.get('sets') or []:
+            by_set.setdefault(key, []).append(item)
+    if by_set:
+        value['sets'] = {key: _accuracy([i['status'] for i in found]) for key, found in by_set.items()}
+        sampled = [i for i in by_set.get('representative', []) if i.get('weight')]
+        if sampled and len(sampled) == len(by_set['representative']):
+            measured_weight = sum(i['weight'] for i in sampled if i['status'] in DECIDED)
+            passed_weight = sum(i['weight'] for i in sampled if i['status'] == 'PASS')
+            value['sets']['representative']['weighted'] = (
+                round(100 * passed_weight / measured_weight) if measured_weight else None
+            )
     return value

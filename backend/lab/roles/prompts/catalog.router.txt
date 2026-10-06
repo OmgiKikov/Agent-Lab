@@ -1,0 +1,3 @@
+Place every customer episode into one scenario of the catalog: the scenario whose task is the customer's task. An episode is given by its id, its task, its object and the customer's first message of the episode.
+Choose by what the customer wants to get done, not by the words it shares with a scenario. If no scenario fits, place it in "none"; never stretch a scenario over another task.
+Return {assignments:[{episodeId, scenarioId}]}.

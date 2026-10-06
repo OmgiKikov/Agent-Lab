@@ -39,24 +39,27 @@ def drop_deck(changed: Collection[str]) -> None:
         storage.documents.save(checks.DECK, None)
 
 
-def replace_export(dialogues: list[dict], name: str | None = None) -> int:
-    """The new export with its file name, and what it resets. A saved check never names the previous file."""
+def replace_export(dialogues: list[dict], name: str | None = None, report: dict | None = None) -> int:
+    """The new export with its file name and how its rows were read (report), and what it resets. A saved check never
+    names the previous file."""
     with storage.transaction():
         result = storage.documents.load(checks.result(checks.CODE))
         if result and result.get('topics'):
             # Точность's criteria wait for its next check, which sorts the new conversations into the same topics;
             # without a result, the criteria kept already stay.
             storage.documents.save(checks.CODE_CRITERIA, accuracy.criteria_of(result))
-        storage.dialogues.replace(dialogues, name)
+        storage.dialogues.replace(dialogues, name, report)
         _clear(checks.RESULTS)
     return len(dialogues)
 
 
 async def upload_export(name: str, data: bytes) -> dict:
-    """An uploaded export read in a worker thread and committed whole: how many conversations it has, and how many it
-    had that a check cannot read (the agent wrote first, or never answered), which are left out."""
-    dialogues, skipped = await asyncio.to_thread(export.read_export, name, data)
-    return {'total': replace_export(dialogues, name), 'skipped': skipped}
+    """An uploaded export read in a worker thread and committed whole: how many conversations it has, how many it
+    had that a check cannot read (the agent wrote first, or never answered), and how many were quarantined because
+    their text and the order column disagree; both are left out."""
+    dialogues, skipped, quarantined = await asyncio.to_thread(export.read_export, name, data)
+    report = {'skipped': skipped, 'quarantined': quarantined}
+    return {'total': replace_export(dialogues, name, report), 'skipped': skipped, 'quarantined': len(quarantined)}
 
 
 def replace_sources(items: list[dict], read: dict | None = None) -> None:

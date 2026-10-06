@@ -227,10 +227,20 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.answer(None, 't1r1', check='accuracy')).status_code, 422)
 
     async def build_cards(self, body=None):
-        async def build(topic, dialogue, origin, general, reproduces=()):
-            return {'id': f'{topic["title"]}:{dialogue["id"]}', 'topic': topic['title'], 'criteria': topic['rules']}
+        async def build(topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None):
+            return {
+                'id': f'{topic["title"]}:{dialogue["id"]}',
+                'topic': topic['title'],
+                'criteria': topic['rules'],
+                'sets': list(sets),
+                'sourceDialogueId': dialogue['id'],
+            }
 
-        with patch.object(cards, 'build_card', side_effect=build):
+        found = support.catalog_of(storage.dialogues.ids())
+        with (
+            patch.object(cards, 'build_card', side_effect=build),
+            patch.object(cards.catalog, 'build', AsyncMock(return_value=found)),
+        ):
             response = await self.client.post('/api/cards', json=body)
             if response.status_code == 200:
                 await self.wait_job()
@@ -239,7 +249,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
     async def test_scenarios_are_built_from_the_errors_of_one_check(self):
         self.assertEqual((await self.build_cards()).status_code, 200)
         self.assertEqual(
-            self.jobs.state['error'], 'Сценарии собираются из найденных ошибок. Сначала проверьте разговоры.'
+            self.jobs.state['error'], 'Сценарии собираются по критериям проверки. Сначала проверьте разговоры.'
         )
         response = await self.build_cards({'check': 'code'})
         self.assertEqual(response.status_code, 200)
@@ -257,7 +267,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.build_cards({'check': 'code'})).status_code, 200)
         deck = storage.documents.load(cards.DECK)
         self.assertEqual((deck['check'], [card['topic'] for card in deck['cards']]), ('code', ['Терминалы']))
-        self.assertEqual(set(deck), {'check', 'createdAt', 'model', 'cards'})
+        self.assertEqual(set(deck), {'check', 'createdAt', 'model', 'cards', 'sets', 'catalogRevision'})
         self.assertEqual((await self.build_cards({'check': 'other'})).status_code, 422)
 
     async def test_tone_advice_and_history_read_the_tone_result_whatever_the_accuracy_assessment_did(self):

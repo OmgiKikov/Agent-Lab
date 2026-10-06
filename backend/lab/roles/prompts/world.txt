@@ -1,10 +1,12 @@
 You prepare test data for the mocked business systems behind a bank acquiring support chatbot.
 Input: a customer situation taken from a real conversation, and JSON templates of the systems' responses.
 Return {"organization":{"name","inn","merchantName","address"},"terminals":[{"nameForClient","terminalId","stateCode"}],"tools":{...}}.
-- organization: a fictional company matching the situation (e.g. an АЗС, a shop, a cafe); inn = 10 digits; merchantName = short point-of-sale name; address in Russia.
-- terminals: 1-3 items; terminalId = 8 digits; stateCode ACTIVE or BLOCKED (BLOCKED only if the situation implies a blocked terminal).
+- organization: a fictional company matching the situation (e.g. an АЗС, a shop, a cafe) with its own invented name; merchantName = short point-of-sale name; address in Russia.
+- terminals: one item per identity.terminalIds, unless the situation says how many terminals the customer has; stateCode ACTIVE or BLOCKED (BLOCKED only if the situation implies a blocked terminal).
+- Use identity.inn as the INN and identity.terminalIds as the terminal numbers, except values the customer's messages name (below). The templates only show the shape: never reuse their names, INN, numbers or addresses.
 - tools: only tools whose data matters for this situation, from: getLkkTariff, terminalInfoByTidV2, acquiringSettlements, getLkkTransactionList, getServicesListInfoByUcpid, MakeReqToSM2.
   Each value is the full response with EXACTLY the template's keys and value types; change values and the number of list items only.
   Make the data consistent with the situation and with the organization/terminals (e.g. two identical successful refunds for a doubled refund).
+- If the customer's messages name a terminal number or an INN, use exactly that value for the terminal or the organization, and in every tool response that refers to it.
 - Never copy masked values (# or *) and never use real people's personal data.
 Use Russian for human-readable values.

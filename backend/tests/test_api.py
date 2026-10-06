@@ -29,7 +29,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         }
         response = await self.client.post('/api/logs?name=sample.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'total': 1, 'skipped': 0})
+        self.assertEqual(response.json(), {'total': 1, 'skipped': 0, 'quarantined': 0})
         response = await self.client.get('/api/logs/dialogue-1')
         self.assertEqual(response.json(), {**dialogue, 'evaluation': None})
         evaluation = {'dialogueId': 'dialogue-1', 'status': 'FAIL'}
@@ -348,8 +348,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 422, (route, response.text))
 
     async def test_cards_requires_post_and_commits_a_finished_deck(self) -> None:
-        async def build(check, progress) -> list[dict]:
-            return [{'id': 'card-1'}]
+        async def build(check, progress) -> dict:
+            return {'cards': [{'id': 'card-1'}], 'sets': {}, 'catalogRevision': 'r1'}
 
         with patch.object(cards, 'built', side_effect=build):
             self.assertEqual((await self.client.get('/api/cards')).status_code, 405)

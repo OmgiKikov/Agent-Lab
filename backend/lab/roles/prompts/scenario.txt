@@ -1,5 +1,0 @@
-Create a reproducible CUSTOMER situation from the provided real CUSTOMER messages of one logged conversation.
-Preserve only customer facts actually available in the log. Keep the exact opening utterance and decisive follow-up utterances; explicitly say how the customer replies when asked for identifiers or details the log does not contain.
-Never leak the desired agent behavior or judge criteria into the customer's situation. Do not copy the agent's answer into the customer's facts.
-State the goal, what the customer knows and does not know, and how they behave. Use no real personal data.
-Use Russian. Return {name:"short business title of the scenario (3-7 words)",situation:"who the customer is, goal, known facts, unknown facts, behavior"}.

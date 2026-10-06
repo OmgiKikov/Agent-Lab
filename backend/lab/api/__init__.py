@@ -9,6 +9,7 @@
 - checks: Точность, a check's result, problems, «было → стало», the history of checks;
 - tone: tone of voice: the rules, their criteria, the check, suggestions;
 - severity: serious and minor errors;
+- catalog: the business scenarios of the export;
 - scenarios: the deck of scenarios;
 - runs: runs of the scenarios against the agent;
 - reviews: a person's answer on a verdict.
@@ -16,8 +17,8 @@
 
 from fastapi import APIRouter
 
-from . import agent, agents, checks, logs, reviews, runs, scenarios, settings, severity, state, tone
+from . import agent, agents, catalog, checks, logs, reviews, runs, scenarios, settings, severity, state, tone
 
 router = APIRouter()
-for section in (state, agents, agent, settings, logs, checks, tone, severity, scenarios, runs, reviews):
+for section in (state, agents, agent, settings, logs, checks, tone, severity, catalog, scenarios, runs, reviews):
     router.include_router(section.router)

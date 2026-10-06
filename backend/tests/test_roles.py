@@ -10,7 +10,7 @@ import httpx
 import support
 
 from lab import models, roles, storage
-from lab.roles import advice, customer, judge, planner, scenario, severity, tone, world
+from lab.roles import advice, card, catalog, customer, judge, planner, severity, tone, world
 
 Client = httpx.AsyncClient
 POLICY = {'id': 'tone-of-voice', 'content': 'Обращайтесь к клиенту на вы и отвечайте вежливо.'}
@@ -120,14 +120,30 @@ class EachRoleTests(RoleCase):
         )
         self.assertEqual(answer.value, {'c1': {'serious': True, 'reason': 'Обидит клиента.'}})
 
-    async def test_a_scenario_has_a_name_and_a_situation(self):
+    async def test_a_card_has_a_name_a_goal_and_the_start_of_its_episode(self):
+        talk = {'id': 'd', 'messages': [{'role': 'user', 'content': 'Какой у меня тариф?'}]}
+        usable = {'eligible': True, 'name': 'Тариф', 'goal': 'Узнать тариф', 'episode': {'start': 1}}
+        answer = await self.asked(card.CARD, lambda: card.card('Тарифы', talk), {**usable, 'goal': ' '}, usable)
+        self.assertEqual(answer.value['name'], 'Тариф')
+
+    async def test_an_episode_of_the_catalog_names_the_customers_task(self):
+        talk = {'id': 'd', 'messages': [{'role': 'user', 'content': 'Не работает QR'}]}
         answer = await self.asked(
-            scenario.SCENARIO,
-            lambda: scenario.scenario('Тарифы', ['Какой у меня тариф?']),
-            {'name': ' ', 'situation': 'Клиент узнаёт тариф'},
-            {'name': 'Тариф', 'situation': 'Клиент узнаёт тариф'},
+            catalog.EPISODE,
+            lambda: catalog.episode(talk),
+            {'acquiring': True, 'start': 2, 'task': 'починить QR', 'object': 'QR'},
+            {'acquiring': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'},
         )
-        self.assertEqual((answer.value.name, answer.value.situation), ('Тариф', 'Клиент узнаёт тариф'))
+        self.assertEqual(answer.value['task'], 'починить QR')
+
+    async def test_a_catalog_has_categories_with_scenarios(self):
+        answer = await self.asked(
+            catalog.CATALOG,
+            lambda: catalog.propose([{'task': 'починить QR', 'object': 'QR', 'count': 3}]),
+            {'categories': [{'title': 'QR', 'scenarios': []}]},
+            {'categories': [{'title': 'QR', 'scenarios': [{'title': 'Не работает QR'}]}]},
+        )
+        self.assertEqual(answer.value[0]['scenarios'][0]['id'], 'c1s1')
 
     async def test_a_world_has_the_shapes_of_the_stand(self):
         shapes = {'getLkkTariff': {'rate': 1.0}}
@@ -228,9 +244,9 @@ class AskTests(RoleCase):
 
 class VersionTests(unittest.TestCase):
     def test_a_version_changes_with_the_instructions_or_the_shape_of_the_answer_and_only_then(self):
-        role = roles.Role('test', 'Answer briefly.', scenario.Scenario)
-        self.assertEqual(role.version, roles.Role('other', 'Answer briefly.', scenario.Scenario).version)
-        self.assertNotEqual(role.version, roles.Role('test', 'Answer at length.', scenario.Scenario).version)
+        role = roles.Role('test', 'Answer briefly.', catalog.Scenario)
+        self.assertEqual(role.version, roles.Role('other', 'Answer briefly.', catalog.Scenario).version)
+        self.assertNotEqual(role.version, roles.Role('test', 'Answer at length.', catalog.Scenario).version)
         self.assertNotEqual(role.version, roles.Role('test', 'Answer briefly.', severity.Proposals).version)
         self.assertNotEqual(role.version, roles.Role('test', 'Answer briefly.', str).version)
         self.assertRegex(role.version, r'^[0-9a-f]{12}$')
@@ -243,14 +259,17 @@ class VersionTests(unittest.TestCase):
             judge.JUDGE_RUN,
             tone.CRITERIA,
             severity.SEVERITY,
-            scenario.SCENARIO,
+            card.CARD,
+            catalog.EPISODE,
+            catalog.CATALOG,
+            catalog.ROUTER,
             world.WORLD,
             customer.CUSTOMER,
             customer.OPENING,
             advice.ADVICE,
         ]
-        self.assertEqual(len({role.name for role in every}), 11)
-        self.assertEqual(len({role.version for role in every}), 11)
+        self.assertEqual(len({role.name for role in every}), 14)
+        self.assertEqual(len({role.version for role in every}), 14)
         self.assertTrue(all(role.instructions.strip() and not role.instructions.endswith('\n') for role in every))
 
 

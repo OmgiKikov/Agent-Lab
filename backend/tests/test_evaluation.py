@@ -495,10 +495,11 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
         storage.dialogues.replace([{'id': 'd'}])
         with (
             patch.object(storage.documents, 'load', return_value={'topics': [], 'results': []}),
-            patch.object(cards.scenarios, 'pick', return_value=[({}, 'd', 'Coverage')]),
+            patch.object(cards.catalog, 'build', AsyncMock(return_value=support.catalog_of(['d']))),
+            patch.object(cards, '_topics', AsyncMock(return_value={'d': {'title': 'Тариф', 'rules': [{'id': 'r'}]}})),
             patch.object(cards, 'build_card', AsyncMock(return_value={'id': 'card', 'model': 'actual-main'})),
             patch.object(storage.documents, 'save') as save,
         ):
             result = await cards.built('code')
-        self.assertEqual(result, [{'id': 'card', 'model': 'actual-main'}])
+        self.assertEqual(result['cards'], [{'id': 'card', 'model': 'actual-main'}])
         save.assert_not_called()

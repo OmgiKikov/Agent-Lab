@@ -69,7 +69,9 @@ function Reproduces({ card, record, named }: { card: Card; record?: ScenarioReco
   if (!record) return <span aria-hidden className="mt-0.5 block h-[18px]" />;
   if (card.origin !== FROM_LOG)
     return (
-      <span className="mt-0.5 block truncate text-small text-fg-3">Контроль: {controlLine(record.sourceStatus)}</span>
+      <span className="mt-0.5 block truncate text-small text-fg-3">
+        {card.origin}: {controlLine(record.sourceStatus)}
+      </span>
     );
   const [first, ...more] = record.reproduces;
   if (!first)
@@ -137,6 +139,9 @@ function LastResults({ record, personas }: { record?: ScenarioRecord; personas: 
   );
 }
 
+/** The order of the list: the category and the scenario of the catalog; cards without one come last. */
+const scenarioKey = (c: Card) => (c.scenario ? `${c.scenario.category}\u0000${c.scenario.title}` : "\uffff");
+
 /**
  * «Сценарии»: each scenario is a test of the error it was built from, in the check named over the list. A row says what
  * it reproduces and how it came out in the latest run that played it, beside the run before; the list filters by that
@@ -173,11 +178,17 @@ export function ScenariosPage() {
   const failingTypes = [...new Set(failing.flatMap((id) => failedTypes(records.get(id)?.history)))];
   const filter = toFilter(params.get("v"));
   const q = query.trim().toLowerCase();
-  const shown = cards.filter(
-    (c) =>
-      (filter === "all" || outcome(c) === filter) &&
-      (!q || `${c.name} ${c.topic} ${c.situation} ${c.opening}`.toLowerCase().includes(q)),
-  );
+  // Grouped by the business scenarios of the catalog: a category, then its scenarios, then the cards of each.
+  const shown = cards
+    .filter(
+      (c) =>
+        (filter === "all" || outcome(c) === filter) &&
+        (!q ||
+          `${c.name} ${c.topic} ${c.scenario?.category ?? ""} ${c.scenario?.title ?? ""} ${c.situation} ${c.opening}`
+            .toLowerCase()
+            .includes(q)),
+    )
+    .sort((a, b) => scenarioKey(a).localeCompare(scenarioKey(b), "ru"));
   const topics = new Set(cards.map((c) => c.topic)).size;
   const id = params.get("s") ?? (wide ? (shown[0]?.id ?? null) : null);
   const card = cards.find((c) => c.id === id) ?? null;
@@ -305,10 +316,15 @@ export function ScenariosPage() {
               ))}
             {shown.length > 0 && (
               <ul aria-label="Сценарии">
-                {shown.map((c) => (
+                {shown.map((c, i) => (
                   <li key={c.id}>
+                    {c.scenario && c.scenario.id !== shown[i - 1]?.scenario?.id && (
+                      <p className="px-3 pb-1 pt-4 text-small text-fg-3">
+                        {c.scenario.category} · <span className="text-fg-2">{c.scenario.title}</span>
+                      </p>
+                    )}
                     <Row on={c.id === id} onClick={() => pick(c.id)}>
-                      {topics > 1 && <span className="block text-small text-fg-3">{c.topic}</span>}
+                      {topics > 1 && !c.scenario && <span className="block text-small text-fg-3">{c.topic}</span>}
                       <span className="block text-body font-medium text-fg">{c.name}</span>
                       <Reproduces card={c} record={records.get(c.id)} named={namedCriteria(c, list)} />
                       <LastResults record={records.get(c.id)} personas={state.personas} />
