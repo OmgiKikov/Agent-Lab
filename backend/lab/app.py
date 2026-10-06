@@ -69,9 +69,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def recover(app: FastAPI) -> None:
     """The long work the process before this one left running, taken up again where it stopped (jobs.recover); the runs
-    it left running with no task to continue them are stopped (storage.runs.recover)."""
+    and the checks of the live agent it left running with no task to continue them are stopped."""
     app.state.jobs.recover(work.RESUME)
     storage.runs.recover()
+    storage.replays.recover()
 
 
 async def in_context(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:

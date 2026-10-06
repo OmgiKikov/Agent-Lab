@@ -51,3 +51,28 @@ def verdict(before: dict | None, now: dict | None) -> tuple[str | None, str | No
         return 'same', direction
     p = fisher(before['failed'], before['measured'] - before['failed'], now['failed'], now['measured'] - now['failed'])
     return ('beyond-chance' if p < LEVEL else 'within-chance'), direction
+
+
+def mcnemar(fixed: int, broken: int) -> float:
+    """McNemar's exact test, two-sided, of paired verdicts: the same conversations with an error before and not now
+    (fixed), and the other way round (broken). The probability, were the two equally likely, of a split of these
+    changes at least as uneven: the conversations that did not change say nothing about the difference."""
+    changed = fixed + broken
+    if not changed:
+        return 1.0
+    tail = sum(comb(changed, k) for k in range(min(fixed, broken) + 1))
+    return min(1.0, 2 * tail / 2**changed)
+
+
+def paired(fixed: int, broken: int, pairs: int) -> tuple[str | None, str | None]:
+    """What a person may read into the same conversations judged before and now (pairs of them, fixed and broken as
+    in mcnemar), and which way the errors went: few pairs say nothing more; otherwise the difference is beyond chance or
+    within it (McNemar, LEVEL), or there is none."""
+    if not pairs:
+        return None, None
+    direction = 'same' if fixed == broken else 'fewer' if fixed > broken else 'more'
+    if pairs < FEW:
+        return 'few', direction
+    if direction == 'same':
+        return 'same', direction
+    return ('beyond-chance' if mcnemar(fixed, broken) < LEVEL else 'within-chance'), direction

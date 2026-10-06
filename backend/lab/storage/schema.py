@@ -7,6 +7,7 @@ Schema 7: the export's conversations are rows (dialogues), the saved checks of b
 the answers people gave on verdicts rows of their own (reviews): a result, a saved check and a run keep verdicts only.
 Schema 8: long work is kept as it goes (tasks, steps), never only in memory.
 Schema 9: an agent has exports, each upload one (exports); a conversation is a row by its export and id (dialogues).
+Schema 10: the checks of the live agent on the same customers (replays).
 """
 
 import json
@@ -22,7 +23,7 @@ from ..domain.metric import metric
 
 # The database's user_version once these tables are in place. Raise it with every change here: a database is set up
 # again only when its user_version differs.
-SCHEMA = 9
+SCHEMA = 10
 EXPORT = 'logs.json'  # where a database before schema 7 kept the export's conversations, as one document
 EXPORT_META = 'logs-meta.json'  # schema 7–8: the record of the one export, its file and when it was uploaded
 PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or the Lab (storage.reviews)
@@ -46,6 +47,8 @@ TABLES = (
     DIALOGUES,
     # summary: the run without its conversations, written with it, for the list of runs.
     'CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL, summary TEXT)',
+    # The checks of the live agent on the same customers (storage/replays.py), like the runs: summary for their list.
+    'CREATE TABLE IF NOT EXISTS replays (id TEXT PRIMARY KEY, value TEXT NOT NULL, summary TEXT NOT NULL)',
     # The saved checks of both checks (kind: tone or code): summary is the line of the list, value the whole record.
     'CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, kind TEXT NOT NULL, summary TEXT NOT NULL, '
     'value TEXT NOT NULL)',

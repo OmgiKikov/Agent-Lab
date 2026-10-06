@@ -68,6 +68,8 @@ def state() -> dict:
             {key: summary.get(key) for key in RUN_FIELDS} | {'targetName': agents.run_name(summary)}
             for summary in storage.runs.summaries()
         ],
+        # The checks of the live agent on the same customers, without their conversations, the newest first.
+        'replays': storage.replays.summaries(),
         'targets': [agents.public(key, way) for key, way in connection.ways().items()],
         'personas': personas.public(),
     }

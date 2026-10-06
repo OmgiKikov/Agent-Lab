@@ -3,6 +3,7 @@
 - documents: the inputs, drafts, settings, the deck and the current result of each check, each one JSON document;
 - exports, dialogues: the exports of real conversations, each upload one, and their conversations, one row each;
 - runs: the runs of scenarios, each with its conversations and verdicts;
+- replays: the checks of the live agent on the same customers, each with its conversations and verdicts;
 - history: the saved checks of both checks;
 - reviews: the answers people gave on verdicts, one row each, a journal;
 - severity: which criteria's errors are serious, a person's decisions and the model's proposals;
@@ -14,7 +15,7 @@ flows/, which holds a transaction (transaction) around the writes one change mak
 database becomes them: schema.py.
 """
 
-from . import calls, db, documents, exports, history, registry, reviews, runs, severity, tasks
+from . import calls, db, documents, exports, history, registry, replays, reviews, runs, severity, tasks
 from .db import now, transaction
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     'history',
     'now',
     'registry',
+    'replays',
     'reviews',
     'runs',
     'severity',

@@ -12,13 +12,28 @@
 - severity: serious and minor errors;
 - scenarios: the deck of scenarios;
 - runs: runs of the scenarios against the agent;
+- replays: the live agent on the same customers;
 - reviews: a person's answer on a verdict.
 """
 
 from fastapi import APIRouter
 
-from . import agent, agents, checks, exports, logs, reviews, runs, scenarios, settings, severity, state, tone
+from . import agent, agents, checks, exports, logs, replays, reviews, runs, scenarios, settings, severity, state, tone
 
 router = APIRouter()
-for section in (state, agents, agent, settings, exports, logs, checks, tone, severity, scenarios, runs, reviews):
+for section in (
+    state,
+    agents,
+    agent,
+    settings,
+    exports,
+    logs,
+    checks,
+    tone,
+    severity,
+    scenarios,
+    runs,
+    replays,
+    reviews,
+):
     router.include_router(section.router)
