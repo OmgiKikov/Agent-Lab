@@ -63,6 +63,9 @@ async def proposed_after(check: str, progress: Progress) -> None:
     try:
         await propose(check, progress)
     except asyncio.CancelledError:
+        # The Lab closing is no person's stop: the task stays running, and the next process proposes the rest.
+        if storage.tasks.closing():
+            raise
         current = asyncio.current_task()
         if current is not None:
             current.uncancel()

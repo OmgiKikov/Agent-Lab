@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field
 from .. import storage
 from ..domain import personas
 from ..flows import connection, simulation
-from .base import Jobs, start
+from . import work
+from .base import Jobs
 
 router = APIRouter()
 
@@ -24,13 +25,8 @@ async def start_run(jobs: Jobs, payload: RunCommand) -> dict:
     if payload.target not in connection.ways():
         raise HTTPException(400, connection.UNKNOWN_WAY)
     chosen = [key for key in payload.personas if key in personas.PERSONAS] or [personas.DEFAULT]
-    return start(
-        jobs,
-        'run',
-        lambda progress: simulation.run(
-            payload.target, payload.cardIds or None, payload.label, progress, payload.repeats, chosen
-        ),
-    )
+    given = payload.model_dump() | {'cardIds': payload.cardIds or None, 'personas': chosen}
+    return work.start(jobs, 'run', given, task_id=simulation.new_run_id())
 
 
 @router.get('/api/runs/{run_id}')
@@ -47,4 +43,4 @@ async def rejudge(jobs: Jobs, run_id: str) -> dict:
     record = storage.runs.get(run_id)
     if record is None:
         raise HTTPException(404, 'Прогон не найден')
-    return start(jobs, 'rejudge', lambda progress: simulation.rejudge(record, progress))
+    return work.start(jobs, 'rejudge', {'runId': run_id})

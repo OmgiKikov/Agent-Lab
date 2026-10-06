@@ -5,10 +5,19 @@ only a process opens a transaction and decides what a change resets. An HTTP han
 job (jobs.py) gives it its progress and its stop.
 """
 
+import hashlib
+import json
 from collections.abc import Callable
+from typing import Any
 
 # How a process tells what it is doing: progress(message=…, done=…, total=…) and whatever its screen reads.
 Progress = Callable[..., None]
+
+
+def same_work(**parts: Any) -> str:
+    """What makes two starts of long work the same work, as one short string: a stopped task continues only when the
+    work started again has the same (storage.tasks.begin)."""
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:32]
 
 
 def error_text(error: BaseException) -> str:

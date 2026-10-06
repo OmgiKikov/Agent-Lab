@@ -6,7 +6,8 @@ from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from ..flows import scenarios
-from .base import Jobs, start
+from . import work
+from .base import Jobs
 
 router = APIRouter()
 
@@ -22,7 +23,7 @@ async def start_cards(jobs: Jobs, payload: CardsCommand | None = Body(default=No
         check = scenarios.chosen_check(payload.check if payload else None)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
-    return start(jobs, 'cards', lambda progress: scenarios.build(check, progress))
+    return work.start(jobs, 'cards', {'check': check})
 
 
 @router.get('/api/scenarios')

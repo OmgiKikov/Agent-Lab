@@ -8,6 +8,7 @@ from ..domain import checks, personas
 from ..flows import checks as results_of
 from ..flows import connection, inputs, scenarios, tone
 from ..jobs import BusyError
+from . import work
 from .base import Jobs
 
 router = APIRouter()
@@ -41,6 +42,8 @@ def state(jobs: Jobs) -> dict:
     replaced). Each check's result comes in brief (flows.checks.head): the screens fetch its verdicts by its checkId
     and reviewsStamp (GET /api/checks/{check})."""
     job = dict(jobs.state)
+    # Whether starting the same work again continues it (work.continuable): the screen offers to go on.
+    job['continuable'] = work.continuable(storage.tasks.latest())
     found = {check: results_of.head(check) for check in checks.RESULTS}
     return {
         'job': job,

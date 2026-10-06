@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, patch
 import support
 
 from lab import storage
+from lab.api import work
+from lab.domain import personas
 from lab.domain.metric import metric
 from lab.flows import answers, inputs, simulation
 from lab.jobs import Jobs
@@ -79,7 +81,7 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('actual-judge-card-1', result['model'])
         self.assertIn('actual-judge-card-2', result['model'])
 
-    async def test_a_conversation_is_written_once_when_it_ends_and_its_progress_stays_in_memory(self) -> None:
+    async def test_a_conversation_is_written_when_it_ends_and_when_judged_its_turns_stay_in_memory(self) -> None:
         entered, release = asyncio.Event(), asyncio.Event()
 
         async def say(conversation_id: str, message: str, world: dict) -> dict:
@@ -111,8 +113,9 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item['status'] for item in live['items']], ['PASS', 'RUNNING'])
         self.assertEqual(len(live['items'][0]['conversation']), 2 * simulation.MAX_AGENT_TURNS)
         self.assertEqual(live['metric']['total'], 1)
-        # The agent's version, each conversation once when it ends, the finished run: never once per turn.
-        self.assertEqual(writes.call_count, 1 + len(result['items']) + 1)
+        # The agent's version, each conversation when it ends (a restart judges it, never plays it again) and when
+        # judged, the finished run: never once per turn.
+        self.assertEqual(writes.call_count, 1 + 2 * len(result['items']) + 1)
         self.assertGreater(len(reported), 2 * len(result['items']))
         self.assertEqual(reported[-1]['done'], 2)
         self.assertEqual([item['status'] for item in result['items']], ['PASS', 'PASS'])
@@ -693,6 +696,113 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
             {'cardId': 'd', 'status': 'UNMEASURED', 'second': {'model': 'm', 'status': 'PASS'}},
         ]
         self.assertEqual(metric(items)['secondJudge'], {'model': 'm', 'checked': 1, 'agree': 1})
+
+
+class RunAfterRestartTests(unittest.IsolatedAsyncioTestCase):
+    """A run of three scenarios when the Lab goes down: the first conversation judged, the second ended and being
+    judged, the third waiting for the agent's reply."""
+
+    async def asyncSetUp(self) -> None:
+        support.lab(self)
+        self.agent = FakeAgent()
+        self.said: list[tuple[str, str]] = []
+        self.judged: list[str] = []
+        self.hold = True
+        self.judging, self.waiting = asyncio.Event(), asyncio.Event()
+        patches = [
+            patch.object(
+                simulation.scenarios, 'deck', return_value=[card('c1', 'q1'), card('c2', 'q2'), card('c3', 'q3')]
+            ),
+            patch.object(simulation.connection, 'ways', return_value={'test': {'name': 'Test'}}),
+            patch.object(simulation.connection, 'connect', return_value=self.agent),
+            patch.object(self.agent, 'say', side_effect=self.say),
+            patch.object(simulation, 'evaluate', side_effect=self.evaluate),
+        ]
+        for mocked in patches:
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        self.jobs = Jobs()
+        self.addAsyncCleanup(self.jobs.close)
+
+    async def say(self, conversation_id: str, message: str, world: dict) -> dict:
+        self.said.append((conversation_id, message))
+        if message == 'q3' and self.hold:
+            self.waiting.set()
+            await asyncio.Event().wait()
+        return {'text': 'answer', 'status': '202', 'ok': False, 'options': [], 'events': []}
+
+    async def evaluate(self, scenario: dict, item: dict) -> None:
+        self.judged.append(scenario['id'])
+        if scenario['id'] == 'c2' and self.hold:
+            self.judging.set()
+            await asyncio.Event().wait()
+        item.update(status='PASS', rules=[], model='judge')
+
+    async def cut(self) -> tuple[str, dict]:
+        """The run started, then the Lab closed with the run in the middle; the run as the next process finds it."""
+        given = {'target': 'test', 'cardIds': None, 'label': '', 'repeats': 1, 'personas': [personas.DEFAULT]}
+        started = self.jobs.start('run', work.KINDS['run'].work(given), given=given, task_id=simulation.new_run_id())
+        await self.judging.wait()
+        await self.waiting.wait()
+        for _ in range(200):
+            if storage.runs.get(started['task'])['items'][0]['status'] == 'PASS':
+                break
+            await asyncio.sleep(0.005)
+        await self.jobs.close()
+        self.hold = False
+        return started['task'], storage.runs.get(started['task'])
+
+    async def resume(self) -> Jobs:
+        later = Jobs()
+        self.addAsyncCleanup(later.close)
+        later.recover(work.RESUME)
+        storage.runs.recover()  # as the Lab starts: a run its task goes on with is not stopped
+        for _ in range(400):
+            if not later.state['running']:
+                return later
+            await asyncio.sleep(0.005)
+        self.fail('the run did not finish')
+
+    async def test_ended_conversations_are_judged_and_unfinished_ones_played_again_as_new(self) -> None:
+        run_id, cut = await self.cut()
+        self.assertEqual(cut['status'], 'running')
+        self.assertEqual(
+            [(item['status'], item.get('ended', False)) for item in cut['items']],
+            [
+                ('PASS', True),
+                ('RUNNING', True),
+                ('RUNNING', False),
+            ],
+        )
+        before = cut['items'][2]['conversationId']
+        said = len(self.said)
+        await self.resume()
+        run = storage.runs.get(run_id)
+        self.assertEqual(run['status'], 'done')
+        self.assertEqual([item['status'] for item in run['items']], ['PASS', 'PASS', 'PASS'])
+        # The ended conversation was judged, never played again; the unfinished one was played again as a new one.
+        self.assertEqual([message for _, message in self.said[said:]], ['q3'])
+        self.assertNotEqual(run['items'][2]['conversationId'], before)
+        self.assertEqual(run['items'][2]['restarts'], 1)
+        self.assertEqual(self.judged.count('c1'), 1)
+
+    async def test_scenarios_gone_meanwhile_fail_the_run_and_say_why(self) -> None:
+        run_id, _ = await self.cut()
+        with patch.object(simulation.scenarios, 'deck', return_value=[card('c1', 'q1')]):
+            later = await self.resume()
+        run = storage.runs.get(run_id)
+        self.assertEqual(run['status'], 'failed')
+        self.assertIn('Сценарии прогона изменились', run['error'])
+        self.assertIn('Сценарии прогона изменились', later.state['error'])
+
+    async def test_a_stand_updated_meanwhile_fails_the_run_instead_of_mixing_versions(self) -> None:
+        run_id, _ = await self.cut()
+        self.agent.version = 'v2'
+        await self.resume()
+        run = storage.runs.get(run_id)
+        self.assertEqual(run['status'], 'failed')
+        self.assertIn('было v1, стало v2', run['error'])
+        self.assertEqual([item['status'] for item in run['items']], ['PASS', 'UNMEASURED', 'UNMEASURED'])
 
 
 if __name__ == '__main__':

@@ -12,7 +12,8 @@ from .. import models, storage
 from ..domain import checks, policy_files
 from ..flows import Progress, advice, inputs, tone
 from ..jobs import BusyError
-from .base import Jobs, start, uploaded
+from . import work
+from .base import Jobs, uploaded
 from .checks import saved
 
 router = APIRouter()
@@ -97,18 +98,18 @@ async def read_tone_file(request: Request, name: str) -> dict:
 
 @router.post('/api/tone-of-voice/criteria')
 async def prepare_tone_criteria(jobs: Jobs) -> dict:
-    return start(jobs, 'tone-criteria', tone.collect_criteria)
+    return work.start(jobs, 'tone-criteria', {})
 
 
 @router.post('/api/tone-of-voice/check')
 async def check_tone(jobs: Jobs, payload: ToneCheckCommand) -> dict:
     try:
-        criteria = tone.selection(payload.ruleIds, payload.revision)
+        tone.selection(payload.ruleIds, payload.revision)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
-    return start(
-        jobs, 'tone-check', lambda progress: tone.check(criteria, payload.count, progress, propose=payload.propose)
-    )
+    revision = storage.documents.load(tone.DRAFT)['revision']
+    given = {'ruleIds': payload.ruleIds, 'revision': revision, 'count': payload.count, 'propose': payload.propose}
+    return work.start(jobs, 'tone-check', given)
 
 
 @router.get('/api/tone-of-voice/history')

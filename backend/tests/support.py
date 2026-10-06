@@ -5,12 +5,15 @@ Discovery (-s tests) imports the test modules by their own names, so they import
 
 import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
 
 from lab import app, config
 from lab.jobs import Jobs, PerAgent
+from lab.storage import tasks
 
 # An address nobody answers on: a test that forgets to replace the model gets an error, and no key is ever spent.
 NOWHERE = 'http://127.0.0.1:9/v1'
@@ -47,3 +50,13 @@ def serve(test: unittest.IsolatedAsyncioTestCase, jobs: Jobs | PerAgent | None =
     test.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=test.app), base_url='http://test')
     test.addAsyncCleanup(test.client.aclose)
     test.addAsyncCleanup(test.jobs.close)
+
+
+@contextmanager
+def running(kind: str) -> Iterator[dict]:
+    """A task of this kind kept running while the block runs, as the screens and the guards see one (storage.tasks)."""
+    task = tasks.begin(kind, {})
+    try:
+        yield task
+    finally:
+        tasks.end(task['id'], tasks.DONE)

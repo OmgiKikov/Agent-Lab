@@ -5,6 +5,7 @@ inserted to this schema the same way (legacy.py).
 
 Schema 7: the export's conversations are rows (dialogues), the saved checks of both checks one table (history), and
 the answers people gave on verdicts rows of their own (reviews): a result, a saved check and a run keep verdicts only.
+Schema 8: long work is kept as it goes (tasks, steps), never only in memory.
 """
 
 import json
@@ -20,7 +21,7 @@ from ..domain.metric import metric
 
 # The database's user_version once these tables are in place. Raise it with every change here: a database is set up
 # again only when its user_version differs.
-SCHEMA = 7
+SCHEMA = 8
 EXPORT = 'logs.json'  # where a database before schema 7 kept the export's conversations, as one document
 EXPORT_META = 'logs-meta.json'  # the name of the export's file and when it was uploaded
 PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or the Lab (storage.reviews)
@@ -45,6 +46,16 @@ TABLES = (
     'answered_by TEXT, via TEXT NOT NULL, ms INTEGER NOT NULL, input_tokens INTEGER, output_tokens INTEGER, '
     'cost REAL, outcome TEXT NOT NULL, status INTEGER, detail TEXT)',
     'CREATE INDEX IF NOT EXISTS calls_by_subject ON calls (subject)',
+    # Long work (storage.tasks): one row per task, also after it ended; at most one running at a time.
+    'CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, '
+    'input TEXT NOT NULL, fingerprint TEXT, progress TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, '
+    'started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT, resumed INTEGER NOT NULL DEFAULT 0, '
+    'stalled INTEGER NOT NULL DEFAULT 0, steps_at_resume INTEGER)',
+    "CREATE UNIQUE INDEX IF NOT EXISTS one_running_task ON tasks (status) WHERE status = 'running'",
+    'CREATE INDEX IF NOT EXISTS tasks_by_kind ON tasks (kind, started_at)',
+    # The finished parts of a task, kept as each is done: a conversation judged, the topics planned.
+    'CREATE TABLE IF NOT EXISTS steps (task_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, '
+    'at TEXT NOT NULL, PRIMARY KEY (task_id, key))',
 )
 
 

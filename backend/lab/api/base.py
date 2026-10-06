@@ -1,11 +1,11 @@
-"""What the sections of the API share: the owner of long work of the app a request came to (jobs_of, Jobs), starting a
-job (start) and an uploaded file read no further than its limit (uploaded)."""
+"""What the sections of the API share: the owner of long work of the app a request came to (jobs_of, Jobs) and an
+uploaded file read no further than its limit (uploaded). Long work is started by its kind (work.start)."""
 
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
 
-from ..jobs import BusyError, PerAgent, Work
+from ..jobs import PerAgent
 
 
 async def jobs_of(request: Request) -> PerAgent:
@@ -14,14 +14,6 @@ async def jobs_of(request: Request) -> PerAgent:
 
 
 Jobs = Annotated[PerAgent, Depends(jobs_of)]
-
-
-def start(jobs: PerAgent, kind: str, work: Work) -> dict:
-    """Long work started in the background; 409 while another task of the agent runs."""
-    try:
-        return jobs.start(kind, work)
-    except BusyError as error:
-        raise HTTPException(409, str(error)) from error
 
 
 async def uploaded(request: Request, limit: int, advice: str) -> bytes:

@@ -66,7 +66,12 @@ export function JobNotices() {
     const info = jobOf(job);
     const label = info?.label ?? "Задача";
     if (job.error !== STOPPED) markTab(job.error ? "Не удалось" : "Готово");
-    if (job.error === STOPPED) toast.notify(`${label}: остановлено`);
+    if (job.error === STOPPED)
+      toast.notify(
+        job.continuable
+          ? `${label}: остановлено. Сделанное сохранено: тот же запуск продолжит с этого места.`
+          : `${label}: остановлено`,
+      );
     else if (job.error) toast.error(`${label}: не удалось. ${job.error}`);
     else if (!info || here.current !== info.to.split("?")[0])
       toast.notify(
@@ -167,7 +172,11 @@ export function TaskCard({ bar }: { bar?: boolean }) {
             {message}
           </div>
         )}
-        <div className="mt-1 text-small text-fg-4">Страницу можно закрыть, результат сохранится.</div>
+        <div className="mt-1 text-small text-fg-4">
+          {job.resumed
+            ? "Продолжена после перезапуска Lab: сделанное раньше сохранено."
+            : "Страницу можно закрыть, результат сохранится."}
+        </div>
         {progress}
         <div className="mt-2 flex items-center justify-between gap-2 text-small text-fg-3">
           <span className="tabular-nums">{total ? `${done}\u00a0из\u00a0${total}` : "идёт"}</span>

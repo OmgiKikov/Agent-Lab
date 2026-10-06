@@ -9,9 +9,9 @@ from pydantic import BaseModel, Field
 
 from .. import storage
 from ..domain import checks
-from ..flows import accuracy
 from ..flows import checks as results_of
-from .base import Jobs, start
+from . import work
+from .base import Jobs
 
 router = APIRouter()
 Check = Literal['tone', 'code']
@@ -27,11 +27,7 @@ class DiscoverCommand(BaseModel):
 @router.post('/api/discover')
 async def start_discover(jobs: Jobs, payload: DiscoverCommand | None = Body(default=None)) -> dict:
     payload = payload or DiscoverCommand()
-    return start(
-        jobs,
-        'discover',
-        lambda progress: accuracy.check(payload.count, progress, replan=payload.replan, propose=payload.propose),
-    )
+    return work.start(jobs, 'discover', payload.model_dump())
 
 
 @router.get('/api/checks/{check}')

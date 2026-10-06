@@ -82,7 +82,7 @@ class AgentRequestTests(unittest.IsolatedAsyncioTestCase):
         first = (await self.client.get('/api/state', headers={'X-Agent': self.first})).json()
         self.assertEqual((first['job']['running'], second['job']['running']), (True, False))
         with registry.using(self.second):
-            self.assertEqual(self.jobs.start('discover', slow), {'ok': True})
+            self.assertTrue(self.jobs.start('discover', slow)['ok'])
         release.set()
 
     async def test_a_job_writes_into_the_agent_it_was_started_in(self) -> None:
