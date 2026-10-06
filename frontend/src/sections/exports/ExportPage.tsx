@@ -137,17 +137,18 @@ export function ExportPage() {
         actions={
           line && (
             <>
-              <Button variant="ghost" icon={Pencil} onClick={() => setRenaming(true)}>
-                Переименовать
+              <Button variant="ghost" icon={Pencil} aria-label="Переименовать" onClick={() => setRenaming(true)}>
+                <span className="hidden sm:inline">Переименовать</span>
               </Button>
               <Button
                 variant="ghost"
                 icon={Trash2}
+                aria-label="Удалить"
                 disabled={!item || running}
                 title={running ? "Сейчас идёт другая задача" : undefined}
                 onClick={() => setDeleting(true)}
               >
-                Удалить
+                <span className="hidden sm:inline">Удалить</span>
               </Button>
             </>
           )
