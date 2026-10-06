@@ -60,9 +60,9 @@ class Settings(BaseModel):
     second_model: str | None = Field(None, alias='LAB_SECOND_MODEL')
     second_key: SecretStr | None = Field(None, alias='LAB_SECOND_KEY')
     openrouter_key: SecretStr | None = Field(None, alias='OPENROUTER_API_KEY')
-    # One request to the model at a time: the bank's gateway limits requests (429), and calls side by side only meet it
-    # sooner.
-    concurrency: int = Field(1, ge=1, alias='LAB_MODEL_CONCURRENCY')
+    # How many calls go to the models at once; unset, as many as where they go takes (models.concurrency): one to the
+    # bank's gateway, which limits requests (429), and calls side by side only meet it sooner.
+    concurrency: int | None = Field(None, ge=1, alias='LAB_MODEL_CONCURRENCY')
 
     # The bank's gateway: the archived Agent Lab's settings file, and what the environment says over it.
     gateway_file: Path | None = Field(None, alias='AGENT_LAB_GATEWAY_FILE')

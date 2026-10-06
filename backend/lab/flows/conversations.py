@@ -5,7 +5,7 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 
-from .. import config, models, storage
+from .. import models, storage
 from ..domain import export, sampling, verdicts
 from ..domain.transcript import tool_calls
 from ..roles import judge
@@ -99,7 +99,7 @@ async def judge_each(todo: list[tuple[dict, dict]], done: Callable[[dict], None]
     for dialogue, _ in todo:
         if step(dialogue['id']) in kept:
             done(kept[step(dialogue['id'])])
-    slots = asyncio.Semaphore(config.current().concurrency)
+    slots = asyncio.Semaphore(models.concurrency())
 
     async def one(dialogue: dict, topic: dict) -> None:
         async with slots:

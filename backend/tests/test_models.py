@@ -23,6 +23,44 @@ def json_response(value):
     return httpx.Response(200, json=value)
 
 
+class ConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    """How many calls go to the models at once: LAB_MODEL_CONCURRENCY when it is set, else by where they go."""
+
+    async def at_once(self) -> int:
+        """The most calls the model had at once when 64 were asked together."""
+        active = most = 0
+
+        async def slow(*_):
+            nonlocal active, most
+            active += 1
+            most = max(most, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return models.Completion('ok', 'model')
+
+        storage.calls.listed()  # the journal's database is set up before the calls write to it together
+        with patch.object(models.openai_compatible, 'chat', slow), patch.object(models.gateway, 'chat', slow):
+            await asyncio.gather(*(models.chat('system', 'question') for _ in range(64)))
+        return most
+
+    async def test_openrouter_takes_32_calls_at_once(self):
+        support.lab(self, model_url=None, openrouter_key='key')
+        self.assertEqual(await self.at_once(), 32)
+
+    async def test_an_endpoint_of_ones_own_takes_one_call_at_a_time(self):
+        support.lab(self)
+        self.assertEqual(await self.at_once(), 1)
+
+    async def test_the_banks_gateway_takes_one_call_at_a_time(self):
+        support.lab(self, model_url=None, model='glm-5')
+        with patch.object(models.gateway, 'configured', return_value=True):
+            self.assertEqual(await self.at_once(), 1)
+
+    async def test_lab_model_concurrency_is_kept_wherever_the_calls_go(self):
+        support.lab(self, model_url=None, openrouter_key='key', concurrency=10)
+        self.assertEqual(await self.at_once(), 10)
+
+
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.settings = support.lab(self)

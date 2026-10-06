@@ -8,10 +8,11 @@ Two backends, chosen as the Lab starts (endpoints):
   with LAB_SECOND_MODEL (+ LAB_SECOND_URL / LAB_SECOND_KEY). It re-checks every verdict; its actual model is recorded in
   that result. Without it, or when it is the main model again, there is no second check (second_judge).
 
-chat() is the one way to ask: within the limit of concurrent calls (one by default), asked again when another try may
-pass (no connection, 5xx; over the limit of requests, 429, for longer), and every try written to the agent's journal of
-calls with the role that asks, the version of its instructions and what the calls are about (about): a check, a run, a
-deck. The journal keeps no conversation: the texts are in the results already. The roles (roles/) ask through it.
+chat() is the one way to ask: within the limit of concurrent calls (concurrency: one by default, more on OpenRouter),
+asked again when another try may pass (no connection, 5xx; over the limit of requests, 429, for longer), and every try
+written to the agent's journal of calls with the role that asks, the version of its instructions and what the calls are
+about (about): a check, a run, a deck. The journal keeps no conversation: the texts are in the results already. The
+roles (roles/) ask through it.
 """
 
 import asyncio
@@ -51,6 +52,11 @@ RATE_LIMITED = (
     'Модель не принимает запросы: превышен лимит (HTTP 429). Lab подождал и повторил запрос {} раз, но лимит не снят. '
     'Подождите несколько минут и продолжите: сделанное сохранено.'
 )
+# Calls at once without LAB_MODEL_CONCURRENCY (concurrency). OpenRouter spreads them over many providers and takes far
+# more: a hundred calls of the judge at once got no refusal. The bank's gateway limits requests, and calls side by side
+# only meet its limit sooner; an endpoint of one's own is not known to take more.
+OPENROUTER_CONCURRENCY = 32
+CONCURRENCY = 1
 # No connection, a dropped one, or no answer in time: the next try may pass.
 _TRANSIENT = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 # No connection, or no answer in time: what is wrong in plain words, the exception's name for support, and where to
@@ -144,6 +150,15 @@ def main_model() -> str:
     return endpoints().main[1]
 
 
+def concurrency() -> int:
+    """How many calls go to the models at once: LAB_MODEL_CONCURRENCY when it is set, else OPENROUTER_CONCURRENCY on
+    OpenRouter and CONCURRENCY elsewhere."""
+    settings = config.current()
+    if settings.concurrency:
+        return settings.concurrency
+    return OPENROUTER_CONCURRENCY if endpoints().main[0] == OPENROUTER else CONCURRENCY
+
+
 _gate: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 
 
@@ -152,7 +167,7 @@ def _limit() -> asyncio.Semaphore:
     global _gate
     loop = asyncio.get_running_loop()
     if _gate is None or _gate[0] is not loop:
-        _gate = (loop, asyncio.Semaphore(config.current().concurrency))
+        _gate = (loop, asyncio.Semaphore(concurrency()))
     return _gate[1]
 
 
@@ -390,6 +405,7 @@ __all__ = [
     'about',
     'chat',
     'check',
+    'concurrency',
     'describe',
     'detail',
     'endpoints',

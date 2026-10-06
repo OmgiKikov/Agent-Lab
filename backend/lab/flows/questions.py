@@ -4,7 +4,7 @@ import asyncio
 import time
 import uuid
 
-from .. import agents, config, models, storage
+from .. import agents, models, storage
 from ..domain import checks, metric
 from ..domain.tone import for_judging
 from . import Progress, agent_context, check_setup, connection, conversations, error_text, provenance
@@ -43,7 +43,7 @@ async def run(
             if known not in ('…', agents.UNKNOWN_VERSION) and agent.version != known:
                 raise ValueError('Версия агента изменилась. Создайте новый запуск для нового сравнения.')
             record['version'] = agent.version
-            slots = asyncio.Semaphore(min(4, config.current().concurrency))
+            slots = asyncio.Semaphore(min(4, models.concurrency()))
             criteria = {topic['id']: topic['rules'] for topic in record.get('topics') or []}
             saved = time.monotonic()
 
