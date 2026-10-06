@@ -5,7 +5,7 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 
-from . import agents, discover, judge, llm, logs, rag, store, tone
+from . import agents, discover, judge, llm, logs, match, rag, store, tone
 from .agents import AgentError
 from .agents.session import session
 from .jobs import Progress
@@ -138,6 +138,7 @@ async def criteria_by_dialogue(dialogues: list[dict]) -> dict[str, list[dict]]:
             *tone_rules,
             *of_family('code', (topic_of.get(str(d['id'])) or {}).get('rules') or []),
             *rag.CRITERIA,
+            match.CRITERION,
         ]
         for d in dialogues
     }
@@ -214,11 +215,9 @@ async def _play_step(agent: agents.HttpAgent, conversation_id: str, step: dict, 
 
 
 async def _judge_step(rules: list[dict], step: dict, verdict: StepJudge) -> None:
-    rag_called = rag.called(step['trace'])
-    asked = [rule for rule in rules if rule['family'] != 'rag' or rag_called]
-    skipped = [rag.skipped(rule) for rule in rules if rule['family'] == 'rag' and not rag_called]
+    asked, skipped = _split(rules, step)
     if not asked:
-        step.update(rules=skipped, status=judge.verdict_of(skipped), error=None)
+        step.update(rules=skipped, status=judge.verdict_of(match.counted(skipped)), error=None)
         return
     try:
         result, second = await _both_judges(asked, step, verdict)
@@ -226,7 +225,21 @@ async def _judge_step(rules: list[dict], step: dict, verdict: StepJudge) -> None
         step.update(rules=judge.checked([], asked, '') + skipped, status='UNMEASURED', error=str(error))
         return
     rows = result.rows + skipped
-    step.update(rules=rows, status=judge.verdict_of(rows), model=result.model, second=second, error=None)
+    step.update(rules=rows, status=judge.verdict_of(match.counted(rows)), model=result.model, second=second, error=None)
+
+
+def _split(rules: list[dict], step: dict) -> tuple[list[dict], list[dict]]:
+    """The rules to ask the judge about, and the rows of those whose moment did not arise on this step."""
+    rag_called = rag.called(step['trace'])
+    asked, skipped = [], []
+    for rule in rules:
+        if rule['family'] == 'rag' and not rag_called:
+            skipped.append(rag.skipped(rule))
+        elif rule['family'] == match.FAMILY and step.get('prodReply') is None:
+            skipped.append(match.skipped())
+        else:
+            asked.append(rule)
+    return asked, skipped
 
 
 async def _both_judges(asked: list[dict], step: dict, verdict: StepJudge) -> tuple[judge.Verdict, dict | None]:

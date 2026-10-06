@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from lab import cards, discover, judge, llm, quotes
+from lab import cards, discover, judge, llm, match, quotes
 from lab.judge_reply import RuleReply
 from lab.metric import metric
 
@@ -477,6 +477,17 @@ class StepVerdictTests(unittest.IsolatedAsyncioTestCase):
     async def test_history_shows_the_agent_as_the_customer_saw_it(self) -> None:
         _, payload = await self.judged('вернуть платёж покупателю')
         self.assertEqual(payload['history'][1], {'role': 'AGENT', 'text': 'Чем помочь?\n[Кнопки: TRANSFER_INTO_CHAT]'})
+
+    async def test_the_match_with_production_is_not_in_the_steps_status(self) -> None:
+        answer = {
+            'rules': [
+                verdict('rag:query', 'PASS', 'вернуть платёж покупателю'),
+                verdict(match.CRITERION['id'], 'FAIL', 'Откройте раздел'),
+            ]
+        }
+        with patch.object(llm, 'chat', AsyncMock(return_value=completion(answer))):
+            result = await judge.step_verdict([RAG_RULE, match.CRITERION], REPLAYED_STEP)
+        self.assertEqual(result.status, 'PASS')
 
     async def test_rag_quote_from_the_query_stays_pass(self) -> None:
         result, _ = await self.judged('вернуть платёж покупателю')

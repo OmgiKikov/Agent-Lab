@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from . import llm, logs, quotes, rag
+from . import llm, logs, match, quotes, rag
 from .context import knowledge
 from .judge_reply import JudgeReply, RuleReply
 from .prompts import JUDGE_LOG, JUDGE_REPLAY, JUDGE_RUN
@@ -201,7 +201,7 @@ async def step_verdict(rules: list[dict], step: dict, endpoint: llm.Endpoint | N
         knowledge_available=rag.called(trace),
         rag_text=rag.evidence(trace),
     )
-    return Verdict(rows, verdict_of(rows), answer.model)
+    return Verdict(rows, verdict_of(match.counted(rows)), answer.model)
 
 
 async def second_opinion(verdict: Callable[..., Awaitable[Verdict]], *args) -> dict | None:

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lab import llm, rag, replay, store
+from lab import llm, match, rag, replay, store
 from lab.agents import AgentError
 from lab.judge import Verdict
 
@@ -80,7 +80,7 @@ class CriteriaTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_without_checks_only_rag_criteria(self) -> None:
         found = await replay.criteria_by_dialogue([DIALOGUE])
-        self.assertEqual(found['d-1'], rag.CRITERIA)
+        self.assertEqual(found['d-1'], [*rag.CRITERIA, match.CRITERION])
 
     async def test_accuracy_topic_rules_join_for_a_known_dialogue(self) -> None:
         store.save(
@@ -91,7 +91,9 @@ class CriteriaTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         found = await replay.criteria_by_dialogue([DIALOGUE])
-        self.assertEqual([r['id'] for r in found['d-1']], ['code:r1', *(r['id'] for r in rag.CRITERIA)])
+        self.assertEqual(
+            [r['id'] for r in found['d-1']], ['code:r1', *(r['id'] for r in rag.CRITERIA), match.CRITERION['id']]
+        )
 
 
 TRACE = {'traceId': 't', 'chains': [], 'rag': [{'query': 'q', 'passages': [], 'answer': 'a'}], 'systems': []}
@@ -197,9 +199,36 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
             (
                 'UNMEASURED',
                 'Модель не ответила.',
-                {'code:r1': 'UNKNOWN', **{r['id']: 'NOT_APPLICABLE' for r in rag.CRITERIA}},
+                {
+                    'code:r1': 'UNKNOWN',
+                    **{r['id']: 'NOT_APPLICABLE' for r in rag.CRITERIA},
+                    match.CRITERION['id']: 'UNKNOWN',
+                },
             ),
         )
+
+    async def test_a_reply_unlike_production_fails_no_step(self) -> None:
+        async def unlike_production(rules: list[dict], step: dict, endpoint=None) -> Verdict:
+            rows = [
+                {
+                    'ruleId': r['id'],
+                    'rule': r['text'],
+                    'status': 'FAIL' if r['id'] == match.CRITERION['id'] else 'PASS',
+                    'reason': 'ok',
+                    'agentQuote': 'x',
+                    'title': '',
+                }
+                for r in rules
+            ]
+            return Verdict(rows, 'PASS', 'judge-model')
+
+        result = await self.play(FakeAgent(), verdict=unlike_production)
+        self.assertEqual(result['dialogues'][0]['steps'][0]['status'], 'PASS')
+
+    async def test_the_match_does_not_apply_without_a_production_reply(self) -> None:
+        result = await self.play(FakeAgent())
+        rows = result['dialogues'][0]['steps'][1]['rules']
+        self.assertEqual(next(r['status'] for r in rows if r['ruleId'] == match.CRITERION['id']), 'NOT_APPLICABLE')
 
     async def test_rag_criteria_are_not_applicable_without_a_knowledge_base_call(self) -> None:
         result = await self.play(FakeAgent(trace={**TRACE, 'rag': []}))
