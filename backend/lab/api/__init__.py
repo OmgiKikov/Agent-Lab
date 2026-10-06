@@ -5,7 +5,8 @@
 - agents: the agents the Lab checks;
 - agent: the agent under test: how it is reached, its code and knowledge;
 - settings: the models;
-- logs: the export of real conversations;
+- exports: the exports of real conversations, each upload one;
+- logs: one conversation of an export with its evaluation;
 - checks: Точность, a check's result, problems, «было → стало», the history of checks;
 - tone: tone of voice: the rules, their criteria, the check, suggestions;
 - severity: serious and minor errors;
@@ -16,8 +17,8 @@
 
 from fastapi import APIRouter
 
-from . import agent, agents, checks, logs, reviews, runs, scenarios, settings, severity, state, tone
+from . import agent, agents, checks, exports, logs, reviews, runs, scenarios, settings, severity, state, tone
 
 router = APIRouter()
-for section in (state, agents, agent, settings, logs, checks, tone, severity, scenarios, runs, reviews):
+for section in (state, agents, agent, settings, exports, logs, checks, tone, severity, scenarios, runs, reviews):
     router.include_router(section.router)

@@ -1,30 +1,20 @@
-"""The export of real conversations: uploading it, and one conversation with its evaluation."""
+"""One conversation of an export with its evaluation, and the earlier address of an upload."""
 
-import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..domain import export
 from ..flows import checks as results_of
-from ..flows import inputs
-from ..jobs import BusyError
-from .base import Jobs, uploaded
+from .base import Jobs
+from .exports import receive
 
 router = APIRouter()
 
 
 @router.post('/api/logs')
 async def upload_logs(jobs: Jobs, request: Request, name: str) -> dict:
-    data = await uploaded(request, export.LIMIT, 'Выгрузите разговоры за меньший срок.')
-    try:
-        return await jobs.perform('logs', lambda progress: inputs.upload_export(name, data))
-    except BusyError as error:
-        raise HTTPException(409, str(error)) from error
-    except asyncio.CancelledError as error:
-        raise HTTPException(409, 'Загрузка остановлена') from error
-    except (ValueError, KeyError, OSError) as error:
-        raise HTTPException(400, f'Не удалось прочитать файл. {error}') from error
+    """An export uploaded the earlier way: added beside the others, as POST /api/exports does."""
+    return await receive(jobs, request, name, None)
 
 
 @router.get('/api/logs/{dialogue_id}')

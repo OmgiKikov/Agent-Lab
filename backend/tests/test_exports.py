@@ -176,5 +176,80 @@ class ExportFlowTests(unittest.TestCase):
         self.assertEqual(conversations.export_of({'export': {'id': 'other'}}), 'other')
 
 
+class ExportsApiTests(unittest.IsolatedAsyncioTestCase):
+    """The section «Выгрузки»: upload, the list with the checks made of each, rename, delete and conversations."""
+
+    async def asyncSetUp(self) -> None:
+        support.serve(self)
+
+    async def upload(self, *talks: dict, file: str = 'x.jsonl', title: str = '') -> dict:
+        body = '\n'.join(json.dumps(t, ensure_ascii=False) for t in talks).encode()
+        query = f'/api/exports?name={file}' + (f'&title={title}' if title else '')
+        response = await self.client.post(query, content=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    async def test_upload_list_rename_and_delete(self) -> None:
+        first = await self.upload(talk('a'), file='Сентябрь.jsonl')
+        second = await self.upload(talk('a'), file='b.jsonl', title='Октябрь')
+        self.assertEqual((first['name'], first['total'], second['name']), ('Сентябрь', 1, 'Октябрь'))
+        listed = (await self.client.get('/api/exports')).json()['exports']
+        self.assertEqual([e['name'] for e in listed], ['Октябрь', 'Сентябрь'])
+        self.assertEqual(listed[0]['checks'], {'tone': None, 'code': None})
+        renamed = await self.client.post(f'/api/exports/{first["id"]}/rename', json={'name': 'Сентябрь, весь'})
+        self.assertEqual(renamed.json()['name'], 'Сентябрь, весь')
+        self.assertEqual((await self.client.post('/api/exports/nope/rename', json={'name': 'X'})).status_code, 404)
+        state = (await self.client.get('/api/state')).json()
+        self.assertEqual([e['id'] for e in state['exports']], [second['id'], first['id']])
+        gone = await self.client.post(f'/api/exports/{second["id"]}/delete')
+        self.assertEqual(gone.json(), {'removed': second | {'name': 'Октябрь'}, 'cleared': []})
+        self.assertEqual((await self.client.post(f'/api/exports/{second["id"]}/delete')).status_code, 404)
+
+    async def test_the_list_names_the_latest_check_made_of_each_export(self) -> None:
+        export = await self.upload(talk('a'))
+        line = {
+            'id': 'c1',
+            'finishedAt': '2026-10-02T10:00:00+00:00',
+            'summary': {'measured': 2, 'passed': 1, 'failed': 1, 'unmeasured': 0},
+            'export': {'id': export['id'], 'name': 'x'},
+        }
+        storage.history.save('tone', {'check': line, 'result': {}})
+        storage.documents.save('tone-result.json', {'checkId': 'c1', 'export': export, 'results': []})
+        [listed] = (await self.client.get('/api/exports')).json()['exports']
+        self.assertEqual(
+            listed['checks']['tone'],
+            {'id': 'c1', 'finishedAt': line['finishedAt'], 'summary': line['summary'], 'current': True},
+        )
+        self.assertIsNone(listed['checks']['code'])
+
+    async def test_deleting_the_export_of_a_result_says_which_went(self) -> None:
+        export = await self.upload(talk('a'))
+        storage.documents.save('discover.json', {'topics': [], 'results': [], 'export': export})
+        gone = (await self.client.post(f'/api/exports/{export["id"]}/delete')).json()
+        self.assertEqual(gone['cleared'], ['code'])
+
+    async def test_nothing_is_deleted_while_another_task_runs(self) -> None:
+        export = await self.upload(talk('a'))
+        with support.running('discover'):
+            response = await self.client.post(f'/api/exports/{export["id"]}/delete')
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(len(storage.exports.listed()), 1)
+
+    async def test_conversations_of_an_export_in_pages(self) -> None:
+        export = await self.upload(*(talk(f'd{n}', f'Вопрос  {n}\nещё') for n in range(3)))
+        page = (await self.client.get(f'/api/exports/{export["id"]}/conversations?offset=1&limit=1')).json()
+        self.assertEqual(page, {'total': 3, 'items': [{'id': 'd1', 'first': 'Вопрос 1 ещё', 'turns': 2}]})
+        one = (await self.client.get(f'/api/exports/{export["id"]}/conversations/d2')).json()
+        self.assertEqual(one['messages'][0]['content'], 'Вопрос  2\nещё')
+        self.assertEqual((await self.client.get('/api/exports/nope/conversations')).status_code, 404)
+        missing = await self.client.get(f'/api/exports/{export["id"]}/conversations/nope')
+        self.assertEqual(missing.status_code, 404)
+
+    async def test_an_unreadable_file_is_refused(self) -> None:
+        response = await self.client.post('/api/exports?name=broken.xlsx', content=b'not a workbook')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(storage.exports.listed(), [])
+
+
 if __name__ == '__main__':
     unittest.main()
