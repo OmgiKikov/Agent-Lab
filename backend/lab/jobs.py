@@ -24,6 +24,7 @@ STALLED = (
     'сбой. Запустите её снова.'
 )
 BUSY = 'Сейчас идёт другая задача. Дождитесь её или остановите.'
+LOST = 'Задача закончилась, но её конец не записался. Запустите её снова.'
 PACE = 0.25  # seconds between two writes of a task's progress; the last value waits out the pause and is written
 
 
@@ -72,6 +73,7 @@ class Jobs:
     ) -> tuple[asyncio.Task, dict]:
         if self._task is not None and not self._task.done():
             raise BusyError(BUSY)
+        self._settle()
         if resumed is None:
             try:
                 record = tasks.begin(kind, given or {}, fingerprint, task_id)
@@ -149,6 +151,7 @@ class Jobs:
     async def stop(self) -> None:
         task = self._task
         if task is None or task.done():
+            self._settle()
             raise BusyError('Задача уже закончилась.')
         current = self._current
         if not task.cancelling():
@@ -171,6 +174,16 @@ class Jobs:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):  # the work's own end is not the closing Lab's
             await task
+
+    def _settle(self) -> None:
+        """The task this owner ran is over, yet kept as running: its end could not be written (storage failed). It
+        ends failed, saying so, and the agent is no longer busy. A Lab closing never gets here: it starts no work."""
+        task, current = self._task, self._current
+        if task is None or not task.done() or current is None or current.closing:
+            return
+        record = tasks.get(current.id)
+        if record is not None and record['status'] == tasks.RUNNING:
+            tasks.end(current.id, tasks.FAILED, LOST)
 
     @staticmethod
     def _stopped(task_id: str) -> None:

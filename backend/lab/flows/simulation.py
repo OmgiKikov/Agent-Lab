@@ -26,6 +26,7 @@ from ..roles import customer, judge
 from . import Progress, connection, error_text, same_work, scenarios
 
 MAX_AGENT_TURNS = 3
+PENDING_VERSION = '…'  # a run's agent version until the agent is reached
 PARALLEL = 4
 NO_REPLIES = 'Агент не ответил ни в одном разговоре'
 # What a re-judge changes in a conversation.
@@ -143,7 +144,7 @@ def new_run(
         'id': run_id or new_run_id(),
         'target': key,
         'targetName': config['name'],
-        'version': '…',
+        'version': PENDING_VERSION,
         'label': label,
         'customer': config.get('customer', ''),
         'startedAt': storage.now(),
@@ -191,6 +192,8 @@ async def run(
     record = storage.runs.get(task_id) if task_id else None
     if record is None:
         record, chosen = begun(key, card_ids, label, repeats, persona_ids, task_id)
+    elif record['status'] != 'running':
+        return record  # it ended before the process that made it did: a stop or a failure stands
     else:
         try:
             chosen = continued(record)
@@ -213,6 +216,8 @@ async def run(
             if item['status'] == 'RUNNING':
                 ended_before.add(index)
             storage.runs.update_item(record['id'], index, item)
+            # A finished part of the task: a restart that finds new ones knows the run goes on (storage.tasks.resume).
+            storage.tasks.keep(f'conversation:{index}:{"ended" if item["status"] == "RUNNING" else "measured"}', True)
         done = sum(item['status'] != 'RUNNING' for item in record['items'])
         progress(run=record['id'], done=done, total=len(plan), message=f'Играем сценарии · {record["targetName"]}')
 
@@ -298,7 +303,7 @@ def continued(record: dict) -> list[dict]:
 def same_agent(record: dict, version: str) -> None:
     """A run continued after a restart goes on only with the agent it began with: one run must not mix two versions of
     the agent. A stand that names no version cannot be told apart, and goes on."""
-    unknown = {'…', 'не сообщается', '', None}
+    unknown = {PENDING_VERSION, agents.UNKNOWN_VERSION, '', None}
     if record['version'] not in unknown and version not in unknown and version != record['version']:
         raise RuntimeError(
             f'Агент на стенде обновился, пока Lab перезапускался (было {record["version"]}, стало {version}): '

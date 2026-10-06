@@ -32,6 +32,7 @@ async def check(count: int, progress: Progress, *, replan: bool = False, propose
     if storage.history.get(checks.CODE, check_id) is None:
         result = await assess(count, progress, replan, check_id)
         commit(result, new_criteria=replan)
+    storage.tasks.keep('published', check_id)  # a finished part of the task
     if propose:
         await severity.proposed_after(checks.CODE, progress)
     return result
@@ -102,7 +103,8 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
     dialogues = conversations.sample(count)
     if not dialogues:
         raise RuntimeError('Нет разговоров для проверки. Сначала загрузите диалоги.')
-    planned = storage.tasks.steps().get(TOPICS)
+    kept = storage.tasks.steps()
+    planned = kept.get(TOPICS)
     if planned is None:
         planned = storage.tasks.keep(TOPICS, await plan(previous, result_before, srcs, dialogues, progress, replan))
     topics, dropped, rules_since, started = (
@@ -117,7 +119,7 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
         for dialogue_id in topic['dialogueIds']:
             topic_of.setdefault(dialogue_id, topic)
     todo = [(d, topic_of[str(d['id'])]) for d in dialogues if str(d['id']) in topic_of]
-    before = conversations.judged_before([dialogue for dialogue, _ in todo])
+    before = conversations.judged_before([dialogue for dialogue, _ in todo], kept)
     progress(stage='judge', done=before, total=len(todo), message='Проверяем разговоры')
     judged = []
 
@@ -125,7 +127,7 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
         judged.append(result)
         progress(stage='judge', done=len(judged), total=len(todo), message='Проверяем разговоры')
 
-    await conversations.judge_each(todo, done)
+    await conversations.judge_each(todo, done, kept)
     results.ensure_answered(judged, result_before)
     order = {str(d['id']): i for i, d in enumerate(dialogues)}
     judged.sort(key=lambda r: order.get(str(r['dialogueId']), 0))

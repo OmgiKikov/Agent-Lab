@@ -51,7 +51,8 @@ export function Checking({
   const resume = async () => {
     setResuming(true);
     try {
-      await api("/api/tone-of-voice/check", { ...input, propose: true });
+      // The same start as the stopped one, as it was kept: the service continues it only when nothing changed.
+      await api("/api/tone-of-voice/check", input);
       await refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));

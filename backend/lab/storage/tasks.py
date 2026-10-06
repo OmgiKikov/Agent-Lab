@@ -56,7 +56,7 @@ def begin(kind: str, given: dict, fingerprint: str | None = None, task_id: str |
         if fingerprint and latest and latest['status'] in (STOPPED, FAILED) and latest['fingerprint'] == fingerprint:
             connection.execute(
                 'UPDATE tasks SET status = ?, input = ?, progress = ?, error = NULL, started_at = ?, updated_at = ?, '
-                'finished_at = NULL, stalled = 0, steps_at_resume = NULL WHERE id = ?',
+                'finished_at = NULL, resumed = 0, stalled = 0, steps_at_resume = NULL WHERE id = ?',
                 (RUNNING, db.dump(given), '{}', at, at, latest['id']),
             )
             return _get(connection, latest['id']) | {'continued': True}
@@ -114,7 +114,8 @@ def end(task_id: str, status: str, error: str | None = None, progress: dict | No
 
 def resume(task_id: str) -> bool:
     """A task a process before this one left running, taken up again: counted, and given up (False) after STALLED
-    restarts in a row that found no new step."""
+    restarts in a row that found no new step. Every kind that takes long keeps a step for each part it finishes, so a
+    task that goes on between restarts is never given up."""
     with db.transaction(), db.connect() as connection:
         steps = connection.execute('SELECT count(*) FROM steps WHERE task_id = ?', (task_id,)).fetchone()[0]
         connection.execute(

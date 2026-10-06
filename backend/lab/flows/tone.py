@@ -219,26 +219,28 @@ def carry_decisions(judged: list[dict], criteria: list[dict], dialogues: list[di
             row['review'] = decision
 
 
-async def judge(dialogues: list[dict], topic: dict, progress: Progress) -> list[dict]:
+async def judge(dialogues: list[dict], topic: dict, progress: Progress, kept: dict | None = None) -> list[dict]:
     """Every conversation by the topic's criteria, in the order of the sample, the count moving as each is judged; a
-    task continued counts the verdicts it kept from the start (conversations.judge_each)."""
+    task continued counts the verdicts it kept (its steps) from the start (conversations.judge_each)."""
     found: list[dict] = []
 
     def done(result: dict) -> None:
         found.append(result)
         progress(done=len(found), total=len(dialogues), message='Проверяем разговоры')
 
-    await conversations.judge_each([(dialogue, topic) for dialogue in dialogues], done)
+    await conversations.judge_each([(dialogue, topic) for dialogue in dialogues], done, kept)
     order = {str(dialogue['id']): index for index, dialogue in enumerate(dialogues)}
     return sorted(found, key=lambda result: order[str(result['dialogueId'])])
 
 
 def fingerprint(given: dict) -> str:
-    """The same check of tone of voice (work.KINDS): the same criteria, their revision and the ones chosen, on the
-    same material (conversations.same_material)."""
+    """The same check of tone of voice (work.KINDS): the same criteria, the ones chosen of the revision that is
+    current (criteria collected again or clarified since make other work), on the same material
+    (conversations.same_material)."""
     return same_work(
         check=checks.TONE,
         revision=given['revision'],
+        current=(storage.documents.load(DRAFT) or {}).get('revision'),
         rules=sorted(given['ruleIds']),
         **conversations.same_material(given['count']),
     )
@@ -254,6 +256,7 @@ async def check(criteria: list[dict], count: int, progress: Progress, *, propose
     if storage.history.get(checks.TONE, check_id) is None:
         result = await assess(criteria, count, progress, check_id)
         commit(result)
+    storage.tasks.keep('published', check_id)  # a finished part of the task
     if propose:
         await severity.proposed_after(checks.TONE, progress)
     return result
@@ -273,8 +276,9 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
         raise ValueError('Сначала загрузите диалоги.')
     started = storage.now()
     topic = {'id': 't1', 'title': checks.TONE_TOPIC, 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
-    progress(done=conversations.judged_before(dialogues), total=len(dialogues), message='Проверяем разговоры')
-    judged = await judge(dialogues, {**topic, 'rules': [tone.for_judging(rule) for rule in criteria]}, progress)
+    kept = storage.tasks.steps()
+    progress(done=conversations.judged_before(dialogues, kept), total=len(dialogues), message='Проверяем разговоры')
+    judged = await judge(dialogues, {**topic, 'rules': [tone.for_judging(rule) for rule in criteria]}, progress, kept)
     ensure_active()
     previous = current(checks.TONE) or {}
     results.ensure_answered(judged, previous)

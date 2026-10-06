@@ -13,7 +13,7 @@ from test_tone_followthrough import judged
 from lab import models, storage
 from lab.api import work
 from lab.flows import conversations, tone
-from lab.jobs import INTERRUPTED, STALLED, STOPPED, Jobs
+from lab.jobs import INTERRUPTED, LOST, STALLED, STOPPED, Jobs
 from lab.storage import tasks
 
 
@@ -75,6 +75,12 @@ class TaskStorageTests(unittest.TestCase):
         found = tasks.get(task['id'])
         self.assertEqual((found['status'], found['kept'], found['progress']), ('done', 0, {'done': 1, 'total': 1}))
         self.assertFalse(tasks.begin('tone-check', {}, 'same')['continued'])
+
+    def test_a_persons_continue_is_no_restart(self):
+        task = tasks.begin('tone-check', {}, 'same')
+        tasks.resume(task['id'])
+        tasks.end(task['id'], tasks.STOPPED)
+        self.assertEqual(tasks.begin('tone-check', {}, 'same')['resumed'], 0)
 
     def test_restarts_that_find_no_new_step_give_the_task_up(self):
         task = tasks.begin('tone-check', {})
@@ -173,6 +179,29 @@ class JobLifeTests(unittest.IsolatedAsyncioTestCase):
             await self.jobs.perform('tone-check', chatty)
         self.assertLess(len(writes), 20)
         self.assertEqual(self.jobs.state['progress'], {'done': 200, 'total': 200})
+
+    async def test_a_task_whose_end_was_not_written_does_not_keep_the_agent_busy(self):
+        end = tasks.end
+        calls = []
+
+        def broken_once(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 1:
+                raise RuntimeError('database is locked')
+            return end(*args, **kwargs)
+
+        async def quick(progress):
+            pass
+
+        with patch.object(tasks, 'end', broken_once):
+            first = self.jobs.start('sources', quick)
+            await until(lambda: len(calls) == 1)
+            await asyncio.sleep(0)
+            self.assertTrue(self.jobs.state['running'])  # storage still says so
+            again = self.jobs.start('sources', quick)
+        self.assertNotEqual(again['task'], first['task'])
+        self.assertEqual(tasks.get(first['task'])['error'], LOST)
+        await until(lambda: not self.jobs.state['running'])
 
     async def test_a_screen_reads_the_task_from_storage_not_from_the_owner(self):
         async def failing(progress):
@@ -286,6 +315,20 @@ class DurableToneCheckTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((other['continued'], other['kept']), (False, 0))
             await until(lambda: not self.jobs.state['running'])
         self.assertEqual(len(self.judged), 2 + 4)
+
+    async def test_criteria_clarified_after_the_stop_make_other_work(self):
+        with patch.object(conversations, 'judge_dialogue', side_effect=self.judge):
+            await self.start()
+            await self.two.wait()
+            await self.client.post('/api/job/stop')
+        self.assertTrue((await self.client.get('/api/state')).json()['job']['continuable'])
+        draft = storage.documents.load(tone.DRAFT)
+        response = await self.client.post(
+            '/api/tone-of-voice/clarification',
+            json={'revision': draft['revision'], 'ruleId': 'pronouns', 'text': '«Вы» с прописной буквы тоже ошибка.'},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse((await self.client.get('/api/state')).json()['job']['continuable'])
 
     async def test_other_judges_make_other_work(self):
         with patch.object(conversations, 'judge_dialogue', side_effect=self.judge):

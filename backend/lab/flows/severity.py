@@ -53,6 +53,7 @@ async def propose(check: str, progress: Progress | None = None, again: bool = Fa
                 storage.severity.failed(check, str(error))
                 return str(error)
             storage.severity.propose(check, {key: answer.value[id_] for id_, key in ids.items()}, answer.model)
+            storage.tasks.keep(f'proposed:{check}:{part[0]}', True)  # a finished part of the task
     return None
 
 

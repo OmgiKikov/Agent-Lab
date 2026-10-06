@@ -786,6 +786,21 @@ class RunAfterRestartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run['items'][2]['restarts'], 1)
         self.assertEqual(self.judged.count('c1'), 1)
 
+    async def test_a_run_keeps_a_step_for_each_finished_conversation_so_restarts_are_no_stalls(self) -> None:
+        run_id, _ = await self.cut()
+        # The first conversation ended and was judged, the second one ended: three finished parts before the Lab went
+        # down.
+        self.assertEqual(storage.tasks.get(run_id)['kept'], 3)
+
+    async def test_a_run_that_ended_before_the_process_did_is_not_reopened(self) -> None:
+        run_id, _ = await self.cut()
+        storage.runs.update(run_id, status='stopped', error='Прогон остановлен')
+        said = len(self.said)
+        await self.resume()
+        run = storage.runs.get(run_id)
+        self.assertEqual((run['status'], run['error']), ('stopped', 'Прогон остановлен'))
+        self.assertEqual(len(self.said), said)
+
     async def test_scenarios_gone_meanwhile_fail_the_run_and_say_why(self) -> None:
         run_id, _ = await self.cut()
         with patch.object(simulation.scenarios, 'deck', return_value=[card('c1', 'q1')]):
