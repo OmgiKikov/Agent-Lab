@@ -9,8 +9,17 @@ import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Field";
 import { Sheet } from "../../ui/Sheet";
 
-/** A dataset as people call it: the name given at the upload, or its file without the extension. */
-export const shownName = (d: Dataset) => (d.name === d.file ? d.name.replace(/\.(jsonl|json|csv|xlsx)$/i, "") : d.name);
+/** A file name that tells a person nothing: an id or a hash the export system gave it. */
+const MEANINGLESS = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,})$/i;
+
+/**
+ * A dataset as people call it: the name given at the upload, or its file without the extension; a file named by an id
+ * is called by the day it came.
+ */
+export const shownName = (d: Dataset) => {
+  const name = d.name === d.file ? d.name.replace(/\.(jsonl|json|csv|xlsx)$/i, "") : d.name;
+  return MEANINGLESS.test(name) ? `Выгрузка от ${longDay(d.createdAt)}` : name;
+};
 
 function Line({ label, children }: { label: string; children: ReactNode }) {
   return (
