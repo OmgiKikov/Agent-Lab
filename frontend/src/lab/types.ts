@@ -280,6 +280,23 @@ export type ReplayStep = {
 export type ReplayDialogue = { dialogueId: string; status: Status; steps: ReplayStep[] };
 export type Family = "tone" | "code" | "rag";
 export type FamilyScore = { pass: number; fail: number; accuracy: number | null };
+/** A step of a replay by where it sits: the conversation and the step's index in it. */
+export type StepRef = { dialogueId: string; step: number };
+export type KnowledgeBaseCriterion = {
+  id: string;
+  name: string;
+  pass: number;
+  fail: number;
+  unknown: number;
+  failed: StepRef[];
+};
+/** What a replay says about the knowledge base (backend rag.summary), counted by the service on every read. */
+export type KnowledgeBaseSummary = {
+  steps: number;
+  called: number;
+  match: { same: number; different: number; unknown: number; differentSteps: StepRef[] };
+  criteria: KnowledgeBaseCriterion[];
+};
 export type ReplayResult = {
   id: string;
   target: string;
@@ -294,4 +311,6 @@ export type ReplayResult = {
   model: string;
   metric: Record<Family, FamilyScore>;
   dialogues: ReplayDialogue[];
+  /** The knowledge-base summary; an older service does not send it. */
+  knowledgeBase?: KnowledgeBaseSummary;
 };

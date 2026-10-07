@@ -7,15 +7,20 @@ import { SectionJob } from "../../app/SectionJob";
 import { api } from "../../lab/api";
 import { count, longDay, pct, time } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { FAMILIES, FAMILY_NAME, useReplay } from "../../lab/replay";
-import type { FamilyScore, ReplayDialogue, ReplayResult, Target } from "../../lab/types";
+import { FAMILY_NAME, useReplay } from "../../lab/replay";
+import type { Family, FamilyScore, ReplayDialogue, ReplayResult, Target } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
 import { Dot, dotOf } from "../simulations/parts";
+import { KnowledgeBase } from "./KnowledgeBase";
 import { StepView } from "./StepView";
 
 const MAX_COUNT = 200;
+
+/** Tone and prompts keep one number each; the knowledge base has its own block (KnowledgeBase). */
+const SCORED: Family[] = ["tone", "code"];
+
 const FIELD =
   "mt-1 block rounded-control border border-line bg-canvas px-3 py-2 text-body text-fg outline-none focus-visible:ring-2 focus-visible:ring-run";
 
@@ -142,11 +147,12 @@ function Result({ result }: { result: ReplayResult }) {
         {result.stand?.idpCache &&
           ` · кэш базы знаний: ${result.stand.idpCache.warmed} из ${result.stand.idpCache.total}`}
       </p>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {FAMILIES.map((family) => (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {SCORED.map((family) => (
           <Score key={family} name={FAMILY_NAME[family]} score={result.metric[family]} />
         ))}
       </div>
+      <KnowledgeBase result={result} />
       <ul>
         {result.dialogues.map((d) => (
           <Dialogue
