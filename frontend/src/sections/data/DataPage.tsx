@@ -6,12 +6,11 @@ import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { SECTIONS, datasetLink, launchLink, stageRoot } from "../../app/links";
 import { useWide } from "../../app/useWide";
-import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
+import { CHECKS, resultOf } from "../../lab/checks";
 import { useDatasets, type Dataset } from "../../lab/datasets";
 import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useLaunches } from "../../lab/launches";
-import { CheckResult } from "../../product/CheckResult";
 import { ExportFormat } from "../../product/ExportFormat";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button, buttonClass } from "../../ui/Button";
@@ -20,6 +19,7 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu, type MenuItem } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
 import { ArchiveSheet, DatasetInfo, shownName } from "./DatasetInfo";
+import { CheckCards } from "./CheckCards";
 import { ExportConversations } from "./ExportConversations";
 
 const conversations = (n: number) => count(n, "разговор", "разговора", "разговоров");
@@ -238,34 +238,6 @@ export function DataPage() {
       : []),
     ...(d.archivedAt ? [{ key: "archived", node: `в архиве с ${longDay(d.archivedAt)}` }] : []),
   ];
-  // Each check of this dataset as an agent's card says it: its result in a line with its bar, leading to it; or not
-  // checked yet, and the way to begin.
-  const checks = CHECKS.map((check) => {
-    const f = found.find((x) => x.check === check);
-    return f ? (
-      <Link
-        key={check}
-        to={f.to}
-        className="-m-2 block rounded-control p-2 transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-      >
-        <CheckResult name={CHECK_NAME[check]} line={f.line} />
-      </Link>
-    ) : (
-      <div key={check}>
-        <p className="text-small font-medium text-fg-2">{CHECK_NAME[check]}</p>
-        <p className="mt-1 text-small text-fg-3">Ещё не проверяли</p>
-        {!d.archivedAt && (
-          <Link
-            to={`${launchLink(check)}?dataset=${encodeURIComponent(d.id)}`}
-            className="mt-1 inline-flex items-center gap-1 rounded-sm text-small font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-          >
-            Начать проверку
-            <ArrowRight aria-hidden className="size-3.5" />
-          </Link>
-        )}
-      </div>
-    );
-  });
   // On a phone an open conversation takes the whole page.
   const reading = !!params.get("d") && !wide;
   const archivedNow = (gone: Dataset, wasInWork: boolean) => {
@@ -286,12 +258,12 @@ export function DataPage() {
     });
   };
   return (
-    <div className="flex h-full flex-col">
+    // A wide screen keeps the list and the conversation in view under the cards; a phone scrolls the whole page.
+    <div className="flex flex-col lg:h-full">
       {header}
       {!reading && (
         <section aria-label="Датасет" className="flex-shrink-0 border-b border-line px-4 py-5 lg:px-10">
           <div className="flex flex-wrap items-start gap-x-10 gap-y-4">
-            {/* What it is on the left, what the checks found on the right; on a narrow screen one under the other. */}
             <div className="min-w-[min(100%,22rem)] flex-1">
               <h2 className={choices.length ? "sr-only" : "break-words text-title font-semibold text-fg"}>{title}</h2>
               {choices.length > 0 && (
@@ -319,7 +291,6 @@ export function DataPage() {
                 </button>
               </p>
             </div>
-            <div className="grid w-full gap-x-8 gap-y-4 sm:grid-cols-2 lg:w-[540px]">{checks}</div>
             {d.archivedAt && (
               <Button
                 icon={RotateCcw}
@@ -331,6 +302,9 @@ export function DataPage() {
                 Вернуть из архива
               </Button>
             )}
+          </div>
+          <div className="mt-5">
+            <CheckCards found={found} datasetId={d.id} archived={!!d.archivedAt} />
           </div>
         </section>
       )}

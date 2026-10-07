@@ -221,7 +221,6 @@ export function ExportConversations({ datasetId }: { datasetId: string }) {
   const [params, setParams] = useSearchParams();
   const wide = useWide();
   const [query, setQuery] = useState("");
-  const scroller = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const pages = useInfiniteQuery({
     queryKey: ["dataset-dialogues", AGENT, datasetId],
@@ -256,7 +255,8 @@ export function ExportConversations({ datasetId }: { datasetId: string }) {
       (entries) => {
         if (entries[0]?.isIntersecting) void fetchNextPage();
       },
-      { root: scroller.current, rootMargin: "600px 0px" },
+      // Seen against the screen: the list scrolls in itself on a wide screen, with the page on a phone.
+      { rootMargin: "600px 0px" },
     );
     seen.observe(el);
     return () => seen.disconnect();
@@ -289,7 +289,7 @@ export function ExportConversations({ datasetId }: { datasetId: string }) {
         <div className="px-4 pb-3 pt-4 lg:pl-10">
           <Search value={query} onChange={setQuery} placeholder="Найти по первому вопросу клиента" />
         </div>
-        <div ref={scroller} className="min-h-0 flex-1 overflow-auto px-1 pb-2 lg:pl-7 lg:pr-2">
+        <div className="px-1 pb-2 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:pl-7 lg:pr-2">
           {pages.isPending ? (
             <RowsLoading />
           ) : pages.isError && !all.length ? (
