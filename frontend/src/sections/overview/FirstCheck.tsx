@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, Check, Database, FlaskConical, MessageSquareQuote, Target } from "lucide-react";
-import { SECTIONS, launchLink } from "../../app/links";
+import { judgesLink, SECTIONS, launchLink } from "../../app/links";
 import { count } from "../../lab/format";
 import { codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
@@ -18,10 +18,11 @@ export function FirstCheck({ state }: { state: LabState }) {
       title: "Tone of voice",
       icon: MessageSquareQuote,
       description: "Соблюдает ли агент правила общения: тон, обращение и ясность ответа.",
-      ready: !!policy,
+      ready: !!policy && !!state.toneOfVoice,
       need: policy ? policy.origin : "Нужны правила общения — текст или документ",
-      to: launchLink("tone"),
-      action: "Настроить проверку",
+      // Without rules the first step is the rules themselves: the bank's document, its criteria collected.
+      to: policy && state.toneOfVoice ? launchLink("tone") : `${judgesLink("tone")}&doc=1`,
+      action: policy && state.toneOfVoice ? "К проверке" : "Добавить правила",
     },
     {
       title: "Точность",

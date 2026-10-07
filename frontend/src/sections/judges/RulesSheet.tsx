@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { Download, Loader2, Plus, RotateCcw, Sparkles } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { ArrowRight, Download, Loader2, Plus, RotateCcw, Sparkles } from "lucide-react";
+import { launchLink } from "../../app/links";
 import { api, textFile } from "../../lab/api";
 import { CHECK_NAME, resultOf } from "../../lab/checks";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
@@ -8,7 +9,7 @@ import { useLabState } from "../../lab/LabProvider";
 import { download } from "../../lab/problemReport";
 import type { Check } from "../../lab/types";
 import { TONE_ID } from "../../lab/tone";
-import { Button } from "../../ui/Button";
+import { Button, buttonClass } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Modal } from "../../ui/Modal";
@@ -45,6 +46,8 @@ export function RulesSheet({ check, open, onClose }: { check: Check; open: boole
       ? state.job.error
       : null;
   const hasDocument = !!state?.sources.some((s) => s.id === TONE_ID);
+  // The criteria were just collected and nothing ran since: the next step is the check itself.
+  const collected = check === "tone" && !state?.job.running && state?.job.kind === "tone-criteria" && !state.job.error;
   const [editing, setEditing] = useState<JudgeVersion | null | undefined>();
   const [asking, setAsking] = useState<{ id: string | null; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -109,6 +112,17 @@ export function RulesSheet({ check, open, onClose }: { check: Check; open: boole
               >
                 Остановить
               </Button>
+            </div>
+          )}
+          {collected && (
+            <div role="status" className="flex flex-wrap items-center gap-3 rounded-block bg-inset p-4 text-body">
+              <span className="min-w-0 flex-1 text-fg-2">
+                Критерии собраны: {library.selected?.name ?? "правила общения"}. Следующий шаг — проверка разговоров.
+              </span>
+              <Link to={launchLink("tone")} className={buttonClass({ variant: "primary", size: "sm" })}>
+                Новая проверка
+                <ArrowRight aria-hidden className="size-3.5" />
+              </Link>
             </div>
           )}
           {collectFailed && collectFailed !== "Остановлено" && (
