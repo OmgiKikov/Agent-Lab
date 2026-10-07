@@ -21,7 +21,7 @@ from ..domain.transcript import for_judge, tool_calls, with_buttons
 from ..roles import customer, judge
 from . import Progress, connection, error_text, scenarios
 
-MAX_AGENT_TURNS = 3
+MAX_AGENT_TURNS = 3  # the budget of a conversation: reaching it cuts the conversation short, it is no outcome
 PARALLEL = 4
 NO_REPLIES = 'Агент не ответил ни в одном разговоре'
 # What a re-judge changes in a conversation.
@@ -42,7 +42,7 @@ async def prepare_openings(chosen: list[dict], persona_ids: list[str], progress:
     missing = [
         (card, key)
         for card in chosen
-        for key in persona_ids
+        for key in personas.plays(card, persona_ids)
         if key != personas.DEFAULT and not (card.get('openings') or {}).get(key)
     ]
     if not missing:
@@ -83,8 +83,10 @@ def customer_details(
 
 
 async def play(card: dict, agent: agents.HttpAgent, item: dict, changed: Callable[[], None]) -> None:
-    """One conversation of the scenario with the agent, up to MAX_AGENT_TURNS replies, then judged. A conversation the
-    agent or the model broke keeps its turns and says why."""
+    """One conversation of the scenario with the agent, up to MAX_AGENT_TURNS replies, then judged. It says why it
+    stopped (stop): the customer's own reason (resolved, instruction, gave_up, ended), the agent handed it off
+    (handed_off), or the budget cut it short (budget). The customer's last words before its end mark go to the agent
+    too. A conversation the agent or the model broke keeps its turns and says why."""
     conversation = item['conversation']
     shapes = world.templates(connection.repo()) if agent.mocked else None
     test_data = scenario_world.overrides(card.get('world'), shapes) if agent.mocked else {}
@@ -94,6 +96,7 @@ async def play(card: dict, agent: agents.HttpAgent, item: dict, changed: Callabl
     item.update(world=bool(test_data), customerDetails=found, ended=False)
     persona = item.get('persona') or personas.DEFAULT
     line, from_log = opening(card, persona), persona == personas.DEFAULT
+    stop = None
     try:
         for turn in range(1, MAX_AGENT_TURNS + 1):
             conversation.append(
@@ -106,14 +109,22 @@ async def play(card: dict, agent: agents.HttpAgent, item: dict, changed: Callabl
             changed()
             if not reply['text']:
                 raise agents.AgentError(f'Агент не прислал текст ответа (статус {reply["status"]}).')
-            if not reply['ok'] or turn == MAX_AGENT_TURNS:
+            if stop:
+                break  # the customer's last words are answered
+            if not reply['ok']:
+                stop = 'handed_off'
+                break
+            if turn == MAX_AGENT_TURNS:
+                stop = 'budget'
                 break
             item['stage'] = f'ход {turn + 1}: клиент пишет'
             changed()
-            line, from_log = await customer_says(card, conversation, details, persona), False
-            if customer.END in line or not line:
+            (line, stop), from_log = customer.ending(await customer_says(card, conversation, details, persona)), False
+            if stop and not line:
                 break
-        item['ended'] = True
+            if not line:
+                raise models.ModelError('Модель клиента не написала реплику.')
+        item.update(ended=True, stop=stop)
         item['stage'] = 'модель оценивает'
         changed()
         await evaluate(card, item)
@@ -178,7 +189,15 @@ async def run(
     persona_ids = [p for p in personas.PERSONAS if p in (persona_ids or [personas.DEFAULT])] or [personas.DEFAULT]
     config = connection.ways()[key]
     record = new_run(key, config, label, repeats, persona_ids)
-    plan = [(card, persona, attempt) for attempt in range(1, repeats + 1) for persona in persona_ids for card in chosen]
+    # Types play the stress set; a scenario of the representative set is played once per repeat, by the ordinary one.
+    order = persona_ids if personas.DEFAULT in persona_ids else [personas.DEFAULT, *persona_ids]
+    plan = [
+        (card, persona, attempt)
+        for attempt in range(1, repeats + 1)
+        for persona in order
+        for card in chosen
+        if persona in personas.plays(card, persona_ids)
+    ]
     record['items'] = [new_item(card, persona, attempt) for card, persona, attempt in plan]
     # The run is measured by the criteria of the check its deck was built from, and remembers it.
     record['check'] = scenarios.check() or checks.of_run(record)

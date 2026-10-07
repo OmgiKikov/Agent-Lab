@@ -13,6 +13,7 @@ Sets are never averaged together:
 import hashlib
 import json
 import random
+from collections import Counter
 from collections.abc import Callable, Sequence
 
 from . import quotes
@@ -157,7 +158,25 @@ def deck(built: list[dict], manifests: dict, weights: dict[str, float], failed: 
     for card in cards:
         if 'representative' in (card.get('sets') or []):
             card['weight'] = weights.get(card['sourceDialogueId'])
-    return {'cards': cards, 'sets': manifests}
+    return {'cards': cards, 'sets': manifests, 'checks': checked(cards)}
+
+
+def checked(cards: Sequence[dict]) -> dict:
+    """The deck's checks in counts: cards whose brief copies the old agent's words or the judge's criteria, or names
+    in the goal what the customer said only later (cards.audit); and how the customers answered when the agent asked
+    for an identifier, by the action of their reaction: what a rule for an identifier the log never settles rests on."""
+    found = {'cards': len(cards), 'agentWords': 0, 'criteriaWords': 0, 'goalAhead': 0}
+    for card in cards:
+        for key, items in ((card.get('checks') or {}).get('audit') or {}).items():
+            found[key] += bool(items)
+    answers = Counter(
+        action
+        for card in cards
+        for reaction in card.get('reactions') or []
+        if reaction['trigger'] == 'identifier_request'
+        for action in reaction['actions']
+    )
+    return found | {'identifierAnswers': dict(answers.most_common())}
 
 
 def _named(criterion: dict, fallback: str) -> str:

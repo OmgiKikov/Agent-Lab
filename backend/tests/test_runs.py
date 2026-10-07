@@ -8,6 +8,7 @@ from lab import storage
 from lab.domain.metric import metric
 from lab.flows import answers, inputs, simulation
 from lab.jobs import Jobs
+from lab.roles.base import Answer
 
 
 def card(key: str = 'card-1', text: str = 'question') -> dict:
@@ -642,6 +643,62 @@ class RunsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['items'][0]['status'], 'FAIL')
         self.assertEqual(
             (result['items'][1]['status'], result['items'][1]['error']), ('UNMEASURED', 'Агент ответил HTTP 500')
+        )
+
+    async def play(self, says: list[str], status: str = '200', deck: list[dict] | None = None, **run) -> dict:
+        """One run of the deck (one card by default) with the customer saying these lines in turn and the agent
+        answering with this status; the finished run."""
+        lines = iter(says)
+
+        async def say(conversation_id: str, message: str, world: dict) -> dict:
+            return {'text': 'answer', 'status': status, 'ok': status == '200', 'options': [], 'events': []}
+
+        async def customer(scenario: dict, conversation: list[dict], details: str = '', persona: str | None = None):
+            return next(lines)
+
+        async def evaluate(scenario: dict, item: dict) -> None:
+            item.update(status='PASS', rules=[])
+
+        with (
+            patch.object(simulation.scenarios, 'deck', return_value=deck or [card()]),
+            patch.object(self.agent, 'say', side_effect=say),
+            patch.object(simulation, 'customer_says', side_effect=customer),
+            patch.object(simulation, 'evaluate', side_effect=evaluate),
+            patch.object(simulation.customer, 'opening', AsyncMock(return_value=Answer('ну', 'm'))),
+            patch.object(simulation.scenarios, 'remember_openings'),
+        ):
+            result = await simulation.run('test', **run)
+        self.assertEqual((result['status'], result['error']), ('done', None))
+        return result
+
+    async def test_a_conversation_says_why_it_stopped_and_the_customers_last_words_reach_the_agent(self) -> None:
+        thanked = (await self.play(['Спасибо! [КОНЕЦ: решено]']))['items'][0]
+        self.assertEqual(thanked['stop'], 'resolved')
+        self.assertEqual(
+            [(m['role'], m['text']) for m in thanked['conversation']],
+            [('customer', 'question'), ('agent', 'answer'), ('customer', 'Спасибо!'), ('agent', 'answer')],
+        )
+        left = (await self.play(['[КОНЕЦ: ухожу]']))['items'][0]
+        self.assertEqual((left['stop'], len(left['conversation'])), ('gave_up', 2))
+        # The budget cuts a conversation short: it is no outcome of the customer's.
+        cut = (await self.play(['ещё вопрос'] * simulation.MAX_AGENT_TURNS))['items'][0]
+        self.assertEqual((cut['stop'], len(cut['conversation'])), ('budget', 2 * simulation.MAX_AGENT_TURNS))
+        handed = (await self.play([], status='202-2'))['items'][0]
+        self.assertEqual((handed['stop'], handed['ended']), ('handed_off', True))
+
+    def test_the_customer_s_end_mark_says_why(self) -> None:
+        ending = simulation.customer.ending
+        self.assertEqual(ending('Спасибо! [КОНЕЦ: инструкция]'), ('Спасибо!', 'instruction'))
+        self.assertEqual(ending('[конец: решено]'), ('', 'resolved'))
+        self.assertEqual(ending('ок [КОНЕЦ]'), ('ок', 'ended'))
+        self.assertEqual(ending('А как попасть в меню?'), ('А как попасть в меню?', None))
+
+    async def test_customer_types_play_the_stress_set_and_the_representative_one_plays_as_logged(self) -> None:
+        deck = [card('logged') | {'sets': ['representative']}, card('rare') | {'sets': ['stress']}]
+        result = await self.play(['[КОНЕЦ: решено]'] * 4, deck=deck, persona_ids=['impatient'])
+        self.assertEqual(
+            [(item['cardId'], item['persona']) for item in result['items']],
+            [('logged', 'default'), ('rare', 'impatient')],
         )
 
     async def test_a_run_remembers_the_check_its_deck_was_built_from(self) -> None:

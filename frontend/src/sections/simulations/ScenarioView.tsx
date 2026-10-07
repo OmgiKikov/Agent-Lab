@@ -14,6 +14,7 @@ import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Label } from "../../ui/Label";
 import { Dot, dotOf } from "./parts";
+import { Profile } from "./Profile";
 
 /** How the scenario's record stands: still loading, failed to load, or here (possibly empty). */
 export type RecordState = "loading" | "error" | "ready";
@@ -242,7 +243,7 @@ export function ScenarioView({
           {record ? <Results record={record} state={state} named={named} onPlay={onPlay} /> : pending}
         </Section>
         <Section label="Клиент">
-          <p className="mt-2 max-w-[66ch] text-read text-fg">{summary}</p>
+          {card.knowledge ? <Profile card={card} /> : <p className="mt-2 max-w-[66ch] text-read text-fg">{summary}</p>}
           {summary !== card.situation.trim() && (
             <details className="group mt-2">
               <summary className={summaryClass}>

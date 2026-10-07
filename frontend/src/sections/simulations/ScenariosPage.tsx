@@ -9,6 +9,7 @@ import { useCriteria } from "../../lab/criteria";
 import { count, day } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { personaName } from "../../lab/look";
+import { DeckCheckLine } from "./Profile";
 import {
   namedCriteria,
   failedTypes,
@@ -221,6 +222,7 @@ export function ScenariosPage() {
                 "Сценариев пока нет"
               )}
             </p>
+            {cards.length > 0 && deck?.checks && <DeckCheckLine checks={deck.checks} />}
             {cards.length > 0 && tests && (
               <div role="radiogroup" aria-label="Итог в последнем прогоне" className="flex flex-wrap gap-1.5">
                 {FILTERS.filter((f) => f.value !== "none" || counts.none > 0).map((f) => {

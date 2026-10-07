@@ -2,6 +2,8 @@
 
 A scenario passed by the ordinary customer and failed by one of these shows where the agent breaks on how people
 write, not on what they ask. A type changes only the manner: the goal, the facts and the questions stay the card's.
+Types are stress: they play the scenarios of the stress set; the representative set stands for the export's own
+customers and is played in the manner counted from them (plays).
 """
 
 DEFAULT = 'default'
@@ -59,3 +61,9 @@ def name(key: str | None) -> str:
 
 def style(key: str | None) -> str:
     return PERSONAS.get(key or DEFAULT, PERSONAS[DEFAULT])['style']
+
+
+def plays(card: dict, chosen: list[str]) -> list[str]:
+    """The types of customers that play this scenario: the ones chosen for a scenario of the stress set (or of a deck
+    built before sets), the ordinary one for any other."""
+    return chosen if 'stress' in (card.get('sets') or ['stress']) else [DEFAULT]

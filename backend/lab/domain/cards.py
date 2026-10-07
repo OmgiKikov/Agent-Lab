@@ -1,9 +1,16 @@
 """The customer of a scenario: one logged episode of the agent's domain read into a card, every item with a quote the
 code found in the log. Pure functions; the model's part is roles/card.py.
 
-A card holds the task, what the customer knows and how they know it, what they saw, how they write and how they
-reacted to the agent. The simulator reads only this customer part (`situation`, rendered here from the fields, never
-retold by a model); the frozen criteria of its topic are a separate binding for the judge.
+The customer part of a card is the profile of the synthetic customer, in four blocks:
+- context: the channel and how the customer came to the task (episode);
+- goal: the task of the episode as the catalog read it, never the trajectory of the conversation;
+- knowledge, the prerequisites: what the customer knows, believes or does not know, each with when they say it
+  (disclose: in the opening, when it becomes relevant, only when asked), what the log does not establish, what they
+  already tried, and what happens when they try something (observations); identifiers get their values from the bank
+  the agent sees, when the conversation is played (flows/simulation.customer_details);
+- behaviour: reactions as actions to a move of the agent, and the manner counted from their own messages.
+The simulator reads only this part (`situation`, rendered here from the fields, never retold by a model); the frozen
+criteria of its topic are a separate binding for the judge.
 """
 
 import json
@@ -27,13 +34,34 @@ TRIGGERS = {
     'handoff_offer': 'агент предлагает оператора',
     'resolved': 'вопрос решён',
 }
-SAID = {
-    'before': 'уже сказано в чате до этого вопроса',
-    'opening': 'уже есть в первом сообщении',
-    'later': 'сообщаешь сам позже',
-    'on_request': 'говоришь, если спросят',
+# What the customer did in a message that answered the agent: the content comes from their knowledge, not the old chat.
+ACTIONS = {
+    'answer': 'отвечаешь на вопрос',
+    'give_detail': 'уточняешь подробность своей ситуации',
+    'dont_know': 'говоришь, что не знаешь',
+    'ask_how': 'спрашиваешь, как именно это сделать',
+    'ask_meaning': 'переспрашиваешь, что имеется в виду',
+    'correct_object': 'поправляешь: тебе нужно другое',
+    'report_obstacle': 'говоришь, что так сделать не можешь и что мешает',
+    'report_result': 'сообщаешь, что получилось',
+    'choose_option': 'выбираешь один из вариантов',
+    'decline_handoff': 'не уходишь к оператору и объясняешь задачу здесь',
+    'ask_human': 'просишь живого специалиста',
+    'restate': 'повторяешь свою задачу',
+    'accept': 'принимаешь ответ',
 }
+# The customer's access to a fact, by the extractor's status; what the agent told is never the customer's own.
+ACCESS = {'knows': 'knows', 'masked_in_source': 'knows', 'believes': 'believes', 'does_not_know': 'does_not_know'}
+# When the customer says a fact, by where its quote stands (opening, before the episode) or what the extractor saw.
+DISCLOSE = {'opening': 'opening', 'before': 'when_relevant', 'later': 'when_relevant', 'on_request': 'on_request'}
+# An observation the customer reported trying what the agent suggested is what happens when one tries it; one they
+# made before is what they already know.
+TRYING = ('instruction', 'inapplicable_instruction')
+REPORTING = ('report_result', 'report_obstacle')
 ENTRY = {'after_greeting': 'после приветствия', 'after_other_topic': 'после другого вопроса'}
+CHANNEL = {'WEB': 'на сайте банка', 'MOBILE': 'в мобильном приложении банка'}
+DONE = 'Готово, когда это получилось или у тебя есть способ это сделать, который подходит именно тебе.'
+
 # What an agent's request for an identifier says, besides the words of the profile's identifiers (_asks_for).
 IDENTIFYING = r'номер|реквизит|идентификатор|договор|данные'
 GREETING = re.compile(r'^\W*(здравствуй|добр|привет|доброе)', re.I)
@@ -66,17 +94,18 @@ TRIGGER_NEEDS = {
     'instruction': (STEPS,),
 }
 TRANSITION = re.compile(r'`\s*`\s*`\s*transition-code\s*([\w-]*)\s*`\s*`\s*`\.?')
+WORDS = re.compile(r'\w+')
+SHINGLE = 6  # words in a row: a copied phrase, not a shared term
 
 
 def readable(value: dict) -> dict:
-    """The extractor's answer, if a card can be read from it: in Russian, with a name, a goal and the episode's start.
-    Whether the customer has a task of the agent's domain is the episode reader's decision, not the extractor's: its
-    doubt is kept on the card (domainDoubt). A ValueError asks the model again."""
+    """The extractor's answer, if a card can be read from it: in Russian, with a name and the episode's start. Whether
+    the customer has a task of the agent's domain is the episode reader's decision, not the extractor's: its doubt is
+    kept on the card (domainDoubt). A ValueError asks the model again."""
     if FOREIGN.search(json.dumps(value, ensure_ascii=False)):
         raise ValueError('card text switched to another script')
-    for field in ('name', 'goal'):
-        if not isinstance(value.get(field), str) or not value[field].strip():
-            raise ValueError(f'card needs {field}')
+    if not isinstance(value.get('name'), str) or not value['name'].strip():
+        raise ValueError('card needs name')
     if not isinstance((value.get('episode') or {}).get('start'), int):
         raise ValueError('card needs episode.start')
     return value
@@ -150,8 +179,11 @@ def grounded(
     def text(item: dict, *fields: str) -> bool:
         return all(isinstance(item.get(f), str) and item[f].strip() for f in fields)
 
+    def acted(x: dict) -> bool:
+        x['actions'] = [a for a in x.get('actions') or [] if a in ACTIONS] if isinstance(x.get('actions'), list) else []
+        return bool(x['actions'])
+
     lists = {
-        'circumstances': lambda x: text(x, 'text') and said(x.get('n'), x.get('quote'), 'user'),
         'observations': lambda x: text(x, 'action', 'result')
         and not ABOUT_CHAT.search(x['action'] + ' ' + x['result'])
         and said(x.get('n'), x.get('quote'), 'user'),
@@ -161,8 +193,9 @@ def grounded(
             said(x.get('n'), x.get('quote'), 'user')
             or (x.get('status') == 'learned_from_agent' and said(x.get('n'), x.get('quote'), 'assistant'))
         ),
-        'reactions': lambda x: text(x, 'trigger', 'response')
+        'reactions': lambda x: text(x, 'trigger')
         and x['trigger'] in TRIGGERS
+        and acted(x)
         and said(x.get('n'), x.get('quote'), 'user')
         and said(x.get('agentN'), x.get('agentQuote'), 'assistant')
         and x['agentN'] < x['n']
@@ -262,47 +295,68 @@ def _manner(features: dict, samples: list[str]) -> str:
     return line
 
 
+def _said(item: dict) -> str:
+    """A fact as the customer brings it; what they believe may be wrong."""
+    return item['text'] + (' (так ты считаешь, но можешь ошибаться)' if item.get('access') == 'believes' else '')
+
+
+def _tried(item: dict) -> str:
+    return f'уже пробовал: {item["action"]} — {item["result"]}'
+
+
 def brief(card: dict) -> str:
-    """The customer's part of the card as the simulator reads it: what the customer wants, knows and does."""
-    lines = [f'Твоя задача: {card["goal"]}' + (f' Речь именно о: {card["object"]}.' if card.get('object') else '')]
-    if card['episode']['entry'] in ENTRY:
-        lines.append(f'К этому вопросу ты перешёл {ENTRY[card["episode"]["entry"]]}.')
-    if card['circumstances']:
-        lines.append('Обстоятельства:\n' + '\n'.join(f'- {x["text"]}' for x in card['circumstances']))
-    known = []
-    for fact in card['facts']:
-        if fact.get('status') == 'learned_from_agent':
-            continue  # the old agent's words, not what this customer brings
-        if fact.get('status') == 'does_not_know':
-            known.append(f'- не знаешь: {fact["text"]}')
-            continue
-        note = {'believes': 'так ты считаешь, но можешь ошибаться', 'masked_in_source': 'значение ты знаешь'}
-        extra = [note.get(fact.get('status'), ''), SAID.get(fact.get('said'), '')]
-        known.append(f'- {fact["text"]}' + ''.join(f' ({e})' for e in extra if e))
-    if known:
-        lines.append('Что ты знаешь:\n' + '\n'.join(known))
-    if card['notEstablished']:
-        lines.append(
-            'По настоящему разговору не известно (не придумывай подробностей):\n'
-            + '\n'.join(f'- {x}' for x in card['notEstablished'])
-        )
-    words = {'knows': 'знаешь', 'looks_up': 'наизусть не помнишь, можешь посмотреть', 'unknown': 'не знаешь'}
-    assumed = 'из настоящего разговора не известно, знаешь ли ты это; если попросят, скажи, что посмотришь'
-    said = [
-        f'{(v.get("label") or k)[:1].upper()}{(v.get("label") or k)[1:]}: '
-        f'{assumed if v.get("basis") == "assumption" else words[v["value"]]}.'
-        for k, v in card['identifiers'].items()
+    """The profile as the simulator reads it: the context, the task, what the customer says when, what they do not
+    know, what happens when they try, how they reacted and how they write. Identifiers are not here: their values come
+    from the bank the agent sees, beside this text, when the conversation is played."""
+    episode, goal = card['episode'], card['goal']
+    where = CHANNEL.get(episode.get('channel') or '')
+    entry = ENTRY.get(episode.get('entry') or '')
+    lines = [
+        ' '.join(
+            x
+            for x in (
+                'Ты пишешь в чат поддержки' + (f' {where}.' if where else '.'),
+                f'К этому вопросу ты перешёл {entry}.' if entry else '',
+            )
+            if x
+        ),
+        f'Твоя задача: {goal["task"]}.' + (f' Речь о: {goal["object"]}.' if goal.get('object') else '') + f' {DONE}',
     ]
-    if said:
-        lines.append('\n'.join(said))
-    if card['observations']:
-        lines.append(
-            'Что получается, когда пробуешь (говори об этом, только если дошло до этого действия):\n'
-            + '\n'.join(f'- {x["action"]} → {x["result"]}' for x in card['observations'])
-        )
-    reactions = [f'- если {TRIGGERS.get(x["trigger"], x["trigger"])}: {x["response"]}' for x in card['reactions']]
-    if reactions:
-        lines.append('Как ты реагировал в настоящем разговоре (только если случится то же):\n' + '\n'.join(reactions))
+    known = [k for k in card['knowledge'] if k['access'] != 'does_not_know']
+    before = [o for o in card['observations'] if o['when'] == 'before']
+
+    def block(title: str, items: list[str]) -> None:
+        if items:
+            lines.append(title + '\n' + '\n'.join(f'- {x}' for x in items))
+
+    block(
+        'Уже есть в твоём первом сообщении:',
+        [_said(k) for k in known if k['disclose'] == 'opening']
+        + [_tried(o) for o in before if o['disclose'] == 'opening'],
+    )
+    block(
+        'Расскажешь сам, когда это станет к месту, не всё сразу:',
+        [_said(k) for k in known if k['disclose'] == 'when_relevant']
+        + [_tried(o) for o in before if o['disclose'] != 'opening'],
+    )
+    block('Скажешь, только если спросят:', [_said(k) for k in known if k['disclose'] == 'on_request'])
+    block('Не знаешь:', [k['text'] for k in card['knowledge'] if k['access'] == 'does_not_know'])
+    block(
+        'Из настоящего разговора не известно (если спросят, скажи, что не знаешь или не проверял, не придумывай):',
+        card['notEstablished'],
+    )
+    block(
+        'Если агент предложит это сделать, вот что получится:',
+        [f'{o["action"]} → {o["result"]}' for o in card['observations'] if o['when'] == 'during'],
+    )
+    block(
+        'Как ты действовал в настоящем разговоре (только если агент сделает то же):',
+        [
+            f'если {TRIGGERS[r["trigger"]]}: {" и ".join(ACTIONS[a] for a in r["actions"])}'
+            + (f' («{"»; «".join(r["reveals"])}»)' if r['reveals'] else '')
+            for r in card['reactions']
+        ],
+    )
     lines.append(_manner(card['style'], card.get('samples') or []))
     return '\n'.join(lines)
 
@@ -312,16 +366,30 @@ def starts(messages: list[dict], start: object) -> bool:
     return isinstance(start, int) and 1 <= start <= len(messages) and messages[start - 1]['role'] == 'user'
 
 
-def customer(value: dict, dialogue: dict, agent: dict, start: int | None = None, end: int | None = None) -> dict:
-    """The customer part of a card from the extractor's answer (readable) about the agent under test (agent: its
-    profile): the items the code found in the
-    log, the episode's opening with its masks filled, the manner counted from the customer's own messages, and the
-    brief the simulator reads (situation). start: where the catalog's reading put the episode; the card then describes
-    the episode its business scenario was given for, whatever the extractor said. end: where that episode ends (the
-    customer turns to another task): nothing after it is the card's evidence or manner."""
+def _unmasked(text: str, rng: random.Random) -> tuple[str, int]:
+    """A customer-facing text with no mask left: short masked digits as fictional digits of the same length; a long
+    masked number (an identifier: its value comes from the bank the agent sees) and hidden text (*) as «…»."""
+    found = MASK.findall(text)
+
+    def filled(match: re.Match) -> str:
+        run = match.group()
+        return ''.join(rng.choice('123456789') for _ in run) if set(run) == {'#'} and len(run) < 5 else '…'
+
+    return MASK.sub(filled, text), len(found)
+
+
+def customer(value: dict, dialogue: dict, agent: dict, episode: dict | None = None) -> dict:
+    """The customer part of a card, the profile, from the extractor's answer (readable) about the agent under test
+    (agent: its profile). episode: the catalog's reading of the conversation (start, end, task, object): the card
+    describes the episode its business scenario was given for, whatever the extractor said, its goal is the episode's
+    task, and nothing after its end (the customer turns to another task) is the card's evidence or manner. The items
+    are those the code found in the log; when each fact is said follows from where its quote stands, and what a
+    reaction reveals from the facts said in the same message. Masks are filled in every text the customer reads."""
     messages, source = dialogue['messages'], str(dialogue['id'])
     meta = dialogue.get('meta') or {}
     agents = meta.get('agents') or []
+    episode = episode or {}
+    start, end = episode.get('start'), episode.get('end')
     kept, dropped = grounded(value, messages, end, agent)
     said = value['episode']['start']
     if starts(messages, start):
@@ -330,17 +398,55 @@ def customer(value: dict, dialogue: dict, agent: dict, start: int | None = None,
         start = said
     else:
         start, dropped['episode'] = 1, 1
-    for fact in kept['facts']:
-        # When it was said follows from where its quote stands, not from the model's label.
-        if fact.get('status') == 'learned_from_agent':
-            fact['said'] = None  # the agent said it; the customer brings nothing
-        elif fact['n'] < start:
-            fact['said'] = 'before'
-        elif fact['n'] == start:
-            fact['said'] = 'opening'
-        elif fact.get('said') == 'opening':
-            fact['said'] = 'later'
     end = end if isinstance(end, int) and start <= end <= len(messages) else len(messages)
+    rng, masks = random.Random(f'{SEED}:text:{source}'), 0
+
+    def clean(text: str) -> str:
+        nonlocal masks
+        text, found = _unmasked(text.strip(), rng)
+        masks += found
+        return text
+
+    def disclose(n: int, label: object) -> str:
+        if n == start:
+            return 'opening'
+        return 'when_relevant' if n < start or label == 'opening' else DISCLOSE.get(str(label), 'when_relevant')
+
+    knowledge = []
+    for fact in kept['facts']:
+        if fact.get('status') not in ACCESS:
+            # The old agent's words are not what this customer brings; a fact of no known status is not a fact.
+            dropped['fromAgent' if fact.get('status') == 'learned_from_agent' else 'facts'] += 1
+            continue
+        access = ACCESS[fact['status']]
+        knowledge.append(
+            {
+                'text': clean(fact['text']),
+                'access': access,
+                'disclose': disclose(fact['n'], fact.get('said')),
+                'n': fact['n'],
+                'quote': fact['quote'],
+            }
+        )
+    trying = {r['n'] for r in kept['reactions'] if r['trigger'] in TRYING and set(REPORTING) & set(r['actions'])}
+    observations = [
+        {
+            'action': clean(o['action']),
+            'result': clean(o['result']),
+            'when': 'during' if o['n'] in trying else 'before',
+            'disclose': disclose(o['n'], None),
+            'n': o['n'],
+            'quote': o['quote'],
+        }
+        for o in kept['observations']
+    ]
+    reactions = []
+    for r in kept['reactions']:
+        reveals = [k['text'] for k in knowledge if k['n'] == r['n'] and k['access'] != 'does_not_know']
+        reveals += [_tried(o) for o in observations if o['n'] == r['n'] and o['when'] == 'before']
+        reactions.append(
+            {key: r[key] for key in ('trigger', 'actions', 'agentN', 'agentQuote', 'n', 'quote')} | {'reveals': reveals}
+        )
     texts = [m['content'] for m in messages[start - 1 : end] if m['role'] == 'user']
     quoted = {x['quote'] for x in kept['reactions']}
     samples = [t for t in texts[1:] if not MASK.search(t) and len(t) <= 160 and t not in quoted][:2]
@@ -348,8 +454,10 @@ def customer(value: dict, dialogue: dict, agent: dict, start: int | None = None,
     opening = filled or _digits(texts[0], source)
     card = {
         'name': value['name'].strip(),
-        'goal': value['goal'].strip().rstrip('.') + '.',
-        'object': str(value.get('object') or '').strip().rstrip('.'),
+        'goal': {
+            'task': str(episode.get('task') or value['name']).strip().rstrip('.'),
+            'object': str(episode.get('object') or '').strip().rstrip('.'),
+        },
         'episode': {
             'start': start,
             'end': end,
@@ -358,7 +466,10 @@ def customer(value: dict, dialogue: dict, agent: dict, start: int | None = None,
             'channel': meta.get('channel'),
             'row': meta.get('row'),
         },
-        **{k: kept[k] for k in ('circumstances', 'facts', 'notEstablished', 'observations', 'reactions')},
+        'knowledge': knowledge,
+        'notEstablished': [clean(x) for x in kept['notEstablished']],
+        'observations': observations,
+        'reactions': reactions,
         'identifiers': identifiers(kept, agent),
         'style': style(texts),
         'samples': samples,
@@ -366,12 +477,47 @@ def customer(value: dict, dialogue: dict, agent: dict, start: int | None = None,
         'checks': {
             'dropped': dict(dropped),
             'openingFilled': False if not MASK.search(texts[0]) else 'model' if filled else 'digits',
+            'masksFilled': masks,
             # The extractor's doubt that the customer has a task of the domain: the reader decided; kept for review.
             'domainDoubt': str(value.get('domainDoubt') or '').strip() or None,
         },
     }
     card['situation'] = brief(card)
     return card
+
+
+def _shingles(text: str) -> set[tuple[str, ...]]:
+    words = WORDS.findall(text.lower())
+    return {tuple(words[i : i + SHINGLE]) for i in range(len(words) - SHINGLE + 1)}
+
+
+def _stems(text: str) -> set[str]:
+    """The content words of a text by their first five letters: «терминала» is «терминал»."""
+    return {word[:5] for word in WORDS.findall(text.lower()) if len(word) >= 5}
+
+
+def audit(card: dict, dialogue: dict, criteria: list[dict]) -> dict:
+    """What the code checks in the text the simulator reads: no phrase of the old agent's replies in the episode and
+    none of the judge's criteria (SHINGLE words in a row), and no fact the customer said only later already in their
+    goal. Each is what was found, at most a few; empty is clean."""
+    episode, told = card['episode'], _shingles(card['situation'])
+    replies = [m['content'] for m in dialogue['messages'][episode['start'] - 1 : episode['end']] if m['role'] != 'user']
+    rules = [text for c in criteria for text in (c['text'], c['quote'])]
+    goal = _stems(f'{card["goal"]["task"]} {card["goal"]["object"]}')
+
+    def copied(texts: list[str]) -> list[str]:
+        return sorted({' '.join(phrase) for text in texts for phrase in _shingles(text) & told})[:3]
+
+    def ahead(text: str) -> bool:
+        stems = _stems(text)
+        return bool(stems) and len(stems & goal) * 2 >= len(stems)
+
+    later = [k['text'] for k in card['knowledge'] if k['disclose'] != 'opening' and k['access'] != 'does_not_know']
+    return {
+        'agentWords': copied(replies),
+        'criteriaWords': copied(rules),
+        'goalAhead': [text for text in later if ahead(text)],
+    }
 
 
 def episode_texts(card: dict, dialogue: dict) -> tuple[str, list[str]]:

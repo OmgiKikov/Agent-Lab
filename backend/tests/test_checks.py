@@ -267,7 +267,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.build_cards({'check': 'code'})).status_code, 200)
         deck = storage.documents.load(cards.DECK)
         self.assertEqual((deck['check'], [card['topic'] for card in deck['cards']]), ('code', ['Терминалы']))
-        self.assertEqual(set(deck), {'check', 'createdAt', 'model', 'cards', 'sets', 'catalogRevision'})
+        self.assertEqual(set(deck), {'check', 'createdAt', 'model', 'cards', 'sets', 'checks', 'catalogRevision'})
         self.assertEqual((await self.build_cards({'check': 'other'})).status_code, 422)
 
     async def test_tone_advice_and_history_read_the_tone_result_whatever_the_accuracy_assessment_did(self):

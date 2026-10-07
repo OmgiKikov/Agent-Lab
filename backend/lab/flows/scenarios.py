@@ -78,22 +78,22 @@ async def build_card(
     sets: Sequence[str],
     general: Sequence[dict] = (),
     scenario: dict | None = None,
-    start: int | None = None,
-    end: int | None = None,
+    episode: dict | None = None,
     agent: dict | None = None,
 ) -> dict:
     """The card of one conversation: its customer from the whole chat, every item found in the log (roles.card,
     domain.cards), its frozen criteria, and the world of its test data when the stand's fixtures are there
     (roles.world); without them, or when the model gives no usable world, the scenario is played against the stand's
-    default answers. start: where the catalog's reading put the episode (the card describes the episode its scenario
-    was given for); end: where that episode ends, the customer turning to another task. agent: the profile of the
-    agent under test (flows/profile.py), the current one by default."""
-    agent = agent or profile.current()
-    answer = await card_role.card(topic['title'], dialogue, agent, start, end)
-    customer = cards.customer(answer.value, dialogue, agent, start, end)
+    default answers. episode: the catalog's reading of the conversation, where the episode starts and ends and its
+    task (the card describes the episode its scenario was given for). agent: the profile of the agent under test
+    (flows/profile.py), the current one by default."""
+    agent, episode = agent or profile.current(), episode or {}
+    answer = await card_role.card(topic['title'], dialogue, agent, episode.get('start'), episode.get('end'))
+    customer = cards.customer(answer.value, dialogue, agent, episode)
     raw, written = cards.episode_texts(customer, dialogue)
     prompts = '\n'.join(source['content'] for source in inputs.sources())
     criteria = scenarios.criteria(topic, general, prompts)
+    customer['checks']['audit'] = cards.audit(customer, dialogue, criteria)
     test_data, shapes = None, world.templates(connection.repo())
     if shapes is not None:
         try:
@@ -213,10 +213,9 @@ class _Building:
         sets = self.chosen[dialogue_id]
         episode = self.episodes.get(dialogue_id) or {}
         scenario = self.scenario_of.get(episode.get('scenarioId') or '')
-        start, end = episode.get('start'), episode.get('end')
         try:
             self.made[dialogue_id] = await build_card(
-                topic, dialogue, sets, self.general, scenario, start, end, self.agent
+                topic, dialogue, sets, self.general, scenario, episode, self.agent
             )
             self.failed.pop(dialogue_id, None)
         except models.ModelError as error:

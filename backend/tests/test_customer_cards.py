@@ -31,9 +31,7 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
             ],
         }
         reply = {
-            'eligible': True,
             'name': 'Тариф терминала',
-            'goal': 'Узнать тариф своего терминала',
             'episode': {'start': 1, 'entry': 'first_message'},
             'facts': [
                 {'text': 'тариф 1,8%', 'status': 'learned_from_agent', 'n': 2, 'quote': 'Ваш тариф 1,8%'},
@@ -42,7 +40,7 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
             'reactions': [
                 {
                     'trigger': 'inapplicable_instruction',
-                    'response': 'говорит, что раздела нет, и зовёт человека',
+                    'actions': ['report_obstacle', 'ask_human', 'shrug'],
                     'agentN': 2,
                     'agentQuote': 'Подробный ответ',
                     'n': 3,
@@ -62,13 +60,26 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
             patch.object(deck_flow.world, 'templates', return_value=None),
             patch.object(deck_flow.inputs, 'sources', return_value=[]),
         ):
-            card = await deck_flow.build_card(topic(), chat, ['representative'], scenario=scenario)
+            episode = {'start': 1, 'end': 3, 'task': 'узнать тариф своего терминала', 'object': 'тариф'}
+            card = await deck_flow.build_card(topic(), chat, ['representative'], scenario=scenario, episode=episode)
         self.assertEqual(card['model'], 'actual-model')
         self.assertEqual(card['opening'], 'Какой тариф у терминала 48213907?')
-        self.assertEqual([(f['status'], f['said']) for f in card['facts']], [('learned_from_agent', None)])
-        self.assertEqual((card['checks']['dropped']['facts'], card['checks']['dropped']['observations']), (1, 1))
+        # The agent's words are not the customer's knowledge; a quote the log does not have is no fact.
+        self.assertEqual(card['knowledge'], [])
+        dropped = card['checks']['dropped']
+        self.assertEqual((dropped['fromAgent'], dropped['facts'], dropped['observations']), (1, 1, 1))
         self.assertNotIn('1,8%', card['situation'])
-        self.assertIn('раздела нет', card['situation'])
+        # The goal is the episode's task, never what the conversation went on to.
+        self.assertEqual(card['goal'], {'task': 'узнать тариф своего терминала', 'object': 'тариф'})
+        self.assertIn('Ты пишешь в чат поддержки на сайте банка.', card['situation'])
+        self.assertIn('Твоя задача: узнать тариф своего терминала. Речь о: тариф.', card['situation'])
+        # A reaction is what the customer did, in the words of its actions: an unknown action is no part of it.
+        self.assertEqual(card['reactions'][0]['actions'], ['report_obstacle', 'ask_human'])
+        self.assertIn(
+            'если инструкция не подходит или её нельзя выполнить: говоришь, что так сделать не можешь и что мешает '
+            'и просишь живого специалиста',
+            card['situation'],
+        )
         terminal = {'label': 'номер терминала', 'value': 'knows', 'basis': 'log', 'status': 'masked_in_source'}
         self.assertEqual(card['identifiers']['terminal'], terminal)
         # The log never settles the INN: no knowledge is drawn at random, the simulator's assumption says so.
@@ -81,7 +92,9 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
                 'status': 'not_established',
             },
         )
-        self.assertIn('ИНН и реквизиты организации: из настоящего разговора не известно', card['situation'])
+        # Identifiers are not in the brief: their values come from the bank the agent sees, when it is played.
+        self.assertNotIn('ИНН', card['situation'])
+        self.assertEqual(card['checks']['audit'], {'agentWords': [], 'criteriaWords': [], 'goalAhead': []})
         self.assertEqual((card['episode']['scope'], card['origin']), ('agent_only', 'Представительный набор'))
         self.assertEqual(card['criteria'][1]['observation'], 'tool')
         self.assertEqual(card['scenario'], scenario)
@@ -96,17 +109,20 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
                 {'role': 'assistant', 'content': 'Перейдите в раздел «Оборудование»'},
             ],
         }
-        reply = {'eligible': True, 'name': 'Заказ терминала', 'goal': 'Заказать терминал', 'episode': {'start': 1}}
+        reply = {'name': 'Заказ терминала', 'episode': {'start': 1}}
         answer = models.Reply(json.dumps(reply, ensure_ascii=False), 'm')
         with (
             patch.object(models, 'chat', AsyncMock(return_value=answer)) as asked,
             patch.object(deck_flow.world, 'templates', return_value=None),
             patch.object(deck_flow.inputs, 'sources', return_value=[]),
         ):
-            card = await deck_flow.build_card(topic(), chat, ['representative'], start=3)
+            card = await deck_flow.build_card(
+                topic(), chat, ['representative'], episode={'start': 3, 'task': 'заказать терминал'}
+            )
         self.assertEqual(json.loads(asked.await_args.args[1])['episodeStart'], 3)
         self.assertEqual((card['opening'], card['episode']['start']), ('Заказать терминал', 3))
         self.assertEqual(card['checks']['dropped']['episode'], 1)  # the extractor put it elsewhere
+        self.assertEqual(card['goal']['task'], 'заказать терминал')
 
     async def test_the_reader_decides_the_domain_and_the_extractors_doubt_stays_on_the_card(self):
         chat = {
@@ -130,7 +146,6 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         reply = {
             'domainDoubt': 'клиент платит как покупатель',
             'name': 'Оплата',
-            'goal': 'Оплатить',
             'episode': {'start': 1},
         }
         answer = models.Reply(json.dumps(reply, ensure_ascii=False), 'm')
@@ -139,8 +154,151 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
             patch.object(deck_flow.world, 'templates', return_value=None),
             patch.object(deck_flow.inputs, 'sources', return_value=[]),
         ):
-            card = await deck_flow.build_card(topic(), chat, ['representative'], start=1, end=2, agent=support.agent())
+            episode = {'start': 1, 'end': 2}
+            card = await deck_flow.build_card(topic(), chat, ['representative'], episode=episode, agent=support.agent())
         self.assertEqual(card['checks']['domainDoubt'], 'клиент платит как покупатель')
+
+    def test_the_profile_says_when_each_fact_is_told_what_a_reaction_reveals_and_what_trying_gives(self):
+        messages = [
+            {'role': 'user', 'content': 'Не проходит сверка итогов. Что делать?'},
+            {'role': 'assistant', 'content': 'Решить проблему помогут эти шаги: 1. Нажмите «Меню».'},
+            {'role': 'user', 'content': 'У меня интегрированный терминал, файл от инженера не запускается'},
+            {'role': 'assistant', 'content': 'Нажмите «Меню» и выберите «Сверка итогов»'},
+            {'role': 'user', 'content': 'Нет кнопки Меню, есть F# и цифры'},
+            {'role': 'assistant', 'content': 'С какой кассой работает терминал?'},
+            {'role': 'user', 'content': 'АТОЛ'},
+        ]
+        value = {
+            'name': 'Сверка итогов',
+            'episode': {'start': 1, 'entry': 'first_message'},
+            'facts': [
+                {
+                    'text': 'Сверка у тебя не проходит.',
+                    'status': 'knows',
+                    'said': 'opening',
+                    'n': 1,
+                    'quote': 'Не проходит сверка итогов',
+                },
+                {
+                    'text': 'У тебя интегрированный терминал.',
+                    'status': 'knows',
+                    'said': 'later',
+                    'n': 3,
+                    'quote': 'интегрированный терминал',
+                },
+                {'text': 'Касса у тебя АТОЛ.', 'status': 'believes', 'said': 'on_request', 'n': 7, 'quote': 'АТОЛ'},
+            ],
+            'observations': [
+                {
+                    'action': 'запустить файл от инженера',
+                    'result': 'не запускается',
+                    'n': 3,
+                    'quote': 'файл от инженера не запускается',
+                },
+                {
+                    'action': 'нажать «Меню» на терминале',
+                    'result': 'кнопки нет, есть F# и цифры',
+                    'n': 5,
+                    'quote': 'Нет кнопки Меню',
+                },
+            ],
+            'reactions': [
+                {
+                    'trigger': 'instruction',
+                    'actions': ['give_detail'],
+                    'agentN': 2,
+                    'agentQuote': 'эти шаги',
+                    'n': 3,
+                    'quote': 'интегрированный терминал',
+                },
+                {
+                    'trigger': 'instruction',
+                    'actions': ['report_obstacle'],
+                    'agentN': 4,
+                    'agentQuote': 'Нажмите',
+                    'n': 5,
+                    'quote': 'Нет кнопки Меню',
+                },
+            ],
+            'notEstablished': ['Модель терминала ######.'],
+        }
+        episode = {'start': 1, 'end': 7, 'task': 'разобраться, почему не проходит сверка итогов', 'object': 'сверка'}
+        card = cards.customer(value, {'id': 'd', 'messages': messages}, support.agent(), episode)
+        self.assertEqual(
+            [(k['text'], k['access'], k['disclose']) for k in card['knowledge']],
+            [
+                ('Сверка у тебя не проходит.', 'knows', 'opening'),
+                ('У тебя интегрированный терминал.', 'knows', 'when_relevant'),
+                ('Касса у тебя АТОЛ.', 'believes', 'on_request'),
+            ],
+        )
+        # What the customer tried before writing is told; what they reported trying the agent's steps is what trying
+        # gives the next customer too. A detail given after steps reports no try: the file is a try of their own.
+        self.assertEqual([o['when'] for o in card['observations']], ['before', 'during'])
+        self.assertEqual(
+            card['reactions'][0]['reveals'],
+            ['У тебя интегрированный терминал.', 'уже пробовал: запустить файл от инженера — не запускается'],
+        )
+        situation = card['situation']
+        sections = situation.split('\n')
+        self.assertLess(
+            sections.index('Уже есть в твоём первом сообщении:'), sections.index('- Сверка у тебя не проходит.')
+        )
+        self.assertIn(
+            'Расскажешь сам, когда это станет к месту, не всё сразу:\n- У тебя интегрированный терминал.', situation
+        )
+        self.assertIn(
+            'Скажешь, только если спросят:\n- Касса у тебя АТОЛ. (так ты считаешь, но можешь ошибаться)', situation
+        )
+        self.assertRegex(
+            situation,
+            r'Если агент предложит это сделать, вот что получится:\n'
+            r'- нажать «Меню» на терминале → кнопки нет, есть F\d и цифры',
+        )
+        # No mask is left for the customer: a short masked number is a fictional one, a long one is left out.
+        self.assertNotIn('#', situation)
+        self.assertIn('Модель терминала ….', situation)
+        self.assertEqual(card['checks']['masksFilled'], 2)
+
+    def test_the_brief_is_checked_for_the_agents_words_the_criteria_and_a_goal_ahead_of_the_customer(self):
+        messages = [
+            {'role': 'user', 'content': 'Не проходит сверка'},
+            {'role': 'assistant', 'content': 'Откройте раздел эквайринг и выберите пункт сверка итогов за день'},
+            {'role': 'user', 'content': 'У меня интегрированный терминал'},
+        ]
+        value = {
+            'name': 'Сверка',
+            'episode': {'start': 1},
+            'facts': [
+                {
+                    'text': 'Тебе сказали: откройте раздел эквайринг и выберите пункт сверка итогов.',
+                    'status': 'knows',
+                    'said': 'later',
+                    'n': 3,
+                    'quote': 'интегрированный терминал',
+                },
+                {
+                    'text': 'У тебя интегрированный терминал.',
+                    'status': 'knows',
+                    'said': 'later',
+                    'n': 3,
+                    'quote': 'интегрированный терминал',
+                },
+            ],
+        }
+        episode = {'start': 1, 'end': 3, 'task': 'провести сверку на интегрированном терминале'}
+        card = cards.customer(value, {'id': 'd', 'messages': messages}, support.agent(), episode)
+        rule = {'text': 'Агент просит выбрать пункт сверка итогов за день', 'quote': 'выбрать пункт'}
+        found = cards.audit(card, {'messages': messages}, [rule])
+        self.assertIn('откройте раздел эквайринг и выберите пункт', found['agentWords'])
+        self.assertEqual(found['criteriaWords'], [])
+        self.assertEqual(found['goalAhead'], ['У тебя интегрированный терминал.'])
+        deck = scenarios.checked([card | {'checks': {'audit': found}}, {'checks': {}, 'reactions': []}])
+        self.assertEqual(
+            deck, {'cards': 2, 'agentWords': 1, 'criteriaWords': 0, 'goalAhead': 1, 'identifierAnswers': {}}
+        )
+        asked = {'trigger': 'identifier_request', 'actions': ['dont_know']}
+        self.assertEqual(scenarios.checked([{'reactions': [asked]}])['identifierAnswers'], {'dont_know': 1})
 
     def test_filled_opening_may_change_only_the_masked_runs(self):
         self.assertEqual(cards._filled('Терминал ####', 'Терминал 1234'), 'Терминал 1234')
@@ -169,7 +327,7 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
             {'role': 'assistant', 'content': 'Перейдите в раздел «Эквайринг» и нажмите «Тарифы»'},
             {'role': 'user', 'content': 'Не вижу такого раздела'},
         ]
-        reaction = {'response': 'не нашёл раздел', 'agentN': 2, 'agentQuote': 'Перейдите в раздел', 'n': 3}
+        reaction = {'actions': ['report_obstacle'], 'agentN': 2, 'agentQuote': 'Перейдите в раздел', 'n': 3}
         value = {
             'identifiers': {
                 'organization': {'status': 'knows', 'n': 1, 'quote': 'мерчанту Ромашка Тверская'},
@@ -178,6 +336,7 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
             'reactions': [
                 {**reaction, 'trigger': 'handoff_offer', 'quote': 'Не вижу такого раздела'},
                 {**reaction, 'trigger': 'instruction', 'quote': 'Не вижу такого раздела'},
+                {**reaction, 'trigger': 'instruction', 'actions': ['shrug'], 'quote': 'Не вижу такого раздела'},
             ],
             'hypotheses': [
                 {'trigger': 'instruction', 'response': 'попробуешь шаги'},
@@ -256,17 +415,18 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         ]
         value = {
             'identifiers': {'terminal': 'знает', 'organization': ['knows']},
-            'circumstances': [
-                {'text': 'терминал не печатает чек', 'n': 1, 'quote': 'Не печатает чек'},
-                {'text': 'не видит раздела тарифов', 'n': 5, 'quote': 'Не вижу такого раздела'},
+            'facts': [
+                {'text': 'терминал не печатает чек', 'status': 'knows', 'n': 1, 'quote': 'Не печатает чек'},
+                {'text': 'не видит раздела тарифов', 'status': 'knows', 'n': 5, 'quote': 'Не вижу такого раздела'},
             ],
         }
         kept, dropped = cards.grounded(value, messages, end=3, agent=support.agent())
-        self.assertEqual([x['n'] for x in kept['circumstances']], [1])
-        self.assertEqual((dropped['circumstances'], dropped['afterEpisode']), (1, 1))
+        self.assertEqual([x['n'] for x in kept['facts']], [1])
+        self.assertEqual((dropped['facts'], dropped['afterEpisode']), (1, 1))
         self.assertEqual(set(kept['identifiers']), {'terminal', 'organization'})
-        reply = {'name': 'Чек', 'goal': 'Починить печать чека', 'episode': {'start': 1}, **value}
-        card = cards.customer(reply, {'id': 'd', 'messages': messages}, support.agent(), start=1, end=3)
+        reply = {'name': 'Чек', 'episode': {'start': 1}, **value}
+        episode = {'start': 1, 'end': 3, 'task': 'починить печать чека'}
+        card = cards.customer(reply, {'id': 'd', 'messages': messages}, support.agent(), episode)
         self.assertEqual((card['episode']['end'], card['style']['messages']), (3, 2))  # the tariff question is not it
         self.assertEqual(cards.episode_texts(card, {'id': 'd', 'messages': messages})[1][-1], messages[2]['content'])
 

@@ -8,7 +8,7 @@ import { longDay, plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
 import { download, secondLine } from "../../lab/problemReport";
 import { useReview, useTurns, type Decision, type Example } from "../../lab/problems";
-import type { CustomerDetails, Rule } from "../../lab/types";
+import type { CustomerDetails, Rule, Stop } from "../../lab/types";
 import { Conversation, type Mark } from "../../product/Conversation";
 import { Facts } from "../../product/Facts";
 import { MarkNo } from "../../product/MarkNo";
@@ -21,6 +21,15 @@ import { VerdictWord } from "./Rows";
 import { criteriaByRule, type Named } from "./model";
 
 type Tab = "talk" | "details";
+/** Why a simulated conversation stopped, in words (backend: simulation.play); the budget is no outcome of the customer. */
+const STOP: Record<Stop, string> = {
+  resolved: "клиент: решено",
+  instruction: "клиент получил инструкцию",
+  gave_up: "клиент ушёл без решения",
+  ended: "клиент закончил",
+  handed_off: "передан оператору",
+  budget: "лимит ходов",
+};
 
 /**
  * Whose bank the customer's details came from, in a word; unknown ones are a warning: the customer was told it has
@@ -280,6 +289,7 @@ export function Dialog({
                 : []),
               { label: "Ваши ответы", value: reviewed ? `${reviewed}\u00a0из\u00a0${broken}` : "ещё нет" },
               ...(row.details ? [detailsFact(row.details)] : []),
+              ...(row.stop ? [{ label: "Конец разговора", value: STOP[row.stop] ?? row.stop }] : []),
             ]}
           />
         </div>

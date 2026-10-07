@@ -120,11 +120,11 @@ class EachRoleTests(RoleCase):
         )
         self.assertEqual(answer.value, {'c1': {'serious': True, 'reason': 'Обидит клиента.'}})
 
-    async def test_a_card_has_a_name_a_goal_and_the_start_of_its_episode(self):
+    async def test_a_card_has_a_name_and_the_start_of_its_episode(self):
         talk = {'id': 'd', 'messages': [{'role': 'user', 'content': 'Какой у меня тариф?'}]}
-        usable = {'eligible': True, 'name': 'Тариф', 'goal': 'Узнать тариф', 'episode': {'start': 1}}
+        usable = {'name': 'Тариф', 'episode': {'start': 1}}
         answer = await self.asked(
-            card.CARD, lambda: card.card('Тарифы', talk, support.agent()), {**usable, 'goal': ' '}, usable
+            card.CARD, lambda: card.card('Тарифы', talk, support.agent()), {**usable, 'name': ' '}, usable
         )
         self.assertEqual(answer.value['name'], 'Тариф')
 
@@ -180,7 +180,7 @@ class EachRoleTests(RoleCase):
         self.assertIn(
             'Реквизиты (называй их, если агент спросит номер терминала, организацию или ИНН): ИНН 7701234567', system
         )
-        self.assertIn('Твоя манера общения (она важнее правил о длине и стиле ниже): торопится', system)
+        self.assertIn('Твоя манера общения (она важнее манеры, описанной в ситуации): торопится', system)
         self.assertNotIn('response_format', requests[0])
         roles_asked = [(line['role'], line['version']) for line in storage.calls.listed('run:test')]
         self.assertEqual(

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Check, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
-import { count, plural } from "../../lab/format";
+import { count } from "../../lab/format";
 import { BY_CRITERIA } from "../../lab/checks";
 import { DEFAULT_PERSONA } from "../../lab/look";
 import { pickOf, type Pick } from "../../lab/runs";
@@ -61,7 +61,9 @@ export function PlayDialog({
   }, [open, preset, presetTypes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const deck = pickOf(cards, pick, chosen);
-  const total = deck.length * types.length * Number(repeats);
+  // Types play the stress set; a scenario of the representative set plays once, as its customer wrote.
+  const typed = (c: (typeof cards)[number]) => !c.sets?.length || c.sets.includes("stress");
+  const total = deck.reduce((n, c) => n + (typed(c) ? types.length : 1), 0) * Number(repeats);
   const toggle = <T,>(list: Set<T>, v: T) => {
     const next = new Set(list);
     if (next.has(v)) next.delete(v);
@@ -210,6 +212,10 @@ export function PlayDialog({
               );
             })}
           </div>
+          <p className="mt-1.5 text-small text-fg-3">
+            Типы играют сценарии стрессового набора. Представительный набор клиент играет так, как писал настоящий
+            клиент.
+          </p>
         </Block>
         <Block label="Повторы">
           <Segmented
@@ -233,8 +239,8 @@ export function PlayDialog({
           />
         </Block>
         <p className="mt-5 text-small text-fg-3">
-          {count(deck.length, "сценарий", "сценария", "сценариев")} × {types.length}{" "}
-          {plural(types.length, "тип", "типа", "типов")} клиента
+          {count(deck.length, "сценарий", "сценария", "сценариев")}
+          {deck.some(typed) ? `, стрессовые × ${count(types.length, "тип", "типа", "типов")} клиента` : ""}
           {repeats !== "1" ? ` × ${repeats} раза` : ""} ={" "}
           <span className="text-fg">{count(total, "разговор", "разговора", "разговоров")}</span>
         </p>

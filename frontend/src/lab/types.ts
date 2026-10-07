@@ -50,6 +50,7 @@ export type Message = {
  * the stand's own fixtures, or the organization of the conversation's EPK on the IFT stand. Not known: the customer
  * was told it has none at hand (the fixtures could not be read, the EPK is not described, or there is no EPK).
  */
+export type Stop = "resolved" | "instruction" | "gave_up" | "ended" | "handed_off" | "budget";
 export type CustomerDetails = { from: "world" | "fixtures" | "epk"; epk?: string | null; known: boolean; text: string };
 export type Item = {
   cardId: string;
@@ -69,6 +70,8 @@ export type Item = {
   world?: boolean;
   /** What the customer could say of its organization, and whose bank it came from (backend: customer_details). */
   customerDetails?: CustomerDetails;
+  /** Why the conversation stopped: the customer's reason, a handoff, or the budget of turns (backend: play). */
+  stop?: Stop | null;
   /** The criteria frozen when the conversation was played: a criterion that never applied in it is named only here. */
   criteria?: Criterion[];
 };
@@ -111,11 +114,47 @@ export type World = {
   terminals: { nameForClient: string; terminalId: string; stateCode: string }[];
   tools: Record<string, unknown>;
 };
+/**
+ * The profile of a card's customer (backend/lab/domain/cards.py, customer): what they know and when they say it,
+ * what they already tried and what trying gives, how they reacted to the agent; every item cites its customer message
+ * (n) by a quote of the log. Cards built before the profile have none of it, only the situation.
+ */
+export type Knowledge = {
+  text: string;
+  access: "knows" | "believes" | "does_not_know";
+  disclose: "opening" | "when_relevant" | "on_request";
+  n: number;
+  quote: string;
+};
+export type Observation = {
+  action: string;
+  result: string;
+  when: "before" | "during";
+  disclose: Knowledge["disclose"];
+  n: number;
+  quote: string;
+};
+export type Reaction = {
+  trigger: string;
+  actions: string[];
+  reveals: string[];
+  agentQuote: string;
+  n: number;
+  quote: string;
+};
+/** What the code found in the text the simulator reads (cards.audit): empty lists are clean. */
+export type Audit = { agentWords: string[]; criteriaWords: string[]; goalAhead: string[] };
 export type Card = {
   id: string;
   topic: string;
   name: string;
   situation: string;
+  goal?: { task: string; object: string };
+  knowledge?: Knowledge[];
+  notEstablished?: string[];
+  observations?: Observation[];
+  reactions?: Reaction[];
+  checks?: { audit?: Audit };
   opening: string;
   criteria: Criterion[];
   origin: string;
@@ -196,7 +235,19 @@ export type Discover = {
   };
 };
 /** The scenarios, built from the errors of one check and remembering it. */
-export type Deck = { check: Check; cards: Card[]; createdAt?: string };
+/**
+ * The deck's checks in counts (backend/lab/domain/scenarios.py, checked): cards whose text for the customer copies the
+ * agent's words or the criteria, or names in the goal what the customer said later; and how customers answered when
+ * the agent asked for an identifier, by action.
+ */
+export type DeckChecks = {
+  cards: number;
+  agentWords: number;
+  criteriaWords: number;
+  goalAhead: number;
+  identifierAnswers: Record<string, number>;
+};
+export type Deck = { check: Check; cards: Card[]; createdAt?: string; checks?: DeckChecks };
 export type Job = {
   kind: string | null;
   running: boolean;
