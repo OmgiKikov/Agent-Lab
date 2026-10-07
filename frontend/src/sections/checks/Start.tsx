@@ -105,12 +105,14 @@ export function ToneStart() {
   const { state } = useLabState();
   const previous = usePrevious("tone");
   const job = state?.job;
-  if (job?.running && job.kind === "tone-check")
+  // A launch of this check is a check under way too: its report shows how far it got.
+  const launch = job?.running && job.kind === "launch" && job.input?.check === "tone" ? job.progress.launch : null;
+  if (job?.running && (job.kind === "tone-check" || launch))
     return (
       <Empty
         title="Проверяем разговоры"
         action={
-          <Link to={toneCheckLink("checking")} className={primary}>
+          <Link to={launch ? launchLink("tone", launch) : toneCheckLink("checking")} className={primary}>
             Открыть проверку
             <ArrowRight aria-hidden className="size-4" />
           </Link>
@@ -146,8 +148,9 @@ export function ToneStart() {
         </Link>
       }
     >
-      Загрузите выгрузку чата и правила общения. Из правил соберём критерии и проверим по ним настоящие разговоры.
-      Подключать агента не нужно.
+      {needsOf("tone", state).every((need) => need.value)
+        ? "Разговоры и критерии готовы. В «Новой проверке» выберите, сколько разговоров проверить и что именно."
+        : "Загрузите выгрузку чата и правила общения. Из правил соберём критерии и проверим по ним настоящие разговоры. Подключать агента не нужно."}
       {previous && <PreviousCheck check="tone" line={previous.line} className="mt-3" />}
     </Empty>
   );
@@ -161,7 +164,7 @@ export function AccuracyStart() {
   const { state } = useLabState();
   const previous = usePrevious("code");
   const job = state?.job;
-  if (job?.running && job.kind === "discover")
+  if (job?.running && (job.kind === "discover" || (job.kind === "launch" && job.input?.check === "code")))
     return (
       <Empty title="Проверяем разговоры">
         Модель извлекает критерии из кода агента и проверяет по ним разговоры. Итог появится здесь, страницу можно
