@@ -41,7 +41,11 @@ function ExportDialog({
         }
       }}
       title="Разговор из выгрузки"
-      sub="Разговор из текущей выгрузки"
+      sub={
+        query.data
+          ? `${count(query.data.messages.length, "реплика", "реплики", "реплик")} · как он записан в файле, до проверки`
+          : "Как он записан в файле, до проверки"
+      }
     >
       <div className="p-5 sm:p-7">
         {query.isPending ? (
