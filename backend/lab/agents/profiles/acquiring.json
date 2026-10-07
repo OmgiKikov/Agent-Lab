@@ -34,8 +34,8 @@
     "Подключение и отключение эквайринга": []
   },
   "identifiers": [
-    {"key": "terminal", "label": "номер терминала"},
-    {"key": "organization", "label": "ИНН и реквизиты организации"}
+    {"key": "terminal", "label": "номер терминала", "value": "(?:\\D*\\d){5}|[#*]"},
+    {"key": "organization", "label": "ИНН и реквизиты организации", "value": "(?:\\D*\\d){5}|[#*]"}
   ],
   "export": {
     "agentCode": "ACQUIRING_AGENT",

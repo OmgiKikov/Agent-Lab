@@ -63,23 +63,33 @@ def opening(card: dict, persona: str) -> str:
     return card['opening'] if persona == personas.DEFAULT else card['openings'][persona]
 
 
+def _bank(
+    card: dict, agent: agents.HttpAgent, shapes: dict | None, test_data: dict, conversation_id: str
+) -> tuple[dict, dict | None]:
+    """Whose bank the agent sees in this conversation and its client: the scenario's world when the mocks took it, the
+    stand's own fixtures when they did not, and on the IFT stand the organization of the conversation's EPK as the
+    settings describe it; no client when it is unknown there."""
+    if test_data:
+        return {'from': 'world'}, card.get('world')
+    if agent.mocked:
+        return {'from': 'fixtures'}, scenario_world.fixture_client(shapes)
+    epk, described = agent.client(conversation_id)
+    return {'from': 'epk', 'epk': epk}, scenario_world.epk_client(described)
+
+
+def _told(found: dict, client: dict | None, card: dict) -> dict:
+    text = scenario_world.customer_profile(client, card.get('identifiers'))
+    return found | {'known': bool(text), 'text': text or scenario_world.NO_DETAILS}
+
+
 def customer_details(
     card: dict, agent: agents.HttpAgent, shapes: dict | None, test_data: dict, conversation_id: str
 ) -> dict:
-    """What the customer can say of its organization and terminals: the client the agent's bank holds in this
-    conversation, as far as the card says the customer knows it (identifiers). The bank is the scenario's world when
-    the mocks took it, the stand's own fixtures when they did not, and on the IFT stand the organization of the
-    conversation's EPK as the settings describe it. {from: world | fixtures | epk, epk, known, text}; known is false
-    when the bank's client is unknown here: the customer is then told it has no details at hand, never made-up ones."""
-    if test_data:
-        found, client = {'from': 'world'}, card.get('world')
-    elif agent.mocked:
-        found, client = {'from': 'fixtures'}, scenario_world.fixture_client(shapes)
-    else:
-        epk, described = agent.client(conversation_id)
-        found, client = {'from': 'epk', 'epk': epk}, scenario_world.epk_client(described)
-    text = scenario_world.customer_profile(client, card.get('identifiers'))
-    return found | {'known': bool(text), 'text': text or scenario_world.NO_DETAILS}
+    """What the customer can say of its organization and terminals: the client of the agent's bank in this
+    conversation (_bank), as far as the card says the customer knows it (identifiers). {from: world | fixtures | epk,
+    epk, known, text}; known is false when the bank's client is unknown here: the customer is then told it has no
+    details at hand, never made-up ones."""
+    return _told(*_bank(card, agent, shapes, test_data, conversation_id), card)
 
 
 async def play(card: dict, agent: agents.HttpAgent, item: dict, changed: Callable[[], None]) -> None:
@@ -90,12 +100,15 @@ async def play(card: dict, agent: agents.HttpAgent, item: dict, changed: Callabl
     conversation = item['conversation']
     shapes = world.templates(connection.repo()) if agent.mocked else None
     test_data = scenario_world.overrides(card.get('world'), shapes) if agent.mocked else {}
-    found = customer_details(card, agent, shapes, test_data, item['conversationId'])
+    bank, client = _bank(card, agent, shapes, test_data, item['conversationId'])
+    found = _told(bank, client, card)
     details = found['text']
     # Whether the conversation ran to its end: only such a conversation may be judged again (ended).
     item.update(world=bool(test_data), customerDetails=found, ended=False)
     persona = item.get('persona') or personas.DEFAULT
     line, from_log = opening(card, persona), persona == personas.DEFAULT
+    if bank['from'] != 'world':  # a world was made with the opening's numbers; any other bank has its own
+        line = scenario_world.bound(line, card.get('openingValues') or [], client)
     stop = None
     try:
         for turn in range(1, MAX_AGENT_TURNS + 1):
@@ -153,7 +166,9 @@ def new_run(key: str, config: dict, label: str, repeats: int, persona_ids: list[
     }
 
 
-def new_item(card: dict, persona: str, attempt: int) -> dict:
+def new_item(card: dict, persona: str, attempt: int, sample: int | None = None) -> dict:
+    """A conversation of a run before it is played; one of the representative set names the size of the deck's sample
+    (sample), so the run's metric knows whether it played all of it."""
     return {
         'cardId': card['id'],
         'persona': persona,
@@ -163,6 +178,7 @@ def new_item(card: dict, persona: str, attempt: int) -> dict:
         'origin': card['origin'],
         'sets': list(card.get('sets') or []),
         'weight': card.get('weight'),
+        **({'sample': sample} if sample and 'representative' in (card.get('sets') or []) else {}),
         'scenario': card.get('scenario'),
         'situation': card['situation'],
         'criteria': deepcopy(card['criteria']),
@@ -198,7 +214,8 @@ async def run(
         for card in chosen
         if persona in personas.plays(card, persona_ids)
     ]
-    record['items'] = [new_item(card, persona, attempt) for card, persona, attempt in plan]
+    size = scenarios.sample()
+    record['items'] = [new_item(card, persona, attempt, size) for card, persona, attempt in plan]
     # The run is measured by the criteria of the check its deck was built from, and remembers it.
     record['check'] = scenarios.check() or checks.of_run(record)
     storage.runs.create(record)

@@ -138,6 +138,8 @@ function SimResult() {
                 `. С поправкой на частоту сценариев без ошибок ${m.sets.representative.weighted}%`}
               {m.sets.representative?.incomplete &&
                 ". Поправку на частоту сценариев не считаем: у части сценариев выборки нет карточки"}
+              {m.sets.representative?.partial &&
+                ". Поправку на частоту сценариев не считаем: сыграна только часть представительного набора"}
             </p>
           )}
           <Matrix run={run} state={state} />

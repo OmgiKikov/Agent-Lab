@@ -40,7 +40,7 @@ def profile_view() -> dict:
         raise HTTPException(404, str(error)) from error
 
 
-@router.put('/api/profile')
+@router.post('/api/profile')
 def save_profile(jobs: Jobs, payload: dict = Body(...)) -> dict:
     """A person's profile of the agent; the conversations are read again under it on the next build."""
     if jobs.state['running']:

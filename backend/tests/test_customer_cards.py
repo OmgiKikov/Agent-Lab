@@ -224,6 +224,8 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
                 'Модель терминала ######.',
                 'Неизвестно, знаешь ли ты номер своего терминала.',
                 'Неизвестно, знаешь ли ты ИНН и реквизиты своей организации.',
+                'Неизвестно, знаешь ли ты ИНН.',
+                'Не установлено, доступна ли история операций терминала по его номеру.',
             ],
         }
         episode = {'start': 1, 'end': 7, 'task': 'разобраться, почему не проходит сверка итогов', 'object': 'сверка'}
@@ -264,8 +266,12 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Модель терминала ….', situation)
         self.assertEqual(card['checks']['masksFilled'], 2)
         # What the log leaves open about an identifier is not said twice: its value comes from the bank's data.
-        self.assertEqual(card['notEstablished'], ['Модель терминала ….'])
-        self.assertEqual(card['checks']['dropped']['notEstablished'], 2)
+        # One that only mentions an identifier is about something else and stays.
+        self.assertEqual(
+            card['notEstablished'],
+            ['Модель терминала ….', 'Не установлено, доступна ли история операций терминала по его номеру.'],
+        )
+        self.assertEqual(card['checks']['dropped']['notEstablished'], 3)
 
     def test_the_brief_is_checked_for_the_agents_words_the_criteria_and_a_goal_ahead_of_the_customer(self):
         messages = [
@@ -359,6 +365,18 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dropped['identifiers'], 2)
         self.assertEqual([r['trigger'] for r in kept['reactions']], ['instruction'])
         self.assertNotIn('hypotheses', kept)  # a reaction the log never showed is no part of the customer
+
+    def test_what_a_quote_of_an_identifier_must_show_is_the_agent_profiles(self):
+        messages = [{'role': 'user', 'content': 'Мой логин customer_alpha, не могу войти'}]
+        agent = profile.checked({'domain': 'Вход в банк', 'identifiers': [{'key': 'login', 'label': 'логин'}]})
+        value = {'identifiers': {'login': {'status': 'knows', 'n': 1, 'quote': 'логин customer_alpha'}}}
+        self.assertEqual(cards.grounded(value, messages, agent=agent)[0]['identifiers']['login']['status'], 'knows')
+        # The acquiring agent's identifiers are numbers: a name is no terminal number.
+        named = {'identifiers': {'terminal': {'status': 'knows', 'n': 1, 'quote': 'логин customer_alpha'}}}
+        found = cards.grounded(named, messages, agent=support.agent())[0]['identifiers']['terminal']
+        self.assertEqual(found['status'], 'not_established')
+        with self.assertRaisesRegex(ValueError, 'не регулярное выражение'):
+            profile.checked({'domain': 'x', 'identifiers': [{'key': 'login', 'label': 'логин', 'value': '('}]})
 
     def test_a_quote_keeps_its_negation_word_starts_and_masks(self):
         found = cards._found
@@ -470,3 +488,9 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         value = metric.metric([{**failed, 'status': 'FAIL'}, {**passed, 'status': 'PASS'}])
         self.assertEqual(value['sets']['stress'], {'accuracy': 0, 'passed': 0, 'measured': 1})
         self.assertEqual(value['sets']['representative'], {'accuracy': 50, 'passed': 1, 'measured': 2, 'weighted': 25})
+        # A run of part of the deck's sample (here 1 of its 2 cards) gives no estimate for the export.
+        alone = simulation.new_item({**card, 'id': 'd', 'sets': ['representative'], 'weight': 1.0}, 'default', 1, 2)
+        part = metric.metric([{**alone, 'status': 'PASS'}])['sets']['representative']
+        self.assertEqual((part['partial'], 'weighted' in part), (True, False))
+        whole = [{**failed, 'sample': 2, 'status': 'FAIL'}, {**alone, 'status': 'PASS'}]
+        self.assertEqual(metric.metric(whole)['sets']['representative']['weighted'], 25)

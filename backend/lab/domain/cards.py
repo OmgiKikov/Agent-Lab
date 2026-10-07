@@ -95,6 +95,8 @@ TRIGGER_NEEDS = {
 }
 TRANSITION = re.compile(r'`\s*`\s*`\s*transition-code\s*([\w-]*)\s*`\s*`\s*`\.?')
 WORDS = re.compile(r'\w+')
+# A statement of whether the customer knows something, as the extractor words it in the second person.
+KNOWING = re.compile(r'\b(знаешь|знает|знаете|помнишь|помнит|известен ли тебе|известны ли тебе|есть ли у тебя)\b', re.I)
 SHINGLE = 6  # words in a row: a copied phrase, not a shared term
 
 
@@ -138,9 +140,10 @@ def _found(quote: object, text: str, role: str) -> bool:
     return isinstance(quote, str) and quotes.spoken(quote, text, masks=role == 'user')
 
 
-def _holds_value(quote: str) -> bool:
-    """A quote that carries an identifier itself: five or more digits, or a value the export masked."""
-    return len(re.sub(r'\D', '', quote)) >= 5 or bool(MASK.search(quote))
+def _holds_value(quote: str, identifier: dict) -> bool:
+    """A quote that carries the identifier's value itself, as the agent's profile describes it (value); without a
+    description any quote of the customer does."""
+    return bool(re.search(identifier['value'], quote)) if identifier.get('value') else bool(quote.strip())
 
 
 def _asks_for(agent: dict | None) -> re.Pattern:
@@ -209,11 +212,12 @@ def grounded(
     kept['notEstablished'] = [str(x) for x in value.get('notEstablished') or [] if str(x).strip()]
     given = value.get('identifiers') if isinstance(value.get('identifiers'), dict) else {}
     kept['identifiers'] = {}
-    for key in (x['key'] for x in (agent or {}).get('identifiers') or []):
+    for identifier in (agent or {}).get('identifiers') or []:
+        key = identifier['key']
         item = given.get(key) if isinstance(given.get(key), dict) else {}  # a malformed one is not established
         status = item.get('status')
         # Knowing it means the customer typed the value: a company's name is not its INN.
-        shown = status == 'does_not_know' or _holds_value(str(item.get('quote') or ''))
+        shown = status == 'does_not_know' or _holds_value(str(item.get('quote') or ''), identifier)
         cited = said(item.get('n'), item.get('quote'), 'user')
         if status in ('knows', 'masked_in_source', 'does_not_know') and shown and cited:
             kept['identifiers'][key] = {'status': status, 'quote': item['quote']}
@@ -231,6 +235,15 @@ def _filled(opening: str, filled: object) -> str | None:
         return None
     pattern = '.{1,60}?'.join(re.escape(part) for part in MASKED_VALUE.split(opening.strip()))
     return filled.strip() if re.fullmatch(pattern, filled.strip(), re.S) else None
+
+
+def _values(raw: str, opening: str) -> list[str]:
+    """What stands in the opening where the log's opening has a masked run: the values the card made up."""
+    parts = MASKED_VALUE.split(raw.strip())
+    if len(parts) < 2:
+        return []
+    found = re.fullmatch('(.{1,60}?)'.join(re.escape(part) for part in parts), opening.strip(), re.S)
+    return [value for value in found.groups() if not MASK.search(value)] if found else []
 
 
 def _digits(opening: str, seed: str) -> str:
@@ -447,9 +460,8 @@ def customer(value: dict, dialogue: dict, agent: dict, episode: dict | None = No
         reactions.append(
             {key: r[key] for key in ('trigger', 'actions', 'agentN', 'agentQuote', 'n', 'quote')} | {'reveals': reveals}
         )
-    # What the log leaves open about an identifier is the identifier's own (identifiers): its value comes from the bank.
-    labels = [_stems(x['label']) for x in agent['identifiers']]
-    established = [x for x in kept['notEstablished'] if not any(label and label <= _stems(x) for label in labels)]
+    # Whether the customer knows an identifier is the identifier's own (identifiers): its value comes from the bank.
+    established = [x for x in kept['notEstablished'] if not _knows_identifier(x, agent)]
     dropped['notEstablished'] += len(kept['notEstablished']) - len(established)
     texts = [m['content'] for m in messages[start - 1 : end] if m['role'] == 'user']
     quoted = {x['quote'] for x in kept['reactions']}
@@ -478,6 +490,8 @@ def customer(value: dict, dialogue: dict, agent: dict, episode: dict | None = No
         'style': style(texts),
         'samples': samples,
         'opening': opening,
+        # Made up for the masks of the opening: the bank's own values replace them when the conversation is played.
+        'openingValues': _values(texts[0], opening),
         'checks': {
             'dropped': dict(dropped),
             'openingFilled': False if not MASK.search(texts[0]) else 'model' if filled else 'digits',
@@ -498,6 +512,19 @@ def _shingles(text: str) -> set[tuple[str, ...]]:
 def _stems(text: str) -> set[str]:
     """The content words of a text by their first five letters: «терминала» is «терминал»."""
     return {word[:5] for word in WORDS.findall(text.lower()) if len(word) >= 5}
+
+
+def _knows_identifier(text: str, agent: dict) -> bool:
+    """Whether an open question is whether the customer knows one of the agent's identifiers: it names the identifier
+    by any part of its label («ИНН и реквизиты организации»: «ИНН», or «реквизиты организации») and asks what the
+    customer knows. One that only mentions it («история операций терминала по его номеру») stays."""
+    found = {word[:5] for word in WORDS.findall(text.lower())}
+    for identifier in agent['identifiers']:
+        for part in re.split(r',|\s+и\s+', identifier['label'].lower()):
+            words = {word[:5] for word in WORDS.findall(part) if len(word) >= 3}
+            if words and words <= found and KNOWING.search(text):
+                return True
+    return False
 
 
 def audit(card: dict, dialogue: dict, criteria: list[dict]) -> dict:

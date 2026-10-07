@@ -67,7 +67,11 @@ def metric(items: list[dict]) -> dict:
         value['sets'] = {key: _accuracy([i['status'] for i in found]) for key, found in by_set.items()}
         representative = by_set.get('representative', [])
         sampled = [i for i in representative if i.get('weight')]
-        if sampled and len(sampled) == len(representative):
+        # A run that played part of the sample (sample: its size in the deck) stands for no export either.
+        size = next((i['sample'] for i in representative if i.get('sample')), None)
+        if size and len({i['cardId'] for i in representative}) < size:
+            value['sets']['representative']['partial'] = True
+        elif sampled and len(sampled) == len(representative):
             measured_weight = sum(i['weight'] for i in sampled if i['status'] in DECIDED)
             passed_weight = sum(i['weight'] for i in sampled if i['status'] == 'PASS')
             value['sets']['representative']['weighted'] = (

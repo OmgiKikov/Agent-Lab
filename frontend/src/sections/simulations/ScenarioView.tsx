@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ArrowUpRight, Building2, Database, Play } from "lucide-react";
 import { criterionLink, runLink, type Check } from "../../app/links";
@@ -7,9 +7,11 @@ import { duty } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { count, longDay, time } from "../../lab/format";
 import { personaName } from "../../lab/look";
+import { useTurns, type Example } from "../../lab/problems";
 import { isRunning, runTitle } from "../../lab/runs";
 import { firstSentence, runsOf, type Named, type Played, type ScenarioRecord } from "../../lab/scenarios";
 import type { Card, Criterion as CardCriterion, LabState, Persona } from "../../lab/types";
+import { Conversation } from "../../product/Conversation";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Label } from "../../ui/Label";
@@ -131,6 +133,32 @@ function Results({
   );
 }
 
+/**
+ * The real conversation the scenario was built from, folded and fetched when opened: any conversation of the export,
+ * whether the check sampled it or not (the catalog's sample reaches beyond the check's).
+ */
+function Source({ id }: { id: string }) {
+  const [open, setOpen] = useState(false);
+  const { turns, loading, error } = useTurns(open ? ({ source: "log", dialogueId: id } as Example) : undefined);
+  return (
+    <details className="group mt-2" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className={summaryClass}>
+        Настоящий разговор, из которого собран
+        <Fold />
+      </summary>
+      <div className="mt-3 rounded-sheet bg-inset px-4 py-4 sm:px-6">
+        {loading ? (
+          <Skeleton className="h-24" />
+        ) : error ? (
+          <p className="text-small text-bad">Не удалось загрузить разговор.</p>
+        ) : turns ? (
+          <Conversation turns={turns} />
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 /** One criterion the runs will check: its number and name, linked to the check's criteria, or its duty. */
 function CriterionRow({ x, own, check }: { x: CardCriterion; own?: Named; check: Check | null }) {
   if (!own?.c || !check)
@@ -229,15 +257,6 @@ export function ScenarioView({
           >
             Сыграть этот сценарий
           </Button>
-          {card.sourceDialogueId && check && (
-            <Link
-              to={dialogOf({ source: "log", dialogueId: card.sourceDialogueId, check })}
-              className="inline-flex items-center gap-1 text-small text-fg-2 underline decoration-line-strong underline-offset-4 hover:text-fg"
-            >
-              Настоящий разговор, из которого собран
-              <ArrowRight aria-hidden className="size-3.5" />
-            </Link>
-          )}
         </div>
         <Section label="Результаты">
           {record ? <Results record={record} state={state} named={named} onPlay={onPlay} /> : pending}
@@ -253,6 +272,7 @@ export function ScenarioView({
               <p className="mt-2 max-w-[66ch] whitespace-pre-line text-read text-fg-2">{card.situation}</p>
             </details>
           )}
+          {card.sourceDialogueId && <Source id={card.sourceDialogueId} />}
         </Section>
         <Section label="Клиент начинает так">
           <div className="mt-3 space-y-3 rounded-sheet bg-inset px-4 py-4 sm:px-6">

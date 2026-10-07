@@ -9,7 +9,7 @@ import support
 
 from lab import agents, storage
 from lab.agents.http import HttpAgent, epk_of, prod_request
-from lab.domain import world
+from lab.domain import cards, world
 from lab.flows import connection, simulation
 
 # The stand's fixture answers, as agents.world.templates reads them: the client every test of the stand talks as.
@@ -104,6 +104,18 @@ class BankOfTheConversationTests(unittest.TestCase):
         self.assertIsNone(world.fixture_client({}))
         self.assertIsNone(world.epk_client(None))
 
+    def test_the_numbers_made_up_for_the_openings_masks_become_the_banks_own(self):
+        raw = 'Терминал ######## не работает, ИНН ##########, оплата ####'
+        opening = 'Терминал 48213907 не работает, ИНН 7799999999, оплата 1500'
+        values = cards._values(raw, opening)
+        self.assertEqual(values, ['48213907', '7799999999', '1500'])
+        client = world.fixture_client(FIXTURES)
+        self.assertEqual(
+            world.bound(opening, values, client), 'Терминал 12345678 не работает, ИНН 7701234567, оплата 1500'
+        )
+        self.assertEqual(world.bound(opening, values, None), opening)  # an unknown bank changes nothing
+        self.assertEqual(cards._values('Без масок', 'Без масок'), [])
+
     def test_the_conversation_talks_as_the_epk_its_customer_is_told_of(self):
         support.lab(self)
         for conversation_id in ('a', 'b', 'c', 'dd'):
@@ -151,7 +163,11 @@ class IftAgent:
     def client(self, conversation_id: str) -> tuple[str | None, dict | None]:
         return '111', DESCRIBED
 
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
     async def say(self, conversation_id: str, message: str, world: dict) -> dict:
+        self.sent.append(message)
         return {'text': 'Назовите ИНН', 'status': '200', 'ok': True, 'options': [], 'events': []}
 
 
@@ -164,12 +180,13 @@ class PlayedConversationTests(unittest.IsolatedAsyncioTestCase):
             'topic': 'topic',
             'origin': 'log',
             'situation': 'situation',
-            'opening': 'Какой у меня тариф?',
+            'opening': 'Какой тариф у терминала 48213907?',
+            'openingValues': ['48213907'],
             'criteria': [],
             'world': scenario_world(),
             'identifiers': KNOWS,
         }
-        told = []
+        told, agent = [], IftAgent()
 
         async def customer(scenario: dict, conversation: list[dict], details: str = '', persona: str | None = None):
             told.append(details)
@@ -181,7 +198,7 @@ class PlayedConversationTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(simulation.scenarios, 'deck', return_value=[card]),
             patch.object(simulation.connection, 'ways', return_value={'prod': {'name': 'ИФТ'}}),
-            patch.object(simulation.connection, 'connect', return_value=IftAgent()),
+            patch.object(simulation.connection, 'connect', return_value=agent),
             patch.object(simulation, 'customer_says', side_effect=customer),
             patch.object(simulation, 'evaluate', side_effect=evaluate),
         ):
@@ -189,6 +206,8 @@ class PlayedConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(told), {'Твоя организация: ООО «Тест», ИНН 7712345678. Терминалы: номер 11112222.'})
         details = storage.runs.get(result['id'])['items'][0]['customerDetails']
         self.assertEqual((details['from'], details['epk'], details['known']), ('epk', '111', True))
+        # The number made up for the opening's mask is the EPK organization's terminal, the one the agent can find.
+        self.assertEqual(agent.sent[0], 'Какой тариф у терминала 11112222?')
 
 
 class ClientSettingsApiTests(unittest.IsolatedAsyncioTestCase):
@@ -205,3 +224,18 @@ class ClientSettingsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()['detail'], agents.BAD_INN.format(epk='111'))
         self.assertEqual(connection.settings()['clients'], clients)
+
+
+class AgentProfileApiTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        support.serve(self)
+
+    async def test_the_page_reads_the_shipped_profile_and_saves_a_checked_one(self) -> None:
+        shipped = (await self.client.get('/api/profile')).json()
+        self.assertEqual(shipped['identifiers'][0]['key'], 'terminal')
+        response = await self.client.post('/api/profile', json={'domain': ''})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('домена', response.json()['detail'])
+        mine = {'domain': 'Вход в банк', 'identifiers': [{'key': 'login', 'label': 'логин'}]}
+        self.assertEqual((await self.client.post('/api/profile', json=mine)).status_code, 200)
+        self.assertEqual((await self.client.get('/api/profile')).json()['domain'], 'Вход в банк')

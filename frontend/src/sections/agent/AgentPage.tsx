@@ -16,6 +16,7 @@ import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
+import { AgentProfile } from "./AgentProfile";
 import { ConnectionForm } from "./Connection";
 
 /** The characters of prompts the criteria planner takes (backend/lab/agents/sources.py, MAX_TOTAL). */
@@ -93,6 +94,7 @@ export function AgentPage() {
               key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}|${JSON.stringify(state.settings.clients)}`}
               state={state}
             />
+            <AgentProfile />
           </div>
           <section aria-label="Код агента">
             <h2 className="text-title font-semibold text-fg">Код агента</h2>

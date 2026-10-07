@@ -31,6 +31,12 @@ def deck() -> list[dict]:
     return (storage.documents.load(DECK) or {}).get('cards') or []
 
 
+def sample() -> int | None:
+    """How many cards the deck's representative set has: a run measures the export only when it plays all of them."""
+    found = ((storage.documents.load(DECK) or {}).get('sets') or {}).get('representative') or {}
+    return len(found['cardIds']) if found.get('cardIds') else None
+
+
 def check() -> str | None:
     """The check whose criteria the deck's scenarios are judged by."""
     return (storage.documents.load(DECK) or {}).get('check')

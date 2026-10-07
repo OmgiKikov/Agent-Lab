@@ -63,8 +63,12 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
         placements = proposal.get('placements') or {}
         for dialogue_id, episode in episodes.items():
             episode.pop('scenarioId', None)
-            if dialogue_id in placements:
-                episode['scenarioId'] = placements[dialogue_id]
+            placed = placements.get(dialogue_id)
+            # A placement of a reading made since (another export, reader or profile) is no placement of this one.
+            if isinstance(placed, dict) and placed.get('reading') == _reading(episode):
+                episode['scenarioId'] = placed['scenarioId']
+            elif isinstance(placed, str):  # saved before placements named their reading
+                episode['scenarioId'] = placed
     elif rebuild or not categories:
         progress(stage='catalog', done=0, total=1, message='Выделяем бизнес-сценарии')
         tasks = catalog.distinct_tasks(catalog.sample(episodes, SAMPLE))
@@ -83,13 +87,19 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
         """The placements so far: of the proposed scenarios beside the catalog in use, or of its own in it."""
         saved = current() or {}
         if proposal:
-            placed = {i: e['scenarioId'] for i, e in episodes.items() if e.get('scenarioId')}
+            placed = {
+                i: {'scenarioId': e['scenarioId'], 'reading': _reading(e)}
+                for i, e in episodes.items()
+                if e.get('scenarioId')
+            }
             saved['proposed'] = {**proposal, 'placements': placed}
         else:
             saved['episodes'] = episodes
         storage.documents.save(CATALOG, saved)
 
     await _place(categories, episodes, dialogues, progress, keep_placements)
+    # Placed too little, the catalog in use stays: the work so far is kept (keep_placements) for the next build.
+    _enough({i: e for i, e in episodes.items() if catalog.in_domain(e)}, 'unplaced', 'не разложила по сценариям')
     document = {
         'revision': catalog.revision(categories),
         'builtAt': storage.now(),
@@ -98,8 +108,12 @@ async def _build(progress: Progress, rebuild: bool) -> dict:
         'episodes': episodes,
     }
     storage.documents.save(CATALOG, document)
-    _enough({i: e for i, e in episodes.items() if catalog.in_domain(e)}, 'unplaced', 'не разложила по сценариям')
     return document
+
+
+def _reading(episode: dict) -> list:
+    """What a reading of an episode stands on: the conversation, the reader's version and the agent's profile."""
+    return [episode.get('fingerprint'), episode.get('version'), episode.get('profile')]
 
 
 def _keep_readings(episodes: dict[str, dict]) -> None:

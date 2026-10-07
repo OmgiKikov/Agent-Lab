@@ -16,8 +16,9 @@ LONGEST = 2  # ...but never from fewer customer messages than this
 
 
 def checked(value: object) -> dict:
-    """The profile, if the pipeline can use it: a domain, identifiers each with a key and a label, lists of words where
-    lists are asked for. A ValueError says what is wrong."""
+    """The profile, if the pipeline can use it: a domain, identifiers each with a key, a label and, if the agent's
+    customers write them in a recognisable form, what a quote of the value must show (value: a regular expression),
+    lists of words where lists are asked for. A ValueError says what is wrong."""
     if not isinstance(value, dict):
         raise ValueError('Профиль агента — объект.')
     domain = str(value.get('domain') or '').strip()
@@ -36,6 +37,11 @@ def checked(value: object) -> dict:
         for x in identifiers
     ):
         raise ValueError('Идентификаторы в профиле агента — список {key, label}, key латиницей.')
+    for x in identifiers:
+        try:
+            re.compile(str(x.get('value') or ''))
+        except re.error as error:
+            raise ValueError(f'«value» идентификатора {x["key"]} — не регулярное выражение: {error}.') from error
     categories = value.get('categoryExamples') or {}
     if not isinstance(categories, dict):
         raise ValueError('«categoryExamples» в профиле агента — категории со списками сценариев.')
@@ -50,7 +56,10 @@ def checked(value: object) -> dict:
         'taskExamples': words('taskExamples'),
         'objectExamples': words('objectExamples'),
         'categoryExamples': {str(k): [str(s) for s in v or []] for k, v in categories.items()},
-        'identifiers': [{'key': x['key'], 'label': x['label'].strip()} for x in identifiers],
+        'identifiers': [
+            {'key': x['key'], 'label': x['label'].strip(), **({'value': x['value']} if x.get('value') else {})}
+            for x in identifiers
+        ],
         'export': {
             'agentCode': export.get('agentCode') or None,
             'sharedAgents': [str(x) for x in export.get('sharedAgents') or []],

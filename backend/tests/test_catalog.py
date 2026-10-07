@@ -199,6 +199,29 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(again.await_count, 2)  # only the two the model did not read
         self.assertEqual((found['totals']['unread'], found['totals']['placed']), (0, 20))
 
+    async def test_a_rebuild_that_places_too_little_leaves_the_catalog_in_use(self):
+        storage.dialogues.replace([talk(f'd{i}') for i in range(10)])
+        reading = Answer({'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
+
+        async def place(scenarios, items):
+            return Answer([(i['id'], 'c1s1') for i in items], 'm')
+
+        with (
+            patch.object(catalog_role, 'episode', AsyncMock(return_value=reading)),
+            patch.object(catalog_role, 'propose', AsyncMock(return_value=Answer(catalog.taxonomy(PROPOSED), 'm'))),
+            patch.object(catalog_role, 'place', AsyncMock(side_effect=place)),
+        ):
+            used = await catalog_flow.build()
+        with (
+            patch.object(catalog_role, 'propose', AsyncMock(return_value=Answer(catalog.taxonomy(PROPOSED[:1]), 'm'))),
+            patch.object(catalog_role, 'place', AsyncMock(side_effect=models.ModelError('unusable'))),
+            self.assertRaisesRegex(RuntimeError, 'не разложила по сценариям'),
+        ):
+            await catalog_flow.build(rebuild=True)
+        saved = catalog_flow.current()
+        self.assertEqual((saved['revision'], saved['totals']), (used['revision'], used['totals']))
+        self.assertIn('proposed', saved)  # the rebuild's work waits beside the catalog in use
+
     async def test_one_conversation_the_model_cannot_read_among_many_is_left_out(self):
         storage.dialogues.replace([talk(f'd{i}') for i in range(30)])
         reading = Answer({'inDomain': True, 'start': 1, 'task': 'починить QR', 'object': 'QR'}, 'm')
@@ -330,13 +353,18 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('categories', saved)  # no catalog in use yet: the proposal waits beside it
         self.assertEqual(len(saved['proposed']['placements']), 2)
 
+        # One of the placed conversations changed meanwhile: its new reading is placed anew, not by the old placement.
+        storage.dialogues.replace([talk('d1', 'Подключить QR'), talk('d2'), talk('d3')])
         with (
             patch.object(catalog_role, 'episode', AsyncMock(return_value=reading)) as episode,
             patch.object(catalog_role, 'propose', AsyncMock(side_effect=AssertionError('proposed again'))),
-            patch.object(catalog_role, 'place', AsyncMock(return_value=Answer([('e1', 'c1s1')], 'm'))) as again,
+            patch.object(
+                catalog_role, 'place', AsyncMock(return_value=Answer([('e1', 'c1s1'), ('e2', 'c1s1')], 'm'))
+            ) as again,
         ):
             found = await catalog_flow.build()
-        self.assertEqual((episode.await_count, again.await_count), (0, 1))
+        self.assertEqual((episode.await_count, again.await_count), (1, 1))
+        self.assertEqual(len(again.await_args.args[1]), 2)  # d1, read again, and d3, never placed
         self.assertEqual(found['totals']['placed'], 3)
         self.assertNotIn('proposed', found)
 

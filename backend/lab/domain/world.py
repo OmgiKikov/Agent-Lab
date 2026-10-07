@@ -8,6 +8,7 @@ agent's parsers accept them; a tool whose shape differs is dropped and the stand
 
 import json
 import random
+import re
 
 SCENARIO_TOOLS = (
     'getLkkTariff',
@@ -197,6 +198,26 @@ def epk_client(details: dict | None) -> dict | None:
     }
     terminals = [{'nameForClient': '', 'terminalId': tid} for tid in details.get('terminals') or []]
     return {'organization': organization, 'terminals': terminals}
+
+
+def bound(text: str, values: list[str], client: dict | None) -> str:
+    """The opening with the numbers made up for its masks (values) that are identifiers replaced by the client's own:
+    one as long as an INN by the INN, any other of 6+ digits by the client's terminals in turn. Amounts and counts stay;
+    without a client nothing changes."""
+    if not client:
+        return text
+    terminals = [t['terminalId'] for t in client['terminals']]
+    inn, turn = client['organization'].get('inn') or '', 0
+    for value in values:
+        digits = re.sub(r'[\s-]', '', value)
+        if not digits.isdigit() or len(digits) < 6:
+            continue
+        if inn and len(digits) == len(inn):
+            text = text.replace(value, inn, 1)
+        elif terminals:
+            text = text.replace(value, terminals[turn % len(terminals)], 1)
+            turn += 1
+    return text
 
 
 def customer_profile(world: dict | None, known: dict | None = None) -> str:

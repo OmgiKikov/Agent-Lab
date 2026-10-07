@@ -29,7 +29,15 @@ export type Metric = {
    * no card (incomplete). */
   sets?: Record<
     string,
-    { accuracy: number | null; passed: number; measured: number; weighted?: number | null; incomplete?: boolean }
+    {
+      accuracy: number | null;
+      passed: number;
+      measured: number;
+      weighted?: number | null;
+      incomplete?: boolean;
+      /** The run played part of the deck's representative set: no estimate for the export. */
+      partial?: boolean;
+    }
   >;
 };
 /** A call of the agent's tool as the service recorded it. */
