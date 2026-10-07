@@ -2,6 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  BookOpen,
   Bot,
   ClipboardCheck,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
   MessageSquareQuote,
   MessagesSquare,
   Play,
+  Plus,
   Presentation,
   Route,
   Search,
@@ -24,7 +26,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { BY_CRITERIA, CHECK_NAME, CHECKS, checkOfOld, resultOf } from "../lab/checks";
+import { BY_CRITERIA, CHECK_NAME, CHECKS, resultOf } from "../lab/checks";
 import { duty } from "../lab/criteria";
 import { count, day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
@@ -120,7 +122,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         {
           id: `s-${c}-review`,
           group: "Разделы",
-          label: `${CHECK_NAME[c]} · Проверка`,
+          label: `${CHECK_NAME[c]} · Ответы людей`,
           sub: "Это действительно ошибка? Случаи по одному",
           icon: ClipboardCheck,
           run: go(reviewLink(c)),
@@ -132,6 +134,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           sub: c === "tone" ? "Что агент обязан делать по правилам общения" : "Что агент обязан делать по своему коду",
           icon: ListChecks,
           run: go(criterionLink(c)),
+        },
+        {
+          id: `s-${c}-rules`,
+          group: "Разделы",
+          label: `${CHECK_NAME[c]} · Правила`,
+          sub: "Наборы правил и их версии, новый набор",
+          icon: BookOpen,
+          run: go(criterionLink(c, null, { rules: "1" })),
         },
         {
           id: `s-${c}-history`,
@@ -170,7 +180,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-agent",
         group: "Разделы",
         label: "Агент",
-        sub: "Подключение и прочитанный код",
+        sub: "Карточка агента: подключение, код, инструменты, база знаний",
         icon: Bot,
         run: go(SECTIONS.agent),
       },
@@ -219,10 +229,18 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "a-upload",
         group: "Действия",
-        label: "Загрузить диалоги",
+        label: "Добавить датасет",
         sub: "Выгрузка чата, общая для обеих проверок",
         icon: Upload,
-        run: go(conversationsLink(checkOfOld(state))),
+        run: go(SECTIONS.data),
+      },
+      {
+        id: "a-agent",
+        group: "Действия",
+        label: "Новый агент",
+        sub: "Свои разговоры, правила и итоги — отдельно от этого агента",
+        icon: Plus,
+        run: () => window.location.assign("/agents?new=1"),
       },
       {
         id: "a-cards",
