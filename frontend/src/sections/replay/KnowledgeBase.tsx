@@ -89,6 +89,7 @@ function MatchLine({
 }) {
   const { same, different, unknown } = summary.match;
   const used = `С обращением к базе знаний — ${count(summary.called, "шаг", "шага", "шагов")} из ${summary.steps}`;
+  const differ = count(different, "отличается", "отличаются", "отличаются");
   if (same + different === 0)
     return (
       <p className="text-small text-fg-2">
@@ -101,8 +102,8 @@ function MatchLine({
       {different > 0 && (
         <>
           {" · "}
-          <Toggle open={open} listId={listId} label="Шаги, где повтор отличается от прода" onClick={onToggle}>
-            {count(different, "отличается", "отличаются", "отличаются")}
+          <Toggle open={open} listId={listId} label={`${differ} от прода — показать шаги`} onClick={onToggle}>
+            {differ}
           </Toggle>
         </>
       )}
