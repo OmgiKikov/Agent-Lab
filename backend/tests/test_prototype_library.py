@@ -158,6 +158,26 @@ class JudgeLibraryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((mine['version'], mine['builtin']), (1, False))
         self.assertEqual([version['id'] for version in storage.judges.listed('code')], [mine['id']])
 
+    async def test_criteria_made_before_the_library_keep_the_day_they_were_made(self):
+        """Criteria of tone of voice made before the library are adopted as its first version, dated when they were
+        made; a version a person saves later is dated when it is saved."""
+        made = '2026-10-05T09:30:00.000+00:00'
+        policy = rules.source('tone', 'Правила общения банка', 'Всегда обращайтесь к клиенту на вы.')
+        storage.documents.save('sources.json', [policy])
+        storage.documents.save(
+            'tone-of-voice-criteria.json',
+            {'revision': 'r1', 'createdAt': made, 'sourceSha256': policy['sha256'], 'criteria': [criterion()]},
+        )
+        listed = (await self.client.get('/api/judges/tone')).json()
+        adopted = listed['versions'][0]
+        self.assertEqual((len(listed['versions']), listed['selectedId']), (1, adopted['id']))
+        self.assertEqual(adopted['createdAt'], made)
+        later = judges.save(
+            'tone', adopted['name'], policy['content'], [criterion('Не используйте жаргон.')], adopted['setId'], None
+        )
+        self.assertEqual(later['version'], 2)
+        self.assertGreater(later['createdAt'], made)
+
     async def test_failed_rule_save_is_atomic_and_export_is_the_selected_version(self):
         policy = 'Всегда обращайтесь к клиенту на вы.'
         mine = judges.save('tone', 'Наши правила', policy, [criterion()], None, None)

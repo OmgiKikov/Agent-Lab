@@ -10,13 +10,13 @@ DRAFT = 'tone-of-voice-criteria.json'
 
 def library(kind: str) -> dict:
     """The versions of rules of a kind and the one in force. Criteria of tone of voice made while no set was selected
-    (before the library) become its first version; the ones a set an earlier Lab wrote itself copied in, while it is
-    still selected, do not."""
+    (before the library) become its first version, dated when they were made; the ones a set an earlier Lab wrote
+    itself copied in, while it is still selected, do not."""
     if kind == 'tone' and storage.judges.selected(kind) is None:
         draft = storage.documents.load(DRAFT)
         policy = next((s for s in inputs.sources() if s['id'] == checks.TONE_OF_VOICE), None)
         if draft and policy:
-            storage.judges.capture_tone(draft, policy)
+            storage.judges.capture_tone(draft, policy, adopted=True)
     selected = storage.judges.active(kind)
     return {'versions': storage.judges.listed(kind), 'selectedId': selected['id'] if selected else None}
 

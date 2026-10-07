@@ -39,7 +39,9 @@ def save(
     *,
     set_id: str | None = None,
     base_id: str | None = None,
+    at: str | None = None,
 ) -> dict:
+    """A new version of a set (set_id), or the first of a new set; at: when its criteria were made, if not now."""
     with db.transaction():
         own = [v for v in _made() if v['setId'] == set_id]
         if own and base_id is not None and own[-1]['id'] != base_id:
@@ -53,15 +55,16 @@ def save(
             'criteria': criteria,
             'builtin': False,  # never: the screens still read the key
             'version': len(own) + 1,
-            'createdAt': db.now(),
+            'createdAt': at or db.now(),
         }
         documents.save(LIBRARY, [*(documents.load(LIBRARY, []) or []), value])
         return value
 
 
-def capture_tone(draft: dict, policy: dict) -> dict:
+def capture_tone(draft: dict, policy: dict, *, adopted: bool = False) -> dict:
     """Generated or clarified criteria also enter the library, as a new version of the set in force for the same rules,
-    else of a set of their own."""
+    else of a set of their own. A version is dated when it is saved; criteria made before the library and adopted into
+    it (adopted) keep the day they were made."""
     current = active('tone')
     if current and current['criteria'] == draft['criteria'] and current['policy'] == policy['content']:
         return current
@@ -72,6 +75,7 @@ def capture_tone(draft: dict, policy: dict) -> dict:
         policy['content'],
         draft['criteria'],
         set_id=current['setId'] if own else None,
+        at=draft.get('createdAt') if adopted else None,
     )
     select('tone', value['id'])
     return value
