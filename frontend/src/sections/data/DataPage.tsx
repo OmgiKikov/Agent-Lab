@@ -83,7 +83,9 @@ export function DataPage() {
           {loaded ? "Разговоры для проверки" : "Начните с настоящих разговоров"}
         </h2>
         <p className="mt-3 max-w-[65ch] text-read text-fg-3">
-          Выберите датасет для проверки. Файлы, прошлые результаты и критерии сохраняются отдельно.
+          {loaded
+            ? "Итог и сценарии проверок показываются по датасету с галочкой. Выберите другой — вернутся его прошлые результаты."
+            : "Выгрузка чата с настоящими разговорами клиентов: по ней проверяется агент."}
         </p>
         <DatasetLibrary showArchive={showArchive} onArchiveChange={setShowArchive} />
         {showArchive ? null : !loaded ? (
@@ -102,7 +104,7 @@ export function DataPage() {
         ) : (
           <>
             <div className="mt-8 border-t border-line pt-6">
-              <p className="text-small text-fg-3">Просмотр выбранного датасета</p>
+              <p className="text-small text-fg-3">Сейчас в проверках</p>
               <h3 className="mt-1 break-words text-title font-semibold text-fg">
                 {state.logs.name || state.logs.file}
               </h3>

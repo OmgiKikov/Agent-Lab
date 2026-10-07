@@ -49,18 +49,22 @@ export function DatasetLibrary({
   if (!library.data) return <Skeleton className="mt-7 h-40" />;
   if (!library.data.datasets.length) return null;
   const visible = library.data.datasets.filter((item) => !!item.archivedAt === showArchive);
+  const archived = library.data.datasets.filter((d) => d.archivedAt).length;
   return (
     <section className="mt-7" aria-label="Датасеты агента">
-      <Segmented
-        label="Датасеты и архив"
-        className="mb-4"
-        value={showArchive ? "archive" : "active"}
-        onChange={(value) => onArchiveChange(value === "archive")}
-        options={[
-          { value: "active", label: "Датасеты", count: library.data.datasets.filter((d) => !d.archivedAt).length },
-          { value: "archive", label: "Архив", count: library.data.datasets.filter((d) => d.archivedAt).length },
-        ]}
-      />
+      {/* The archive is a place only once something is in it. */}
+      {(archived > 0 || showArchive) && (
+        <Segmented
+          label="Датасеты и архив"
+          className="mb-4"
+          value={showArchive ? "archive" : "active"}
+          onChange={(value) => onArchiveChange(value === "archive")}
+          options={[
+            { value: "active", label: "Датасеты", count: library.data.datasets.length - archived },
+            { value: "archive", label: "Архив", count: archived },
+          ]}
+        />
+      )}
       {removed && (
         <div role="status" className="mb-4 flex flex-wrap items-center gap-3 rounded-control bg-inset p-3 text-body">
           «{removed.name}» в архиве.
@@ -90,7 +94,8 @@ export function DatasetLibrary({
               <span className="min-w-0">
                 <span className="block break-words text-read font-semibold text-fg">{item.name}</span>
                 <span className="mt-1 block break-all text-small text-fg-3">
-                  {item.file} · {count(item.total, "разговор", "разговора", "разговоров")}
+                  {item.file && item.file !== item.name ? `${item.file} · ` : ""}
+                  {count(item.total, "разговор", "разговора", "разговоров")}
                   {item.bytes > 0 ? ` · ${fileSize(item.bytes)}` : ""} · {when(item.createdAt)}
                 </span>
               </span>

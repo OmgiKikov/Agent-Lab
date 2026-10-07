@@ -40,7 +40,7 @@ function ExportDialog({
           trigger.current.focus();
         }
       }}
-      title={`Диалог ${id}`}
+      title="Разговор из выгрузки"
       sub="Разговор из текущей выгрузки"
     >
       <div className="p-5 sm:p-7">
@@ -107,7 +107,7 @@ export function ExportConversations({ stamp }: { stamp?: string | null }) {
                   <span className="min-w-0 flex-1">
                     <span className="line-clamp-1 text-body font-medium text-fg">{dialog.opening}</span>
                     <span className="mt-1 block truncate text-small text-fg-3">
-                      Диалог {dialog.id} · {count(dialog.turns, "реплика", "реплики", "реплик")}
+                      {count(dialog.turns, "реплика", "реплики", "реплик")}
                     </span>
                   </span>
                   <ChevronRight aria-hidden className="size-4 shrink-0 text-fg-4" />

@@ -11,7 +11,6 @@ import { seriousOf } from "../../lab/severity";
 import { SeverityStatus } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Trust } from "../../product/Trust";
-import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
@@ -60,16 +59,12 @@ export function ResultPage({ check }: { check: Check }) {
     <CheckHeader
       check={check}
       actions={
-        <>
-          <span className="hidden sm:contents">
-            <UploadButton variant="outline" check={check} />
-          </span>
-          {result && (
-            <Button variant="outline" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)}>
-              <span className="hidden sm:inline">Отчёт для письма</span>
-            </Button>
-          )}
-        </>
+        // New conversations come through «Датасеты» or «Новая проверка»; the result's own action is its report.
+        result && (
+          <Button variant="outline" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)}>
+            <span className="hidden sm:inline">Отчёт для письма</span>
+          </Button>
+        )
       }
     />
   );
