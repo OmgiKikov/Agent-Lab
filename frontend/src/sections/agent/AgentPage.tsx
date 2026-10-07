@@ -115,7 +115,8 @@ export function AgentPage() {
               />
             ) : context.data && agent ? (
               <ConnectionForm
-                key={`${agent.name}|${agent.description}|${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}|${JSON.stringify(context.data)}`}
+                // One form per agent: saving never starts it afresh, so a refused save keeps what the person typed.
+                key={agent.id}
                 state={state}
                 agent={agent}
                 context={context.data}

@@ -197,17 +197,18 @@ export function ConnectionForm({
     setWay(id);
     write(WAY, id);
   };
+  // What the service may refuse goes first (the links of the repository and of IDP are checked there), the name last:
+  // a refusal leaves everything as it was saved before, and the form keeps every edit to fix and save again.
   const save = () => {
     setSaving(true);
-    (identityDirty
-      ? api("/api/agents/update", { id: agent.id, name: name.trim(), description: description.trim() }).then(() =>
-          cache.invalidateQueries({ queryKey: ["agents"] }),
-        )
-      : Promise.resolve()
-    )
+    (contextDirty ? api("/api/agent/context", nextContext) : Promise.resolve())
       .then(() => api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: nextRepo }))
-      .then(() => (contextDirty ? api("/api/agent/context", nextContext) : null))
-      .then(() => Promise.all([refresh(), onSaved()]))
+      .then(() =>
+        identityDirty
+          ? api("/api/agents/update", { id: agent.id, name: name.trim(), description: description.trim() })
+          : null,
+      )
+      .then(() => Promise.all([refresh(), onSaved(), cache.invalidateQueries({ queryKey: ["agents"] })]))
       .then(() => toast.notify("Сохранено"))
       .catch(toast.error)
       .finally(() => setSaving(false));
