@@ -426,6 +426,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_replay_yet_is_an_empty_result(self) -> None:
         self.assertEqual((await self.client.get('/api/replay')).json(), {})
 
+    async def test_the_replay_comes_with_its_knowledge_base_summary(self) -> None:
+        store.save(api.replay.RESULT, {'id': 'replay-1', 'dialogues': [{'dialogueId': 'd-1', 'steps': []}]})
+        summary = (await self.client.get('/api/replay')).json()['knowledgeBase']
+        self.assertEqual((summary['steps'], summary['called']), (0, 0))
+
     async def test_state_has_no_replay_before_the_first_one(self) -> None:
         self.assertIsNone((await self.client.get('/api/state')).json()['replay'])
 

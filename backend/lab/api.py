@@ -22,6 +22,7 @@ from . import (
     personas,
     policy_files,
     problems,
+    rag,
     registry,
     replay,
     scenarios,
@@ -701,7 +702,11 @@ async def start_replay(payload: ReplayCommand) -> dict:
 
 @app.get('/api/replay')
 def replay_result() -> dict:
-    return store.load(replay.RESULT) or {}
+    """The latest replay and what it says about the knowledge base, counted on every read from the saved verdicts."""
+    result = store.load(replay.RESULT)
+    if not result:
+        return {}
+    return {**result, 'knowledgeBase': rag.summary(result.get('dialogues') or [])}
 
 
 @app.post('/api/runs/{run_id}/rejudge')
