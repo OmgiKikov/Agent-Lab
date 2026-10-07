@@ -196,50 +196,9 @@ function AgentTurn({
   );
 }
 
-type Shown = { turn: Turn; again: number };
-
-/** What the customer saw of a turn, for telling a repeat: its words without the export's button codes and the full
- * stop an export sometimes leaves after them, with its buttons. */
-const seen = (t: Turn) => {
-  const { text, buttons } = visible(t.text);
-  return [text.replace(/[\s.]+$/u, ""), ...buttons, ...(t.options ?? [])].join("\u0000");
-};
-
-/**
- * The same question with the same answer, again and again in a row — an export often writes them so, or the customer
- * repeated and the agent answered alike: shown once, with how many times more (`again`). Nothing is dropped from the
- * conversation the judge read; a reply with steps of the agent is never folded.
- */
-function folded(turns: Turn[]): Shown[] {
-  const out: Shown[] = [];
-  let i = 0;
-  while (i < turns.length) {
-    const asked = turns[i];
-    const answered = turns[i + 1];
-    if (asked.role !== "customer" || answered?.role !== "agent" || answered.events?.length) {
-      out.push({ turn: asked, again: 0 });
-      i += 1;
-      continue;
-    }
-    let next = i + 2;
-    while (
-      turns[next]?.role === "customer" &&
-      seen(turns[next]) === seen(asked) &&
-      turns[next + 1]?.role === "agent" &&
-      seen(turns[next + 1]) === seen(answered) &&
-      !turns[next + 1].events?.length
-    )
-      next += 2;
-    out.push({ turn: asked, again: 0 }, { turn: answered, again: (next - i) / 2 - 1 });
-    i = next;
-  }
-  return out;
-}
-
 /**
  * A conversation as the chat looked: the customer's bubbles on the right, the agent's on the left with the judge's quote
- * marked in yellow and numbered. Turns long before the mark fold into «ещё N реплик выше»; an exchange repeated word for
- * word in a row is shown once, saying how many times more it came.
+ * marked in yellow and numbered. Turns long before the mark fold into «ещё N реплик выше».
  */
 export function Conversation({
   turns,
@@ -257,8 +216,7 @@ export function Conversation({
   const shown = (t: Turn) =>
     placed.words.some((m) => inWords(t, m.quote)) ||
     (t.role === "agent" && (t.events ?? []).some((c) => placed.steps.some((m) => cites(c, m.quote))));
-  const items = folded(turns);
-  const at = marks.length ? items.findIndex((item) => shown(item.turn)) : -1;
+  const at = marks.length ? turns.findIndex(shown) : -1;
   const [open, setOpen] = useState(false);
   const from = at > 2 && !open ? at - 1 : 0;
   return (
@@ -274,7 +232,7 @@ export function Conversation({
           {plural(from, "реплика", "реплики", "реплик")} выше
         </button>
       )}
-      {items.slice(from).map(({ turn: t, again }, i) =>
+      {turns.slice(from).map((t, i) =>
         t.role === "customer" ? (
           <div key={i + from} className="flex max-w-[80%] flex-col items-end gap-1.5 self-end">
             <span className="px-1 text-small text-fg-3">Клиент</span>
@@ -283,16 +241,7 @@ export function Conversation({
             </div>
           </div>
         ) : (
-          <div key={i + from} className="flex flex-col gap-2">
-            <AgentTurn turn={t} marks={placed.words} stepMarks={placed.steps} lit={lit} onLit={onLit} />
-            {again > 0 && (
-              <p className="self-center rounded-full border border-dashed border-line-strong px-3 py-1 text-small text-fg-3">
-                Этот вопрос и ответ повторились ещё {again}
-                {"\u00a0"}
-                {plural(again, "раз", "раза", "раз")} подряд — так в выгрузке
-              </p>
-            )}
-          </div>
+          <AgentTurn key={i + from} turn={t} marks={placed.words} stepMarks={placed.steps} lit={lit} onLit={onLit} />
         ),
       )}
     </div>
