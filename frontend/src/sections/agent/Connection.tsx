@@ -9,6 +9,7 @@ import { Input } from "../../ui/Field";
 import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 import { agentKey } from "../../app/agent";
+import { KnowledgeField, ToolsField, type AgentContext } from "./ContextFields";
 
 type Answer = Probe & { question?: string };
 /** The last answer of the agent: on which way and where (`where`, since this change), what it said and when. */
@@ -140,12 +141,25 @@ function Way({ target, on, onPick }: { target: Target; on: boolean; onPick: () =
   );
 }
 
+/** A link to a repository, not a folder: «https://…», «ssh://…». The scp form «git@host:path» is said to be rewritten. */
+const isLink = (text: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(text);
+const scpForm = (text: string) => /^[^\s/@]+@[^\s/:]+:/.test(text);
+
 /**
- * Подключение: the way to reach the agent, whose clients the simulator writes for, where the code is; save and check.
- * Each check's answer is kept by the connection it asked (targetKey): switching the way while «Проверить связь» is on
- * its way never shows the old connection's answer under the new one.
+ * The agent's card: how to reach it, whose clients the simulator writes for, where its code is (a folder here or a
+ * link to its repository), the tools and the knowledge base the judge is told about; one save for all of it. Each
+ * check's answer is kept by the connection it asked (targetKey): switching the way while «Проверить связь» is on its
+ * way never shows the old connection's answer under the new one.
  */
-export function ConnectionForm({ state }: { state: LabState }) {
+export function ConnectionForm({
+  state,
+  context,
+  onSaved,
+}: {
+  state: LabState;
+  context: AgentContext;
+  onSaved: () => Promise<unknown>;
+}) {
   const { refresh } = useLabState();
   const toast = useToast();
   const saved = state.settings;
@@ -153,11 +167,20 @@ export function ConnectionForm({ state }: { state: LabState }) {
   const [way, setWay] = useState(wayOf(state, memory.way) ?? "prod");
   const [prodUrl, setProdUrl] = useState(saved.prodUrl);
   const [epk, setEpk] = useState(saved.epk.join(" "));
-  const [repo, setRepo] = useState(saved.repo);
+  // Where the code is: the repository's link when one is saved, else the folder.
+  const [code, setCode] = useState(context.repositoryUrl || saved.repo);
+  const [known, setKnown] = useState(context);
   const [saving, setSaving] = useState(false);
   const [checks, setChecks] = useState<Record<string, Answer | "pending">>({});
+  const link = isLink(code.trim());
+  const nextContext = { ...known, repositoryUrl: link ? code.trim() : "" };
+  const nextRepo = link ? saved.repo : code.trim();
+  const contextDirty = JSON.stringify(nextContext) !== JSON.stringify(context);
   const dirty =
-    prodUrl.trim() !== saved.prodUrl || repo.trim() !== saved.repo || words(epk).join(" ") !== saved.epk.join(" ");
+    prodUrl.trim() !== saved.prodUrl ||
+    nextRepo !== saved.repo ||
+    words(epk).join(" ") !== saved.epk.join(" ") ||
+    contextDirty;
   const target = state.targets.find((t) => t.id === way);
   const check = target ? (checks[targetKey(target)] ?? null) : null;
   const last = lastOn(memory.last, target);
@@ -167,8 +190,9 @@ export function ConnectionForm({ state }: { state: LabState }) {
   };
   const save = () => {
     setSaving(true);
-    api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: repo.trim() })
-      .then(() => refresh())
+    api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: nextRepo })
+      .then(() => (contextDirty ? api("/api/agent/context", nextContext) : null))
+      .then(() => Promise.all([refresh(), onSaved()]))
       .then(() => toast.notify("Сохранено"))
       .catch(toast.error)
       .finally(() => setSaving(false));
@@ -201,7 +225,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
       });
   };
   return (
-    <section aria-label="Подключение">
+    <section aria-label="Подключение и код агента">
       <Label>Как подключить агента</Label>
       <div role="radiogroup" aria-label="Способ подключения" className="mt-2 border-t border-line">
         {state.targets.map((t) => (
@@ -223,17 +247,6 @@ export function ConnectionForm({ state }: { state: LabState }) {
             />
           </Field>
         )}
-        <Field label="Папка с кодом агента" hint="Из этой папки читаются инструкции агента для проверки точности.">
-          <Input
-            name="repo"
-            autoComplete="off"
-            value={repo}
-            onChange={(e) => setRepo(e.target.value)}
-            placeholder="~/Desktop/aigw-local"
-            className={INPUT}
-            spellCheck={false}
-          />
-        </Field>
         {way === "local-http" && (
           <p className="text-small text-fg-3">
             Адрес не нужен: агент уже запущен на этом компьютере{target?.where ? ` (${target.where})` : ""}.
@@ -252,9 +265,44 @@ export function ConnectionForm({ state }: { state: LabState }) {
           />
         </Field>
       </div>
-      {dirty && <p className="mt-4 text-small text-warn">Есть несохранённые изменения</p>}
+      <h3 className="mt-8 text-read font-semibold text-fg">Код и знания</h3>
+      <div className="mt-4 space-y-5">
+        <Field
+          label="Код агента"
+          hint={
+            scpForm(code.trim())
+              ? "Для SSH укажите адрес так: ssh://git@host/team/agent.git"
+              : link
+                ? "Репозиторий скачается кнопкой «Прочитать код», с доступом к Git, настроенным на этом компьютере."
+                : "Папка на этом компьютере или ссылка на Git-репозиторий. Из кода берутся критерии точности."
+          }
+        >
+          <Input
+            name="repo"
+            autoComplete="off"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="~/Desktop/agent или https://git…/agent.git"
+            className={INPUT}
+            spellCheck={false}
+            aria-invalid={scpForm(code.trim()) || undefined}
+          />
+        </Field>
+        <ToolsField tools={known.tools} onChange={(tools) => setKnown((v) => ({ ...v, tools }))} />
+        <KnowledgeField
+          value={known}
+          saved={!contextDirty}
+          onChange={(key, text) => setKnown((v) => ({ ...v, [key]: text }))}
+        />
+      </div>
+      {dirty && <p className="mt-5 text-small text-warn">Есть несохранённые изменения</p>}
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button icon={Save} loading={saving} disabled={!dirty || state.job.running} onClick={save}>
+        <Button
+          icon={Save}
+          loading={saving}
+          disabled={!dirty || state.job.running || scpForm(code.trim())}
+          onClick={save}
+        >
           Сохранить
         </Button>
         {target && target.kind !== "code" && (

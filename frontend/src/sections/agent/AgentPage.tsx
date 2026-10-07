@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, FileText, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AGENT } from "../../app/agent";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { criterionLink, launchLink } from "../../app/links";
@@ -16,7 +18,7 @@ import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
-import { AgentContext } from "./AgentContext";
+import type { AgentContext } from "./ContextFields";
 import { Identity } from "./Identity";
 import { ConnectionForm } from "./Connection";
 
@@ -34,6 +36,11 @@ export function AgentPage() {
   const { state, offline, refresh } = useLabState();
   const toast = useToast();
   const criteria = useCriteria("code");
+  const context = useQuery({
+    queryKey: ["agent-context", AGENT],
+    queryFn: () => api<AgentContext>("/api/agent/context"),
+  });
+  const codeAt = context.data?.repositoryUrl || state?.settings.repo;
   const { list } = criteria;
   const [reading, setReading] = useState(false);
   const busy = !!state?.job.running || reading;
@@ -58,11 +65,9 @@ export function AgentPage() {
             variant="primary"
             icon={RotateCcw}
             loading={reading}
-            disabled={busy || !state?.settings.repo}
+            disabled={busy || !codeAt}
             onClick={readCode}
-            title={
-              state?.settings.repo ? `Папка с кодом: ${state.settings.repo}` : "Сначала укажите папку с кодом агента"
-            }
+            title={codeAt ? `Код агента: ${codeAt}` : "Сначала укажите, где код агента"}
           >
             {codeSources(state).length ? "Прочитать код заново" : "Прочитать код"}
           </Button>
@@ -97,14 +102,27 @@ export function AgentPage() {
         <Identity />
         <div className="grid max-w-6xl gap-x-12 gap-y-10 px-4 pb-16 pt-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:px-10 lg:pt-8">
           <div>
-            <h2 className="text-title font-semibold text-fg">Подключение</h2>
+            <h2 className="text-title font-semibold text-fg">Карточка агента</h2>
             <p className="mb-5 mt-1 text-small text-fg-3">
-              Адрес нужен для живых вопросов и симуляций. Из кода можно собрать критерии точности.
+              Как связаться с агентом, где его код и что о нём должен знать судья. Для проверки записанных разговоров
+              ничего из этого не нужно.
             </p>
-            <ConnectionForm
-              key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}`}
-              state={state}
-            />
+            {context.isError ? (
+              <LoadFailed
+                title="Не удалось загрузить карточку"
+                error={context.error}
+                onRetry={() => context.refetch()}
+              />
+            ) : context.data ? (
+              <ConnectionForm
+                key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}|${JSON.stringify(context.data)}`}
+                state={state}
+                context={context.data}
+                onSaved={() => context.refetch()}
+              />
+            ) : (
+              <Skeleton className="h-[420px]" />
+            )}
           </div>
           <section aria-label="Код агента">
             <h2 className="text-title font-semibold text-fg">Код агента</h2>
@@ -123,7 +141,7 @@ export function AgentPage() {
                   . {plural(sources.length, "Из него", "Из них", "Из них")} дословно берутся критерии точности.
                 </>
               ) : (
-                "Код ещё не прочитан. Укажите папку с кодом агента в форме подключения, сохраните её и нажмите «Прочитать код»."
+                "Код ещё не прочитан. Укажите в карточке, где код агента — папку или ссылку на репозиторий, — сохраните и нажмите «Прочитать код»."
               )}
             </p>
             {sources.length > 0 && over.length > 0 && (
@@ -195,9 +213,6 @@ export function AgentPage() {
               </>
             )}
           </section>
-          <div className="lg:col-span-2">
-            <AgentContext />
-          </div>
         </div>
       </div>
     </div>
