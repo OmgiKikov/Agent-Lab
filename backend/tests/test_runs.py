@@ -35,6 +35,9 @@ class FakeAgent:
     async def close(self) -> None:
         self.closed = True
 
+    def client(self, conversation_id: str) -> tuple[str | None, dict | None]:
+        return None, None
+
     async def say(self, conversation_id: str, message: str, world: dict) -> dict:
         return {'text': 'answer', 'status': '202', 'ok': False, 'options': [], 'events': []}
 

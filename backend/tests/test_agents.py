@@ -48,7 +48,7 @@ class NamesTests(unittest.TestCase):
     def test_the_ways_to_reach_the_agent_have_the_names_of_the_agent_section(self):
         """«Сыграть» said «Агент на ИФТ / Локальный агент / Агент из исходников» for what «Агент» calls «Тестовый
         стенд банка / На этом компьютере / Запуск из кода»: one set everywhere, in words without a developer's slang."""
-        ways = agents.configs({'prodUrl': '', 'epk': [], 'repo': '~/agent'})
+        ways = agents.configs({'prodUrl': '', 'epk': [], 'clients': {}, 'repo': '~/agent'})
         named = {key: config['name'] for key, config in ways.items()}
         self.assertEqual(
             named,

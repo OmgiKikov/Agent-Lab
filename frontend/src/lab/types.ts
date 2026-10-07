@@ -45,6 +45,12 @@ export type Message = {
   options?: string[];
   events?: ToolEvent[];
 };
+/**
+ * The details of its organization the customer was told in a conversation: from the scenario's world in the mocks,
+ * the stand's own fixtures, or the organization of the conversation's EPK on the IFT stand. Not known: the customer
+ * was told it has none at hand (the fixtures could not be read, the EPK is not described, or there is no EPK).
+ */
+export type CustomerDetails = { from: "world" | "fixtures" | "epk"; epk?: string | null; known: boolean; text: string };
 export type Item = {
   cardId: string;
   name: string;
@@ -61,6 +67,8 @@ export type Item = {
   second?: { model: string; status: string; rules?: Rule[] };
   review?: "agree" | "disagree" | null;
   world?: boolean;
+  /** What the customer could say of its organization, and whose bank it came from (backend: customer_details). */
+  customerDetails?: CustomerDetails;
   /** The criteria frozen when the conversation was played: a criterion that never applied in it is named only here. */
   criteria?: Criterion[];
 };
@@ -142,7 +150,9 @@ export type Pattern = {
 };
 export type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };
 export type Persona = { id: string; name: string; note: string };
-export type Settings = { prodUrl: string; epk: string[]; repo: string };
+/** The organization of an EPK on the IFT stand as a person described it: what the synthetic customer can name. */
+export type Client = { name: string; inn: string; terminals: string[] };
+export type Settings = { prodUrl: string; epk: string[]; clients: Record<string, Client>; repo: string };
 export type Source = { id: string; kind: string; origin: string; chars: number; rules: number; sha256?: string | null };
 /**
  * The models as /api/state describes them (backend/lab/models/__init__.py, describe): where the conversations go, where the second

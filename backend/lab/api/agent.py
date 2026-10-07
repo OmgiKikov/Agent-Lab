@@ -11,9 +11,18 @@ from .base import Jobs, start
 router = APIRouter()
 
 
+class ClientCommand(BaseModel):
+    """The organization of one EPK id: what the synthetic customer can name on the IFT stand."""
+
+    name: str = ''
+    inn: str = ''
+    terminals: list[str] | str = Field(default_factory=list)
+
+
 class SettingsCommand(BaseModel):
     prodUrl: str = ''
     epk: list[str] | str = Field(default_factory=list)
+    clients: dict[str, ClientCommand] = Field(default_factory=dict)
     repo: str = ''
 
 

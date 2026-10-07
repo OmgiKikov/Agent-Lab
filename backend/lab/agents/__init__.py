@@ -17,20 +17,41 @@ DEFAULT_REPO = '~/Desktop/aigw-local'
 # The three ways to reach the agent, in words without a developer's slang: the same in «Агент», «Сыграть», the runs and
 # the reports. A run keeps the name it was played under (targetName); it is shown under the current one (run_name).
 NAMES = {'prod': 'Тестовый стенд банка', 'local-http': 'На этом компьютере', 'local-code': 'Запуск из кода'}
-# The test client in the local stand's fixtures: the synthetic customer gives these details when asked.
-STAND_CUSTOMER = (
-    'Твоя организация: ООО «Ромашка», ИНН 7701234567. Торговая точка «Ромашка, Тверская», '
-    'г. Москва, ул. Тверская, д. 1. Терминалы: Касса №1 (номер 12345678) и Касса №2 (номер 87654321).'
-)
+BAD_INN = 'ИНН клиента с ЕПК {epk} записан с ошибкой: нужно 10 или 12 цифр.'
+BAD_TERMINALS = 'Номера терминалов клиента с ЕПК {epk}: только цифры, через пробел.'
+
+
+def _clients(saved: object, epk: list[str]) -> dict[str, dict]:
+    """The organizations of the EPK ids as the person described them ({epk: {name, inn, terminals}}): what the
+    synthetic customer can name on the IFT stand, where the agent sees these organizations' real data. Only the EPK
+    ids talked as; one described by nothing is left out."""
+    found = {}
+    for key, item in saved.items() if isinstance(saved, dict) else ():
+        if str(key).strip() not in epk or not isinstance(item, dict):
+            continue
+        terminals = item.get('terminals') or []
+        if isinstance(terminals, str):
+            terminals = terminals.replace(',', ' ').split()
+        described = {
+            'name': str(item.get('name') or '').strip(),
+            'inn': str(item.get('inn') or '').strip(),
+            'terminals': [str(t).strip() for t in terminals if str(t).strip()],
+        }
+        if any(described.values()):
+            found[str(key).strip()] = described
+    return found
 
 
 def settings(saved: dict) -> dict:
     """prodUrl: the agent's address on the IFT stand; epk: the customers' EPK ids to talk as (none: an
-    unauthorized test customer); repo: the agent's repository with its prompts, tools and knowledge base. saved: the
-    settings as the page last saved them."""
+    unauthorized test customer); clients: the organizations of those EPK ids, as far as the person described them;
+    repo: the agent's repository with its prompts, tools and knowledge base. saved: the settings as the page last saved
+    them."""
+    epk = [str(e).strip() for e in saved.get('epk') or [] if str(e).strip()]
     return {
         'prodUrl': str(saved.get('prodUrl') or '').strip(),
-        'epk': [str(e).strip() for e in saved.get('epk') or [] if str(e).strip()],
+        'epk': epk,
+        'clients': _clients(saved.get('clients'), epk),
         'repo': str(saved.get('repo') or DEFAULT_REPO).strip(),
     }
 
@@ -44,6 +65,12 @@ def changed(current: dict, values: dict) -> dict:
     found['prodUrl'] = found['prodUrl'].strip()
     if found['prodUrl'] and not address_valid(found['prodUrl']):
         raise ValueError(BAD_ADDRESS)
+    found['clients'] = _clients(found['clients'], [str(e).strip() for e in found['epk'] or []])
+    for epk, client in found['clients'].items():
+        if client['inn'] and not (client['inn'].isdigit() and len(client['inn']) in (10, 12)):
+            raise ValueError(BAD_INN.format(epk=epk))
+        if not all(t.isdigit() for t in client['terminals']):
+            raise ValueError(BAD_TERMINALS.format(epk=epk))
     return found
 
 
@@ -56,6 +83,7 @@ def configs(current: dict) -> dict[str, dict]:
             'profile': 'prod',
             'url': current['prodUrl'],
             'epk': current['epk'],
+            'clients': current['clients'],
             'note': 'Стенд ИФТ в сети банка. Агент доступен с рабочего компьютера.',
         },
         'local-http': {
@@ -63,7 +91,6 @@ def configs(current: dict) -> dict[str, dict]:
             'kind': 'http',
             'profile': 'local',
             'url': f'http://127.0.0.1:8080{AGENT_PATH}',
-            'customer': STAND_CUSTOMER,
             'note': (
                 'Агент с тем же API уже запущен на этом компьютере. GigaChat настоящий, системы банка на заглушках.'
             ),
@@ -74,7 +101,6 @@ def configs(current: dict) -> dict[str, dict]:
             'profile': 'local',
             'repo': current['repo'],
             'port': 8081,
-            'customer': STAND_CUSTOMER,
             'note': 'Агент запускается из кода только на время прогона.',
         },
     }
@@ -112,7 +138,6 @@ def create(connection: dict) -> HttpAgent:
 
 __all__ = [
     'NAMES',
-    'STAND_CUSTOMER',
     'AgentError',
     'CodeAgent',
     'HttpAgent',

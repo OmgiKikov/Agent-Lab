@@ -90,7 +90,7 @@ export function AgentPage() {
               Где работает агент и как с ним связаться. Это нужно только для симуляций.
             </p>
             <ConnectionForm
-              key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}`}
+              key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}|${JSON.stringify(state.settings.clients)}`}
               state={state}
             />
           </div>

@@ -2,7 +2,7 @@ import { conversationsLink } from "../app/links";
 import { CHECK_NAME } from "./checks";
 import { inlineText, quoteText } from "./problemReport";
 import type { Decision, Example } from "./problems";
-import type { Check, Criterion, Discover, LabRun, Rule, Status } from "./types";
+import type { Check, Criterion, CustomerDetails, Discover, LabRun, Rule, Status } from "./types";
 
 /** One row of a stage's conversations: a logged conversation or a simulated one. */
 export type Source = "log" | "sim";
@@ -28,6 +28,8 @@ export type DialogRow = {
   review?: Decision | null;
   /** The criteria frozen in a simulated conversation when it was played. */
   frozen?: Criterion[];
+  /** What the customer of a simulated conversation could say of its organization. */
+  details?: CustomerDetails;
 };
 
 export const logKey = (dialogueId: string) => `log~${dialogueId}`;
@@ -101,6 +103,7 @@ export function simRows(run: LabRun | null | undefined): DialogRow[] {
     second: item.second ?? null,
     review: item.review ?? null,
     frozen: item.criteria,
+    details: item.customerDetails,
   }));
 }
 

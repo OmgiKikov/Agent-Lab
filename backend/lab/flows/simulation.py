@@ -63,19 +63,35 @@ def opening(card: dict, persona: str) -> str:
     return card['opening'] if persona == personas.DEFAULT else card['openings'][persona]
 
 
-async def play(card: dict, agent: agents.HttpAgent, record: dict, item: dict, changed: Callable[[], None]) -> None:
+def customer_details(
+    card: dict, agent: agents.HttpAgent, shapes: dict | None, test_data: dict, conversation_id: str
+) -> dict:
+    """What the customer can say of its organization and terminals: the client the agent's bank holds in this
+    conversation, as far as the card says the customer knows it (identifiers). The bank is the scenario's world when
+    the mocks took it, the stand's own fixtures when they did not, and on the IFT stand the organization of the
+    conversation's EPK as the settings describe it. {from: world | fixtures | epk, epk, known, text}; known is false
+    when the bank's client is unknown here: the customer is then told it has no details at hand, never made-up ones."""
+    if test_data:
+        found, client = {'from': 'world'}, card.get('world')
+    elif agent.mocked:
+        found, client = {'from': 'fixtures'}, scenario_world.fixture_client(shapes)
+    else:
+        epk, described = agent.client(conversation_id)
+        found, client = {'from': 'epk', 'epk': epk}, scenario_world.epk_client(described)
+    text = scenario_world.customer_profile(client, card.get('identifiers'))
+    return found | {'known': bool(text), 'text': text or scenario_world.NO_DETAILS}
+
+
+async def play(card: dict, agent: agents.HttpAgent, item: dict, changed: Callable[[], None]) -> None:
     """One conversation of the scenario with the agent, up to MAX_AGENT_TURNS replies, then judged. A conversation the
     agent or the model broke keeps its turns and says why."""
     conversation = item['conversation']
     shapes = world.templates(connection.repo()) if agent.mocked else None
     test_data = scenario_world.overrides(card.get('world'), shapes) if agent.mocked else {}
-    details = (
-        scenario_world.customer_profile(card.get('world'), card.get('identifiers'))
-        if test_data
-        else record.get('customer', '')
-    )
+    found = customer_details(card, agent, shapes, test_data, item['conversationId'])
+    details = found['text']
     # Whether the conversation ran to its end: only such a conversation may be judged again (ended).
-    item.update(world=bool(test_data), ended=False)
+    item.update(world=bool(test_data), customerDetails=found, ended=False)
     persona = item.get('persona') or personas.DEFAULT
     line, from_log = opening(card, persona), persona == personas.DEFAULT
     try:
@@ -114,7 +130,6 @@ def new_run(key: str, config: dict, label: str, repeats: int, persona_ids: list[
         'targetName': config['name'],
         'version': '…',
         'label': label,
-        'customer': config.get('customer', ''),
         'startedAt': storage.now(),
         'finishedAt': None,
         'model': models.main_model(),
@@ -189,7 +204,7 @@ async def run(
 
                 async def one(card: dict, index: int) -> None:
                     async with gate:
-                        await play(card, agent, record, record['items'][index], lambda: changed(index))
+                        await play(card, agent, record['items'][index], lambda: changed(index))
 
                 async with asyncio.TaskGroup() as group:
                     for index, (card, _, _) in enumerate(plan):

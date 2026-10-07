@@ -31,10 +31,16 @@ def address_valid(url: str) -> bool:
     return parts.scheme in ('http', 'https') and bool(parts.hostname) and port != 0 and not re.search(r'\s', url)
 
 
+def epk_of(conversation_id: str, epk_ids: list[str]) -> str | None:
+    """The EPK a conversation talks as on the IFT stand, the same in every turn; None: an unauthorized test customer,
+    whose organization the bank does not know."""
+    return epk_ids[sum(conversation_id.encode()) % len(epk_ids)] if epk_ids else None
+
+
 def prod_request(conversation_id: str, text: str, epk_ids: list[str]) -> tuple[dict, dict]:
     """Headers and body the IFT stand expects. With EPK ids the customer is authorized as one of these
     organizations, the same in every turn of a conversation, so the agent can look up the client's own data."""
-    epk = epk_ids[sum(conversation_id.encode()) % len(epk_ids)] if epk_ids else 'org-12345'
+    epk = epk_of(conversation_id, epk_ids) or 'org-12345'
     headers = {
         'Content-Type': 'application/json',
         'Request-Id': str(uuid.uuid4()),
@@ -120,12 +126,19 @@ class HttpAgent:
         self.url = connection.get('url') or ''
         self.profile = connection.get('profile', 'prod')
         self.epk = connection.get('epk') or []
+        self.clients = connection.get('clients') or {}
         self.version = 'не сообщается'
 
     @property
     def mocked(self) -> bool:
         """The bank's systems behind this agent are the stand's mocks, so a scenario's test data can be applied."""
         return self.profile == 'local'
+
+    def client(self, conversation_id: str) -> tuple[str | None, dict | None]:
+        """On the IFT stand: the EPK the conversation talks as and its organization as the settings describe it
+        (agents.settings, clients); none for an unauthorized customer or an EPK nobody described."""
+        epk = epk_of(conversation_id, self.epk)
+        return epk, self.clients.get(epk) if epk else None
 
     def request(self, conversation_id: str, text: str) -> tuple[dict, dict]:
         if self.profile == 'prod':

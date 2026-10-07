@@ -8,7 +8,7 @@ import { longDay, plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
 import { download, secondLine } from "../../lab/problemReport";
 import { useReview, useTurns, type Decision, type Example } from "../../lab/problems";
-import type { Rule } from "../../lab/types";
+import type { CustomerDetails, Rule } from "../../lab/types";
 import { Conversation, type Mark } from "../../product/Conversation";
 import { Facts } from "../../product/Facts";
 import { MarkNo } from "../../product/MarkNo";
@@ -21,6 +21,29 @@ import { VerdictWord } from "./Rows";
 import { criteriaByRule, type Named } from "./model";
 
 type Tab = "talk" | "details";
+
+/**
+ * Whose bank the customer's details came from, in a word; unknown ones are a warning: the customer was told it has
+ * none at hand, so what the agent asked for could not be given.
+ */
+function detailsFact(d: CustomerDetails) {
+  if (d.known) {
+    const word =
+      d.from === "world" ? "тестовые данные сценария" : d.from === "fixtures" ? "заглушки стенда" : `ЕПК ${d.epk}`;
+    return { label: "Реквизиты клиента", value: word, title: d.text };
+  }
+  const why =
+    d.from === "fixtures"
+      ? "заглушки стенда не прочитаны: проверьте папку с кодом агента"
+      : d.epk
+        ? `ЕПК ${d.epk} без реквизитов в разделе «Агент»`
+        : "клиент без ЕПК";
+  return {
+    label: "Реквизиты клиента",
+    value: <span className="text-warn">неизвестны</span>,
+    title: `Клиенту сказано, что реквизитов под рукой нет: ${why}.`,
+  };
+}
 const ORDER: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
 const WORD: Record<string, [string, string]> = {
   FAIL: ["ошибка", "text-bad"],
@@ -256,6 +279,7 @@ export function Dialog({
                   ]
                 : []),
               { label: "Ваши ответы", value: reviewed ? `${reviewed}\u00a0из\u00a0${broken}` : "ещё нет" },
+              ...(row.details ? [detailsFact(row.details)] : []),
             ]}
           />
         </div>
@@ -311,6 +335,7 @@ export function Dialog({
                 итог: row.status,
                 вторая_проверка: row.second,
                 критерии: row.rules,
+                реквизиты_клиента: row.details,
               },
               null,
               2,

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Check as CheckIcon, Code2, Globe, Monitor, PlugZap, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
-import type { LabState, Probe, Target } from "../../lab/types";
+import type { Client, LabState, Probe, Target } from "../../lab/types";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
@@ -30,6 +30,32 @@ const words = (text: string) =>
     .split(/[\s,;]+/)
     .map((s) => s.trim())
     .filter(Boolean);
+
+/** An EPK's organization as typed: the terminal numbers in one line. */
+type Draft = { name: string; inn: string; terminals: string };
+const draftOf = (c?: Client): Draft => ({
+  name: c?.name ?? "",
+  inn: c?.inn ?? "",
+  terminals: (c?.terminals ?? []).join(" "),
+});
+
+/** The organizations of the EPK ids talked as, as the service keeps them: one described by nothing is left out. */
+function described(ids: string[], drafts: Record<string, Draft>): Record<string, Client> {
+  return Object.fromEntries(
+    ids.flatMap((id) => {
+      const d = drafts[id];
+      const c = d && { name: d.name.trim(), inn: d.inn.trim(), terminals: words(d.terminals) };
+      return c && (c.name || c.inn || c.terminals.length) ? [[id, c] as const] : [];
+    }),
+  );
+}
+
+const sameClients = (a: Record<string, Client>, b: Record<string, Client>) =>
+  Object.keys(a).length === Object.keys(b).length &&
+  Object.entries(a).every(
+    ([id, c]) =>
+      b[id] && c.name === b[id].name && c.inn === b[id].inn && c.terminals.join(" ") === b[id].terminals.join(" "),
+  );
 
 /** How each way reaches the agent; the ways are named by the service (backend/lab/agents, NAMES), as in «Сыграть». */
 const WAY_LOOK: Record<string, { icon: typeof Globe; how: string }> = {
@@ -153,11 +179,21 @@ export function ConnectionForm({ state }: { state: LabState }) {
   const [way, setWay] = useState(wayOf(state, memory.way) ?? "prod");
   const [prodUrl, setProdUrl] = useState(saved.prodUrl);
   const [epk, setEpk] = useState(saved.epk.join(" "));
+  const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
+    Object.fromEntries(Object.entries(saved.clients).map(([id, c]) => [id, draftOf(c)])),
+  );
   const [repo, setRepo] = useState(saved.repo);
   const [saving, setSaving] = useState(false);
   const [checks, setChecks] = useState<Record<string, Answer | "pending">>({});
+  const ids = words(epk);
+  const clients = described(ids, drafts);
   const dirty =
-    prodUrl.trim() !== saved.prodUrl || repo.trim() !== saved.repo || words(epk).join(" ") !== saved.epk.join(" ");
+    prodUrl.trim() !== saved.prodUrl ||
+    repo.trim() !== saved.repo ||
+    ids.join(" ") !== saved.epk.join(" ") ||
+    !sameClients(clients, saved.clients);
+  const draft = (id: string, field: keyof Draft, value: string) =>
+    setDrafts((all) => ({ ...all, [id]: { ...draftOf(), ...all[id], [field]: value } }));
   const target = state.targets.find((t) => t.id === way);
   const check = target ? (checks[targetKey(target)] ?? null) : null;
   const last = lastOn(memory.last, target);
@@ -167,7 +203,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
   };
   const save = () => {
     setSaving(true);
-    api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: repo.trim() })
+    api("/api/settings", { prodUrl: prodUrl.trim(), epk: ids, clients, repo: repo.trim() })
       .then(() => refresh())
       .then(() => toast.notify("Сохранено"))
       .catch(toast.error)
@@ -253,6 +289,53 @@ export function ConnectionForm({ state }: { state: LabState }) {
             spellCheck={false}
           />
         </Field>
+        {way === "prod" && ids.length > 0 && (
+          <fieldset>
+            <legend className="mb-1.5 block text-small font-medium text-fg-2">Реквизиты этих клиентов</legend>
+            <div className="space-y-3">
+              {ids.map((id) => (
+                <div key={id}>
+                  <p className="mb-1 font-mono text-meta text-fg-3">ЕПК {id}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      aria-label={`Организация клиента ${id}`}
+                      autoComplete="off"
+                      value={drafts[id]?.name ?? ""}
+                      onChange={(e) => draft(id, "name", e.target.value)}
+                      placeholder="Организация"
+                      className={INPUT}
+                      spellCheck={false}
+                    />
+                    <input
+                      aria-label={`ИНН клиента ${id}`}
+                      autoComplete="off"
+                      inputMode="numeric"
+                      value={drafts[id]?.inn ?? ""}
+                      onChange={(e) => draft(id, "inn", e.target.value)}
+                      placeholder="ИНН"
+                      className={INPUT}
+                      spellCheck={false}
+                    />
+                    <input
+                      aria-label={`Номера терминалов клиента ${id}`}
+                      autoComplete="off"
+                      inputMode="numeric"
+                      value={drafts[id]?.terminals ?? ""}
+                      onChange={(e) => draft(id, "terminals", e.target.value)}
+                      placeholder="Номера терминалов через пробел"
+                      className={cn(INPUT, "col-span-2")}
+                      spellCheck={false}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-1.5 text-small text-fg-3">
+              Это клиент сможет назвать агенту: на стенде агент видит настоящие данные этих организаций. Без реквизитов
+              клиент скажет, что назвать их не может.
+            </p>
+          </fieldset>
+        )}
       </div>
       {dirty && <p className="mt-4 text-small text-warn">Есть несохранённые изменения</p>}
       <div className="mt-4 flex flex-wrap items-center gap-2">

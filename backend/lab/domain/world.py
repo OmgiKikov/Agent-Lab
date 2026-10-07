@@ -18,6 +18,10 @@ SCENARIO_TOOLS = (
     'MakeReqToSM2',
 )
 MAX_BODY = 19000  # the mock server rejects override bodies over 20000 characters
+# What the customer is told when the bank's client is unknown: a number it made up would be a wrong one for the agent.
+NO_DETAILS = (
+    'их нет под рукой: если агент спросит номер терминала или ИНН, скажи, что назвать не можешь; не придумывай.'
+)
 
 # Element shapes for lists that are empty in the fixtures (from the agent's pydantic models).
 SETTLEMENT_ITEMS = {
@@ -148,9 +152,57 @@ def overrides(world: dict | None, shapes: dict | None) -> dict:
     return tools
 
 
+def _first(value: object) -> dict:
+    """The first object of a fixture's list, or an empty one."""
+    return value[0] if isinstance(value, list) and value and isinstance(value[0], dict) else {}
+
+
+def fixture_client(shapes: dict | None) -> dict | None:
+    """The client the stand's own fixtures hold (shapes: their answers, agents.world.templates), in the shape of a
+    world's client: what the agent sees when no world of a scenario was sent to the mocks. None when the fixtures
+    cannot be read or hold no client."""
+    if not shapes:
+        return None
+    listed = [t for t in (shapes.get('getLkkTerminalList') or {}).get('terminals') or [] if isinstance(t, dict)]
+    org = (shapes.get('organizationInfoByMidOrTid') or {}).get('organization') or {}
+    by_epk = _first((shapes.get('organizationInfoByEpkId') or {}).get('organizations'))
+    inn = str(org.get('inn') or by_epk.get('inn') or '')
+    terminals = [
+        {'nameForClient': str(t.get('nameForClient') or ''), 'terminalId': str(t['terminalId'])}
+        for t in listed
+        if t.get('terminalId')
+    ]
+    if not inn and not terminals:
+        return None
+    point = _first(listed)
+    organization = {
+        'name': str(org.get('name') or ''),
+        'inn': inn,
+        'merchantName': str(point.get('merchantName') or ''),
+        'address': str(point.get('address') or ''),
+    }
+    return {'organization': organization, 'terminals': terminals}
+
+
+def epk_client(details: dict | None) -> dict | None:
+    """The organization of an EPK on the IFT stand as the person wrote it in the settings (name, inn, terminals), in
+    the shape of a world's client; None when nothing is written for it."""
+    if not details:
+        return None
+    organization = {
+        'name': details.get('name') or '',
+        'inn': details.get('inn') or '',
+        'merchantName': '',
+        'address': '',
+    }
+    terminals = [{'nameForClient': '', 'terminalId': tid} for tid in details.get('terminals') or []]
+    return {'organization': organization, 'terminals': terminals}
+
+
 def customer_profile(world: dict | None, known: dict | None = None) -> str:
     """The client's view of the world: the organization and its terminals as far as this customer knows them.
-    known (the card's identifiers): per identifier knows | looks_up | unknown; without it the customer knows all."""
+    known (the card's identifiers): per identifier knows | looks_up | unknown; without it the customer knows all.
+    What the client has no value for (a name, a point of sale) is left out."""
     if not world:
         return ''
     org = world['organization']
@@ -158,21 +210,32 @@ def customer_profile(world: dict | None, known: dict | None = None) -> str:
     def what(name: str) -> str:
         return ((known or {}).get(name) or {}).get('value', 'knows')
 
+    access = what('organization')
     inn = {
-        'knows': f', ИНН {org["inn"]}',
-        'looks_up': f', ИНН наизусть не помнишь; если попросят, посмотришь: {org["inn"]}',
-        'unknown': ', ИНН не знаешь',
-    }[what('organization')]
-    numbers = what('terminal')
-    terminals = ', '.join(
-        t['nameForClient'] + (f' (номер {t["terminalId"]})' if numbers != 'unknown' else '') for t in world['terminals']
+        'knows': f'ИНН {org["inn"]}',
+        'looks_up': f'ИНН наизусть не помнишь; если попросят, посмотришь: {org["inn"]}',
+        'unknown': 'ИНН не знаешь',
+    }[access]
+    who = ', '.join(x for x in (org.get('name'), inn if org.get('inn') or access == 'unknown' else '') if x)
+    point = ', '.join(
+        x for x in (f'«{org["merchantName"]}»' if org.get('merchantName') else '', org.get('address')) if x
     )
+    numbers = what('terminal')
+
+    def terminal(t: dict) -> str:
+        number = f'номер {t["terminalId"]}' if numbers != 'unknown' else ''
+        name = t.get('nameForClient') or ''
+        return f'{name} ({number})' if name and number else name or number
+
+    named = [x for x in map(terminal, world['terminals']) if x]
     note = {
         'knows': '',
         'looks_up': ' Номера терминалов наизусть не помнишь: если попросят, сначала скажи, что посмотришь.',
         'unknown': ' Номеров терминалов не знаешь.',
     }[numbers]
-    return (
-        f'Твоя организация: {org["name"]}{inn}. Торговая точка «{org["merchantName"]}», '
-        f'{org["address"]}. Терминалы: {terminals}.{note}'
-    )
+    lines = [f'Твоя организация: {who}.' if who else '', f'Торговая точка {point}.' if point else '']
+    if named:
+        lines.append(f'Терминалы: {", ".join(named)}.{note}')
+    elif world['terminals']:
+        lines.append(f'Терминалов: {len(world["terminals"])}.{note}')
+    return ' '.join(x for x in lines if x)
