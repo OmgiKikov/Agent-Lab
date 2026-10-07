@@ -156,13 +156,28 @@ async def play(item: dict, agent: agents.HttpAgent, details: str, changed: Calla
         return False
 
 
+def verdict_of(found: dict) -> dict:
+    """What a pair keeps of a judged conversation: its verdict, the rows on the criteria and who judged."""
+    return {key: found.get(key) for key in ('status', 'rules', 'second', 'error', 'model', 'judgeVersion')}
+
+
 async def judge(record: dict, item: dict, changed: Callable[[], None]) -> None:
-    """A conversation that ran to its end, judged as a recorded one by the judge of the recordings."""
+    """A conversation that ran to its end and its recording, cut to as many replies of the agent (domain.replay.cut),
+    both judged now by the judge of the recordings: a pair differs in the agent's replies only."""
     item['stage'] = 'модель оценивает'
     changed()
-    found = await conversations.judge_dialogue(pairs.as_dialogue(item), judged_by(record, item['topicId']))
-    keep = ('status', 'rules', 'second', 'error', 'model', 'judgeVersion')
-    item.update({key: found.get(key) for key in keep}, stage='')
+    topic = judged_by(record, item['topicId'])
+    replies = sum(1 for turn in item['conversation'] if turn['role'] == 'agent')
+    if not replies:  # nothing of the agent to set beside the recording
+        item.update(status='UNMEASURED', error='Агент не ответил ни разу.', stage='')
+        changed()
+        return
+    recording = pairs.cut({'id': item['dialogueId'], 'messages': item['recorded']}, replies)
+    async with asyncio.TaskGroup() as group:
+        then = group.create_task(conversations.judge_dialogue(recording, topic))
+        now = group.create_task(conversations.judge_dialogue(pairs.as_dialogue(item), topic))
+    before = verdict_of(then.result())
+    item.update(verdict_of(now.result()), before=before, cut=len(recording['messages']), stage='')
     changed()
 
 
@@ -204,7 +219,7 @@ async def run(check: str, key: str, count: int, progress: Progress = lambda **_:
     with models.about(f'replay:{record["id"]}'):
         try:
             async with agents.session(connection.connect(key)) as agent:
-                simulation.same_agent(record, agent.version)
+                same_agent(record, agent.version)
                 record['version'] = agent.version
                 storage.replays.update(record['id'], version=agent.version)
                 await play_all(record, agent, changed)
@@ -237,6 +252,17 @@ async def play_all(record: dict, agent: agents.HttpAgent, changed: Callable[[int
         for index, item in enumerate(record['items']):
             if item['status'] == 'RUNNING':
                 group.create_task(one(index))
+
+
+def same_agent(record: dict, version: str) -> None:
+    """A check continued after a restart goes on only with the agent it began with: one check must not mix two versions
+    of the agent. A stand that names no version cannot be told apart, and goes on."""
+    unknown = {simulation.PENDING_VERSION, agents.UNKNOWN_VERSION, '', None}
+    if record['version'] not in unknown and version not in unknown and version != record['version']:
+        raise RuntimeError(
+            f'Агент на стенде обновился, пока Lab перезапускался (было {record["version"]}, стало {version}): '
+            'в одной проверке нельзя смешивать версии. Запустите проверку заново.'
+        )
 
 
 def finish(record: dict) -> None:

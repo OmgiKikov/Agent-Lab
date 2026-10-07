@@ -1,6 +1,7 @@
 """The live agent on the same customers: the conversations of a check's result played again with the agent under test
 (domain.replay, flows.replay, storage.replays) and compared with the recordings, pair by pair."""
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -104,6 +105,31 @@ class CustomerTests(unittest.TestCase):
                 ('assistant', 'Готово'),
             ),
         )
+
+    def test_a_recording_is_cut_to_as_many_replies_of_the_agent(self) -> None:
+        dialogue = recorded(
+            'd1',
+            ('user', 'a'),
+            ('assistant', 'b'),
+            ('user', 'c'),
+            ('assistant', 'd'),
+            ('user', 'e'),
+            ('assistant', 'f'),
+        )
+        self.assertEqual(
+            replay.cut(dialogue, 2),
+            recorded('d1', ('user', 'a'), ('assistant', 'b'), ('user', 'c'), ('assistant', 'd')),
+        )
+        self.assertEqual(replay.cut(dialogue, 5), dialogue)
+
+    def test_the_customer_may_name_what_the_recording_hides(self) -> None:
+        situation = replay.situation(recorded('d', ('user', 'Терминал #####')))
+        self.assertIn('исключение из правила', situation)
+
+    def test_at_most_a_hundred_customers_are_met_again(self) -> None:
+        result = {'results': [verdict(f'd{n}', 'PASS') for n in range(150)]}
+        self.assertEqual(len(replay.chosen(result, 300)), replay.LIMIT)
+        self.assertEqual(replay.LIMIT, 100)
 
     def test_the_same_customers_are_the_judged_ones_of_the_result(self) -> None:
         result = {
@@ -276,6 +302,8 @@ class LiveFlowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(conversations, 'judge_dialogue', judge):
             record = await live.run('tone', 'test', 10)
         self.assertEqual(record['status'], 'done')
+        self.assertNotIn('topics', storage.replays.summaries()[0])
+        self.assertNotIn('customer', storage.replays.summaries()[0])
         self.assertEqual((record['version'], record['targetName']), ('1.4.2', 'Тестовый стенд'))
         self.assertEqual(record['basis']['checkId'], 'c1')
         self.assertEqual(sorted(item['dialogueId'] for item in record['items']), ['d1', 'd2'])
@@ -288,11 +316,47 @@ class LiveFlowTests(unittest.IsolatedAsyncioTestCase):
         # The judge of the recordings, with the criteria of the result as the check judged them (clarified).
         topic = judge.await_args_list[0].args[1]
         self.assertIn('Уточнения, подтверждённые человеком', topic['rules'][0]['text'])
-        self.assertEqual(judge.await_count, 2)
-        self.assertEqual(record['summary']['fixed'], 1)
-        self.assertEqual(record['summary']['before'], {'failed': 1, 'measured': 2})
+        # Each side of a pair judged now: the recording (at the same length) and the conversation now.
+        self.assertEqual(judge.await_count, 4)
+        self.assertEqual(record['summary']['fixed'], 0)
+        self.assertEqual(record['summary']['before'], {'failed': 0, 'measured': 2})
         self.assertEqual(record['summary']['now'], {'failed': 0, 'measured': 2})
-        self.assertEqual(storage.replays.summaries()[0]['summary']['fixed'], 1)
+        self.assertEqual(storage.replays.summaries()[0]['summary']['passing'], 2)
+
+    async def test_the_recording_is_judged_at_the_length_of_the_conversation_now(self) -> None:
+        """A recording longer than the conversation now is judged on as many replies of the agent: an error the agent
+        made only later in the recording is not counted as fixed by a conversation that never got that far."""
+        long = recorded(
+            'd4',
+            ('user', 'Вопрос'),
+            ('assistant', 'Ответ 1'),
+            ('user', 'Ещё'),
+            ('assistant', 'Ответ 2'),
+            ('user', 'Ещё'),
+            ('assistant', 'Ответ 3'),
+            ('user', 'Ещё'),
+            ('assistant', 'ПЛОХО'),
+        )
+        export = inputs.add_export([long], 'Длинные.xlsx')
+        self.result['export'] = storage.exports.line(export)
+        self.result['results'] = [verdict('d4', 'FAIL', ('pronouns', 'FAIL'))]
+        storage.documents.save('tone-result.json', self.result)
+        shown: list[list[str]] = []
+
+        async def judge(dialogue: dict, topic: dict) -> dict:
+            replies = [m['content'] for m in dialogue['messages'] if m['role'] == 'assistant']
+            shown.append(replies)
+            status = 'FAIL' if any('ПЛОХО' in reply for reply in replies) else 'PASS'
+            return await judged_as(status)(dialogue, topic)
+
+        with patch.object(conversations, 'judge_dialogue', AsyncMock(side_effect=judge)):
+            record = await live.run('tone', 'test', 10)
+        [played] = record['items']
+        self.assertEqual(played['replies'], 3)
+        self.assertIn(['Ответ 1', 'Ответ 2', 'Ответ 3'], shown)  # the recording, cut to the replies now
+        self.assertEqual((played['before']['status'], played['status']), ('PASS', 'PASS'))
+        self.assertEqual(played['cut'], 6)
+        self.assertEqual(record['summary']['fixed'], 0)
 
     async def test_without_a_result_there_is_nobody_to_meet(self) -> None:
         storage.documents.save('tone-result.json', None)
@@ -319,7 +383,13 @@ class LiveFlowTests(unittest.IsolatedAsyncioTestCase):
             storage.replays.update_items(
                 'live-1',
                 {
-                    ended: {'conversation': [{'role': 'customer', 'text': 'Сняли дважды'}], 'ended': True},
+                    ended: {
+                        'conversation': [
+                            {'role': 'customer', 'text': 'Сняли дважды'},
+                            {'role': 'agent', 'text': 'Ответ', 'options': []},
+                        ],
+                        'ended': True,
+                    },
                     cut: {'conversation': [{'role': 'customer', 'text': 'Как подключить СБП'}], 'ended': False},
                 },
             )
@@ -330,11 +400,65 @@ class LiveFlowTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 storage.tasks.CURRENT.reset(token)
         self.assertEqual(record['status'], 'done')
-        self.assertEqual(judge.await_count, 2)
+        self.assertEqual(judge.await_count, 4)
         by_id = {item['dialogueId']: item for item in record['items']}
-        self.assertEqual(len(by_id['d1']['conversation']), 1)  # judged as it ended, never played again
+        self.assertEqual(len(by_id['d1']['conversation']), 2)  # judged as it ended, never played again
         self.assertEqual(by_id['d2']['restarts'], 1)
         self.assertEqual([told[0] for told in self.agent.told.values()], ['Как подключить СБП'])
+
+    async def test_a_stand_updated_during_a_restart_says_so_in_the_words_of_this_check(self) -> None:
+        record = live.begun('tone', 'test', 10, 'live-2')
+        storage.replays.update('live-2', version='1.0')
+        with self.assertRaisesRegex(RuntimeError, 'в одной проверке'):
+            live.same_agent({**record, 'version': '1.0'}, '2.0')
+
+
+class LiveStopTests(unittest.IsolatedAsyncioTestCase):
+    """«Остановить» during a check of the live agent: it ends as it stands."""
+
+    async def asyncSetUp(self) -> None:
+        support.serve(self)
+        export = inputs.add_export([recorded('d1', ('user', 'Вопрос'), ('assistant', 'Ответ'))], 'a.xlsx')
+        result = {
+            'purpose': 'tone-of-voice',
+            'checkId': 'c1',
+            'finishedAt': '2026-10-02T10:00:00+00:00',
+            'export': storage.exports.line(export),
+            'topics': [
+                {'id': 't1', 'title': 'Tone of voice', 'rules': [{'id': 'r', 'text': 'Правило', 'quote': 'Правило'}]}
+            ],
+            'results': [verdict('d1', 'FAIL', ('r', 'FAIL'))],
+        }
+        storage.documents.save('tone-result.json', result)
+
+    async def test_a_stop_ends_the_check_with_what_it_has(self) -> None:
+        agent = FakeAgent()
+        entered = asyncio.Event()
+
+        async def slow(conversation_id: str, message: str, world: dict) -> dict:
+            entered.set()
+            await asyncio.Event().wait()
+            return {}
+
+        with (
+            patch.object(live.connection, 'ways', return_value={'test': {'name': 'Тест'}}),
+            patch.object(live.connection, 'connect', return_value=agent),
+            patch.object(agent, 'say', side_effect=slow),
+        ):
+            started = await self.client.post('/api/replays', json={'check': 'tone', 'target': 'test', 'count': 5})
+            self.assertEqual(started.status_code, 200, started.text)
+            await asyncio.wait_for(entered.wait(), 5)
+            await self.client.post('/api/job/stop')
+            for _ in range(200):
+                if not self.jobs.state['running']:
+                    break
+                await asyncio.sleep(0.01)
+        [record] = storage.replays.summaries()
+        stopped = storage.replays.get(record['id'])
+        self.assertEqual(stopped['status'], 'stopped')
+        self.assertEqual(
+            (stopped['items'][0]['status'], stopped['items'][0]['error']), ('UNMEASURED', 'Проверка остановлена')
+        )
 
 
 class LiveStorageTests(unittest.TestCase):

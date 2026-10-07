@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import storage
+from ..domain.replay import LIMIT
 from ..flows import connection, replay
 from . import work
 from .base import Jobs
@@ -17,7 +18,7 @@ router = APIRouter()
 class ReplayCommand(BaseModel):
     check: Literal['tone', 'code']
     target: str
-    count: int = Field(default=50, ge=1, le=300)
+    count: int = Field(default=50, ge=1, le=LIMIT)
 
 
 @router.post('/api/replays')

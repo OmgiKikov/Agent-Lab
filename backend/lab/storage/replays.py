@@ -91,8 +91,14 @@ def _save(connection: sqlite3.Connection, record: dict) -> None:
     )
 
 
+# What a list of checks never needs, and /api/state carries with every look: the conversations, the frozen criteria
+# and the details the synthetic customer gives.
+_HEAVY = {'items', 'topics', 'customer'}
+
+
 def _summary(record: dict) -> str:
-    """The check without its conversations: how many there are, and how many are done."""
+    """The check without its conversations and criteria: how many conversations there are, and how many are done."""
     items = record.get('items') or []
     done = sum(1 for item in items if item.get('status') != 'RUNNING')
-    return db.dump({key: value for key, value in record.items() if key != 'items'} | {'size': len(items), 'done': done})
+    light = {key: value for key, value in record.items() if key not in _HEAVY}
+    return db.dump(light | {'size': len(items), 'done': done})

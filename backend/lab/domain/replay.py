@@ -2,8 +2,10 @@
 and how they compare with the recordings, pair by pair. Pure: no model, no storage.
 
 A played conversation starts with the customer's real first message, word for word; then the synthetic customer wants
-what the customer of the recording wanted (situation), and the agent answers as many times as it did in the recording.
-It is judged by the same judge and criteria as the recordings, so a pair differs in the agent's replies only.
+what the customer of the recording wanted (situation), and the agent answers as many times as it did in the recording,
+at most MAX_REPLIES. Both sides of a pair are judged now, by the same judge and criteria: the conversation now, and the
+recording cut to as many replies of the agent (cut) — a longer recording has more chances to fail, and its later errors
+cannot recur in a shorter conversation, so the whole recording's verdict would count them as fixed.
 """
 
 from . import sampling
@@ -12,7 +14,8 @@ from .problems import rule_key
 from .statistics import paired
 
 MAX_REPLIES = 3  # the agent's replies in a played conversation, as in a run of scenarios
-LIMIT = 300  # conversations of a result played at most, as a check takes at most
+# Customers met again at most: enough pairs to say something, and a record each write can carry.
+LIMIT = 100
 DECIDED = ('PASS', 'FAIL')
 # What a pair says, by the verdicts before (in the recording) and now.
 CHANGE = {
@@ -47,8 +50,21 @@ def situation(dialogue: dict) -> str:
         f'{said}\n'
         'Добивайся того же, что и тогда. Первую реплику ты уже написал. Отвечай на вопросы агента по смыслу этих '
         'реплик; если агент спросит то, чего в них нет, скажи, что не знаешь.\n'
-        'Цифры и имена в записи скрыты знаками # и *: если агент попросит номер или имя, назови правдоподобные.'
+        'Цифры и имена в записи скрыты знаками # и *. Это исключение из правила не выдумывать номера: если агент '
+        'попросит номер терминала, ИНН, сумму или имя, назови правдоподобные.'
     )
+
+
+def cut(dialogue: dict, replies: int) -> dict:
+    """The recording up to the agent's reply number `replies`: what a conversation now with as many replies is set
+    beside. A shorter recording stays whole."""
+    messages, seen = [], 0
+    for message in dialogue.get('messages') or []:
+        if seen == replies:
+            break
+        messages.append(message)
+        seen += message.get('role') == 'assistant'
+    return {**dialogue, 'messages': messages}
 
 
 def as_dialogue(item: dict) -> dict:
