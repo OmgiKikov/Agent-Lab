@@ -28,6 +28,15 @@ STOPPED = 'Остановлено пользователем.'
 
 
 def prepare(given: dict) -> dict:
+    if (
+        'simulations' in given['modes']
+        and 'dataset' not in given['modes']
+        and (given.get('ruleIds') or given.get('replan'))
+    ):
+        raise ValueError(
+            'Сценарии симуляций собираются из ошибок в записанных ответах. Чтобы сыграть их по выбранным критериям '
+            'или по критериям, извлечённым заново, отметьте и «Ответы в датасете».'
+        )
     dataset = storage.datasets.get(given['datasetId'])
     if dataset is None or dataset['archivedAt']:
         raise ValueError('Выберите существующий датасет.')
@@ -84,6 +93,11 @@ async def run(given: dict, progress: Progress) -> dict:
         for mode, result in record['modes'].items():
             if result['status'] == 'done':
                 continue
+            waits = _waits_for_answers(mode, given, record)
+            if waits:
+                result.update(status='failed', error=waits)
+                storage.launches.save('launch', record)
+                continue
             result.update(status='running', error=None)
             storage.launches.save('launch', record)
 
@@ -109,6 +123,20 @@ async def run(given: dict, progress: Progress) -> dict:
     if record['status'] == 'failed':
         raise RuntimeError('Часть режимов не завершена. Результаты успешных режимов сохранены в отчёте запуска.')
     return record
+
+
+def _waits_for_answers(mode: str, given: dict, record: dict) -> str | None:
+    """Why a mode cannot run while the check of the recorded answers of this launch did not finish, when it takes its
+    criteria from that check: the scenarios by chosen criteria are built from its errors, criteria read anew come from
+    it. None when the mode can run."""
+    answers = record['modes'].get('dataset')
+    if mode == 'dataset' or answers is None or answers['status'] == 'done':
+        return None
+    if mode == 'simulations' and (given.get('ruleIds') or given.get('replan')):
+        return 'Проверка «Ответы в датасете» не завершилась, а сценарии по выбранным критериям собираются из её ошибок.'
+    if mode == 'questions' and given.get('replan'):
+        return 'Проверка «Ответы в датасете» не завершилась, а критерии, извлечённые заново, даёт она.'
+    return None
 
 
 def view(record: dict) -> dict:
@@ -160,7 +188,8 @@ async def _mode(mode: str, given: dict, progress: Progress, launch_id: str) -> d
             progress,
             f'{launch_id}-questions',
             rule_ids=given.get('ruleIds'),
-            replan=bool(given.get('replan')),
+            # The criteria are read anew once per launch: by its check of the recorded answers when it has one.
+            replan=bool(given.get('replan')) and 'dataset' not in given.get('modes', ()),
         )
         return {
             'status': result['status'],

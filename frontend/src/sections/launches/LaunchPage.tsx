@@ -195,6 +195,10 @@ export function LaunchPage({ check }: { check: Check }) {
   const last = resultOf(state, check);
   const loading = !library || !judges.data;
   const failed = datasets.isError || judges.isError;
+  // Scenarios are built from the errors the check of the recorded answers finds: by chosen criteria, or by criteria
+  // read anew, the simulations need that check in the same launch (api/launches.py says the same).
+  const scenariosWait =
+    chosen.includes("simulations") && !chosen.includes("dataset") && (!!subset || (extractedBefore && replan));
   const ready =
     !loading &&
     !failed &&
@@ -202,7 +206,8 @@ export function LaunchPage({ check }: { check: Check }) {
     rulesReady &&
     conversations > 0 &&
     chosen.length > 0 &&
-    !(subset && !subset.length);
+    !(subset && !subset.length) &&
+    !scenariosWait;
   const missing: ReactNode = failed ? (
     "Не удалось загрузить датасеты или правила."
   ) : loading ? (
@@ -241,6 +246,8 @@ export function LaunchPage({ check }: { check: Check }) {
     "Укажите, сколько разговоров проверить."
   ) : !chosen.length ? (
     "Отметьте, что проверить."
+  ) : scenariosWait ? (
+    "Сценарии собираются из ошибок в записанных ответах: чтобы сыграть их по выбранным критериям, отметьте и «Ответы в датасете»."
   ) : null;
   const plan =
     dataset && conversations

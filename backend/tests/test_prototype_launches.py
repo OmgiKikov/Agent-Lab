@@ -248,6 +248,82 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(check.await_args.kwargs['replan'], replan)
                 self.assertEqual(replay.await_args.kwargs['replan'], replan)
 
+    async def test_scenarios_by_chosen_or_reextracted_criteria_need_the_recorded_answers_checked_first(self):
+        """Scenarios are built from the errors the check of the recorded answers finds: played by some of the criteria
+        (or by criteria read anew) they need that check in the same launch, so a launch of the simulations alone with
+        such a choice is refused before anything starts; the recorded questions do without it."""
+        two = [criterion(), criterion('Не обещайте сроков.') | {'id': 'r2', 'name': 'Сроки'}]
+        rules = judges.save('tone', 'Правила', 'Всегда обращайтесь к клиенту на вы.', two, None, None)
+        given = {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': rules['id'],
+            'count': 1,
+            'target': 'local-http',
+            'agentVersion': '',
+            'modes': ['simulations'],
+            'ruleIds': ['r2'],
+        }
+        with self.assertRaises(ValueError):
+            launches.prepare(given)
+        launches.prepare(given | {'modes': ['questions']})
+        launches.prepare(given | {'modes': ['dataset', 'simulations']})
+        code = given | {'check': 'code', 'judgeId': None, 'ruleIds': None, 'replan': True}
+        with self.assertRaises(ValueError):
+            launches.prepare(code)
+
+    async def test_the_criteria_are_read_anew_once_per_launch(self):
+        """With the recorded answers in the launch the code's criteria are read anew there, once: the recorded
+        questions are judged by the same criteria, so their answers stay comparable; alone, the questions read them."""
+        metric = {'passed': 1, 'failed': 0, 'measured': 1, 'unmeasured': 0, 'total': 1, 'accuracy': 100}
+
+        async def checked(*args, **kwargs):
+            storage.documents.save(checks.result('code'), {'checkId': 'saved', 'summary': metric})
+
+        for modes, reads in ((['dataset', 'questions'], False), (['questions'], True)):
+            with self.subTest(modes=modes):
+                given = {'check': 'code', 'count': 1, 'target': 'local-http', 'modes': modes, 'replan': True}
+                with (
+                    patch('lab.flows.accuracy.check', new=AsyncMock(side_effect=checked)),
+                    patch('lab.flows.severity.propose', new=AsyncMock(return_value=None)),
+                    patch(
+                        'lab.flows.questions.run',
+                        new=AsyncMock(return_value={'id': 'q', 'status': 'done', 'metric': metric}),
+                    ) as replay,
+                ):
+                    await launches.run(given, lambda **_: None)
+                self.assertEqual(replay.await_args.kwargs['replan'], reads)
+
+    async def test_simulations_by_chosen_criteria_never_fall_back_to_older_scenarios(self):
+        """The check of the recorded answers by the chosen criteria failed: the simulations of the launch do not play
+        the scenarios an earlier check left, they fail saying why."""
+        two = [criterion(), criterion('Не обещайте сроков.') | {'id': 'r2', 'name': 'Сроки'}]
+        rules = judges.save('tone', 'Правила', 'Всегда обращайтесь к клиенту на вы.', two, None, None)
+        storage.documents.save(checks.DECK, {'check': 'tone', 'cards': [{'id': 'old', 'criteria': [criterion()]}]})
+        given = {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': rules['id'],
+            'count': 1,
+            'target': 'local-http',
+            'agentVersion': '',
+            'modes': ['dataset', 'simulations'],
+            'ruleIds': ['r2'],
+        }
+        launches.prepare(given)
+        with (
+            patch('lab.flows.tone.check', new=AsyncMock(side_effect=RuntimeError('Модель недоступна'))),
+            patch('lab.flows.scenarios.build', new=AsyncMock()) as build,
+            patch('lab.flows.simulation.run', new=AsyncMock()) as play,
+            self.assertRaises(RuntimeError),
+        ):
+            await launches.run(given, lambda **_: None)
+        build.assert_not_awaited()
+        play.assert_not_awaited()
+        record = storage.launches.listed('launch')[0]
+        self.assertEqual(record['modes']['simulations']['status'], 'failed')
+        self.assertIn('Ответы в датасете', record['modes']['simulations']['error'])
+
     async def test_grouped_check_preserves_native_severity_proposals(self):
         for check, flow in [('tone', 'tone'), ('code', 'accuracy')]:
             with self.subTest(check=check):
