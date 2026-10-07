@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Mark } from "../app/Mark";
 
-/** The shape of content that is still loading. */
-/** A placeholder in the shape of what loads. It shows only after 200 ms, so a fast answer never flashes it. */
+/**
+ * A placeholder in the shape of what loads. It shows only after 200 ms, so a fast answer never flashes it. A tint of the
+ * text's colour, so it shows on white, on grey and in the dark alike.
+ */
 export function Skeleton({ className }: { className?: string }) {
   return (
     <div className="delay-200 duration-150 animate-in fade-in-0 fill-mode-both motion-reduce:animate-none">
-      <div className={cn("animate-pulse rounded-control bg-raised/70", className)} />
+      <div className={cn("animate-pulse rounded-control bg-fg/[0.06]", className)} />
     </div>
   );
 }

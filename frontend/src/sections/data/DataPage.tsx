@@ -1,13 +1,14 @@
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Archive, ArrowRight, ChevronDown, Database, Info, RotateCcw } from "lucide-react";
+import { Archive, ArrowRight, ChevronDown, ChevronRight, Database, Info, RotateCcw } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { SECTIONS, datasetLink, launchLink, stageRoot, type Check } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
 import { useDatasets, type Dataset } from "../../lab/datasets";
-import { count, longDay } from "../../lab/format";
+import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useLaunches } from "../../lab/launches";
 import { ExportFormat } from "../../product/ExportFormat";
@@ -22,9 +23,43 @@ import { ExportConversations } from "./ExportConversations";
 
 const conversations = (n: number) => count(n, "разговор", "разговора", "разговоров");
 
-/** What a check found, in the words of every result: errors of what it could check. */
+/** A number the line is about: dark and even, the rest of the line quiet. */
+const Num = ({ n, bad }: { n: number; bad?: boolean }) => (
+  <span className={cn("font-semibold tabular-nums", bad ? "text-bad" : "text-fg")}>{n}</span>
+);
+
+/** The way to a check not done yet, in the prototype's words. */
+const CHECK_LAUNCH: Record<Check, string> = { tone: "Проверить Tone of voice", code: "Проверить точность" };
+
+type Fact = { key: string; node: ReactNode };
+
+/** Facts in a row, a dot between them; a fact and its dot go to the next line together. */
+function Facts({ facts }: { facts: Fact[] }) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+      {facts.map((fact, i) => (
+        <span key={fact.key} className="whitespace-nowrap">
+          {i > 0 && (
+            <span aria-hidden className="mr-1.5">
+              ·
+            </span>
+          )}
+          {fact.node}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** What a check found, in the words of every result: errors of what it could check, the errors red as there. */
 const foundText = (check: Check, failed: number, measured: number) =>
-  measured ? `${CHECK_NAME[check]}: ${failed} из ${measured} с ошибкой` : `${CHECK_NAME[check]}: не удалось проверить`;
+  measured ? (
+    <>
+      {CHECK_NAME[check]}: <Num n={failed} bad={failed > 0} /> из <Num n={measured} /> с ошибкой
+    </>
+  ) : (
+    `${CHECK_NAME[check]}: не удалось проверить`
+  );
 
 /**
  * «Датасеты»: one export at a time, the newest by default — what it holds and what the checks found in it, in one line,
@@ -51,6 +86,7 @@ export function DataPage() {
   const header = (
     <Header
       title="Датасеты"
+      actionsInline
       actions={
         listed.length > 0 && (
           <UploadButton
@@ -183,8 +219,16 @@ export function DataPage() {
       : []),
   ];
   const title = shownName(d);
-  const facts: { key: string; node: ReactNode }[] = [
-    { key: "total", node: conversations(d.total) },
+  // What the file holds, then what the checks found: two groups, each whole on a line of its own when they wrap.
+  const held: Fact[] = [
+    {
+      key: "total",
+      node: (
+        <>
+          <Num n={d.total} /> {plural(d.total, "разговор", "разговора", "разговоров")}
+        </>
+      ),
+    },
     ...(d.skipped
       ? [
           {
@@ -196,25 +240,38 @@ export function DataPage() {
                 title="В них первым пишет агент или он не отвечает"
                 className="rounded-sm text-warn underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
               >
-                пропущено {d.skipped}
+                пропущено <span className="font-semibold tabular-nums">{d.skipped}</span>
               </button>
             ),
           },
         ]
       : []),
-    ...found.map((f) => ({
-      key: f.check,
-      node: (
-        <Link
-          to={f.to}
-          className="rounded-sm text-fg-2 underline-offset-2 hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-        >
-          {f.text}
-        </Link>
-      ),
-    })),
     ...(d.archivedAt ? [{ key: "archived", node: `в архиве с ${longDay(d.archivedAt)}` }] : []),
   ];
+  // The checks of this dataset, each its own pill: what it found, leading to it; or, not done, the way to do it. The
+  // first not done is the next step and the one black pill; with both done, no pill calls.
+  const nextCheck = d.archivedAt ? undefined : CHECKS.find((check) => !found.some((f) => f.check === check));
+  const pills = CHECKS.flatMap((check) => {
+    const f = found.find((x) => x.check === check);
+    if (f)
+      return [
+        <Link key={check} to={f.to} className={cn(buttonClass({ variant: "outline" }), "font-normal")}>
+          {/* One piece of text: the pill spaces its icon apart, not the words. */}
+          <span>{f.text}</span>
+          <ChevronRight aria-hidden className="size-3.5 text-fg-3" />
+        </Link>,
+      ];
+    if (d.archivedAt) return [];
+    return [
+      <Link
+        key={check}
+        to={`${launchLink(check)}?dataset=${encodeURIComponent(d.id)}`}
+        className={buttonClass({ variant: check === nextCheck ? "primary" : "outline" })}
+      >
+        {CHECK_LAUNCH[check]}
+      </Link>,
+    ];
+  });
   // On a phone an open conversation takes the whole page.
   const reading = !!params.get("d") && !wide;
   const archivedNow = (gone: Dataset, wasInWork: boolean) => {
@@ -255,55 +312,33 @@ export function DataPage() {
                   }
                 />
               )}
-              <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-read text-fg-3">
-                {facts.map((fact, i) => (
-                  // A fact and the dot before it go to the next line together.
-                  <span key={fact.key} className="whitespace-nowrap">
-                    {i > 0 && (
-                      <span aria-hidden className="mr-1.5">
-                        ·
-                      </span>
-                    )}
-                    {fact.node}
-                  </span>
-                ))}
+              <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-read text-fg-3">
+                <Facts facts={held} />
                 <button
                   type="button"
                   aria-label="Подробности"
                   title="Подробности"
                   onClick={() => setInfo(true)}
-                  className="ml-0.5 grid size-7 place-items-center rounded-full text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+                  className="-ml-2.5 grid size-7 place-items-center rounded-full text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
                 >
                   <Info aria-hidden className="size-4" />
                 </button>
               </p>
             </div>
-            {d.archivedAt ? (
-              <Button
-                icon={RotateCcw}
-                disabled={library.changing || !!state.job.running}
-                onClick={() =>
-                  void library.change("archive", d.id, { undo: true }).catch((cause) => toast.error(cause))
-                }
-              >
-                Вернуть из архива
-              </Button>
-            ) : (
-              <Menu
-                align="right"
-                items={CHECKS.map((check) => ({
-                  key: check,
-                  label: CHECK_NAME[check],
-                  run: () => void navigate(`${launchLink(check)}?dataset=${encodeURIComponent(d.id)}`),
-                }))}
-                trigger={
-                  <span className={buttonClass({ variant: "primary" })}>
-                    Проверить
-                    <ChevronDown aria-hidden className="size-4" />
-                  </span>
-                }
-              />
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {pills}
+              {d.archivedAt && (
+                <Button
+                  icon={RotateCcw}
+                  disabled={library.changing || !!state.job.running}
+                  onClick={() =>
+                    void library.change("archive", d.id, { undo: true }).catch((cause) => toast.error(cause))
+                  }
+                >
+                  Вернуть из архива
+                </Button>
+              )}
+            </div>
           </div>
         </section>
       )}
