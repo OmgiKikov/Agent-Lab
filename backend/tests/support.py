@@ -3,6 +3,7 @@
 Discovery (-s tests) imports the test modules by their own names, so they import this one as `support`.
 """
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,11 +50,19 @@ def serve(test: unittest.IsolatedAsyncioTestCase, jobs: Jobs | PerAgent | None =
     test.addAsyncCleanup(test.jobs.close)
 
 
+def agent() -> dict:
+    """The profile of the agent the Lab ships one for (flows/profile.py): what a test of the pipeline runs under."""
+    from lab.domain import profile
+    from lab.flows import profile as profile_flow
+
+    return profile.checked(json.loads(profile_flow.SHIPPED.read_text(encoding='utf-8')))
+
+
 def catalog_of(dialogue_ids: list[str]) -> dict:
     """A catalog of business scenarios with one scenario that holds every conversation named: a deck built in a test
     asks no model for it (flows.catalog.build)."""
     scenario = {'id': 'c1s1', 'title': 'Узнать тариф', 'description': ''}
-    episode = {'acquiring': True, 'start': 1, 'task': 'узнать тариф', 'object': 'тариф', 'scenarioId': 'c1s1'}
+    episode = {'inDomain': True, 'start': 1, 'task': 'узнать тариф', 'object': 'тариф', 'scenarioId': 'c1s1'}
     return {
         'revision': 'test',
         'categories': [{'id': 'c1', 'title': 'Тарифы', 'description': '', 'scenarios': [scenario]}],

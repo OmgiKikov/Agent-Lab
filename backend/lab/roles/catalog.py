@@ -1,6 +1,7 @@
-"""The catalog of business scenarios (domain/catalog.py): the episode reader names each conversation's acquiring task,
-the catalog role proposes the categories and scenarios from all the tasks, and the router places episodes in a
-catalog found before. An episode is named by a short id (e1, e2…)."""
+"""The catalog of business scenarios (domain/catalog.py): the episode reader names each conversation's task in the
+agent's domain, the catalog role proposes the categories and scenarios from all the tasks, and the router places
+episodes in a catalog found before. The reader and the catalog role are told the agent's domain (agent: its profile,
+domain/profile.for_models). An episode is named by a short id (e1, e2…)."""
 
 from typing import Annotated, Any
 
@@ -20,7 +21,7 @@ class Episode(BaseModel):
 
     model_config = ConfigDict(extra='allow')
 
-    acquiring: bool | None = None
+    inDomain: bool | None = None
     reason: str | None = None
     start: int | None = None
     end: int | None = None
@@ -68,19 +69,19 @@ CATALOG = Role('catalog', instructions('catalog'), Catalog)
 ROUTER = Role('catalog.router', instructions('catalog.router'), Placement)
 
 
-async def episode(dialogue: dict) -> Answer[dict]:
-    """The acquiring task of one conversation, read from the whole chat: {acquiring, start, end, task, object} or
-    {acquiring: false, reason}."""
-    payload = {'events': catalog.events(dialogue)}
+async def episode(dialogue: dict, agent: dict) -> Answer[dict]:
+    """The task of one conversation in the agent's domain, read from the whole chat: {inDomain, start, end, task,
+    object} or {inDomain: false, reason}."""
+    payload = {'agent': agent, 'events': catalog.events(dialogue)}
     return await ask(EPISODE, payload, accept=lambda reply: catalog.checked_episode(reply.model_dump(), dialogue))
 
 
-async def propose(tasks: list[dict]) -> Answer[list[dict]]:
+async def propose(tasks: list[dict], agent: dict) -> Answer[list[dict]]:
     """The categories and scenarios of the tasks ({task, object, count}: each distinct task once, with how many
     episodes have it), with the code's ids (catalog.taxonomy)."""
     return await ask(
         CATALOG,
-        {'tasks': tasks},
+        {'agent': agent, 'tasks': tasks},
         accept=lambda reply: catalog.taxonomy([c.model_dump() for c in reply.categories]),
         timeout=PROPOSING,
     )

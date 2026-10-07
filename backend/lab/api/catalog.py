@@ -1,9 +1,10 @@
-"""The catalog of business scenarios: building it from the export, and reading it."""
+"""The catalog of business scenarios: building it from the export, and reading it; the profile of the agent it is
+built for."""
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
-from ..flows import catalog
+from ..flows import catalog, profile
 from .base import Jobs, start
 
 router = APIRouter()
@@ -28,3 +29,23 @@ def catalog_view() -> dict:
     if not found or not found.get('categories'):
         raise HTTPException(404, 'Каталог бизнес-сценариев ещё не собран')
     return {key: value for key, value in found.items() if key not in ('episodes', 'proposed')}
+
+
+@router.get('/api/profile')
+def profile_view() -> dict:
+    """The profile of the agent under test: its domain, the identifiers of its customers, how the export names it."""
+    try:
+        return profile.current()
+    except RuntimeError as error:
+        raise HTTPException(404, str(error)) from error
+
+
+@router.put('/api/profile')
+def save_profile(jobs: Jobs, payload: dict = Body(...)) -> dict:
+    """A person's profile of the agent; the conversations are read again under it on the next build."""
+    if jobs.state['running']:
+        raise HTTPException(409, 'Профиль нельзя менять, пока идёт задача. Дождитесь её или остановите.')
+    try:
+        return profile.save(payload)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error

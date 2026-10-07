@@ -1,5 +1,5 @@
-"""The customer of a scenario: one logged acquiring episode read into a card, every item with a quote the code found in
-the log. Pure functions; the model's part is roles/card.py.
+"""The customer of a scenario: one logged episode of the agent's domain read into a card, every item with a quote the
+code found in the log. Pure functions; the model's part is roles/card.py.
 
 A card holds the task, what the customer knows and how they know it, what they saw, how they write and how they
 reacted to the agent. The simulator reads only this customer part (`situation`, rendered here from the fields, never
@@ -34,7 +34,8 @@ SAID = {
     'on_request': 'говоришь, если спросят',
 }
 ENTRY = {'after_greeting': 'после приветствия', 'after_other_topic': 'после другого вопроса'}
-IDENTIFIERS = ('terminal', 'organization')
+# What an agent's request for an identifier says, besides the words of the profile's identifiers (_asks_for).
+IDENTIFYING = r'номер|реквизит|идентификатор|договор|данные'
 GREETING = re.compile(r'^\W*(здравствуй|добр|привет|доброе)', re.I)
 POLITE = re.compile(r'пожалуйста|спасибо|подскажите|будьте добры', re.I)
 MASK = re.compile(r'[#*]+')
@@ -61,7 +62,6 @@ TRIGGER_NEEDS = {
     'unclear_question': (ASKS,),
     'repeated_clarification': (ASKS,),
     'choice_offer': (ASKS,),
-    'identifier_request': (ASKS, re.compile(r'номер|инн|реквизит|мерчант|терминал|точк|tid|договор', re.I)),
     'handoff_offer': (re.compile(r'оператор|специалист|поддержк|горяч\w* лини|позвон|отделени|менеджер', re.I),),
     'instruction': (STEPS,),
 }
@@ -69,12 +69,11 @@ TRANSITION = re.compile(r'`\s*`\s*`\s*transition-code\s*([\w-]*)\s*`\s*`\s*`\.?'
 
 
 def readable(value: dict) -> dict:
-    """The extractor's answer, if a card can be read from it: in Russian, and with a name, a goal and the episode's
-    start unless it says the conversation has no acquiring task. A ValueError asks the model again."""
+    """The extractor's answer, if a card can be read from it: in Russian, with a name, a goal and the episode's start.
+    Whether the customer has a task of the agent's domain is the episode reader's decision, not the extractor's: its
+    doubt is kept on the card (domainDoubt). A ValueError asks the model again."""
     if FOREIGN.search(json.dumps(value, ensure_ascii=False)):
         raise ValueError('card text switched to another script')
-    if value.get('eligible') is False:
-        return value
     for field in ('name', 'goal'):
         if not isinstance(value.get(field), str) or not value[field].strip():
             raise ValueError(f'card needs {field}')
@@ -96,11 +95,12 @@ def events(dialogue: dict) -> list[dict]:
     return found
 
 
-def chat(dialogue: dict) -> dict:
-    """What the extractor is told about the chat besides its events: its channel and whether other agents took part."""
+def chat(dialogue: dict, agent: dict) -> dict:
+    """What the extractor is told about the chat besides its events: its channel and whether agents other than the one
+    under test (agent: its profile) took part, when the export names them."""
     meta = dialogue.get('meta') or {}
-    agents = meta.get('agents') or []
-    return {'channel': meta.get('channel'), 'otherAgentsInChat': bool(set(agents) - {'ACQUIRING_AGENT'})}
+    agents, own = meta.get('agents') or [], agent['export']['agentCode']
+    return {'channel': meta.get('channel'), 'otherAgentsInChat': bool(set(agents) - {own}) if own and agents else None}
 
 
 def _found(quote: object, text: str, role: str) -> bool:
@@ -114,15 +114,30 @@ def _holds_value(quote: str) -> bool:
     return len(re.sub(r'\D', '', quote)) >= 5 or bool(MASK.search(quote))
 
 
-def _fits(trigger: str, agent_text: str) -> bool:
-    """The agent's message shows what the trigger says it did: a question, a request for a number, a handoff, steps."""
-    return all(pattern.search(agent_text) for pattern in TRIGGER_NEEDS.get(trigger, ()))
+def _asks_for(agent: dict | None) -> re.Pattern:
+    """What an agent's request for an identifier of this agent's customers says: a number, details, or the words of
+    the profile's identifiers (their stems: «терминала» asks for «номер терминала»)."""
+    labels = [x['label'] for x in (agent or {}).get('identifiers') or []]
+    stems = {re.escape(word[:5].lower()) for label in labels for word in re.findall(r'\w{3,}', label)}
+    return re.compile('|'.join([IDENTIFYING, *sorted(stems)]), re.I)
 
 
-def grounded(value: dict, messages: list[dict], end: int | None = None) -> tuple[dict, Counter]:
+def _fits(trigger: str, agent_text: str, agent: dict | None = None) -> bool:
+    """The agent's message shows what the trigger says it did: a question, a request for an identifier, a handoff,
+    steps."""
+    needs = TRIGGER_NEEDS.get(trigger, ())
+    if trigger == 'identifier_request':
+        needs = (ASKS, _asks_for(agent))
+    return all(pattern.search(agent_text) for pattern in needs)
+
+
+def grounded(
+    value: dict, messages: list[dict], end: int | None = None, agent: dict | None = None
+) -> tuple[dict, Counter]:
     """Only items whose quotes stand in the cited message of the right speaker, within the episode when its end is
     known (end: after it the customer turns to another task); the rest is counted, not kept, and those that cite a
-    message after the episode also apart (afterEpisode)."""
+    message after the episode also apart (afterEpisode). agent: the profile of the agent under test, whose
+    identifiers the card may hold (none without it)."""
     last = min(end or len(messages), len(messages))
 
     def said(n: object, quote: object, role: str) -> bool:
@@ -151,7 +166,7 @@ def grounded(value: dict, messages: list[dict], end: int | None = None) -> tuple
         and said(x.get('n'), x.get('quote'), 'user')
         and said(x.get('agentN'), x.get('agentQuote'), 'assistant')
         and x['agentN'] < x['n']
-        and _fits(x['trigger'], messages[x['agentN'] - 1]['content']),
+        and _fits(x['trigger'], messages[x['agentN'] - 1]['content'], agent),
     }
     for field, valid in lists.items():
         items = [x for x in value.get(field) or [] if isinstance(x, dict)]
@@ -160,17 +175,18 @@ def grounded(value: dict, messages: list[dict], end: int | None = None) -> tuple
         dropped['afterEpisode'] += sum(1 for x in items if isinstance(x.get('n'), int) and x['n'] > last)
     kept['notEstablished'] = [str(x) for x in value.get('notEstablished') or [] if str(x).strip()]
     given = value.get('identifiers') if isinstance(value.get('identifiers'), dict) else {}
-    for name in IDENTIFIERS:
-        item = given.get(name) if isinstance(given.get(name), dict) else {}  # a malformed one is not established
+    kept['identifiers'] = {}
+    for key in (x['key'] for x in (agent or {}).get('identifiers') or []):
+        item = given.get(key) if isinstance(given.get(key), dict) else {}  # a malformed one is not established
         status = item.get('status')
-        # Knowing it means the customer typed the value: a merchant's name is not its INN or terminal number.
+        # Knowing it means the customer typed the value: a company's name is not its INN.
         shown = status == 'does_not_know' or _holds_value(str(item.get('quote') or ''))
         cited = said(item.get('n'), item.get('quote'), 'user')
         if status in ('knows', 'masked_in_source', 'does_not_know') and shown and cited:
-            kept[name] = {'status': status, 'quote': item['quote']}
+            kept['identifiers'][key] = {'status': status, 'quote': item['quote']}
         else:
             dropped['identifiers'] += status in ('knows', 'masked_in_source', 'does_not_know')
-            kept[name] = {'status': 'not_established'}
+            kept['identifiers'][key] = {'status': 'not_established'}
     return kept, dropped
 
 
@@ -190,18 +206,18 @@ def _digits(opening: str, seed: str) -> str:
     return re.sub(r'#+', lambda m: ''.join(rng.choice('123456789') for _ in range(max(4, len(m.group())))), opening)
 
 
-def identifiers(kept: dict) -> dict:
-    """What the customer can say about each identifier: from the log where it shows. Where the log never settles it,
-    the simulator assumes the customer will look it up when asked (basis: assumption): no knowledge is made up either
-    way, and the card keeps that the log did not establish it."""
+def identifiers(kept: dict, agent: dict) -> dict:
+    """What the customer can say about each identifier of the agent's customers (agent: its profile): from the log
+    where it shows. Where the log never settles it, the simulator assumes the customer will look it up when asked
+    (basis: assumption): no knowledge is made up either way, and the card keeps that the log did not establish it."""
     result = {}
-    for name in IDENTIFIERS:
-        status = kept[name]['status']
+    for item in agent['identifiers']:
+        status = kept['identifiers'][item['key']]['status']
         if status == 'not_established':
-            result[name] = {'value': 'looks_up', 'basis': 'assumption', 'status': status}
+            found = {'value': 'looks_up', 'basis': 'assumption'}
         else:
-            value = 'unknown' if status == 'does_not_know' else 'knows'
-            result[name] = {'value': value, 'basis': 'log', 'status': status}
+            found = {'value': 'unknown' if status == 'does_not_know' else 'knows', 'basis': 'log'}
+        result[item['key']] = {'label': item['label'], **found, 'status': status}
     return result
 
 
@@ -271,14 +287,14 @@ def brief(card: dict) -> str:
             + '\n'.join(f'- {x}' for x in card['notEstablished'])
         )
     words = {'knows': 'знаешь', 'looks_up': 'наизусть не помнишь, можешь посмотреть', 'unknown': 'не знаешь'}
-    names = {'terminal': 'Номер терминала', 'organization': 'ИНН и реквизиты организации'}
     assumed = 'из настоящего разговора не известно, знаешь ли ты это; если попросят, скажи, что посмотришь'
-    lines.append(
-        '\n'.join(
-            f'{names[k]}: {assumed if v.get("basis") == "assumption" else words[v["value"]]}.'
-            for k, v in card['identifiers'].items()
-        )
-    )
+    said = [
+        f'{(v.get("label") or k)[:1].upper()}{(v.get("label") or k)[1:]}: '
+        f'{assumed if v.get("basis") == "assumption" else words[v["value"]]}.'
+        for k, v in card['identifiers'].items()
+    ]
+    if said:
+        lines.append('\n'.join(said))
     if card['observations']:
         lines.append(
             'Что получается, когда пробуешь (говори об этом, только если дошло до этого действия):\n'
@@ -296,8 +312,9 @@ def starts(messages: list[dict], start: object) -> bool:
     return isinstance(start, int) and 1 <= start <= len(messages) and messages[start - 1]['role'] == 'user'
 
 
-def customer(value: dict, dialogue: dict, start: int | None = None, end: int | None = None) -> dict:
-    """The customer part of a card from the extractor's answer (readable, eligible): the items the code found in the
+def customer(value: dict, dialogue: dict, agent: dict, start: int | None = None, end: int | None = None) -> dict:
+    """The customer part of a card from the extractor's answer (readable) about the agent under test (agent: its
+    profile): the items the code found in the
     log, the episode's opening with its masks filled, the manner counted from the customer's own messages, and the
     brief the simulator reads (situation). start: where the catalog's reading put the episode; the card then describes
     the episode its business scenario was given for, whatever the extractor said. end: where that episode ends (the
@@ -305,7 +322,7 @@ def customer(value: dict, dialogue: dict, start: int | None = None, end: int | N
     messages, source = dialogue['messages'], str(dialogue['id'])
     meta = dialogue.get('meta') or {}
     agents = meta.get('agents') or []
-    kept, dropped = grounded(value, messages, end)
+    kept, dropped = grounded(value, messages, end, agent)
     said = value['episode']['start']
     if starts(messages, start):
         dropped['episode'] = int(said != start)
@@ -337,18 +354,20 @@ def customer(value: dict, dialogue: dict, start: int | None = None, end: int | N
             'start': start,
             'end': end,
             'entry': (value.get('episode') or {}).get('entry'),
-            'scope': 'acquiring_only' if agents == ['ACQUIRING_AGENT'] else 'mixed' if agents else None,
+            'scope': 'agent_only' if agents == [agent['export']['agentCode']] else 'mixed' if agents else None,
             'channel': meta.get('channel'),
             'row': meta.get('row'),
         },
         **{k: kept[k] for k in ('circumstances', 'facts', 'notEstablished', 'observations', 'reactions')},
-        'identifiers': identifiers(kept),
+        'identifiers': identifiers(kept, agent),
         'style': style(texts),
         'samples': samples,
         'opening': opening,
         'checks': {
             'dropped': dict(dropped),
             'openingFilled': False if not MASK.search(texts[0]) else 'model' if filled else 'digits',
+            # The extractor's doubt that the customer has a task of the domain: the reader decided; kept for review.
+            'domainDoubt': str(value.get('domainDoubt') or '').strip() or None,
         },
     }
     card['situation'] = brief(card)

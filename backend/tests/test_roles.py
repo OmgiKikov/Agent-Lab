@@ -123,23 +123,25 @@ class EachRoleTests(RoleCase):
     async def test_a_card_has_a_name_a_goal_and_the_start_of_its_episode(self):
         talk = {'id': 'd', 'messages': [{'role': 'user', 'content': 'Какой у меня тариф?'}]}
         usable = {'eligible': True, 'name': 'Тариф', 'goal': 'Узнать тариф', 'episode': {'start': 1}}
-        answer = await self.asked(card.CARD, lambda: card.card('Тарифы', talk), {**usable, 'goal': ' '}, usable)
+        answer = await self.asked(
+            card.CARD, lambda: card.card('Тарифы', talk, support.agent()), {**usable, 'goal': ' '}, usable
+        )
         self.assertEqual(answer.value['name'], 'Тариф')
 
     async def test_an_episode_of_the_catalog_names_the_customers_task(self):
         talk = {'id': 'd', 'messages': [{'role': 'user', 'content': 'Не работает QR'}]}
         answer = await self.asked(
             catalog.EPISODE,
-            lambda: catalog.episode(talk),
-            {'acquiring': True, 'start': 2, 'end': 1, 'task': 'починить QR', 'object': 'QR'},
-            {'acquiring': True, 'start': 1, 'end': 1, 'task': 'починить QR', 'object': 'QR'},
+            lambda: catalog.episode(talk, {}),
+            {'inDomain': True, 'start': 2, 'end': 1, 'task': 'починить QR', 'object': 'QR'},
+            {'inDomain': True, 'start': 1, 'end': 1, 'task': 'починить QR', 'object': 'QR'},
         )
         self.assertEqual(answer.value['task'], 'починить QR')
 
     async def test_a_catalog_has_categories_with_scenarios(self):
         answer = await self.asked(
             catalog.CATALOG,
-            lambda: catalog.propose([{'task': 'починить QR', 'object': 'QR', 'count': 3}]),
+            lambda: catalog.propose([{'task': 'починить QR', 'object': 'QR', 'count': 3}], {}),
             {'categories': [{'title': 'QR', 'scenarios': []}]},
             {'categories': [{'title': 'QR', 'scenarios': [{'title': 'Не работает QR'}]}]},
         )

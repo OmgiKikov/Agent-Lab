@@ -15,9 +15,10 @@ from .. import models, storage
 from ..agents import world
 from ..domain import cards, checks, scenarios
 from ..domain import catalog as business
+from ..domain import profile as profile_domain
 from ..roles import card as card_role
 from ..roles import world as world_role
-from . import Progress, accuracy, catalog, connection, inputs, tone
+from . import Progress, accuracy, catalog, connection, inputs, profile, tone
 
 DECK = checks.DECK  # {check, createdAt, model, cards, sets, catalogRevision}
 # What the task says while it builds; the count of the built and the failed ones is the task's own (done of total).
@@ -80,22 +81,17 @@ async def build_card(
     scenario: dict | None = None,
     start: int | None = None,
     end: int | None = None,
+    agent: dict | None = None,
 ) -> dict:
     """The card of one conversation: its customer from the whole chat, every item found in the log (roles.card,
     domain.cards), its frozen criteria, and the world of its test data when the stand's fixtures are there
     (roles.world); without them, or when the model gives no usable world, the scenario is played against the stand's
-    default answers. A conversation without an acquiring task gives {eligible: false, reason}. start: where the
-    catalog's reading put the episode (the card describes the episode its scenario was given for); end: where that
-    episode ends, the customer turning to another task."""
-    answer = await card_role.card(topic['title'], dialogue, start, end)
-    if answer.value.get('eligible') is False:
-        return {
-            'eligible': False,
-            'sets': list(sets),
-            'sourceDialogueId': str(dialogue['id']),
-            'reason': str(answer.value.get('ineligibleReason') or ''),
-        }
-    customer = cards.customer(answer.value, dialogue, start, end)
+    default answers. start: where the catalog's reading put the episode (the card describes the episode its scenario
+    was given for); end: where that episode ends, the customer turning to another task. agent: the profile of the
+    agent under test (flows/profile.py), the current one by default."""
+    agent = agent or profile.current()
+    answer = await card_role.card(topic['title'], dialogue, agent, start, end)
+    customer = cards.customer(answer.value, dialogue, agent, start, end)
     raw, written = cards.episode_texts(customer, dialogue)
     prompts = '\n'.join(source['content'] for source in inputs.sources())
     criteria = scenarios.criteria(topic, general, prompts)
@@ -129,9 +125,10 @@ async def built(check: str, progress: Progress = lambda **_: None) -> dict:
     episodes = found.get('episodes') or {}
     scenario_of = business.scenarios_of(found['categories'])
     groups = business.strata(episodes)
-    chosen, sampled, manifests = _chosen(analysis, episodes, groups)
+    agent = profile.current()
+    chosen, sampled, manifests = _chosen(analysis, episodes, groups, agent)
     manifest = manifests['representative']
-    deck = _Building(check, analysis, episodes, scenario_of, chosen, progress)
+    deck = _Building(check, analysis, episodes, scenario_of, chosen, progress, agent)
     await deck.make(list(chosen))
     lost = [dialogue_id for dialogue_id in sampled if not deck.carded(dialogue_id)]
     extra = business.replacements(groups, sampled, lost, set(chosen))
@@ -163,9 +160,10 @@ class _Building:
         scenario_of: dict[str, dict],
         chosen: dict[str, tuple[list[str], list[str]]],
         progress: Progress,
+        agent: dict,
     ) -> None:
         self.check, self.analysis, self.episodes, self.scenario_of = check, analysis, episodes, scenario_of
-        self.chosen, self.progress = chosen, progress
+        self.chosen, self.progress, self.agent = chosen, progress, agent
         self.general = scenarios.general_rules(analysis)
         self.made: dict[str, dict] = {}
         self.failed: dict[str, dict] = {}
@@ -181,14 +179,25 @@ class _Building:
             topic_of = await _topics(self.analysis, list(dialogues.values()))
         plan = {}
         for dialogue_id in ids:
-            if dialogue_id in dialogues and (topic_of.get(dialogue_id) or {}).get('rules'):
+            # Whether the customer has a task of the agent's domain is the episode reader's decision.
+            episode = self.episodes.get(dialogue_id) or {}
+            reason = (
+                'разговор не прочитан'
+                if not episode or episode.get('error')
+                else f'вне домена агента: {episode.get("reason") or "нет задачи"}'
+                if not business.in_domain(episode)
+                else None
+                if dialogue_id in dialogues and (topic_of.get(dialogue_id) or {}).get('rules')
+                else 'не отнесён к теме с критериями'
+            )
+            if reason is None:
                 plan[dialogue_id] = topic_of[dialogue_id]
             else:
                 self.made[dialogue_id] = {
                     'eligible': False,
                     'sets': self.chosen[dialogue_id][0],
                     'sourceDialogueId': dialogue_id,
-                    'reason': 'не отнесён к теме с критериями',
+                    'reason': reason,
                 }
         self._told(BUILDING)
         for _ in range(ROUNDS):
@@ -205,10 +214,10 @@ class _Building:
         sets, reproduces = self.chosen[dialogue_id]
         episode = self.episodes.get(dialogue_id) or {}
         scenario = self.scenario_of.get(episode.get('scenarioId') or '')
-        start, end = (episode.get('start'), episode.get('end')) if episode.get('acquiring') else (None, None)
+        start, end = episode.get('start'), episode.get('end')
         try:
             self.made[dialogue_id] = await build_card(
-                topic, dialogue, sets, self.general, reproduces, scenario, start, end
+                topic, dialogue, sets, self.general, reproduces, scenario, start, end, self.agent
             )
             self.failed.pop(dialogue_id, None)
         except models.ModelError as error:
@@ -222,7 +231,7 @@ class _Building:
 
 
 def _chosen(
-    analysis: dict, episodes: dict[str, dict], groups: dict[str, list[str]]
+    analysis: dict, episodes: dict[str, dict], groups: dict[str, list[str]], agent: dict
 ) -> tuple[dict[str, tuple[list[str], list[str]]], dict[str, str], dict]:
     """The conversations of the three sets: each with its sets and the criteria it reproduces; the representative
     sample's scenario of each sampled one; the sets' manifests."""
@@ -235,8 +244,8 @@ def _chosen(
     sampled = {dialogue_id: key for dialogue_id, key, _ in sample}
     for dialogue_id in sampled:
         chosen.setdefault(dialogue_id, ([], []))[0].append('representative')
-    acquiring = [i for i, e in episodes.items() if e.get('acquiring')]
-    rare, manifests['stress'] = scenarios.stress(storage.dialogues.read(acquiring), set(chosen))
+    found = storage.dialogues.read([i for i, e in episodes.items() if business.in_domain(e)])
+    rare, manifests['stress'] = scenarios.stress(found, set(chosen), profile_domain.rare(agent, found))
     for dialogue in rare:
         chosen.setdefault(str(dialogue['id']), ([], []))[0].append('stress')
     if not chosen:
