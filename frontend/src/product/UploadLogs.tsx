@@ -42,12 +42,15 @@ export function UploadButton({
   check,
   disabled = false,
   compact = false,
+  onLoaded,
 }: {
   variant?: "primary" | "outline";
   label?: string;
   check?: Check;
   disabled?: boolean;
   compact?: boolean;
+  /** After the export is read: the page shows what came, such as «Датасеты» the new dataset. */
+  onLoaded?: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -87,6 +90,7 @@ export function UploadButton({
       setOpen(false);
       setFile(null);
       setDatasetName("");
+      onLoaded?.();
       const next = check ? launchLink(check) : null;
       const left = skipped
         ? `. Ещё ${count(skipped, "разговор не загружен", "разговора не загружены", "разговоров не загружены")}: ${plural(skipped, "в нём", "в них", "в них")} первым пишет агент или он не отвечает.`

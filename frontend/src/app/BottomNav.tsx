@@ -30,7 +30,9 @@ function MobileItem({ item }: { item: NavItem }) {
 export function BottomNav() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const more = pathname === SECTIONS.data || SETUP.some((item) => isActive(item, pathname));
+  // «Датасеты» and a dataset's own page under it.
+  const data = pathname === SECTIONS.data || pathname.startsWith(`${SECTIONS.data}/`);
+  const more = data || SETUP.some((item) => isActive(item, pathname));
   return (
     <nav
       aria-label="Разделы"
@@ -57,7 +59,7 @@ export function BottomNav() {
           {
             key: "data",
             label: "Датасеты",
-            on: pathname === SECTIONS.data,
+            on: data,
             run: () => navigate(SECTIONS.data),
           },
           ...SETUP.map((i) => ({

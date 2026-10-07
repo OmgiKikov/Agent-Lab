@@ -62,6 +62,12 @@ def conversation(dialogue: dict) -> list[dict]:
     ]
 
 
+def preview(dialogue: dict) -> dict:
+    """A conversation in a list: its id, the start of its first message and how many messages it has."""
+    messages = dialogue['messages']
+    return {'id': dialogue['id'], 'opening': messages[0]['content'][:240] if messages else '', 'turns': len(messages)}
+
+
 def turns(text: str) -> list[dict]:
     marks = list(MARKER.finditer(text))
     return [

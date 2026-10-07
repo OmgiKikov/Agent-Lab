@@ -39,6 +39,9 @@ export const side = (stage: Stage): "log" | "sim" => (stage === "sim" ? "sim" : 
 /** The section of a check or of the simulations: «/tone», «/accuracy», «/simulations». */
 export const stageRoot = (stage: Stage) => ROOT[stage];
 
+/** One dataset: its conversations as its file has them, one of them open (`d`). */
+export const datasetLink = (id: string) => `${SECTIONS.data}/${enc(id)}`;
+
 /** The result of a stage: of a check, or of a run of the simulation (the last one when none is named). */
 export const stageLink = (stage: Stage, runId?: string | null) =>
   `${ROOT[stage]}${stage === "sim" ? query({ run: runId }) : ""}`;

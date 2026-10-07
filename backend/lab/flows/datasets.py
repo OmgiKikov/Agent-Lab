@@ -1,7 +1,7 @@
 """Select one immutable dataset as the working export; keep each dataset's compatible results and scenarios."""
 
 from .. import storage
-from ..domain import accuracy, checks
+from ..domain import accuracy, checks, export
 from . import agent_context, same_work
 
 CONTEXT = (*checks.RESULTS.values(), checks.DECK)
@@ -48,6 +48,21 @@ def listed(*, archived: bool = False) -> dict:
         return {'activeId': active, 'datasets': storage.datasets.listed(archived=archived)}
 
 
+def dialogues(dataset_id: str, offset: int, limit: int) -> dict | None:
+    """A page of one dataset's conversations in the order of its file, archived or not. Reading a dataset never makes
+    it the working export: the checks' results stay as they are."""
+    item = storage.datasets.get(dataset_id)
+    if item is None:
+        return None
+    page = storage.datasets.page(dataset_id, offset, limit)
+    return {'total': item['total'], 'offset': offset, 'items': [export.preview(d) for d in page]}
+
+
+def dialogue(dataset_id: str, dialogue_id: str) -> dict | None:
+    """One conversation of a dataset as its file has it."""
+    return storage.datasets.dialogue(dataset_id, dialogue_id)
+
+
 def _activate(dataset_id: str) -> dict:
     item = storage.datasets.activate(dataset_id)
     context = storage.datasets.context(dataset_id)
@@ -68,13 +83,13 @@ def select(dataset_id: str) -> dict:
         return _activate(dataset_id)
 
 
-def add(items: list[dict], file: str, name: str | None = None, size: int = 0) -> dict:
+def add(items: list[dict], file: str, name: str | None = None, size: int = 0, skipped: int | None = None) -> dict:
     title = (name or '').strip() or file
     if len(title) > 160:
         raise ValueError('Название датасета должно быть не длиннее 160 символов.')
     with storage.transaction():
         _stash()
-        item = storage.datasets.create(items, file, title, size)
+        item = storage.datasets.create(items, file, title, size, skipped)
         return _activate(item['id'])
 
 

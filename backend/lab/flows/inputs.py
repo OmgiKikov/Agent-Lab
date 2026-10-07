@@ -39,10 +39,7 @@ def export_page(offset: int, limit: int) -> dict:
             **storage.dialogues.meta(),
             'total': storage.dialogues.count(),
             'offset': offset,
-            'items': [
-                {'id': item['id'], 'opening': item['messages'][0]['content'][:240], 'turns': len(item['messages'])}
-                for item in dialogues
-            ],
+            'items': [export.preview(item) for item in dialogues],
         }
 
 
@@ -71,7 +68,7 @@ async def upload_export(name: str, data: bytes, title: str | None = None) -> dic
     """An uploaded export read in a worker thread and committed whole: how many conversations it has, and how many it
     had that a check cannot read (the agent wrote first, or never answered), which are left out."""
     dialogues, skipped = await asyncio.to_thread(export.read_export, name, data)
-    item = datasets.add(dialogues, name, title, len(data))
+    item = datasets.add(dialogues, name, title, len(data), skipped)
     return {'total': item['total'], 'skipped': skipped}
 
 

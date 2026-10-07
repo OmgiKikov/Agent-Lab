@@ -1,6 +1,7 @@
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AGENT } from "../app/agent";
 import { api } from "./api";
+import { count, longDay } from "./format";
 import { useLabState } from "./LabProvider";
 
 export type Dataset = {
@@ -11,6 +12,8 @@ export type Dataset = {
   bytes: number;
   createdAt: string;
   archivedAt: string | null;
+  /** The conversations its upload left out (the agent wrote first, or never answered); null when not known. */
+  skipped?: number | null;
 };
 export type DatasetLibrary = { activeId: string | null; datasets: Dataset[] };
 export function useDatasets(archived = false) {
@@ -41,3 +44,11 @@ export function useDatasets(archived = false) {
     mutation.mutateAsync({ action, id, extra });
   return { ...query, change, changing };
 }
+
+/** A dataset in words: how many conversations, when it came, and its file when it is named otherwise. */
+export const datasetFacts = (d: Dataset) =>
+  [
+    count(d.total, "разговор", "разговора", "разговоров"),
+    `загружен ${longDay(d.createdAt)}`,
+    d.file && d.file !== d.name ? `файл ${d.file}` : null,
+  ].filter(Boolean) as string[];

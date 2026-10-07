@@ -7,11 +7,11 @@ from . import db, dialogues, documents
 
 
 def _item(row: tuple) -> dict:
-    return dict(zip(('id', 'name', 'file', 'createdAt', 'bytes', 'archivedAt', 'total'), row, strict=True))
+    return dict(zip(('id', 'name', 'file', 'createdAt', 'bytes', 'archivedAt', 'skipped', 'total'), row, strict=True))
 
 
 SELECT = (
-    'SELECT d.id, d.name, d.file, d.created_at, d.bytes, d.archived_at, '
+    'SELECT d.id, d.name, d.file, d.created_at, d.bytes, d.archived_at, d.skipped, '
     '(SELECT count(*) FROM dataset_dialogues WHERE dataset_id=d.id) FROM datasets d'
 )
 
@@ -28,13 +28,13 @@ def get(dataset_id: str) -> dict | None:
         return _item(row) if row else None
 
 
-def create(items: list[dict], file: str, name: str, size: int = 0) -> dict:
+def create(items: list[dict], file: str, name: str, size: int = 0, skipped: int | None = None) -> dict:
     dataset_id = uuid.uuid4().hex
     with db.connect() as connection:
         db.begin(connection)
         connection.execute(
-            'INSERT INTO datasets(id,name,file,created_at,bytes) VALUES(?,?,?,?,?)',
-            (dataset_id, name, file, db.now(), size),
+            'INSERT INTO datasets(id,name,file,created_at,bytes,skipped) VALUES(?,?,?,?,?,?)',
+            (dataset_id, name, file, db.now(), size, skipped),
         )
         connection.executemany(
             'INSERT INTO dataset_dialogues(dataset_id,position,id,value) VALUES(?,?,?,?)',
@@ -117,3 +117,11 @@ def page(dataset_id: str, offset: int, limit: int) -> list[dict]:
             (dataset_id, limit, offset),
         )
         return [json.loads(row[0]) for row in rows]
+
+
+def dialogue(dataset_id: str, dialogue_id: str) -> dict | None:
+    with db.connect() as connection:
+        row = connection.execute(
+            'SELECT value FROM dataset_dialogues WHERE dataset_id=? AND id=?', (dataset_id, dialogue_id)
+        ).fetchone()
+    return json.loads(row[0]) if row else None

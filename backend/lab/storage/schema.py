@@ -8,6 +8,7 @@ the answers people gave on verdicts rows of their own (reviews): a result, a sav
 Schema 8: long work is kept as it goes (tasks, steps), never only in memory.
 Schema 9: immutable datasets alongside the selected working export.
 Schema 10: grouped launches and recorded-question runs.
+Schema 11: a dataset keeps how many conversations its upload left out.
 """
 
 import json
@@ -23,7 +24,7 @@ from ..domain.metric import metric
 
 # The database's user_version once these tables are in place. Raise it with every change here: a database is set up
 # again only when its user_version differs.
-SCHEMA = 10
+SCHEMA = 11
 EXPORT = 'logs.json'  # where a database before schema 7 kept the export's conversations, as one document
 EXPORT_META = 'logs-meta.json'  # the name of the export's file and when it was uploaded
 PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or the Lab (storage.reviews)
@@ -31,8 +32,10 @@ PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or th
 TABLES = (
     'CREATE TABLE IF NOT EXISTS launches (id TEXT PRIMARY KEY, kind TEXT NOT NULL, '
     'summary TEXT NOT NULL, value TEXT NOT NULL)',
+    # skipped: the conversations of the upload a check cannot read (the agent wrote first, or never answered), left
+    # out; unknown (NULL) for a dataset uploaded before it was kept.
     'CREATE TABLE IF NOT EXISTS datasets (id TEXT PRIMARY KEY, name TEXT NOT NULL, file TEXT, '
-    'created_at TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT)',
+    'created_at TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT, skipped INTEGER)',
     'CREATE TABLE IF NOT EXISTS dataset_dialogues (dataset_id TEXT NOT NULL, position INTEGER NOT NULL, '
     'id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (dataset_id, position), UNIQUE (dataset_id, id))',
     'CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)',
@@ -80,6 +83,8 @@ def set_up(connection: sqlite3.Connection, path: Path) -> None:
             connection.execute(statement)
         if 'summary' not in {column[1] for column in connection.execute('PRAGMA table_info(runs)')}:
             connection.execute('ALTER TABLE runs ADD COLUMN summary TEXT')
+        if 'skipped' not in {column[1] for column in connection.execute('PRAGMA table_info(datasets)')}:
+            connection.execute('ALTER TABLE datasets ADD COLUMN skipped INTEGER')
         upgrade(connection)
         connection.execute(f'PRAGMA user_version = {SCHEMA}')
 

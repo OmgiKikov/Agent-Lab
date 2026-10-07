@@ -182,6 +182,7 @@ const productRoutes = [
       { path: "accuracy/launch", element: <LaunchPage key="code" check="code" /> },
       { path: "overview", element: <OverviewPage /> },
       { path: "data", element: <DataPage /> },
+      { path: "data/:datasetId", element: <DataPage /> },
       // One page of the agent for someone who does not use the product: numbers, answers, the ticked problems.
       { path: "summary", element: <SummaryPage /> },
       // Tone of voice: the customers' real conversations checked against a person's rules of communication.

@@ -125,12 +125,13 @@ export function LaunchPage({ check }: { check: Check }) {
   // The count as typed, so the field can be emptied on the way to another number; it settles when the field is left.
   const [size, setSize] = useState(String(draft.size));
   const [target, setTarget] = useState(draft.target);
-  const [datasetId, setDatasetId] = useState(draft.datasetId);
+  // «Проверить» on a dataset's page opens this form with it chosen (?dataset=); «Извлечь заново» of Точность, with its
+  // criteria to be read from the code anew (?replan=1).
+  const [query] = useSearchParams();
+  const [datasetId, setDatasetId] = useState(query.get("dataset") ?? draft.datasetId);
   const [judgeId, setJudgeId] = useState(draft.judgeId);
   const [picked, setPicked] = useState(draft.picked);
   const [picking, setPicking] = useState(false);
-  // «Извлечь заново» of Точность opens this form with its criteria to be read from the code anew (?replan=1).
-  const [query] = useSearchParams();
   const [replan, setReplan] = useState(query.get("replan") === "1");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

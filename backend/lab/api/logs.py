@@ -55,6 +55,23 @@ def datasets_view(archived: bool = False) -> dict:
     return datasets.listed(archived=archived)
 
 
+@router.get('/api/datasets/{dataset_id}/dialogues')
+def dataset_dialogues(dataset_id: str, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=50)) -> dict:
+    """Browse any dataset's conversations without making it the one the checks go by."""
+    found = datasets.dialogues(dataset_id, offset, limit)
+    if found is None:
+        raise HTTPException(404, 'Датасет не найден')
+    return found
+
+
+@router.get('/api/datasets/{dataset_id}/dialogues/{dialogue_id}')
+def dataset_dialogue(dataset_id: str, dialogue_id: str) -> dict:
+    found = datasets.dialogue(dataset_id, dialogue_id)
+    if found is None:
+        raise HTTPException(404, 'Разговор не найден')
+    return found
+
+
 @router.post('/api/datasets/{action}')
 async def dataset_action(action: Literal['select', 'archive', 'rename'], jobs: Jobs, payload: DatasetCommand) -> dict:
     async def work(progress: object) -> dict:

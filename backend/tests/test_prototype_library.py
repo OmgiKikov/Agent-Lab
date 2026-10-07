@@ -70,6 +70,31 @@ class DatasetTests(unittest.IsolatedAsyncioTestCase):
         datasets.select(item['id'])
         self.assertEqual(storage.dialogues.ids(), ['d1'])
 
+    async def test_any_dataset_is_read_without_becoming_the_one_the_checks_go_by(self):
+        first = datasets.add([dialogue(), dialogue('d2', 'Второй вопрос')], 'one.jsonl', 'Первый')
+        datasets.add([dialogue('d3')], 'two.jsonl', 'Второй')
+        datasets.archive(first['id'])
+        page = await self.client.get(f'/api/datasets/{first["id"]}/dialogues?offset=1&limit=5')
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertEqual(
+            page.json(), {'total': 2, 'offset': 1, 'items': [{'id': 'd2', 'opening': 'Второй вопрос', 'turns': 2}]}
+        )
+        one = await self.client.get(f'/api/datasets/{first["id"]}/dialogues/d1')
+        self.assertEqual(one.json(), dialogue())
+        self.assertEqual(storage.dialogues.ids(), ['d3'])
+        self.assertEqual((await self.client.get('/api/datasets/nope/dialogues')).status_code, 404)
+        self.assertEqual((await self.client.get(f'/api/datasets/{first["id"]}/dialogues/d3')).status_code, 404)
+
+    async def test_a_dataset_keeps_how_many_conversations_its_upload_left_out(self):
+        agent_first = {'id': 'a1', 'messages': [{'role': 'assistant', 'content': 'Здравствуйте!'}]}
+        body = '\n'.join(json.dumps(item, ensure_ascii=False) for item in (dialogue(), agent_first))
+        response = await self.client.post('/api/logs?name=one.jsonl', content=body.encode())
+        self.assertEqual(response.json(), {'total': 1, 'skipped': 1})
+        listed = (await self.client.get('/api/datasets')).json()['datasets']
+        self.assertEqual([(item['total'], item['skipped']) for item in listed], [(1, 1)])
+        storage.dialogues.replace([dialogue('d2')], 'legacy.jsonl')
+        self.assertIsNone(storage.datasets.get(storage.datasets.adopt_current())['skipped'])
+
     async def test_uploaded_formats_are_real_and_invalid_import_keeps_the_active_dataset(self):
         for name, body in (
             ('one.json', json.dumps([dialogue()])),
