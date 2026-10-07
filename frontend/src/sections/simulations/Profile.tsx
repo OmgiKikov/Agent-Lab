@@ -16,7 +16,7 @@ const TRIGGER: Record<string, string> = {
   resolved: "ответил на вопрос",
 };
 /** What the customer did in reply (backend/lab/domain/cards.py, ACTIONS). */
-export const ACTION: Record<string, string> = {
+const ACTION: Record<string, string> = {
   answer: "ответил",
   give_detail: "уточнил подробность",
   dont_know: "сказал, что не знает",
