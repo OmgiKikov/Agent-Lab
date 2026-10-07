@@ -79,3 +79,84 @@ class StandTraceTests(unittest.TestCase):
     def test_an_answer_from_the_cache_is_a_knowledge_base_call(self) -> None:
         cached = {'rag': [{'source': 'cache', 'query': 'q', 'passages': [], 'answer': 'a'}]}
         self.assertTrue(rag.called(cached))
+
+
+def verdict(rule_id: str, status: str) -> dict:
+    return {'ruleId': rule_id, 'rule': '', 'status': status, 'reason': '', 'agentQuote': '', 'title': ''}
+
+
+def step(index: int, trace: dict | None, verdicts: dict[str, str]) -> dict:
+    """A replayed step as replay.py saves it: its trace and the main model's verdict on each criterion."""
+    return {
+        'index': index,
+        'customer': f'реплика {index}',
+        'trace': trace,
+        'rules': [verdict(rule_id, status) for rule_id, status in verdicts.items()],
+    }
+
+
+ASKED = {'chains': [], 'rag': [{'source': 'idp', 'query': 'q', 'passages': [], 'answer': 'a'}], 'systems': []}
+CACHED = {'chains': [], 'rag': [{'source': 'cache', 'query': 'q', 'passages': [], 'answer': 'a'}], 'systems': []}
+NOT_ASKED = {'chains': [], 'rag': [], 'systems': []}
+MATCH = 'replay:match'
+
+
+def replayed(*steps: dict) -> list[dict]:
+    return [{'dialogueId': 'd-1', 'status': 'PASS', 'steps': list(steps)}]
+
+
+def criterion(summary: dict, rule_id: str) -> dict:
+    return next(row for row in summary['criteria'] if row['id'] == rule_id)
+
+
+class SummaryTests(unittest.TestCase):
+    def test_a_step_answered_from_the_cache_used_the_knowledge_base(self) -> None:
+        self.assertEqual(rag.summary(replayed(step(0, CACHED, {})))['called'], 1)
+
+    def test_a_step_without_a_call_is_left_out(self) -> None:
+        summary = rag.summary(replayed(step(0, NOT_ASKED, {}), step(1, None, {})))
+        self.assertEqual((summary['steps'], summary['called']), (2, 0))
+
+    def test_a_criterion_counts_pass_fail_and_unknown_apart(self) -> None:
+        summary = rag.summary(
+            replayed(
+                step(0, ASKED, {'rag:relevant': 'PASS'}),
+                step(1, ASKED, {'rag:relevant': 'FAIL'}),
+                step(2, ASKED, {'rag:relevant': 'UNKNOWN'}),
+                step(3, ASKED, {'rag:relevant': 'NOT_APPLICABLE'}),
+            )
+        )
+        found = criterion(summary, 'rag:relevant')
+        self.assertEqual((found['pass'], found['fail'], found['unknown']), (1, 1, 1))
+
+    def test_failed_points_to_the_steps_that_failed_the_criterion(self) -> None:
+        summary = rag.summary(replayed(step(0, ASKED, {'rag:query': 'PASS'}), step(1, ASKED, {'rag:query': 'FAIL'})))
+        self.assertEqual(criterion(summary, 'rag:query')['failed'], [{'dialogueId': 'd-1', 'step': 1}])
+
+    def test_every_criterion_is_listed_in_order_with_its_name(self) -> None:
+        summary = rag.summary([])
+        self.assertEqual(
+            [(row['id'], row['name']) for row in summary['criteria']],
+            [(rule['id'], rule['name']) for rule in rag.CRITERIA],
+        )
+
+    def test_the_match_with_production_is_counted_on_steps_that_used_the_knowledge_base(self) -> None:
+        summary = rag.summary(
+            replayed(
+                step(0, ASKED, {MATCH: 'PASS'}),
+                step(1, ASKED, {MATCH: 'FAIL'}),
+                step(2, ASKED, {MATCH: 'UNKNOWN'}),
+                step(3, NOT_ASKED, {MATCH: 'FAIL'}),
+            )
+        )
+        self.assertEqual(
+            summary['match'],
+            {'same': 1, 'different': 1, 'unknown': 1, 'differentSteps': [{'dialogueId': 'd-1', 'step': 1}]},
+        )
+
+    def test_an_empty_replay_has_nothing_counted(self) -> None:
+        summary = rag.summary([])
+        self.assertEqual(
+            (summary['steps'], summary['called'], summary['match']['same'], criterion(summary, 'rag:query')['pass']),
+            (0, 0, 0, 0),
+        )

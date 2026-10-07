@@ -2,6 +2,8 @@
 (spec 2026-10-05-voice360-replay-design.md). The trace comes from the agent's recorder:
 aigw-local replay/recorder.py."""
 
+from . import match
+
 CHAIN_OUTPUT = 2000  # an internal step's answer as the judge sees it; the prompts stay out
 NOT_CALLED = 'На этом шаге агент не обращался к базе знаний.'
 
@@ -111,3 +113,40 @@ def skipped(rule: dict) -> dict:
         'agentQuote': '',
         'title': '',
     }
+
+
+def summary(dialogues: list[dict]) -> dict:
+    """What a replay says about the knowledge base (spec 2026-10-07-replay-knowledge-base-breakdown-design.md): how
+    many steps used it, how many of them matched production, and each criterion's counts with the steps that failed
+    it. Only the main model's verdicts count, as in replay.metric."""
+    steps = [(dialogue['dialogueId'], step) for dialogue in dialogues for step in dialogue['steps']]
+    used = [(dialogue_id, step) for dialogue_id, step in steps if called(step.get('trace'))]
+    production = _tally(match.CRITERION['id'], used)
+    return {
+        'steps': len(steps),
+        'called': len(used),
+        'match': {
+            'same': production['pass'],
+            'different': production['fail'],
+            'unknown': production['unknown'],
+            'differentSteps': production['failed'],
+        },
+        'criteria': [{'id': rule['id'], 'name': rule['name'], **_tally(rule['id'], used)} for rule in CRITERIA],
+    }
+
+
+def _tally(rule_id: str, used: list[tuple[str, dict]]) -> dict:
+    """One criterion over the steps that used the knowledge base: PASS, FAIL and UNKNOWN apart, and where it failed."""
+    verdicts = [
+        ({'dialogueId': dialogue_id, 'step': step['index']}, _status(step, rule_id)) for dialogue_id, step in used
+    ]
+    return {
+        'pass': sum(status == 'PASS' for _, status in verdicts),
+        'fail': sum(status == 'FAIL' for _, status in verdicts),
+        'unknown': sum(status == 'UNKNOWN' for _, status in verdicts),
+        'failed': [ref for ref, status in verdicts if status == 'FAIL'],
+    }
+
+
+def _status(step: dict, rule_id: str) -> str | None:
+    return next((row['status'] for row in step.get('rules') or [] if row['ruleId'] == rule_id), None)
