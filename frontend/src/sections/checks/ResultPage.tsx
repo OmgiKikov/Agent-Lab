@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { FileText } from "lucide-react";
-import { conversationsLink, type Check } from "../../app/links";
+import { conversationsLink, launchLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
 import { longDay } from "../../lab/format";
@@ -15,7 +15,6 @@ import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { ProblemList } from "../problems/ProblemList";
-import { AssessSheet } from "./AssessSheet";
 import { CheckHeader } from "./CheckHeader";
 import { CompareLine, NoLongerFound, useComparison, wasOf } from "./Compare";
 import { CheckReport } from "./CheckReport";
@@ -27,21 +26,22 @@ const PART = { bad: "fail", ok: "pass", none: "none" } as const;
  * «Итог» of a check: the real conversations of the export as this check judged them — one number, the conversations
  * with a serious error and whose decision that is, and how it stands to the check's previous check; then the
  * problems it is made of, serious first, then most frequent, each beside its previous count, and the criteria whose
- * errors are no longer found. A new check is the header's «Новая проверка»; the explicit ?assess=1 link keeps the
- * advanced accuracy workflow for re-extracting criteria or resuming an earlier standalone check.
+ * errors are no longer found. A new check is the header's «Новая проверка», where accuracy can also read its criteria
+ * from the agent's code anew.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const { data, list, error, retry } = useCriteria(check);
   const result = resultOf(state, check);
   const compare = useComparison(check);
-  const [assess, setAssess] = useState(false);
   const [report, setReport] = useState(false);
   useEffect(() => {
-    if (params.get("assess") === "1" && check === "code") setAssess(true);
+    // «Проверить снова» of an older address (?assess=1) is the new check now.
+    if (params.get("assess") === "1") navigate(launchLink(check), { replace: true });
     if (params.get("report") === "1") setReport(true);
-  }, [params, check]);
+  }, [params, check, navigate]);
   const drop = (key: string) => {
     if (params.get(key))
       setParams(
@@ -69,15 +69,6 @@ export function ResultPage({ check }: { check: Check }) {
   );
   const sheets = (
     <>
-      {check === "code" && (
-        <AssessSheet
-          open={assess}
-          onClose={() => {
-            setAssess(false);
-            drop("assess");
-          }}
-        />
-      )}
       {result && (
         <CheckReport
           check={check}

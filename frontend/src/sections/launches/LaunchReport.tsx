@@ -223,7 +223,12 @@ export function LaunchReport() {
               «{record.dataset?.name || record.dataset?.file || "Датасет"}» ·{" "}
               {record.judge
                 ? `правила «${record.judge.name}», версия ${record.judge.version}`
-                : "критерии из кода агента"}
+                : record.replan
+                  ? "критерии заново извлечены из кода агента"
+                  : "критерии из кода агента"}
+              {record.ruleIds?.length
+                ? `, ${count(record.ruleIds.length, "выбранный критерий", "выбранных критерия", "выбранных критериев")}`
+                : ""}
               {record.agentVersion ? ` · ${record.agentVersion}` : ""}
             </p>
           </div>

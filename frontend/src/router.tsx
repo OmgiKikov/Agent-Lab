@@ -1,5 +1,14 @@
 import { createBrowserRouter, Navigate, useLocation, useParams } from "react-router-dom";
-import { historyLink, problemLink, SECTIONS, stageLink, stageRoot, toneCheckLink, type Check } from "./app/links";
+import {
+  historyLink,
+  judgesLink,
+  launchLink,
+  problemLink,
+  SECTIONS,
+  stageLink,
+  stageRoot,
+  type Check,
+} from "./app/links";
 import { checkOfOld } from "./lab/checks";
 import { dialogLink } from "./lab/dialogs";
 import { useLabState } from "./lab/LabProvider";
@@ -20,7 +29,6 @@ import { SettingsPage } from "./sections/settings/SettingsPage";
 import { RunListPage } from "./sections/simulations/RunList";
 import { ScenariosPage } from "./sections/simulations/ScenariosPage";
 import { SimResultPage } from "./sections/simulations/SimResultPage";
-import { CheckPage } from "./sections/tone/CheckPage";
 import { HistoryPage } from "./sections/checks/History";
 import { ServiceDown } from "./ui/EmptyState";
 
@@ -77,7 +85,7 @@ function OldLogs() {
   if (problem) return <Navigate to={problemLink(problem, check)} replace />;
   if (tab === "dialogs") return <Navigate to={`${root}/conversations${rest}`} replace />;
   if (tab === "review") return <Navigate to={`${root}/review${rest}`} replace />;
-  if (assess) return <Navigate to={check === "tone" ? toneCheckLink("criteria") : `${root}?assess=1`} replace />;
+  if (assess) return <Navigate to={launchLink(check)} replace />;
   return <Navigate to={`${root}${rest}`} replace />;
 }
 
@@ -126,8 +134,7 @@ function OldViolations() {
   if (p.get("s") === "sim") return <Navigate to={v ? problemLink(v, "sim", run) : stageLink("sim", run)} replace />;
   if (!check) return wait;
   if (v) return <Navigate to={problemLink(v, check)} replace />;
-  if (p.get("assess"))
-    return <Navigate to={check === "tone" ? toneCheckLink("criteria") : `${stageRoot(check)}?assess=1`} replace />;
+  if (p.get("assess")) return <Navigate to={launchLink(check)} replace />;
   if (p.get("report")) return <Navigate to={`${stageRoot(check)}?report=1`} replace />;
   return <Navigate to={stageRoot(check)} replace />;
 }
@@ -138,6 +145,14 @@ function DialogRedirect() {
   const { check, wait } = useOldCheck();
   if (!check) return wait;
   return <Navigate to={dialogLink(decodeURIComponent(dialogKey ?? ""), check)} replace />;
+}
+
+/** The step-by-step check of tone of voice (/tone/check?step=): each of its steps, where it lives now. */
+function OldToneCheck() {
+  const step = new URLSearchParams(useLocation().search).get("step");
+  const to =
+    step === "materials" ? `${judgesLink("tone")}&doc=1` : step === "criteria" ? launchLink("tone") : SECTIONS.tone;
+  return <Navigate to={to} replace />;
 }
 
 /** «Начать проверку» became «Обзор»; a saved check it opened (?history=) lives in the history of tone of voice. */
@@ -171,7 +186,9 @@ const productRoutes = [
       { path: "summary", element: <SummaryPage /> },
       // Tone of voice: the customers' real conversations checked against a person's rules of communication.
       { path: "tone", element: <ResultPage key="tone" check="tone" /> },
-      { path: "tone/check", element: <CheckPage /> },
+      // The step-by-step check of tone of voice became the one path: its rules step opens the rules from a document,
+      // its criteria step the new check, its result the result.
+      { path: "tone/check", element: <OldToneCheck /> },
       { path: "tone/conversations", element: <DialogsPage key="tone" stage="tone" /> },
       { path: "tone/review", element: <ReviewPage key="tone" stage="tone" /> },
       // The rules of the next checks open over the criteria (?rules=1); this address was their own page.
@@ -203,7 +220,7 @@ const productRoutes = [
       { path: "settings", element: <SettingsPage /> },
       // The addresses of the time when one result lived in «Диалоги» and the start chose what it was.
       { path: "start", element: <OldStart /> },
-      { path: "check", element: <To to="/tone/check" /> },
+      { path: "check", element: <OldToneCheck /> },
       { path: "logs", element: <OldLogs /> },
       { path: "logs/conversations", element: <IntoCheck path="/conversations" /> },
       { path: "logs/review", element: <IntoCheck path="/review" /> },

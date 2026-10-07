@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Check as CheckMark } from "lucide-react";
 import { Mark } from "../../app/Mark";
-import { launchLink, toneCheckLink, type Check } from "../../app/links";
+import { launchLink, SECTIONS, type Check } from "../../app/links";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
@@ -112,7 +112,7 @@ export function ToneStart() {
       <Empty
         title="Проверяем разговоры"
         action={
-          <Link to={launch ? launchLink("tone", launch) : toneCheckLink("checking")} className={primary}>
+          <Link to={launch ? launchLink("tone", launch) : SECTIONS.tone} className={primary}>
             Открыть проверку
             <ArrowRight aria-hidden className="size-4" />
           </Link>

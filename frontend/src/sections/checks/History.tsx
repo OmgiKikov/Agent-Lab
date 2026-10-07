@@ -499,6 +499,8 @@ function LaunchRow({
         <p className="mt-1 break-words text-small text-fg-3">
           {finished(launch.startedAt)} · {launch.dataset?.name || launch.dataset?.file || "Датасет"}
           {launch.judge ? ` · правила «${launch.judge.name}»` : launch.check === "code" ? " · критерии из кода" : ""}
+          {launch.ruleIds?.length ? ` · ${count(launch.ruleIds.length, "критерий", "критерия", "критериев")}` : ""}
+          {launch.replan ? " · критерии извлечены заново" : ""}
           {launch.agentVersion ? ` · ${launch.agentVersion}` : ""}
         </p>
         {rest.length > 0 && (

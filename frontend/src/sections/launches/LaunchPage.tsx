@@ -1,12 +1,12 @@
 import { Input, Select } from "../../ui/Field";
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, FlaskConical, MessagesSquare, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { agentKey } from "../../app/agent";
 import { Header } from "../../app/Header";
 import { StageTabs } from "../../app/StageTabs";
-import { criterionLink, historyLink, launchLink, SECTIONS, toneCheckLink } from "../../app/links";
+import { criterionLink, historyLink, launchLink, SECTIONS } from "../../app/links";
 import { api } from "../../lab/api";
 import { CHECK_NAME, resultOf } from "../../lab/checks";
 import { useDatasets } from "../../lab/datasets";
@@ -44,7 +44,16 @@ const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boo
 ];
 
 /** What the form remembers between visits, per agent and check: a choice that is gone falls back to the current one. */
-type Draft = { modes: Mode[]; version: string; size: number; target: string; datasetId?: string; judgeId?: string };
+type Draft = {
+  modes: Mode[];
+  version: string;
+  size: number;
+  target: string;
+  datasetId?: string;
+  judgeId?: string;
+  /** Some of the criteria of tone of voice, chosen for these rules. */
+  picked?: { rulesId: string; ids: string[] };
+};
 function readDraft(check: Check): Draft {
   const fallback: Draft = { modes: ["dataset"], version: "", size: 100, target: "" };
   try {
@@ -61,6 +70,10 @@ function readDraft(check: Check): Draft {
       target: typeof value.target === "string" ? value.target : "",
       datasetId: typeof value.datasetId === "string" ? value.datasetId : undefined,
       judgeId: typeof value.judgeId === "string" ? value.judgeId : undefined,
+      picked:
+        value.picked && typeof value.picked.rulesId === "string" && Array.isArray(value.picked.ids)
+          ? { rulesId: value.picked.rulesId, ids: value.picked.ids.filter((id: unknown) => typeof id === "string") }
+          : undefined,
     };
   } catch {
     return fallback;
@@ -114,6 +127,11 @@ export function LaunchPage({ check }: { check: Check }) {
   const [target, setTarget] = useState(draft.target);
   const [datasetId, setDatasetId] = useState(draft.datasetId);
   const [judgeId, setJudgeId] = useState(draft.judgeId);
+  const [picked, setPicked] = useState(draft.picked);
+  const [picking, setPicking] = useState(false);
+  // «Извлечь заново» of Точность opens this form with its criteria to be read from the code anew (?replan=1).
+  const [query] = useSearchParams();
+  const [replan, setReplan] = useState(query.get("replan") === "1");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -129,6 +147,18 @@ export function LaunchPage({ check }: { check: Check }) {
   const rulesId = remembered ? judgeId! : (judges.data?.selectedId ?? "");
   const rules = versions.find((v) => v.id === rulesId) ?? null;
   const rulesReady = rules ? rules.criteria.length > 0 : check === "code" && codeSources(state).length > 0;
+  // Tone of voice can be checked by some of its criteria, as a person chose them for these rules; all of them else.
+  const criteria = rules?.criteria ?? [];
+  const pickedIds = picked?.rulesId === rulesId ? picked.ids.filter((id) => criteria.some((c) => c.id === id)) : null;
+  const subset = check === "tone" && pickedIds && pickedIds.length < criteria.length ? pickedIds : null;
+  const toggle = (id: string) => {
+    const base = subset ?? criteria.map((c) => c.id);
+    const next = base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
+    setPicked(next.length === criteria.length ? undefined : { rulesId, ids: next });
+  };
+  // Точность by the agent's code: its criteria are read from the code on the first check, anew when asked.
+  const fromCode = check === "code" && !rules && codeSources(state).length > 0;
+  const extractedBefore = fromCode && !!resultOf(state, "code");
   const total = dataset?.total ?? 0;
   const most = Math.min(MAX, total);
   const wanted = Number.parseInt(size, 10);
@@ -145,19 +175,34 @@ export function LaunchPage({ check }: { check: Check }) {
     try {
       localStorage.setItem(
         agentKey(`launch-draft-${check}`),
-        JSON.stringify({ modes, version, size: wanted > 0 ? wanted : draft.size, target, datasetId, judgeId }),
+        JSON.stringify({
+          modes,
+          version,
+          size: wanted > 0 ? wanted : draft.size,
+          target,
+          datasetId,
+          judgeId,
+          picked,
+        }),
       );
     } catch {
       /* Drafts are optional when browser storage is unavailable. */
     }
-  }, [check, modes, version, wanted, target, datasetId, judgeId, draft.size]);
+  }, [check, modes, version, wanted, target, datasetId, judgeId, picked, draft.size]);
 
   const blocked = busy || !!state?.job.running;
   // What the last check found, beside the next one: the way into its history.
   const last = resultOf(state, check);
   const loading = !library || !judges.data;
   const failed = datasets.isError || judges.isError;
-  const ready = !loading && !failed && !!dataset && rulesReady && conversations > 0 && chosen.length > 0;
+  const ready =
+    !loading &&
+    !failed &&
+    !!dataset &&
+    rulesReady &&
+    conversations > 0 &&
+    chosen.length > 0 &&
+    !(subset && !subset.length);
   const missing: ReactNode = failed ? (
     "Не удалось загрузить датасеты или правила."
   ) : loading ? (
@@ -173,7 +218,7 @@ export function LaunchPage({ check }: { check: Check }) {
     check === "tone" ? (
       <>
         Нужны правила общения.{" "}
-        <Link to={toneCheckLink("materials")} className="text-run hover:underline">
+        <Link to={criterionLink("tone", null, { rules: "1", doc: "1" })} className="text-run hover:underline">
           Собрать критерии из документа
         </Link>
       </>
@@ -190,6 +235,8 @@ export function LaunchPage({ check }: { check: Check }) {
         .
       </>
     )
+  ) : subset && !subset.length ? (
+    "Отметьте хотя бы один критерий."
   ) : !conversations ? (
     "Укажите, сколько разговоров проверить."
   ) : !chosen.length ? (
@@ -198,7 +245,11 @@ export function LaunchPage({ check }: { check: Check }) {
   const plan =
     dataset && conversations
       ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из «${dataset.name}» ${
-          rules ? `по правилам «${rules.name}»${versionWord(rules, versions)}` : "по критериям из кода агента"
+          rules
+            ? `${subset ? `по ${subset.length} из ${count(criteria.length, "критерия", "критериев", "критериев")} правил` : "по правилам"} «${rules.name}»${versionWord(rules, versions)}`
+            : replan && extractedBefore
+              ? "по критериям, которые извлечём из кода агента заново"
+              : "по критериям из кода агента"
         }.`
       : "";
 
@@ -214,6 +265,8 @@ export function LaunchPage({ check }: { check: Check }) {
         agentVersion: version.trim(),
         modes: chosen,
         count: conversations,
+        ...(subset ? { ruleIds: subset } : {}),
+        ...(extractedBefore && replan ? { replan: true } : {}),
         target: way?.id ?? "prod",
       });
       await refresh();
@@ -302,6 +355,57 @@ export function LaunchPage({ check }: { check: Check }) {
                 )
               }
             </Row>
+            {check === "tone" && criteria.length > 1 && (
+              <div className="text-body">
+                <p className="flex flex-wrap items-baseline gap-x-2 text-fg-2">
+                  Критерии: {subset ? `${subset.length} из ${criteria.length}` : `все ${criteria.length}`}
+                  <button type="button" onClick={() => setPicking((on) => !on)} className="text-run hover:underline">
+                    {picking ? "Свернуть" : subset ? "Изменить выбор" : "Выбрать часть"}
+                  </button>
+                  {subset && (
+                    <button type="button" onClick={() => setPicked(undefined)} className="text-run hover:underline">
+                      Все
+                    </button>
+                  )}
+                </p>
+                {picking && (
+                  <ul className="mt-2 max-h-72 divide-y divide-line overflow-auto rounded-control border border-line">
+                    {criteria.map((c, i) => (
+                      <li key={c.id}>
+                        <label className="flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-hover">
+                          <input
+                            type="checkbox"
+                            checked={(subset ?? criteria.map((x) => x.id)).includes(c.id)}
+                            onChange={() => toggle(c.id)}
+                            className="mt-1 size-4 accent-primary"
+                          />
+                          <span className="min-w-0 text-fg">
+                            {i + 1}. {c.name}
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {extractedBefore && (
+              <label className="flex cursor-pointer items-start gap-3 text-body">
+                <input
+                  type="checkbox"
+                  checked={replan}
+                  onChange={(e) => setReplan(e.target.checked)}
+                  className="mt-1 size-4 accent-primary"
+                />
+                <span>
+                  <span className="block font-medium text-fg">Извлечь критерии из кода заново</span>
+                  <span className="mt-0.5 block text-small text-fg-3">
+                    Если у агента изменились инструкции или инструменты. Прежний итог и ответы людей останутся в
+                    истории.
+                  </span>
+                </span>
+              </label>
+            )}
             <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
               <Row label="Сколько разговоров">
                 {(id) => (

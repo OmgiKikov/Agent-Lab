@@ -1,19 +1,19 @@
 import { PROPOSING, proposalCheck } from "../lab/severity";
 import type { Job } from "../lab/types";
-import { criterionLink, launchLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
+import { criterionLink, judgesLink, launchLink, scenariosLink, SECTIONS } from "./links";
 
 /** A task of the service: how it is called and the section where its result lives. */
 export const JOBS: Record<string, { label: string; to: string }> = {
-  "tone-policy": { label: "Правила общения", to: toneCheckLink("materials") },
+  "tone-policy": { label: "Правила общения", to: judgesLink("tone") },
   launch: { label: "Проверка агента", to: `${SECTIONS.tone}/history` },
   "judge-rules": { label: "Правила", to: SECTIONS.overview },
   datasets: { label: "Датасеты", to: "/data" },
   "agent-context": { label: "Контекст агента", to: "/agent" },
   logs: { label: "Загрузка диалогов", to: SECTIONS.data },
-  "tone-criteria": { label: "Критерии tone of voice", to: toneCheckLink("criteria") },
-  "tone-check": { label: "Проверка tone of voice", to: toneCheckLink("result") },
-  "tone-advice": { label: "Предложение по находке", to: toneCheckLink("result") },
-  "tone-clarification": { label: "Уточнение критерия", to: toneCheckLink("criteria") },
+  "tone-criteria": { label: "Критерии tone of voice", to: judgesLink("tone") },
+  "tone-check": { label: "Проверка tone of voice", to: SECTIONS.tone },
+  "tone-advice": { label: "Предложение по находке", to: SECTIONS.tone },
+  "tone-clarification": { label: "Уточнение критерия", to: judgesLink("tone") },
   sources: { label: "Чтение кода агента", to: SECTIONS.agent },
   discover: { label: "Проверка точности", to: SECTIONS.accuracy },
   cards: { label: "Сборка сценариев", to: scenariosLink() },

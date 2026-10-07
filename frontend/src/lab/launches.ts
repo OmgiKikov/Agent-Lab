@@ -26,6 +26,9 @@ export type Launch = {
   agentVersion?: string;
   dataset?: { name?: string; file?: string; datasetId?: string };
   judge?: { id?: string; setId?: string; name: string; version: number } | null;
+  /** Some of the criteria of tone of voice, when a person chose them; the code's criteria read anew (Точность). */
+  ruleIds?: string[] | null;
+  replan?: boolean;
   modes: Partial<Record<Mode, Outcome>>;
 };
 export type Pair = {

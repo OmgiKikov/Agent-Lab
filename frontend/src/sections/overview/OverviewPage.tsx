@@ -11,7 +11,6 @@ import {
   SECTIONS,
   stageLink,
   stageRoot,
-  toneCheckLink,
   type Check,
 } from "../../app/links";
 import { useAgent } from "../../lab/agents";
@@ -60,7 +59,7 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
       return {
         status: "Проверяем разговоры",
         needs: needsOf("tone", state),
-        action: { label: "Открыть проверку", to: toneCheckLink("checking") },
+        action: { label: "Открыть проверку", to: SECTIONS.tone },
       };
     if (fresh)
       return {

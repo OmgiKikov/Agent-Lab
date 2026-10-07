@@ -1,5 +1,4 @@
 import type { Check } from "../lab/types";
-import type { CheckStep } from "../lab/tone";
 
 export type { Check };
 
@@ -66,9 +65,6 @@ export const criterionLink = (
   ruleId?: string | null,
   extra: Record<string, string | null | undefined> = {},
 ) => `${ROOT[check]}/criteria${query({ c: ruleId, ...extra })}`;
-
-/** The tone-of-voice check step by step; without a step it opens where the work stands. */
-export const toneCheckLink = (step?: CheckStep) => `${SECTIONS.tone}/check${query({ step })}`;
 
 /** The saved checks of a check, one of them open when given. */
 export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${query({ id })}`;

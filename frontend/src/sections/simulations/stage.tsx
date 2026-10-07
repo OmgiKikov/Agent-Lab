@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { StageTabs } from "../../app/StageTabs";
-import { runLink, scenariosLink, toneCheckLink, type Check } from "../../app/links";
+import { launchLink, runLink, scenariosLink, type Check } from "../../app/links";
 import { api } from "../../lab/api";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
 import { count, longDay } from "../../lab/format";
@@ -189,7 +189,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
             {actions && outdated && (
               <p className="px-4 pb-3 text-body text-fg-3 lg:px-10">
                 Критерии tone of voice изменились.{" "}
-                <Link to={toneCheckLink("criteria")} className="text-run underline">
+                <Link to={launchLink("tone")} className="text-run underline">
                   Проверьте разговоры заново
                 </Link>
                 , потом соберите сценарии.

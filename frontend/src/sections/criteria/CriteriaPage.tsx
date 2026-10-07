@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { BookOpen, ChevronDown, RotateCcw } from "lucide-react";
 import { launchLink, type Check } from "../../app/links";
@@ -10,7 +10,7 @@ import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
-import { accuracySources, codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
+import { accuracySources, customAccuracy, TONE_ID } from "../../lab/tone";
 import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -20,7 +20,6 @@ import { Segmented } from "../../ui/Segmented";
 import { CheckHeader } from "../checks/CheckHeader";
 import { RulesSheet } from "../judges/RulesSheet";
 import { useJudges } from "../../lab/judges";
-import { Reextract } from "./Reextract";
 import { CodeView } from "./CodeView";
 import { CriteriaTable } from "./CriteriaTable";
 import { CriterionPanel, type Shown } from "./CriterionPanel";
@@ -49,7 +48,6 @@ export function CriteriaPage({ check }: { check: Check }) {
   const judges = useJudges(check);
   const tone = check === "tone";
   const rulesOpen = params.get("rules") === "1";
-  const [reextract, setReextract] = useState(false);
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
       (prev) => {
@@ -112,7 +110,6 @@ export function CriteriaPage({ check }: { check: Check }) {
     },
   });
 
-  const busy = !!state?.job.running;
   const sideOptions = (
     [
       ["log", "Диалоги"],
@@ -125,14 +122,14 @@ export function CriteriaPage({ check }: { check: Check }) {
         check={check}
         actions={
           !tone && !customAccuracy(state) ? (
-            <Button
-              icon={RotateCcw}
-              onClick={() => setReextract(true)}
-              disabled={busy || !codeSources(state).length}
-              title="Модель прочитает код агента заново и извлечёт критерии дословно"
+            <Link
+              to={`${launchLink("code")}?replan=1`}
+              title="Новая проверка, в которой модель прочитает код агента заново и извлечёт критерии дословно"
+              className={buttonClass()}
             >
+              <RotateCcw aria-hidden className="size-3.5" />
               Извлечь заново
-            </Button>
+            </Link>
           ) : undefined
         }
       />
@@ -423,7 +420,6 @@ export function CriteriaPage({ check }: { check: Check }) {
           </aside>
         )}
       </div>
-      {!tone && <Reextract open={reextract} onClose={() => setReextract(false)} />}
     </div>
   );
 }
