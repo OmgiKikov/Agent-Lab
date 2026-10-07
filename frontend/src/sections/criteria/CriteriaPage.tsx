@@ -18,6 +18,7 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Segmented } from "../../ui/Segmented";
 import { CheckHeader } from "../checks/CheckHeader";
+import { BeforeCheck } from "./BeforeCheck";
 import { RulesSheet } from "../judges/RulesSheet";
 import { useJudges } from "../../lab/judges";
 import { CodeView } from "./CodeView";
@@ -165,27 +166,25 @@ export function CriteriaPage({ check }: { check: Check }) {
         </div>
       </div>
     );
+  // Before the first check the criteria are the step after the rules: the ones collected from them, or where they come
+  // from. After it, every criterion with its verdicts.
   if (!list.length)
     return (
       <div className="flex h-full flex-col">
         {header}
-        <EmptyState
-          drop
-          title="Критериев пока нет"
-          className="flex-1 justify-center"
-          action={
-            <div className="flex flex-wrap justify-center gap-2">
-              {rulesButton}
-              <Link to={launchLink(check)} className={buttonClass({ variant: "primary", size: "sm" })}>
-                Новая проверка
-              </Link>
-            </div>
-          }
-        >
-          {tone
-            ? "После проверки здесь появятся критерии из правил общения и то, как агент их соблюдает."
-            : "После проверки здесь появятся критерии из кода агента или своего набора правил и найденные нарушения."}
-        </EmptyState>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <BeforeCheck
+            check={check}
+            rules={judges.selected}
+            onRules={() => set((n) => n.set("rules", "1"), false)}
+            onDocument={() =>
+              set((n) => {
+                n.set("rules", "1");
+                n.set("doc", "1");
+              }, false)
+            }
+          />
+        </div>
       </div>
     );
 

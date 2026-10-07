@@ -26,12 +26,12 @@ import { useLabState } from "../../lab/LabProvider";
 import { MODE_NAME, type Mode } from "../../lab/launches";
 import { codeSources } from "../../lab/tone";
 import type { Check } from "../../lab/types";
-import { Button } from "../../ui/Button";
+import { Button, buttonClass } from "../../ui/Button";
+import { MarkNo } from "../../product/MarkNo";
 import { UploadButton } from "../../product/UploadLogs";
 import { shownName } from "../data/DatasetInfo";
-import { DocumentRules } from "../judges/DocumentRules";
 import { useConnectionMemory } from "../agent/Connection";
-import { ServiceDown } from "../../ui/EmptyState";
+import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Sheet } from "../../ui/Sheet";
@@ -57,6 +57,69 @@ const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boo
     live: true,
   },
 ];
+
+const bar = "block h-1.5 rounded-full bg-fg/10";
+/** The grid paper the pictures of the ways lie on, as the checks of a dataset show theirs. */
+const PAPER =
+  "rounded-control bg-inset [background-image:radial-gradient(rgb(var(--fg-4)/0.35)_1px,transparent_1px)] [background-size:8px_8px]";
+
+/** What checking the recorded answers gives: the agent's reply with the quote the check found marked. */
+function RecordedPicture() {
+  return (
+    <div className="flex h-full flex-col justify-center gap-1.5 px-3">
+      <span className="ml-auto block h-2.5 w-12 rounded-full bg-customer" />
+      <div className="space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line">
+        <span className={cn(bar, "w-14")} />
+        <span className="flex items-center gap-1">
+          <span className="block h-1.5 w-9 rounded-full bg-mark" />
+          <MarkNo n={1} className="h-3 min-w-3 px-0.5 text-[8px]" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** What asking the live agent gives: the same question, the recorded reply beside the new one. */
+function LivePicture() {
+  return (
+    <div className="flex h-full flex-col justify-center gap-1.5 px-3">
+      <span className="ml-auto block h-2.5 w-12 rounded-full bg-customer" />
+      <div className="flex gap-1">
+        <div className="flex-1 space-y-1.5 rounded-lg bg-list p-1.5 opacity-50 ring-1 ring-line">
+          <span className={cn(bar, "w-4/5")} />
+          <span className={cn(bar, "w-1/2")} />
+        </div>
+        <div className="flex-1 space-y-1.5 rounded-lg bg-list p-1.5 ring-1 ring-line-strong">
+          <span className={cn(bar, "w-3/4")} />
+          <span className={cn(bar, "w-3/5")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** What the simulations give: clients of different kinds playing the scenarios through. */
+function SimulationPicture() {
+  return (
+    <div className="flex h-full flex-col justify-center gap-2 px-3">
+      <div className="flex -space-x-1">
+        {["bg-mark", "bg-run/40", "bg-fg/20"].map((tint) => (
+          <span key={tint} className={cn("size-4 rounded-full ring-2 ring-inset", tint)} />
+        ))}
+      </div>
+      <div className="space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line">
+        <span className={cn(bar, "w-14")} />
+        <span className={cn(bar, "w-9")} />
+      </div>
+    </div>
+  );
+}
+
+const WAY_PICTURE: Record<Mode, () => ReactNode> = {
+  dataset: RecordedPicture,
+  questions: LivePicture,
+  simulations: SimulationPicture,
+};
 
 /** What the form remembers between visits, per agent and check: a choice that is gone falls back to the current one. */
 type Draft = {
@@ -108,46 +171,103 @@ function ruleChoices(versions: JudgeVersion[], selectedId: string | null): Judge
 const versionWord = (v: JudgeVersion, all: JudgeVersion[]) =>
   all.some((other) => other.setId === v.setId && other.id !== v.id) ? ` · версия ${v.version}` : "";
 
+/** The number typed in on its dotted line, inside a sentence of a card. */
+const NUMBER =
+  "inline-block border-b-[1.5px] border-dotted border-fg-4 bg-transparent text-center font-semibold tabular-nums text-fg transition-colors hover:border-fg-3 focus:border-solid focus:border-fg focus:outline-none";
+
 /**
- * A word of the sentence that is chosen: the word itself, dotted under, a small chevron when it opens a list; a light
- * ground only under the pointer. Opened or typed in, it stays a word of the line.
+ * A step done before the launch, as a soft card: a tick or a ring, what the step is, what it gave, one line under it.
+ * A step not done says so and gives the way to it.
  */
-const WORD =
-  "inline-flex items-center gap-0.5 rounded-md px-1 align-baseline font-medium text-fg transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60";
-const DOTTED = "underline decoration-fg-4 decoration-dotted decoration-[1.5px] underline-offset-[7px]";
-
-/** A word to be added: what the sentence still lacks, in the colour of a link. */
-const LACK =
-  "inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 align-baseline font-medium text-run transition-colors hover:bg-run/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60";
-
-/** A word that opens a list of choices: its value and a small chevron. */
-function Word({ children }: { children: ReactNode }) {
+function StepCard({
+  done,
+  label,
+  title,
+  children,
+}: {
+  done: boolean;
+  label: string;
+  title: ReactNode;
+  children?: ReactNode;
+}) {
   return (
-    <span className={WORD}>
-      <span className={DOTTED}>{children}</span>
-      <ChevronDown aria-hidden className="size-4 text-fg-3" />
-    </span>
+    <section aria-label={label} className="flex min-w-0 flex-col rounded-[18px] bg-inset p-4">
+      <p className="flex items-center gap-2 text-small text-fg-3">
+        <span
+          aria-hidden
+          className={cn(
+            "grid size-4 place-items-center rounded-full",
+            done ? "bg-fg text-canvas" : "ring-[1.5px] ring-inset ring-fg-4",
+          )}
+        >
+          {done && <Tick className="size-2.5" strokeWidth={3.5} />}
+        </span>
+        {label}
+        <span className="sr-only">{done ? " — готово" : " — не готово"}</span>
+      </p>
+      <div className="mt-2 min-w-0 text-title font-semibold text-fg">{title}</div>
+      {children && <div className="mt-1 text-body text-fg-3">{children}</div>}
+    </section>
   );
 }
 
-/** One way to check as a chip to switch on and off: dark with a tick when on, a «+» when off, dashed when it cannot run. */
-function WayChip({ id, on, off, onToggle }: { id: Mode; on: boolean; off: boolean; onToggle: () => void }) {
-  const Icon = on ? Tick : Plus;
+/**
+ * One way to check as a card, as the checks of a dataset are drawn: a picture of what it gives, its name, what it does,
+ * a button that takes it into the check or leaves it out. A way that cannot run says what it needs.
+ */
+function WayCard({
+  id,
+  on,
+  off,
+  check,
+  onToggle,
+  children,
+}: {
+  id: Mode;
+  on: boolean;
+  off: boolean;
+  check: Check;
+  onToggle: () => void;
+  children?: ReactNode;
+}) {
+  const option = OPTIONS.find((o) => o.id === id)!;
+  const Picture = WAY_PICTURE[id];
   return (
-    <button
-      type="button"
-      aria-pressed={on}
-      disabled={off}
-      onClick={onToggle}
+    <section
+      aria-label={MODE_NAME[id]}
       className={cn(
-        "inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-body transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
-        on ? "bg-fg text-canvas" : "text-fg-2 ring-1 ring-inset ring-line-strong hover:bg-hover hover:text-fg",
-        off && "cursor-default text-fg-4 ring-dashed hover:bg-transparent hover:text-fg-4",
+        "flex items-center gap-4 rounded-block border bg-canvas p-3 pr-4 transition-colors",
+        on ? "border-fg/50" : "border-line",
       )}
     >
-      <Icon aria-hidden className="size-3.5" strokeWidth={on ? 3 : 2} />
-      {MODE_NAME[id]}
-    </button>
+      <div aria-hidden className={cn("hidden h-[84px] w-28 shrink-0 sm:block", PAPER, off && "opacity-50")}>
+        <Picture />
+      </div>
+      <div className="min-w-0 flex-1 py-1">
+        <p className={cn("text-read font-semibold", off ? "text-fg-3" : "text-fg")}>{MODE_NAME[id]}</p>
+        <p className="mt-0.5 text-body text-fg-3">{option.description}</p>
+        {children && <div className="mt-1 text-body text-fg-3">{children}</div>}
+      </div>
+      {off ? (
+        <Link
+          to={`${SECTIONS.agent}?return=${check}`}
+          className="shrink-0 rounded-sm text-body font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+        >
+          Подключить агента
+        </Link>
+      ) : (
+        <Button
+          size="sm"
+          variant={on ? "primary" : "outline"}
+          icon={on ? Tick : Plus}
+          aria-pressed={on}
+          onClick={onToggle}
+          className="shrink-0"
+        >
+          {on ? "Выбрано" : "Добавить"}
+        </Button>
+      )}
+    </section>
   );
 }
 
@@ -178,8 +298,6 @@ export function LaunchPage({ check }: { check: Check }) {
   const [replan, setReplan] = useState(query.get("replan") === "1");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // The rules of communication collected right over the form, without leaving it.
-  const [collect, setCollect] = useState(false);
 
   const library = datasets.data;
   const dataset =
@@ -299,10 +417,25 @@ export function LaunchPage({ check }: { check: Check }) {
     }
   };
 
-  const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
   const [versioning, setVersioning] = useState(!!draft.version);
-  // What the launch waits for, said beside its button; the word that is missing in the sentence gives the way to it.
-  const why = state?.job.running && !collecting ? "Сейчас идёт другая задача этого агента." : ready ? null : missing;
+  // What the launch waits for, said beside its button; the step that is missing gives the way to it above.
+  const why = state?.job.running ? "Сейчас идёт другая задача этого агента." : ready ? null : missing;
+  const plan =
+    dataset && conversations && rulesReady
+      ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из «${shownName(dataset)}» ${
+          rules
+            ? `по ${subset ? `${subset.length} из ${criteria.length}` : criteria.length} ${plural(
+                subset ? subset.length : criteria.length,
+                "критерию",
+                "критериям",
+                "критериям",
+              )}`
+            : extractedBefore && replan
+              ? "по критериям, которые заново извлечём из кода"
+              : "по критериям из кода агента"
+        }.`
+      : null;
+  const criteriaPage = criterionLink(check);
   const rulesMenu = [
     ...(check === "code" && codeSources(state).length > 0
       ? [
@@ -333,61 +466,30 @@ export function LaunchPage({ check }: { check: Check }) {
           },
         ]
       : []),
-    ...(check === "tone" ? [{ key: "doc", label: "Собрать из документа", run: () => setCollect(true) }] : []),
-    {
-      key: "edit",
-      label: "Изменить правила",
-      run: () => void navigate(criterionLink(check, null, { rules: "1" })),
-    },
+    ...(check === "tone" && criteria.length > 1
+      ? [{ key: "pick", label: "Выбрать часть критериев", run: () => setPicking(true) }]
+      : []),
+    { key: "open", label: "Открыть критерии", run: () => void navigate(criteriaPage) },
   ];
-  const lackOfRules =
-    judges.data && !rulesReady && !fromCode ? (
-      check === "tone" ? (
-        collecting ? (
-          <span className={cn(LACK, "text-fg-3 hover:bg-transparent")}>собираем критерии…</span>
-        ) : (
-          <button type="button" onClick={() => setCollect(true)} className={LACK}>
-            <Plus aria-hidden className="size-4" />
-            правилам общения
-          </button>
-        )
-      ) : (
-        <Link to={`${SECTIONS.agent}?return=code`} className={LACK}>
-          <Plus aria-hidden className="size-4" />
-          критериям из кода агента
-        </Link>
-      )
-    ) : null;
-  const hint =
-    library && !dataset ? (
-      <span className="flex flex-wrap items-center gap-3">
-        Проверка идёт по выгрузке чата с настоящими разговорами.
-        <UploadButton variant="outline" label="Загрузить выгрузку" />
-      </span>
-    ) : lackOfRules ? (
-      check === "tone" ? (
-        collecting ? (
-          "Модель собирает критерии из документа — потом можно запускать."
-        ) : (
-          "Критерии соберутся из правил общения банка: документ или текст."
-        )
-      ) : (
-        <>
-          Критерии соберутся из кода агента, когда он подключён. Или{" "}
-          <Link to={criterionLink("code", null, { rules: "1" })} className="text-run hover:underline">
-            выберите готовый набор правил
-          </Link>
-          .
-        </>
-      )
-    ) : null;
+  const criteriaTitle = rules ? (
+    <>
+      {subset ? `${subset.length} из ${criteria.length}` : criteria.length}{" "}
+      {plural(criteria.length, "критерий", "критерия", "критериев")}
+    </>
+  ) : fromCode ? (
+    "Из кода агента"
+  ) : check === "tone" ? (
+    "Нужны правила общения"
+  ) : (
+    "Нужен код агента"
+  );
   return (
     <div>
       <Header title={CHECK_NAME[check]} tabs={<StageTabs stage={check} />} />
       {offline && !state ? (
         <ServiceDown />
       ) : (
-        <div className="max-w-[880px] px-4 pb-16 pt-8 lg:px-10">
+        <div className="max-w-[920px] px-4 pb-16 pt-8 lg:px-10">
           <h2 className="text-page font-semibold text-fg">Новая проверка</h2>
           {failed && (
             <div className="mt-6">
@@ -402,113 +504,130 @@ export function LaunchPage({ check }: { check: Check }) {
             </div>
           )}
           <fieldset disabled={blocked}>
-            {/* The launch said as one sentence; each of its words that can be chosen is chosen right in it. */}
-            <p className="mt-6 max-w-[40ch] text-title leading-[2.75rem] text-fg-2 sm:max-w-none">
-              Проверим{" "}
-              {dataset ? (
-                <input
-                  aria-label="Сколько разговоров проверить"
-                  inputMode="numeric"
-                  value={wanted > most && most > 0 ? String(most) : size}
-                  onChange={(e) => setSize(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                  onBlur={() => setSize(String(conversations || Math.min(100, most) || draft.size))}
-                  style={{ width: `${Math.max(2, (wanted > most ? String(most) : size).length) + 0.6}ch` }}
-                  className="inline-block border-b-[1.5px] border-dotted border-fg-4 bg-transparent text-center font-medium tabular-nums text-fg transition-colors hover:border-fg-3 focus:border-solid focus:border-fg focus:outline-none"
-                />
-              ) : null}{" "}
-              {plural(conversations || 0, "разговор", "разговора", "разговоров")} из{" "}
-              {!library ? (
-                "…"
-              ) : !dataset ? (
-                <span className="text-fg-3">выгрузки чата</span>
-              ) : library.datasets.length > 1 ? (
-                <Menu
-                  items={library.datasets.map((d) => ({
-                    key: d.id,
-                    label: shownName(d),
-                    sub: datasetFacts(d).join(" · "),
-                    on: d.id === dataset.id,
-                    run: () => setDatasetId(d.id),
-                  }))}
-                  trigger={<Word>«{shownName(dataset)}»</Word>}
-                />
-              ) : (
-                <span className="font-medium text-fg">«{shownName(dataset)}»</span>
-              )}
-              <br />
-              по{" "}
-              {!judges.data ? (
-                "…"
-              ) : lackOfRules ? (
-                lackOfRules
-              ) : rules ? (
-                <>
-                  {check === "tone" && criteria.length > 1 ? (
-                    <button type="button" onClick={() => setPicking(true)} className={WORD}>
-                      <span className={DOTTED}>
-                        {subset ? `${subset.length} из ${criteria.length}` : criteria.length}{" "}
-                        {plural(subset ? subset.length : criteria.length, "критерию", "критериям", "критериям")}
-                      </span>
-                      <ChevronDown aria-hidden className="size-4 text-fg-3" />
-                    </button>
+            {/* The steps before the launch: what is checked, and by what — the criteria are the step after the rules. */}
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <StepCard
+                done={!!dataset}
+                label="Разговоры"
+                title={
+                  !library ? (
+                    <Skeleton className="h-7 w-48" />
+                  ) : !dataset ? (
+                    "Нет выгрузки"
+                  ) : library.datasets.length > 1 ? (
+                    <Menu
+                      className="max-w-full"
+                      items={library.datasets.map((d) => ({
+                        key: d.id,
+                        label: shownName(d),
+                        sub: datasetFacts(d).join(" · "),
+                        on: d.id === dataset.id,
+                        run: () => setDatasetId(d.id),
+                      }))}
+                      trigger={
+                        <span className="flex min-w-0 items-center gap-1 text-left">
+                          <span className="min-w-0 truncate">{shownName(dataset)}</span>
+                          <ChevronDown aria-hidden className="size-5 shrink-0 text-fg-3" />
+                        </span>
+                      }
+                    />
                   ) : (
-                    <span className="font-medium text-fg">
-                      {criteria.length} {plural(criteria.length, "критерию", "критериям", "критериям")}
-                    </span>
-                  )}{" "}
-                  из правил{" "}
-                  <Menu
-                    items={rulesMenu}
-                    trigger={
-                      <Word>
-                        «{rules.name}
-                        {versionWord(rules, versions)}»
-                      </Word>
-                    }
-                  />
-                </>
-              ) : (
-                <Menu
-                  items={rulesMenu}
-                  trigger={
-                    <Word>
-                      {extractedBefore && replan ? "критериям, извлечённым заново из кода" : "критериям из кода агента"}
-                    </Word>
-                  }
-                />
-              )}
-            </p>
-            {hint && <div className="mt-3 text-body text-fg-3">{hint}</div>}
+                    <span className="block truncate">{shownName(dataset)}</span>
+                  )
+                }
+              >
+                {!library ? null : !dataset ? (
+                  <span className="flex flex-wrap items-center gap-3">
+                    Проверка идёт по выгрузке чата.
+                    <UploadButton variant="outline" label="Загрузить" />
+                  </span>
+                ) : (
+                  <>
+                    Проверим{" "}
+                    <input
+                      aria-label="Сколько разговоров проверить"
+                      inputMode="numeric"
+                      value={wanted > most && most > 0 ? String(most) : size}
+                      onChange={(e) => setSize(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                      onBlur={() => setSize(String(conversations || Math.min(100, most) || draft.size))}
+                      style={{ width: `${Math.max(2, (wanted > most ? String(most) : size).length) + 0.6}ch` }}
+                      className={NUMBER}
+                    />{" "}
+                    из {total}
+                    {total > MAX ? ` · за раз до ${MAX}` : ""}
+                  </>
+                )}
+              </StepCard>
+              <StepCard
+                done={rulesReady}
+                label="Критерии"
+                title={
+                  !judges.data ? (
+                    <Skeleton className="h-7 w-40" />
+                  ) : rulesReady && rulesMenu.length > 1 ? (
+                    <Menu
+                      className="max-w-full"
+                      items={rulesMenu}
+                      trigger={
+                        <span className="flex min-w-0 items-center gap-1 text-left">
+                          <span className="min-w-0 truncate">{criteriaTitle}</span>
+                          <ChevronDown aria-hidden className="size-5 shrink-0 text-fg-3" />
+                        </span>
+                      }
+                    />
+                  ) : (
+                    criteriaTitle
+                  )
+                }
+              >
+                {!judges.data ? null : rules ? (
+                  <>
+                    из «{rules.name}
+                    {versionWord(rules, versions)}» ·{" "}
+                    <Link to={criteriaPage} className="text-run hover:underline">
+                      открыть
+                    </Link>
+                  </>
+                ) : fromCode ? (
+                  <>
+                    {extractedBefore && replan ? "Извлечём заново при проверке" : "Соберутся при проверке"} ·{" "}
+                    <Link to={criteriaPage} className="text-run hover:underline">
+                      открыть
+                    </Link>
+                  </>
+                ) : (
+                  <span className="flex flex-wrap items-center gap-3">
+                    {check === "tone" ? "Критерии соберутся из правил." : "Критерии соберутся из кода."}
+                    <Link
+                      to={check === "tone" ? criterionLink("tone", null, { rules: "1", doc: "1" }) : criteriaPage}
+                      className={buttonClass({ variant: "primary", size: "sm" })}
+                    >
+                      {check === "tone" ? "Добавить правила" : "К критериям"}
+                    </Link>
+                  </span>
+                )}
+              </StepCard>
+            </div>
 
-            <div className="mt-8 flex flex-wrap gap-2">
+            <h3 className="mt-10 text-lead font-semibold text-fg">Что проверить</h3>
+            <div className="mt-3 space-y-3">
               {OPTIONS.map(({ id, live: needsAgent }) => (
-                <WayChip
+                <WayCard
                   key={id}
                   id={id}
+                  check={check}
                   on={chosen.includes(id)}
                   off={needsAgent && !reachable.length}
                   onToggle={() => setModes((all) => (all.includes(id) ? all.filter((m) => m !== id) : [...all, id]))}
-                />
+                >
+                  {id === "simulations" && chosen.includes(id)
+                    ? "Если сценариев ещё нет, сначала найдём ошибки в выбранных разговорах."
+                    : null}
+                </WayCard>
               ))}
             </div>
-            <p className="mt-3 max-w-[70ch] text-body text-fg-3">
-              {OPTIONS.filter((o) => chosen.includes(o.id))
-                .map((o) => o.description)
-                .join(" ")}
-              {!reachable.length && (
-                <>
-                  {chosen.length ? " " : ""}
-                  Вопросы агенту и симуляции — когда он подключён.{" "}
-                  <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
-                    Подключить
-                  </Link>
-                </>
-              )}
-              {chosen.includes("simulations") &&
-                " Если сценариев ещё нет, сначала найдём ошибки в выбранных разговорах."}
-            </p>
             {live && way && (
-              <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-fg-3">
+              <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-fg-3">
                 {reachable.length > 1 ? (
                   <label className="flex items-center gap-2">
                     Агент
@@ -565,7 +684,7 @@ export function LaunchPage({ check }: { check: Check }) {
                   версия агента
                 </button>
               )}
-              {why && <p className="min-w-0 basis-full text-body text-fg-3">{why}</p>}
+              {(why ?? plan) && <p className="min-w-0 basis-full text-body text-fg-3">{why ?? plan}</p>}
             </div>
             {error && (
               <p role="alert" className="mt-3 text-body text-bad">
@@ -621,7 +740,6 @@ export function LaunchPage({ check }: { check: Check }) {
               ))}
             </ul>
           </Sheet>
-          {check === "tone" && <DocumentRules open={collect} onClose={() => setCollect(false)} />}
         </div>
       )}
     </div>
