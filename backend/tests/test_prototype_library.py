@@ -2,12 +2,13 @@
 
 import json
 import unittest
+from pathlib import Path
 
 import support
 
 from lab import storage
 from lab.domain import checks, export
-from lab.flows import agent_context, datasets, judges
+from lab.flows import agent_context, connection, datasets, judges
 
 
 def dialogue(key='d1', question='Как вернуть терминал?'):
@@ -140,6 +141,15 @@ class JudgeLibraryTests(unittest.IsolatedAsyncioTestCase):
                 agent_context.save({key: 'https://secret-token@example.test/project'})
         self.assertEqual(agent_context.current()['repositoryUrl'], '')
         self.assertEqual(agent_context.current()['idpUrl'], '')
+
+    async def test_a_saved_repository_is_the_agents_code_only_once_it_is_cloned(self):
+        """Until its repository is cloned (or when the clone failed), the agent's code is in the folder of the settings,
+        never in an empty folder kept for the clone."""
+        connection.save_settings({'repo': '~/agents/bank'})
+        agent_context.save({'repositoryUrl': 'https://git.example.test/bank/agent.git'})
+        self.assertEqual(connection.repo(), Path('~/agents/bank').expanduser())
+        (agent_context.checkout_path() / '.git').mkdir(parents=True)
+        self.assertEqual(connection.repo(), agent_context.checkout_path())
 
     async def test_agent_rename_preserves_its_identity_and_database(self):
         agent = storage.registry.create('Первый', '')

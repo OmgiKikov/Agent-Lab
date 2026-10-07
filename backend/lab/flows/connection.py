@@ -23,8 +23,12 @@ def save_settings(values: dict) -> dict:
 
 
 def repo() -> Path:
-    """The folder of the agent's code."""
-    return agent_context.checkout_path() or Path(settings()['repo']).expanduser()
+    """The folder of the agent's code: the clone of its repository once there is one (agent_context.checkout), else the
+    folder of the settings. A repository saved but never cloned, or whose clone failed, has no code to read."""
+    clone = agent_context.checkout_path()
+    if clone is not None and (clone / '.git').exists():
+        return clone
+    return Path(settings()['repo']).expanduser()
 
 
 def ways() -> dict[str, dict]:
