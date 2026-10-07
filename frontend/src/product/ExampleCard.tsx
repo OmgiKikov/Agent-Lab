@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { ArrowUpRight } from "lucide-react";
@@ -46,6 +47,7 @@ export function ExampleCard({
   onDecide,
   onSkip,
   emphasis,
+  actions,
 }: {
   example: Example;
   lit: boolean;
@@ -53,6 +55,8 @@ export function ExampleCard({
   onDecide?: (d: Decision) => void;
   onSkip?: () => void;
   emphasis?: boolean;
+  /** What a person can do next with this case, under the answer: clarify the criterion, ask for a better reply. */
+  actions?: ReactNode;
 }) {
   const { state } = useLabState();
   const { turns, loading, error } = useTurns(example);
@@ -117,6 +121,7 @@ export function ExampleCard({
           )}
         >
           <ReviewButtons example={example} onDecide={onDecide} onSkip={onSkip} emphasis={emphasis} />
+          {actions}
         </div>
       )}
       {judged && (
