@@ -180,6 +180,8 @@ export type Discover = {
 /** The scenarios, built from the errors of one check and remembering it. */
 export type Deck = { check: Check; cards: Card[]; createdAt?: string };
 export type Job = {
+  /** The task's own id: a launch is the task that runs it, so a paused launch is told by it (backend/lab/jobs.py). */
+  id?: string;
   kind: string | null;
   running: boolean;
   error: string | null;

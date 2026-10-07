@@ -5,9 +5,8 @@ import { ArrowRight, RotateCcw, Square } from "lucide-react";
 import { Header } from "../../app/Header";
 import { historyLink, launchLink, runLink, stageRoot } from "../../app/links";
 import { api } from "../../lab/api";
-import { CHECK_NAME } from "../../lab/checks";
 import { MODE_NAME, useLaunch, useQuestions, type Mode, type Pair } from "../../lab/launches";
-import { when } from "../../lab/format";
+import { count, longDay, time } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { Conversation } from "../../product/Conversation";
 import { Button, buttonClass } from "../../ui/Button";
@@ -27,6 +26,10 @@ function pairLabel(item: Pair): string {
   );
 }
 
+/** «3 вопроса клиента»: how much of the conversation was asked again, instead of its id. */
+const questionsOf = (item: Pair) =>
+  count(item.original.filter((m) => m.role === "user").length, "вопрос клиента", "вопроса клиента", "вопросов клиента");
+
 function Pairs({ id }: { id: string }) {
   const q = useQuestions(id);
   const [chosenId, setChosenId] = useState<string | null>(null);
@@ -34,10 +37,11 @@ function Pairs({ id }: { id: string }) {
   if (q.isError) return <LoadFailed title="Ответы не загрузились" error={q.error} onRetry={() => q.refetch()} />;
   if (!q.data) return <Skeleton className="h-40" />;
   return (
-    <section className="mt-8">
-      <h2 className="text-title font-semibold text-fg">Исходные вопросы · новые ответы</h2>
+    <section id="answers" className="mt-10 scroll-mt-6">
+      <h2 className="text-title font-semibold text-fg">Те же вопросы — новые ответы</h2>
       <p className="mt-2 text-body text-fg-3">
-        Версия на стенде: {q.data.version}. Вопросы клиента повторены из датасета без синтетического клиента.
+        Агенту на стенде заданы вопросы клиентов из датасета, слово в слово.
+        {q.data.version && q.data.version !== "…" ? ` Версия на стенде: ${q.data.version}.` : ""}
       </p>
       <ul className="mt-5 divide-y divide-line rounded-block border border-line">
         {q.data.items.map((item) => (
@@ -48,7 +52,7 @@ function Pairs({ id }: { id: string }) {
             >
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-body font-medium text-fg">{item.name}</span>
-                <span className="mt-1 block text-small text-fg-3">Диалог {item.dialogueId}</span>
+                <span className="mt-1 block text-small text-fg-3">{questionsOf(item)}</span>
               </span>
               <span
                 className={`text-small ${item.status === "FAIL" ? "text-bad" : item.status === "PASS" ? "text-ok" : "text-fg-3"}`}
@@ -61,13 +65,7 @@ function Pairs({ id }: { id: string }) {
         ))}
       </ul>
       {chosen && (
-        <Sheet
-          open
-          width="lg"
-          onClose={() => setChosenId(null)}
-          title={chosen.name}
-          sub={`Диалог ${chosen.dialogueId}`}
-        >
+        <Sheet open width="lg" onClose={() => setChosenId(null)} title={chosen.name} sub={questionsOf(chosen)}>
           <div className="p-5">
             <div className="grid gap-7 md:grid-cols-2">
               <section>
@@ -181,6 +179,9 @@ export function LaunchReport() {
   if (pathname !== launchLink(record.check, record.id))
     return <Navigate to={launchLink(record.check, record.id)} replace />;
   const questions = record.modes.questions?.questionsId;
+  // The service continues only the launch it stopped last, with what that one kept (api/work.py, paused); any other
+  // launch is started again from the beginning, and the button says so.
+  const continues = state?.paused?.launch?.id === record.id;
   return (
     <div>
       <CheckHeader
@@ -196,27 +197,34 @@ export function LaunchReport() {
               Остановить
             </Button>
           ) : (
-            <Button icon={RotateCcw} loading={busy} disabled={!!state?.job.running} onClick={retry}>
-              {record.status === "done" ? (
-                <>
-                  Повторить<span className="hidden sm:inline"> запуск</span>
-                </>
-              ) : (
-                "Продолжить"
-              )}
+            <Button
+              icon={RotateCcw}
+              loading={busy}
+              disabled={!!state?.job.running}
+              onClick={retry}
+              title={
+                continues
+                  ? "Продолжить с того места, где проверка остановилась: уже проверенное не проверяется снова"
+                  : "Новая проверка с теми же датасетом, правилами и режимами"
+              }
+            >
+              {continues ? "Продолжить" : "Запустить ещё раз"}
             </Button>
           )
         }
       />
       <div className="max-w-[1180px] px-4 pb-16 pt-8 lg:px-10">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-page font-semibold text-fg">{record.agentVersion || CHECK_NAME[record.check]}</h2>
-            <p className="mt-2 text-read text-fg-3">
-              {record.dataset?.name || record.dataset?.file} · {when(record.startedAt)}
-            </p>
-            <p className="mt-1 text-small text-fg-3">
-              {record.judge ? `${record.judge.name} · v${record.judge.version}` : "Критерии из кода агента"}
+          <div className="min-w-0">
+            <h2 className="text-page font-semibold text-fg">
+              Проверка {longDay(record.startedAt)}, {time(record.startedAt)}
+            </h2>
+            <p className="mt-2 break-words text-read text-fg-3">
+              «{record.dataset?.name || record.dataset?.file || "Датасет"}» ·{" "}
+              {record.judge
+                ? `правила «${record.judge.name}», версия ${record.judge.version}`
+                : "критерии из кода агента"}
+              {record.agentVersion ? ` · ${record.agentVersion}` : ""}
             </p>
           </div>
           <span role="status">
@@ -237,7 +245,9 @@ export function LaunchReport() {
                 : historyLink(record.check, result.checkId)
               : result.runId
                 ? runLink(result.runId)
-                : null;
+                : result.questionsId
+                  ? "#answers"
+                  : null;
             return (
               <section key={mode} className="flex flex-col rounded-block border border-line p-5">
                 <h3 className="text-read font-semibold text-fg">{MODE_NAME[mode as Mode]}</h3>
@@ -267,19 +277,30 @@ export function LaunchReport() {
                   </p>
                 )}
                 {href && (
-                  <Link to={href} className={`mt-5 self-start ${buttonClass({ variant: "outline" })}`}>
-                    Разобрать результат
-                    <ArrowRight className="size-3.5" />
-                  </Link>
+                  <div className="mt-auto pt-5">
+                    {href.startsWith("#") ? (
+                      <a href={href} className={buttonClass({ variant: "outline" })}>
+                        Посмотреть ответы
+                        <ArrowRight className="size-3.5" />
+                      </a>
+                    ) : (
+                      <Link to={href} className={buttonClass({ variant: "outline" })}>
+                        Разобрать результат
+                        <ArrowRight className="size-3.5" />
+                      </Link>
+                    )}
+                  </div>
                 )}
               </section>
             );
           })}
         </div>
-        <p className="mt-4 text-small text-fg-3">Для каждого режима сохранены свои диалоги и оценки.</p>
+        <p className="mt-4 text-small text-fg-3">
+          У каждого режима свои разговоры и свой итог: их числа не складываются.
+        </p>
         {questions && <Pairs id={questions} />}
         <Link to={historyLink(record.check)} className="mt-8 inline-flex items-center gap-2 text-body text-run">
-          История этой проверки
+          История проверок
           <ArrowRight className="size-3.5" />
         </Link>
       </div>

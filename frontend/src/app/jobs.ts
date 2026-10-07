@@ -5,8 +5,8 @@ import { criterionLink, launchLink, scenariosLink, SECTIONS, toneCheckLink } fro
 /** A task of the service: how it is called and the section where its result lives. */
 export const JOBS: Record<string, { label: string; to: string }> = {
   "tone-policy": { label: "Правила общения", to: toneCheckLink("materials") },
-  launch: { label: "Проверка агента", to: "/launches" },
-  "judge-rules": { label: "Правила судьи", to: "/overview" },
+  launch: { label: "Проверка агента", to: `${SECTIONS.tone}/history` },
+  "judge-rules": { label: "Правила", to: SECTIONS.overview },
   datasets: { label: "Датасеты", to: "/data" },
   "agent-context": { label: "Контекст агента", to: "/agent" },
   logs: { label: "Загрузка диалогов", to: SECTIONS.data },

@@ -1,22 +1,21 @@
-import { LaunchHistory } from "../launches/LaunchHistory";
 import { useMemo, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, ChevronDown, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Check } from "../../app/links";
+import { launchLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
 import { duty, nameFromText, quoteKey } from "../../lab/criteria";
-import { count, longDay, time } from "../../lab/format";
+import { count, longDay, pct, time } from "../../lab/format";
 import {
   comparisonText,
-  errorShare,
   loadHistory,
   loadSaved,
   type CodeSnapshot,
   type SavedCheck,
   type ToneSnapshot,
 } from "../../lab/history";
+import { MODE_NAME, useLaunches, type Launch, type Mode, type Outcome } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
 import type { LogDialogue } from "../../lab/problems";
 import type { Discover, Rule, Status } from "../../lab/types";
@@ -25,6 +24,7 @@ import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
+import { LaunchStatus } from "../launches/LaunchStatus";
 import { CheckHeader } from "./CheckHeader";
 
 const statusText = (status: Status) =>
@@ -407,6 +407,21 @@ function Snapshot({
   );
 }
 
+/** «22 из 53 проверенных разговоров — с ошибкой агента · 42%»: the number every row of the history starts with. */
+function CountLine({ failed, measured }: { failed: number; measured: number }) {
+  if (!measured) return <>Ни один разговор не удалось проверить</>;
+  return (
+    <>
+      <span className={cn("font-semibold tabular-nums", failed ? "text-bad" : "text-fg")}>{failed}</span> из{" "}
+      {count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой агента
+      <span className="text-fg-3"> · {pct(failed, measured)}%</span>
+    </>
+  );
+}
+
+const ROW =
+  "flex w-full items-start gap-3 rounded-control px-1 py-4 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run";
+
 /** One saved check in the list: its number first, as on every screen, then when, which export, how it stands. */
 function CheckRow({
   check,
@@ -420,25 +435,11 @@ function CheckRow({
   onOpen: () => void;
 }) {
   const { failed, measured, unmeasured } = check.summary;
-  const share = errorShare(check);
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex w-full items-start gap-3 rounded-control px-1 py-4 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run"
-    >
+    <button type="button" onClick={onOpen} className={ROW}>
       <div className="min-w-0 flex-1">
         <p className="text-read text-fg-2">
-          {measured ? (
-            <>
-              <span className={cn("font-semibold tabular-nums", failed ? "text-bad" : "text-fg")}>{failed}</span> из{" "}
-              {count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с
-              ошибкой агента
-              <span className="text-fg-3"> · {share}%</span>
-            </>
-          ) : (
-            "Ни один разговор не удалось проверить"
-          )}
+          <CountLine failed={failed} measured={measured} />
           {current && <span className="ml-2 text-small text-fg-3">текущий итог</span>}
         </p>
         <p className="mt-1 break-words text-small text-fg-3">
@@ -449,6 +450,64 @@ function CheckRow({
       </div>
       <ArrowRight aria-hidden className="mt-1 size-4 shrink-0 text-fg-3" />
     </button>
+  );
+}
+
+const ORDER: Mode[] = ["dataset", "questions", "simulations"];
+
+/**
+ * A launch in the history, one row whatever it checked: the first way it checked gives the number (the recorded
+ * answers when they were checked), the others follow in a line. Its saved check of the recorded answers is this row,
+ * not a second one.
+ */
+function LaunchRow({
+  launch,
+  saved,
+  previous,
+  current,
+}: {
+  launch: Launch;
+  saved?: SavedCheck;
+  previous?: SavedCheck;
+  current: boolean;
+}) {
+  const modes = ORDER.filter((mode) => launch.modes[mode]).map((mode) => [mode, launch.modes[mode]!] as const);
+  const [[firstMode, first], ...rest] = modes.length
+    ? modes
+    : [["dataset" as Mode, { status: launch.status } as Outcome]];
+  const said = (mode: Mode, outcome: Outcome) =>
+    outcome.metric
+      ? `${MODE_NAME[mode]}: ${outcome.metric.failed} из ${outcome.metric.measured} с ошибкой`
+      : `${MODE_NAME[mode]}: ${outcome.status === "failed" ? "не удалось" : outcome.status === "stopped" ? "остановлено" : "ещё нет итога"}`;
+  return (
+    <Link to={launchLink(launch.check, launch.id)} className={ROW}>
+      <div className="min-w-0 flex-1">
+        <p className="text-read text-fg-2">
+          {firstMode !== "dataset" && <span className="text-fg-3">{MODE_NAME[firstMode]}: </span>}
+          {first.metric ? (
+            <CountLine failed={first.metric.failed} measured={first.metric.measured} />
+          ) : (
+            <span className="text-fg-3">Итога ещё нет</span>
+          )}
+          {current && <span className="ml-2 text-small text-fg-3">текущий итог</span>}
+          {launch.status !== "done" && (
+            <span className="ml-2 inline-block align-middle">
+              <LaunchStatus status={launch.status} />
+            </span>
+          )}
+        </p>
+        <p className="mt-1 break-words text-small text-fg-3">
+          {finished(launch.startedAt)} · {launch.dataset?.name || launch.dataset?.file || "Датасет"}
+          {launch.judge ? ` · правила «${launch.judge.name}»` : launch.check === "code" ? " · критерии из кода" : ""}
+          {launch.agentVersion ? ` · ${launch.agentVersion}` : ""}
+        </p>
+        {rest.length > 0 && (
+          <p className="mt-2 text-small text-fg-3">{rest.map(([mode, outcome]) => said(mode, outcome)).join(" · ")}</p>
+        )}
+        {saved && <p className="mt-2 text-small text-fg-3">{comparisonText(saved, previous)}</p>}
+      </div>
+      <ArrowRight aria-hidden className="mt-1 size-4 shrink-0 text-fg-3" />
+    </Link>
   );
 }
 
@@ -479,6 +538,18 @@ export function HistoryPage({ check }: { check: Check }) {
     staleTime: Infinity,
   });
   const checks = data?.checks ?? [];
+  const launches = useLaunches(check, `${state?.job.id}-${state?.job.running}`);
+  // One list, newest first: a launch is one row with all it checked; a saved check that came from no launch (an older
+  // one, or a check of chosen criteria) is a row of its own.
+  const fromLaunch = new Set((launches.data?.launches ?? []).map((l) => l.modes.dataset?.checkId).filter(Boolean));
+  const previousOf = (saved?: SavedCheck) => checks.find((item) => item.id === saved?.comparison.previousId);
+  const rows = [
+    ...(launches.data?.launches ?? []).map((launch) => ({ at: launch.startedAt, launch, saved: undefined })),
+    ...checks
+      .filter((saved) => !fromLaunch.has(saved.id))
+      .map((saved) => ({ at: saved.finishedAt, launch: undefined, saved })),
+  ].sort((a, b) => b.at.localeCompare(a.at));
+  const loading = isLoading || !state || (!launches.data && !launches.isError);
   return (
     <div className="flex h-full flex-col">
       <CheckHeader check={check} />
@@ -487,39 +558,61 @@ export function HistoryPage({ check }: { check: Check }) {
           <ServiceDown />
         ) : (
           <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-10">
-            <LaunchHistory check={check} />
-            <h2 className="mt-10 text-title font-semibold text-fg">Сохранённые оценки диалогов</h2>
+            <h2 className="text-title font-semibold text-fg">История проверок</h2>
             <p className="mt-1 max-w-[64ch] text-read text-fg-3">{KEEPS[check]}</p>
             <div className="mt-6">
-              {(isLoading || !state) && <Skeleton className="h-40" />}
-              {error && (
+              {loading && <Skeleton className="h-40" />}
+              {(error || launches.isError) && (
                 <div className="py-3">
                   <p role="alert" className="text-body text-fg-3">
                     Не удалось загрузить историю.
                   </p>
-                  <Button className="mt-3" icon={RotateCcw} onClick={() => void refetch()}>
+                  <Button
+                    className="mt-3"
+                    icon={RotateCcw}
+                    onClick={() => {
+                      void refetch();
+                      void launches.refetch();
+                    }}
+                  >
                     Повторить
                   </Button>
                 </div>
               )}
-              {data && !checks.length && (
+              {!loading && !rows.length && !error && !launches.isError && (
                 <p className="py-3 text-body text-fg-3">
                   {result && !result.checkId
                     ? "Текущий итог появился раньше истории. История начнётся со следующей проверки."
                     : "Здесь появятся завершённые проверки с их разговорами и критериями."}
                 </p>
               )}
-              <div className="divide-y divide-line">
-                {checks.map((saved) => (
-                  <CheckRow
-                    key={saved.id}
-                    check={saved}
-                    previous={checks.find((item) => item.id === saved.comparison.previousId)}
-                    current={saved.id === result?.checkId}
-                    onOpen={() => select(saved.id)}
-                  />
-                ))}
-              </div>
+              {!loading && (
+                <div className="divide-y divide-line">
+                  {rows.map((row) => {
+                    if (row.launch) {
+                      const saved = checks.find((item) => item.id === row.launch.modes.dataset?.checkId);
+                      return (
+                        <LaunchRow
+                          key={row.launch.id}
+                          launch={row.launch}
+                          saved={saved}
+                          previous={previousOf(saved)}
+                          current={!!saved && saved.id === result?.checkId}
+                        />
+                      );
+                    }
+                    return (
+                      <CheckRow
+                        key={row.saved!.id}
+                        check={row.saved!}
+                        previous={previousOf(row.saved)}
+                        current={row.saved!.id === result?.checkId}
+                        onOpen={() => select(row.saved!.id)}
+                      />
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         )}

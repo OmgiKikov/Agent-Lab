@@ -25,7 +25,7 @@ export type Launch = {
   startedAt: string;
   agentVersion?: string;
   dataset?: { name?: string; file?: string; datasetId?: string };
-  judge?: { name: string; version: number } | null;
+  judge?: { id?: string; setId?: string; name: string; version: number } | null;
   modes: Partial<Record<Mode, Outcome>>;
 };
 export type Pair = {
@@ -47,13 +47,17 @@ export const useLaunch = (id?: string) =>
     queryKey: ["launch", AGENT, id],
     queryFn: () => api<Launch>(`/api/launches/${id}`),
     enabled: !!id,
-    refetchInterval: (q) => (q.state.data?.status === "running" || !q.state.data ? 1500 : false),
+    refetchInterval: (q) => (q.state.data?.status === "running" || (!q.state.data && !q.state.error) ? 1500 : false),
   });
-export const useLaunches = (check?: Check) =>
+/**
+ * The launches of a check, newest first. `stamp` changes when a task of the agent starts or ends, so the list is asked
+ * again then; while one of them runs, it is asked every few seconds, and not at all when nothing runs.
+ */
+export const useLaunches = (check?: Check, stamp?: string) =>
   useQuery({
-    queryKey: ["launches", AGENT, check],
+    queryKey: ["launches", AGENT, check, stamp],
     queryFn: () => api<{ launches: Launch[] }>(`/api/launches${check ? `?check=${check}` : ""}`),
-    refetchInterval: 4000,
+    refetchInterval: (q) => (q.state.data?.launches.some((l) => l.status === "running") ? 4000 : false),
   });
 export const useQuestions = (id?: string) =>
   useQuery({
